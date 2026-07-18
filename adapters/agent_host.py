@@ -17,7 +17,8 @@ Substrate endpoints (register_host / request_wake / claim_wake / complete_wake �
 lane (store/app); this only CONSUMES them. Built fail-open against the spec's operation names —
 a missing/!200 endpoint logs and is skipped, never crashes the daemon — so it is ready the moment
 those land. Pin REST paths below once Codex publishes them. Config via env: PM_BASE, PM_PROJECT,
-PM_MCP_TOKEN, PM_HOST_ID, PM_REPO_ROOT, PM_HOST_MAX_SESSIONS, PM_AGENT_WORK_MODULE (real work_fn;
+PM_MCP_TOKEN, PM_HOST_ID, PM_REPO_ROOT, PM_AGENT_HOST_SOURCE_REPO_ROOT,
+PM_HOST_MAX_SESSIONS, PM_AGENT_WORK_MODULE (real work_fn;
 absent -> --dry, which claims+abandons safely), PM_AGENT_HOST_ALLOW_WORK,
 PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM.
 """
@@ -323,7 +324,8 @@ def _require(method, path, body=None):
 
 
 def default_inventory():
-    repo = os.environ.get("PM_REPO_ROOT") or _git_root()
+    repo = (os.environ.get("PM_AGENT_HOST_SOURCE_REPO_ROOT")
+            or os.environ.get("PM_REPO_ROOT") or _git_root())
     host_id = os.environ.get("PM_HOST_ID") or f"host/{socket.gethostname().split('.')[0]}"
     env_lanes = _csv(os.environ.get("PM_HOST_LANES", ""))
     policy = host_policy_from_env(env_lanes)

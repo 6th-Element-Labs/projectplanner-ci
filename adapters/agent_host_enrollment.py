@@ -624,6 +624,32 @@ def _lexists(path: Path) -> bool:
     return os.path.lexists(Path(path).expanduser())
 
 
+def _validated_source_repo_root(value: Path | str) -> Path:
+    """Return an exact Git work source without trusting the signed runtime tree."""
+    raw = Path(value).expanduser()
+    if not raw.is_absolute() or raw.is_symlink():
+        raise EnrollmentError("source_repo_root must be an absolute non-symlink path")
+    resolved = raw.resolve()
+    if raw.absolute() != resolved or not resolved.is_dir():
+        raise EnrollmentError("source_repo_root must resolve directly to a directory")
+
+    def git(*arguments: str) -> str:
+        result = subprocess.run(
+            ["git", "-C", str(resolved), *arguments],
+            capture_output=True, text=True, timeout=30, check=False)
+        if result.returncode != 0:
+            raise EnrollmentError("source_repo_root must be a usable Git checkout")
+        return (result.stdout or "").strip()
+
+    top_level = Path(git("rev-parse", "--show-toplevel")).resolve()
+    if top_level != resolved:
+        raise EnrollmentError("source_repo_root must name the Git checkout root")
+    if not git("remote", "get-url", "origin"):
+        raise EnrollmentError("source_repo_root must have a canonical origin remote")
+    git("rev-parse", "HEAD")
+    return resolved
+
+
 def _private_key_matches_fingerprint(private_key_pem: str, fingerprint: str) -> bool:
     """Cryptographically bind retry key material to its recorded public fingerprint."""
     try:
@@ -713,6 +739,7 @@ def _validate_retry_artifacts(
         base_url: str, project: str, target_platform: str, prefix: Path,
         service_path: Path, config_path: Path, state_path: Path,
         workspace_root: Path, codex_home: Path, source_codex_home: Path,
+        source_repo_root: Path,
         log_root: Path) -> None:
     """Prove an existing journal is semantically safe before copying local auth."""
     status = str(state.get("status") or "")
@@ -730,6 +757,7 @@ def _validate_retry_artifacts(
         "identity_path": str(identity_path),
         "config_path": str(config_path),
         "state_path": str(state_path),
+        "source_repo_root": str(source_repo_root),
     }
     if any(str(state.get(key) or "") != str(value) for key, value in expected.items()):
         raise EnrollmentError(
@@ -774,6 +802,7 @@ def _validate_retry_artifacts(
     expected_config_paths = {
         "service_path": str(service_path),
         "repo_root": str(prefix / "current"),
+        "source_repo_root": str(source_repo_root),
         "runner_dir": str(state_path.parent / "runner"),
         "runtime_root": str(state_path.parent / "provider-runtimes"),
         "workspace_root": str(workspace_root),
@@ -830,7 +859,7 @@ def _validate_persisted_lifecycle_layout(
     required_config_paths = {
         key: str(config.get(key) or "").strip()
         for key in (
-            "service_path", "repo_root", "runner_dir", "runtime_root",
+            "service_path", "repo_root", "source_repo_root", "runner_dir", "runtime_root",
             "workspace_root", "codex_home", "source_codex_home", "log_root",
         )
     }
@@ -854,6 +883,9 @@ def _validate_persisted_lifecycle_layout(
     source_codex_home = Path(required_config_paths["source_codex_home"])
     if not source_codex_home.is_absolute() or source_codex_home.is_symlink():
         raise EnrollmentError("source_codex_home must be an absolute non-symlink path")
+    source_repo_root = Path(required_config_paths["source_repo_root"])
+    if not source_repo_root.is_absolute() or source_repo_root.is_symlink():
+        raise EnrollmentError("source_repo_root must be an absolute non-symlink path")
     _validate_install_layout(
         prefix=prefix,
         config_root=config_path.parent,
@@ -914,6 +946,8 @@ def _finalize_install(
     source_codex_home_value = str(config.get("source_codex_home") or "").strip()
     if not source_codex_home_value:
         raise EnrollmentError("pending enrollment finalization lacks source Codex home")
+    source_repo_root = _validated_source_repo_root(
+        str(config.get("source_repo_root") or ""))
     workspace_root = Path(config.get("workspace_root") or state_root / "workspaces")
     codex_home = Path(config.get("codex_home") or state_root / "codex-home")
     _validate_install_layout(
@@ -952,7 +986,7 @@ def _finalize_install(
             config_path=config_path,
             service_path=service_path,
             log_root=log_root,
-            writable_roots=(state_root, workspace_root, codex_home),
+            writable_roots=(state_root, workspace_root, codex_home, source_repo_root),
         )
         state["finalization_step"] = "service_rendered"
         _atomic_json(state_path, state, 0o600)
@@ -1026,6 +1060,7 @@ def _install_host_unlocked(*, bundle_dir: Path, public_key_path: Path, bootstrap
                  service_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
                  local_auth_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
                  codex_executable: str = "",
+                 source_repo_root: Path | None = None,
                  hostname: str = "") -> dict[str, Any]:
     """Prepare a durable local install, consume bootstrap once, then start."""
     manifest = verify_bundle(bundle_dir, public_key_path)
@@ -1053,6 +1088,8 @@ def _install_host_unlocked(*, bundle_dir: Path, public_key_path: Path, bootstrap
     state_path = state_root / "state.json"
     source_codex_home = Path(
         os.environ.get("CODEX_HOME") or (Path.home() / ".codex")).expanduser().resolve()
+    source_repo = _validated_source_repo_root(
+        source_repo_root or selected.get("source_repo_root") or "")
     user_home = Path.home().expanduser().resolve()
     _validate_install_layout(
         prefix=prefix,
@@ -1090,6 +1127,7 @@ def _install_host_unlocked(*, bundle_dir: Path, public_key_path: Path, bootstrap
             workspace_root=workspace_root,
             codex_home=codex_home_candidate,
             source_codex_home=source_codex_home,
+            source_repo_root=source_repo,
             log_root=log_root,
         )
         local_state_journaled = True
@@ -1198,6 +1236,7 @@ def _install_host_unlocked(*, bundle_dir: Path, public_key_path: Path, bootstrap
                 "identity_path": str(identity_path),
                 "config_path": str(config_path),
                 "state_path": str(state_path),
+                "source_repo_root": str(source_repo),
                 "base_url": base_url.rstrip("/"),
                 "owner_user_id": owner_user_id,
                 "allow_work": bool(allow_work),
@@ -1284,6 +1323,7 @@ def _install_host_unlocked(*, bundle_dir: Path, public_key_path: Path, bootstrap
         "platform": target_platform,
         "service_path": str(service_path),
         "repo_root": str(prefix / "current"),
+        "source_repo_root": str(source_repo),
         "runner_dir": str(state_root / "runner"),
         "runtime_root": str(state_root / "provider-runtimes"),
         "workspace_root": str(workspace_root),
@@ -1324,7 +1364,8 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
                  http: Callable[..., dict[str, Any]] = request_json,
                  service_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
                  local_auth_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
-                 codex_executable: str = "", hostname: str = "") -> dict[str, Any]:
+                 codex_executable: str = "", source_repo_root: Path | None = None,
+                 hostname: str = "") -> dict[str, Any]:
     """Serialize enrollment from local-state detection through finalization."""
     selected = dict(paths or _default_paths(target_platform))
     with _install_lock(
@@ -1348,11 +1389,13 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
             service_runner=service_runner,
             local_auth_runner=local_auth_runner,
             codex_executable=codex_executable,
+            source_repo_root=source_repo_root,
             hostname=hostname,
         )
 
 
 def update_host(*, bundle_dir: Path, public_key_path: Path, state_path: Path,
+                source_repo_root: Path | None = None,
                 restart_service: bool = True,
                 service_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> dict[str, Any]:
     manifest = verify_bundle(bundle_dir, public_key_path)
@@ -1370,12 +1413,33 @@ def update_host(*, bundle_dir: Path, public_key_path: Path, state_path: Path,
     config_path = Path(state["config_path"])
     config = _read_json(config_path)
     previous_config = dict(config)
+    source_repo = _validated_source_repo_root(
+        source_repo_root or config.get("source_repo_root") or "")
     current = prefix / "current"
     previous = current.resolve() if current.exists() else None
     release = _install_release(bundle_dir, manifest, prefix)
+
+    def render(config_value: dict[str, Any]) -> None:
+        roots = [
+            state_path.parent,
+            Path(config_value["workspace_root"]),
+            Path(config_value["codex_home"]),
+        ]
+        previous_source = str(config_value.get("source_repo_root") or "").strip()
+        if previous_source:
+            roots.append(_validated_source_repo_root(previous_source))
+        render_service(
+            state["platform"], python=sys.executable,
+            entrypoint=prefix / "current" / manifest["entrypoint"],
+            identity_path=Path(state["identity_path"]), config_path=config_path,
+            service_path=Path(state["service_path"]),
+            log_root=Path(config_value["log_root"]), writable_roots=roots)
+
     try:
         config["agent_host_version"] = manifest["version"]
+        config["source_repo_root"] = str(source_repo)
         _atomic_json(config_path, config, 0o600)
+        render(config)
         if restart_service:
             control_service(
                 state["platform"], "restart", Path(state["service_path"]), runner=service_runner)
@@ -1385,6 +1449,7 @@ def update_host(*, bundle_dir: Path, public_key_path: Path, state_path: Path,
             rollback.symlink_to(previous)
             os.replace(rollback, current)
         _atomic_json(config_path, previous_config, 0o600)
+        render(previous_config)
         if restart_service:
             try:
                 control_service(
@@ -1836,6 +1901,8 @@ def service_run(identity_path: Path, config_path: Path) -> None:
     local_auth = preflight_codex_local_auth(
         codex_executable=str(config.get("codex_executable") or ""),
         codex_home=codex_home)
+    source_repo_root = _validated_source_repo_root(
+        str(config.get("source_repo_root") or ""))
     values = {
         "PM_BASE": config["base_url"],
         "PM_PROJECT": config["project"],
@@ -1870,6 +1937,7 @@ def service_run(identity_path: Path, config_path: Path) -> None:
         "PM_HOST_LOCAL_AUTH_ACCOUNT_PROOF": local_auth.get("account_fingerprint") or "",
         "PM_CODEX_EXECUTABLE": local_auth.get("codex_executable") or "",
         "PM_REPO_ROOT": config["repo_root"],
+        "PM_AGENT_HOST_SOURCE_REPO_ROOT": str(source_repo_root),
         "PM_RUNNER_DIR": config["runner_dir"],
         "PM_PROVIDER_RUNTIME_ROOT": config["runtime_root"],
         "PM_AGENT_HOST_VERSION": config.get("agent_host_version") or AGENT_HOST_VERSION,
@@ -1929,6 +1997,7 @@ def main(argv: list[str] | None = None) -> int:
     install.add_argument("--base-url", default="https://plan.taikunai.com")
     install.add_argument("--project", required=True, type=_non_blank_project)
     install.add_argument("--owner-user-id", required=True)
+    install.add_argument("--source-repo-root", type=Path, required=True)
     install.add_argument("--platform", default="")
     install.add_argument("--lanes", default="")
     install.add_argument("--no-start", action="store_true")
@@ -1936,6 +2005,7 @@ def main(argv: list[str] | None = None) -> int:
     update.add_argument("--bundle", type=Path, required=True)
     update.add_argument("--public-key", type=Path, required=True)
     update.add_argument("--state", type=Path, required=True)
+    update.add_argument("--source-repo-root", type=Path)
     update.add_argument("--no-restart", action="store_true")
     rotate = sub.add_parser("rotate")
     rotate.add_argument("--identity", type=Path, required=True)
@@ -1988,6 +2058,7 @@ def main(argv: list[str] | None = None) -> int:
                 base_url=args.base_url,
                 project=args.project,
                 owner_user_id=args.owner_user_id,
+                source_repo_root=args.source_repo_root,
                 target_platform=_platform(args.platform),
                 lanes=[item.strip() for item in args.lanes.split(",") if item.strip()],
                 start_service=not args.no_start,
@@ -1997,6 +2068,7 @@ def main(argv: list[str] | None = None) -> int:
                 bundle_dir=args.bundle,
                 public_key_path=args.public_key,
                 state_path=args.state,
+                source_repo_root=args.source_repo_root,
                 restart_service=not args.no_restart,
             )
         elif args.command == "rotate":

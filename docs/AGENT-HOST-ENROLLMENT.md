@@ -100,8 +100,13 @@ python adapters/agent_host_enrollment.py install \
   --base-url https://plan.taikunai.com \
   --project switchboard \
   --owner-user-id user-123 \
+  --source-repo-root /path/to/clean/projectplanner-checkout \
   --lanes ADAPTER
 ```
+
+The source checkout is a separate Git work source with an `origin` remote. The service
+executes the verified signed release, while task-isolated worktrees are created from this
+checkout. Never point `--source-repo-root` at the signed release directory.
 
 Default paths:
 
@@ -215,7 +220,8 @@ echoes it; only a redacted execution connection, billing binding, and budget are
 python adapters/agent_host_enrollment.py update \
   --bundle /path/to/switchboard-agent-host-0.2.1 \
   --public-key /path/to/agent-host-ed25519-public.pem \
-  --state ~/.local/state/switchboard-agent-host/state.json
+  --state ~/.local/state/switchboard-agent-host/state.json \
+  --source-repo-root /path/to/clean/projectplanner-checkout
 
 python adapters/agent_host_enrollment.py rotate \
   --identity ~/.config/switchboard-agent-host/identity.json \
