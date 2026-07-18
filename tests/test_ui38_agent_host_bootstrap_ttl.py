@@ -291,6 +291,41 @@ try:
     ok(waited.get("bound") is False and clock["now"] <= 100,
        "dead local runner still fails closed at the readiness deadline")
 
+    # If Switchboard briefly requeues a claimed wake during a slow boot, the next
+    # host tick must reclaim and reuse the deterministic local runner instead of
+    # calling supervisor start again and failing the live first process.
+    finalizer_key = agent_host._bound_finalizer_key(wake, inventory, runner_id)
+    real_supervisor_action = agent_host.supervisor_action
+    with agent_host._BOUND_FINALIZERS_LOCK:
+        agent_host._BOUND_FINALIZERS[finalizer_key] = object()
+    agent_host.supervisor_action = lambda action, requested_id, options=None: {
+        "runner_session_id": requested_id,
+        "alive": True,
+        "pid": 4242,
+        "cwd": str(ROOT),
+        "task_id": task_id,
+        "control": {"managed_process": True},
+    }
+    try:
+        reused = agent_host._reuse_inflight_bound_runner(
+            wake, inventory, runner_id, preclaim_registration=preclaim_row)
+    finally:
+        agent_host.supervisor_action = real_supervisor_action
+        with agent_host._BOUND_FINALIZERS_LOCK:
+            agent_host._BOUND_FINALIZERS.pop(finalizer_key, None)
+    ok(reused.get("reused_local_runner") is True
+       and reused.get("reason") == "runner_binding_pending_reused"
+       and reused.get("pid") == 4242
+       and reused.get("binding_pending") is True,
+       "a second host tick reuses the live local runner without duplicate start")
+
+    source = Path(agent_host.__file__).read_text(encoding="utf-8")
+    reuse_pos = source.index("reused = _reuse_inflight_bound_runner(")
+    launch_pos = source.index("rec = (launch(", reuse_pos)
+    ok(reuse_pos < launch_pos and "if reused:" in source[reuse_pos:launch_pos]
+       and "continue" in source[reuse_pos:launch_pos],
+       "run_once exits the wake path before launch when local boot is reused")
+
     old_env = {key: os.environ.get(key) for key in (
         "PM_CO_WAKE_ID", "PM_CO_HOST_ID", "PM_RUNNER_SESSION_ID",
         "PM_TASK_ID", "PM_AGENT_ID",

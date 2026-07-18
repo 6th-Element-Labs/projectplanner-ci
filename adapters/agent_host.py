@@ -1502,6 +1502,63 @@ def _runner_session_id_for_wake(wake, host_id):
     return "run_" + hashlib.sha256(source.encode()).hexdigest()[:16]
 
 
+def _bound_finalizer_key(wake, inventory, runner_session_id):
+    return (f"{inventory.get('host_id')}:{wake.get('wake_id')}:"
+            f"{runner_session_id}")
+
+
+def _reuse_inflight_bound_runner(wake, inventory, runner_session_id,
+                                  preclaim_registration=None):
+    """Return a pending receipt when this exact local boot already exists.
+
+    A claimed wake may be requeued if the central host heartbeat briefly expires
+    while a slow local fetch/worktree is still running.  The deterministic runner
+    id then leads the next host tick back to the same supervised process.  Reclaim
+    the wake, but never call ``supervisor start`` a second time: doing so rejects
+    the duplicate id and incorrectly terminalizes the wake that the first process
+    still owns.
+
+    The in-memory finalizer is authoritative within one daemon lifetime.  The
+    supervisor record also lets a restarted daemon reattach to a surviving local
+    process.
+    """
+    key = _bound_finalizer_key(wake, inventory, runner_session_id)
+    with _BOUND_FINALIZERS_LOCK:
+        finalizer_active = key in _BOUND_FINALIZERS
+    health = supervisor_action("health", runner_session_id)
+    local_alive = bool(
+        health and not health.get("error") and health.get("alive"))
+    if not finalizer_active and not local_alive:
+        return None
+    rec = dict(health or {}) if local_alive else {}
+    if not finalizer_active:
+        _submit_bound_finalizer(wake, inventory, runner_session_id, rec)
+    return {
+        "wake_id": wake.get("wake_id"),
+        "started": True,
+        "runner_session_id": runner_session_id,
+        "wake_mode": rec.get("wake_mode") or wake_mode(wake, inventory),
+        "reason": "runner_binding_pending_reused",
+        "pid": rec.get("pid"),
+        "cwd": rec.get("cwd") or inventory.get("repo_root"),
+        "task_id": rec.get("task_id") or wake.get("task_id"),
+        "claim_id": None,
+        "work_session_id": None,
+        "control": rec.get("control") or {},
+        "session_url": rec.get("session_url"),
+        "provider_session_id": rec.get("provider_session_id"),
+        "failure_class": None,
+        "provider_error": None,
+        "runner_registered": bool(
+            preclaim_registration
+            and not preclaim_registration.get("error")
+            and not preclaim_registration.get("error_code")),
+        "usage_registered": False,
+        "binding_pending": True,
+        "reused_local_runner": True,
+    }
+
+
 def _register_preclaim_runner(wake, inventory, runner_session_id, *, renewal=False):
     binding = ((wake.get("policy") or {}).get("account_binding") or {})
     selector = wake.get("selector") or {}
@@ -1742,7 +1799,7 @@ def _finalize_bound_runner(wake, inventory, runner_session_id, rec):
 
 def _submit_bound_finalizer(wake, inventory, runner_session_id, rec):
     """Start one daemon finalizer per claimed wake and return immediately."""
-    key = f"{inventory.get('host_id')}:{wake.get('wake_id')}:{runner_session_id}"
+    key = _bound_finalizer_key(wake, inventory, runner_session_id)
 
     def finish():
         try:
@@ -1999,6 +2056,13 @@ def run_once(inventory):
                 "result": {"started": False, "reason": "exact_binding_denied"},
             })
             continue
+        if bind_required and runner_session_id:
+            reused = _reuse_inflight_bound_runner(
+                claimed_wake, inventory, runner_session_id,
+                preclaim_registration=preclaim_registration)
+            if reused:
+                acted.append(reused)
+                continue
         execution_binding = ((claimed_wake.get("policy") or {}).get(
             "execution_binding") or {})
         launch_env = ({
