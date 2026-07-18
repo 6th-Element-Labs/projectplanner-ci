@@ -628,6 +628,72 @@ def _personal_runner_connection_in(
     return connection, None
 
 
+def _native_agent_host_runner_allowed_in(
+        c: sqlite3.Connection, record: Dict[str, Any],
+        principal_id: str) -> bool:
+    """Admit only the server-selected host-local runner for a live wake.
+
+    Enrolled Agent Hosts are narrow principals.  BYOA/account-bound executions
+    must keep their ``personal_execution_connections`` fence, but a project-wide
+    native Codex host intentionally has no exported/provider connection.  Its
+    authority is the live wake placement plus host principal.  Persist a marker
+    derived here (never trusted from the request) so later claim-bound heartbeats
+    for the same runner remain admissible after the wake becomes terminal.
+    """
+    metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+    runner_session_id = str(
+        record.get("runner_session_id") or record.get("id") or "").strip()
+    host_id = str(record.get("host_id") or "").strip()
+    existing = c.execute(
+        "SELECT host_id, principal_id, metadata_json FROM runner_sessions "
+        "WHERE runner_session_id=?", (runner_session_id,),
+    ).fetchone() if runner_session_id else None
+    if existing:
+        existing_metadata = _json_obj(existing["metadata_json"], {})
+        if (str(existing["host_id"] or "") == host_id
+                and str(existing["principal_id"] or "") == principal_id
+                and existing_metadata.get("native_host_execution") is True):
+            metadata["native_host_execution"] = True
+            record["metadata"] = metadata
+            return True
+
+    phase = str(metadata.get("credential_admission_phase") or "").strip().lower()
+    status = str(record.get("status") or "").strip().lower()
+    wake_id = str(metadata.get("wake_id") or "").strip()
+    if (phase != "preclaim" or status != "starting" or record.get("claim_id")
+            or not wake_id or not host_id):
+        return False
+    wake = c.execute(
+        "SELECT status, claimed_by_host, task_id, selector_json, policy_json, "
+        "placement_json FROM wake_intents WHERE wake_id=?", (wake_id,),
+    ).fetchone()
+    if not wake or str(wake["status"] or "") not in {"pending", "claimed"}:
+        return False
+    selector = _json_obj(wake["selector_json"], {})
+    policy = _json_obj(wake["policy_json"], {})
+    placement = _json_obj(wake["placement_json"], {})
+    execution = policy.get("execution_binding") or {}
+    if (policy.get("account_binding") or execution.get("execution_connection_id")
+            or policy.get("require_runner_bind") is not True):
+        return False
+    expected = {
+        "task_id": str(wake["task_id"] or selector.get("task_id") or ""),
+        "agent_id": str(selector.get("agent_id") or ""),
+        "runtime": str(selector.get("runtime") or ""),
+    }
+    if any(str(record.get(key) or "") != value
+           for key, value in expected.items() if value):
+        return False
+    if str(wake["status"] or "") == "claimed":
+        if str(wake["claimed_by_host"] or "") != host_id:
+            return False
+    elif str(placement.get("selected_host_id") or "") != host_id:
+        return False
+    metadata["native_host_execution"] = True
+    record["metadata"] = metadata
+    return True
+
+
 def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
                               principal_id: str, actor: str, now: float) -> Dict[str, Any]:
     runner_session_id = (record.get("runner_session_id") or record.get("id") or "").strip()
@@ -681,7 +747,8 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
             metadata[key] = record.get(key)
     record = {**record, "host_id": host_id, "metadata": metadata,
               "runner_session_id": runner_session_id}
-    if narrow_host:
+    if narrow_host and not _native_agent_host_runner_allowed_in(
+            c, record, principal_id):
         _connection, binding_error = _personal_runner_connection_in(
             c, record, principal_id, now)
         if binding_error:

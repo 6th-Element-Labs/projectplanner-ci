@@ -1419,6 +1419,46 @@ try:
                 "wake_id", "work_session_id", "source_sha", "execution_connection_id")},
         },
     )
+    native_wake = store.request_wake(
+        selector={"runtime": "codex", "agent_id": "codex/native-exact",
+                  "task_id": "ADAPTER-18"},
+        reason="native host-local admission", source="test", task_id="ADAPTER-18",
+        policy={"require_runner_bind": True,
+                "scheduler": {"mode": "hybrid", "prefer_persistent": True,
+                              "allow_persistent": True, "allow_ephemeral": True}},
+        actor="test", project=PROJECT,
+    )
+    with enrollment_store._conn(PROJECT) as connection:
+        connection.execute(
+            "UPDATE wake_intents SET placement_json=? WHERE wake_id=?",
+            (json.dumps({"selected_host_id": "host/adapter18-macos"}),
+             native_wake["wake_id"]),
+        )
+    native_preclaim_registration = client.post(
+        "/ixp/v1/register_runner_session",
+        headers={"Authorization": f"Bearer {initial_mac_token}"},
+        json={
+            "project": PROJECT, "runner_session_id": "run-native-exact",
+            "host_id": "host/adapter18-macos", "agent_id": "codex/native-exact",
+            "runtime": "codex", "task_id": "ADAPTER-18", "status": "starting",
+            "metadata": {"wake_id": native_wake["wake_id"],
+                         "credential_admission_phase": "preclaim"},
+        },
+    )
+    native_claim_bound_registration = client.post(
+        "/ixp/v1/register_runner_session",
+        headers={"Authorization": f"Bearer {initial_mac_token}"},
+        json={
+            "project": PROJECT, "runner_session_id": "run-native-exact",
+            "host_id": "host/adapter18-macos", "agent_id": "codex/native-exact",
+            "runtime": "codex", "task_id": "ADAPTER-18",
+            "claim_id": "taskclaim-native-exact", "status": "running",
+            "require_task_bind": True,
+            "metadata": {"wake_id": native_wake["wake_id"],
+                         "work_session_id": "worksession-native-exact",
+                         "credential_admission_phase": "claim_bound"},
+        },
+    )
     unbound_runner_creation = client.post(
         "/ixp/v1/register_runner_session",
         headers={"Authorization": f"Bearer {initial_mac_token}"},
@@ -1543,6 +1583,10 @@ try:
        and exact_only_completion.status_code == 200
        and runner_identity_hijack.status_code == 403
        and exact_runner_registration.status_code == 200
+       and native_preclaim_registration.status_code == 200
+       and native_preclaim_registration.json().get("metadata", {}).get(
+           "native_host_execution") is True
+       and native_claim_bound_registration.status_code == 200
        and unbound_runner_creation.status_code == 403
        and unbound_runner_creation.json()["detail"].get("error_code")
        == "runner_execution_binding_mismatch"
