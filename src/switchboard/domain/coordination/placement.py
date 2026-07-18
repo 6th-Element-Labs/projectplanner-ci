@@ -135,6 +135,9 @@ def evaluate_host(
 
     if host.get("stale") or str(host.get("status") or "online") != "online":
         reasons.append("host_unavailable")
+    target_host_id = str(selector.get("host_id") or "").strip()
+    if target_host_id and str(host.get("host_id") or "") != target_host_id:
+        reasons.append("host_id_mismatch")
     runtime = _runtime_match(host, selector)
     if runtime is None:
         reasons.append("runtime_or_capability_mismatch")

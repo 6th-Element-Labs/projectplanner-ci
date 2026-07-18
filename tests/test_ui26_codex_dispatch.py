@@ -47,7 +47,7 @@ ok("your personal ChatGPT/Codex login" in APP,
    "the Codex confirm dialog is explicit this runs under the operator's own credentials")
 ok("no Codex-capable host is online for this lane yet" in APP,
    "an honest queued-with-no-host message exists for the codex path, matching the existing Claude one")
-ok("Use Watch above (UI-24 terminal) to see it live" in APP,
+ok("Use Watch above to see it live" in APP,
    "the running-state copy points the operator at the UI-24 terminal, not a nonexistent Codex session URL")
 
 # ---- the live dispatch-panel poller distinguishes runtimes, not just the button --

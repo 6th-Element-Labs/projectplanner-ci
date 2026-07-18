@@ -1979,7 +1979,7 @@ const TeepPlan = {
                     </div>
                 </div>
                 <div class="tab-pane fade" id="m-dev" role="tabpanel">
-                    <p class="text-secondary">Dispatch starts a vendor-hosted Claude Code cloud session through a trigger-only host. Claude works from a pushed <code>claude/</code> task branch in Anthropic's sandbox, the app-visible session is bound here, and the resulting PR returns through Switchboard. It never merges or writes to main/master on its own.</p>
+                    <p class="text-secondary">Choose Claude Code for a vendor-hosted cloud session, or Codex (personal) to wake your enrolled Mac Agent Host. Personal Codex atomically claims this exact task, binds a managed Work Session, and streams its native PTY here in Watch. Neither path merges or writes to main/master on its own.</p>
                     ${t.is_blocking ? `<div class="alert alert-warning d-flex" role="alert"><i class="ti ti-shield-lock me-2 mt-1"></i><div><span class="fw-bold">Human-gated.</span> This task is blocking — a maintainer must approve both the dispatch and the resulting PR before anything merges.</div></div>` : ''}
                     ${this.controlTruthHtml(t)}
                     ${this.workSessionsPanelHtml(t)}

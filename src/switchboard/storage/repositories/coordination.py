@@ -2960,6 +2960,9 @@ def _runtime_matches_selector(runtime: Dict[str, Any], selector: Dict[str, Any])
 def _host_can_handle(host: Dict[str, Any], selector: Dict[str, Any]) -> bool:
     if host.get("stale"):
         return False
+    target_host_id = str(selector.get("host_id") or "").strip()
+    if target_host_id and str(host.get("host_id") or "") != target_host_id:
+        return False
     if host.get("available_sessions") is not None and host["available_sessions"] <= 0:
         return False
     return any(_runtime_matches_selector(rt, selector) for rt in host.get("runtimes") or [])

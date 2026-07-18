@@ -432,11 +432,14 @@ def create_router(*, resolve_project: ProjectResolver,
 
     if not thin_mode_a:
         @router.post("/api/tasks/{task_id}/dispatch")
-        async def dispatch_task(task_id: str, body: dict = Body(default={})):
+        async def dispatch_task(request: Request, task_id: str,
+                                body: dict = Body(default={})):
             project = resolve_project((body or {}).get("project"))
+            principal = resolve_principal(
+                request, project, ("write:tasks",), dev_actor="web")
             result = await asyncio.to_thread(
-                dispatch.dispatch, task_id, (body or {}).get("actor", "user"), project,
-                (body or {}).get("runtime") or "claude-code")
+                dispatch.dispatch, task_id, auth.actor(principal), project,
+                (body or {}).get("runtime") or "claude-code", principal.get("id") or "")
             if result.get("error") == "task not found":
                 raise HTTPException(404, "task not found")
             return result

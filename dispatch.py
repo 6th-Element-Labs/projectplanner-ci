@@ -1,8 +1,9 @@
-"""Dispatch a plan task to Claude Code cloud or Codex cloud through the wake substrate.
+"""Dispatch a plan task through the wake substrate.
 
 The UI dispatch controls and MCP tools call `dispatch()` here. Claude uses the official
-``claude --cloud`` bridge (``vendor_cloud`` capability). Codex uses the ADAPTER-19
-``cloud_execution`` envelope consumed by ``adapters/codex/cloud_adapter.py``.
+``claude --cloud`` bridge (``vendor_cloud`` capability). The browser's Codex action targets
+the authenticated operator's enrolled native Agent Host. The explicit ``codex-cloud`` runtime
+retains the ADAPTER-19 envelope consumed by ``adapters/codex/cloud_adapter.py``.
 """
 import hashlib
 import json
@@ -111,6 +112,52 @@ def _work_hosts(project, lane="", runtime=_RUNTIME, capability=_CLOUD_CAPABILITY
     return [h for h in hosts if _host_is_cloud_capable(h, runtime=runtime, capability=capability)]
 
 
+def _personal_host_target(project, principal_id, lane=""):
+    """Return the operator-owned enrolled Codex host and whether it is live now.
+
+    Enrollment ownership is durable, so an offline host can still be the target of a queued
+    wake. Live inventory is only used for the online/headroom signal shown by the UI.
+    """
+    owner = str(principal_id or "").strip()
+    if not owner:
+        return None, False
+    try:
+        enrollments = store.list_agent_host_enrollments(status="active", project=project)
+        hosts = store.list_agent_hosts(
+            runtime=_CODEX_RUNTIME, lane=lane, include_stale=True, project=project)
+    except Exception:
+        return None, False
+    hosts_by_id = {str(host.get("host_id") or ""): host for host in hosts}
+    candidates = []
+    for enrollment in enrollments:
+        if str(enrollment.get("owner_user_id") or "") != owner:
+            continue
+        if project not in set(enrollment.get("project_allowlist") or []):
+            continue
+        if "openai-codex" not in set(enrollment.get("provider_allowlist") or []):
+            continue
+        host_id = str(enrollment.get("host_id") or "").strip()
+        if not host_id:
+            continue
+        host = hosts_by_id.get(host_id) or {}
+        local_auth = dict((host.get("capacity") or {}).get("local_auth") or {})
+        live = bool(
+            host
+            and not host.get("stale")
+            and _host_is_work_capable(host)
+            and local_auth.get("available") is True
+            and local_auth.get("auth_mode") == "chatgpt_personal"
+            and (host.get("available_sessions") is None
+                 or int(host.get("available_sessions") or 0) > 0)
+        )
+        candidates.append((live, host_id))
+    if not candidates:
+        return None, False
+    candidates.sort(key=lambda item: (not item[0], item[1]))
+    live, host_id = candidates[0]
+    return host_id, live
+
+
 def status(project=store.DEFAULT_PROJECT):
     hosts = _work_hosts(project)
     return {"configured": True, "mode": "wake", "project": project,
@@ -124,6 +171,10 @@ def _normalize_runtime(runtime):
     if value in {_CODEX_RUNTIME, "codex-cloud", _CODEX_VENDOR}:
         return _CODEX_RUNTIME
     return ""
+
+
+def _codex_cloud_requested(runtime):
+    return str(runtime or "").strip().lower() in {"codex-cloud", _CODEX_VENDOR}
 
 
 def _codex_cloud_policy(task_id, task, branch):
@@ -152,7 +203,8 @@ def _codex_cloud_policy(task_id, task, branch):
     }
 
 
-def dispatch(task_id, actor="user", project=store.DEFAULT_PROJECT, runtime=_RUNTIME):
+def dispatch(task_id, actor="user", project=store.DEFAULT_PROJECT, runtime=_RUNTIME,
+             principal_id=""):
     """Enqueue a lane-scoped wake for `task_id` on `project`."""
     t = store.get_task(task_id, project=project)
     if not t:
@@ -163,7 +215,52 @@ def dispatch(task_id, actor="user", project=store.DEFAULT_PROJECT, runtime=_RUNT
         return {"dispatched": False, "error": "unsupported runtime",
                 "task_id": task_id, "project": project, "runtime": runtime}
     lane = t.get("_wsId") or ""
-    if selected_runtime == _CODEX_RUNTIME:
+    if selected_runtime == _CODEX_RUNTIME and not _codex_cloud_requested(runtime):
+        branch = f"codex/{task_id.lower()}"
+        host_id, host_online = _personal_host_target(project, principal_id, lane)
+        if not host_id:
+            return {
+                "dispatched": False,
+                "error": "personal_agent_host_not_enrolled",
+                "reason": "No active Codex Agent Host enrollment belongs to this user.",
+                "task_id": task_id,
+                "project": project,
+                "runtime": selected_runtime,
+            }
+        selector = {
+            "runtime": _CODEX_RUNTIME,
+            "lane": lane,
+            "agent_id": f"codex/{task_id}",
+            "task_id": task_id,
+            "host_id": host_id,
+            "branch": branch,
+        }
+        policy = {
+            "mode": "agent_host",
+            "execution_mode": "native_personal_agent_host",
+            "continuity": "fresh_switchboard_state",
+            "require_runner_bind": True,
+            "allow_on_demand": False,
+            "scheduler": {
+                "mode": "hybrid",
+                "prefer_persistent": True,
+                "allow_persistent": True,
+                "allow_ephemeral": False,
+                "burst_enabled": False,
+            },
+            "placement": {
+                "canonical_repo": "6th-Element-Labs/projectplanner",
+                "session_policy": "code_strict",
+                "isolation": "task_worktree",
+            },
+        }
+        hosts = [host_id] if host_online else []
+        note = (
+            f"Queued native Codex execution for `{host_id}` on `{branch}` (lane "
+            f"{lane or '—'}). The enrolled host will atomically claim this exact task, bind a "
+            "managed Work Session and runner, then stream the native Codex PTY to Watch."
+        )
+    elif selected_runtime == _CODEX_RUNTIME:
         branch = f"codex/{task_id.lower()}"
         selector = {
             "runtime": _CODEX_RUNTIME,
@@ -195,15 +292,22 @@ def dispatch(task_id, actor="user", project=store.DEFAULT_PROJECT, runtime=_RUNT
                 f"A trigger-only host will launch the pushed `{branch}` branch, bind the "
                 "app-visible session URL, and Claude will open a PR.")
     reason = f"Operator dispatched {task_id} — {t.get('title') or ''}".strip()
+    idem_key = (
+        f"ui-personal-dispatch:v2:{project}:{task_id}:{principal_id}:{selector.get('host_id')}"
+        if selected_runtime == _CODEX_RUNTIME and not _codex_cloud_requested(runtime)
+        else f"ui-dispatch:{project}:{task_id}:{str(runtime or selected_runtime).lower()}"
+    )
     w = store.request_wake(
         selector=selector, reason=reason, source=f"ui:{actor}",
         policy=policy, task_id=task_id, actor=actor,
-        project=project, idem_key=f"ui-dispatch:{project}:{task_id}:{selected_runtime}")
+        principal_id=principal_id, project=project, idem_key=idem_key)
     if w.get("error") or not w.get("wake_id"):
         return {"dispatched": False, "task_id": task_id, "project": project,
                 "error": w.get("error") or w.get("reason") or "wake not created"}
     if not hosts:
-        if selected_runtime == _CODEX_RUNTIME:
+        if selected_runtime == _CODEX_RUNTIME and not _codex_cloud_requested(runtime):
+            note += f" `{selector.get('host_id')}` is offline or full, so the exact wake stays queued."
+        elif selected_runtime == _CODEX_RUNTIME:
             note += " No Codex cloud bridge host is online for this lane yet, so it stays queued."
         else:
             note += (" No authenticated Claude cloud trigger host is online for this lane yet, so "
@@ -212,7 +316,9 @@ def dispatch(task_id, actor="user", project=store.DEFAULT_PROJECT, runtime=_RUNT
     return {"dispatched": True, "task_id": task_id, "project": project,
             "wake_id": w["wake_id"], "wake_status": w.get("status"),
             "lane": lane, "runtime": selected_runtime,
-            "vendor_id": _CODEX_VENDOR if selected_runtime == _CODEX_RUNTIME else None,
+            "vendor_id": (_CODEX_VENDOR if selected_runtime == _CODEX_RUNTIME
+                          and _codex_cloud_requested(runtime) else None),
+            "host_id": selector.get("host_id"),
             "branch": branch, "execution_mode": policy.get("mode"),
             "work_hosts_online": len(hosts)}
 
