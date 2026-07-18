@@ -252,6 +252,45 @@ try:
        and all(is_renewal for _at, is_renewal in renewals),
        "bind finalizer renews throughout startup longer than one 60s TTL")
 
+    # The default 90-second readiness SLO must not kill a healthy exact-task boot
+    # while a slow canonical worktree is still being created. A live local runner
+    # plus the exact renewable preclaim extends the wait, with a separate hard cap.
+    clock = {"now": 0.0}
+    renewals = []
+
+    def delayed_bind_try(_method, _path, _body=None, _timeout=None):
+        return {"sessions": [bound_row if clock["now"] > 120 else preclaim_row]}
+
+    def delayed_bind_sleep(seconds):
+        clock["now"] += max(10.0, seconds)
+
+    agent_host._try = delayed_bind_try
+    agent_host._register_preclaim_runner = fake_register
+    try:
+        waited = agent_host.wait_for_runner_binding(
+            wake, inventory, runner_id,
+            max_timeout_s=180,
+            runner_alive=lambda requested_id: requested_id == runner_id,
+            sleep=delayed_bind_sleep, monotonic=lambda: clock["now"])
+    finally:
+        agent_host._try = real_try
+        agent_host._register_preclaim_runner = real_register
+    ok(waited.get("bound") is True and clock["now"] > 90,
+       "live exact preclaim extends bind wait beyond the readiness SLO")
+
+    clock = {"now": 0.0}
+    agent_host._try = delayed_bind_try
+    try:
+        waited = agent_host.wait_for_runner_binding(
+            wake, inventory, runner_id,
+            max_timeout_s=180,
+            runner_alive=lambda _requested_id: False,
+            sleep=delayed_bind_sleep, monotonic=lambda: clock["now"])
+    finally:
+        agent_host._try = real_try
+    ok(waited.get("bound") is False and clock["now"] <= 100,
+       "dead local runner still fails closed at the readiness deadline")
+
     old_env = {key: os.environ.get(key) for key in (
         "PM_CO_WAKE_ID", "PM_CO_HOST_ID", "PM_RUNNER_SESSION_ID",
         "PM_TASK_ID", "PM_AGENT_ID",

@@ -177,6 +177,36 @@ def _codex_cloud_requested(runtime):
     return str(runtime or "").strip().lower() in {"codex-cloud", _CODEX_VENDOR}
 
 
+def _personal_dispatch_attempt(project, task_id, selector, base_idem_key):
+    """Return the safe idempotency key (or live wake) for a browser retry.
+
+    One fixed key correctly collapses double-clicks, but it also replays a failed
+    wake forever. Reuse the latest matching wake while it is active or completed;
+    after an explicitly terminal failure/cancellation/expiry, derive one new key
+    from that wake. A second click then sees the new active wake and collapses onto
+    it instead of creating parallel duplicate sessions.
+    """
+    try:
+        wakes = store.list_wake_intents(
+            task_id=task_id, runtime=_CODEX_RUNTIME, project=project)
+    except Exception:
+        return base_idem_key, None, None
+    matching = [wake for wake in wakes if (
+        str((wake.get("selector") or {}).get("host_id") or "")
+        == str(selector.get("host_id") or "")
+        and str((wake.get("selector") or {}).get("agent_id") or "")
+        == str(selector.get("agent_id") or "")
+    )]
+    if not matching:
+        return base_idem_key, None, None
+    latest = matching[-1]
+    status = str(latest.get("status") or "").lower()
+    if status not in {"failed", "cancelled", "expired"}:
+        return base_idem_key, latest, None
+    prior_wake_id = str(latest.get("wake_id") or "")
+    return f"{base_idem_key}:after:{prior_wake_id}", None, prior_wake_id
+
+
 def _codex_cloud_policy(task_id, task, branch):
     endpoint = os.environ.get("PM_MCP_PUBLIC_URL", "https://plan.taikunai.com/mcp")
     return {
@@ -292,12 +322,23 @@ def dispatch(task_id, actor="user", project=store.DEFAULT_PROJECT, runtime=_RUNT
                 f"A trigger-only host will launch the pushed `{branch}` branch, bind the "
                 "app-visible session URL, and Claude will open a PR.")
     reason = f"Operator dispatched {task_id} — {t.get('title') or ''}".strip()
+    personal_dispatch = (
+        selected_runtime == _CODEX_RUNTIME and not _codex_cloud_requested(runtime))
     idem_key = (
         f"ui-personal-dispatch:v2:{project}:{task_id}:{principal_id}:{selector.get('host_id')}"
-        if selected_runtime == _CODEX_RUNTIME and not _codex_cloud_requested(runtime)
+        if personal_dispatch
         else f"ui-dispatch:{project}:{task_id}:{str(runtime or selected_runtime).lower()}"
     )
-    w = store.request_wake(
+    existing_wake = None
+    if personal_dispatch:
+        idem_key, existing_wake, retry_after = _personal_dispatch_attempt(
+            project, task_id, selector, idem_key)
+        if retry_after:
+            # The side-effect ledger hashes the payload independently from the
+            # API idempotency key. Name the terminal predecessor in the policy so
+            # a deliberate retry is a new auditable effect, not a replay of void.
+            policy = {**policy, "dispatch_attempt_after": retry_after}
+    w = existing_wake or store.request_wake(
         selector=selector, reason=reason, source=f"ui:{actor}",
         policy=policy, task_id=task_id, actor=actor,
         principal_id=principal_id, project=project, idem_key=idem_key)
@@ -312,7 +353,8 @@ def dispatch(task_id, actor="user", project=store.DEFAULT_PROJECT, runtime=_RUNT
         else:
             note += (" No authenticated Claude cloud trigger host is online for this lane yet, so "
                      "it stays queued (deploy/switchboard-claude-cloud-host.service.example).")
-    store.add_comment(task_id, "Switchboard (dispatch)", note, project=project)
+    if existing_wake is None:
+        store.add_comment(task_id, "Switchboard (dispatch)", note, project=project)
     return {"dispatched": True, "task_id": task_id, "project": project,
             "wake_id": w["wake_id"], "wake_status": w.get("status"),
             "lane": lane, "runtime": selected_runtime,

@@ -160,6 +160,28 @@ try:
     ok(right_claim.get("claimed") is True,
        "the enrolled Mac atomically claims the exact wake")
 
+    duplicate = dispatch.dispatch(
+        task_id, actor=OWNER, principal_id=OWNER, project=P, runtime="codex")
+    ok(duplicate.get("wake_id") == wake["wake_id"]
+       and len(store.list_wake_intents(task_id=task_id, project=P)) == 1,
+       "repeat click collapses onto the matching active personal wake")
+
+    failed_wake = store.cancel_wake(
+        wake["wake_id"], reason="runner bind test terminal",
+        actor=OWNER, project=P)
+    retry = dispatch.dispatch(
+        task_id, actor=OWNER, principal_id=OWNER, project=P, runtime="codex")
+    ok(failed_wake.get("status") == "cancelled"
+       and retry.get("wake_id") not in (None, wake["wake_id"])
+       and len(store.list_wake_intents(task_id=task_id, project=P)) == 2,
+       "browser retry creates one fresh wake after a terminal attempt")
+
+    retry_duplicate = dispatch.dispatch(
+        task_id, actor=OWNER, principal_id=OWNER, project=P, runtime="codex")
+    ok(retry_duplicate.get("wake_id") == retry.get("wake_id")
+       and len(store.list_wake_intents(task_id=task_id, project=P)) == 2,
+       "repeat retry click cannot create parallel duplicate sessions")
+
     missing = dispatch.dispatch(
         task_id, actor="user/other", principal_id="user/other", project=P,
         runtime="codex")

@@ -1522,15 +1522,24 @@ def _register_preclaim_runner(wake, inventory, runner_session_id, *, renewal=Fal
 
 
 def wait_for_runner_binding(wake, inventory, runner_session_id, timeout_s=None,
+                            max_timeout_s=None, runner_alive=None,
                             sleep=time.sleep, monotonic=time.monotonic):
     """Wait until the child has published its exact claim + Work Session tuple.
 
     Process liveness is not execution readiness.  Autopilot may report Running only
     after the child owns the exact task and its Watch/Chat row is fully bound.
     """
-    timeout_s = float(timeout_s if timeout_s is not None else os.environ.get(
+    explicit_timeout = timeout_s is not None
+    timeout_s = float(timeout_s if explicit_timeout else os.environ.get(
         "PM_AGENT_HOST_BIND_TIMEOUT_S", "90"))
-    deadline = monotonic() + max(0.0, timeout_s)
+    if max_timeout_s is None:
+        max_timeout_s = (timeout_s if explicit_timeout else os.environ.get(
+            "PM_AGENT_HOST_BIND_MAX_TIMEOUT_S", "600"))
+    max_timeout_s = max(timeout_s, float(max_timeout_s))
+    started_at = monotonic()
+    deadline = started_at + max(0.0, timeout_s)
+    hard_deadline = started_at + max(0.0, max_timeout_s)
+    extended_for_live_boot = False
     renew_interval_s = max(1.0, float(os.environ.get(
         "PM_AGENT_HOST_PRECLAIM_RENEW_INTERVAL_S", "15")))
     next_renewal = monotonic() + renew_interval_s
@@ -1543,6 +1552,7 @@ def wait_for_runner_binding(wake, inventory, runner_session_id, timeout_s=None,
         "runtime": str((wake.get("selector") or {}).get("runtime") or ""),
     }
     last = None
+    last_exact_preclaim = False
     while monotonic() <= deadline:
         query = urllib.parse.urlencode({
             "project": PROJECT,
@@ -1582,6 +1592,7 @@ def wait_for_runner_binding(wake, inventory, runner_session_id, timeout_s=None,
                 and phase == "preclaim"
                 and status == "starting"
             )
+            last_exact_preclaim = exact_preclaim
             now_mono = monotonic()
             if exact_preclaim and now_mono >= next_renewal:
                 # The server performs an atomic compare-and-refresh.  If the child
@@ -1591,6 +1602,23 @@ def wait_for_runner_binding(wake, inventory, runner_session_id, timeout_s=None,
                     wake, inventory, runner_session_id, renewal=True)
                 next_renewal = now_mono + renew_interval_s
         if monotonic() >= deadline:
+            # Worktree creation on user-owned storage can legitimately exceed the
+            # normal readiness SLO. Keep waiting only when both halves of the
+            # admission proof agree that this is still the exact boot we launched:
+            # the server still has our renewable preclaim and the local supervised
+            # process is alive. A dead/mismatched boot still fails closed at the
+            # original deadline; even a live boot is capped by hard_deadline.
+            if (not extended_for_live_boot and last_exact_preclaim
+                    and hard_deadline > deadline):
+                if runner_alive is None:
+                    health = supervisor_action("health", runner_session_id)
+                    alive = bool((health or {}).get("alive"))
+                else:
+                    alive = bool(runner_alive(runner_session_id))
+                if alive:
+                    extended_for_live_boot = True
+                    deadline = hard_deadline
+                    continue
             break
         sleep(min(1.0, max(0.0, deadline - monotonic())))
     return {"bound": False, "reason": "runner_bind_timeout", "session": last}
