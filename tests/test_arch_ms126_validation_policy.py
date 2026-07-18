@@ -32,6 +32,9 @@ def ok(condition: bool, message: str) -> None:
 policy = project_validation_policy("switchboard")
 ok(policy["schema"] == "switchboard.validation_policy.v1", "policy is project-wide v1")
 ok(policy["required_status_context"] == UI_CONTEXT, "dedicated UI context is declared")
+runner_source = (ROOT / "scripts" / "run_ui_playwright.py").read_text(encoding="utf-8")
+ok('"completed_at": finished' in runner_source,
+   "Playwright receipt includes the code-strict completion timestamp")
 
 missing = classify_task(
     {"title": "Refactor repository adapter", "phase": "Build"},

@@ -107,6 +107,24 @@ try:
        "explicit task policy may opt a nonblocking flow task into dispatch")
     ok(parked.get("status") == "idle",
        "explicit targeting still cannot auto-dispatch a parked link")
+    duplicate_id_status = {
+        "deliverable_id": "cross-project-duplicate", "progress": {},
+        "linked_tasks": [
+            {"project_id": "project-a", "task_id": "SAME-1", "role": "contributes",
+             "task_detail": {"task_id": "SAME-1", "status": "Not Started",
+                             "dependency_state": {"ready": True}, "active_claims": [],
+                             "workstream": "RENDER"}},
+            {"project_id": "project-b", "task_id": "SAME-1", "role": "contributes",
+             "task_detail": {"task_id": "SAME-1", "status": "Not Started",
+                             "dependency_state": {"ready": True}, "active_claims": [],
+                             "workstream": "RENDER"}},
+        ],
+    }
+    project_target = mission_coordinator.coordinator_tick_plan(
+        duplicate_id_status,
+        policy={"target_task_id": "SAME-1", "target_project_id": "project-b"})
+    ok(project_target.get("dispatch", {}).get("project_id") == "project-b",
+       "explicit task targeting is fenced by project when task ids overlap")
     lane_fail_closed = mission_coordinator.coordinator_tick_plan(
         {"deliverable_id": "coord-mission", "progress": {}, "next_actions": [
             {"action": "claim_task", "task_id": "NO-LANE"},

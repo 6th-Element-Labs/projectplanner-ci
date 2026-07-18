@@ -44,6 +44,7 @@ def main() -> int:
     command = [sys.executable, str(test_path)]
     completed = subprocess.run(command, cwd=ROOT, text=True,
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    finished = time.time()
     output_bytes = completed.stdout.encode("utf-8", errors="replace")
     passed = completed.returncode == 0 and "SKIP" not in completed.stdout
     receipt = {
@@ -71,8 +72,11 @@ def main() -> int:
         "failed_request_count": 0,
         "output_hash": sha256(output_bytes),
         "artifact_hash": sha256(output_bytes + args.head_sha.encode()),
-        "duration_seconds": round(time.time() - started, 3),
-        "recorded_at": time.time(),
+        "duration_seconds": round(finished - started, 3),
+        # The code-strict executed-test gate consumes completed_at; recorded_at
+        # remains for compatibility with existing UI receipt readers.
+        "completed_at": finished,
+        "recorded_at": finished,
     }
     output_path = ROOT / args.output
     output_path.parent.mkdir(parents=True, exist_ok=True)

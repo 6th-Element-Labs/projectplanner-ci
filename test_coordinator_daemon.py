@@ -87,6 +87,37 @@ class FakeStore:
         return [{"id": "deliverable-a", "status": "approved"},
                 {"id": "deliverable-b", "status": "in_review"}]
 
+    def list_autopilot_scopes(self, **_kwargs):
+        return [
+            {"scope_id": "scope-a", "scope_type": "deliverable",
+             "deliverable_id": "deliverable-a", "runtime": "codex", "status": "active"},
+            {"scope_id": "scope-b", "scope_type": "deliverable",
+             "deliverable_id": "deliverable-b", "runtime": "codex", "status": "active"},
+        ]
+
+    def get_mission_status(self, *, deliverable_id, **_kwargs):
+        task_id = "TASK-A" if deliverable_id == "deliverable-a" else "TASK-B"
+        detail = {
+            "task_id": task_id, "status": "Not Started",
+            "dependency_state": {"ready": True, "satisfied": True},
+            "active_claims": [], "provenance": {}, "workstream": "CO",
+        }
+        return {
+            "deliverable_id": deliverable_id,
+            "deliverable": {"id": deliverable_id, "status": "approved"},
+            "linked_tasks": [{"task_id": task_id, "project_id": "switchboard",
+                              "task_detail": detail}],
+            "dispatch_scope": {"links": [{"task_id": task_id,
+                                            "project_id": "switchboard",
+                                            "automatic_dispatch_eligible": True}]},
+            "next_actions": [{"action": "claim_task", "task_id": task_id,
+                              "project_id": "switchboard", "lane": "CO"}],
+        }
+
+    def update_autopilot_scope(self, scope_id, **kwargs):
+        self.calls.append(("scope_update", scope_id, kwargs))
+        return {"scope_id": scope_id, **kwargs}
+
     def run_mission_coordinator_tick(self, *, idem_key, deliverable_id, policy, **kwargs):
         self.calls.append(("mission", deliverable_id, policy))
         if idem_key not in self.effects:
@@ -110,7 +141,7 @@ first = daemon_mod.CoordinatorDaemon(
     config, store_mod=store, instance_id="instance-one", clock=clock)
 run1 = first.tick_project("switchboard")
 ok(run1["status"] == "running" and run1["receipts"][0]["deliverable_id"] == "deliverable-a",
-   "leader processes one bounded deliverable")
+   "leader processes one bounded operator-started scope")
 state1 = run1["state"]
 ok(state1["sequence"] == 1 and state1["last_deliverable_id"] == "deliverable-a",
    "sequence and deliverable cursor persist after the idempotent effect")
@@ -138,7 +169,7 @@ clock.value += 31
 third = daemon_mod.CoordinatorDaemon(
     config, store_mod=store, instance_id="instance-three", clock=clock)
 replay = third.tick_project("switchboard")
-ok(replay["receipts"][0]["idem_key"] in store.effects
+ok(replay["receipts"][0]["task_receipts"][0]["idem_key"] in store.effects
    and len(store.effects) == effects_before,
    "crash replay reuses the durable idempotency key without duplicating effects")
 
@@ -162,8 +193,8 @@ ok(lane_run["status"] == "running" and lane_policy["denied_lanes"] == ["CO"],
 
 service = Path("deploy/projectplanner-coordinator-autopilot.service").read_text()
 ok("Restart=always" in service and "coordinator_daemon.py run" in service
-   and "PM_COORDINATOR_AUTOPILOT_ACT=0" in service,
-   "systemd profile is persistent and ships disarmed")
+   and "PM_COORDINATOR_AUTOPILOT_ACT=1" in service,
+   "systemd profile is persistent and active scopes are the arming boundary")
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

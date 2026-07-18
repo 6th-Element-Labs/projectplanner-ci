@@ -137,6 +137,100 @@
         }
     },
 
+    async loadAutopilotScopes(deliverableId) {
+        const id = (deliverableId || '').trim();
+        if (!id) { this.autopilotScopes = []; return []; }
+        try {
+            const res = await fetch(`api/deliverables/${encodeURIComponent(id)}/autopilot`, { cache: 'no-store' });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
+            this.autopilotScopes = Array.isArray(data.scopes) ? data.scopes : [];
+        } catch (e) {
+            this.autopilotScopes = [];
+        }
+        return this.autopilotScopes;
+    },
+
+    _autopilotScope(scopeType, taskId, taskProject) {
+        const type = scopeType || 'deliverable';
+        const tid = String(taskId || '').toUpperCase();
+        return (this.autopilotScopes || []).find((scope) => {
+            if (scope.scope_type !== type) return false;
+            if (type === 'deliverable') return true;
+            return String(scope.task_id || '').toUpperCase() === tid
+                && (!taskProject || scope.task_project === taskProject);
+        }) || null;
+    },
+
+    _taskAutopilotState(taskId, taskProject) {
+        const deliverable = this._autopilotScope('deliverable');
+        if (deliverable) return { scope: deliverable, covered: true };
+        return { scope: this._autopilotScope('task', taskId, taskProject), covered: false };
+    },
+
+    _missionAutopilotControlsHtml() {
+        const scope = this._autopilotScope('deliverable');
+        const status = scope && scope.status;
+        const last = (scope && scope.last_result) || {};
+        const taskReceipts = (last.receipts || []).length;
+        const stateLabel = status === 'paused' ? 'Paused'
+            : (last.status === 'waiting' ? 'Waiting for dependencies/capacity' : 'Autopilot running');
+        if (!scope) {
+            return `<div class="d-flex flex-column align-items-end gap-1">
+                <button class="btn btn-primary" type="button" data-autopilot-action="start" data-autopilot-scope="deliverable">
+                    <i class="ti ti-player-play me-1"></i>Start deliverable</button>
+                <span class="text-secondary small">Starts every ready task and keeps advancing.</span>
+                <span id="mission-autopilot-flash" class="small"></span></div>`;
+        }
+        return `<div class="d-flex flex-column align-items-end gap-1">
+            <div class="btn-list justify-content-end">
+                <span class="badge bg-${status === 'paused' ? 'yellow' : 'green'}-lt"><span class="status-dot ${status === 'active' ? 'status-dot-animated ' : ''}bg-${status === 'paused' ? 'yellow' : 'green'} me-1"></span>${this.esc(stateLabel)}${taskReceipts ? ` · ${taskReceipts} this wave` : ''}</span>
+                <button class="btn btn-sm btn-outline-primary" type="button" data-autopilot-action="${status === 'paused' ? 'resume' : 'pause'}" data-autopilot-scope="deliverable"><i class="ti ti-${status === 'paused' ? 'player-play' : 'player-pause'} me-1"></i>${status === 'paused' ? 'Resume' : 'Pause'}</button>
+                <button class="btn btn-sm btn-outline-danger" type="button" data-autopilot-action="stop" data-autopilot-scope="deliverable"><i class="ti ti-player-stop me-1"></i>Stop</button>
+            </div><span id="mission-autopilot-flash" class="small text-secondary"></span></div>`;
+    },
+
+    _taskAutopilotButtonHtml(taskId, taskProject, compact) {
+        const state = this._taskAutopilotState(taskId, taskProject);
+        if (state.covered) {
+            return `<span class="badge bg-green-lt" title="Included in the active deliverable run"><i class="ti ti-player-play me-1"></i>Included</span>`;
+        }
+        if (state.scope) {
+            const paused = state.scope.status === 'paused';
+            const waiting = (state.scope.last_result || {}).status === 'waiting';
+            return `<div class="btn-list flex-nowrap justify-content-end">
+                <span class="badge bg-${paused ? 'yellow' : 'blue'}-lt">${paused ? 'Paused' : (waiting ? 'Waiting' : 'Armed')}</span>
+                <button class="btn btn-sm btn-outline-${paused ? 'primary' : 'secondary'}" type="button" data-autopilot-action="${paused ? 'resume' : 'pause'}" data-autopilot-scope="task" data-autopilot-task="${this.esc(taskId)}" data-autopilot-project="${this.esc(taskProject || '')}" title="${paused ? 'Resume task Autopilot' : 'Pause task Autopilot'}"><i class="ti ti-${paused ? 'player-play' : 'player-pause'}${compact ? '' : ' me-1'}"></i>${compact ? '' : (paused ? 'Resume task' : 'Pause task')}</button>
+                <button class="btn btn-sm btn-outline-danger" type="button" data-autopilot-action="stop" data-autopilot-scope="task" data-autopilot-task="${this.esc(taskId)}" data-autopilot-project="${this.esc(taskProject || '')}" title="Stop task Autopilot"><i class="ti ti-player-stop${compact ? '' : ' me-1'}"></i>${compact ? '' : 'Stop task'}</button>
+            </div>`;
+        }
+        return `<button class="btn btn-sm btn-primary" type="button" data-autopilot-action="start" data-autopilot-scope="task" data-autopilot-task="${this.esc(taskId)}" data-autopilot-project="${this.esc(taskProject || '')}"><i class="ti ti-player-play me-1"></i>${compact ? 'Start' : 'Start task'}</button>`;
+    },
+
+    async controlAutopilot(action, scopeType, taskId, taskProject) {
+        const deliverableId = (this.selectedDeliverableId || '').trim();
+        if (!deliverableId) return;
+        const flash = document.getElementById('mission-autopilot-flash');
+        if (flash) { flash.className = 'small text-secondary'; flash.textContent = `${action === 'start' ? 'Starting' : action + 'ing'}…`; }
+        const isTask = scopeType === 'task';
+        const path = isTask
+            ? `api/deliverables/${encodeURIComponent(deliverableId)}/tasks/${encodeURIComponent(taskId)}/autopilot`
+            : `api/deliverables/${encodeURIComponent(deliverableId)}/autopilot`;
+        try {
+            const res = await fetch(path, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action, task_project: taskProject || window.PM_PROJECT || 'maxwell', runtime: 'codex' }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.error) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
+            await this.loadAutopilotScopes(deliverableId);
+            await this.refreshMissionPage();
+        } catch (e) {
+            if (flash) { flash.className = 'small text-danger'; flash.textContent = `Autopilot failed: ${e.message}`; }
+            else window.alert(`Autopilot failed: ${e.message}`);
+        }
+    },
+
     async generateMissionBrief() {
         const id = (this.selectedDeliverableId || '').trim();
         if (!id) return;
@@ -325,6 +419,7 @@
             await Promise.all([
                 this.loadMissionStatus(this.selectedDeliverableId),
                 this.loadDependencyGraph(this.selectedDeliverableId),
+                this.loadAutopilotScopes(this.selectedDeliverableId),
                 this.loadBreakdownProposals(this.selectedDeliverableId),
                 this.loadKpisAndOutcomes(), this.loadClosureReport(this.selectedDeliverableId),
             ]);
@@ -681,7 +776,8 @@
         const nodeSig = (g.nodes || []).map((n) => `${n.id}:${n.state}`).sort();
         const active = (s.active_work || []).map((w) => `${w.task_id}:${w.status}:${(w.active_claims || []).length}`).sort();
         const blockers = (s.blockers || []).map((b) => `${b.kind || ''}:${b.task_id || ''}`).sort();
-        return JSON.stringify([nodeSig, active, blockers, s.progress || {}, g.stats || {}, (s.deliverable || {}).status, ((this.missionClosure || {}).report || {}).report_id, ((this.missionClosure || {}).report || {}).grade]);
+        const scopes = (this.autopilotScopes || []).map((scope) => `${scope.scope_id}:${scope.status}:${scope.updated_at}`).sort();
+        return JSON.stringify([nodeSig, active, blockers, scopes, s.progress || {}, g.stats || {}, (s.deliverable || {}).status, ((this.missionClosure || {}).report || {}).report_id, ((this.missionClosure || {}).report || {}).grade]);
     },
 
     _missionLiveStamp(changed) {
@@ -703,7 +799,7 @@
         if (!id || this._missionLiveBusy) return;
         this._missionLiveBusy = true;
         try {
-            await Promise.all([this.loadMissionStatus(id), this.loadDependencyGraph(id), this.loadClosureReport(id)]);
+            await Promise.all([this.loadMissionStatus(id), this.loadDependencyGraph(id), this.loadAutopilotScopes(id), this.loadClosureReport(id)]);
         } catch (e) {
             this._missionLiveBusy = false;
             return;   // transient (agent mid-write, network blip) — try again next tick
@@ -785,7 +881,7 @@
             <h2 class="mb-2">${this.esc(d.title || s.deliverable_id || 'Mission')}</h2>
             <div class="btn-list">${this._missionBadge(d.status, this.DELIVERABLE_STATUS_COLOR)} ${this._missionConfidence(board.confidence)} ${proofToggle}</div>
         </div>
-        <div class="text-end"><div class="mb-2">${this._missionClosureActionHtml()}</div>
+        <div class="text-end"><div class="mb-2">${this._missionAutopilotControlsHtml()}</div><div class="mb-2">${this._missionClosureActionHtml()}</div>
             <span class="badge bg-green-lt" title="Live — auto-refreshes as agents update tasks"><span class="status-dot status-dot-animated bg-green me-1"></span>Live</span>
             <div id="mission-live-stamp" class="text-secondary small mt-1"></div>
         </div></div>
@@ -819,8 +915,8 @@
         }).join('') || '<tr><td colspan="4" class="text-secondary">Nothing Done-with-proof yet</td></tr>';
         const linkedRows = (s.linked_tasks || []).map((link) => {
             const dtl = link.task_detail || link.task || {};
-            return `<tr><td>${this.esc(link.project_id || '')}</td><td><a href="#" data-linked-task="${this.esc(link.task_id)}" data-linked-project="${this.esc(link.project_id)}">${this.esc(link.task_id)}</a></td><td>${this.esc(dtl.title || dtl.error || '')}</td><td>${this._missionBadge(dtl.status || 'missing', this.STATUS_COLOR)}</td><td>${this.esc(link.milestone_id || '—')}</td><td>${this.esc(link.role || '—')}</td></tr>`;
-        }).join('') || '<tr><td colspan="6" class="text-secondary">No cross-project links</td></tr>';
+            return `<tr><td>${this.esc(link.project_id || '')}</td><td><a href="#" data-linked-task="${this.esc(link.task_id)}" data-linked-project="${this.esc(link.project_id)}">${this.esc(link.task_id)}</a></td><td>${this.esc(dtl.title || dtl.error || '')}</td><td>${this._missionBadge(dtl.status || 'missing', this.STATUS_COLOR)}</td><td>${this.esc(link.milestone_id || '—')}</td><td>${this.esc(link.role || '—')}</td><td class="text-end">${dtl.status === 'Done' ? '<span class="text-secondary small">Done</span>' : this._taskAutopilotButtonHtml(link.task_id, link.project_id, true)}</td></tr>`;
+        }).join('') || '<tr><td colspan="7" class="text-secondary">No cross-project links</td></tr>';
         // Blockers box removed — it dumped raw kinds like "dependency_unsatisfied". The
         // dependency map already outlines blockers with a thick dark border.
         const blockerHtml = '';
@@ -849,7 +945,7 @@
             `<div class="row g-3 mb-4"><div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Active work</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Task</th><th>Title</th><th>Status</th><th>Session</th><th>Assignee</th><th>Claims</th></tr></thead><tbody>${activeRows}</tbody></table></div></div></div>
             <div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Done with proof</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Task</th><th>Title</th><th>Provenance</th><th>PR</th></tr></thead><tbody>${doneRows}</tbody></table></div></div></div></div>` +
             agents +
-            `<div class="card mb-4"><div class="card-header"><h3 class="card-title">Linked tasks across projects</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Project</th><th>Task</th><th>Title</th><th>Status</th><th>Milestone</th><th>Role</th></tr></thead><tbody>${linkedRows}</tbody></table></div></div>` +
+            `<div class="card mb-4"><div class="card-header"><h3 class="card-title">Linked tasks across projects</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Project</th><th>Task</th><th>Title</th><th>Status</th><th>Milestone</th><th>Role</th><th class="text-end">Autopilot</th></tr></thead><tbody>${linkedRows}</tbody></table></div></div>` +
             `<div class="row g-3"><div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Architecture / policy</h3></div><div class="card-body">${this._missionPolicyDrift(s)}</div></div></div>
             <div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Recent changes</h3></div><div class="card-body">${this._missionRecentChanges(s.linked_tasks)}</div></div></div></div>`;
         el.innerHTML = essentials +
@@ -1026,7 +1122,10 @@
     },
     // ---- small modal + fetch helpers ----
     _dlShow(id) { window.bootstrap.Modal.getOrCreateInstance(document.getElementById(id)).show(); },
-    _dlHide(id) { const m = document.getElementById(id); const inst = m && window.bootstrap.Modal.getInstance(m); if (inst) inst.hide(); },
+    _dlHide(id) {
+        const m = document.getElementById(id);
+        if (m) window.bootstrap.Modal.getOrCreateInstance(m).hide();
+    },
     _dlFlash(id, msg, cls) { const el = document.getElementById(id); if (el) { el.textContent = msg || ''; el.className = `small ${cls || 'text-secondary'} me-auto`; } },
     _dlHttpErr(res, data) {
         if (res.status === 403) return 'You don’t have permission for this action.';
@@ -1417,11 +1516,26 @@
             <label class="form-check mb-3"><input class="form-check-input" type="checkbox" id="dl-node-blocks"${link.blocks_deliverable ? ' checked' : ''}>
                 <span class="form-check-label">This task blocks the deliverable</span></label>
             <a href="#" class="small" id="dl-node-open"><i class="ti ti-external-link me-1"></i>Open task detail</a>`;
+        const detail = link.task_detail || link.task || {};
+        if (detail.status !== 'Done') {
+            body.insertAdjacentHTML('beforeend', `<div class="mt-3" id="dl-node-autopilot">${this._taskAutopilotButtonHtml(id, taskProject, false)}</div>`);
+        }
         this._dlFlash('dl-node-flash', '', 'text-secondary');
         document.getElementById('dl-node-open')?.addEventListener('click', (e) => {
             e.preventDefault();
             this._dlHide('dl-node-modal');
             this.openLinkedTask(id, taskProject);
+        });
+        document.getElementById('dl-node-autopilot')?.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-autopilot-action]');
+            if (!btn) return;
+            // The node modal lives inside #mission-page, which also owns the
+            // delegated task-row controls. Keep this click local so one user
+            // action cannot issue the same idempotent request twice.
+            e.preventDefault();
+            e.stopPropagation();
+            this._dlHide('dl-node-modal');
+            this.controlAutopilot(btn.dataset.autopilotAction, 'task', id, taskProject);
         });
         this._dlShow('dl-node-modal');
     },

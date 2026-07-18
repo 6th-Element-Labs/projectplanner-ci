@@ -5,10 +5,11 @@ etag boundaries; create_deliverable uses a shared application command.
 """
 from __future__ import annotations
 
-from typing import Callable
+from typing import Callable, Literal
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from fastapi.responses import Response
+from pydantic import BaseModel, ConfigDict, Field
 
 import auth
 import deliverable_closure
@@ -19,6 +20,17 @@ from switchboard.application.commands import create_deliverable as create_delive
 ProjectResolver = Callable[[str], str]
 PrincipalResolver = Callable[..., dict]
 EtagJson = Callable[..., Response]
+
+
+class AutopilotControlBody(BaseModel):
+    """Typed operator intent for one durable task or deliverable scope."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["start", "pause", "resume", "stop"] = "start"
+    profile_id: str = Field(default="autopilot-default", min_length=1, max_length=128)
+    runtime: str = Field(default="codex", min_length=1, max_length=64)
+    task_project: str = Field(default="", max_length=128)
 
 
 def create_router(*, resolve_project: ProjectResolver,
@@ -173,6 +185,72 @@ def create_router(*, resolve_project: ProjectResolver,
             code = 404 if "unknown" in result["error"] else 400
             raise HTTPException(code, result["error"])
         return etag_json(request, result, max_age=5)  # CONSOL-8: TTL+ETag poll parity
+
+    @router.get("/api/deliverables/{deliverable_id}/autopilot")
+    def deliverable_autopilot_status(deliverable_id: str, project: str = Query(...)):
+        """Return durable task/deliverable scopes for one mission cockpit."""
+        project = resolve_project(project)
+        if not store.get_deliverable(deliverable_id, project=project):
+            raise HTTPException(404, "unknown deliverable")
+        scopes = store.list_autopilot_scopes(
+            project=project, deliverable_id=deliverable_id,
+            status="active,paused", limit=500)
+        return {
+            "schema": "switchboard.autopilot_scope_list.v1",
+            "project_id": project,
+            "deliverable_id": deliverable_id,
+            "scopes": scopes,
+        }
+
+    @router.post("/api/deliverables/{deliverable_id}/autopilot")
+    async def control_deliverable_autopilot(request: Request, deliverable_id: str,
+                                            body: AutopilotControlBody,
+                                            project: str = Query(...)):
+        project = resolve_project(project)
+        principal = resolve_principal(request, project, ("write:tasks",), dev_actor="web")
+        action = body.action
+        common = {
+            "project": project,
+            "profile_id": body.profile_id,
+            "deliverable_id": deliverable_id,
+            "scope_type": "deliverable",
+            "actor": auth.actor(principal),
+        }
+        if action == "start":
+            result = store.start_autopilot_scope(
+                **common, runtime=body.runtime)
+        else:
+            result = store.control_autopilot_scope(**common, action=action)
+        if result.get("error"):
+            code = 404 if "unknown" in result["error"] or "not found" in result["error"] else 400
+            raise HTTPException(code, result["error"])
+        return result
+
+    @router.post("/api/deliverables/{deliverable_id}/tasks/{task_id}/autopilot")
+    async def control_task_autopilot(request: Request, deliverable_id: str, task_id: str,
+                                     body: AutopilotControlBody,
+                                     project: str = Query(...)):
+        project = resolve_project(project)
+        principal = resolve_principal(request, project, ("write:tasks",), dev_actor="web")
+        action = body.action
+        common = {
+            "project": project,
+            "profile_id": body.profile_id,
+            "deliverable_id": deliverable_id,
+            "scope_type": "task",
+            "task_project": body.task_project or project,
+            "task_id": task_id,
+            "actor": auth.actor(principal),
+        }
+        if action == "start":
+            result = store.start_autopilot_scope(
+                **common, runtime=body.runtime)
+        else:
+            result = store.control_autopilot_scope(**common, action=action)
+        if result.get("error"):
+            code = 404 if "unknown" in result["error"] or "not found" in result["error"] else 400
+            raise HTTPException(code, result["error"])
+        return result
 
     @router.post("/api/deliverables/{deliverable_id}/closure_verify")
     async def verify_deliverable_closure_route(request: Request, deliverable_id: str,

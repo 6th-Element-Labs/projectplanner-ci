@@ -108,6 +108,29 @@ def apply_schema(c):
             task_id TEXT, actor TEXT, kind TEXT, payload TEXT, created_at REAL
         );
         CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+        -- UI-27: durable operator-started autopilot scopes. The daemon only
+        -- drains rows in active state; an empty table is therefore safely idle.
+        CREATE TABLE IF NOT EXISTS autopilot_scopes (
+            scope_id        TEXT PRIMARY KEY,
+            profile_id      TEXT NOT NULL,
+            scope_type      TEXT NOT NULL,
+            deliverable_id  TEXT NOT NULL,
+            task_project    TEXT NOT NULL DEFAULT '',
+            task_id         TEXT NOT NULL DEFAULT '',
+            runtime         TEXT NOT NULL DEFAULT 'codex',
+            status          TEXT NOT NULL DEFAULT 'active',
+            requested_by    TEXT NOT NULL,
+            generation      INTEGER NOT NULL DEFAULT 1,
+            created_at      REAL NOT NULL,
+            updated_at      REAL NOT NULL,
+            last_tick_at    REAL,
+            last_result_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS ix_autopilot_scopes_active
+            ON autopilot_scopes(profile_id, status, updated_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_autopilot_scopes_live_target
+            ON autopilot_scopes(profile_id, scope_type, deliverable_id, task_project, task_id)
+            WHERE status IN ('active', 'paused');
         -- BUG-47: ledger for numbered additive migrations (db/migrations.py). One row per
         -- applied migration name; the runner uses it to skip already-applied migrations
         -- instead of relying on catch-all exception swallowing to detect "already done".

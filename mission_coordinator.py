@@ -57,6 +57,7 @@ def _normalize_policy(policy: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "allowed_lanes": [],
         "denied_lanes": [],
         "target_task_id": "",
+        "target_project_id": "",
         "target_milestone_id": "",
     }
     if isinstance(policy, dict):
@@ -77,6 +78,7 @@ def _normalize_policy(policy: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         str(lane).strip().upper() for lane in (denied or []) if str(lane).strip()
     })
     base["target_task_id"] = str(base.get("target_task_id") or "").strip().upper()
+    base["target_project_id"] = str(base.get("target_project_id") or "").strip()
     base["target_milestone_id"] = str(base.get("target_milestone_id") or "").strip()
     return base
 
@@ -94,6 +96,7 @@ def _explicit_target_actions(mission_status: Dict[str, Any],
     explicit ``dispatch_eligible=false`` remain fail-closed even when targeted.
     """
     target_task = policy.get("target_task_id") or ""
+    target_project = policy.get("target_project_id") or ""
     target_milestone = policy.get("target_milestone_id") or ""
     if not target_task and not target_milestone:
         return list(mission_status.get("next_actions") or [])
@@ -102,6 +105,8 @@ def _explicit_target_actions(mission_status: Dict[str, Any],
         task_id = str(link.get("task_id") or "").upper()
         milestone_id = str(link.get("milestone_id") or "")
         if target_task and task_id != target_task:
+            continue
+        if target_project and str(link.get("project_id") or "") != target_project:
             continue
         if target_milestone and milestone_id != target_milestone:
             continue
@@ -181,6 +186,7 @@ def _scope_mission_status(mission_status: Dict[str, Any],
         "allowed_lanes": sorted(allowed_lanes),
         "denied_lanes": sorted(denied_lanes),
         "target_task_id": policy.get("target_task_id") or None,
+        "target_project_id": policy.get("target_project_id") or None,
         "target_milestone_id": policy.get("target_milestone_id") or None,
         "candidate_count": len(actions),
     }
@@ -330,6 +336,7 @@ def _record_tick_decision(
             "allowed_lanes": policy.get("allowed_lanes") or [],
             "denied_lanes": policy.get("denied_lanes") or [],
             "target_task_id": policy.get("target_task_id") or "",
+            "target_project_id": policy.get("target_project_id") or "",
             "target_milestone_id": policy.get("target_milestone_id") or "",
         },
         "narrative_source_fingerprint": (

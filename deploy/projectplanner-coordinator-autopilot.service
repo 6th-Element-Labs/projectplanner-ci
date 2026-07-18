@@ -1,5 +1,5 @@
 # /etc/systemd/system/projectplanner-coordinator-autopilot.service
-# COORD-8 durable deliverable-scoped autopilot. Ships disarmed by default.
+# COORD-8/UI-27 durable scoped autopilot. Empty scope table is safely idle.
 [Unit]
 Description=ProjectPlanner Switchboard deliverable autopilot coordinator
 After=local-fs.target network-online.target
@@ -18,7 +18,7 @@ EnvironmentFile=/opt/projectplanner/.env
 Environment=PM_SQLITE_MMAP_BYTES=0
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PM_COORDINATOR_AUTOPILOT_PROJECTS=switchboard
-Environment=PM_COORDINATOR_AUTOPILOT_ACT=0
+Environment=PM_COORDINATOR_AUTOPILOT_ACT=1
 RuntimeDirectory=projectplanner
 ExecStart=/opt/projectplanner/.venv/bin/python /opt/projectplanner/coordinator_daemon.py run
 Restart=always

@@ -259,6 +259,24 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
     ("0059_ix_agent_host_revocation_recovery_principal",
      "CREATE INDEX IF NOT EXISTS ix_agent_host_revocation_recovery_principal "
      "ON agent_host_revocation_recovery(principal_id, host_id)"),
+    # UI-27 — the coordinator daemon drains only durable operator-started
+    # deliverable/task scopes. No rows means no automatic work.
+    ("0062_autopilot_scopes",
+     "CREATE TABLE IF NOT EXISTS autopilot_scopes ("
+     "scope_id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, scope_type TEXT NOT NULL, "
+     "deliverable_id TEXT NOT NULL, task_project TEXT NOT NULL DEFAULT '', "
+     "task_id TEXT NOT NULL DEFAULT '', runtime TEXT NOT NULL DEFAULT 'codex', "
+     "status TEXT NOT NULL DEFAULT 'active', requested_by TEXT NOT NULL, "
+     "generation INTEGER NOT NULL DEFAULT 1, created_at REAL NOT NULL, "
+     "updated_at REAL NOT NULL, last_tick_at REAL, "
+     "last_result_json TEXT NOT NULL DEFAULT '{}')"),
+    ("0063_ix_autopilot_scopes_active",
+     "CREATE INDEX IF NOT EXISTS ix_autopilot_scopes_active "
+     "ON autopilot_scopes(profile_id, status, updated_at)"),
+    ("0064_ux_autopilot_scopes_live_target",
+     "CREATE UNIQUE INDEX IF NOT EXISTS ux_autopilot_scopes_live_target "
+     "ON autopilot_scopes(profile_id, scope_type, deliverable_id, task_project, task_id) "
+     "WHERE status IN ('active', 'paused')"),
 ]
 
 

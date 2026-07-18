@@ -32,11 +32,11 @@ ok(report.get("process_build_authorized") is True, "Go authorizes ARCH-MS-110 si
 ok(report.get("production_cutover_authorized") is False, "production cutover is not pre-authorized")
 ok(report.get("failed_gates") == [], "all six independence gates pass")
 checks = report.get("checks") or {}
-ok(checks.get("router_inventory_complete") is True, "all 24 router routes are inventoried")
+ok(checks.get("router_inventory_complete") is True, "all 27 router routes are inventoried")
 ok(checks.get("day_one_surface_exact") is True, "exact eight-route day-one surface is locked")
 ok(checks.get("repository_calls_exact") is True, "repository/application calls match live router AST")
 ok(checks.get("writer_transactions_complete") is True,
-   "all sixteen writers have explicit monolith transaction/orchestration boundaries")
+   "all nineteen monolith-only routes have explicit transaction/orchestration boundaries")
 ok(checks.get("closure_transaction_atomic") is True, "closure report and audit stamp remain atomic")
 ok(checks.get("auth_project_scope_bound") is True, "standalone build requires project-scoped read Auth")
 ok(checks.get("revision_drift_contract") is True, "revision and drift contract is explicit")
@@ -47,7 +47,8 @@ ok(probe.get("lock_errors") == 0, "concurrent probe has zero lock errors")
 ok(probe.get("snapshot_mismatches") == 0, "readers never observe split closure state")
 
 verdict = gate.load_verdict(ROOT / "docs" / "deliverables" / "deliverables_independence_verdict.json")
-ok(len(verdict.get("writer_inventory") or []) == 16, "all sixteen writes explicitly stay monolith-owned")
+ok(len(verdict.get("writer_inventory") or []) == 19,
+   "all nineteen non-service routes explicitly stay monolith-owned")
 ok("ARCH-MS-110" in (verdict.get("go_only_tasks") or []), "machine verdict gates the Go-only successor")
 incomplete_writers = [dict(row) for row in verdict.get("writer_inventory") or []]
 incomplete_writers[0].pop("transaction")

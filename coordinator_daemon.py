@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""Durable deliverable-scoped coordinator daemon (COORD-8).
+"""Durable operator-scoped coordinator daemon (COORD-8 / UI-27).
 
 The daemon is intentionally a thin control shell around the existing mission
 coordinator. It adds a single-leader lease, presence heartbeat, project/lane
-allowlists, durable pause controls, and a crash-safe per-deliverable cursor.
+allowlists, durable pause controls, operator-started scopes, and a crash-safe
+round-robin cursor.
 All task effects still pass through the existing claim/wake/review policy gates.
 """
 from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import hashlib
 import json
 import os
 import signal
@@ -57,6 +59,7 @@ class DaemonConfig:
     heartbeat_seconds: int = 30
     lease_ttl_seconds: int = 120
     max_deliverables_per_tick: int = 8
+    max_tasks_per_scope_tick: int = 8
 
     @classmethod
     def from_env(cls, environ: Optional[Mapping[str, str]] = None) -> "DaemonConfig":
@@ -81,6 +84,8 @@ class DaemonConfig:
             ),
             max_deliverables_per_tick=max(
                 1, int(env.get("PM_COORDINATOR_AUTOPILOT_MAX_DELIVERABLES", "8"))),
+            max_tasks_per_scope_tick=max(
+                1, int(env.get("PM_COORDINATOR_AUTOPILOT_MAX_TASKS_PER_SCOPE", "8"))),
         )
 
 
@@ -152,6 +157,7 @@ class CoordinatorDaemon:
             "project_id": project,
             "sequence": int(saved.get("sequence") or 0),
             "last_deliverable_id": saved.get("last_deliverable_id") or "",
+            "last_scope_id": saved.get("last_scope_id") or "",
             "last_activity_cursor": int(saved.get("last_activity_cursor") or 0),
             "leader_lease_id": saved.get("leader_lease_id") or "",
             "leader_expires_at": saved.get("leader_expires_at"),
@@ -216,20 +222,170 @@ class CoordinatorDaemon:
                 previous, actor=self.config.actor, project=project)
         return {"leader": True, "lease": lease}
 
-    def _ordered_deliverables(self, project: str, state: Dict[str, Any]) -> list[Dict[str, Any]]:
-        rows = [
-            row for row in self.store.list_deliverables(
-                project=project, include_task_snapshots=False)
-            if str(row.get("status") or "").strip().lower()
-            not in TERMINAL_DELIVERABLE_STATUSES
-        ]
-        rows.sort(key=lambda row: str(row.get("id") or ""))
-        last = state.get("last_deliverable_id") or ""
-        ids = [str(row.get("id") or "") for row in rows]
+    def _ordered_scopes(self, project: str, state: Dict[str, Any]) -> list[Dict[str, Any]]:
+        """Round-robin only through durable scopes an operator explicitly started."""
+        rows = list(self.store.list_autopilot_scopes(
+            project=project, profile_id=self.config.profile_id,
+            status="active", limit=2000))
+        rows.sort(key=lambda row: str(row.get("scope_id") or ""))
+        last = state.get("last_scope_id") or ""
+        ids = [str(row.get("scope_id") or "") for row in rows]
         if last in ids:
             index = ids.index(last) + 1
             rows = rows[index:] + rows[:index]
         return rows[:self.config.max_deliverables_per_tick]
+
+    @staticmethod
+    def _task_detail(mission_status: Dict[str, Any], task_id: str,
+                     task_project: str = "") -> Dict[str, Any]:
+        target = str(task_id or "").upper()
+        for link in mission_status.get("linked_tasks") or []:
+            if str(link.get("task_id") or "").upper() != target:
+                continue
+            if task_project and str(link.get("project_id") or "") != task_project:
+                continue
+            return link.get("task_detail") or {}
+        return {}
+
+    @staticmethod
+    def _terminal_task(detail: Dict[str, Any]) -> bool:
+        return bool(detail.get("status") == "Done"
+                    and (detail.get("provenance") or {}).get("terminal"))
+
+    def _scope_complete(self, scope: Dict[str, Any], mission_status: Dict[str, Any]) -> bool:
+        if str((mission_status.get("deliverable") or {}).get("status") or "").lower() \
+                in TERMINAL_DELIVERABLE_STATUSES:
+            return True
+        if scope.get("scope_type") == "task":
+            return self._terminal_task(self._task_detail(
+                mission_status, scope.get("task_id") or "",
+                scope.get("task_project") or ""))
+        eligible = {
+            (str(row.get("project_id") or ""), str(row.get("task_id") or "").upper())
+            for row in (mission_status.get("dispatch_scope") or {}).get("links") or []
+            if row.get("automatic_dispatch_eligible")
+        }
+        if not eligible:
+            return False
+        return all(self._terminal_task(self._task_detail(mission_status, task_id, task_project))
+                   for task_project, task_id in eligible)
+
+    def _scope_candidates(self, scope: Dict[str, Any],
+                          mission_status: Dict[str, Any]) -> list[Dict[str, Any]]:
+        if scope.get("scope_type") == "task":
+            task_id = str(scope.get("task_id") or "").upper()
+            detail = self._task_detail(
+                mission_status, task_id, scope.get("task_project") or "")
+            if not detail or self._terminal_task(detail):
+                return []
+            return [{"task_id": task_id, "task_project": scope.get("task_project") or "",
+                     "action": "target_task"}]
+        eligible = {
+            (str(row.get("project_id") or ""), str(row.get("task_id") or "").upper())
+            for row in (mission_status.get("dispatch_scope") or {}).get("links") or []
+            if row.get("automatic_dispatch_eligible")
+        }
+        by_task: Dict[tuple[str, str], Dict[str, Any]] = {}
+        for action in mission_status.get("next_actions") or []:
+            task_id = str(action.get("task_id") or "").upper()
+            key = (str(action.get("project_id") or ""), task_id)
+            if key not in eligible:
+                continue
+            if action.get("action") not in {
+                "claim_task", "resume_or_claim", "verify_merge_provenance",
+                "request_human_approval",
+            }:
+                continue
+            by_task.setdefault(key, dict(action))
+        return [by_task[key] for key in sorted(by_task)][:self.config.max_tasks_per_scope_tick]
+
+    def _candidate_revision(self, mission_status: Dict[str, Any], candidate: Dict[str, Any]) -> str:
+        detail = self._task_detail(
+            mission_status, candidate.get("task_id") or "",
+            candidate.get("task_project") or candidate.get("project_id") or "")
+        snapshot = {
+            "status": detail.get("status"),
+            "claims": sorted(str(row.get("claim_id") or "")
+                             for row in detail.get("active_claims") or []),
+            "dependency": detail.get("dependency_state") or {},
+            "human_gate": detail.get("human_gate") or {},
+            "provenance_terminal": (detail.get("provenance") or {}).get("terminal"),
+            "action": candidate.get("action"),
+        }
+        return hashlib.sha256(
+            json.dumps(snapshot, sort_keys=True, default=str).encode()).hexdigest()[:12]
+
+    def _run_scope(self, project: str, scope: Dict[str, Any],
+                   denied_lanes: Iterable[str] = ()) -> Dict[str, Any]:
+        deliverable_id = str(scope.get("deliverable_id") or "")
+        mission_status = self.store.get_mission_status(
+            project=project, deliverable_id=deliverable_id)
+        if mission_status.get("error"):
+            result = {"status": "failed", "error": mission_status.get("error"),
+                      "deliverable_id": deliverable_id}
+            self.store.update_autopilot_scope(
+                scope["scope_id"], project=project, status="failed",
+                last_result=result, ticked_at=float(self.clock()))
+            return result
+        if self._scope_complete(scope, mission_status):
+            result = {"status": "completed", "deliverable_id": deliverable_id,
+                      "scope_id": scope.get("scope_id"), "receipts": []}
+            self.store.update_autopilot_scope(
+                scope["scope_id"], project=project, status="completed",
+                last_result=result, ticked_at=float(self.clock()))
+            return result
+
+        candidates = self._scope_candidates(scope, mission_status)
+        receipts = []
+        for candidate in candidates:
+            task_id = str(candidate.get("task_id") or "").upper()
+            revision = self._candidate_revision(mission_status, candidate)
+            idem_key = f"ui27:{scope['scope_id']}:{task_id}:{revision}"
+            policy = {
+                "auto_refresh_brief": not receipts,
+                "auto_claim": bool(self.config.act and self.config.worker_agent_id),
+                "auto_wake": bool(self.config.act and not self.config.worker_agent_id),
+                "worker_agent_id": self.config.worker_agent_id,
+                "worker_wake_selector": ({"runtime": scope.get("runtime")
+                                           or self.config.worker_runtime}
+                                          if self.config.act else {}),
+                "allowed_lanes": list(self.config.allowed_lanes),
+                "denied_lanes": list(denied_lanes),
+                "target_task_id": task_id,
+                "target_project_id": candidate.get("task_project")
+                    or candidate.get("project_id") or project,
+            }
+            result = self.store.run_mission_coordinator_tick(
+                project=project,
+                deliverable_id=deliverable_id,
+                coordinator_agent_id=self.agent_id,
+                actor=self.config.actor,
+                policy=policy,
+                idem_key=idem_key,
+            )
+            receipts.append({
+                "task_id": task_id,
+                "task_project": candidate.get("task_project")
+                    or candidate.get("project_id") or project,
+                "status": result.get("status"),
+                "decision_id": result.get("decision_id"),
+                "dispatch": result.get("dispatch"),
+                "error": result.get("error"),
+                "idem_key": idem_key,
+            })
+        result = {
+            "status": "running" if receipts else "waiting",
+            "scope_id": scope.get("scope_id"),
+            "scope_type": scope.get("scope_type"),
+            "deliverable_id": deliverable_id,
+            "task_id": scope.get("task_id") or None,
+            "candidate_count": len(candidates),
+            "receipts": receipts,
+        }
+        self.store.update_autopilot_scope(
+            scope["scope_id"], project=project, last_result=result,
+            ticked_at=float(self.clock()))
+        return result
 
     def tick_project(self, project: str) -> Dict[str, Any]:
         if project not in self.config.projects:
@@ -248,48 +404,32 @@ class CoordinatorDaemon:
             return {"project": project, "status": "paused", "control": control}
 
         receipts = []
-        for deliverable in self._ordered_deliverables(project, state):
+        for scope in self._ordered_scopes(project, state):
             # Controls are re-read between effects so an operator pause is bounded
-            # by one deliverable tick rather than the whole project sweep.
+            # by one scope tick rather than the whole project sweep.
             control = get_control(self.store, project, self.config.profile_id)
             if control.get("paused"):
                 break
-            deliverable_id = str(deliverable.get("id") or "")
+            deliverable_id = str(scope.get("deliverable_id") or "")
             sequence = int(state.get("sequence") or 0)
-            idem_key = (
-                f"coord8:{self.config.profile_id}:{project}:{sequence}:{deliverable_id}"
-            )
-            policy = {
-                "auto_refresh_brief": True,
-                "auto_claim": bool(self.config.act and self.config.worker_agent_id),
-                "auto_wake": bool(self.config.act and not self.config.worker_agent_id),
-                "worker_agent_id": self.config.worker_agent_id,
-                "worker_wake_selector": ({"runtime": self.config.worker_runtime}
-                                         if self.config.act else {}),
-                "allowed_lanes": list(self.config.allowed_lanes),
-                "denied_lanes": control.get("paused_lanes") or [],
-            }
-            result = self.store.run_mission_coordinator_tick(
-                project=project,
-                deliverable_id=deliverable_id,
-                coordinator_agent_id=self.agent_id,
-                actor=self.config.actor,
-                policy=policy,
-                idem_key=idem_key,
-            )
+            result = self._run_scope(
+                project, scope, denied_lanes=control.get("paused_lanes") or [])
             receipts.append({
+                "scope_id": scope.get("scope_id"),
+                "scope_type": scope.get("scope_type"),
                 "deliverable_id": deliverable_id,
                 "status": result.get("status"),
-                "decision_id": result.get("decision_id"),
-                "dispatch": result.get("dispatch"),
+                "task_id": scope.get("task_id") or None,
+                "candidate_count": result.get("candidate_count", 0),
+                "task_receipts": result.get("receipts") or [],
                 "error": result.get("error"),
-                "idem_key": idem_key,
             })
-            # Persist only after the idempotent deliverable tick returns. A crash
-            # before this write reuses the same idem_key on restart.
+            # Persist only after the scope's idempotent task ticks return. A crash
+            # before this write reuses the same candidate revision keys on restart.
             state.update({
                 "sequence": sequence + 1,
                 "last_deliverable_id": deliverable_id,
+                "last_scope_id": scope.get("scope_id") or "",
                 "last_activity_cursor": int(self.store._activity_cursor(project)),
                 "last_heartbeat_at": float(self.clock()),
                 "status": "running",
@@ -307,6 +447,7 @@ class CoordinatorDaemon:
              "instance_id": self.instance_id, "project": project,
              "status": status, "acting": self.config.act,
              "receipt_count": len(receipts),
+             "scope_ids": [row["scope_id"] for row in receipts],
              "deliverable_ids": [row["deliverable_id"] for row in receipts],
              "sequence": state.get("sequence")},
             project=project,

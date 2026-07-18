@@ -3963,6 +3963,17 @@ const TeepPlan = {
         if (missionPage && !this._missionWired) {
             this._missionWired = true;
             missionPage.addEventListener('click', (e) => {
+                const autopilot = e.target.closest('[data-autopilot-action]');
+                if (autopilot && missionPage.contains(autopilot)) {
+                    e.preventDefault();
+                    this.controlAutopilot(
+                        autopilot.getAttribute('data-autopilot-action'),
+                        autopilot.getAttribute('data-autopilot-scope') || 'deliverable',
+                        autopilot.getAttribute('data-autopilot-task') || '',
+                        autopilot.getAttribute('data-autopilot-project') || '',
+                    );
+                    return;
+                }
                 // UI-1 authoring controls come first so a node pill (which is also a
                 // data-linked-task) opens the node-action modal, not the task modal.
                 const act = e.target.closest('[data-dl-action]');
