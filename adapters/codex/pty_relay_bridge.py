@@ -117,8 +117,15 @@ def pump_chunked_stream(
     req = urllib.request.Request(stream_url, method="GET")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
+            # HTTPResponse.read(n) waits for exactly n bytes (or EOF).  A live
+            # PTY rarely emits 4 KiB at once, so using read(4096) made short
+            # prompts and command output appear frozen in the browser until
+            # enough unrelated output accumulated.  read1() returns the bytes
+            # currently available from the chunked response and preserves the
+            # low-latency terminal-stream contract.
+            read_available = getattr(resp, "read1", resp.read)
             while not stop.is_set():
-                chunk = resp.read(4096)
+                chunk = read_available(4096)
                 if not chunk:
                     break
                 on_bytes(chunk)

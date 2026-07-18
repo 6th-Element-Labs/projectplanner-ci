@@ -318,14 +318,25 @@ stream_url = pty_stream.build_stream_url(
     bind_host=meta["stream_bind"], port=int(meta["stream_port"]),
     runner_session_id=session_id, ticket=stream_ticket)
 stop_pump = threading.Event()
+pumped_bytes: list[bytes] = []
 
 def _pump():
     def on_bytes(data: bytes):
+        pumped_bytes.append(data)
         hub.publish_output(session_id, data)
     bridge.pump_chunked_stream(stream_url, on_bytes, stop_event=stop_pump, timeout=20)
 
 pump_thread = threading.Thread(target=_pump, daemon=True)
 pump_thread.start()
+
+# A terminal stream must not wait for a full 4 KiB read buffer.  The child has
+# emitted only a few bytes, so this catches urllib HTTPResponse.read(4096),
+# which blocks until 4096 bytes or EOF and made browser Watch look frozen.
+deadline = time.time() + 2
+while time.time() < deadline and not any(b"ANSI-OK" in chunk for chunk in pumped_bytes):
+    time.sleep(0.02)
+ok(any(b"ANSI-OK" in chunk for chunk in pumped_bytes),
+   "small PTY output streams immediately without a 4 KiB buffering delay")
 
 deadline = time.time() + 8
 saw_ansi = False
