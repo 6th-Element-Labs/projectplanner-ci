@@ -1925,7 +1925,10 @@ const TeepPlan = {
                     ${this.runnerControlHtml(t)}
                     <div id="runner-pty-dev-mount" class="mb-3"></div>
                     ${this.claimControlHtml(t)}
-                    <button id="edit-dispatch" class="btn btn-primary mb-3"><i class="ti ti-robot me-1"></i>Dispatch to Claude Code</button>
+                    <div class="btn-list mb-3">
+                        <button id="edit-dispatch" class="btn btn-primary"><i class="ti ti-robot me-1"></i>Dispatch to Claude Code</button>
+                        <button id="edit-dispatch-codex" class="btn btn-outline-primary"><i class="ti ti-terminal-2 me-1"></i>Dispatch to Codex (personal)</button>
+                    </div>
                     <div id="dispatch-panel"></div>
                     <span id="edit-flash-dev" class="small text-secondary"></span>
                 </div>
@@ -1957,7 +1960,8 @@ const TeepPlan = {
         document.getElementById('details-status').addEventListener('change', (e) => this.quickStatus(t.task_id, e.target.value));
         document.getElementById('edit-delete').addEventListener('click', () => this.deleteTask(t.task_id));
         document.getElementById('edit-save').addEventListener('click', () => this.saveTask(t.task_id));
-        document.getElementById('edit-dispatch').addEventListener('click', () => this.dispatchTask(t.task_id));
+        document.getElementById('edit-dispatch').addEventListener('click', () => this.dispatchTask(t.task_id, 'claude-code'));
+        document.getElementById('edit-dispatch-codex').addEventListener('click', () => this.dispatchTask(t.task_id, 'codex'));
         const revokeBtn = document.getElementById('claim-revoke-btn');
         if (revokeBtn) revokeBtn.addEventListener('click', () => this.revokeClaim(t.task_id));
         document.getElementById('chat-send').addEventListener('click', () => this.sendChat(t.task_id));
@@ -2114,19 +2118,30 @@ const TeepPlan = {
         }
     },
 
-    async dispatchTask(id) {
+    async dispatchTask(id, runtime) {
+        const rt = runtime === 'codex' ? 'codex' : 'claude-code';
         const flash = (msg, cls) => { const el = document.getElementById('edit-flash-dev'); if (el) { el.textContent = msg; el.className = 'small text-' + (cls || 'secondary'); } };
         const proj = window.PM_PROJECT || 'maxwell';
-        if (!window.confirm(`Dispatch ${id} to Claude Code cloud? Anthropic hosts the coding session on a claude/ task branch and the session/PR links return here — it never touches main/master.`)) return;
-        flash('Queuing a Claude cloud session…');
+        const confirmMsg = rt === 'codex'
+            ? `Dispatch ${id} to your own registered Codex Agent Host? This queues a wake for a Codex-capable host running your personal ChatGPT/Codex login on a codex/ task branch — it stays queued until an eligible host is online for this task's lane, and it never touches main/master on its own.`
+            : `Dispatch ${id} to Claude Code cloud? Anthropic hosts the coding session on a claude/ task branch and the session/PR links return here — it never touches main/master.`;
+        if (!window.confirm(confirmMsg)) return;
+        flash(rt === 'codex' ? 'Queuing a Codex dispatch…' : 'Queuing a Claude cloud session…');
         let data;
         try {
-            const res = await fetch(`api/tasks/${encodeURIComponent(id)}/dispatch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: proj }) });
+            const res = await fetch(`api/tasks/${encodeURIComponent(id)}/dispatch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: proj, runtime: rt }) });
             data = await res.json();
         } catch (e) { return flash('Dispatch failed: ' + e.message, 'danger'); }
         if (!data.dispatched) return flash('Dispatch failed: ' + (data.error || data.detail || 'unknown'), 'danger');
-        if (!data.work_hosts_online) flash(`Queued (wake ${data.wake_id}) — no authenticated Claude cloud trigger host is online yet.`, 'warning');
-        else flash(`Queued (wake ${data.wake_id}) — the trigger host will bind an app-visible Claude session.`, 'green');
+        if (!data.work_hosts_online) {
+            flash(rt === 'codex'
+                ? `Queued (wake ${data.wake_id}) — no Codex-capable host is online for this lane yet.`
+                : `Queued (wake ${data.wake_id}) — no authenticated Claude cloud trigger host is online yet.`, 'warning');
+        } else {
+            flash(rt === 'codex'
+                ? `Queued (wake ${data.wake_id}) — your Codex Agent Host will bind a runner session. Use Watch above to see it live.`
+                : `Queued (wake ${data.wake_id}) — the trigger host will bind an app-visible Claude session.`, 'green');
+        }
         this._loadDispatch(id);   // render the live panel (queued → running → Open PR); it self-refreshes
     },
 
@@ -2216,7 +2231,13 @@ const TeepPlan = {
         try { d = await (await fetch(`api/tasks/${encodeURIComponent(id)}/dispatch/latest?project=${encodeURIComponent(proj)}`)).json(); } catch (e) { return; }
         const st = d && d.status;
         if (!st || st === 'none') { el.innerHTML = ''; return; }
-        const M = {
+        const isCodex = d.runtime === 'codex';
+        const M = isCodex ? {
+            queued: ['Queued for Codex host', 'yellow'],
+            claiming: ['Claimed — provisioning…', 'azure'],
+            running: ['Codex host running', 'azure'],
+            pr: ['PR ready', 'green'],
+        } : {
             queued: ['Queued for Claude cloud', 'yellow'],
             claiming: ['Claimed — provisioning…', 'azure'],
             running: ['Claude cloud running', 'azure'],
@@ -2225,19 +2246,21 @@ const TeepPlan = {
         const [label, color] = M[st] || [st, 'secondary'];
         const active = st === 'queued' || st === 'claiming' || st === 'running';
         const pr = d.pr_url ? `<a href="${this.esc(d.pr_url)}" target="_blank" class="btn btn-success btn-sm"><i class="ti ti-git-pull-request me-1"></i>Open PR ↗</a>` : '';
-        const session = d.session_url ? `<a href="${this.esc(d.session_url)}" target="_blank" rel="noopener" class="btn btn-azure btn-sm"><i class="ti ti-external-link me-1"></i>Open Claude session ↗</a>` : '';
+        const session = (!isCodex && d.session_url) ? `<a href="${this.esc(d.session_url)}" target="_blank" rel="noopener" class="btn btn-azure btn-sm"><i class="ti ti-external-link me-1"></i>Open Claude session ↗</a>` : '';
         const who = d.agent_id ? ` <span class="text-secondary small">${this.esc(d.agent_id)}</span>` : '';
         el.innerHTML = `
             <div class="card"><div class="card-body py-2">
                 <div class="d-flex align-items-center gap-2 flex-wrap">
-                    <i class="ti ti-cloud text-azure"></i><strong>Claude cloud dispatch</strong>${who}
+                    <i class="ti ti-cloud text-azure"></i><strong>${isCodex ? 'Codex host dispatch' : 'Claude cloud dispatch'}</strong>${who}
                     <span class="badge bg-${color}-lt">${this.esc(label)}</span>
                     ${st === 'running' || st === 'claiming' ? '<span class="spinner-border spinner-border-sm text-azure"></span>' : ''}
                     <span class="ms-auto"></span>${session}${pr}
                 </div>
-                ${st === 'queued' ? '<div class="small text-secondary mt-1">Queued — waiting for an authenticated trigger host with the vendor_cloud capability.</div>' : ''}
-                ${st === 'claiming' ? '<div class="small text-secondary mt-1">The trigger host claimed the wake and is provisioning an Anthropic-hosted session.</div>' : ''}
-                ${st === 'running' ? '<div class="small text-secondary mt-1">Working in Claude cloud. Open the session to watch or steer it; the PR button appears after provenance lands.</div>' : ''}
+                ${st === 'queued' ? `<div class="small text-secondary mt-1">Queued — waiting for ${isCodex ? 'a Codex-capable Agent Host on this lane' : 'an authenticated trigger host with the vendor_cloud capability'}.</div>` : ''}
+                ${st === 'claiming' ? '<div class="small text-secondary mt-1">The host claimed the wake and is provisioning a session.</div>' : ''}
+                ${st === 'running' ? (isCodex
+                    ? '<div class="small text-secondary mt-1">Working on your Codex Agent Host. Use Watch above (UI-24 terminal) to see it live; the PR button appears after provenance lands.</div>'
+                    : '<div class="small text-secondary mt-1">Working in Claude cloud. Open the session to watch or steer it; the PR button appears after provenance lands.</div>') : ''}
                 ${st === 'pr' ? '<div class="small text-secondary mt-1">Next: open the PR, review the diff, and merge it on GitHub (or comment back here).</div>' : ''}
             </div></div>`;
         if (active) setTimeout(() => { if (this._dispatchPollId === id) this._loadDispatch(id); }, 7000);
