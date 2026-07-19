@@ -167,9 +167,10 @@ try:
         ok("native Codex CLI" in confirm_text
            and "assignment config and Switchboard MCP" in confirm_text,
            "the confirm dialog describes the direct CLI bootstrap contract")
-        with page.expect_response(f"**/api/tasks/{task_id}/dispatch**"):
-            page.click("#confirm-modal-ok")
+        page.click("#confirm-modal-ok")
         page.wait_for_selector("#confirm-modal", state="hidden", timeout=5000)
+        page.wait_for_function(
+            "() => document.getElementById('edit-flash-dev')?.textContent.includes('Assigned')")
 
         body = captured.get("body") or ""
         ok('"runtime":"codex"' in body.replace(" ", ""),
@@ -184,9 +185,10 @@ try:
         claude_btn.click()
         page.wait_for_selector("#confirm-modal.show", timeout=5000)
         claude_confirm_text = page.locator("#confirm-modal").inner_text()
-        with page.expect_response(f"**/api/tasks/{task_id}/dispatch**"):
-            page.click("#confirm-modal-ok")
+        page.click("#confirm-modal-ok")
         page.wait_for_selector("#confirm-modal", state="hidden", timeout=5000)
+        page.wait_for_function(
+            "() => document.getElementById('edit-flash-dev')?.textContent.includes('Queued')")
         body2 = captured.get("body") or ""
         ok('"runtime":"claude-code"' in body2.replace(" ", ""),
            f"the pre-existing Claude Code button is unaffected — still sends runtime=claude-code (got: {body2!r})")

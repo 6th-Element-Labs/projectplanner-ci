@@ -340,11 +340,14 @@
         return new Promise((resolve) => {
             let settled = false;
             let confirmed = false;
+            const onShown = () => { ok.disabled = false; };
             const finish = (val) => {
                 if (settled) return;
                 settled = true;
                 ok.removeEventListener('click', onOk);
+                modalEl.removeEventListener('shown.bs.modal', onShown);
                 modalEl.removeEventListener('hidden.bs.modal', onHide);
+                ok.disabled = false;
                 resolve(val);
             };
             // Resolve only after Bootstrap has completed its fade-out. Callers
@@ -352,7 +355,12 @@
             // resolving on click left the fading backdrop intercepting them.
             const onOk = () => { confirmed = true; modal.hide(); };
             const onHide = () => finish(confirmed);
+            // Bootstrap ignores hide() while its opening transition is active.
+            // Keeping the action disabled until shown prevents an early click
+            // from leaving a confirmed dialog visibly stuck over the page.
+            ok.disabled = true;
             ok.addEventListener('click', onOk);
+            modalEl.addEventListener('shown.bs.modal', onShown, { once: true });
             modalEl.addEventListener('hidden.bs.modal', onHide);
             modal.show();
         });

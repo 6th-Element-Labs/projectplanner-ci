@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+from types import SimpleNamespace
 
 from path_setup import ROOT  # noqa: F401
 from adapters import agent_host
@@ -143,6 +144,46 @@ ok(summary["acted"][0]["started"] is True
    and summary["acted"][0]["runner_registered"] is True
    and summary["acted"][0]["completion_recorded"] is True,
    "one direct daemon tick reports a live browser-visible Codex session")
+
+# Production hosts retain historical runner evidence.  Renewal must never pull
+# every stale row for the host before it can heartbeat the few local PTYs that
+# are actually alive.
+bounded_calls = []
+saved_try = agent_host._try
+saved_subprocess_run = agent_host.subprocess.run
+agent_host.subprocess.run = lambda *args, **kwargs: SimpleNamespace(
+    returncode=0,
+    stdout=json.dumps({"sessions": [{
+        "runner_session_id": "run-direct-bug86", "task_id": task_id,
+        "status": "running", "alive": True,
+    }, {
+        "runner_session_id": "run-old-dead", "task_id": "OLD-1",
+        "status": "failed", "alive": False,
+    }]}),
+)
+
+
+def bounded_try(method, path, body=None):
+    bounded_calls.append((method, path))
+    return {"sessions": [{
+        "runner_session_id": "run-direct-bug86", "task_id": task_id,
+        "status": "running", "metadata": {
+            "wake_id": wake["wake_id"], "direct_assignment": True,
+        },
+    }]}
+
+
+agent_host._try = bounded_try
+bounded_rows = agent_host._drain_runners(host_id)
+agent_host._try = saved_try
+agent_host.subprocess.run = saved_subprocess_run
+ok(len(bounded_calls) == 1
+   and f"task_id={task_id}" in bounded_calls[0][1]
+   and "include_stale=true" in bounded_calls[0][1]
+   and all("task_id=OLD-1" not in path for _, path in bounded_calls)
+   and bounded_rows[0]["alive"] is True
+   and bounded_rows[0]["metadata"]["wake_id"] == wake["wake_id"],
+   "runner renewal fetches stale history only for locally-live task ids")
 
 # The wake leaves the pending feed after launch, but the native CLI can run for
 # hours.  Every later daemon tick must renew the exact local PTY row so closing

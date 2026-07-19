@@ -1474,11 +1474,16 @@ def _drain_query(path, **query):
     return f"{path}?{urllib.parse.urlencode({'project': PROJECT, **query})}"
 
 
-def _drain_runners(host_id):
-    result = _try("GET", _drain_query(
-        P_LIST_RUNNERS, host_id=host_id, include_stale="true")) or {}
-    sessions = result.get("sessions") or result.get("runner_sessions") or []
-    sessions = sessions if isinstance(sessions, list) else []
+def _drain_runners(host_id, recover_stale_local=True):
+    """Join supervisor truth to only the central rows this tick can act on.
+
+    A long-lived personal host can accumulate thousands of stale historical
+    runner rows.  Downloading all of them before renewing a handful of live
+    local PTYs makes the heartbeat itself miss its lease.  Recovery therefore
+    asks for stale rows only for task ids that the local supervisor says are
+    alive.  The graceful-drain caller opts out and fetches only centrally-live
+    rows for the host.
+    """
     try:
         out = subprocess.run(
             [sys.executable, SUPERVISOR, "list"],
@@ -1487,6 +1492,24 @@ def _drain_runners(host_id):
             if out.returncode == 0 else []
     except Exception:
         local = []
+    sessions = []
+    if recover_stale_local:
+        live_task_ids = sorted({
+            str(row.get("task_id") or "") for row in local
+            if row.get("alive") is True and str(row.get("task_id") or "")
+        })
+        for task_id in live_task_ids:
+            result = _try("GET", _drain_query(
+                P_LIST_RUNNERS, host_id=host_id, task_id=task_id,
+                include_stale="true")) or {}
+            rows = result.get("sessions") or result.get("runner_sessions") or []
+            if isinstance(rows, list):
+                sessions.extend(rows)
+    else:
+        result = _try("GET", _drain_query(
+            P_LIST_RUNNERS, host_id=host_id, include_stale="false")) or {}
+        rows = result.get("sessions") or result.get("runner_sessions") or []
+        sessions = rows if isinstance(rows, list) else []
     merged = {row.get("runner_session_id"): dict(row) for row in local
               if row.get("runner_session_id")}
     for row in sessions:
@@ -2003,7 +2026,7 @@ def handle_drain(request, inventory):
     receipt = co_drain.drain_host(
         request,
         co_drain.inventory_for_drain(inventory),
-        runners=_drain_runners(inventory["host_id"]),
+        runners=_drain_runners(inventory["host_id"], recover_stale_local=False),
         work_sessions=_drain_work_sessions(),
         supervisor=supervisor_action,
         release_lease=_release_provider_lease,
