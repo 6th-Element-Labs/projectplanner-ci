@@ -211,6 +211,7 @@ _COORD_HTTP_PRIMARY = (os.environ.get("PM_COORD_HTTP_PRIMARY") or "").strip().lo
 _DELIVERABLES_HTTP_PRIMARY = (
     os.environ.get("PM_DELIVERABLES_HTTP_PRIMARY") or ""
 ).strip().lower()
+_INGEST_HTTP_PRIMARY = (os.environ.get("PM_INGEST_HTTP_PRIMARY") or "").strip().lower()
 if _TASKS_HTTP_PRIMARY == "service":
     app.include_router(_create_task_router(
         resolve_project=_proj,
@@ -325,7 +326,10 @@ app.include_router(_create_external_effects_router(
     resolve_principal=_principal,
     resolve_body_project=_body_project,
 ))
-app.include_router(_create_intake_inbox_router(resolve_project=_proj))
+app.include_router(_create_intake_inbox_router(
+    resolve_project=_proj,
+    sibling_bc_only=_INGEST_HTTP_PRIMARY == "service",
+))
 app.include_router(_create_digest_notify_router(resolve_project=_proj))
 app.include_router(_create_ops_export_router(
     resolve_project=_proj,

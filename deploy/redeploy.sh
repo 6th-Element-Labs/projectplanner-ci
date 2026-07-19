@@ -85,22 +85,33 @@ COORD_WAS_ACTIVE="$(systemctl is-active switchboard-coord 2>/dev/null || true)"
 COORD_WAS_ENABLED="$(systemctl is-enabled switchboard-coord 2>/dev/null || true)"
 DELIVERABLES_WAS_ACTIVE="$(systemctl is-active switchboard-deliverables 2>/dev/null || true)"
 DELIVERABLES_WAS_ENABLED="$(systemctl is-enabled switchboard-deliverables 2>/dev/null || true)"
+INGEST_WAS_ACTIVE="$(systemctl is-active switchboard-ingest 2>/dev/null || true)"
+INGEST_WAS_ENABLED="$(systemctl is-enabled switchboard-ingest 2>/dev/null || true)"
 DELIVERABLES_CUT_WAS_LIVE=0
 if sudo test -f "$CADDY_LIVE" \
     && sudo grep -q 'handle @deliverables_day_one_reads' "$CADDY_LIVE"
 then
     DELIVERABLES_CUT_WAS_LIVE=1
 fi
+INGEST_CUT_WAS_LIVE=0
+if sudo test -f "$CADDY_LIVE" \
+    && sudo grep -q 'handle @ingest_inbox_read' "$CADDY_LIVE" \
+    && sudo grep -q 'handle @ingest_text_intake' "$CADDY_LIVE"
+then
+    INGEST_CUT_WAS_LIVE=1
+fi
 PROJECTPLANNER_UNIT_LIVE="${PROJECTPLANNER_UNIT_LIVE:-/etc/systemd/system/projectplanner.service}"
 TASKS_UNIT_LIVE="${TASKS_UNIT_LIVE:-/etc/systemd/system/switchboard-tasks.service}"
 COORD_UNIT_LIVE="${COORD_UNIT_LIVE:-/etc/systemd/system/switchboard-coord.service}"
 DELIVERABLES_UNIT_LIVE="${DELIVERABLES_UNIT_LIVE:-/etc/systemd/system/switchboard-deliverables.service}"
+INGEST_UNIT_LIVE="${INGEST_UNIT_LIVE:-/etc/systemd/system/switchboard-ingest.service}"
 for snapshot in \
     "$CADDY_LIVE:Caddyfile" \
     "$PROJECTPLANNER_UNIT_LIVE:projectplanner.service" \
     "$TASKS_UNIT_LIVE:switchboard-tasks.service" \
     "$COORD_UNIT_LIVE:switchboard-coord.service" \
-    "$DELIVERABLES_UNIT_LIVE:switchboard-deliverables.service"
+    "$DELIVERABLES_UNIT_LIVE:switchboard-deliverables.service" \
+    "$INGEST_UNIT_LIVE:switchboard-ingest.service"
 do
     source_path="${snapshot%%:*}"
     snapshot_name="${snapshot#*:}"
@@ -121,11 +132,15 @@ restore_tasks_cut_topology() {
     local edge_ready=0
     local coord_tracked=0
     local deliverables_tracked=0
+    local ingest_tracked=0
     if [ "${COORD_WAS_ACTIVE+x}" = x ]; then
         coord_tracked=1
     fi
     if [ "${DELIVERABLES_WAS_ACTIVE+x}" = x ]; then
         deliverables_tracked=1
+    fi
+    if [ "${INGEST_WAS_ACTIVE+x}" = x ]; then
+        ingest_tracked=1
     fi
     set +e
 
@@ -148,6 +163,10 @@ restore_tasks_cut_topology() {
     if [ -f "$ROLLBACK_DIR/switchboard-deliverables.service.present" ]; then
         sudo cp "$ROLLBACK_DIR/switchboard-deliverables.service" \
             "$DELIVERABLES_UNIT_LIVE" || rollback_rc=1
+    fi
+    if [ -f "$ROLLBACK_DIR/switchboard-ingest.service.present" ]; then
+        sudo cp "$ROLLBACK_DIR/switchboard-ingest.service" \
+            "$INGEST_UNIT_LIVE" || rollback_rc=1
     fi
     sudo systemctl daemon-reload || { rollback_rc=1; monolith_ready=0; }
     sudo systemctl restart projectplanner || { rollback_rc=1; monolith_ready=0; }
@@ -231,6 +250,24 @@ restore_tasks_cut_topology() {
                 sudo systemctl daemon-reload || rollback_rc=1
             fi
         fi
+        if [ "$ingest_tracked" -eq 1 ]; then
+            case "$INGEST_WAS_ACTIVE" in
+                active)
+                    sudo systemctl restart switchboard-ingest || rollback_rc=1
+                    HEALTH_URL=http://127.0.0.1:8126/health \
+                        bash "$ROOT/deploy/wait-for-health.sh" || rollback_rc=1
+                    ;;
+                *) sudo systemctl stop switchboard-ingest || rollback_rc=1 ;;
+            esac
+            case "$INGEST_WAS_ENABLED" in
+                enabled) sudo systemctl enable switchboard-ingest >/dev/null 2>&1 || rollback_rc=1 ;;
+                *) sudo systemctl disable switchboard-ingest >/dev/null 2>&1 || rollback_rc=1 ;;
+            esac
+            if [ ! -f "$ROLLBACK_DIR/switchboard-ingest.service.present" ]; then
+                sudo rm -f "$INGEST_UNIT_LIVE" || rollback_rc=1
+                sudo systemctl daemon-reload || rollback_rc=1
+            fi
+        fi
     fi
 
     set -e
@@ -267,7 +304,7 @@ sudo systemctl daemon-reload
 #    must be healthy before Caddy.
 section "restart services"
 sudo systemctl enable "${CUT_SERVICES[@]}" >/dev/null 2>&1
-if [ "$DELIVERABLES_CUT_WAS_LIVE" -eq 1 ]; then
+if [ "$DELIVERABLES_CUT_WAS_LIVE" -eq 1 ] && [ "$INGEST_CUT_WAS_LIVE" -eq 1 ]; then
     sudo systemctl restart "${APP_SERVICES[@]}"
 else
     # First activation: leave the currently routed monolith process untouched.
@@ -292,8 +329,12 @@ bash "$ROOT/deploy/sync_caddy_fail_closed.sh" \
 # restart the monolith so PM_DELIVERABLES_HTTP_PRIMARY=service takes effect.
 # The rollback guard is still armed; a failed restart/health check restores the
 # prior unit and edge before changing any cut-service lifecycle.
-if [ "$DELIVERABLES_CUT_WAS_LIVE" -eq 0 ]; then
-    section "Deliverables dual-strip monolith"
+if [ "$DELIVERABLES_CUT_WAS_LIVE" -eq 0 ] || [ "$INGEST_CUT_WAS_LIVE" -eq 0 ]; then
+    if [ "$DELIVERABLES_CUT_WAS_LIVE" -eq 0 ]; then
+        section "Deliverables dual-strip monolith"
+    else
+        section "Ingest dual-strip monolith"
+    fi
     sudo systemctl restart projectplanner
     HEALTH_URL=http://127.0.0.1:8110/health \
         bash "$ROOT/deploy/wait-for-health.sh"

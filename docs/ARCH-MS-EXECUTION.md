@@ -47,6 +47,7 @@
 | **ARCH-MS-99** | Ingest service: ADR charter + thin surface | 🟡 | ADR-0016; `docs/ingest/thin_day_one_surface.md`; `tests/test_arch_ms99_ingest_charter.py` |
 | **ARCH-MS-119** | Ingest independence: writers, idempotency, routing, and capacity | 🟢 Go after remediation | Executable route/writer/retry/isolation/auth/contention/capacity gate; durable intake ledger + inbox uniqueness + IngestAuthPort + measured 64 MiB cap authorize ARCH-MS-120 side-by-side build; production cutover remains separate |
 | **ARCH-MS-120** | Standalone Ingest service and side-by-side parity on 8126 | 🟡 In progress | `src/switchboard/services/ingest/`; durable operation ledger; project-scoped Auth port; `tests/test_arch_ms120_ingest_service.py` |
+| **ARCH-MS-121** | Ingest systemd, Caddy, dual-strip, rollback, and deploy gates | 🟡 In progress | `deploy/switchboard-ingest.service`; method-exact `:8126` edge; fail-closed health/readiness and topology rollback proof |
 
 Update the **Repo evidence** column when a PR merges. Board status follows Switchboard provenance
 rules — agents use `complete_claim`; Done requires merge webhook or reconcile.

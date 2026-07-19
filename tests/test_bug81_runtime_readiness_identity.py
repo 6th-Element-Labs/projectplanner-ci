@@ -26,6 +26,10 @@ proof_ready = next(line for line in rendered.splitlines() if line.startswith("PR
 
 assert "taikun-pm:8110:/health/deep" in proof_ready
 assert "projectplanner:8110:/health/deep" not in proof_ready
-assert "CUT_SERVICES=(switchboard-auth switchboard-tasks switchboard-coord switchboard-deliverables)" in rendered
+cut_services = " ".join(
+    row["name"] for row in sorted(inventory["services"], key=lambda row: row["restart_order"])
+    if row["name"] != "projectplanner"
+)
+assert f"CUT_SERVICES=({cut_services})" in rendered
 
 print("BUG-81 runtime readiness identity: 4 passed, 0 failed")

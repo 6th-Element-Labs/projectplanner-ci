@@ -51,14 +51,19 @@ ok("poll" in surf.lower(), "thin surface keeps mailbox poll off day-one")
 ok("PM_INGEST_HTTP_PRIMARY" in surf or "dual-strip" in surf.lower(),
    "thin surface names dual-strip analogue")
 
-ok(not (ROOT / "deploy/switchboard-ingest.service").is_file(),
-   "no production Ingest systemd unit yet (charter only)")
+production_unit = ROOT / "deploy/switchboard-ingest.service"
 caddy = (ROOT / "deploy/Caddyfile").read_text(encoding="utf-8")
 live = "\n".join(
     line for line in caddy.splitlines()
     if line.strip() and not line.lstrip().startswith("#")
 )
-ok("8126" not in live, "live Caddy does not yet route Ingest :8126")
+if production_unit.is_file():
+    ok("8126" in production_unit.read_text(encoding="utf-8"),
+       "later authorized cut keeps the production unit on :8126")
+    ok("8126" in live, "later authorized cut routes live Caddy to Ingest :8126")
+else:
+    ok(True, "no production Ingest systemd unit yet (charter only)")
+    ok("8126" not in live, "live Caddy does not yet route Ingest :8126")
 
 tracker_text = tracker.read_text(encoding="utf-8") if tracker.is_file() else ""
 ok("ARCH-MS-99" in tracker_text, "execution tracker lists ARCH-MS-99")

@@ -5,6 +5,7 @@
     {"name": "switchboard-auth", "unit": "switchboard-auth.service", "port": 8121, "health": "/health", "ready": "/ready", "restart_order": 20, "snapshot": false, "rollback_lifecycle": false, "edge_owns": ["/api/auth*"]},
     {"name": "switchboard-tasks", "unit": "switchboard-tasks.service", "port": 8122, "health": "/health", "ready": "/ready", "restart_order": 30, "snapshot": true, "rollback_lifecycle": true, "edge_owns": ["/api/tasks*"]},
     {"name": "switchboard-coord", "unit": "switchboard-coord.service", "port": 8123, "health": "/health", "ready": "/ready", "restart_order": 40, "snapshot": true, "rollback_lifecycle": true, "edge_owns": ["/api/board", "/api/signals", "/ixp/v1/delta", "/api/coordination", "/api/coordinator_decisions"]},
-    {"name": "switchboard-deliverables", "unit": "switchboard-deliverables.service", "port": 8124, "health": "/health", "ready": "/ready", "restart_order": 50, "snapshot": true, "rollback_lifecycle": true, "edge_owns": ["@deliverables_day_one_reads"], "first_cut_edge_before_monolith_restart": true}
+    {"name": "switchboard-deliverables", "unit": "switchboard-deliverables.service", "port": 8124, "health": "/health", "ready": "/ready", "restart_order": 50, "snapshot": true, "rollback_lifecycle": true, "edge_owns": ["@deliverables_day_one_reads"], "first_cut_edge_before_monolith_restart": true},
+    {"name": "switchboard-ingest", "unit": "switchboard-ingest.service", "port": 8126, "health": "/health", "ready": "/ready", "restart_order": 60, "snapshot": true, "rollback_lifecycle": true, "edge_owns": ["@ingest_inbox_read", "@ingest_text_intake"], "first_cut_edge_before_monolith_restart": true}
   ]
 }

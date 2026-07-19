@@ -36,24 +36,25 @@ def _queue_triage(res, source, subject, project=None):
     return res
 
 
-def create_router(*, resolve_project: ProjectResolver) -> APIRouter:
+def create_router(*, resolve_project: ProjectResolver, sibling_bc_only: bool = False) -> APIRouter:
     router = APIRouter()
 
-    @router.post("/api/intake")
-    async def intake_artifact(body: dict = Body(...), project: str = Query(...)):
-        """Ingest an artifact (transcript/email/document) into `project`'s RAG corpus + triage it
-        against that board. Returns {summary, proposals, new_tasks, sources, ingested_chunks, inbox_id}."""
-        text = (body.get("text") or "").strip()
-        if not text:
-            raise HTTPException(400, "text required")
-        project = resolve_project(project)
-        try:
-            res = await asyncio.to_thread(
-                intake.ingest_and_triage, body.get("kind") or "note", body.get("title") or "", text,
-                project=project)
-            return _queue_triage(res, body.get("kind") or "note", body.get("title") or "", project)
-        except Exception as e:
-            raise HTTPException(502, f"intake error: {e}")
+    if not sibling_bc_only:
+        @router.post("/api/intake")
+        async def intake_artifact(body: dict = Body(...), project: str = Query(...)):
+            """Ingest an artifact (transcript/email/document) into `project`'s RAG corpus + triage it
+            against that board. Returns {summary, proposals, new_tasks, sources, ingested_chunks, inbox_id}."""
+            text = (body.get("text") or "").strip()
+            if not text:
+                raise HTTPException(400, "text required")
+            project = resolve_project(project)
+            try:
+                res = await asyncio.to_thread(
+                    intake.ingest_and_triage, body.get("kind") or "note", body.get("title") or "", text,
+                    project=project)
+                return _queue_triage(res, body.get("kind") or "note", body.get("title") or "", project)
+            except Exception as e:
+                raise HTTPException(502, f"intake error: {e}")
 
     @router.post("/api/intake/upload")
     async def intake_upload(file: UploadFile = File(...), kind: str = Form("document"),
@@ -88,11 +89,12 @@ def create_router(*, resolve_project: ProjectResolver) -> APIRouter:
         res["chars"] = len(text)
         return _queue_triage(res, "transcript" if media else "upload", label, project)
 
-    @router.get("/api/inbox")
-    async def get_inbox(status: str = None, project: str = Query(...)):
-        project = resolve_project(project)
-        return {"items": store.list_inbox(status, project=project),
-                "pending": store.inbox_pending_count(project=project)}
+    if not sibling_bc_only:
+        @router.get("/api/inbox")
+        async def get_inbox(status: str = None, project: str = Query(...)):
+            project = resolve_project(project)
+            return {"items": store.list_inbox(status, project=project),
+                    "pending": store.inbox_pending_count(project=project)}
 
     @router.post("/api/inbox/{item_id}/confirm")
     async def confirm_inbox(item_id: int, body: dict = Body(default={}),

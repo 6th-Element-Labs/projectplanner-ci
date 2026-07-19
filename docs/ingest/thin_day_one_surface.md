@@ -23,10 +23,12 @@
 - MCP (`:8111`)
 - Auth / Tasks / Coord / Deliverables / Tally process cuts — must not regress
 
-## Dual-strip (future Go cut)
+## Dual-strip (ARCH-MS-121 Go cut)
 
-When Go: production monolith sets `PM_INGEST_HTTP_PRIMARY=service` and mounts only sibling
+Production sets `PM_INGEST_HTTP_PRIMARY=service` and mounts only sibling
 Ingest routes that are **not** on the day-one list.
+
+Deployment and rollback: [`docs/runbooks/ingest-caddy-cutover-rollback.md`](../runbooks/ingest-caddy-cutover-rollback.md).
 
 ## Side-by-side artifact (ARCH-MS-120)
 
