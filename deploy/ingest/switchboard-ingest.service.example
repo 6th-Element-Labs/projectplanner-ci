@@ -1,0 +1,15 @@
+[Unit]
+Description=Switchboard Ingest service (side-by-side)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/projectplanner
+Environment=PYTHONPATH=/opt/projectplanner:/opt/projectplanner/src
+Environment=SWITCHBOARD_INGEST_PORT=8126
+ExecStart=/opt/projectplanner/.venv/bin/python -m switchboard.services.ingest
+Restart=on-failure
+MemoryMax=64M
+
+[Install]
+WantedBy=multi-user.target

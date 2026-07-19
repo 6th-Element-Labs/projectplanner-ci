@@ -167,6 +167,17 @@ def apply_schema(c):
             summary TEXT, triage TEXT, status TEXT DEFAULT 'pending',
             received_at REAL, created_at REAL
         );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_inbox_source_external
+            ON inbox(source, external_id) WHERE external_id IS NOT NULL AND external_id <> '';
+        CREATE TABLE IF NOT EXISTS ingest_operations (
+            idem_key TEXT PRIMARY KEY,
+            request_hash TEXT NOT NULL,
+            status TEXT NOT NULL,
+            response_json TEXT,
+            error TEXT,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS file_leases (
             id          TEXT PRIMARY KEY,
             agent_id    TEXT NOT NULL,

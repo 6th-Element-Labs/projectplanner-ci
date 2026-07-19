@@ -28,8 +28,8 @@
 When Go: production monolith sets `PM_INGEST_HTTP_PRIMARY=service` and mounts only sibling
 Ingest routes that are **not** on the day-one list.
 
-## Drill artifacts (later tasks)
+## Side-by-side artifact (ARCH-MS-120)
 
-- Example unit: `deploy/ingest/switchboard-ingest.service.example` (not live until Go)
+- Example unit: `deploy/ingest/switchboard-ingest.service.example` (64 MiB cgroup cap)
 - Example Caddy fragment under `deploy/` (not live until Go)
 - Rollback runbook patterned after Tasks/Auth/Coord/Deliverables/Tally

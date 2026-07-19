@@ -92,15 +92,20 @@ def failure_semantics_proof(inbox_source: str, store_source: str,
     schema_has_unique_dedupe = ("UNIQUE(source, external_id)" in store_source
                                 or "UNIQUE (source, external_id)" in store_source
                                 or "ux_inbox" in store_source)
+    adapter = (ROOT / "src/switchboard/api/ingest_port_adapters.py").read_text(encoding="utf-8")
+    standalone = (ROOT / "src/switchboard/services/ingest/router.py").read_text(encoding="utf-8")
+    ledger_present = "ingest_operations" in store_source and "BEGIN IMMEDIATE" in adapter
+    queue_failure_visible = "except Exception as exc" in adapter and "status='failed'" in adapter
     findings = {
         "dedupe_check_then_insert_without_unique_constraint":
             "inbox_exists" in process and "add_inbox_item" in process
             and not schema_has_unique_dedupe,
-        "intake_multi_effect_has_no_retry_ledger":
+        "intake_multi_effect_has_no_retry_ledger": not ledger_present and
             "rag.add_document" in (ROOT / "intake.py").read_text(encoding="utf-8")
             and "agent.triage" in (ROOT / "intake.py").read_text(encoding="utf-8"),
-        "triage_queue_write_failure_swallowed":
+        "triage_queue_write_failure_swallowed": not queue_failure_visible and
             "except Exception" in queue and "pass" in queue,
+        "standalone_idempotency_key_optional": "Header(..., alias=\"Idempotency-Key\")" not in standalone,
     }
     return {"safe": not any(findings.values()),
             "findings": sorted(code for code, present in findings.items() if present)}
@@ -220,10 +225,17 @@ def evaluate(root: Path = ROOT, *, run_probe: bool = True) -> dict[str, Any]:
         "build_authorization_matches": bool(verdict.get("process_build_authorized"))
                                        == (expected_verdict == "go"),
         "production_cut_not_preauthorized": verdict.get("production_cutover_authorized") is False,
-        "go_only_task_fail_closed": "ARCH-MS-120" in (verdict.get("go_only_tasks") or [])
-                                    and not go_only_task_authorized(verdict, "ARCH-MS-120"),
-        "nogo_exit_visible": bool((verdict.get("nogo_exit") or {}).get("keep_in_process"))
-                             and (verdict.get("nogo_exit") or {}).get("ship_uvicorn") is False,
+        "go_only_task_authorization_matches": "ARCH-MS-120" in (verdict.get("go_only_tasks") or [])
+                                    and go_only_task_authorized(verdict, "ARCH-MS-120")
+                                    == (expected_verdict == "go"),
+        "exit_matches_verdict": (
+            expected_verdict == "go"
+            and (verdict.get("go_exit") or {}).get("ship_uvicorn") is True
+        ) or (
+            expected_verdict == "nogo"
+            and bool((verdict.get("nogo_exit") or {}).get("keep_in_process"))
+            and (verdict.get("nogo_exit") or {}).get("ship_uvicorn") is False
+        ),
     }
     probe = run_sqlite_probe() if run_probe else None
     if probe is not None:

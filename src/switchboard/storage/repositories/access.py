@@ -5,6 +5,8 @@ also owns principal/session/password SQL plus ``resolve_write_actor`` and
 identity-risk helpers previously planned for ``auth_store.py``. ``store.py``
 re-exports the public facade; root ``auth_store.py`` remains a compatibility shim.
 """
+from __future__ import annotations
+
 import json
 import os
 import re

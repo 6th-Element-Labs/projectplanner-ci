@@ -138,6 +138,17 @@ ADDITIVE_COLUMN_MIGRATIONS: List[Tuple[str, str, str, str]] = [
 # Idempotent DDL migrations (``CREATE ... IF NOT EXISTS``) applied after the column set,
 # once each, recorded in the same ledger. (name, sql).
 DDL_MIGRATIONS: List[Tuple[str, str]] = [
+    ("0062_ingest_operations",
+     "CREATE TABLE IF NOT EXISTS ingest_operations ("
+     "idem_key TEXT PRIMARY KEY, request_hash TEXT NOT NULL, status TEXT NOT NULL, "
+     "response_json TEXT, error TEXT, created_at REAL NOT NULL, updated_at REAL NOT NULL)"),
+    ("0063_dedupe_inbox_source_external",
+     "DELETE FROM inbox WHERE external_id IS NOT NULL AND external_id <> '' "
+     "AND id NOT IN (SELECT MIN(id) FROM inbox WHERE external_id IS NOT NULL "
+     "AND external_id <> '' GROUP BY source, external_id)"),
+    ("0064_ux_inbox_source_external",
+     "CREATE UNIQUE INDEX IF NOT EXISTS ux_inbox_source_external "
+     "ON inbox(source, external_id) WHERE external_id IS NOT NULL AND external_id <> ''"),
     ("0019_ux_messages_idem",
      "CREATE UNIQUE INDEX IF NOT EXISTS ux_messages_idem "
      "ON agent_messages(idem_key) WHERE idem_key IS NOT NULL"),

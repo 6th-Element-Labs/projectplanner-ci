@@ -45,10 +45,14 @@ def add_inbox_item(source, external_id, sender, subject, summary, triage, receiv
     with _conn(project) as c:
         cur = c.execute(
             "INSERT INTO inbox(source,external_id,sender,subject,summary,triage,status,received_at,created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
+            "VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(source,external_id) WHERE external_id IS NOT NULL AND external_id <> '' DO NOTHING",
             (source, external_id, sender, subject, summary, json.dumps(triage or {}), "pending",
              received_at or time.time(), time.time()))
-        return cur.lastrowid
+        if cur.rowcount:
+            return cur.lastrowid
+        row = c.execute("SELECT id FROM inbox WHERE source=? AND external_id=?",
+                        (source, external_id)).fetchone()
+        return int(row[0])
 
 
 def list_inbox(status: Optional[str] = None, limit: int = 50,
