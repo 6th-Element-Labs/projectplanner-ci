@@ -18,8 +18,9 @@ same way the backend tests prove the relay side is correct in isolation.
 """
 from __future__ import annotations
 
-import os
+import base64
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -347,17 +348,32 @@ try:
         composer.press("Enter")
         page.wait_for_selector("#runner-chat-log [data-runner-chat-status]", timeout=5000)
         chat_frame = page.evaluate(
-            "window.__ui24ChatFrames.find((frame) => frame.purpose === 'chat')")
+            "window.__ui24ChatFrames.find((frame) => frame.purpose === 'chat_text')")
         ok(chat_frame.get("type") == "input"
-           and chat_frame.get("purpose") == "chat"
+           and chat_frame.get("purpose") == "chat_text"
            and chat_frame.get("task_id") == "FAKE-TASK-1"
            and chat_frame.get("request_id", "").startswith("runner-chat-"),
-           f"typed composer sends one exact task-bound chat frame on the live relay ({chat_frame})")
+           f"typed composer sends exact task-bound text on the live relay ({chat_frame})")
+        ok(base64.b64decode(chat_frame["data_b64"]) == b"do what it takes to unblock it",
+           "composer text is delivered without bundling Enter into the paste burst")
         page.evaluate("""
             ([requestId]) => TeepPlan._runnerPtyHandleFrame(
                 TeepPlan._runnerPty,
                 JSON.stringify({type: 'control_ack', request_id: requestId, ok: true}))
         """, [chat_frame["request_id"]])
+        page.wait_for_function(
+            "window.__ui24ChatFrames.some((frame) => frame.purpose === 'chat_submit')",
+            timeout=5000,
+        )
+        submit_frame = page.evaluate(
+            "window.__ui24ChatFrames.find((frame) => frame.purpose === 'chat_submit')")
+        ok(base64.b64decode(submit_frame["data_b64"]) == b"\r",
+           "composer sends Enter as a separate PTY keypress after text acknowledgement")
+        page.evaluate("""
+            ([requestId]) => TeepPlan._runnerPtyHandleFrame(
+                TeepPlan._runnerPty,
+                JSON.stringify({type: 'control_ack', request_id: requestId, ok: true}))
+        """, [submit_frame["request_id"]])
         page.wait_for_function(
             "document.querySelector('#runner-chat-log [data-runner-chat-status]')?.textContent === 'Delivered'",
             timeout=5000,
@@ -374,7 +390,7 @@ try:
         composer.fill("retry this exact message")
         composer.press("Enter")
         failed_frame = page.evaluate(
-            "window.__ui24ChatFrames.filter((frame) => frame.purpose === 'chat').at(-1)")
+            "window.__ui24ChatFrames.filter((frame) => frame.purpose === 'chat_text').at(-1)")
         page.evaluate("""
             ([requestId]) => TeepPlan._runnerPtyHandleFrame(
                 TeepPlan._runnerPty,
@@ -385,7 +401,7 @@ try:
            "failed live delivery restores the exact text for retry")
         composer.press("Enter")
         retried_frame = page.evaluate(
-            "window.__ui24ChatFrames.filter((frame) => frame.purpose === 'chat').at(-1)")
+            "window.__ui24ChatFrames.filter((frame) => frame.purpose === 'chat_text').at(-1)")
         ok(retried_frame["request_id"] != failed_frame["request_id"],
            "same-text retry receives a fresh operation id")
         page.evaluate("""

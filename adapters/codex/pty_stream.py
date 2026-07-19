@@ -621,11 +621,17 @@ def _make_handler(
             if not isinstance(text, str) or not text:
                 self._json(400, {"error": "invalid_input", "reason": "text_required"})
                 return
-            newline = body.get("nl", body.get("newline", True))
-            payload = format_inject_payload(text, kind=kind, newline=bool(newline))
+            submit = bool(body.get("nl", body.get("newline", True)))
+            payload = format_inject_payload(text, kind=kind, newline=False)
             try:
                 with write_lock:
                     written = os.write(master_fd, payload)
+                    if submit:
+                        # Codex can treat text plus Enter in one write as a
+                        # paste, leaving the text in its composer.  Model the
+                        # real terminal interaction: type, then press Enter.
+                        time.sleep(0.075)
+                        written += os.write(master_fd, b"\r")
             except OSError as exc:
                 self._json(503, {
                     "error": "not_supported",

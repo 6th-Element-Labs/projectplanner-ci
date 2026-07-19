@@ -682,6 +682,48 @@
             if (pending.timer) clearTimeout(pending.timer);
             const badge = pending.entry && pending.entry.querySelector('[data-runner-chat-status]');
             if (frame.ok) {
+                if (pending.phase === 'text') {
+                    // Codex detects a text+Enter burst as a paste and can leave
+                    // it sitting in the composer.  Wait for proof that the text
+                    // reached the PTY, then send Enter as its own keypress.
+                    const submitId = this._runnerPtyRequestId('chat-submit');
+                    const submitPending = {
+                        entry: pending.entry,
+                        text: pending.text,
+                        phase: 'submit',
+                        timer: null,
+                    };
+                    submitPending.timer = setTimeout(() => {
+                        if (!rp.pendingChat || !rp.pendingChat[submitId]) return;
+                        delete rp.pendingChat[submitId];
+                        if (badge) {
+                            badge.className = 'badge bg-red-lt';
+                            badge.textContent = 'Press Enter';
+                        }
+                        this._runnerPtyGate('The message reached Codex, but Enter was not acknowledged. Press Enter in the terminal to submit it.', 'danger');
+                    }, 10000);
+                    rp.pendingChat[submitId] = submitPending;
+                    setTimeout(() => {
+                        if (!rp.pendingChat || !rp.pendingChat[submitId]) return;
+                        if (!rp.ws || rp.ws.readyState !== WebSocket.OPEN) {
+                            clearTimeout(submitPending.timer);
+                            delete rp.pendingChat[submitId];
+                            if (badge) {
+                                badge.className = 'badge bg-red-lt';
+                                badge.textContent = 'Press Enter';
+                            }
+                            this._runnerPtyGate('The message reached Codex, but Watch disconnected before Enter. Press Enter after reconnecting.', 'danger');
+                            return;
+                        }
+                        rp.ws.send(this._runnerPtyEncodeFrame('input', {
+                            request_id: submitId,
+                            purpose: 'chat_submit',
+                            task_id: rp.taskId,
+                            data_b64: this._runnerPtyB64FromString('\r'),
+                        }));
+                    }, 75);
+                    return;
+                }
                 if (badge) {
                     badge.className = 'badge bg-green-lt';
                     badge.textContent = 'Delivered';
@@ -690,7 +732,11 @@
             } else {
                 if (badge) {
                     badge.className = 'badge bg-red-lt';
-                    badge.textContent = 'Failed';
+                    badge.textContent = pending.phase === 'submit' ? 'Press Enter' : 'Failed';
+                }
+                if (pending.phase === 'submit') {
+                    this._runnerPtyGate(`The message reached Codex, but Enter failed: ${this.esc(frame.error || 'runner refused input')}. Press Enter in the terminal to submit it.`, 'danger');
+                    return;
                 }
                 const els = this._runnerPtyEls();
                 if (els.chatInput && !els.chatInput.value) els.chatInput.value = pending.text;
@@ -738,12 +784,12 @@
                     if (els.chatInput && !els.chatInput.value) els.chatInput.value = pending.text;
                     this._runnerPtyGate('The live runner did not acknowledge the message. It was restored so you can retry.', 'danger');
                 }, 10000);
-                rp.pendingChat[requestId] = { entry, text, timer };
+                rp.pendingChat[requestId] = { entry, text, phase: 'text', timer };
                 rp.ws.send(this._runnerPtyEncodeFrame('input', {
                     request_id: requestId,
-                    purpose: 'chat',
+                    purpose: 'chat_text',
                     task_id: rp.taskId,
-                    data_b64: this._runnerPtyB64FromString(`${text}\r`),
+                    data_b64: this._runnerPtyB64FromString(text),
                 }));
                 return;
             }
