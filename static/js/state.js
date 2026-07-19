@@ -37,7 +37,7 @@
                  'Wave 1': '#4299e1', 'Wave 2': '#066fd1', 'Wave 3': '#f76707', 'Wave 4': '#2fb344' },
     OWNER_COLOR: { 'Taikun': 'blue', 'TEEP': 'teal', 'Sensirion/Nubo': 'orange', 'IFS Merrick': 'purple', 'Joint': 'cyan' },
     RISK_COLOR: { Low: 'green', Medium: 'yellow', High: 'red' },
-    STATUS_COLOR: { 'Not Started': 'secondary', 'In Progress': 'blue', 'In Review': 'azure', 'Blocked': 'red', 'Done': 'green' },
+    STATUS_COLOR: { 'Not Started': 'secondary', 'In Progress': 'blue', 'In Review': 'yellow', 'Blocked': 'red', 'Done': 'green' },
     DELIVERABLE_STATUS_COLOR: {
         proposed: 'secondary', approved: 'azure', in_progress: 'blue', blocked: 'red',
         in_review: 'yellow', done: 'green', archived: 'secondary',

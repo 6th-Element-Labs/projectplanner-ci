@@ -102,8 +102,8 @@ try:
     review = mission_graph.build_dependency_graph([
         _link("REVIEW-1", "awaiting merge", status="In Review"),
     ], deliverable_id="review-colors", project_id=HOME)
-    ok("classDef reviewNode fill:#eaf4fb,stroke:#4299e1" in review.get("mermaid", ""),
-       "In Review graph node uses the Azure task-status palette")
+    ok("classDef reviewNode fill:#fff4cc,stroke:#e0a800" in review.get("mermaid", ""),
+       "In Review graph node uses the yellow task-status palette")
     ok(mission_graph.node_execution_state({"status": "Not Started"}) == "todo",
        "Not Started maps to todo")
     ok(mission_graph.node_execution_state({"status": "Done"}) == "done_unproven",

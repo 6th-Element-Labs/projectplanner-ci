@@ -6,6 +6,8 @@ from path_setup import ROOT
 SOURCE = (ROOT / "static" / "js" / "mission.js").read_text(
     encoding="utf-8"
 )
+STATE = (ROOT / "static" / "js" / "state.js").read_text(encoding="utf-8")
+APP = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
 
 
 def ok(condition: bool, message: str) -> None:
@@ -14,11 +16,15 @@ def ok(condition: bool, message: str) -> None:
         raise SystemExit(1)
 
 
-ok("['in_review', 'In review', '#eaf4fb', '#4299e1']" in SOURCE,
-   "dependency-map legend uses the Azure In Review palette")
-ok("in_review: 'bg-azure-lt'" in SOURCE,
-   "dependency-map task pill uses the Azure In Review badge")
-ok("in_review: 'bg-yellow-lt'" not in SOURCE,
-   "dependency-map no longer renders In Review as yellow")
+ok("['in_review', 'In review', '#ffe083', '#e0a800']" in SOURCE,
+   "dependency-map legend uses the yellow In Review palette")
+ok("in_review: 'bg-yellow-lt'" in SOURCE,
+   "dependency-map task pill uses the yellow In Review badge")
+ok("in_review: 'bg-azure-lt'" not in SOURCE,
+   "dependency-map no longer renders In Review as Azure")
+ok("'In Review': 'yellow'" in STATE,
+   "task-status badges use the yellow In Review palette")
+ok("'In Review': 'yellow'" in APP,
+   "proposal status badges use the yellow In Review palette")
 
-print("\nBUG-92 dependency-map status colors: 3 passed, 0 failed")
+print("\nBUG-92 status colors: 5 passed, 0 failed")

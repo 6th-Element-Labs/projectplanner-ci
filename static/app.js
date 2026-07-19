@@ -2772,7 +2772,7 @@ const TeepPlan = {
         }
     },
 
-    _STATUS_TONE: { 'In Progress': 'blue', 'In Review': 'azure', 'Done': 'green', 'Blocked': 'red', 'Not Started': 'secondary' },
+    _STATUS_TONE: { 'In Progress': 'blue', 'In Review': 'yellow', 'Done': 'green', 'Blocked': 'red', 'Not Started': 'secondary' },
 
     // Compact, low-badge change summary: ONE colored status pill + quiet label→value text
     // (description truncated). Replaces the old badge-per-field dump.
