@@ -177,7 +177,8 @@ def _codex_cloud_requested(runtime):
     return str(runtime or "").strip().lower() in {"codex-cloud", _CODEX_VENDOR}
 
 
-def _personal_dispatch_attempt(project, task_id, selector, base_idem_key):
+def _personal_dispatch_attempt(project, task_id, selector, base_idem_key,
+                               continuation_of=""):
     """Return the safe idempotency key (or live wake) for a browser retry.
 
     One fixed key correctly collapses double-clicks, but it also replays a failed
@@ -191,12 +192,20 @@ def _personal_dispatch_attempt(project, task_id, selector, base_idem_key):
             task_id=task_id, runtime=_CODEX_RUNTIME, project=project)
     except Exception:
         return base_idem_key, None, None
-    matching = [wake for wake in wakes if (
-        str((wake.get("selector") or {}).get("host_id") or "")
-        == str(selector.get("host_id") or "")
-        and str((wake.get("selector") or {}).get("agent_id") or "")
-        == str(selector.get("agent_id") or "")
-    )]
+    matching = []
+    for wake in wakes:
+        wake_assignment = (wake.get("policy") or {}).get("assignment") or {}
+        wake_continuation = str(
+            (wake_assignment.get("continuation") or {}).get(
+                "previous_runner_session_id") or "")
+        if (
+            str((wake.get("selector") or {}).get("host_id") or "")
+            == str(selector.get("host_id") or "")
+            and str((wake.get("selector") or {}).get("agent_id") or "")
+            == str(selector.get("agent_id") or "")
+            and wake_continuation == str(continuation_of or "")
+        ):
+            matching.append(wake)
     if not matching:
         return base_idem_key, None, None
     latest = matching[-1]
@@ -234,7 +243,7 @@ def _codex_cloud_policy(task_id, task, branch):
 
 
 def dispatch(task_id, actor="user", project=store.DEFAULT_PROJECT, runtime=_RUNTIME,
-             principal_id=""):
+             principal_id="", continuation=None):
     """Enqueue a lane-scoped wake for `task_id` on `project`."""
     t = store.get_task(task_id, project=project)
     if not t:
@@ -281,6 +290,23 @@ def dispatch(task_id, actor="user", project=store.DEFAULT_PROJECT, runtime=_RUNT
         ).strip()
         if not endpoint.endswith("/mcp"):
             endpoint = endpoint.rstrip("/") + "/mcp"
+        continuation = dict(continuation or {})
+        review_continuation = bool(continuation)
+        if review_continuation:
+            prior_runner = str(
+                continuation.get("previous_runner_session_id") or "").strip()
+            if not prior_runner:
+                return {"dispatched": False, "error": "continuation_runner_required",
+                        "task_id": task_id, "project": project}
+            provider_session = str(
+                continuation.get("provider_session_id") or "").strip()
+            continuation = {
+                "schema": "switchboard.review_runner_continuation.v1",
+                "mode": "resume_conversation" if provider_session else "replacement_handoff",
+                "previous_runner_session_id": prior_runner,
+                "provider_session_id": provider_session or None,
+                "handoff": dict(continuation.get("handoff") or {}),
+            }
         policy = {
             "mode": "direct_task",
             "execution_mode": "direct_personal_cli",
@@ -294,6 +320,9 @@ def dispatch(task_id, actor="user", project=store.DEFAULT_PROJECT, runtime=_RUNT
                 "deliverable_id": deliverable_id,
                 "host_id": host_id,
                 "prompt": (
+                    (f"Review and merge {task_id} if green{prompt_scope} in project "
+                     f"{project} via Switchboard.")
+                    if review_continuation else
                     f"Do {task_id}{prompt_scope} in project {project} via Switchboard."
                 ),
                 "repository": {
@@ -306,6 +335,7 @@ def dispatch(task_id, actor="user", project=store.DEFAULT_PROJECT, runtime=_RUNT
                     "endpoint": endpoint,
                     "auth_source": "enrolled_agent_host_token",
                 },
+                **({"continuation": continuation} if review_continuation else {}),
             },
             "placement": {
                 "canonical_repo": "6th-Element-Labs/projectplanner",
@@ -315,7 +345,11 @@ def dispatch(task_id, actor="user", project=store.DEFAULT_PROJECT, runtime=_RUNT
         }
         hosts = [host_id] if host_online else []
         note = (
-            f"Assigned `{task_id}` directly to `{host_id}`. The enrolled Mac will open an "
+            (f"Started a replacement review runner for `{task_id}` on `{host_id}` while "
+             f"preserving `{continuation.get('previous_runner_session_id')}` as history. "
+             if review_continuation else
+             f"Assigned `{task_id}` directly to `{host_id}`. ")
+            + "The enrolled Mac will open an "
             f"isolated `{branch}-direct-<session>` workspace, start its native Codex CLI with the Switchboard "
             "MCP connection preloaded, and publish the same PTY to Watch."
         )
@@ -353,7 +387,13 @@ def dispatch(task_id, actor="user", project=store.DEFAULT_PROJECT, runtime=_RUNT
     reason = f"Operator dispatched {task_id} — {t.get('title') or ''}".strip()
     personal_dispatch = (
         selected_runtime == _CODEX_RUNTIME and not _codex_cloud_requested(runtime))
+    continuation_of = str(
+        ((policy.get("assignment") or {}).get("continuation") or {}).get(
+            "previous_runner_session_id") or "")
     idem_key = (
+        (f"ui-resume-review:v1:{project}:{task_id}:{principal_id}:"
+         f"{selector.get('host_id')}:{continuation_of}")
+        if personal_dispatch and continuation_of else
         f"ui-personal-dispatch:v3:{project}:{task_id}:{principal_id}:{selector.get('host_id')}"
         if personal_dispatch
         else f"ui-dispatch:{project}:{task_id}:{str(runtime or selected_runtime).lower()}"
@@ -361,7 +401,7 @@ def dispatch(task_id, actor="user", project=store.DEFAULT_PROJECT, runtime=_RUNT
     existing_wake = None
     if personal_dispatch:
         idem_key, existing_wake, retry_after = _personal_dispatch_attempt(
-            project, task_id, selector, idem_key)
+            project, task_id, selector, idem_key, continuation_of=continuation_of)
         if retry_after:
             # The side-effect ledger hashes the payload independently from the
             # API idempotency key. Name the terminal predecessor in the policy so
@@ -393,6 +433,92 @@ def dispatch(task_id, actor="user", project=store.DEFAULT_PROJECT, runtime=_RUNT
             "host_id": selector.get("host_id"),
             "branch": branch, "execution_mode": policy.get("mode"),
             "work_hosts_online": len(hosts)}
+
+
+def _review_handoff(task, stale_session):
+    """Return the small, non-secret context needed by a replacement reviewer."""
+    git_state = dict(task.get("git_state") or {})
+    metadata = dict(stale_session.get("metadata") or {})
+    snapshot = dict(stale_session.get("last_snapshot") or {})
+    environment = dict(stale_session.get("environment") or {})
+    return {
+        "task_id": task.get("task_id"),
+        "title": task.get("title"),
+        "workflow_status": task.get("status"),
+        "branch": git_state.get("branch") or metadata.get("branch") or snapshot.get("branch"),
+        "head_sha": git_state.get("head_sha") or metadata.get("head_sha") or snapshot.get("head_sha"),
+        "pr_url": git_state.get("pr_url") or metadata.get("pr_url") or snapshot.get("pr_url"),
+        "checks": git_state.get("checks") or metadata.get("checks") or snapshot.get("checks"),
+        "previous_runner_status": stale_session.get("status"),
+        "previous_failure_reason": environment.get("failure_reason"),
+        "previous_log_tail": environment.get("log_tail"),
+    }
+
+
+def resume_review(task_id, actor="user", project=store.DEFAULT_PROJECT,
+                  principal_id=""):
+    """Replace one dead In Review runner without changing task workflow state."""
+    task = store.get_task(task_id, project=project)
+    if not task:
+        return {"resumed": False, "error": "task not found", "task_id": task_id}
+    if str(task.get("status") or "") != "In Review":
+        return {"resumed": False, "error": "task_not_in_review", "task_id": task_id,
+                "status": task.get("status")}
+    watch = store.resolve_runner_watch(task_id, include_stale=True, project=project)
+    if watch.get("watchable"):
+        return {"resumed": False, "error": "review_runner_already_live",
+                "task_id": task_id,
+                "runner_session_id": watch.get("runner_session_id")}
+    sessions = list(watch.get("sessions") or [])
+    terminal_statuses = {
+        "completed", "failed", "cancelled", "expired", "lost", "killed", "exited",
+    }
+    live_unwatchable = [session for session in sessions if (
+        session.get("stale") is not True
+        and str(session.get("status") or "").strip().lower()
+        in {"starting", "ready", "running"}
+    )]
+    if live_unwatchable:
+        return {"resumed": False, "error": "review_runner_bind_incomplete",
+                "task_id": task_id,
+                "runner_session_id": live_unwatchable[0].get("runner_session_id")}
+    dead_sessions = [session for session in sessions if (
+        session.get("stale") is True
+        or str(session.get("status") or "").strip().lower() in terminal_statuses
+    )]
+    if not dead_sessions:
+        return {"resumed": False, "error": "stale_review_runner_not_found",
+                "task_id": task_id}
+    stale_session = dead_sessions[0]
+    metadata = dict(stale_session.get("metadata") or {})
+    provider_session_id = str(
+        metadata.get("codex_conversation_id")
+        or metadata.get("provider_session_id")
+        or metadata.get("conversation_id")
+        or metadata.get("thread_id")
+        or ""
+    ).strip()
+    previous_runner_id = str(stale_session.get("runner_session_id") or "").strip()
+    result = dispatch(
+        task_id, actor=actor, project=project, runtime="codex",
+        principal_id=principal_id,
+        continuation={
+            "previous_runner_session_id": previous_runner_id,
+            "provider_session_id": provider_session_id,
+            "handoff": _review_handoff(task, stale_session),
+        },
+    )
+    if not result.get("dispatched"):
+        return {"resumed": False, **result}
+    current = store.get_task(task_id, project=project)
+    return {
+        "resumed": True,
+        **result,
+        "continuation_mode": (
+            "resume_conversation" if provider_session_id else "replacement_handoff"),
+        "previous_runner_session_id": previous_runner_id,
+        "workflow_status": (current or {}).get("status"),
+    }
 
 
 def dispatch_to_co_fleet(task_id, actor="user", project=store.DEFAULT_PROJECT,

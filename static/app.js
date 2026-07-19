@@ -1899,6 +1899,7 @@ const TeepPlan = {
                     </div>
                     <div class="btn-list flex-nowrap">
                         <button id="task-primary-start" class="btn btn-primary" type="button" hidden><i class="ti ti-player-play me-1"></i>Start task</button>
+                        <button id="task-primary-resume-review" class="btn btn-primary" type="button" hidden><i class="ti ti-refresh me-1"></i>Resume review</button>
                         <button id="task-primary-watch-here" class="btn btn-primary" type="button" hidden><i class="ti ti-terminal-2 me-1"></i><span>Watch live</span></button>
                         <button id="task-primary-watch-sidecar" class="btn btn-outline-primary" type="button" hidden><i class="ti ti-layout-sidebar-right me-1"></i>Open side panel</button>
                     </div>
@@ -1915,6 +1916,7 @@ const TeepPlan = {
         const badge = document.getElementById('task-primary-runner-badge');
         const state = document.getElementById('task-primary-runner-state');
         const start = document.getElementById('task-primary-start');
+        const resumeReview = document.getElementById('task-primary-resume-review');
         const watchHere = document.getElementById('task-primary-watch-here');
         const watchSidecar = document.getElementById('task-primary-watch-sidecar');
         const taskStatus = String(root.dataset.taskStatus || '');
@@ -1935,20 +1937,28 @@ const TeepPlan = {
                     ? `This task is blocked, but <span class="font-monospace">${this.esc(watch.runner_session_id || session.runner_session_id || '')}</span> is still live on ${this.esc(bind.host_id || session.host_id || 'your enrolled host')}. Tell it how to repair the gate.`
                     : `<span class="font-monospace">${this.esc(watch.runner_session_id || session.runner_session_id || '')}</span> on ${this.esc(bind.host_id || session.host_id || 'your enrolled host')} · connected to Switchboard`;
                 start.hidden = true;
+                resumeReview.hidden = true;
                 watchHere.hidden = false;
                 watchHere.querySelector('span').textContent = blocked ? 'Talk to agent' : 'Watch live';
                 watchHere.querySelector('i').className = `ti ti-${blocked ? 'message-circle' : 'terminal-2'} me-1`;
                 watchSidecar.hidden = false;
             } else {
-                const hasExpiredSession = Array.isArray(watch && watch.sessions) && watch.sessions.length > 0;
-                root.dataset.sessionState = hasExpiredSession ? 'reconnecting' : 'ready';
-                badge.className = `badge bg-${hasExpiredSession ? 'yellow' : 'secondary'}-lt`;
-                badge.textContent = hasExpiredSession ? 'Reconnecting' : 'Ready';
-                title.textContent = hasExpiredSession ? 'Reconnecting task session' : 'Ready for an agent';
-                state.textContent = hasExpiredSession
-                    ? 'The host is renewing an existing session. You can retry Watch in a moment.'
+                const hasEndedSession = Array.isArray(watch && watch.sessions) && watch.sessions.length > 0;
+                const terminalRunnerStatuses = new Set(['completed', 'failed', 'cancelled', 'expired', 'lost', 'killed', 'exited']);
+                const hasDeadSession = hasEndedSession && watch.sessions.some((session) =>
+                    session.stale === true || terminalRunnerStatuses.has(String(session.status || '').toLowerCase()));
+                const resumableReview = taskStatus === 'In Review' && hasDeadSession;
+                root.dataset.sessionState = resumableReview ? 'review-stale' : (hasEndedSession ? 'ended' : 'ready');
+                badge.className = `badge bg-${resumableReview ? 'yellow' : (hasEndedSession ? 'red' : 'secondary')}-lt`;
+                badge.textContent = resumableReview ? 'In Review · runner stopped' : (hasEndedSession ? 'Runner stopped' : 'Ready');
+                title.textContent = resumableReview ? 'Review runner stopped' : (hasEndedSession ? 'Task runner stopped' : 'Ready for an agent');
+                state.textContent = resumableReview
+                    ? 'The task remains In Review. Start one replacement reviewer; the ended run stays in history.'
+                    : hasEndedSession
+                    ? 'The previous runner ended. Its history is preserved.'
                     : 'The selected Mac will prepare the repository and open the live Codex session here.';
-                start.hidden = false;
+                start.hidden = resumableReview;
+                resumeReview.hidden = !resumableReview;
                 watchHere.hidden = true;
                 watchSidecar.hidden = true;
             }
@@ -1959,6 +1969,7 @@ const TeepPlan = {
             title.textContent = 'Task session unavailable';
             state.textContent = `Runner status unavailable: ${e.message}`;
             start.hidden = false;
+            resumeReview.hidden = true;
             watchHere.hidden = true;
             watchSidecar.hidden = true;
         }
@@ -2102,6 +2113,8 @@ const TeepPlan = {
         this._loadDispatch(t.task_id);
         const primaryStart = document.getElementById('task-primary-start');
         if (primaryStart) primaryStart.addEventListener('click', () => this.dispatchTask(t.task_id, 'codex'));
+        const primaryResumeReview = document.getElementById('task-primary-resume-review');
+        if (primaryResumeReview) primaryResumeReview.addEventListener('click', () => this.resumeTaskReview(t.task_id, { dockInto: document.getElementById('runner-pty-details-mount') || undefined }));
         const primaryWatchHere = document.getElementById('task-primary-watch-here');
         if (primaryWatchHere) primaryWatchHere.addEventListener('click', async () => {
             const runner = document.getElementById('task-primary-runner');

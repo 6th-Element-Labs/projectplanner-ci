@@ -61,6 +61,7 @@ try:
         ("POST", "/api/tasks/{task_id}/comment"),
         ("POST", "/api/tasks/{task_id}/dispatch"),
         ("GET", "/api/tasks/{task_id}/dispatch/latest"),
+        ("POST", "/api/tasks/{task_id}/resume-review"),
         ("POST", "/api/tasks/{task_id}/chat"),
     }
     actual = {

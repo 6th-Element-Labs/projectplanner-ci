@@ -356,6 +356,9 @@
             return true;
         }
         const watchable = watch && watch.watchable !== false && !watch.error && watch.error_code !== 'runner_bind_incomplete';
+        const resumeBox = document.getElementById('runner-pty-resume');
+        const resumeButton = document.getElementById('runner-pty-resume-review');
+        if (resumeBox) resumeBox.hidden = true;
         if (!watchable) {
             const sessions = (watch && Array.isArray(watch.sessions)) ? watch.sessions : [];
             // Preserve authoring fallback for tasks that have never had a
@@ -380,6 +383,16 @@
             if (els.title) els.title.textContent = rememberedSid ? `${id} · ${rememberedSid}` : id;
             if (els.sub) els.sub.textContent = String(rememberedSession?.host_id || '');
             if (els.live) els.live.hidden = true;
+            const localTask = (this.tasks || []).find((task) => String(task.task_id || '') === id);
+            const taskStatus = String(opts.taskStatus || localTask?.status || '');
+            const endedStatuses = new Set(['completed', 'failed', 'cancelled', 'expired', 'lost', 'killed', 'exited']);
+            const ended = rememberedSession && (
+                rememberedSession.stale === true
+                || endedStatuses.has(String(rememberedSession.status || '').toLowerCase()));
+            if (resumeBox) resumeBox.hidden = !(taskStatus === 'In Review' && rememberedSid && ended);
+            if (resumeButton && taskStatus === 'In Review' && rememberedSid && ended) {
+                resumeButton.onclick = () => this.resumeTaskReview(id, opts);
+            }
             const missing = (watch && watch.missing || []).join(', ') || 'bind fields';
             const detail = watch?.message
                 || `Runner bind incomplete for Watch/Chat (missing: ${missing})`;
@@ -408,6 +421,44 @@
         this._runnerPty = { taskId: id, runnerSessionId: sid, mode, reconnectAttempts: 0 };
         await this._runnerPtyConnect();
         return true;
+    },
+
+    async resumeTaskReview(taskId, opts) {
+        const id = String(taskId || '').trim();
+        if (!id) return false;
+        const box = document.getElementById('runner-pty-resume');
+        const button = document.getElementById('runner-pty-resume-review');
+        const note = document.getElementById('runner-pty-resume-note');
+        if (button) button.disabled = true;
+        if (note) note.textContent = 'Starting one replacement reviewer on your enrolled Mac…';
+        try {
+            const res = await fetch(`/api/tasks/${encodeURIComponent(id)}/resume-review`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ project: window.PM_PROJECT || 'maxwell' }),
+            });
+            const result = await res.json();
+            if (!res.ok || !result.resumed) throw new Error(result.reason || result.error || 'replacement runner was not started');
+            if (note) note.textContent = result.continuation_mode === 'resume_conversation'
+                ? 'Resuming the same Codex conversation…'
+                : 'Replacement started with the saved review handoff…';
+            this._runnerPtyLast = null;
+            const deadline = Date.now() + 30000;
+            while (Date.now() < deadline) {
+                await new Promise((resolve) => setTimeout(resolve, 1000));
+                const watch = await fetch(`/ixp/v1/runner_sessions/watch?project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&task_id=${encodeURIComponent(id)}`, { cache: 'no-store' });
+                const state = await watch.json();
+                if (watch.ok && state && state.watchable !== false && !state.error) {
+                    if (box) box.hidden = true;
+                    return this.openRunnerSessionPanel(id, opts || {});
+                }
+            }
+            if (note) note.textContent = 'Replacement is queued. This panel will show it when the Mac starts it.';
+            return true;
+        } catch (e) {
+            if (note) note.textContent = `Could not resume review: ${e.message}`;
+            if (button) button.disabled = false;
+            return false;
+        }
     },
 
     async _runnerPtyConnect() {

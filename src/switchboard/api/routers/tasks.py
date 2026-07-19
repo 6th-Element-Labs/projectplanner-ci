@@ -7,9 +7,10 @@ reads, and updates continue to delegate to the application layer.
 from __future__ import annotations
 
 import asyncio
-from typing import Callable
+from typing import Callable, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
+from pydantic import BaseModel
 
 import agent
 import auth
@@ -37,6 +38,12 @@ from switchboard.contracts.tasks.v1 import (
 
 ProjectResolver = Callable[[str], str]
 PrincipalResolver = Callable[..., dict]
+
+
+class ResumeReviewBody(BaseModel):
+    """Typed operator request for replacing one ended review runner."""
+
+    project: Optional[str] = None
 
 
 def create_router(*, resolve_project: ProjectResolver,
@@ -449,6 +456,25 @@ def create_router(*, resolve_project: ProjectResolver,
                                        project: str = Query(...)):
             return await asyncio.to_thread(
                 dispatch.latest, task_id, resolve_project(project))
+
+        @router.post("/api/tasks/{task_id}/resume-review")
+        async def resume_task_review(request: Request, task_id: str,
+                                     body: ResumeReviewBody = Body(
+                                         default=ResumeReviewBody())):
+            project = resolve_project(body.project)
+            principal = resolve_principal(
+                request, project, ("write:tasks",), dev_actor="web")
+            result = await asyncio.to_thread(
+                dispatch.resume_review, task_id, auth.actor(principal), project,
+                principal.get("id") or "")
+            if result.get("error") == "task not found":
+                raise HTTPException(404, result)
+            if result.get("error") in {
+                "task_not_in_review", "review_runner_already_live",
+                "review_runner_bind_incomplete", "stale_review_runner_not_found",
+            }:
+                raise HTTPException(409, result)
+            return result
 
         @router.post("/api/tasks/{task_id}/chat")
         async def chat(task_id: str, body: dict = Body(...),

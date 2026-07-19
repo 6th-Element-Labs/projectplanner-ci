@@ -140,6 +140,8 @@ def _write_assignment_toml(
         raise RuntimeError("direct Codex runner directory is invalid")
     repo = assignment.get("repository") or {}
     mcp = assignment.get("mcp") or {}
+    continuation = assignment.get("continuation") or {}
+    handoff = continuation.get("handoff") or {}
     values = [
         'schema = "switchboard.direct_cli_assignment.v1"',
         f"project = {_toml_string(assignment.get('project'))}",
@@ -164,6 +166,15 @@ def _write_assignment_toml(
         "secret_persisted = false",
         "",
     ]
+    if continuation:
+        values.extend([
+            "[continuation]",
+            f"mode = {_toml_string(continuation.get('mode'))}",
+            f"previous_runner_session_id = {_toml_string(continuation.get('previous_runner_session_id'))}",
+            f"provider_session_id = {_toml_string(continuation.get('provider_session_id'))}",
+            f"handoff_json = {_toml_string(json.dumps(handoff, sort_keys=True))}",
+            "",
+        ])
     path = session_root / "assignment.toml"
     temporary = session_root / "assignment.toml.tmp"
     temporary.write_text("\n".join(values), encoding="utf-8")
@@ -206,6 +217,28 @@ def _issue_direct_mcp_token(assignment: dict[str, Any]) -> str:
     return token
 
 
+def _codex_command(assignment: dict[str, Any], workspace: Path,
+                   executable: str, endpoint: str) -> list[str]:
+    continuation = assignment.get("continuation") or {}
+    provider_session_id = str(continuation.get("provider_session_id") or "").strip()
+    prompt = str(assignment["prompt"])
+    if continuation and not provider_session_id:
+        prompt += "\nReplacement review handoff: " + json.dumps(
+            continuation.get("handoff") or {}, sort_keys=True)
+    command = [executable]
+    if provider_session_id:
+        command.extend(["resume", provider_session_id])
+    command.extend([
+        "-C", str(workspace),
+        "--dangerously-bypass-approvals-and-sandbox",
+        "-c", f"mcp_servers.taikun_plan.url={json.dumps(endpoint)}",
+        "-c", 'mcp_servers.taikun_plan.bearer_token_env_var="SWITCHBOARD_DIRECT_SESSION_TOKEN"',
+        "-c", "mcp_servers.taikun_plan.required=true",
+        prompt,
+    ])
+    return command
+
+
 def main() -> int:
     assignment = _assignment()
     workspace, branch, canonical_sha = _prepare_workspace(assignment)
@@ -223,15 +256,7 @@ def main() -> int:
     environment = os.environ.copy()
     environment["SWITCHBOARD_DIRECT_SESSION_TOKEN"] = direct_token
     executable = str(os.environ.get("PM_CODEX_EXECUTABLE") or "codex").strip()
-    command = [
-        executable,
-        "-C", str(workspace),
-        "--dangerously-bypass-approvals-and-sandbox",
-        "-c", f"mcp_servers.taikun_plan.url={json.dumps(endpoint)}",
-        "-c", 'mcp_servers.taikun_plan.bearer_token_env_var="SWITCHBOARD_DIRECT_SESSION_TOKEN"',
-        "-c", "mcp_servers.taikun_plan.required=true",
-        str(assignment["prompt"]),
-    ]
+    command = _codex_command(assignment, workspace, executable, endpoint)
     os.execvpe(executable, command, environment)
     return 0
 

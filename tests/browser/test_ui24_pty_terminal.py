@@ -504,6 +504,85 @@ try:
         page.unroute("**/ixp/v1/runner_sessions/watch?**", _stale_watch)
         page.evaluate("() => TeepPlan._runnerPtyClose()")
 
+        # ---- stale In Review runner gets one visible replacement action -----
+        resume_requests = []
+        review_watch_calls = []
+
+        def _review_watch(route):
+            review_watch_calls.append(route.request.url)
+            if len(review_watch_calls) == 1:
+                body = {
+                    "watchable": False,
+                    "error_code": "runner_bind_incomplete",
+                    "message": "Review runner crashed",
+                    "sessions": [{
+                        "runner_session_id": "run_ui48_dead",
+                        "host_id": "host/browser-test",
+                        "status": "failed",
+                        "stale": True,
+                    }],
+                }
+            else:
+                body = {
+                    "watchable": True,
+                    "runner_session_id": "run_ui48_replacement",
+                    "bind": {"host_id": "host/browser-test"},
+                    "session": {
+                        "runner_session_id": "run_ui48_replacement",
+                        "host_id": "host/browser-test",
+                        "status": "running",
+                    },
+                }
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
+
+        page.route("**/ixp/v1/runner_sessions/watch?**", _review_watch)
+        def _resume_review(route):
+            resume_requests.append(json.loads(route.request.post_data or "{}"))
+            route.fulfill(
+                status=200, content_type="application/json",
+                body=(
+                    '{"resumed":true,"wake_id":"wake-ui48-replacement",'
+                    '"continuation_mode":"replacement_handoff",'
+                    '"workflow_status":"In Review"}'
+                ),
+            )
+
+        page.route("**/api/tasks/FAKE-TASK-1/resume-review**", _resume_review)
+        page.evaluate("() => { TeepPlan._runnerPtyLast = null; }")
+        page.evaluate("() => TeepPlan.openRunnerSessionPanel('FAKE-TASK-1', {includeStale: true, taskStatus: 'In Review'})")
+        page.wait_for_timeout(300)
+        ok(page.get_by_role("button", name="Resume review").is_visible(),
+           "a stale In Review runner shows the prominent Resume review action")
+        # Browser proof stops at the handoff to the already-covered PTY connect
+        # routine; keep this case hermetic and avoid asking the throwaway server
+        # for a real relay ticket for the mocked replacement runner.
+        page.evaluate("""
+            () => {
+                TeepPlan._runnerPtyConnect = async () => {
+                    document.getElementById('runner-pty-live').hidden = false;
+                };
+            }
+        """)
+        page.get_by_role("button", name="Resume review").click()
+        page.wait_for_timeout(2500)
+        replacement = page.evaluate("""
+            () => ({
+                title: document.getElementById('runner-pty-title').textContent,
+                live: !document.getElementById('runner-pty-live').hidden,
+                resumeHidden: document.getElementById('runner-pty-resume').hidden,
+                note: document.getElementById('runner-pty-resume-note').textContent,
+            })
+        """)
+        ok(len(resume_requests) == 1
+           and resume_requests[0].get("project") == "ui24-browser",
+           "Resume review sends exactly one replacement request for the current project")
+        ok("run_ui48_replacement" in replacement["title"]
+           and replacement["resumeHidden"],
+           "the replacement becomes the active Watch runner without overwriting the stale identity")
+        page.unroute("**/api/tasks/FAKE-TASK-1/resume-review**", _resume_review)
+        page.unroute("**/ixp/v1/runner_sessions/watch?**", _review_watch)
+        page.evaluate("() => TeepPlan._runnerPtyClose()")
+
         ok(not console_errors, f"no uncaught console/page errors during the whole flow (got: {console_errors})")
 
         browser.close()
