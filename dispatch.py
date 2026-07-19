@@ -265,18 +265,47 @@ def dispatch(task_id, actor="user", project=store.DEFAULT_PROJECT, runtime=_RUNT
             "host_id": host_id,
             "branch": branch,
         }
+        links = store.list_task_deliverable_links(task_id, project=project)
+        linked_deliverable = links[0] if links else {}
+        deliverable = t.get("deliverable") or {}
+        deliverable_id = str(
+            t.get("deliverable_id")
+            or (deliverable.get("id") if isinstance(deliverable, dict) else deliverable)
+            or linked_deliverable.get("deliverable_id")
+            or ""
+        ).strip()
+        prompt_scope = f" for deliverable {deliverable_id}" if deliverable_id else ""
+        endpoint = str(
+            os.environ.get("PM_MCP_PUBLIC_URL")
+            or os.environ.get("PM_BASE", "https://plan.taikunai.com").rstrip("/") + "/mcp"
+        ).strip()
+        if not endpoint.endswith("/mcp"):
+            endpoint = endpoint.rstrip("/") + "/mcp"
         policy = {
-            "mode": "agent_host",
-            "execution_mode": "native_personal_agent_host",
-            "continuity": "fresh_switchboard_state",
-            "require_runner_bind": True,
+            "mode": "direct_task",
+            "execution_mode": "direct_personal_cli",
+            "continuity": "switchboard_mcp_boot",
+            "require_runner_bind": False,
             "allow_on_demand": False,
-            "scheduler": {
-                "mode": "hybrid",
-                "prefer_persistent": True,
-                "allow_persistent": True,
-                "allow_ephemeral": False,
-                "burst_enabled": False,
+            "assignment": {
+                "schema": "switchboard.direct_cli_assignment.v1",
+                "project": project,
+                "task_id": task_id,
+                "deliverable_id": deliverable_id,
+                "host_id": host_id,
+                "prompt": (
+                    f"Do {task_id}{prompt_scope} in project {project} via Switchboard."
+                ),
+                "repository": {
+                    "slug": "6th-Element-Labs/projectplanner",
+                    "default_branch": "master",
+                    "branch": branch,
+                    "canonical_sha": "",
+                },
+                "mcp": {
+                    "endpoint": endpoint,
+                    "auth_source": "enrolled_agent_host_token",
+                },
             },
             "placement": {
                 "canonical_repo": "6th-Element-Labs/projectplanner",
@@ -286,9 +315,9 @@ def dispatch(task_id, actor="user", project=store.DEFAULT_PROJECT, runtime=_RUNT
         }
         hosts = [host_id] if host_online else []
         note = (
-            f"Queued native Codex execution for `{host_id}` on `{branch}` (lane "
-            f"{lane or '—'}). The enrolled host will atomically claim this exact task, bind a "
-            "managed Work Session and runner, then stream the native Codex PTY to Watch."
+            f"Assigned `{task_id}` directly to `{host_id}`. The enrolled Mac will open an "
+            f"isolated `{branch}-direct-<session>` workspace, start its native Codex CLI with the Switchboard "
+            "MCP connection preloaded, and publish the same PTY to Watch."
         )
     elif selected_runtime == _CODEX_RUNTIME:
         branch = f"codex/{task_id.lower()}"
@@ -325,7 +354,7 @@ def dispatch(task_id, actor="user", project=store.DEFAULT_PROJECT, runtime=_RUNT
     personal_dispatch = (
         selected_runtime == _CODEX_RUNTIME and not _codex_cloud_requested(runtime))
     idem_key = (
-        f"ui-personal-dispatch:v2:{project}:{task_id}:{principal_id}:{selector.get('host_id')}"
+        f"ui-personal-dispatch:v3:{project}:{task_id}:{principal_id}:{selector.get('host_id')}"
         if personal_dispatch
         else f"ui-dispatch:{project}:{task_id}:{str(runtime or selected_runtime).lower()}"
     )
@@ -357,6 +386,7 @@ def dispatch(task_id, actor="user", project=store.DEFAULT_PROJECT, runtime=_RUNT
         store.add_comment(task_id, "Switchboard (dispatch)", note, project=project)
     return {"dispatched": True, "task_id": task_id, "project": project,
             "wake_id": w["wake_id"], "wake_status": w.get("status"),
+            "assignment_id": w["wake_id"],
             "lane": lane, "runtime": selected_runtime,
             "vendor_id": (_CODEX_VENDOR if selected_runtime == _CODEX_RUNTIME
                           and _codex_cloud_requested(runtime) else None),

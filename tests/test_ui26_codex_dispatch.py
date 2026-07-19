@@ -41,19 +41,19 @@ ok("body: JSON.stringify({ project: proj, runtime: rt })" in APP,
    "the POST body carries the selected runtime to the existing dispatch endpoint")
 
 # ---- confirm/flash copy is honest and runtime-specific, not copy-pasted ---
-ok("your own registered Codex Agent Host" in APP,
+ok("native Codex CLI" in APP and "your enrolled Mac" in APP,
    "the Codex confirm dialog describes the real target (operator's own host), not a vendor cloud")
-ok("your personal ChatGPT/Codex login" in APP,
-   "the Codex confirm dialog is explicit this runs under the operator's own credentials")
-ok("no Codex-capable host is online for this lane yet" in APP,
+ok("assignment config and Switchboard MCP" in APP,
+   "the Codex confirm dialog describes the direct config-driven boot")
+ok("your Mac is offline or full" in APP,
    "an honest queued-with-no-host message exists for the codex path, matching the existing Claude one")
-ok("Use Watch above to see it live" in APP,
+ok("Use Watch above to see and steer the same terminal" in APP,
    "the running-state copy points the operator at the UI-24 terminal, not a nonexistent Codex session URL")
 
 # ---- the live dispatch-panel poller distinguishes runtimes, not just the button --
 ok("const isCodex = d.runtime === 'codex';" in APP,
    "_loadDispatch branches its rendering on the dispatch's actual runtime")
-ok("Codex host dispatch" in APP, "the live panel labels a codex dispatch distinctly from Claude cloud")
+ok("Codex on your Mac" in APP, "the live panel labels a codex dispatch distinctly from Claude cloud")
 ok("(!isCodex && d.session_url)" in APP,
    "the panel never offers an 'Open Claude session' link for a codex dispatch (no such URL exists for it)")
 

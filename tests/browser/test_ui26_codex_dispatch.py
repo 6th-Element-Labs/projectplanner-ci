@@ -118,7 +118,8 @@ try:
         codex_btn = page.locator("#edit-dispatch-codex")
         ok(claude_btn.is_visible() and codex_btn.is_visible(),
            "both the Claude Code and Codex dispatch buttons render side by side")
-        ok("Dispatch to Codex" in codex_btn.inner_text(), "the Codex button is labeled distinctly")
+        ok("Start Codex on my Mac" in codex_btn.inner_text(),
+           "the Codex button names the direct personal-host action")
 
         # ---- auto-accept the confirm() dialog, capture its text --------------
         dialog_texts = []
@@ -141,18 +142,19 @@ try:
         codex_btn.click()
         page.wait_for_timeout(300)
 
-        ok(bool(dialog_texts) and "your own registered Codex Agent Host" in dialog_texts[-1],
+        ok(bool(dialog_texts) and "your enrolled Mac" in dialog_texts[-1],
            f"the confirm dialog for the Codex button names the real target (got: {dialog_texts!r})")
-        ok("your personal ChatGPT/Codex login" in dialog_texts[-1],
-           "the confirm dialog is explicit about whose credentials are used")
+        ok("native Codex CLI" in dialog_texts[-1]
+           and "assignment config and Switchboard MCP" in dialog_texts[-1],
+           "the confirm dialog describes the direct CLI bootstrap contract")
 
         body = captured.get("body") or ""
         ok('"runtime":"codex"' in body.replace(" ", ""),
            f"the actual POST body sent to the backend carries runtime=codex (got: {body!r})")
 
         flash = page.locator("#edit-flash-dev").inner_text()
-        ok("Codex" in flash and "wake-ui26-test" in flash,
-           f"the flash message reflects the codex dispatch and its real wake_id (got: {flash!r})")
+        ok("Assigned" in flash and "wake-ui26-test" in flash,
+           f"the flash message reflects the direct assignment and its real wake_id (got: {flash!r})")
 
         # ---- the Claude Code button still sends the original runtime ---------
         dialog_texts.clear()

@@ -20,6 +20,7 @@ from switchboard.domain.coordination.terminal import (
 )
 from switchboard.storage.repositories.access import has_project
 from switchboard.storage.repositories.coordination import (
+    _host_row,
     _monitor_row,
     _presence_row,
     _wake_row,
@@ -97,6 +98,25 @@ def cleanup_candidates(project: str = DEFAULT_PROJECT,
 
     with _conn(project) as c:
         task_ids = {r["task_id"] for r in c.execute("SELECT task_id FROM tasks").fetchall()}
+
+        if accept("agent_host"):
+            for row in c.execute("SELECT * FROM agent_hosts ORDER BY heartbeat_at").fetchall():
+                host = _host_row(row, now=now)
+                heartbeat_at = float(host.get("heartbeat_at") or 0)
+                if heartbeat_at > now - 3600:
+                    continue
+                enrolled = c.execute(
+                    "SELECT 1 FROM agent_host_enrollments "
+                    "WHERE host_id=? AND status='active' LIMIT 1",
+                    (host.get("host_id"),),
+                ).fetchone()
+                if enrolled:
+                    continue
+                out.append(_cleanup_candidate(
+                    "agent_host", host["host_id"], "remove_stale_host",
+                    "host heartbeat has been absent for more than one hour",
+                    now, timestamp=heartbeat_at, snapshot=host,
+                ))
 
         if accept("agent_presence"):
             for row in c.execute("SELECT * FROM agent_presence ORDER BY heartbeat_at").fetchall():
@@ -297,7 +317,22 @@ def apply_cleanup(project: str = DEFAULT_PROJECT,
             target_id = candidate["target_id"]
             payload = {"candidate": candidate, "reason": reason}
             try:
-                if kind == "agent_presence":
+                if kind == "agent_host":
+                    changed = c.execute(
+                        "DELETE FROM agent_hosts WHERE host_id=? "
+                        "AND heartbeat_at<=? AND NOT EXISTS ("
+                        "SELECT 1 FROM agent_host_enrollments "
+                        "WHERE host_id=? AND status='active')",
+                        (target_id, now - 3600, target_id),
+                    )
+                    c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                              "VALUES (?,?,?,?,?)",
+                              (None, actor, "cleanup.agent_host_removed",
+                               json.dumps(payload, sort_keys=True), now))
+                    results.append({"id": candidate["id"],
+                                    "applied": changed.rowcount == 1,
+                                    "action": candidate["action"]})
+                elif kind == "agent_presence":
                     c.execute("DELETE FROM agent_presence WHERE agent_id=?", (target_id,))
                     c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) "
                               "VALUES (?,?,?,?,?)",

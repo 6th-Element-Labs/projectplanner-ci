@@ -25,6 +25,7 @@ from switchboard.application.commands import register_host as register_host_comm
 from switchboard.application.contracts.agents import (
     BeginHostEnrollmentCommand,
     CompleteHostEnrollmentCommand,
+    DirectAssignmentMCPTokenCommand,
     FinalizeHostEnrollmentCommand,
     RevokeHostIdentityCommand,
     RotateHostIdentityCommand,
@@ -129,6 +130,26 @@ def create_router(*, resolve_project: ProjectResolver,
             status=body.get("status") or "online",
             last_error=body.get("last_error") or "",
             principal_id=principal["id"], actor=auth.actor(principal), project=project))
+
+    @router.post("/ixp/v1/direct_assignments/mcp_token")
+    async def ixp_direct_assignment_mcp_token(
+            request: Request, body: DirectAssignmentMCPTokenCommand = Body(...)):
+        """Give an exact direct CLI its short-lived task-scoped MCP bearer."""
+        payload = body.model_dump(by_alias=True)
+        project = resolve_body_project(payload)
+        principal = resolve_agent_host_principal(
+            resolve_principal, request, project,
+            dev_actor=body.host_id or "direct-cli")
+        host_id = body.host_id
+        require_agent_host_identity(principal, host_id, project)
+        result = store.issue_direct_session_mcp_token(
+            body.wake_id, host_id, body.runner_session_id,
+            principal_id=principal["id"], actor=auth.actor(principal),
+            project=project,
+        )
+        if result.get("error"):
+            raise HTTPException(403, result)
+        return result
 
     @router.post("/ixp/v1/agent-host-enrollments")
     async def ixp_begin_agent_host_enrollment(

@@ -14,6 +14,8 @@ def _session_binding(session: Mapping[str, Any], project: str) -> dict[str, str]
     meta = session.get("metadata") or {}
     if not isinstance(meta, dict):
         meta = {}
+    direct = runner_repo.is_direct_assignment_runner(dict(session))
+    direct_ref = f"direct/{session.get('runner_session_id') or 'session'}"
     return domain.merge_binding({
         "tenant_id": str(
             session.get("tenant_id")
@@ -23,17 +25,20 @@ def _session_binding(session: Mapping[str, Any], project: str) -> dict[str, str]
         "user_id": str(session.get("user_id") or meta.get("user_id") or ""),
         "project_id": str(session.get("project_id") or project or DEFAULT_PROJECT),
         "task_id": bind.get("task_id") or "",
-        "claim_id": bind.get("claim_id") or "",
-        "work_session_id": bind.get("work_session_id") or "",
+        "claim_id": bind.get("claim_id") or (direct_ref if direct else ""),
+        "work_session_id": bind.get("work_session_id") or (direct_ref if direct else ""),
         "runner_session_id": str(session.get("runner_session_id") or ""),
         "host_id": bind.get("host_id") or "",
         "wake_id": bind.get("wake_id") or "",
         "execution_connection_id": str(
             session.get("execution_connection_id")
             or meta.get("execution_connection_id")
+            or (direct_ref if direct else "")
             or ""
         ),
-        "source_sha": str(session.get("source_sha") or meta.get("source_sha") or ""),
+        "source_sha": str(
+            session.get("source_sha") or meta.get("source_sha")
+            or (direct_ref if direct else "")),
         "permission_profile": str(
             session.get("permission_profile")
             or meta.get("permission_profile")
@@ -60,7 +65,7 @@ def mint_ticket_for_session(
     if not session:
         return {"error": "runner_session_not_found", "error_code": "not_found"}
     missing = runner_repo.missing_runner_bind_fields(session)
-    if missing:
+    if missing and not runner_repo.is_direct_assignment_runner(session):
         return runner_repo.runner_bind_incomplete(missing, task_id=session.get("task_id") or "")
     binding = _session_binding(session, project_id)
     if binding_overlay:

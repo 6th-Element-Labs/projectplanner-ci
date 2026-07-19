@@ -19,6 +19,9 @@ REVOKE_HOST_IDENTITY_COMMAND_SCHEMA = "switchboard.agent.revoke_host_identity_co
 UPDATE_HOST_EXECUTION_POLICY_COMMAND_SCHEMA = (
     "switchboard.agent.update_host_execution_policy_command.v1"
 )
+DIRECT_ASSIGNMENT_MCP_TOKEN_COMMAND_SCHEMA = (
+    "switchboard.agent.direct_assignment_mcp_token_command.v1"
+)
 
 
 def parse_json_object(value: Any, *, field_name: str) -> dict[str, Any]:
@@ -288,6 +291,25 @@ class UpdateHostExecutionPolicyCommand(VersionedModel):
             value, field_name="lane_allowlist") if str(item).strip()]
 
 
+class DirectAssignmentMCPTokenCommand(VersionedModel):
+    """Exact host assignment exchanging its enrollment for a scoped MCP bearer."""
+
+    SCHEMA: ClassVar[str] = DIRECT_ASSIGNMENT_MCP_TOKEN_COMMAND_SCHEMA
+    model_config = ConfigDict(frozen=True)
+
+    schema_id: str = Field(
+        default=DIRECT_ASSIGNMENT_MCP_TOKEN_COMMAND_SCHEMA, alias="schema")
+    project: str = Field(default="switchboard", min_length=1, pattern=r".*\S.*")
+    wake_id: str = Field(min_length=1, pattern=r".*\S.*")
+    host_id: str = Field(min_length=1, pattern=r"^host/.+")
+    runner_session_id: str = Field(min_length=1, pattern=r".*\S.*")
+
+    @field_validator("project", "wake_id", "host_id", "runner_session_id", mode="before")
+    @classmethod
+    def _strip_direct_assignment_text(cls, value: Any) -> str:
+        return str(value or "").strip()
+
+
 class CompleteHostEnrollmentCommand(VersionedModel):
     """Single-use bootstrap completion with durable response-loss recovery."""
 
@@ -377,3 +399,5 @@ register(CompleteHostEnrollmentCommand)
 register(FinalizeHostEnrollmentCommand)
 register(RotateHostIdentityCommand)
 register(RevokeHostIdentityCommand)
+register(UpdateHostExecutionPolicyCommand)
+register(DirectAssignmentMCPTokenCommand)

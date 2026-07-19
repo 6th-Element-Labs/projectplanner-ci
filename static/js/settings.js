@@ -350,7 +350,7 @@
             const [data, policy, hostsData] = await Promise.all([
                 this._sfetch(`api/projects/${encodeURIComponent(proj)}/provider-connections`),
                 this._sfetch(`api/projects/${encodeURIComponent(proj)}/provider-auth-capabilities`),
-                this._sfetch(`ixp/v1/agent_hosts?project=${encodeURIComponent(proj)}&include_stale=1`),
+                this._sfetch(`ixp/v1/agent_hosts?project=${encodeURIComponent(proj)}&include_stale=0`),
             ]);
             const conns = data.error ? [] : (data.connections || data.provider_connections || []);
             const caps = policy.error ? [] : (policy.capabilities || []);
@@ -591,7 +591,7 @@
             // cache is unavailable (e.g. the earlier fetch itself failed).
             let hosts = this._aiAccountsHostsCache;
             if (!hosts) {
-                const hostsData = await this._sfetch(`ixp/v1/agent_hosts?project=${encodeURIComponent(proj)}&include_stale=1`);
+                const hostsData = await this._sfetch(`ixp/v1/agent_hosts?project=${encodeURIComponent(proj)}&include_stale=0`);
                 hosts = hostsData.hosts || [];
             }
             const candidates = this._settingsAiAccountCandidateHosts(
@@ -1384,7 +1384,7 @@
         // rationalizing those docks.
         async _settingsFleetSection() {
             const proj = window.PM_PROJECT || 'maxwell';
-            const data = await this._sfetch(`ixp/v1/agent_hosts?project=${encodeURIComponent(proj)}&include_stale=1`);
+            const data = await this._sfetch(`ixp/v1/agent_hosts?project=${encodeURIComponent(proj)}&include_stale=0`);
             if (data.error) return this._settingsErrCard('Fleet & runners', data.error);
             const hosts = data.hosts || [];
             const live = hosts.filter((h) => !h.stale);

@@ -1,0 +1,49 @@
+{
+  "$id": "switchboard.agent.update_host_execution_policy_command.v1",
+  "additionalProperties": false,
+  "description": "Operator authorization for personal-host lane scope and parallelism.",
+  "properties": {
+    "host_id": {
+      "minLength": 1,
+      "pattern": "^host/.+",
+      "title": "Host Id",
+      "type": "string"
+    },
+    "lane_allowlist": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Lane Allowlist",
+      "type": "array"
+    },
+    "lane_mode": {
+      "default": "explicit",
+      "title": "Lane Mode",
+      "type": "string"
+    },
+    "max_sessions": {
+      "maximum": 32,
+      "minimum": 1,
+      "title": "Max Sessions",
+      "type": "integer"
+    },
+    "project": {
+      "minLength": 1,
+      "pattern": ".*\\S.*",
+      "title": "Project",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.agent.update_host_execution_policy_command.v1",
+      "title": "Schema",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project",
+    "host_id",
+    "max_sessions"
+  ],
+  "title": "UpdateHostExecutionPolicyCommand",
+  "type": "object"
+}

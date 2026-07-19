@@ -1551,7 +1551,7 @@ const TeepPlan = {
         if (!body) return;
         let hosts;
         try {
-            const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&include_stale=true`;
+            const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&include_stale=false`;
             hosts = (await (await fetch(`/ixp/v1/agent_hosts?${q}`)).json()).hosts || [];
             if (this.isAdmin) {
                 await Promise.all(hosts.map(async (host) => {
@@ -1668,13 +1668,13 @@ const TeepPlan = {
         if (!body) return;
         let sessions;
         try {
-            const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&include_stale=true`;
+            const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&include_stale=false`;
             sessions = (await (await fetch(`/ixp/v1/runner_sessions?${q}`)).json()).sessions || [];
         } catch (e) { body.innerHTML = `<div class="text-danger small">Runners unavailable: ${this.esc(e.message)}</div>`; return; }
         if (count) { count.className = sessions.length ? 'badge bg-azure-lt ms-2' : 'badge bg-secondary-lt ms-2'; count.textContent = `${sessions.length}`; }
         if (!sessions.length) { body.innerHTML = `<div class="text-secondary small">No live runners registered for this project.</div>`; return; }
         body.innerHTML = `<div class="table-responsive"><table class="table table-sm mb-0 align-middle">
-            <thead><tr><th>Session</th><th>Host</th><th>Runtime</th><th>Claim</th><th>Fidelity</th><th>Environment</th><th>Snapshot</th><th class="text-end">Actions</th></tr></thead>
+            <thead><tr><th>Session</th><th>Host</th><th>Runtime</th><th>Fidelity</th><th>Environment</th><th>Snapshot</th><th class="text-end">Actions</th></tr></thead>
             <tbody>${sessions.map((s) => this._runnerSessionRow(s)).join('')}</tbody></table></div>`;
         body.querySelectorAll('[data-runner-action]').forEach((btn) =>
             btn.addEventListener('click', () => this._fleetRunnerAction(btn.getAttribute('data-runner-id'), btn.getAttribute('data-runner-action'))));
@@ -1979,18 +1979,16 @@ const TeepPlan = {
                     </div>
                 </div>
                 <div class="tab-pane fade" id="m-dev" role="tabpanel">
-                    <p class="text-secondary">Choose Claude Code for a vendor-hosted cloud session, or Codex (personal) to wake your enrolled Mac Agent Host. Personal Codex atomically claims this exact task, binds a managed Work Session, and streams its native PTY here in Watch. Neither path merges or writes to main/master on its own.</p>
+                    <p class="text-secondary">Start Codex on your enrolled Mac to open a native CLI for this task. The Mac daemon writes one assignment TOML, prepares the task workspace, preloads Switchboard MCP, and streams that same PTY here. Neither path merges or writes to main/master on its own.</p>
                     ${t.is_blocking ? `<div class="alert alert-warning d-flex" role="alert"><i class="ti ti-shield-lock me-2 mt-1"></i><div><span class="fw-bold">Human-gated.</span> This task is blocking — a maintainer must approve both the dispatch and the resulting PR before anything merges.</div></div>` : ''}
                     ${this.controlTruthHtml(t)}
-                    ${this.workSessionsPanelHtml(t)}
                     ${this.mergeGatePanelHtml(t)}
                     ${this.monitorControlHtml(t)}
                     ${this.runnerControlHtml(t)}
                     <div id="runner-pty-dev-mount" class="mb-3"></div>
-                    ${this.claimControlHtml(t)}
                     <div class="btn-list mb-3">
                         <button id="edit-dispatch" class="btn btn-primary"><i class="ti ti-robot me-1"></i>Dispatch to Claude Code</button>
-                        <button id="edit-dispatch-codex" class="btn btn-outline-primary"><i class="ti ti-terminal-2 me-1"></i>Dispatch to Codex (personal)</button>
+                        <button id="edit-dispatch-codex" class="btn btn-outline-primary"><i class="ti ti-terminal-2 me-1"></i>Start Codex on my Mac</button>
                     </div>
                     <div id="dispatch-panel"></div>
                     <span id="edit-flash-dev" class="small text-secondary"></span>
@@ -2011,7 +2009,6 @@ const TeepPlan = {
             </div>`;
         this._renderActivity(t);
         this._loadTaskMonitors(t.task_id);
-        this._loadWorkSessions(t.task_id);
         this._initMergeGate(t.task_id);
         this._loadRunnerSessions(t.task_id);
         this._loadDispatch(t.task_id);
@@ -2025,8 +2022,6 @@ const TeepPlan = {
         document.getElementById('edit-save').addEventListener('click', () => this.saveTask(t.task_id));
         document.getElementById('edit-dispatch').addEventListener('click', () => this.dispatchTask(t.task_id, 'claude-code'));
         document.getElementById('edit-dispatch-codex').addEventListener('click', () => this.dispatchTask(t.task_id, 'codex'));
-        const revokeBtn = document.getElementById('claim-revoke-btn');
-        if (revokeBtn) revokeBtn.addEventListener('click', () => this.revokeClaim(t.task_id));
         document.getElementById('chat-send').addEventListener('click', () => this.sendChat(t.task_id));
         document.getElementById('chat-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') this.sendChat(t.task_id); });
         window.bootstrap.Modal.getOrCreateInstance(document.getElementById('task-modal')).show();
@@ -2186,10 +2181,10 @@ const TeepPlan = {
         const flash = (msg, cls) => { const el = document.getElementById('edit-flash-dev'); if (el) { el.textContent = msg; el.className = 'small text-' + (cls || 'secondary'); } };
         const proj = window.PM_PROJECT || 'maxwell';
         const confirmMsg = rt === 'codex'
-            ? `Dispatch ${id} to your own registered Codex Agent Host? This queues a wake for a Codex-capable host running your personal ChatGPT/Codex login on a codex/ task branch — it stays queued until an eligible host is online for this task's lane, and it never touches main/master on its own.`
+            ? `Start a native Codex CLI for ${id} on your enrolled Mac? The daemon creates an isolated task workspace, loads its assignment config and Switchboard MCP, and opens the live terminal here.`
             : `Dispatch ${id} to Claude Code cloud? Anthropic hosts the coding session on a claude/ task branch and the session/PR links return here — it never touches main/master.`;
         if (!window.confirm(confirmMsg)) return;
-        flash(rt === 'codex' ? 'Queuing a Codex dispatch…' : 'Queuing a Claude cloud session…');
+        flash(rt === 'codex' ? 'Sending the task to your Mac…' : 'Queuing a Claude cloud session…');
         let data;
         try {
             const res = await fetch(`api/tasks/${encodeURIComponent(id)}/dispatch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: proj, runtime: rt }) });
@@ -2198,14 +2193,38 @@ const TeepPlan = {
         if (!data.dispatched) return flash('Dispatch failed: ' + (data.error || data.detail || 'unknown'), 'danger');
         if (!data.work_hosts_online) {
             flash(rt === 'codex'
-                ? `Queued (wake ${data.wake_id}) — no Codex-capable host is online for this lane yet.`
+                ? `Assigned (${data.assignment_id || data.wake_id}) — your Mac is offline or full, so it will start when the daemon reconnects.`
                 : `Queued (wake ${data.wake_id}) — no authenticated Claude cloud trigger host is online yet.`, 'warning');
         } else {
             flash(rt === 'codex'
-                ? `Queued (wake ${data.wake_id}) — your Codex Agent Host will bind a runner session. Use Watch above to see it live.`
+                ? `Starting ${id} on ${data.host_id}. The live Codex terminal will open here.`
                 : `Queued (wake ${data.wake_id}) — the trigger host will bind an app-visible Claude session.`, 'green');
         }
         this._loadDispatch(id);   // render the live panel (queued → running → Open PR); it self-refreshes
+        if (rt === 'codex' && data.work_hosts_online) this._openDirectRunnerWhenReady(id);
+    },
+
+    async _openDirectRunnerWhenReady(taskId) {
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < 90000) {
+            let state = null;
+            try {
+                const proj = window.PM_PROJECT || 'maxwell';
+                state = await (await fetch(`api/tasks/${encodeURIComponent(taskId)}/dispatch/latest?project=${encodeURIComponent(proj)}`, { cache: 'no-store' })).json();
+            } catch (e) { /* the daemon will be polled again */ }
+            if (state && state.session_id && state.status === 'running') {
+                await this._loadRunnerSessions(taskId);
+                const mount = document.getElementById('runner-pty-dev-mount');
+                await this.openRunnerSessionPanel(taskId, { dockInto: mount || undefined });
+                return;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+        const el = document.getElementById('edit-flash-dev');
+        if (el) {
+            el.textContent = 'The Mac has not published the CLI yet. The assignment remains queued; refresh when the host is online.';
+            el.className = 'small text-warning';
+        }
     },
 
     async revokeClaim(taskId) {
@@ -2296,9 +2315,9 @@ const TeepPlan = {
         if (!st || st === 'none') { el.innerHTML = ''; return; }
         const isCodex = d.runtime === 'codex';
         const M = isCodex ? {
-            queued: ['Queued for Codex host', 'yellow'],
-            claiming: ['Claimed — provisioning…', 'azure'],
-            running: ['Codex host running', 'azure'],
+            queued: ['Assigned to Mac', 'yellow'],
+            claiming: ['Starting Codex CLI…', 'azure'],
+            running: ['Codex CLI live', 'green'],
             pr: ['PR ready', 'green'],
         } : {
             queued: ['Queued for Claude cloud', 'yellow'],
@@ -2314,15 +2333,15 @@ const TeepPlan = {
         el.innerHTML = `
             <div class="card"><div class="card-body py-2">
                 <div class="d-flex align-items-center gap-2 flex-wrap">
-                    <i class="ti ti-cloud text-azure"></i><strong>${isCodex ? 'Codex host dispatch' : 'Claude cloud dispatch'}</strong>${who}
+                    <i class="ti ti-terminal-2 text-azure"></i><strong>${isCodex ? 'Codex on your Mac' : 'Claude cloud dispatch'}</strong>${who}
                     <span class="badge bg-${color}-lt">${this.esc(label)}</span>
                     ${st === 'running' || st === 'claiming' ? '<span class="spinner-border spinner-border-sm text-azure"></span>' : ''}
                     <span class="ms-auto"></span>${session}${pr}
                 </div>
-                ${st === 'queued' ? `<div class="small text-secondary mt-1">Queued — waiting for ${isCodex ? 'a Codex-capable Agent Host on this lane' : 'an authenticated trigger host with the vendor_cloud capability'}.</div>` : ''}
-                ${st === 'claiming' ? '<div class="small text-secondary mt-1">The host claimed the wake and is provisioning a session.</div>' : ''}
+                ${st === 'queued' ? `<div class="small text-secondary mt-1">${isCodex ? 'The assignment is waiting for your enrolled Mac daemon to accept it.' : 'Queued — waiting for an authenticated trigger host with the vendor_cloud capability.'}</div>` : ''}
+                ${st === 'claiming' ? `<div class="small text-secondary mt-1">${isCodex ? 'The Mac daemon is starting the native CLI and browser PTY.' : 'The cloud host is provisioning a session.'}</div>` : ''}
                 ${st === 'running' ? (isCodex
-                    ? '<div class="small text-secondary mt-1">Working on your Codex Agent Host. Use Watch above (UI-24 terminal) to see it live; the PR button appears after provenance lands.</div>'
+                    ? '<div class="small text-secondary mt-1">The native Codex CLI is working on your Mac. Use Watch above to see and steer the same terminal.</div>'
                     : '<div class="small text-secondary mt-1">Working in Claude cloud. Open the session to watch or steer it; the PR button appears after provenance lands.</div>') : ''}
                 ${st === 'pr' ? '<div class="small text-secondary mt-1">Next: open the PR, review the diff, and merge it on GitHub (or comment back here).</div>' : ''}
             </div></div>`;

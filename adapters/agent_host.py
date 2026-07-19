@@ -51,6 +51,7 @@ PROJECT = os.environ.get("PM_PROJECT", "switchboard")
 SUPERVISOR = os.path.join(_HERE, "codex", "supervisor.py")
 RUN_AGENT = os.path.join(_HERE, "run_agent.py")
 CLOSURE_VERIFIER = os.path.join(_HERE, "closure_verifier.py")
+DIRECT_CODEX_SESSION = os.path.join(_HERE, "direct_codex_session.py")
 
 # Spec operation → REST path. Centralized so Codex's published paths get pinned in ONE place.
 P_REGISTER_HOST = "/ixp/v1/register_host"
@@ -575,7 +576,8 @@ def eligible_runtime(wake, inventory):
     want_rt, want_lane = sel.get("runtime"), sel.get("lane")
     want_caps = set(_csv(sel.get("capabilities") or []))
     requested_mode = str(((wake or {}).get("policy") or {}).get("mode") or "").strip()
-    wants_claim = requested_mode == "claim_next" or bool(want_lane and requested_mode != "message_only")
+    wants_claim = requested_mode in {"claim_next", "direct_task"} or bool(
+        want_lane and requested_mode != "message_only")
     for rt in inventory["runtimes"]:
         if want_rt and rt["runtime"] != want_rt:
             continue
@@ -623,6 +625,8 @@ def wake_mode(wake, inventory=None):
     policy = (wake or {}).get("policy") or {}
     selector = (wake or {}).get("selector") or {}
     explicit = (policy.get("mode") or "").strip()
+    if explicit == "direct_task":
+        return "direct_task"
     if explicit == "cloud_execution" or policy.get("kind") == "cloud_execution":
         return "cloud_execution"
     if policy.get("kind") == "closure_verification" and policy.get("deliverable_id"):
@@ -700,7 +704,11 @@ def launch_command(wake, inventory, runner_session_id=""):
     mode = wake_mode(wake, inventory)
     if mode == "refused":
         raise ValueError("wake asks for global claim_next but host policy forbids global work")
-    if mode == "closure_verify":
+    if mode == "direct_task":
+        if runtime != "codex" or not wake.get("task_id"):
+            raise ValueError("direct task assignment requires a task-bound Codex runtime")
+        child = [sys.executable, DIRECT_CODEX_SESSION]
+    elif mode == "closure_verify":
         policy = wake.get("policy") or {}
         child = [sys.executable, CLOSURE_VERIFIER, "--project", PROJECT,
                  "--deliverable-id", policy.get("deliverable_id"),
@@ -1163,6 +1171,8 @@ def supervisor_action(action, runner_session_id, options=None):
                 server_relay = options.get("server_relay") or {}
                 host_relay_url = str(server_relay.get("host_url") or "")
                 browser_relay_url = str(server_relay.get("browser_url") or "")
+                if isinstance(server_relay.get("binding"), dict):
+                    binding = dict(server_relay["binding"])
                 try:
                     if host_relay_url and browser_relay_url:
                         relay_url = browser_relay_url
@@ -2021,6 +2031,115 @@ def run_once(inventory):
         if not eligible_runtime(w, inventory):
             continue  # not ours — let an eligible host claim it (substrate records if none do)
         wake_id = w.get("wake_id")
+        if wake_mode(w, inventory) == "direct_task":
+            selected_host = str((w.get("selector") or {}).get("host_id") or "")
+            if selected_host != str(host_id or ""):
+                continue
+            assignment = dict((w.get("policy") or {}).get("assignment") or {})
+            if (assignment.get("schema") != "switchboard.direct_cli_assignment.v1"
+                    or str(assignment.get("task_id") or "") != str(w.get("task_id") or "")
+                    or str(assignment.get("host_id") or "") != str(host_id or "")):
+                refused.append({
+                    "wake_id": wake_id,
+                    "error": "direct_assignment_invalid",
+                    "reason": "direct assignment does not match task and selected host",
+                })
+                continue
+            runner_session_id = _runner_session_id_for_wake(w, host_id)
+            health = supervisor_action("health", runner_session_id)
+            reused = bool(health and not health.get("error") and health.get("alive"))
+            if reused:
+                rec = dict(health)
+                rec.update({
+                    "runner_session_id": runner_session_id,
+                    "wake_mode": "direct_task",
+                    "host_id": host_id,
+                    "runtime": "codex",
+                    "task_id": w.get("task_id") or "",
+                })
+            else:
+                try:
+                    rec = launch(
+                        w, inventory, runner_session_id=runner_session_id,
+                        extra_env={
+                            "PM_DIRECT_CODEX_ASSIGNMENT_JSON": json.dumps(
+                                assignment, sort_keys=True),
+                            "PM_CO_WAKE_ID": str(wake_id or ""),
+                            "PM_CO_HOST_ID": str(host_id or ""),
+                        },
+                    )
+                except Exception as exc:
+                    rec = {
+                        "runner_session_id": runner_session_id,
+                        "started": False,
+                        "wake_mode": "direct_task",
+                        "reason": "direct_cli_launch_configuration_error",
+                        "failure_class": "failed_gate",
+                        "provider_error": str(exc)[:500],
+                    }
+            started = bool(reused or confirm_started(rec))
+            assignment_path = os.path.join(
+                str(os.environ.get("PM_AGENT_HOST_RUNNER_DIR")
+                    or os.environ.get("PM_RUNNER_DIR") or ".switchboard/runner"),
+                runner_session_id, "assignment.toml",
+            )
+            if started:
+                rec["status"] = "running"
+                rec["metadata"] = {
+                    **((rec or {}).get("metadata") or {}),
+                    "direct_assignment": True,
+                    "assignment_schema": assignment.get("schema"),
+                    "assignment_toml": assignment_path,
+                    "auth_lane": "enrolled_agent_host_token",
+                }
+                runner_registration = register_runner_session(rec, w, inventory)
+            else:
+                runner_registration = None
+            registered = bool(
+                runner_registration
+                and not runner_registration.get("error")
+                and not runner_registration.get("error_code")
+            )
+            completion = None
+            if started and registered:
+                result = {
+                    "started": True,
+                    "reason": "direct_cli_started",
+                    "runner_session_id": runner_session_id,
+                    "task_id": w.get("task_id"),
+                    "host_id": host_id,
+                    "pid": (rec or {}).get("pid"),
+                    "cwd": (rec or {}).get("cwd"),
+                }
+                # Acknowledge only after the PTY is live and centrally visible.
+                # There is deliberately no ownership handshake before launch.
+                completion = _try("POST", P_COMPLETE_WAKE, {
+                    "project": PROJECT,
+                    "wake_id": wake_id,
+                    "runner_session_id": runner_session_id,
+                    "agent_id": (w.get("selector") or {}).get("agent_id") or "",
+                    "result": result,
+                })
+            acted.append({
+                "wake_id": wake_id,
+                "started": started,
+                "runner_session_id": runner_session_id,
+                "wake_mode": "direct_task",
+                "reason": (
+                    "direct_cli_started" if started and registered
+                    else "direct_runner_registration_failed" if started
+                    else (rec or {}).get("reason") or "direct_cli_launch_failed"
+                ),
+                "pid": (rec or {}).get("pid"),
+                "cwd": (rec or {}).get("cwd"),
+                "task_id": w.get("task_id"),
+                "host_id": host_id,
+                "runner_registered": registered,
+                "assignment_toml": assignment_path,
+                "completion_recorded": bool(completion and not completion.get("error")),
+                "provider_error": (rec or {}).get("provider_error"),
+            })
+            continue
         binding = ((w.get("policy") or {}).get("account_binding") or {})
         bind_required = bool(
             w.get("task_id")

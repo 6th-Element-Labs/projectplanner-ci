@@ -933,6 +933,20 @@ def apply_schema(c):
             ON runner_sessions(host_id, heartbeat_at);
         CREATE INDEX IF NOT EXISTS ix_runner_sessions_task
             ON runner_sessions(task_id, status);
+        CREATE TABLE IF NOT EXISTS direct_session_tokens (
+            token_hash        TEXT PRIMARY KEY,
+            project_id        TEXT NOT NULL,
+            task_id           TEXT NOT NULL,
+            agent_id          TEXT NOT NULL,
+            host_id           TEXT NOT NULL,
+            wake_id           TEXT NOT NULL,
+            runner_session_id TEXT NOT NULL,
+            issued_at         REAL NOT NULL,
+            expires_at        REAL NOT NULL,
+            revoked_at        REAL
+        );
+        CREATE INDEX IF NOT EXISTS ix_direct_session_tokens_runner
+            ON direct_session_tokens(runner_session_id, expires_at);
         CREATE TABLE IF NOT EXISTS work_sessions (
             work_session_id      TEXT PRIMARY KEY,
             project_id           TEXT NOT NULL,

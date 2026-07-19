@@ -35,7 +35,7 @@
         if (!body) return;
         let data;
         try {
-            const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&task_id=${encodeURIComponent(taskId)}&include_stale=true`;
+            const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&task_id=${encodeURIComponent(taskId)}&include_stale=false`;
             data = await (await fetch(`/ixp/v1/runner_sessions?${q}`)).json();
         } catch (e) {
             body.innerHTML = `<div class="text-danger small">Runner sessions unavailable: ${this.esc(e.message)}</div>`;
@@ -52,7 +52,7 @@
             return;
         }
         body.innerHTML = `<div class="table-responsive"><table class="table table-sm mb-0 align-middle">
-            <thead><tr><th>Session</th><th>Host</th><th>Runtime</th><th>Claim</th><th>Fidelity</th><th>Environment</th><th>Snapshot</th><th class="text-end">Actions</th></tr></thead>
+            <thead><tr><th>Session</th><th>Host</th><th>Runtime</th><th>Fidelity</th><th>Environment</th><th>Snapshot</th><th class="text-end">Actions</th></tr></thead>
             <tbody>${sessions.map((s) => this._runnerSessionRow(s)).join('')}</tbody>
         </table></div>`;
         body.querySelectorAll('[data-runner-action]').forEach((btn) => {
@@ -91,7 +91,6 @@
             <td><div class="font-monospace small">${this.esc(s.runner_session_id)}</div><span class="badge bg-${statusColor}-lt">${this.esc(s.status || 'unknown')}${s.stale ? ' · stale' : ''}</span></td>
             <td>${this.esc(s.host_id || '—')}</td>
             <td>${this.esc(s.runtime || '—')}<div class="text-secondary small">${this.esc(s.agent_id || '')}</div></td>
-            <td class="font-monospace small">${this.esc(s.claim_id || '—')}</td>
             <td>${this.esc(fidelity)}</td>
             <td><span class="badge bg-${statusColor}-lt">${this.esc(env.status || s.status || 'unknown')}</span>${uptime ? `<span class="text-secondary small ms-1">${this.esc(uptime)}</span>` : ''}${failure}${logTail}</td>
             <td class="text-secondary small">${this.esc(snapText)}</td>

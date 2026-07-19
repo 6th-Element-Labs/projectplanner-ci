@@ -1,0 +1,44 @@
+{
+  "$id": "switchboard.agent.direct_assignment_mcp_token_command.v1",
+  "additionalProperties": false,
+  "description": "Exact host assignment exchanging its enrollment for a scoped MCP bearer.",
+  "properties": {
+    "host_id": {
+      "minLength": 1,
+      "pattern": "^host/.+",
+      "title": "Host Id",
+      "type": "string"
+    },
+    "project": {
+      "default": "switchboard",
+      "minLength": 1,
+      "pattern": ".*\\S.*",
+      "title": "Project",
+      "type": "string"
+    },
+    "runner_session_id": {
+      "minLength": 1,
+      "pattern": ".*\\S.*",
+      "title": "Runner Session Id",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.agent.direct_assignment_mcp_token_command.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "wake_id": {
+      "minLength": 1,
+      "pattern": ".*\\S.*",
+      "title": "Wake Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "wake_id",
+    "host_id",
+    "runner_session_id"
+  ],
+  "title": "DirectAssignmentMCPTokenCommand",
+  "type": "object"
+}

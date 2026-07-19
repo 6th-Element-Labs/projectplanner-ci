@@ -6,6 +6,7 @@ repo root remains a backward-compatible shim while callers migrate.
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 import time
 import urllib.parse
@@ -14,7 +15,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from constants import DEFAULT_PROJECT
 from db.connection import _conn
-from db.core import _json_obj, _text_tail
+from db.core import _json_obj, _text_tail, hash_token
 
 RUNNER_CONTROL_ACTIONS = {"snapshot", "kill", "restart", "health", "logs", "open", "inject"}
 # COORD-34 / M4.6: operator Watch/Chat may open only when this bind is complete.
@@ -41,6 +42,9 @@ __all__ = [
     "runner_bind_incomplete",
     "is_preclaim_runner",
     "requires_full_runner_bind",
+    "is_direct_assignment_runner",
+    "issue_direct_session_mcp_token",
+    "get_direct_session_principal_by_token_any_project",
     "check_agent_host_bootstrap_authority",
     "assert_runner_watchable",
     "resolve_task_active_runner",
@@ -51,6 +55,119 @@ __all__ = [
     "claim_runner_control_request",
     "complete_runner_control_request",
 ]
+
+
+def issue_direct_session_mcp_token(
+        wake_id: str, host_id: str, runner_session_id: str, *,
+        principal_id: str, actor: str = "agent-host",
+        project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Issue one short-lived task agent bearer for an exact direct assignment."""
+    now = time.time()
+    wake_id = str(wake_id or "").strip()
+    host_id = str(host_id or "").strip()
+    runner_session_id = str(runner_session_id or "").strip()
+    principal_id = str(principal_id or "").strip()
+    expected_runner = "run_" + hashlib.sha256(
+        f"{wake_id}:{host_id}".encode()).hexdigest()[:16]
+    with _conn(project) as c:
+        wake_row = c.execute(
+            "SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
+        if not wake_row:
+            return {"error": "direct_assignment_not_found"}
+        wake = dict(wake_row)
+        selector = _json_obj(wake.get("selector_json"), {})
+        policy = _json_obj(wake.get("policy_json"), {})
+        assignment = policy.get("assignment") or {}
+        enrollment = c.execute(
+            "SELECT enrollment_id FROM agent_host_enrollments "
+            "WHERE host_id=? AND principal_id=? AND status='active'",
+            (host_id, principal_id),
+        ).fetchone()
+        reasons = []
+        if str(wake.get("status") or "") not in {"pending", "claimed", "completed"}:
+            reasons.append("assignment_not_active")
+        if policy.get("mode") != "direct_task" or policy.get("execution_mode") != "direct_personal_cli":
+            reasons.append("assignment_mode_mismatch")
+        if str(selector.get("host_id") or "") != host_id:
+            reasons.append("assignment_host_mismatch")
+        if str(assignment.get("host_id") or "") != host_id:
+            reasons.append("config_host_mismatch")
+        if str(assignment.get("task_id") or "") != str(wake.get("task_id") or ""):
+            reasons.append("config_task_mismatch")
+        if runner_session_id != expected_runner:
+            reasons.append("runner_session_mismatch")
+        if not enrollment:
+            reasons.append("host_enrollment_mismatch")
+        if reasons:
+            return {"error": "direct_assignment_token_denied",
+                    "reason_codes": sorted(reasons)}
+
+        raw_token = "dst-" + uuid.uuid4().hex
+        expires_at = now + 4 * 60 * 60
+        c.execute(
+            "UPDATE direct_session_tokens SET revoked_at=? "
+            "WHERE runner_session_id=? AND revoked_at IS NULL",
+            (now, runner_session_id),
+        )
+        c.execute(
+            "INSERT INTO direct_session_tokens(token_hash,project_id,task_id,agent_id,"
+            "host_id,wake_id,runner_session_id,issued_at,expires_at,revoked_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,NULL)",
+            (hash_token(raw_token), project, str(wake.get("task_id") or ""),
+             str(selector.get("agent_id") or ""), host_id, wake_id,
+             runner_session_id, now, expires_at),
+        )
+        c.execute(
+            "INSERT INTO activity(task_id,actor,kind,payload,created_at) VALUES (?,?,?,?,?)",
+            (wake.get("task_id"), actor, "direct_session.mcp_token_issued",
+             json.dumps({"wake_id": wake_id, "host_id": host_id,
+                         "runner_session_id": runner_session_id,
+                         "token_returned_once": True}, sort_keys=True), now),
+        )
+    return {
+        "issued": True,
+        "task_id": str(wake.get("task_id") or ""),
+        "agent_id": str(selector.get("agent_id") or ""),
+        "runner_session_id": runner_session_id,
+        "expires_at": expires_at,
+        "token": raw_token,
+        "token_returned_once": True,
+    }
+
+
+def get_direct_session_principal_by_token_any_project(
+        token: str) -> Optional[Dict[str, Any]]:
+    """Resolve a live direct-session bearer into its task-bound MCP principal."""
+    token_hash = hash_token(str(token or "").strip())
+    if not token_hash:
+        return None
+    now = time.time()
+    for project_id in _store_facade().project_ids():
+        try:
+            with _conn(project_id) as c:
+                row = c.execute(
+                    "SELECT * FROM direct_session_tokens WHERE token_hash=? "
+                    "AND revoked_at IS NULL AND expires_at>?",
+                    (token_hash, now),
+                ).fetchone()
+        except sqlite3.OperationalError:
+            continue
+        if row:
+            value = dict(row)
+            return {
+                "id": f"direct-session/{value['runner_session_id']}",
+                "kind": "direct_session",
+                "display_name": value["agent_id"],
+                "project": value["project_id"],
+                "scopes": ["read", "write:tasks", "write:ixp"],
+                "bound_task_id": value["task_id"],
+                "bound_agent_id": value["agent_id"],
+                "bound_host_id": value["host_id"],
+                "bound_wake_id": value["wake_id"],
+                "bound_runner_session_id": value["runner_session_id"],
+                "expires_at": value["expires_at"],
+            }
+    return None
 
 
 def check_agent_host_bootstrap_authority(
@@ -435,6 +552,24 @@ def requires_full_runner_bind(record: Dict[str, Any]) -> bool:
     return phase == "claim_bound"
 
 
+def is_direct_assignment_runner(record: Dict[str, Any]) -> bool:
+    """True for the exact host/task PTY started without scheduler lifecycle state."""
+    metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+    if not metadata and record.get("metadata_json"):
+        metadata = _json_obj(record.get("metadata_json"), {})
+    bind = runner_bind_tuple(record)
+    return bool(
+        metadata.get("direct_assignment") is True
+        and metadata.get("native_host_execution") is True
+        and metadata.get("assignment_schema") == "switchboard.direct_cli_assignment.v1"
+        and bind.get("task_id")
+        and bind.get("host_id", "").startswith("host/")
+        and bind.get("wake_id")
+        and not bind.get("claim_id")
+        and not bind.get("work_session_id")
+    )
+
+
 def assert_runner_watchable(session: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Fail closed: Watch/Chat may open only for a fully bound live runner."""
     if not session:
@@ -445,6 +580,23 @@ def assert_runner_watchable(session: Optional[Dict[str, Any]]) -> Dict[str, Any]
             runner_session_id=str(session.get("runner_session_id") or ""),
             task_id=str(session.get("task_id") or ""),
         ) | {"message": "Runner session is stale; Watch/Chat refused until a live bind exists"}
+    if is_direct_assignment_runner(session):
+        status = str(session.get("status") or "").strip().lower()
+        if status not in RUNNER_WATCHABLE_STATUSES:
+            return runner_bind_incomplete(
+                ["live_status"],
+                runner_session_id=str(session.get("runner_session_id") or ""),
+                task_id=str(session.get("task_id") or ""),
+            ) | {"message": f"Direct Codex session status {status or 'unknown'} is not watchable"}
+        return {
+            "watchable": True,
+            "refused": False,
+            "runner_session_id": session.get("runner_session_id"),
+            "task_id": str(session.get("task_id") or ""),
+            "bind": runner_bind_tuple(session),
+            "session": session,
+            "binding_mode": "direct_assignment",
+        }
     missing = missing_runner_bind_fields(session)
     if missing:
         return runner_bind_incomplete(
@@ -827,8 +979,15 @@ def _native_agent_host_runner_allowed_in(
     phase = str(metadata.get("credential_admission_phase") or "").strip().lower()
     status = str(record.get("status") or "").strip().lower()
     wake_id = str(metadata.get("wake_id") or "").strip()
-    if (phase != "preclaim" or status != "starting" or record.get("claim_id")
-            or not wake_id or not host_id):
+    direct_candidate = bool(
+        metadata.get("direct_assignment") is True
+        and metadata.get("assignment_schema") == "switchboard.direct_cli_assignment.v1"
+        and status == "running"
+        and not record.get("claim_id")
+    )
+    preclaim_candidate = bool(
+        phase == "preclaim" and status == "starting" and not record.get("claim_id"))
+    if (not (direct_candidate or preclaim_candidate) or not wake_id or not host_id):
         return False
     wake = c.execute(
         "SELECT status, claimed_by_host, task_id, selector_json, policy_json, "
@@ -840,6 +999,38 @@ def _native_agent_host_runner_allowed_in(
     policy = _json_obj(wake["policy_json"], {})
     placement = _json_obj(wake["placement_json"], {})
     execution = policy.get("execution_binding") or {}
+    direct = bool(
+        policy.get("mode") == "direct_task"
+        and policy.get("execution_mode") == "direct_personal_cli"
+        and policy.get("require_runner_bind") is False
+        and metadata.get("direct_assignment") is True
+        and metadata.get("assignment_schema") == "switchboard.direct_cli_assignment.v1"
+        and status == "running"
+        and not record.get("claim_id")
+    )
+    if direct:
+        assignment = policy.get("assignment") or {}
+        selected_host = str(selector.get("host_id") or placement.get("selected_host_id") or "")
+        expected = {
+            "task_id": str(wake["task_id"] or selector.get("task_id") or ""),
+            "agent_id": str(selector.get("agent_id") or ""),
+            "runtime": str(selector.get("runtime") or ""),
+            "host_id": selected_host,
+        }
+        actual = {
+            "task_id": str(record.get("task_id") or ""),
+            "agent_id": str(record.get("agent_id") or ""),
+            "runtime": str(record.get("runtime") or ""),
+            "host_id": host_id,
+        }
+        if (all(expected.values()) and actual == expected
+                and str(assignment.get("task_id") or "") == expected["task_id"]
+                and str(assignment.get("host_id") or "") == expected["host_id"]):
+            metadata["native_host_execution"] = True
+            metadata["direct_assignment"] = True
+            record["metadata"] = metadata
+            return True
+        return False
     if (policy.get("account_binding") or execution.get("execution_connection_id")
             or policy.get("require_runner_bind") is not True):
         return False
@@ -1312,18 +1503,22 @@ def _server_relay_options(session: Dict[str, Any], *, user_id: str,
     public_base = relay.public_base_from_env()
     if not public_base or relay.is_loopback_url(public_base):
         return {"error": "relay_public_base_unavailable"}
+    direct = is_direct_assignment_runner(session)
+    direct_ref = f"direct/{session.get('runner_session_id') or 'session'}"
     binding = {
         "tenant_id": str(metadata.get("tenant_id") or "tenant/default"),
         "user_id": str(user_id or "operator"),
         "project_id": str(project or DEFAULT_PROJECT),
         "task_id": str(session.get("task_id") or ""),
-        "claim_id": str(session.get("claim_id") or ""),
-        "work_session_id": str(metadata.get("work_session_id") or ""),
+        "claim_id": str(session.get("claim_id") or (direct_ref if direct else "")),
+        "work_session_id": str(
+            metadata.get("work_session_id") or (direct_ref if direct else "")),
         "runner_session_id": str(session.get("runner_session_id") or ""),
         "host_id": str(session.get("host_id") or ""),
         "wake_id": str(metadata.get("wake_id") or ""),
-        "execution_connection_id": str(metadata.get("execution_connection_id") or ""),
-        "source_sha": str(metadata.get("source_sha") or ""),
+        "execution_connection_id": str(
+            metadata.get("execution_connection_id") or (direct_ref if direct else "")),
+        "source_sha": str(metadata.get("source_sha") or (direct_ref if direct else "")),
         "permission_profile": "operator_watch",
     }
     missing = pty_domain.missing_ticket_bind_fields(binding)
@@ -1344,6 +1539,7 @@ def _server_relay_options(session: Dict[str, Any], *, user_id: str,
             float(host_payload.get("exp") or 0),
             float(browser_payload.get("exp") or 0),
         ),
+        "binding": binding,
     }
 
 
