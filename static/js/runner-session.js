@@ -369,6 +369,14 @@
             const rememberedSid = String(
                 watch?.runner_session_id || rememberedSession?.runner_session_id
                 || remembered?.runnerSessionId || '');
+            // A stale/bind-incomplete result has no live _runnerPty object, so
+            // _runnerPtyClose() cannot recover its identity during teardown.
+            // Remember it as soon as discovery succeeds. Subsequent clicks can
+            // then reopen the same truthful gate even if the authoritative
+            // session list no longer includes that historical row.
+            if (rememberedSid) {
+                this._runnerPtyLast = { taskId: id, runnerSessionId: rememberedSid };
+            }
             if (els.title) els.title.textContent = rememberedSid ? `${id} · ${rememberedSid}` : id;
             if (els.sub) els.sub.textContent = String(rememberedSession?.host_id || '');
             if (els.live) els.live.hidden = true;

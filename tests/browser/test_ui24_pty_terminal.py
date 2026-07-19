@@ -435,18 +435,23 @@ try:
 
         def _stale_watch(route):
             stale_watch_urls.append(route.request.url)
+            # The first lookup discovers the crashed runner. The second
+            # deliberately returns no history. The latest typed refusal still
+            # controls the gate message, while the selected runner identity is
+            # presentation state that must survive the close/reopen lifecycle.
+            sessions = ([{
+                "runner_session_id": "run_stale_after_reload",
+                "host_id": "host/browser-test",
+                "status": "failed",
+                "stale": True,
+            }] if len(stale_watch_urls) == 1 else [])
             route.fulfill(
                 status=200, content_type="application/json",
                 body=json.dumps({
                     "watchable": False,
                     "error_code": "runner_bind_incomplete",
                     "message": "Session ended after worker failure",
-                    "sessions": [{
-                        "runner_session_id": "run_stale_after_reload",
-                        "host_id": "host/browser-test",
-                        "status": "failed",
-                        "stale": True,
-                    }],
+                    "sessions": sessions,
                 }),
             )
 
@@ -470,6 +475,32 @@ try:
            "the discovered stale runner opens a truthful runner window on the first click")
         ok(not fresh_stale_open["nodeModalOpen"],
            "fresh stale-runner discovery does not fall through to the authoring modal")
+
+        # Drive the real close button and the real dependency box again. The
+        # second mocked lookup is empty: its typed refusal remains authoritative,
+        # while the selected stale identity keeps the click on the runner surface.
+        page.get_by_role("button", name="Close Watch/Chat").click()
+        page.wait_for_timeout(300)
+        page.locator('.mission-dag-node[data-linked-task="FAKE-TASK-1"]').click()
+        page.wait_for_timeout(300)
+        stale_reopen_after_empty_lookup = page.evaluate("""
+            () => ({
+                visible: !document.getElementById('runner-pty-panel').hidden,
+                title: document.getElementById('runner-pty-title').textContent,
+                rememberedTask: TeepPlan._runnerPtyLast?.taskId || '',
+                rememberedSession: TeepPlan._runnerPtyLast?.runnerSessionId || '',
+                nodeModalOpen: document.getElementById('dl-node-modal').classList.contains('show'),
+            })
+        """)
+        ok(len(stale_watch_urls) == 2 and "include_stale=true" in stale_watch_urls[1],
+           "reopening a closed stale runner performs the authoritative stale lookup")
+        ok(stale_reopen_after_empty_lookup["visible"]
+           and "run_stale_after_reload" in stale_reopen_after_empty_lookup["title"]
+           and stale_reopen_after_empty_lookup["rememberedTask"] == "FAKE-TASK-1"
+           and stale_reopen_after_empty_lookup["rememberedSession"] == "run_stale_after_reload",
+           "the stale runner reopens after an empty follow-up lookup using its remembered identity")
+        ok(not stale_reopen_after_empty_lookup["nodeModalOpen"],
+           "an empty follow-up lookup does not fall through to the authoring modal")
         page.unroute("**/ixp/v1/runner_sessions/watch?**", _stale_watch)
         page.evaluate("() => TeepPlan._runnerPtyClose()")
 

@@ -91,6 +91,9 @@ ok("_runnerPtyLast" in RUNNER_SESSION and "include_stale=true" in RUNNER_SESSION
    "closing a watched runner remembers repeat-click intent and reopens its truthful stale gate")
 ok("opts.includeStale" in RUNNER_SESSION and "!sessions.length" in RUNNER_SESSION,
    "a fresh page can discover stale runner history while never-run tasks still fall back to authoring")
+ok("if (rememberedSid)" in RUNNER_SESSION
+   and "this._runnerPtyLast = { taskId: id, runnerSessionId: rememberedSid }" in RUNNER_SESSION,
+   "a discovered stale runner retains its identity across close/reopen even if later discovery is empty")
 ok("_runnerPtyCloseTimer" in RUNNER_SESSION,
    "a pending close animation cannot hide a runner panel that was immediately reopened")
 
