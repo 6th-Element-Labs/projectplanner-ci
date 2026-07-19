@@ -65,6 +65,8 @@ child = [
     sys.executable, "-c",
     "import os,sys,time\n"
     "sys.stdout.write('PTY=' + str(os.isatty(1)) + '\\n')\n"
+    "size = os.get_terminal_size(1)\n"
+    "sys.stdout.write(f'SIZE={size.lines}x{size.columns}\\n')\n"
     "sys.stdout.flush()\n"
     "for i in range(40):\n"
     "    sys.stdout.write(f'beat-{i}\\n')\n"
@@ -92,6 +94,18 @@ while time.time() < deadline:
         break
     time.sleep(0.05)
 ok("PTY=True" in log_text, "child sees a TTY and streamer dual-writes stdout.log")
+ok("SIZE=40x120" in log_text,
+   "child receives a usable 40x120 PTY before any browser attaches")
+ok(supervisor._initial_pty_size({
+       "PM_RUNNER_PTY_ROWS": "bogus",
+       "PM_RUNNER_PTY_COLS": "0",
+   }) == (40, 120),
+   "invalid configured PTY dimensions fail safely to defaults")
+ok(supervisor._initial_pty_size({
+       "PM_RUNNER_PTY_ROWS": "50",
+       "PM_RUNNER_PTY_COLS": "160",
+   }) == (50, 160),
+   "operator-configured PTY dimensions are honored")
 
 opened = agent_host.supervisor_action("open", meta["runner_session_id"])
 ok(opened.get("opened") is True

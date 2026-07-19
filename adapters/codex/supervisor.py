@@ -11,22 +11,48 @@ holds the master fd, dual-writes stdout.log, serves authenticated HTTP chunked s
 accepts bound-session POST injects for Mission panel chat.
 """
 import argparse
+import fcntl
 import json
 import os
 import pty
 import signal
+import struct
 import subprocess
 import sys
+import termios
 import time
 import uuid
 from pathlib import Path
 
 DEFAULT_RUNNER_DIR = Path(os.environ.get("PM_RUNNER_DIR", ".switchboard/runner")).resolve()
 PTY_STREAM = Path(__file__).resolve().with_name("pty_stream.py")
+DEFAULT_PTY_ROWS = 40
+DEFAULT_PTY_COLS = 120
+MAX_PTY_DIMENSION = 1000
 
 
 def _truthy(value):
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _pty_dimension(value, default):
+    try:
+        parsed = int(str(value or "").strip())
+    except (TypeError, ValueError):
+        return default
+    return parsed if 1 <= parsed <= MAX_PTY_DIMENSION else default
+
+
+def _initial_pty_size(env):
+    return (
+        _pty_dimension(env.get("PM_RUNNER_PTY_ROWS"), DEFAULT_PTY_ROWS),
+        _pty_dimension(env.get("PM_RUNNER_PTY_COLS"), DEFAULT_PTY_COLS),
+    )
+
+
+def _set_pty_size(fd, rows, cols):
+    packed = struct.pack("HHHH", int(rows), int(cols), 0, 0)
+    fcntl.ioctl(int(fd), termios.TIOCSWINSZ, packed)
 
 
 def _now():
@@ -155,6 +181,12 @@ def start_session(command, agent_id, task_id="", claim_id="", cwd=None, runner_d
     host_id = str(env.get("PM_HOST_ID") or env.get("PM_CO_HOST_ID") or "")
     if use_pty:
         master_fd, slave_fd = pty.openpty()
+        # macOS and Linux both create a new PTY at 0x0. Full-screen CLIs render
+        # unusably (often one character per line) before a browser can send its
+        # first resize. Give the child a sane screen from its very first byte;
+        # an attached Watch terminal may resize it normally afterwards.
+        initial_rows, initial_cols = _initial_pty_size(env)
+        _set_pty_size(slave_fd, initial_rows, initial_cols)
         env.setdefault("TERM", os.environ.get("TERM") or "xterm-256color")
         proc = None
         streamer = None
