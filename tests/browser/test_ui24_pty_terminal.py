@@ -58,9 +58,27 @@ PASSWORD = "ui24-browser-test-pw"
 env = dict(os.environ)
 env.update({
     "PM_DB_PATH": str(TMP / "switchboard.db"),
+    "PM_SWITCHBOARD_DB_PATH": str(TMP / "switchboard.db"),
+    "PM_PROJECT_REGISTRY_DB_PATH": str(TMP / "registry.db"),
+    "PM_DYNAMIC_PROJECTS_DIR": str(TMP / "projects"),
     "PM_PORT": str(PORT),
-    "PM_AUTH_MODE": "dev-open",
+    "PM_AUTH_MODE": "required",
+    "PM_JWT_SECRET": "ui24-browser-secret",
 })
+(TMP / "projects").mkdir(parents=True, exist_ok=True)
+os.environ.update({key: value for key, value in env.items() if key.startswith("PM_")})
+
+import auth  # noqa: E402
+import store  # noqa: E402
+from switchboard.api.routers.auth import store as auth_store  # noqa: E402
+
+store.init_project_registry()
+store.create_project("UI-24 Browser", project_id="ui24-browser", actor="test")
+store.init_db("ui24-browser")
+auth_store.init()
+user = auth_store.create_user(EMAIL, "UI-24 Browser Test", auth.password_hash(PASSWORD))
+store.grant_project_role("ui24-browser", "user", user["id"], "viewer",
+                         created_by="test", scopes=["read"])
 
 server = subprocess.Popen(
     [sys.executable, str(Path(ROOT) / "app.py")],
@@ -94,17 +112,26 @@ try:
         browser = p.chromium.launch()
         page = browser.new_page()
 
-        # ---- real signup through the real UI --------------------------------
-        page.goto(f"{BASE_URL}/signup")
-        # Signup form: Name, Email, Password — first three text-ish inputs in order.
-        inputs = page.locator("form input")
-        inputs.nth(0).fill("UI-24 Browser Test")
-        inputs.nth(1).fill(EMAIL)
-        inputs.nth(2).fill(PASSWORD)
-        page.click('button[type="submit"]')
+        # ---- authenticate in the real browser context -----------------------
+        page.goto(f"{BASE_URL}/health")
+        login = page.evaluate("""
+            async ([email, password]) => {
+                const response = await fetch('/api/auth/login', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({email, password}),
+                });
+                return {status: response.status};
+            }
+        """, [EMAIL, PASSWORD])
+        ok(login["status"] == 200, f"real browser context receives an auth cookie ({login})")
+        page.goto(f"{BASE_URL}/?project=ui24-browser")
         page.wait_for_load_state("networkidle")
-        signed_up = "No projects yet" in page.content() or "TAIKUN" in page.content()
-        ok(signed_up, "signup completes and lands on the real app shell")
+        ok("TAIKUN" in page.content(), "authenticated browser lands on the real app shell")
+        ok(page.locator("#mission-page").count() == 1,
+           "the real Deliverable mission-page click delegate is mounted")
+        page.locator("#toptab-mission").click()
+        ok(page.locator("#mission-page").is_visible(),
+           "the real Deliverable mission page is visible for pointer interaction")
 
         # ---- runner-session.js is loaded and wired into the app instance ----
         wired = page.evaluate(
@@ -338,6 +365,32 @@ try:
         closed_state = page.evaluate("({ rpNull: TeepPlan._runnerPty === null, hidden: document.getElementById('runner-pty-panel').hidden })")
         ok(closed_state["rpNull"], "close() tears down the session state")
         ok(closed_state["hidden"], "close() hides the panel")
+
+        # ---- REAL dependency-map pill click survives close + stale runner ----
+        # BUG-91's first regression test called openRunnerSessionPanel directly,
+        # but the compact pill the operator actually clicks had a separate
+        # app.js delegation path that always opened the node-actions modal. Drive
+        # that real click target so the browser proves the complete interaction.
+        page.evaluate("""
+            () => {
+                const missionPage = document.getElementById('mission-page');
+                missionPage.innerHTML = '<a href="#" class="mission-dag-node" '
+                    + 'data-linked-task="FAKE-TASK-1" data-linked-project="switchboard">FAKE-TASK-1</a>';
+            }
+        """)
+        page.locator('.mission-dag-node[data-linked-task="FAKE-TASK-1"]').click()
+        page.wait_for_timeout(300)
+        clicked_reopen = page.evaluate("""
+            () => ({
+                visible: !document.getElementById('runner-pty-panel').hidden,
+                rememberedTask: TeepPlan._runnerPtyLast?.taskId || '',
+                nodeModalOpen: document.getElementById('dl-node-modal').classList.contains('show'),
+            })
+        """)
+        ok(clicked_reopen["visible"] and clicked_reopen["rememberedTask"] == "FAKE-TASK-1",
+           "clicking the visible dependency-map pill reopens the remembered runner sidecar")
+        ok(not clicked_reopen["nodeModalOpen"],
+           "the real dependency-map pill click does not fall through to the node-actions modal")
 
         # ---- repeat Deliverable-node intent survives close + stale runner ---
         # The task's live bind can disappear between closing the sidecar and
