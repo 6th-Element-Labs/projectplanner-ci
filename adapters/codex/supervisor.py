@@ -153,7 +153,8 @@ def _await_stream_ready(ready_path: Path, timeout_s: float | None = None) -> dic
 
 
 def start_session(command, agent_id, task_id="", claim_id="", cwd=None, runner_dir=None,
-                  runner_session_id="", extra_env=None, use_pty=None):
+                  runner_session_id="", extra_env=None, use_pty=None,
+                  wake_id="", wake_mode=""):
     if not command:
         raise ValueError("command required")
     runner_session_id = runner_session_id or "run_" + uuid.uuid4().hex[:16]
@@ -319,6 +320,8 @@ def start_session(command, agent_id, task_id="", claim_id="", cwd=None, runner_d
         "stream_bind": stream_bind,
         "stream_port": stream_port,
         "host_id": host_id,
+        "wake_id": str(wake_id or ""),
+        "wake_mode": str(wake_mode or ""),
     }
     _write_json(_meta_path(runner_session_id, runner_dir), meta)
     if not child_alive:
@@ -420,6 +423,8 @@ def main(argv=None):
     start.add_argument("--claim-id", default="")
     start.add_argument("--cwd", default=os.getcwd())
     start.add_argument("--runner-session-id", default="")
+    start.add_argument("--wake-id", default="")
+    start.add_argument("--wake-mode", default="")
     start.add_argument("child", nargs=argparse.REMAINDER,
                        help="child command after --, e.g. -- python3 worker.py")
 
@@ -440,7 +445,8 @@ def main(argv=None):
     if args.command == "start":
         child = args.child[1:] if args.child[:1] == ["--"] else args.child
         _emit(start_session(child, args.agent_id, args.task_id, args.claim_id, args.cwd,
-                            args.runner_dir, args.runner_session_id))
+                            args.runner_dir, args.runner_session_id,
+                            wake_id=args.wake_id, wake_mode=args.wake_mode))
     elif args.command == "status":
         _emit(status_session(args.runner_session_id, args.runner_dir))
     elif args.command == "snapshot":

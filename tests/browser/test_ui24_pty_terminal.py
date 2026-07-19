@@ -19,6 +19,7 @@ same way the backend tests prove the relay side is correct in isolation.
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 import sys
 import tempfile
@@ -193,6 +194,43 @@ try:
         captured = page.evaluate("window.__ui24CapturedInput.join('')")
         ok("ls -la" in captured, "typed keys reach xterm's onData and are forwarded as raw input")
         ok("\x03" in captured, "Ctrl-C forwards as the real interrupt byte (0x03), not a separate control path")
+
+        # ---- the higher-level composer proves host delivery, not just queueing
+        injected = []
+
+        def _capture_inject(route):
+            injected.append(json.loads(route.request.post_data or "{}"))
+            route.fulfill(
+                status=200, content_type="application/json",
+                body='{"requested":true,"request_id":"runnerreq-ui24-chat"}',
+            )
+
+        page.route("**/ixp/v1/request_runner_inject", _capture_inject)
+        page.route("**/ixp/v1/runner_controls?**", lambda route: route.fulfill(
+            status=200, content_type="application/json",
+            body=(
+                '{"requests":[{"request_id":"runnerreq-ui24-chat",'
+                '"status":"completed","result":{"injected":true}}]}'
+            ),
+        ))
+        composer = page.locator("#runner-chat-input")
+        composer.fill("do what it takes to unblock it")
+        composer.press("Enter")
+        page.wait_for_selector("#runner-chat-log [data-runner-chat-status]", timeout=5000)
+        page.wait_for_function(
+            "document.querySelector('#runner-chat-log [data-runner-chat-status]')?.textContent === 'Delivered'",
+            timeout=5000,
+        )
+        ok(len(injected) == 1
+           and injected[0].get("task_id") == "FAKE-TASK-1"
+           and injected[0].get("runner_session_id") == "run_browsertest"
+           and injected[0].get("text") == "do what it takes to unblock it",
+           "typed composer Enter sends the exact task/session/text once")
+        ok(composer.input_value() == ""
+           and "Delivered to FAKE-TASK-1 · run_browsertest" in page.locator("#runner-pty-gate").inner_text(),
+           "the composer clears only after acceptance and renders exact-run delivery confirmation")
+        page.unroute("**/ixp/v1/request_runner_inject", _capture_inject)
+        page.unroute("**/ixp/v1/runner_controls?**")
 
         # ---- resize computes real rows/cols from the actual container -------
         dims = page.evaluate("""

@@ -60,6 +60,7 @@ P_LIST_WAKES = "/txp/v1/list_wake_intents"
 P_CLAIM_WAKE = "/txp/v1/claim_wake"
 P_COMPLETE_WAKE = "/txp/v1/complete_wake"
 P_REGISTER_RUNNER = "/ixp/v1/register_runner_session"
+P_HEARTBEAT_RUNNER = "/ixp/v1/heartbeat_runner_session"
 P_LIST_RUNNER_CONTROLS = "/ixp/v1/runner_controls"
 P_CLAIM_RUNNER_CONTROL = "/ixp/v1/claim_runner_control"
 P_COMPLETE_RUNNER_CONTROL = "/ixp/v1/complete_runner_control"
@@ -740,6 +741,10 @@ def launch_command(wake, inventory, runner_session_id=""):
            "--cwd", inventory["repo_root"]]
     if runner_session_id:
         cmd += ["--runner-session-id", runner_session_id]
+    if wake.get("wake_id"):
+        cmd += ["--wake-id", str(wake.get("wake_id"))]
+    if mode:
+        cmd += ["--wake-mode", str(mode)]
     if wake.get("task_id"):
         cmd += ["--task-id", wake.get("task_id")]
     cmd += ["--"] + child
@@ -1491,6 +1496,68 @@ def _drain_runners(host_id):
     return list(merged.values())
 
 
+def renew_live_direct_runners(inventory):
+    """Keep browser Watch/Chat bound to every live direct Mac Codex PTY.
+
+    Direct-task wakes are acknowledged immediately after launch, so they leave
+    the pending-wake feed while the native CLI continues working.  The launch
+    registration has a deliberately short lease; without this host heartbeat a
+    close/reopen of Watch loses the centrally discoverable row even though the
+    supervisor-owned process and PTY are still alive.
+
+    ``_drain_runners`` joins local supervisor truth with the last central row.
+    That also repairs sessions launched by older Agent Host builds: their local
+    session.json did not persist wake_mode/wake_id, but the stale central row did.
+    """
+    host_id = str((inventory or {}).get("host_id") or "")
+    renewed = []
+    for session in _drain_runners(host_id):
+        metadata = dict(session.get("metadata") or {})
+        direct = bool(
+            metadata.get("direct_assignment") is True
+            or session.get("wake_mode") == "direct_task"
+        )
+        if (not direct or session.get("alive") is not True
+                or str(session.get("status") or "").lower() != "running"):
+            continue
+        wake_id = str(metadata.get("wake_id") or session.get("wake_id") or "")
+        task_id = str(session.get("task_id") or "")
+        if not wake_id or not task_id:
+            continue
+        body = {
+            "project": PROJECT,
+            "runner_session_id": session.get("runner_session_id"),
+            "host_id": host_id,
+            "agent_id": session.get("agent_id") or f"codex/{task_id}",
+            "runtime": session.get("runtime") or "codex",
+            "task_id": task_id,
+            "claim_id": "",
+            "pid": session.get("pid"),
+            "status": "running",
+            "cwd": session.get("cwd") or inventory.get("repo_root"),
+            "control": session.get("control") or {
+                "tier": "T3", "runner_kill": True, "managed_process": True,
+                "runner_open": True, "runner_inject": True, "runner_logs": True,
+            },
+            "metadata": {
+                **metadata,
+                "wake_id": wake_id,
+                "wake_mode": "direct_task",
+                "direct_assignment": True,
+                "assignment_schema": "switchboard.direct_cli_assignment.v1",
+            },
+            "heartbeat_ttl_s": 60,
+        }
+        result = _try("POST", P_HEARTBEAT_RUNNER, body)
+        renewed.append({
+            "runner_session_id": session.get("runner_session_id"),
+            "task_id": task_id,
+            "renewed": bool(result and not result.get("error")),
+            "error": (result or {}).get("error") if isinstance(result, dict) else None,
+        })
+    return renewed
+
+
 def _drain_work_sessions():
     result = _try("GET", _drain_query(
         P_LIST_WORK_SESSIONS, status="active", include_expired="true")) or {}
@@ -1970,6 +2037,7 @@ def run_once(inventory):
         advertised = _try("POST", P_REGISTER_HOST, registration_inventory(inventory))
         apply_authoritative_execution_policy(inventory, advertised)
         capacity = heartbeat_capacity(inventory)
+    runner_heartbeats = renew_live_direct_runners(inventory)
     local_auth = capacity.get("local_auth")
     if isinstance(local_auth, dict) and local_auth.get("available") is not True:
         return {
@@ -1978,6 +2046,7 @@ def run_once(inventory):
             "acted": finalized,
             "refused": [],
             "runner_controls": [],
+            "runner_heartbeats": runner_heartbeats,
             "auth_available": False,
         }
     recovery = None
@@ -2356,6 +2425,7 @@ def run_once(inventory):
     return {"host_id": host_id, "pending": len(wakes), "acted": acted,
             "refused": refused,
             "runner_controls": controls,
+            "runner_heartbeats": runner_heartbeats,
             "postprocessing_recovery": recovery}
 
 

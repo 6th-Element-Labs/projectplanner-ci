@@ -596,7 +596,7 @@
 
     <!-- Task detail modal -->
     <div class="modal modal-blur fade" id="task-modal" tabindex="-1" role="dialog" aria-hidden="true">
-        <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable" role="document">
+        <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable" role="document">
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title" id="task-modal-title">Task</h5>
@@ -891,13 +891,13 @@
     <script src="js/plan-chat.js?v=1"></script>
     <script src="js/closure.js?v=1"></script>
     <script src="js/mission.js?v=2"></script>
-    <script src="js/runner-session.js?v=1"></script>
+    <script src="js/runner-session.js?v=2"></script>
     <script src="js/proof-console.js?v=1"></script>
     <script src="js/project-admin.js?v=1"></script>
     <script src="js/settings.js?v=1"></script>
     <script src="js/scope.js?v=1"></script>
     <script src="js/attention.js?v=1"></script>
-    <script src="app.js?v=45"></script>
+    <script src="app.js?v=46"></script>
     <script src="taikun-ui.js?v=9"></script>
     <script src="saturation-panel.js?v=1"></script>
     <script src="narration-ops-panel.js?v=1"></script>
@@ -1190,7 +1190,7 @@
                     <input id="runner-chat-input" class="form-control" placeholder="Inject freeform into the live session…" autocomplete="off"/>
                     <button type="button" class="btn btn-azure" id="runner-chat-send">Send</button>
                 </div>
-                <div id="runner-chat-log" class="small text-secondary mt-2" style="max-height:6rem;overflow:auto"></div>
+                <div id="runner-chat-log" class="small text-secondary mt-2" style="max-height:6rem;overflow:auto" aria-live="polite"></div>
             </div>
         </div>
     </div>

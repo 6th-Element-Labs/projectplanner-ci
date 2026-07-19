@@ -71,6 +71,12 @@ ok("dockInto.appendChild(els.panel)" in RUNNER_SESSION,
 ok("this._runnerPty.runnerSessionId === sid" in RUNNER_SESSION,
    "re-opening the same already-connected session moves containers instead of reconnecting")
 ok("runner-pty-dev-mount" in APP, "the task-detail Dev tab provides a dock target for the same panel")
+ok("taskPrimaryRunnerHtml" in APP and "task-primary-start" in APP,
+   "the first task-details surface exposes the primary Start task action")
+ok("task-primary-watch-here" in APP and "task-primary-watch-sidecar" in APP,
+   "the first task-details surface exposes both in-modal and side-panel Watch actions")
+ok("runner-pty-details-mount" in APP and "modalDetailsMount || modalDevMount" in RUNNER_SESSION,
+   "the shared PTY docks into task Details first while retaining the Dev-tab fallback")
 ok("dockInto: mount || undefined" in APP or "dockInto:" in APP,
    "the Dev tab's Watch/Chat button docks in place instead of opening a duplicate sidecar")
 
@@ -88,6 +94,12 @@ ok("openRunnerWatch" not in PROOF, "the Proof Console no longer calls the retire
 for needle in ("data-runner-chat-kind=\"redirect\"", "data-runner-chat-kind=\"hold\"",
                "data-runner-chat-kind=\"approve\"", "request_runner_inject"):
     ok(needle in INDEX or needle in RUNNER_SESSION, f"chat/shortcut wiring present: {needle}")
+ok("e.preventDefault()" in RUNNER_SESSION and "!e.isComposing" in RUNNER_SESSION,
+   "Enter submits the composer exactly once without swallowing IME composition")
+ok("_runnerPtyAwaitChatDelivery" in RUNNER_SESSION and "Delivered to ${rp.taskId}" in RUNNER_SESSION,
+   "session chat distinguishes a queued request from confirmed host delivery")
+ok("els.chatInput.value = text" in RUNNER_SESSION,
+   "failed session chat restores the operator's text instead of discarding it")
 
 # ---- openTask() re-renders an already-open modal without a hide.bs.modal --
 # ---- event (e.g. revokeClaim()) — evacuate a docked panel first, or its ---

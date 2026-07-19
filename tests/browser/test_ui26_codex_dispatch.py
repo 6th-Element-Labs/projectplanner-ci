@@ -111,6 +111,30 @@ try:
 
         page.evaluate("({id, proj}) => TeepPlan.openTask(id, proj)", {"id": task_id, "proj": project_id})
         page.wait_for_selector("#task-modal.show", timeout=5000)
+        page.wait_for_selector("#task-primary-start", state="visible", timeout=5000)
+        ok(page.locator("#task-primary-runner").is_visible()
+           and "Start task" in page.locator("#task-primary-start").inner_text(),
+           "the first Details surface exposes Start task without opening Dev")
+
+        def _watchable_runner(route):
+            route.fulfill(
+                status=200, content_type="application/json",
+                body=(
+                    '{"watchable":true,"runner_session_id":"run-ui26-live",'
+                    '"bind":{"host_id":"host/ui26-mac"},'
+                    '"session":{"runner_session_id":"run-ui26-live",'
+                    '"host_id":"host/ui26-mac","status":"running"}}'
+                ),
+            )
+
+        page.route("**/ixp/v1/runner_sessions/watch?**", _watchable_runner)
+        page.evaluate("id => TeepPlan._loadTaskPrimaryRunner(id)", task_id)
+        page.wait_for_selector("#task-primary-watch-here", state="visible", timeout=5000)
+        ok(page.locator("#task-primary-watch-here").is_visible()
+           and page.locator("#task-primary-watch-sidecar").is_visible(),
+           "a live task offers both Watch here and Open side panel on Details")
+        page.unroute("**/ixp/v1/runner_sessions/watch?**", _watchable_runner)
+
         page.click('a[href="#m-dev"]')
         page.wait_for_selector("#edit-dispatch-codex", state="visible", timeout=5000)
 
@@ -120,10 +144,6 @@ try:
            "both the Claude Code and Codex dispatch buttons render side by side")
         ok("Start Codex on my Mac" in codex_btn.inner_text(),
            "the Codex button names the direct personal-host action")
-
-        # ---- auto-accept the confirm() dialog, capture its text --------------
-        dialog_texts = []
-        page.on("dialog", lambda d: (dialog_texts.append(d.message), d.accept()))
 
         # ---- intercept the dispatch POST to assert the real request body -----
         captured = {}
@@ -140,13 +160,16 @@ try:
             status=200, content_type="application/json", body='{"status": "none"}'))
 
         codex_btn.click()
-        page.wait_for_timeout(300)
-
-        ok(bool(dialog_texts) and "your enrolled Mac" in dialog_texts[-1],
-           f"the confirm dialog for the Codex button names the real target (got: {dialog_texts!r})")
-        ok("native Codex CLI" in dialog_texts[-1]
-           and "assignment config and Switchboard MCP" in dialog_texts[-1],
+        page.wait_for_selector("#confirm-modal.show", timeout=5000)
+        confirm_text = page.locator("#confirm-modal").inner_text()
+        ok("your enrolled Mac" in confirm_text,
+           f"the Tabler confirm modal for the Codex button names the real target (got: {confirm_text!r})")
+        ok("native Codex CLI" in confirm_text
+           and "assignment config and Switchboard MCP" in confirm_text,
            "the confirm dialog describes the direct CLI bootstrap contract")
+        with page.expect_response(f"**/api/tasks/{task_id}/dispatch**"):
+            page.click("#confirm-modal-ok")
+        page.wait_for_selector("#confirm-modal", state="hidden", timeout=5000)
 
         body = captured.get("body") or ""
         ok('"runtime":"codex"' in body.replace(" ", ""),
@@ -157,14 +180,17 @@ try:
            f"the flash message reflects the direct assignment and its real wake_id (got: {flash!r})")
 
         # ---- the Claude Code button still sends the original runtime ---------
-        dialog_texts.clear()
         captured.clear()
         claude_btn.click()
-        page.wait_for_timeout(300)
+        page.wait_for_selector("#confirm-modal.show", timeout=5000)
+        claude_confirm_text = page.locator("#confirm-modal").inner_text()
+        with page.expect_response(f"**/api/tasks/{task_id}/dispatch**"):
+            page.click("#confirm-modal-ok")
+        page.wait_for_selector("#confirm-modal", state="hidden", timeout=5000)
         body2 = captured.get("body") or ""
         ok('"runtime":"claude-code"' in body2.replace(" ", ""),
            f"the pre-existing Claude Code button is unaffected — still sends runtime=claude-code (got: {body2!r})")
-        ok(bool(dialog_texts) and "Anthropic hosts the coding session" in dialog_texts[-1],
+        ok("Anthropic hosts the coding session" in claude_confirm_text,
            "the Claude Code confirm copy is unchanged")
 
 finally:

@@ -70,6 +70,9 @@ ok(mode == "direct_task" and str(agent_host.DIRECT_CODEX_SESSION) in command,
    "direct assignment launches the dedicated native Codex session helper")
 ok("run_agent.py" not in " ".join(command),
    "direct assignment cannot fall into the claim-next worker loop")
+ok(command[command.index("--wake-id") + 1] == wake["wake_id"]
+   and command[command.index("--wake-mode") + 1] == "direct_task",
+   "the supervisor persists the wake identity needed for later runner heartbeats")
 
 events = []
 
@@ -140,6 +143,48 @@ ok(summary["acted"][0]["started"] is True
    and summary["acted"][0]["runner_registered"] is True
    and summary["acted"][0]["completion_recorded"] is True,
    "one direct daemon tick reports a live browser-visible Codex session")
+
+# The wake leaves the pending feed after launch, but the native CLI can run for
+# hours.  Every later daemon tick must renew the exact local PTY row so closing
+# and reopening Watch still resolves it after the original registry TTL.
+heartbeat_calls = []
+agent_host._drain_runners = lambda selected_host: [{
+    "runner_session_id": "run-direct-bug86",
+    "agent_id": f"codex/{task_id}",
+    "runtime": "codex",
+    "task_id": task_id,
+    "host_id": selected_host,
+    "pid": 43210,
+    "status": "running",
+    "alive": True,
+    "cwd": str(ROOT),
+    "control": {"tier": "T3", "runner_open": True, "runner_inject": True},
+    "metadata": {
+        "wake_id": wake["wake_id"],
+        "direct_assignment": True,
+        "native_host_execution": True,
+        "assignment_schema": "switchboard.direct_cli_assignment.v1",
+    },
+}]
+
+
+def fake_heartbeat(method, path, body=None):
+    heartbeat_calls.append((method, path, dict(body or {})))
+    return {"runner_session_id": (body or {}).get("runner_session_id"), "status": "running"}
+
+
+agent_host._try = fake_heartbeat
+renewed = agent_host.renew_live_direct_runners(inventory)
+renewal = heartbeat_calls[0]
+ok(renewed == [{
+       "runner_session_id": "run-direct-bug86", "task_id": task_id,
+       "renewed": True, "error": None,
+   }]
+   and renewal[0:2] == ("POST", agent_host.P_HEARTBEAT_RUNNER)
+   and renewal[2]["metadata"]["wake_id"] == wake["wake_id"]
+   and renewal[2]["task_id"] == task_id
+   and renewal[2]["claim_id"] == "",
+   "each daemon tick renews the live direct task PTY without inventing claim state")
 
 # A failed session can leave its branch attached to the first worktree.  A
 # deliberate retry must therefore create a second worktree with a different

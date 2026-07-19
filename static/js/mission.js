@@ -339,6 +339,7 @@
         const modal = window.bootstrap.Modal.getOrCreateInstance(modalEl);
         return new Promise((resolve) => {
             let settled = false;
+            let confirmed = false;
             const finish = (val) => {
                 if (settled) return;
                 settled = true;
@@ -346,8 +347,11 @@
                 modalEl.removeEventListener('hidden.bs.modal', onHide);
                 resolve(val);
             };
-            const onOk = () => { finish(true); modal.hide(); };
-            const onHide = () => finish(false);
+            // Resolve only after Bootstrap has completed its fade-out. Callers
+            // may immediately open another modal or act on controls underneath;
+            // resolving on click left the fading backdrop intercepting them.
+            const onOk = () => { confirmed = true; modal.hide(); };
+            const onHide = () => finish(confirmed);
             ok.addEventListener('click', onOk);
             modalEl.addEventListener('hidden.bs.modal', onHide);
             modal.show();

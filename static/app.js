@@ -1878,6 +1878,73 @@ const TeepPlan = {
         this.gantt.render();
     },
 
+    taskPrimaryRunnerHtml(t) {
+        return `<div class="card card-sm mb-3" id="task-primary-runner" data-task-id="${this.esc(t.task_id)}">
+            <div class="card-body">
+                <div class="d-flex flex-column flex-md-row align-items-md-center gap-3">
+                    <span class="avatar rounded bg-primary-lt text-primary flex-shrink-0"><i class="ti ti-terminal-2"></i></span>
+                    <div class="flex-fill" style="min-width:0">
+                        <div class="d-flex align-items-center gap-2 mb-1">
+                            <span class="fw-semibold">Codex task session</span>
+                            <span id="task-primary-runner-badge" class="badge bg-secondary-lt">Checking</span>
+                        </div>
+                        <div id="task-primary-runner-state" class="text-secondary small">Checking your enrolled Mac for this task…</div>
+                        <div id="task-primary-flash" class="small mt-1"></div>
+                    </div>
+                    <div class="btn-list flex-nowrap">
+                        <button id="task-primary-start" class="btn btn-primary" type="button" hidden><i class="ti ti-player-play me-1"></i>Start task</button>
+                        <button id="task-primary-watch-here" class="btn btn-primary" type="button" hidden><i class="ti ti-terminal-2 me-1"></i>Watch here</button>
+                        <button id="task-primary-watch-sidecar" class="btn btn-outline-primary" type="button" hidden><i class="ti ti-layout-sidebar-right me-1"></i>Open side panel</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div id="runner-pty-details-mount" class="mb-3"></div>`;
+    },
+
+    async _loadTaskPrimaryRunner(taskId) {
+        const root = document.getElementById('task-primary-runner');
+        if (!root || root.dataset.taskId !== String(taskId || '')) return;
+        const badge = document.getElementById('task-primary-runner-badge');
+        const state = document.getElementById('task-primary-runner-state');
+        const start = document.getElementById('task-primary-start');
+        const watchHere = document.getElementById('task-primary-watch-here');
+        const watchSidecar = document.getElementById('task-primary-watch-sidecar');
+        try {
+            const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&task_id=${encodeURIComponent(taskId)}`;
+            const res = await fetch(`/ixp/v1/runner_sessions/watch?${q}`, { cache: 'no-store' });
+            const watch = await res.json();
+            const live = res.ok && watch && watch.watchable !== false && !watch.error;
+            if (live) {
+                const session = watch.session || {};
+                const bind = watch.bind || {};
+                badge.className = 'badge bg-green-lt';
+                badge.innerHTML = '<span class="status-dot status-dot-animated bg-green me-1"></span>Agent live';
+                state.innerHTML = `<span class="font-monospace">${this.esc(watch.runner_session_id || session.runner_session_id || '')}</span> on ${this.esc(bind.host_id || session.host_id || 'your enrolled host')}`;
+                start.hidden = true;
+                watchHere.hidden = false;
+                watchSidecar.hidden = false;
+            } else {
+                const hasExpiredSession = Array.isArray(watch && watch.sessions) && watch.sessions.length > 0;
+                badge.className = `badge bg-${hasExpiredSession ? 'yellow' : 'secondary'}-lt`;
+                badge.textContent = hasExpiredSession ? 'Reconnecting' : 'Ready';
+                state.textContent = hasExpiredSession
+                    ? 'The host is renewing an existing session. You can retry Watch in a moment.'
+                    : 'No live Codex session is attached. Start this exact task on an enrolled Mac.';
+                start.hidden = false;
+                watchHere.hidden = true;
+                watchSidecar.hidden = true;
+            }
+        } catch (e) {
+            badge.className = 'badge bg-red-lt';
+            badge.textContent = 'Unavailable';
+            state.textContent = `Runner status unavailable: ${e.message}`;
+            start.hidden = false;
+            watchHere.hidden = true;
+            watchSidecar.hidden = true;
+        }
+    },
+
     async openTask(id, project) {
         let t = this.tasks.find((x) => x.task_id === id);
         if (!t && !project) return;
@@ -1935,6 +2002,7 @@ const TeepPlan = {
             </ul>
             <div class="tab-content mt-3">
                 <div class="tab-pane fade show active" id="m-details" role="tabpanel">
+                    ${this.taskPrimaryRunnerHtml(t)}
                     <div class="progress progress-sm mb-3"><div class="progress-bar bg-${sc}" style="width:${pct}%"></div></div>
                     <div class="text-secondary small mb-3 d-flex align-items-center"><span class="status-dot bg-${sc} me-2"></span>${this.esc(t.status || '—')} · ${pct}% complete</div>
                     ${this.taskNarrationHtml(t)}
@@ -2011,7 +2079,19 @@ const TeepPlan = {
         this._loadTaskMonitors(t.task_id);
         this._initMergeGate(t.task_id);
         this._loadRunnerSessions(t.task_id);
+        this._loadTaskPrimaryRunner(t.task_id);
         this._loadDispatch(t.task_id);
+        const primaryStart = document.getElementById('task-primary-start');
+        if (primaryStart) primaryStart.addEventListener('click', () => this.dispatchTask(t.task_id, 'codex'));
+        const primaryWatchHere = document.getElementById('task-primary-watch-here');
+        if (primaryWatchHere) primaryWatchHere.addEventListener('click', () => {
+            const mount = document.getElementById('runner-pty-details-mount');
+            this.openRunnerSessionPanel(t.task_id, { dockInto: mount || undefined });
+        });
+        const primaryWatchSidecar = document.getElementById('task-primary-watch-sidecar');
+        if (primaryWatchSidecar) primaryWatchSidecar.addEventListener('click', () => {
+            this.openRunnerSessionPanel(t.task_id);
+        });
         const watchBtn = document.getElementById('runner-watch-open');
         if (watchBtn) watchBtn.addEventListener('click', () => {
             const mount = document.getElementById('runner-pty-dev-mount');
@@ -2178,12 +2258,24 @@ const TeepPlan = {
 
     async dispatchTask(id, runtime) {
         const rt = runtime === 'codex' ? 'codex' : 'claude-code';
-        const flash = (msg, cls) => { const el = document.getElementById('edit-flash-dev'); if (el) { el.textContent = msg; el.className = 'small text-' + (cls || 'secondary'); } };
+        const flash = (msg, cls) => {
+            ['edit-flash-dev', 'task-primary-flash'].forEach((target) => {
+                const el = document.getElementById(target);
+                if (el) { el.textContent = msg; el.className = 'small mt-1 text-' + (cls || 'secondary'); }
+            });
+        };
         const proj = window.PM_PROJECT || 'maxwell';
-        const confirmMsg = rt === 'codex'
-            ? `Start a native Codex CLI for ${id} on your enrolled Mac? The daemon creates an isolated task workspace, loads its assignment config and Switchboard MCP, and opens the live terminal here.`
-            : `Dispatch ${id} to Claude Code cloud? Anthropic hosts the coding session on a claude/ task branch and the session/PR links return here — it never touches main/master.`;
-        if (!window.confirm(confirmMsg)) return;
+        const confirmed = await this._confirm({
+            title: rt === 'codex' ? `Start ${id} on your Mac?` : `Dispatch ${id} to Claude Code?`,
+            body: rt === 'codex'
+                ? 'Start a native Codex CLI on your enrolled Mac. The daemon creates an isolated workspace, loads its assignment config and Switchboard MCP connection, then opens the exact live CLI here.'
+                : 'Anthropic hosts the coding session on its task branch and returns its session and PR links here.',
+            icon: rt === 'codex' ? 'ti-terminal-2' : 'ti-robot',
+            iconVariant: 'primary',
+            confirmLabel: rt === 'codex' ? 'Start task' : 'Dispatch task',
+            confirmVariant: 'primary',
+        });
+        if (!confirmed) return;
         flash(rt === 'codex' ? 'Sending the task to your Mac…' : 'Queuing a Claude cloud session…');
         let data;
         try {
@@ -2201,6 +2293,7 @@ const TeepPlan = {
                 : `Queued (wake ${data.wake_id}) — the trigger host will bind an app-visible Claude session.`, 'green');
         }
         this._loadDispatch(id);   // render the live panel (queued → running → Open PR); it self-refreshes
+        this._loadTaskPrimaryRunner(id);
         if (rt === 'codex' && data.work_hosts_online) this._openDirectRunnerWhenReady(id);
     },
 
@@ -2214,7 +2307,9 @@ const TeepPlan = {
             } catch (e) { /* the daemon will be polled again */ }
             if (state && state.session_id && state.status === 'running') {
                 await this._loadRunnerSessions(taskId);
-                const mount = document.getElementById('runner-pty-dev-mount');
+                await this._loadTaskPrimaryRunner(taskId);
+                const mount = document.getElementById('runner-pty-details-mount')
+                    || document.getElementById('runner-pty-dev-mount');
                 await this.openRunnerSessionPanel(taskId, { dockInto: mount || undefined });
                 return;
             }

@@ -196,7 +196,10 @@
         if (els.toggleDock) els.toggleDock.addEventListener('click', () => this._runnerPtyToggleDock());
         if (els.chatSend) els.chatSend.addEventListener('click', () => this._runnerPtySendChat('freeform'));
         if (els.chatInput) els.chatInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') this._runnerPtySendChat('freeform');
+            if (e.key === 'Enter' && !e.isComposing) {
+                e.preventDefault();
+                this._runnerPtySendChat('freeform');
+            }
         });
         if (els.chatWrap) els.chatWrap.querySelectorAll('[data-runner-chat-kind]').forEach((b) => {
             b.addEventListener('click', () => this._runnerPtySendChat(b.getAttribute('data-runner-chat-kind') || 'freeform'));
@@ -234,7 +237,8 @@
         const rp = this._runnerPty;
         if (!rp) return;
         const els = this._runnerPtyEls();
-        const modalDevMount = document.getElementById('m-dev');
+        const modalDetailsMount = document.getElementById('runner-pty-details-mount');
+        const modalDevMount = document.getElementById('runner-pty-dev-mount');
         const modal = document.getElementById('task-modal');
         // Only dock into a modal that's actually showing *this* session's
         // task — otherwise an in-flight open for task X can resolve after
@@ -245,12 +249,12 @@
         if (rp.mode === 'docked') {
             this._runnerPtyShowShell(null);
             rp.mode = 'sidecar';
-        } else if (modalDevMount && modalMatches) {
-            this._runnerPtyShowShell(modalDevMount.querySelector('#runner-pty-dev-mount') || modalDevMount);
+        } else if ((modalDetailsMount || modalDevMount) && modalMatches) {
+            this._runnerPtyShowShell(modalDetailsMount || modalDevMount);
             rp.mode = 'docked';
         }
         if (rp.fitAddon) requestAnimationFrame(() => { try { rp.fitAddon.fit(); this._runnerPtySendResize(); } catch (e) { /* ignore */ } });
-        if (els.toggleDock) els.toggleDock.title = rp.mode === 'docked' ? 'Pop out to sidecar' : 'Open in full task view';
+        if (els.toggleDock) els.toggleDock.title = rp.mode === 'docked' ? 'Pop out to side panel' : 'Open in task details';
     },
 
     // Pops a docked panel back to the sidecar if one is live. Safe to call
@@ -552,13 +556,8 @@
         }
         const text = ((els.chatInput && els.chatInput.value) || '').trim();
         if (!text) return;
-        if (els.chatInput) els.chatInput.value = '';
         const injectKind = (kind || 'freeform').toLowerCase();
-        if (els.chatLog) {
-            els.chatLog.insertAdjacentHTML('beforeend',
-                `<div><span class="badge bg-azure-lt me-1">${this.esc(injectKind)}</span>${this.esc(text)}</div>`);
-            els.chatLog.scrollTop = els.chatLog.scrollHeight;
-        }
+        if (els.chatSend) els.chatSend.disabled = true;
         try {
             const res = await fetch('/ixp/v1/request_runner_inject', {
                 method: 'POST',
@@ -575,12 +574,61 @@
             const data = await res.json().catch(() => ({}));
             if (!res.ok || data.error) throw new Error(data.error || data.detail || data.message || `HTTP ${res.status}`);
             if (data.requested === false) {
-                flash(`inject refused: ${data.reason || data.error || 'not accepted'}`, 'warning');
-                return;
+                throw new Error(data.reason || data.error || 'not accepted');
             }
+            if (els.chatInput) els.chatInput.value = '';
+            let entry = null;
+            if (els.chatLog) {
+                els.chatLog.insertAdjacentHTML('beforeend',
+                    `<div class="d-flex align-items-start gap-1 mb-1"><span class="badge bg-yellow-lt" data-runner-chat-status>Sending</span><span>${this.esc(text)}</span></div>`);
+                entry = els.chatLog.lastElementChild;
+                els.chatLog.scrollTop = els.chatLog.scrollHeight;
+            }
+            this._runnerPtyAwaitChatDelivery(data.request_id, entry, text);
         } catch (e) {
             flash(`inject failed: ${e.message}`, 'danger');
+            if (els.chatInput && !els.chatInput.value) els.chatInput.value = text;
+        } finally {
+            if (els.chatSend) els.chatSend.disabled = false;
         }
+    },
+
+    async _runnerPtyAwaitChatDelivery(requestId, entry, text) {
+        const rp = this._runnerPty;
+        const statusBadge = entry && entry.querySelector('[data-runner-chat-status]');
+        if (!requestId || !rp) return;
+        const deadline = Date.now() + 30000;
+        while (Date.now() < deadline && this._runnerPty === rp) {
+            try {
+                const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&runner_session_id=${encodeURIComponent(rp.runnerSessionId)}`;
+                const data = await (await fetch(`/ixp/v1/runner_controls?${q}`, { cache: 'no-store' })).json();
+                const request = (data.requests || []).find((item) => item.request_id === requestId);
+                if (request && request.status === 'completed') {
+                    if (statusBadge) {
+                        statusBadge.className = 'badge bg-green-lt';
+                        statusBadge.textContent = 'Delivered';
+                    }
+                    this._runnerPtyGate(`Delivered to ${rp.taskId} · ${rp.runnerSessionId}`, 'green');
+                    return;
+                }
+                if (request && ['failed', 'cancelled', 'refused'].includes(request.status)) {
+                    if (statusBadge) {
+                        statusBadge.className = 'badge bg-red-lt';
+                        statusBadge.textContent = 'Failed';
+                    }
+                    const els = this._runnerPtyEls();
+                    if (els.chatInput && !els.chatInput.value) els.chatInput.value = text;
+                    this._runnerPtyGate(`Message was not delivered: ${(request.result || {}).error || request.status}`, 'danger');
+                    return;
+                }
+            } catch (e) { /* keep waiting; the queued request remains durable */ }
+            await new Promise((resolve) => setTimeout(resolve, 750));
+        }
+        if (statusBadge) {
+            statusBadge.className = 'badge bg-yellow-lt';
+            statusBadge.textContent = 'Queued';
+        }
+        if (this._runnerPty === rp) this._runnerPtyGate('Message queued on the host; delivery confirmation is still pending.', 'warning');
     },
     };
 

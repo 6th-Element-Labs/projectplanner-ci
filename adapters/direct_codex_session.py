@@ -147,6 +147,7 @@ def _write_assignment_toml(
         f"deliverable_id = {_toml_string(assignment.get('deliverable_id'))}",
         f"host_id = {_toml_string(assignment.get('host_id'))}",
         f"runner_session_id = {_toml_string(runner_id)}",
+        f"wake_id = {_toml_string(os.environ.get('PM_CO_WAKE_ID'))}",
         f"prompt = {_toml_string(assignment.get('prompt'))}",
         "",
         "[repository]",
