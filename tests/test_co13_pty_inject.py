@@ -265,10 +265,10 @@ app_js = read_frontend_source(str(ROOT))
 index_html = (Path(ROOT) / "static" / "index.html").read_text(encoding="utf-8")
 ok("request_runner_inject" in app_js
    and "_runnerPtySendChat" in app_js  # UI-24: renamed from sendRunnerSessionChat
-   and "data-runner-chat-kind" in app_js
-   and "Session chat (bound Codex PTY" in index_html
+   and "Message the live agent" in index_html
+   and "delivery is acknowledged against this exact run" in index_html
    and "SwitchboardRunnerSession" in app_js,
-   "Mission panel exposes session chat inject (not inbox-as-chat)")
+   "Mission panel exposes exact-run session chat with delivery acknowledgement")
 
 print(f"\nCO-13 PTY inject: {passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)

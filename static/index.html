@@ -120,14 +120,14 @@
       /* Full-width top header (combo layout): spans the whole page; sidebar + content sit below it. */
       :root{--tk-header-h:3rem}
       .tk-toolbar{background:var(--tblr-bg-surface);border-bottom:1px solid var(--tblr-border-color);min-height:var(--tk-header-h);position:sticky;top:0;z-index:1035}
-      /* UI-24: bound PTY terminal — a sidecar by default (ambient trigger: a
-         Mission graph node, the Proof Console), reparented in place inside the
-         task-detail modal's Dev tab when opened from full task context. Same
+      /* UI-24/UI-47: bound PTY terminal — a sidecar by default (ambient trigger:
+         a Mission graph node, the Proof Console), reparented in place inside the
+         task-detail modal when opened from full task context. Same
          #runner-pty-panel element moves between the two; never duplicated. */
       #runner-pty-scrim{position:fixed;inset:0;z-index:1060;background:rgba(20,22,28,.32);display:none}
       #runner-pty-scrim.show{display:block}
       #runner-pty-panel{display:flex;flex-direction:column;background:var(--tblr-bg-surface,#fff)}
-      #runner-pty-panel.tk-pty-sidecar{position:fixed;top:0;right:0;bottom:0;width:min(640px,96vw);z-index:1070;
+      #runner-pty-panel.tk-pty-sidecar{position:fixed;top:0;right:0;bottom:0;width:min(580px,96vw);z-index:1070;
         border-left:1px solid var(--tblr-border-color);box-shadow:-24px 0 70px -24px rgba(16,24,40,.4);
         transform:translateX(103%);transition:transform .2s}
       #runner-pty-panel.tk-pty-sidecar.show{transform:none}
@@ -897,7 +897,7 @@
     <script src="js/settings.js?v=1"></script>
     <script src="js/scope.js?v=1"></script>
     <script src="js/attention.js?v=1"></script>
-    <script src="app.js?v=48"></script>
+    <script src="app.js?v=49"></script>
     <script src="taikun-ui.js?v=9"></script>
     <script src="saturation-panel.js?v=1"></script>
     <script src="narration-ops-panel.js?v=1"></script>
@@ -1161,17 +1161,18 @@
     <div id="fleet-dock"></div>
     <div id="saturation-dock"></div>
     <div id="narration-ops-dock"></div>
-    <!-- UI-24: bound PTY terminal panel — see static/js/runner-session.js. Starts
+    <!-- UI-24/UI-47: bound PTY terminal panel — see static/js/runner-session.js. Starts
          parked here (sidecar-shaped, hidden); openRunnerSessionPanel() moves it
          either in place (still here, shown as a right-docked sidecar) or into the
-         task-detail modal's #runner-pty-dev-mount (docked, in-flow). -->
+         task-detail modal's primary runner mount (docked, in-flow). -->
     <div id="runner-pty-scrim"></div>
     <div class="tk-pty-sidecar" id="runner-pty-panel" hidden>
-        <div class="card-header d-flex align-items-center gap-2 py-2">
-            <span class="badge bg-red-lt" id="runner-pty-live" hidden><i class="ti ti-circle-filled me-1"></i>live</span>
+        <div class="card-header d-flex align-items-start gap-2 p-3">
             <div style="min-width:0;flex:1">
-                <div class="fw-semibold small text-truncate" id="runner-pty-title">Runner session</div>
-                <div class="text-secondary small font-monospace text-truncate" id="runner-pty-sub"></div>
+                <div class="fw-semibold">Live Codex session</div>
+                <div class="text-secondary font-monospace text-truncate" id="runner-pty-title">Runner session</div>
+                <div class="text-secondary small text-truncate" id="runner-pty-sub"></div>
+                <span class="badge bg-green-lt mt-2" id="runner-pty-live" hidden><span class="status-dot status-dot-animated bg-green me-1"></span>Working</span>
             </div>
             <button type="button" class="btn btn-sm btn-outline-secondary" id="runner-pty-toggle-dock" title="Open in full task view"><i class="ti ti-arrows-diagonal"></i></button>
             <button type="button" class="btn-close" id="runner-pty-close" aria-label="Close Watch/Chat"></button>
@@ -1180,16 +1181,12 @@
             <div id="runner-pty-gate" class="small mb-2"></div>
             <div id="runner-pty-term" style="flex:1;min-height:16rem;border-radius:.5rem;overflow:hidden"></div>
             <div class="mt-2" id="runner-pty-chat">
-                <div class="small text-secondary mb-1">Session chat (bound Codex PTY — not inbox)</div>
-                <div class="btn-list mb-2">
-                    <button type="button" class="btn btn-sm btn-outline-secondary" data-runner-chat-kind="redirect">Redirect</button>
-                    <button type="button" class="btn btn-sm btn-outline-secondary" data-runner-chat-kind="hold">Hold</button>
-                    <button type="button" class="btn btn-sm btn-outline-secondary" data-runner-chat-kind="approve">Approve</button>
-                </div>
+                <div class="small text-secondary mb-1">Message the live agent</div>
                 <div class="input-group input-group-sm">
-                    <input id="runner-chat-input" class="form-control" placeholder="Inject freeform into the live session…" autocomplete="off"/>
-                    <button type="button" class="btn btn-azure" id="runner-chat-send">Send</button>
+                    <input id="runner-chat-input" class="form-control" placeholder="Message the live agent…" autocomplete="off"/>
+                    <button type="button" class="btn btn-primary" id="runner-chat-send"><i class="ti ti-send me-1"></i>Send</button>
                 </div>
+                <div class="small text-secondary mt-2">Enter sends · delivery is acknowledged against this exact run</div>
                 <div id="runner-chat-log" class="small text-secondary mt-2" style="max-height:6rem;overflow:auto" aria-live="polite"></div>
             </div>
         </div>

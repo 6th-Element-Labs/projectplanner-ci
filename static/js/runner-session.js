@@ -2,7 +2,7 @@
    terminal. One xterm.js instance + one relay WebSocket per runner_session_id,
    living in #runner-pty-panel (static/index.html) — opened either as a
    right-docked sidecar (ambient trigger: a task box, the Proof Console) or
-   reparented in place inside the task-detail modal's Dev tab (already viewing
+   reparented in place inside the task-detail modal's primary session surface
    full task context). Never both at once for the same session: opening the
    other container moves the same panel, it does not open a second connection. */
 (function (global) {
@@ -212,7 +212,7 @@
         this._runnerPtyGuardModalTeardownOnce();
     },
 
-    // dockInto: an element inside the task-detail modal's Dev tab, or falsy for the sidecar.
+    // dockInto: an element inside the task-detail modal, or falsy for the sidecar.
     _runnerPtyShowShell(dockInto) {
         this._runnerPtyBindShellOnce();
         const els = this._runnerPtyEls();
@@ -330,7 +330,7 @@
         els.gate.className = `small mb-2 text-${cls || 'secondary'}`;
     },
 
-    // The one entry point. opts.dockInto: mount inside the task modal's Dev tab
+    // The one entry point. opts.dockInto: mount inside the task modal
     // instead of opening the sidecar. opts.fallbackIfNotWatchable: return false
     // instead of opening a red gate state (lets callers like the mission graph
     // click handler fall back to a different action for tasks with no run).

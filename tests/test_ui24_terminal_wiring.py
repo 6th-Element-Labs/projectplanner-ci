@@ -75,6 +75,9 @@ ok("taskPrimaryRunnerHtml" in APP and "task-primary-start" in APP,
    "the first task-details surface exposes the primary Start task action")
 ok("task-primary-watch-here" in APP and "task-primary-watch-sidecar" in APP,
    "the first task-details surface exposes both in-modal and side-panel Watch actions")
+for needle in ("data-session-state", "Ready for an agent", "Codex is working",
+               "Blocked, agent still live", "Talk to agent"):
+    ok(needle in APP, f"state-driven task session contract is present: {needle}")
 ok("runner-pty-details-mount" in APP and "modalDetailsMount || modalDevMount" in RUNNER_SESSION,
    "the shared PTY docks into task Details first while retaining the Dev-tab fallback")
 ok("dockInto: mount || undefined" in APP or "dockInto:" in APP,
@@ -101,9 +104,9 @@ ok("_runnerPtyCloseTimer" in RUNNER_SESSION,
 ok("openRunnerSessionPanel" in PROOF, "the Proof Console's Watch/Chat button opens the shared panel")
 ok("openRunnerWatch" not in PROOF, "the Proof Console no longer calls the retired badge-only opener")
 
-# ---- chat composer + shortcuts stay a higher-level path into the same PTY --
-for needle in ("data-runner-chat-kind=\"redirect\"", "data-runner-chat-kind=\"hold\"",
-               "data-runner-chat-kind=\"approve\"", "request_runner_inject"):
+# ---- one plain-language chat composer stays bound to the same exact PTY ----
+for needle in ("Message the live agent", "delivery is acknowledged against this exact run",
+               "request_runner_inject"):
     ok(needle in INDEX or needle in RUNNER_SESSION, f"chat/shortcut wiring present: {needle}")
 ok("e.preventDefault()" in RUNNER_SESSION and "!e.isComposing" in RUNNER_SESSION,
    "Enter submits the composer exactly once without swallowing IME composition")

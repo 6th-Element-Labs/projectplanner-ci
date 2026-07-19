@@ -131,8 +131,18 @@ try:
         page.evaluate("id => TeepPlan._loadTaskPrimaryRunner(id)", task_id)
         page.wait_for_selector("#task-primary-watch-here", state="visible", timeout=5000)
         ok(page.locator("#task-primary-watch-here").is_visible()
+           and "Watch live" in page.locator("#task-primary-watch-here").inner_text()
            and page.locator("#task-primary-watch-sidecar").is_visible(),
-           "a live task offers both Watch here and Open side panel on Details")
+           "a running task offers both Watch live and Open side panel on the modal")
+
+        page.locator("#task-primary-runner").evaluate(
+            "element => { element.dataset.taskStatus = 'Blocked'; }")
+        page.evaluate("id => TeepPlan._loadTaskPrimaryRunner(id)", task_id)
+        page.wait_for_function(
+            "() => document.getElementById('task-primary-runner')?.dataset.sessionState === 'blocked-live'")
+        ok("Blocked, agent still live" in page.locator("#task-primary-runner-title").inner_text()
+           and "Talk to agent" in page.locator("#task-primary-watch-here").inner_text(),
+           "a blocked task with a live session becomes a Talk to agent action")
         page.unroute("**/ixp/v1/runner_sessions/watch?**", _watchable_runner)
 
         page.click('a[href="#m-dev"]')

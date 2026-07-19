@@ -1885,13 +1885,13 @@ const TeepPlan = {
     },
 
     taskPrimaryRunnerHtml(t) {
-        return `<div class="card card-sm mb-3" id="task-primary-runner" data-task-id="${this.esc(t.task_id)}">
+        return `<div class="card card-sm mb-3" id="task-primary-runner" data-task-id="${this.esc(t.task_id)}" data-task-status="${this.esc(t.status || '')}" data-session-state="checking">
             <div class="card-body">
                 <div class="d-flex flex-column flex-md-row align-items-md-center gap-3">
                     <span class="avatar rounded bg-primary-lt text-primary flex-shrink-0"><i class="ti ti-terminal-2"></i></span>
                     <div class="flex-fill" style="min-width:0">
                         <div class="d-flex align-items-center gap-2 mb-1">
-                            <span class="fw-semibold">Codex task session</span>
+                            <span class="fw-semibold" id="task-primary-runner-title">Checking task session</span>
                             <span id="task-primary-runner-badge" class="badge bg-secondary-lt">Checking</span>
                         </div>
                         <div id="task-primary-runner-state" class="text-secondary small">Checking your enrolled Mac for this task…</div>
@@ -1899,7 +1899,7 @@ const TeepPlan = {
                     </div>
                     <div class="btn-list flex-nowrap">
                         <button id="task-primary-start" class="btn btn-primary" type="button" hidden><i class="ti ti-player-play me-1"></i>Start task</button>
-                        <button id="task-primary-watch-here" class="btn btn-primary" type="button" hidden><i class="ti ti-terminal-2 me-1"></i>Watch here</button>
+                        <button id="task-primary-watch-here" class="btn btn-primary" type="button" hidden><i class="ti ti-terminal-2 me-1"></i><span>Watch live</span></button>
                         <button id="task-primary-watch-sidecar" class="btn btn-outline-primary" type="button" hidden><i class="ti ti-layout-sidebar-right me-1"></i>Open side panel</button>
                     </div>
                 </div>
@@ -1911,11 +1911,13 @@ const TeepPlan = {
     async _loadTaskPrimaryRunner(taskId) {
         const root = document.getElementById('task-primary-runner');
         if (!root || root.dataset.taskId !== String(taskId || '')) return;
+        const title = document.getElementById('task-primary-runner-title');
         const badge = document.getElementById('task-primary-runner-badge');
         const state = document.getElementById('task-primary-runner-state');
         const start = document.getElementById('task-primary-start');
         const watchHere = document.getElementById('task-primary-watch-here');
         const watchSidecar = document.getElementById('task-primary-watch-sidecar');
+        const taskStatus = String(root.dataset.taskStatus || '');
         try {
             const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&task_id=${encodeURIComponent(taskId)}`;
             const res = await fetch(`/ixp/v1/runner_sessions/watch?${q}`, { cache: 'no-store' });
@@ -1924,26 +1926,37 @@ const TeepPlan = {
             if (live) {
                 const session = watch.session || {};
                 const bind = watch.bind || {};
+                const blocked = taskStatus === 'Blocked';
+                root.dataset.sessionState = blocked ? 'blocked-live' : 'running';
                 badge.className = 'badge bg-green-lt';
                 badge.innerHTML = '<span class="status-dot status-dot-animated bg-green me-1"></span>Agent live';
-                state.innerHTML = `<span class="font-monospace">${this.esc(watch.runner_session_id || session.runner_session_id || '')}</span> on ${this.esc(bind.host_id || session.host_id || 'your enrolled host')}`;
+                title.textContent = blocked ? 'Blocked, agent still live' : 'Codex is working';
+                state.innerHTML = blocked
+                    ? `This task is blocked, but <span class="font-monospace">${this.esc(watch.runner_session_id || session.runner_session_id || '')}</span> is still live on ${this.esc(bind.host_id || session.host_id || 'your enrolled host')}. Tell it how to repair the gate.`
+                    : `<span class="font-monospace">${this.esc(watch.runner_session_id || session.runner_session_id || '')}</span> on ${this.esc(bind.host_id || session.host_id || 'your enrolled host')} · connected to Switchboard`;
                 start.hidden = true;
                 watchHere.hidden = false;
+                watchHere.querySelector('span').textContent = blocked ? 'Talk to agent' : 'Watch live';
+                watchHere.querySelector('i').className = `ti ti-${blocked ? 'message-circle' : 'terminal-2'} me-1`;
                 watchSidecar.hidden = false;
             } else {
                 const hasExpiredSession = Array.isArray(watch && watch.sessions) && watch.sessions.length > 0;
+                root.dataset.sessionState = hasExpiredSession ? 'reconnecting' : 'ready';
                 badge.className = `badge bg-${hasExpiredSession ? 'yellow' : 'secondary'}-lt`;
                 badge.textContent = hasExpiredSession ? 'Reconnecting' : 'Ready';
+                title.textContent = hasExpiredSession ? 'Reconnecting task session' : 'Ready for an agent';
                 state.textContent = hasExpiredSession
                     ? 'The host is renewing an existing session. You can retry Watch in a moment.'
-                    : 'No live Codex session is attached. Start this exact task on an enrolled Mac.';
+                    : 'The selected Mac will prepare the repository and open the live Codex session here.';
                 start.hidden = false;
                 watchHere.hidden = true;
                 watchSidecar.hidden = true;
             }
         } catch (e) {
+            root.dataset.sessionState = 'unavailable';
             badge.className = 'badge bg-red-lt';
             badge.textContent = 'Unavailable';
+            title.textContent = 'Task session unavailable';
             state.textContent = `Runner status unavailable: ${e.message}`;
             start.hidden = false;
             watchHere.hidden = true;
@@ -2000,6 +2013,7 @@ const TeepPlan = {
         document.getElementById('task-modal-title').innerHTML =
             `<span class="status-dot bg-${sc} me-2"></span><span class="text-secondary font-monospace fw-normal me-2">${this.esc(t.task_id)}</span>${this.esc(t.title)}${t.is_blocking ? ' <span class="badge bg-red-lt ms-2"><i class="ti ti-alert-triangle me-1"></i>Blocking</span>' : ''}`;
         document.getElementById('task-modal-body').innerHTML = `
+            ${this.taskPrimaryRunnerHtml(t)}
             <ul class="nav nav-tabs" role="tablist">
                 <li class="nav-item" role="presentation"><a class="nav-link active" data-bs-toggle="tab" href="#m-details" role="tab"><i class="ti ti-info-circle me-1"></i>Details</a></li>
                 <li class="nav-item" role="presentation"><a class="nav-link" data-bs-toggle="tab" href="#m-edit" role="tab"><i class="ti ti-pencil me-1"></i>Edit</a></li>
@@ -2008,7 +2022,6 @@ const TeepPlan = {
             </ul>
             <div class="tab-content mt-3">
                 <div class="tab-pane fade show active" id="m-details" role="tabpanel">
-                    ${this.taskPrimaryRunnerHtml(t)}
                     <div class="progress progress-sm mb-3"><div class="progress-bar bg-${sc}" style="width:${pct}%"></div></div>
                     <div class="text-secondary small mb-3 d-flex align-items-center"><span class="status-dot bg-${sc} me-2"></span>${this.esc(t.status || '—')} · ${pct}% complete</div>
                     ${this.taskNarrationHtml(t)}
@@ -2090,9 +2103,16 @@ const TeepPlan = {
         const primaryStart = document.getElementById('task-primary-start');
         if (primaryStart) primaryStart.addEventListener('click', () => this.dispatchTask(t.task_id, 'codex'));
         const primaryWatchHere = document.getElementById('task-primary-watch-here');
-        if (primaryWatchHere) primaryWatchHere.addEventListener('click', () => {
+        if (primaryWatchHere) primaryWatchHere.addEventListener('click', async () => {
+            const runner = document.getElementById('task-primary-runner');
+            if (runner && runner.dataset.sessionState === 'blocked-live') {
+                await this.openRunnerSessionPanel(t.task_id);
+                const input = document.getElementById('runner-chat-input');
+                if (input) input.focus();
+                return;
+            }
             const mount = document.getElementById('runner-pty-details-mount');
-            this.openRunnerSessionPanel(t.task_id, { dockInto: mount || undefined });
+            await this.openRunnerSessionPanel(t.task_id, { dockInto: mount || undefined });
         });
         const primaryWatchSidecar = document.getElementById('task-primary-watch-sidecar');
         if (primaryWatchSidecar) primaryWatchSidecar.addEventListener('click', () => {
