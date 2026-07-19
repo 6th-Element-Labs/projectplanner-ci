@@ -50,6 +50,10 @@ ok("/txp/v1/claim_next" in live and "/txp/v1/complete_claim" in live,
    "live Caddy routes claim-only TXP")
 ok("@tasks_sibling path_regexp tasks_sibling" in live and "handle @tasks_sibling" in live,
    "sibling dispatch/chat/review paths carved to monolith")
+ok("resume-review" in live,
+   "review continuation is carved to the monolith before the broad Tasks cut")
+ok(live.index("handle @tasks_sibling") < live.index("handle /api/tasks*"),
+   "sibling continuation carve-out precedes the broad Tasks process-cut handle")
 
 # AC: day-one surface not on monolith
 ok((ROOT / "deploy/switchboard-tasks.service").is_file(),

@@ -44,7 +44,10 @@ ok("handle /api/tasks*" in live or "handle /api/tasks" in live,
 ok("8122" in live, "live Caddy points Tasks at :8122")
 ok("@tasks_sibling path_regexp tasks_sibling" in live,
    "live Caddy carves dispatch/chat/review siblings with one anchored matcher")
-ok("dispatch|chat|review_" in live, "sibling matcher covers dispatch, chat, and review")
+ok(
+    "dispatch|chat|resume-review|review_" in live,
+    "sibling matcher covers dispatch, chat, resume-review, and review",
+)
 ok("handle @tasks_sibling" in live, "sibling matcher routes through its own handle")
 ok("/txp/v1/claim_next" in live and "/txp/v1/complete_claim" in live,
    "live Caddy routes claim-only TXP")

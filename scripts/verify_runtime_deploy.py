@@ -594,6 +594,14 @@ def build_evidence(
                     path=f"/api/tasks/{task}/review_verdict{project_qs}", method="GET",
                     token=bearer_token, owner_port=8110, other_port=8122,
                 ),
+                check_live_route_owner(
+                    base_url=edge_base_url,
+                    # Use a guaranteed-missing task so ownership is proven
+                    # without ever creating a replacement runner.
+                    path="/api/tasks/__runtime_probe_missing__/resume-review?project=switchboard",
+                    method="POST", token=bearer_token, owner_port=8110, other_port=8122,
+                    json_body=b'{"project":"switchboard"}',
+                ),
                 ])
             if service_ports.get("switchboard-deliverables") == 8124:
                 selected_deliverable_id, selection_check = resolve_probe_deliverable_id(

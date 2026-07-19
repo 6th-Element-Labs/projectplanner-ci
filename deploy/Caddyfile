@@ -95,7 +95,7 @@ plan.taikunai.com {
     # A Caddy path matcher with multiple `*` wildcards did not reliably match nested
     # paths such as /dispatch/latest, which then fell through to the broad Tasks
     # handle. Use one anchored regexp for the complete sibling surface instead.
-    @tasks_sibling path_regexp tasks_sibling ^/api/tasks/[^/]+/(dispatch|chat|review_[^/]+)(/.*)?$
+    @tasks_sibling path_regexp tasks_sibling ^/api/tasks/[^/]+/(dispatch|chat|resume-review|review_[^/]+)(/.*)?$
     handle @tasks_sibling {
         reverse_proxy 127.0.0.1:8110 {
             transport http {
