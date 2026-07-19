@@ -1921,7 +1921,7 @@ const TeepPlan = {
         const watchSidecar = document.getElementById('task-primary-watch-sidecar');
         const taskStatus = String(root.dataset.taskStatus || '');
         try {
-            const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&task_id=${encodeURIComponent(taskId)}`;
+            const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&task_id=${encodeURIComponent(taskId)}&include_stale=true`;
             const res = await fetch(`/ixp/v1/runner_sessions/watch?${q}`, { cache: 'no-store' });
             const watch = await res.json();
             const live = res.ok && watch && watch.watchable !== false && !watch.error;

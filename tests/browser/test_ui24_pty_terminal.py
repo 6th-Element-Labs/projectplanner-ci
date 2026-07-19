@@ -579,6 +579,37 @@ try:
         ok("run_ui48_replacement" in replacement["title"]
            and replacement["resumeHidden"],
            "the replacement becomes the active Watch runner without overwriting the stale identity")
+
+        # The task modal must perform the same stale discovery after a full
+        # reload. Without include_stale it incorrectly renders Ready / Start
+        # task for an In Review task whose reviewer crashed.
+        review_watch_calls.clear()
+        page.evaluate("""
+            () => {
+                const fixture = document.createElement('div');
+                fixture.id = 'ui50-task-modal-runner-fixture';
+                fixture.innerHTML = TeepPlan.taskPrimaryRunnerHtml({
+                    task_id: 'FAKE-TASK-1', status: 'In Review'
+                });
+                document.body.appendChild(fixture);
+            }
+        """)
+        page.evaluate("() => TeepPlan._loadTaskPrimaryRunner('FAKE-TASK-1')")
+        page.wait_for_timeout(300)
+        modal_runner = page.evaluate("""
+            () => ({
+                badge: document.getElementById('task-primary-runner-badge').textContent,
+                resumeVisible: !document.getElementById('task-primary-resume-review').hidden,
+                startHidden: document.getElementById('task-primary-start').hidden,
+            })
+        """)
+        ok(len(review_watch_calls) == 1
+           and "include_stale=true" in review_watch_calls[0],
+           "the task modal explicitly requests stale runner history after reload")
+        ok("In Review" in modal_runner["badge"]
+           and modal_runner["resumeVisible"] and modal_runner["startHidden"],
+           "the task modal renders Resume review instead of Start task for a dead reviewer")
+        page.evaluate("() => document.getElementById('ui50-task-modal-runner-fixture').remove()")
         page.unroute("**/api/tasks/FAKE-TASK-1/resume-review**", _resume_review)
         page.unroute("**/ixp/v1/runner_sessions/watch?**", _review_watch)
         page.evaluate("() => TeepPlan._runnerPtyClose()")
