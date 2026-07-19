@@ -893,12 +893,25 @@ def apply_schema(c):
             task_id           TEXT,
             principal_id      TEXT,
             idem_key          TEXT,
-            effect_key        TEXT
+            effect_key        TEXT,
+            archived_at       REAL
         );
         CREATE INDEX IF NOT EXISTS ix_wake_intents_status
             ON wake_intents(status, deadline, requested_at);
         CREATE INDEX IF NOT EXISTS ix_wake_intents_host
             ON wake_intents(claimed_by_host, status);
+        CREATE INDEX IF NOT EXISTS ix_wake_intents_live_recent
+            ON wake_intents(archived_at, status, requested_at DESC, wake_id DESC);
+        CREATE INDEX IF NOT EXISTS ix_wake_intents_recent
+            ON wake_intents(requested_at DESC, wake_id DESC);
+        CREATE INDEX IF NOT EXISTS ix_wake_intents_task_recent
+            ON wake_intents(task_id, requested_at DESC, wake_id DESC);
+        CREATE INDEX IF NOT EXISTS ix_wake_intents_runtime_recent
+            ON wake_intents(json_extract(selector_json, '$.runtime'),
+                            requested_at DESC, wake_id DESC);
+        CREATE INDEX IF NOT EXISTS ix_wake_intents_deliverable_recent
+            ON wake_intents(json_extract(selector_json, '$.deliverable_id'),
+                            requested_at DESC, wake_id DESC);
         CREATE UNIQUE INDEX IF NOT EXISTS ux_wake_intents_idem
             ON wake_intents(idem_key) WHERE idem_key IS NOT NULL;
         CREATE TABLE IF NOT EXISTS personal_execution_connections (

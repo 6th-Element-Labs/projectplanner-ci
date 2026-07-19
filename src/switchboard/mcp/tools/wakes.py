@@ -102,11 +102,24 @@ def complete_wake(wake_id: str, ctx: Context, runner_session_id: str = "",
 
 
 def list_wake_intents(project: str = "maxwell", status: str = "", host_id: str = "",
-                      runtime: str = "") -> str:
-    """List durable wake intents. status can be pending|claimed|completed|failed|cancelled."""
+                      runtime: str = "", task_id: str = "", deliverable_id: str = "",
+                      history: bool = False, limit: int = 50,
+                      before_requested_at: float = 0,
+                      before_wake_id: str = "") -> str:
+    """List wakes without scanning history.
+
+    The default returns at most 50 active wakes. Set history=true for bounded newest-first
+    history, including archived terminal records; use the last row as the next-page cursor.
+    """
     services = _services()
-    return services.dumps(store.list_wake_intents(status=status, host_id=host_id,
-                                         runtime=runtime, project=project))
+    bounded_limit = max(1, min(int(limit or 50), 200))
+    return services.dumps(store.list_wake_intents(
+        status=status, host_id=host_id, runtime=runtime, task_id=task_id,
+        deliverable_id=deliverable_id, project=project,
+        active_only=not history and not status, include_archived=history,
+        limit=bounded_limit,
+        before_requested_at=before_requested_at or None,
+        before_wake_id=before_wake_id, newest_first=True))
 
 
 

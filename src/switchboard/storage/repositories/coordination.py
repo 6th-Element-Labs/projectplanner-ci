@@ -576,18 +576,45 @@ def deliver_coordination_escalation(plan: Dict[str, Any], *, actor: str,
 
 
 def list_wake_intents(status: str = "", host_id: str = "", runtime: str = "",
-                      task_id: str = "", deliverable_id: str = "",
-                      project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+                      task_id: str = "", deliverable_id: str = "", wake_id: str = "",
+                      project: str = DEFAULT_PROJECT, *, active_only: bool = False,
+                      include_archived: bool = False, limit: int = 0,
+                      before_requested_at: Optional[float] = None,
+                      before_wake_id: str = "", newest_first: bool = False
+                      ) -> List[Dict[str, Any]]:
+    """Read wakes with SQL-side filters and optional bounded keyset pagination.
+
+    Internal callers retain the historical unlimited default. HTTP and MCP callers set
+    a limit; ordinary polling also sets ``active_only`` so history stays off the hot path.
+    """
     started_at = time.time()
     q = "SELECT * FROM wake_intents WHERE 1=1"
     params: List[Any] = []
     if status:
         q += " AND status=?"; params.append(status)
+    elif active_only:
+        q += " AND status IN ('pending','claimed')"
     if host_id:
         q += " AND claimed_by_host=?"; params.append(host_id)
     if task_id:
         q += " AND task_id=?"; params.append(task_id)
-    q += " ORDER BY requested_at"
+    if wake_id:
+        q += " AND wake_id=?"; params.append(wake_id)
+    if runtime:
+        q += " AND json_extract(selector_json, '$.runtime')=?"; params.append(runtime)
+    if deliverable_id:
+        q += " AND json_extract(selector_json, '$.deliverable_id')=?"
+        params.append(str(deliverable_id))
+    if not include_archived:
+        q += " AND archived_at IS NULL"
+    if before_requested_at is not None:
+        q += " AND (requested_at<? OR (requested_at=? AND wake_id<?))"
+        params.extend((float(before_requested_at), float(before_requested_at),
+                       str(before_wake_id or "\uffff")))
+    direction = "DESC" if newest_first else "ASC"
+    q += f" ORDER BY requested_at {direction}, wake_id {direction}"
+    if limit:
+        q += " LIMIT ?"; params.append(max(1, min(int(limit), 1000)))
     try:
         with _control_plane_conn(project) as c:
             wakes = [_wake_row(r) for r in c.execute(q, params).fetchall()]
@@ -595,14 +622,6 @@ def list_wake_intents(status: str = "", host_id: str = "", runtime: str = "",
         if _store_facade()._sqlite_busy(exc):
             return [_control_plane_unavailable("list_wake_intents", project, started_at, exc)]
         raise
-    if runtime:
-        wakes = [w for w in wakes if (w.get("selector") or {}).get("runtime") == runtime]
-    if deliverable_id:
-        wakes = [
-            w for w in wakes
-            if str((w.get("selector") or {}).get("deliverable_id") or "")
-            == str(deliverable_id)
-        ]
     return wakes
 
 

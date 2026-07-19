@@ -133,6 +133,9 @@ ADDITIVE_COLUMN_MIGRATIONS: List[Tuple[str, str, str, str]] = [
      "agent_host_enrollments", "execution_policy_json",
      "ALTER TABLE agent_host_enrollments "
      "ADD COLUMN execution_policy_json TEXT NOT NULL DEFAULT '{}'"),
+    # BUG-89 — terminal wake history remains auditable but leaves hot Fleet/MCP reads.
+    ("0066_wake_intents_archived_at", "wake_intents", "archived_at",
+     "ALTER TABLE wake_intents ADD COLUMN archived_at REAL"),
 ]
 
 # Idempotent DDL migrations (``CREATE ... IF NOT EXISTS``) applied after the column set,
@@ -296,6 +299,23 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
      "version INTEGER NOT NULL DEFAULT 0, approved_by TEXT NOT NULL DEFAULT '', "
      "approved_at REAL, note TEXT NOT NULL DEFAULT '', "
      "updated_at REAL NOT NULL DEFAULT 0)"),
+    ("0067_ix_wake_intents_live_recent",
+     "CREATE INDEX IF NOT EXISTS ix_wake_intents_live_recent "
+     "ON wake_intents(archived_at, status, requested_at DESC, wake_id DESC)"),
+    ("0068_ix_wake_intents_task_recent",
+     "CREATE INDEX IF NOT EXISTS ix_wake_intents_task_recent "
+     "ON wake_intents(task_id, requested_at DESC, wake_id DESC)"),
+    ("0069_ix_wake_intents_runtime_recent",
+     "CREATE INDEX IF NOT EXISTS ix_wake_intents_runtime_recent "
+     "ON wake_intents(json_extract(selector_json, '$.runtime'), "
+     "requested_at DESC, wake_id DESC)"),
+    ("0070_ix_wake_intents_deliverable_recent",
+     "CREATE INDEX IF NOT EXISTS ix_wake_intents_deliverable_recent "
+     "ON wake_intents(json_extract(selector_json, '$.deliverable_id'), "
+     "requested_at DESC, wake_id DESC)"),
+    ("0071_ix_wake_intents_recent",
+     "CREATE INDEX IF NOT EXISTS ix_wake_intents_recent "
+     "ON wake_intents(requested_at DESC, wake_id DESC)"),
 ]
 
 

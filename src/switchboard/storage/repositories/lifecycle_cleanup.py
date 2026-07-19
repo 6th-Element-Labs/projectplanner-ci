@@ -39,6 +39,9 @@ from switchboard.storage.repositories.tasks import (
 )
 
 
+_WAKE_HISTORY_CLEANUP_BATCH = 500
+
+
 def _cleanup_age_seconds(now: float, timestamp: Optional[float]) -> Optional[float]:
     if timestamp in (None, ""):
         return None
@@ -225,6 +228,27 @@ def cleanup_candidates(project: str = DEFAULT_PROJECT,
                     snapshot=wake,
                 ))
 
+        if accept("wake_intent_history"):
+            terminal = sorted(TERMINAL_WAKE_STATUSES)
+            placeholders = ",".join("?" for _ in terminal)
+            cutoff = now - min_proof_age
+            rows = c.execute(
+                "SELECT * FROM wake_intents WHERE archived_at IS NULL "
+                f"AND status IN ({placeholders}) "
+                "AND requested_at<=? "
+                "ORDER BY requested_at, wake_id LIMIT ?",
+                (*terminal, cutoff, _WAKE_HISTORY_CLEANUP_BATCH),
+            ).fetchall()
+            for row in rows:
+                wake = _wake_row(row)
+                out.append(_cleanup_candidate(
+                    "wake_intent_history", wake["wake_id"], "archive_terminal_wake",
+                    "terminal wake has passed the history retention window", now,
+                    task_id=wake.get("task_id") or "",
+                    timestamp=wake.get("completed_at") or wake.get("requested_at"),
+                    snapshot=wake,
+                ))
+
         if accept("monitor"):
             for row in c.execute("SELECT * FROM coordination_monitors ORDER BY created_at").fetchall():
                 mon = _monitor_row(row) or {}
@@ -405,6 +429,25 @@ def apply_cleanup(project: str = DEFAULT_PROJECT,
                               (candidate.get("task_id"), actor, "cleanup.wake_cancelled",
                                json.dumps(payload, sort_keys=True), now))
                     results.append({"id": candidate["id"], "applied": True,
+                                    "action": candidate["action"]})
+                elif kind == "wake_intent_history":
+                    terminal = sorted(TERMINAL_WAKE_STATUSES)
+                    placeholders = ",".join("?" for _ in terminal)
+                    changed = c.execute(
+                        "UPDATE wake_intents SET archived_at=? WHERE wake_id=? "
+                        "AND archived_at IS NULL "
+                        f"AND status IN ({placeholders})",
+                        (now, target_id, *terminal),
+                    )
+                    if changed.rowcount == 1:
+                        c.execute(
+                            "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                            "VALUES (?,?,?,?,?)",
+                            (candidate.get("task_id"), actor, "cleanup.wake_archived",
+                             json.dumps(payload, sort_keys=True), now),
+                        )
+                    results.append({"id": candidate["id"],
+                                    "applied": changed.rowcount == 1,
                                     "action": candidate["action"]})
                 elif kind == "monitor":
                     mon = candidate.get("snapshot") or {}

@@ -1632,13 +1632,19 @@ const TeepPlan = {
         const count = document.getElementById('fleet-wakes-count');
         if (!body) return;
         let wakes;
+        let activeHasMore = false;
         try {
             const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`;
-            wakes = (await (await fetch(`/ixp/v1/wake_intents?${q}`)).json()).wake_intents || [];
+            const activeResponse = await (await fetch(`/ixp/v1/wake_intents?${q}&limit=100`)).json();
+            wakes = activeResponse.wake_intents || [];
+            activeHasMore = !!(activeResponse.page && activeResponse.page.has_more);
+            if (!wakes.length) {
+                wakes = (await (await fetch(`/ixp/v1/wake_intents?${q}&history=true&limit=8`)).json()).wake_intents || [];
+            }
         } catch (e) { body.innerHTML = `<div class="text-danger small">Wake intents unavailable: ${this.esc(e.message)}</div>`; return; }
         const active = wakes.filter((w) => w.status === 'pending' || w.status === 'claimed');
-        if (count) { count.className = active.length ? 'badge bg-yellow-lt ms-2' : 'badge bg-secondary-lt ms-2'; count.textContent = `${active.length} queued`; }
-        const rows = active.length ? active : wakes.slice(-8).reverse();
+        if (count) { count.className = active.length ? 'badge bg-yellow-lt ms-2' : 'badge bg-secondary-lt ms-2'; count.textContent = `${active.length}${activeHasMore ? '+' : ''} queued`; }
+        const rows = active.length ? active : wakes;
         if (!rows.length) { body.innerHTML = `<div class="text-secondary small">No wake intents.</div>`; return; }
         const hist = !active.length ? `<div class="text-secondary small mt-2"><i class="ti ti-info-circle me-1"></i>No active wakes — showing recent history.</div>` : '';
         body.innerHTML = `<div class="table-responsive"><table class="table table-sm mb-0 align-middle">

@@ -67,8 +67,9 @@ def list_cleanup_candidates(ctx: Context, project: str = "maxwell",
     """List stale lifecycle cleanup candidates without changing board state.
 
     Requires write:system. Candidates cover stale agent presence, expired runner sessions,
-    orphan/expired claims and leases, old wake intents, fired/orphan monitors, and old terminal
-    proof/sentinel tasks that can be archived without deleting provenance.
+    orphan/expired claims and leases, old active wakes, terminal wake history,
+    fired/orphan monitors, and old terminal proof/sentinel tasks. Terminal wake cleanup
+    archives in bounded batches without deleting provenance.
     """
     services = _services()
     services.require_write(ctx, project, ("write:system",))

@@ -117,7 +117,9 @@ def create_router(*, resolve_project: ProjectResolver,
             dry_run=body.get("dry_run") is not False,
             actor=auth.actor(principal),
             reason=body.get("reason") or "operator lifecycle cleanup",
-            proof_task_age_days=float(body.get("proof_task_age_days") or 14),
+            proof_task_age_days=float(
+                14 if body.get("proof_task_age_days") is None
+                else body.get("proof_task_age_days")),
             include_kinds=store.coerce_csv_list(body.get("kinds") or body.get("include_kinds") or []),
         )
         if result.get("error"):
