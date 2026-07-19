@@ -234,6 +234,12 @@ try:
        and (direct_principal or {}).get("bound_task_id") == task_id
        and "write:tasks" in set((direct_principal or {}).get("scopes") or []),
        "the boot exchanges host identity for a short-lived task-bound MCP bearer")
+    with _conn(P) as c:
+        c.execute(
+            "UPDATE direct_session_tokens SET expires_at=0 "
+            "WHERE runner_session_id=?", (direct_runner_id,))
+    ok(auth.principal_for_token_any_project(issued.get("token") or "") is None,
+       "an expired direct-session bearer is rejected before runner renewal")
 
     def claim_task(task_id="", agent_id="", project=P):
         return {"task_id": task_id, "agent_id": agent_id, "project": project}
@@ -248,7 +254,7 @@ try:
             crossed_task = False
     ok(accepted.get("task_id") == task_id and crossed_task is False,
        "direct CLI can run the assigned Switchboard workflow but cannot cross tasks")
-    registered = store.upsert_runner_session({
+    runner_record = {
         "runner_session_id": direct_runner_id,
         "host_id": MAC,
         "agent_id": f"codex/{task_id}",
@@ -268,7 +274,12 @@ try:
             "stream_bind": "127.0.0.1",
             "stream_port": 45678,
         },
-    }, principal_id="principal/ui45-mac", actor=MAC, project=P)
+    }
+    registered = store.upsert_runner_session(
+        runner_record, principal_id="principal/ui45-mac", actor=MAC, project=P)
+    renewed_principal = auth.principal_for_token_any_project(issued.get("token") or "")
+    ok((renewed_principal or {}).get("bound_runner_session_id") == direct_runner_id,
+       "a healthy direct-runner heartbeat renews its exact expired MCP token")
     watch = store.resolve_runner_watch(task_id, project=P)
     ok(not registered.get("error")
        and (registered.get("metadata") or {}).get("native_host_execution") is True
@@ -291,6 +302,11 @@ try:
     ok(completed.get("status") == "completed"
        and completed.get("runner_session_id") == direct_runner_id,
        "the daemon acknowledges the assignment only after the live runner exists")
+    terminal_record = {**runner_record, "status": "completed"}
+    store.upsert_runner_session(
+        terminal_record, principal_id="principal/ui45-mac", actor=MAC, project=P)
+    ok(auth.principal_for_token_any_project(issued.get("token") or "") is None,
+       "a terminal direct runner revokes its task-bound MCP token")
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
 

@@ -32,6 +32,7 @@ RUNNER_FAILURE_TERMINAL_STATUSES = frozenset(
 )
 RUNNER_BIND_ERROR = "runner_bind_incomplete"
 RUNNER_INJECT_ERROR = "wrong_session"
+DIRECT_SESSION_TOKEN_TTL_S = 4 * 60 * 60
 
 __all__ = [
     "RUNNER_BIND_FIELDS",
@@ -203,7 +204,7 @@ def issue_direct_session_mcp_token(
                     "reason_codes": sorted(reasons)}
 
         raw_token = "dst-" + uuid.uuid4().hex
-        expires_at = now + 4 * 60 * 60
+        expires_at = now + DIRECT_SESSION_TOKEN_TTL_S
         c.execute(
             "UPDATE direct_session_tokens SET revoked_at=? "
             "WHERE runner_session_id=? AND revoked_at IS NULL",
@@ -233,6 +234,37 @@ def issue_direct_session_mcp_token(
         "token": raw_token,
         "token_returned_once": True,
     }
+
+
+def _sync_direct_session_token_lease_in(
+        c: sqlite3.Connection, record: Dict[str, Any], metadata: Dict[str, Any],
+        runner_session_id: str, now: float) -> None:
+    """Keep one task-bound token aligned with its direct runner's lifetime."""
+    if metadata.get("direct_assignment") is not True:
+        return
+    binding = (
+        runner_session_id,
+        str(record.get("task_id") or ""),
+        str(record.get("host_id") or ""),
+        str(record.get("agent_id") or ""),
+    )
+    if not all(binding):
+        return
+    status = str(record.get("status") or "").strip().lower()
+    where = (
+        "runner_session_id=? AND task_id=? AND host_id=? AND agent_id=? "
+        "AND revoked_at IS NULL"
+    )
+    if status in RUNNER_WATCHABLE_STATUSES:
+        c.execute(
+            f"UPDATE direct_session_tokens SET expires_at=? WHERE {where}",
+            (now + DIRECT_SESSION_TOKEN_TTL_S, *binding),
+        )
+    elif status in RUNNER_TERMINAL_STATUSES:
+        c.execute(
+            f"UPDATE direct_session_tokens SET revoked_at=? WHERE {where}",
+            (now, *binding),
+        )
 
 
 def get_direct_session_principal_by_token_any_project(
@@ -1490,6 +1522,8 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
     # "active" forever. Successful runners stay active until checkpoint/claim
     # completion owns their stronger lifecycle transition.
     runner_status = str(record.get("status") or "").strip().lower()
+    _sync_direct_session_token_lease_in(
+        c, record, metadata, runner_session_id, now)
     work_session_id = str(metadata.get("work_session_id") or "").strip()
     if (work_session_id
             and str(metadata.get("auth_lane") or "") == "codex_host_local"
