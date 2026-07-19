@@ -157,7 +157,8 @@ def merge_gate(task_id: str, ctx: Context, project: str = "maxwell",
                pr_url: str = "", pr_number: int = 0, repo: str = "",
                target_branch: str = "", branch: str = "", head_sha: str = "",
                required_status_contexts: str = "", status_contexts_json: str = "{}",
-               github_pr_json: str = "{}", require_work_session: bool = False) -> str:
+               github_pr_json: str = "{}", evidence_json: str = "{}",
+               require_work_session: bool = False) -> str:
     """Evaluate safe-merge readiness before an agent runs or requests PR merge.
 
     This records a merge.gate activity event and returns pass/blocked findings. It does
@@ -174,6 +175,12 @@ def merge_gate(task_id: str, ctx: Context, project: str = "maxwell",
         github_pr = json.loads(github_pr_json or "{}")
     except Exception:
         return services.dumps({"error": "github_pr_json must be a JSON object string"})
+    try:
+        evidence = json.loads(evidence_json or "{}")
+    except Exception:
+        return services.dumps({"error": "evidence_json must be a JSON object string"})
+    if not isinstance(evidence, dict):
+        return services.dumps({"error": "evidence_json must be a JSON object string"})
     return services.dumps(merge_gate_command.execute_mapping_result(
         {
             "task_id": task_id,
@@ -189,6 +196,7 @@ def merge_gate(task_id: str, ctx: Context, project: str = "maxwell",
             "required_status_contexts": required_status_contexts,
             "status_contexts": status_contexts,
             "github_pr": github_pr,
+            "evidence": evidence,
             "require_work_session": bool(require_work_session),
             "project": project,
         },

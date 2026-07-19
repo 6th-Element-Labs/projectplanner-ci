@@ -86,6 +86,66 @@ try:
     ok("def execute_mapping_result(" in cmd_src,
        "execute_mapping_result remains the adapter entry")
 
+    import sys
+    import types
+
+    mcp_module = types.ModuleType("mcp")
+    mcp_server_module = types.ModuleType("mcp.server")
+    mcp_fastmcp_module = types.ModuleType("mcp.server.fastmcp")
+    mcp_fastmcp_module.Context = object
+    sys.modules.setdefault("mcp", mcp_module)
+    sys.modules.setdefault("mcp.server", mcp_server_module)
+    sys.modules.setdefault("mcp.server.fastmcp", mcp_fastmcp_module)
+    from switchboard.mcp.tools import external_effects as mcp_effects  # noqa: E402
+
+    captured = {}
+    original_services = mcp_effects._SERVICES
+    original_execute = mcp_effects.merge_gate_command.execute_mapping_result
+    try:
+        mcp_effects._SERVICES = mcp_effects.ExternalEffectsToolServices(
+            dumps=lambda value: value,
+            require_write=lambda *_args, **_kwargs: {"id": "reviewer", "actor": "reviewer"},
+        )
+        mcp_effects.merge_gate_command.execute_mapping_result = (
+            lambda payload, **_kwargs: captured.update(payload) or {"ok": True}
+        )
+        executed = {
+            "schema": "switchboard.executed_test_run.v1",
+            "head_sha": "a" * 40,
+            "commands": ["python3 test_merge_gate.py"],
+            "completed_at": 1234.0,
+            "exit_code": 0,
+            "output_hash": "sha256:" + "b" * 64,
+        }
+        playwright = {
+            **executed,
+            "test_kind": "ui_playwright",
+            "browser": "chromium",
+            "headless": True,
+            "executed_count": 1,
+            "skipped": False,
+            "console_error_count": 0,
+            "failed_request_count": 0,
+        }
+        result = mcp_effects.merge_gate(
+            "BUG-95", None, project="switchboard",
+            evidence_json=__import__("json").dumps({
+                "executed_test_run": executed,
+                "ui_playwright_evidence": playwright,
+            }),
+        )
+        ok(result.get("ok") is True
+           and captured.get("evidence", {}).get("executed_test_run") == executed
+           and captured.get("evidence", {}).get("ui_playwright_evidence") == playwright,
+           "MCP merge_gate passes exact-head test and Playwright evidence to command")
+        invalid = mcp_effects.merge_gate(
+            "BUG-95", None, project="switchboard", evidence_json="[]")
+        ok(invalid.get("error") == "evidence_json must be a JSON object string",
+           "MCP merge_gate rejects non-object evidence")
+    finally:
+        mcp_effects._SERVICES = original_services
+        mcp_effects.merge_gate_command.execute_mapping_result = original_execute
+
     finding = cmd_mod._merge_gate_finding(
         "draft_pr", "Draft PRs cannot pass the merge gate.", "failed_gate")
     ok(finding.get("code") == "draft_pr"
