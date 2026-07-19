@@ -86,12 +86,14 @@ def project_scope_proof(router_path: Path) -> dict[str, Any]:
 
 
 def failure_semantics_proof(inbox_source: str, store_source: str,
-                            router_source: str) -> dict[str, Any]:
+                            router_source: str,
+                            migration_source: str = "") -> dict[str, Any]:
     process = _function_source(inbox_source, "process")
     queue = _function_source(router_source, "_queue_triage")
-    schema_has_unique_dedupe = ("UNIQUE(source, external_id)" in store_source
-                                or "UNIQUE (source, external_id)" in store_source
-                                or "ux_inbox" in store_source)
+    schema_contract = store_source + "\n" + migration_source
+    schema_has_unique_dedupe = ("UNIQUE(source, external_id)" in schema_contract
+                                or "UNIQUE (source, external_id)" in schema_contract
+                                or "ux_inbox" in schema_contract)
     adapter = (ROOT / "src/switchboard/api/ingest_port_adapters.py").read_text(encoding="utf-8")
     standalone = (ROOT / "src/switchboard/services/ingest/router.py").read_text(encoding="utf-8")
     ledger_present = "ingest_operations" in store_source and "BEGIN IMMEDIATE" in adapter
@@ -189,7 +191,9 @@ def evaluate(root: Path = ROOT, *, run_probe: bool = True) -> dict[str, Any]:
     failure = failure_semantics_proof(
         (root / "inbox.py").read_text(encoding="utf-8"),
         (root / "db" / "schema.py").read_text(encoding="utf-8"),
-        router_path.read_text(encoding="utf-8"))
+        router_path.read_text(encoding="utf-8"),
+        (root / "src" / "switchboard" / "storage" / "migrations" / "runner.py")
+        .read_text(encoding="utf-8"))
     gates = verdict.get("gates") or {}
     failed_gates = sorted(name for name in REQUIRED_GATES
                           if not bool((gates.get(name) or {}).get("passed")))

@@ -167,8 +167,8 @@ def apply_schema(c):
             summary TEXT, triage TEXT, status TEXT DEFAULT 'pending',
             received_at REAL, created_at REAL
         );
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_inbox_source_external
-            ON inbox(source, external_id) WHERE external_id IS NOT NULL AND external_id <> '';
+        -- The unique inbox index is installed by migration 0064 only after migration 0063
+        -- removes legacy duplicates. Creating it here would prevent that repair from running.
         CREATE TABLE IF NOT EXISTS ingest_operations (
             idem_key TEXT PRIMARY KEY,
             request_hash TEXT NOT NULL,
@@ -900,18 +900,8 @@ def apply_schema(c):
             ON wake_intents(status, deadline, requested_at);
         CREATE INDEX IF NOT EXISTS ix_wake_intents_host
             ON wake_intents(claimed_by_host, status);
-        CREATE INDEX IF NOT EXISTS ix_wake_intents_live_recent
-            ON wake_intents(archived_at, status, requested_at DESC, wake_id DESC);
-        CREATE INDEX IF NOT EXISTS ix_wake_intents_recent
-            ON wake_intents(requested_at DESC, wake_id DESC);
-        CREATE INDEX IF NOT EXISTS ix_wake_intents_task_recent
-            ON wake_intents(task_id, requested_at DESC, wake_id DESC);
-        CREATE INDEX IF NOT EXISTS ix_wake_intents_runtime_recent
-            ON wake_intents(json_extract(selector_json, '$.runtime'),
-                            requested_at DESC, wake_id DESC);
-        CREATE INDEX IF NOT EXISTS ix_wake_intents_deliverable_recent
-            ON wake_intents(json_extract(selector_json, '$.deliverable_id'),
-                            requested_at DESC, wake_id DESC);
+        -- BUG-89 history indexes are installed by migrations 0067-0071 after additive
+        -- migration 0066 has added archived_at to legacy wake_intents tables.
         CREATE UNIQUE INDEX IF NOT EXISTS ux_wake_intents_idem
             ON wake_intents(idem_key) WHERE idem_key IS NOT NULL;
         CREATE TABLE IF NOT EXISTS personal_execution_connections (
