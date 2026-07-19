@@ -142,12 +142,22 @@ def _write_assignment_toml(
     mcp = assignment.get("mcp") or {}
     continuation = assignment.get("continuation") or {}
     handoff = continuation.get("handoff") or {}
+    assigned_agent = str(
+        assignment.get("agent_id") or f"codex/{assignment.get('task_id')}"
+    )
     values = [
         'schema = "switchboard.direct_cli_assignment.v1"',
         f"project = {_toml_string(assignment.get('project'))}",
         f"task_id = {_toml_string(assignment.get('task_id'))}",
         f"deliverable_id = {_toml_string(assignment.get('deliverable_id'))}",
+        f"role = {_toml_string(assignment.get('role') or 'implementation')}",
+        f"instruction = {_toml_string(assignment.get('instruction') or assignment.get('prompt'))}",
+        f"source_sha = {_toml_string(assignment.get('source_sha'))}",
+        f"user_id = {_toml_string(assignment.get('user_id'))}",
+        f"account_id = {_toml_string(assignment.get('account_id'))}",
+        f"recovery_handoff_json = {_toml_string(json.dumps(assignment.get('recovery_handoff') or {}, sort_keys=True))}",
         f"host_id = {_toml_string(assignment.get('host_id'))}",
+        f"agent_id = {_toml_string(assigned_agent)}",
         f"runner_session_id = {_toml_string(runner_id)}",
         f"wake_id = {_toml_string(os.environ.get('PM_CO_WAKE_ID'))}",
         f"prompt = {_toml_string(assignment.get('prompt'))}",
@@ -159,6 +169,7 @@ def _write_assignment_toml(
         f"default_branch = {_toml_string(repo.get('default_branch') or 'master')}",
         f"branch = {_toml_string(branch)}",
         f"canonical_sha = {_toml_string(canonical_sha)}",
+        f"source_sha = {_toml_string(repo.get('source_sha') or assignment.get('source_sha'))}",
         "",
         "[mcp]",
         f"endpoint = {_toml_string(mcp.get('endpoint'))}",
@@ -221,7 +232,17 @@ def _codex_command(assignment: dict[str, Any], workspace: Path,
                    executable: str, endpoint: str) -> list[str]:
     continuation = assignment.get("continuation") or {}
     provider_session_id = str(continuation.get("provider_session_id") or "").strip()
-    prompt = str(assignment["prompt"])
+    agent_id = str(
+        assignment.get("agent_id") or f"codex/{assignment.get('task_id')}"
+    ).strip()
+    prompt = (
+        "Switchboard assigned execution identity: "
+        f"agent_id={agent_id}; task_id={assignment.get('task_id')}; "
+        f"project={assignment.get('project')}. Use this exact agent_id for "
+        "prepare_agent_session, register_agent, claims, and Work Sessions. "
+        "Do not derive, slugify, or replace it.\n"
+        + str(assignment.get("instruction") or assignment["prompt"])
+    )
     if continuation and not provider_session_id:
         prompt += "\nReplacement review handoff: " + json.dumps(
             continuation.get("handoff") or {}, sort_keys=True)

@@ -170,6 +170,7 @@ try:
     ok(assignment.get("schema") == "switchboard.direct_cli_assignment.v1"
        and assignment.get("task_id") == task_id
        and assignment.get("host_id") == MAC
+       and assignment.get("agent_id") == f"codex/{task_id}"
        and assignment.get("prompt") == (
            f"Do {task_id} for deliverable ui45-direct-deliverable "
            f"in project {P} via Switchboard."),
@@ -263,6 +264,9 @@ try:
             "wake_id": direct_wake["wake_id"],
             "direct_assignment": True,
             "assignment_schema": "switchboard.direct_cli_assignment.v1",
+            "pty": True,
+            "stream_bind": "127.0.0.1",
+            "stream_port": 45678,
         },
     }, principal_id="principal/ui45-mac", actor=MAC, project=P)
     watch = store.resolve_runner_watch(task_id, project=P)

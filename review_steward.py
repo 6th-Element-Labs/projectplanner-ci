@@ -349,7 +349,7 @@ def _execute_action(action: Mapping[str, Any], *, project: str, actor: str,
                 raise RuntimeError("dispatch_hooks_required")
             agent_id = _review_merge_agent(task_id)
             prompt = (
-                f"Review steward handoff for {task_id}.\n"
+                f"Review {task_id} via Switchboard and merge if green.\n"
                 f"PR: {inputs.get('pr_url') or pr_number}\n"
                 f"head_sha: {head_sha or 'unknown'}\n"
                 f"CI: {inputs.get('ci_state')} run={inputs.get('ci_run_id')}\n"
@@ -369,10 +369,12 @@ def _execute_action(action: Mapping[str, Any], *, project: str, actor: str,
                 policy={
                     "mode": "message_only",
                     "kind": "review_merge",
+                    "role": "review_merge",
                     "task_id": task_id,
                     "project": project,
                     "pr_number": pr_number,
                     "head_sha": head_sha or None,
+                    "source_sha": head_sha or None,
                     "message_id": message.get("id"),
                 },
                 actor=actor, project=project, idem_key=idem,

@@ -66,6 +66,8 @@ class DaemonConfig:
     max_tasks_per_scope_tick: int = 64
     elastic_runtime_config_ref: str = ""
     elastic_allow_on_demand: bool = True
+    lifecycle_enabled: bool = True
+    review_reserved_slots: int = 1
 
     @classmethod
     def from_env(cls, environ: Optional[Mapping[str, str]] = None) -> "DaemonConfig":
@@ -97,6 +99,10 @@ class DaemonConfig:
                 or env.get("PM_CO_RUNTIME_CONFIG_REF") or "").strip(),
             elastic_allow_on_demand=enabled_from_env(
                 "PM_COORDINATOR_AUTOPILOT_ALLOW_ON_DEMAND", True, env),
+            lifecycle_enabled=enabled_from_env(
+                "PM_COORDINATOR_AUTOPILOT_LIFECYCLE", True, env),
+            review_reserved_slots=max(
+                1, int(env.get("PM_COORDINATOR_REVIEW_RESERVED_SLOTS", "1"))),
         )
 
 
@@ -148,7 +154,8 @@ def set_control(store_mod: Any, project: str, profile_id: str, *, actor: str,
 
 class CoordinatorDaemon:
     def __init__(self, config: DaemonConfig, *, store_mod: Any = None,
-                 instance_id: str = "", clock: Any = None, sleeper: Any = None) -> None:
+                 instance_id: str = "", clock: Any = None, sleeper: Any = None,
+                 lifecycle_runner: Any = None) -> None:
         if store_mod is None:
             import store as store_mod
         self.store = store_mod
@@ -157,7 +164,26 @@ class CoordinatorDaemon:
         self.agent_id = f"{config.actor}/{self.instance_id[:12]}"
         self.clock = clock or time.time
         self.sleeper = sleeper or time.sleep
+        self.lifecycle_runner = lifecycle_runner
         self._stop = False
+
+    def _drain_lifecycle(self, project: str) -> Dict[str, Any]:
+        """Run T2 before T3 in the leader tick; both retain their native gates."""
+        if not self.config.lifecycle_enabled:
+            return {"status": "disabled"}
+        if self.lifecycle_runner is not None:
+            return dict(self.lifecycle_runner(project=project, daemon=self) or {})
+        # Small hermetic fakes used by daemon tests do not expose a database path.
+        if not callable(getattr(self.store, "_resolve", None)):
+            return {"status": "unavailable"}
+        import review_steward
+        import merge_steward
+        review = review_steward.steward_project(
+            project, actor=self.config.actor, dry_run=not self.config.act)
+        merge = merge_steward.steward_project(
+            project, actor=self.config.actor, dry_run=not self.config.act)
+        return {"status": "drained", "review": review, "merge": merge,
+                "reserved_slots": self.config.review_reserved_slots}
 
     def _state(self, project: str) -> Dict[str, Any]:
         saved = self.store.get_meta(
@@ -492,6 +518,7 @@ class CoordinatorDaemon:
             return {"project": project, "status": "paused", "control": control}
 
         receipts = []
+        lifecycle = self._drain_lifecycle(project)
         for scope in self._ordered_scopes(project, state):
             # Controls are re-read between effects so an operator pause is bounded
             # by one scope tick rather than the whole project sweep.
@@ -534,6 +561,7 @@ class CoordinatorDaemon:
             {"schema": RUN_SCHEMA, "profile_id": self.config.profile_id,
              "instance_id": self.instance_id, "project": project,
              "status": status, "acting": self.config.act,
+             "lifecycle_status": lifecycle.get("status"),
              "receipt_count": len(receipts),
              "scope_ids": [row["scope_id"] for row in receipts],
              "deliverable_ids": [row["deliverable_id"] for row in receipts],
@@ -542,7 +570,7 @@ class CoordinatorDaemon:
         )
         return {"schema": RUN_SCHEMA, "project": project, "status": status,
                 "leader": True, "acting": self.config.act, "receipts": receipts,
-                "state": state}
+                "lifecycle": lifecycle, "state": state}
 
     def tick(self) -> Dict[str, Any]:
         receipts = [self.tick_project(project) for project in self.config.projects]

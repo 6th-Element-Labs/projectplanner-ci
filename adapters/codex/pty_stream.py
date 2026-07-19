@@ -34,7 +34,13 @@ except ModuleNotFoundError:  # adapters/ on sys.path without src/
     from switchboard.api.routers.auth.jwt_util import decode as jwt_decode
     from switchboard.api.routers.auth.jwt_util import encode as jwt_encode
 
-INJECT_KINDS = frozenset({"freeform", "redirect", "hold", "approve"})
+# ``session_chat`` is the browser/control-plane name for ordinary text entered in
+# the Watch composer.  Keep it distinct in the audit response while formatting it
+# exactly like ``freeform`` for the PTY.  The two sides previously disagreed here,
+# causing a valid browser message to fail with HTTP 400.
+INJECT_KINDS = frozenset({
+    "freeform", "session_chat", "redirect", "hold", "approve",
+})
 CONTROL_ACTIONS = frozenset({"input", "resize", "signal"})
 STREAM_CLIENT_QUEUE_LIMIT = 64
 _SIGNAL_BYTES = {

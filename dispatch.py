@@ -243,7 +243,8 @@ def _codex_cloud_policy(task_id, task, branch):
 
 
 def dispatch(task_id, actor="user", project=store.DEFAULT_PROJECT, runtime=_RUNTIME,
-             principal_id="", continuation=None):
+             principal_id="", continuation=None, *, role="implementation",
+             source_sha="", instruction="", findings=None):
     """Enqueue a lane-scoped wake for `task_id` on `project`."""
     t = store.get_task(task_id, project=project)
     if not t:
@@ -255,7 +256,39 @@ def dispatch(task_id, actor="user", project=store.DEFAULT_PROJECT, runtime=_RUNT
                 "task_id": task_id, "project": project, "runtime": runtime}
     lane = t.get("_wsId") or ""
     if selected_runtime == _CODEX_RUNTIME and not _codex_cloud_requested(runtime):
-        branch = f"codex/{task_id.lower()}"
+        task_agent_state = t.get("agent_state") if isinstance(t.get("agent_state"), dict) else {}
+        recovery_handoff = task_agent_state.get("switchboard/recovery_handoff")
+        recovery_handoff = (dict(recovery_handoff)
+                            if isinstance(recovery_handoff, dict) else {})
+        recovery_attempt = int(recovery_handoff.get("attempt") or 0)
+        role = str(role or "implementation").strip().lower()
+        continuation_head = str(
+            ((continuation or {}).get("handoff") or {}).get("head_sha") or ""
+        ).lower()
+        current_head = str(
+            (t.get("git_state") or {}).get("head_sha") or continuation_head
+        ).lower()
+        if continuation and role == "implementation":
+            role = "review_merge"
+            source_sha = source_sha or current_head
+        if role not in {"implementation", "review_merge", "remediation"}:
+            return {"dispatched": False, "error": "unsupported_lifecycle_role",
+                    "task_id": task_id, "project": project, "role": role}
+        source_sha = str(source_sha or "").strip().lower()
+        if source_sha and not re.fullmatch(r"[0-9a-f]{40}", source_sha):
+            return {"dispatched": False, "error": "invalid_source_sha",
+                    "task_id": task_id, "project": project, "role": role}
+        if role in {"review_merge", "remediation"} and not source_sha:
+            return {"dispatched": False, "error": "source_sha_required",
+                    "task_id": task_id, "project": project, "role": role}
+        if source_sha and source_sha != current_head:
+            return {"dispatched": False, "error": "source_sha_mismatch",
+                    "task_id": task_id, "project": project, "role": role,
+                    "expected_head_sha": current_head or None,
+                    "source_sha": source_sha}
+        recovery_branch = str(recovery_handoff.get("branch") or "").strip()
+        branch = (recovery_branch if recovery_branch.startswith("codex/")
+                  else f"codex/{task_id.lower()}")
         host_id, host_online = _personal_host_target(project, principal_id, lane)
         if not host_id:
             return {
@@ -307,6 +340,19 @@ def dispatch(task_id, actor="user", project=store.DEFAULT_PROJECT, runtime=_RUNT
                 "provider_session_id": provider_session or None,
                 "handoff": dict(continuation.get("handoff") or {}),
             }
+        if not instruction:
+            if role == "review_merge":
+                instruction = f"Review {task_id} via Switchboard and merge if green."
+            elif role == "remediation":
+                instruction = f"Remediate review findings for {task_id} via Switchboard."
+            else:
+                instruction = (
+                    f"Do {task_id} in {deliverable_id} via Switchboard"
+                    if deliverable_id else f"Do {task_id} via Switchboard"
+                )
+        if recovery_handoff:
+            instruction += "\nRecovery handoff: " + json.dumps(
+                recovery_handoff, sort_keys=True, separators=(",", ":"))
         policy = {
             "mode": "direct_task",
             "execution_mode": "direct_personal_cli",
@@ -319,17 +365,27 @@ def dispatch(task_id, actor="user", project=store.DEFAULT_PROJECT, runtime=_RUNT
                 "task_id": task_id,
                 "deliverable_id": deliverable_id,
                 "host_id": host_id,
+                "agent_id": selector["agent_id"],
+                "role": role,
+                "instruction": instruction,
                 "prompt": (
-                    (f"Review and merge {task_id} if green{prompt_scope} in project "
-                     f"{project} via Switchboard.")
-                    if review_continuation else
                     f"Do {task_id}{prompt_scope} in project {project} via Switchboard."
+                    if role == "implementation" else
+                    f"Review and merge {task_id} if green{prompt_scope} in project "
+                    f"{project} via Switchboard."
+                    if review_continuation else instruction
                 ),
+                "source_sha": source_sha,
+                "user_id": principal_id,
+                "account_id": principal_id,
+                "findings": list(findings or []),
+                "recovery_handoff": recovery_handoff or None,
                 "repository": {
                     "slug": "6th-Element-Labs/projectplanner",
                     "default_branch": "master",
                     "branch": branch,
                     "canonical_sha": "",
+                    "source_sha": source_sha,
                 },
                 "mcp": {
                     "endpoint": endpoint,
@@ -341,6 +397,12 @@ def dispatch(task_id, actor="user", project=store.DEFAULT_PROJECT, runtime=_RUNT
                 "canonical_repo": "6th-Element-Labs/projectplanner",
                 "session_policy": "code_strict",
                 "isolation": "task_worktree",
+            },
+            "lifecycle": {
+                "role": role,
+                "source_sha": source_sha or None,
+                "findings": list(findings or []),
+                "recovery_attempt": recovery_attempt or None,
             },
         }
         hosts = [host_id] if host_online else []
@@ -394,7 +456,9 @@ def dispatch(task_id, actor="user", project=store.DEFAULT_PROJECT, runtime=_RUNT
         (f"ui-resume-review:v1:{project}:{task_id}:{principal_id}:"
          f"{selector.get('host_id')}:{continuation_of}")
         if personal_dispatch and continuation_of else
-        f"ui-personal-dispatch:v3:{project}:{task_id}:{principal_id}:{selector.get('host_id')}"
+        (f"ui-personal-lifecycle:v1:{project}:{task_id}:{principal_id}:"
+         f"{selector.get('host_id')}:{role}:{source_sha or 'base'}:"
+         f"recovery-{recovery_attempt or 0}")
         if personal_dispatch
         else f"ui-dispatch:{project}:{task_id}:{str(runtime or selected_runtime).lower()}"
     )

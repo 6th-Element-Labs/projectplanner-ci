@@ -1959,6 +1959,34 @@ const TeepPlan = {
         };
     },
 
+    _stopTaskPrimaryRunnerLive() {
+        if (this._taskPrimaryRunnerTimer) {
+            window.clearInterval(this._taskPrimaryRunnerTimer);
+            this._taskPrimaryRunnerTimer = null;
+        }
+        this._taskPrimaryRunnerBusy = false;
+    },
+
+    _startTaskPrimaryRunnerLive(taskId) {
+        this._stopTaskPrimaryRunnerLive();
+        const modal = document.getElementById('task-modal');
+        if (!modal) return;
+        this._taskPrimaryRunnerTimer = window.setInterval(async () => {
+            const root = document.getElementById('task-primary-runner');
+            if (!modal.classList.contains('show') || !root
+                    || root.dataset.taskId !== String(taskId || '')) {
+                this._stopTaskPrimaryRunnerLive();
+                return;
+            }
+            if (this._taskPrimaryRunnerBusy) return;
+            this._taskPrimaryRunnerBusy = true;
+            try { await this._loadTaskPrimaryRunner(taskId); }
+            finally { this._taskPrimaryRunnerBusy = false; }
+        }, 5000);
+        modal.addEventListener('hidden.bs.modal', () => this._stopTaskPrimaryRunnerLive(),
+            { once: true });
+    },
+
     async _loadTaskPrimaryRunner(taskId) {
         const root = document.getElementById('task-primary-runner');
         if (!root || root.dataset.taskId !== String(taskId || '')) return;
@@ -1978,6 +2006,9 @@ const TeepPlan = {
             if (live) {
                 const session = watch.session || {};
                 const bind = watch.bind || {};
+                const liveRunnerId = String(watch.runner_session_id || session.runner_session_id || '');
+                const previousRunnerId = String(root.dataset.runnerSessionId || '');
+                root.dataset.runnerSessionId = liveRunnerId;
                 const blocked = taskStatus === 'Blocked';
                 root.dataset.sessionState = blocked ? 'blocked-live' : 'running';
                 badge.className = 'badge bg-green-lt';
@@ -1992,7 +2023,14 @@ const TeepPlan = {
                 watchHere.querySelector('span').textContent = blocked ? 'Talk to agent' : 'Watch live';
                 watchHere.querySelector('i').className = `ti ti-${blocked ? 'message-circle' : 'terminal-2'} me-1`;
                 watchSidecar.hidden = false;
+                if (previousRunnerId && previousRunnerId !== liveRunnerId
+                        && document.getElementById('runner-pty-panel')) {
+                    const mount = document.getElementById('runner-pty-details-mount')
+                        || document.getElementById('runner-pty-dev-mount');
+                    await this.openRunnerSessionPanel(taskId, { dockInto: mount || undefined });
+                }
             } else {
+                root.dataset.runnerSessionId = '';
                 const hasEndedSession = Array.isArray(watch && watch.sessions) && watch.sessions.length > 0;
                 const terminalRunnerStatuses = new Set(['completed', 'failed', 'cancelled', 'expired', 'lost', 'killed', 'exited']);
                 const hasDeadSession = hasEndedSession && watch.sessions.some((session) =>
@@ -2161,6 +2199,7 @@ const TeepPlan = {
         this._initMergeGate(t.task_id);
         this._loadRunnerSessions(t.task_id);
         this._loadTaskPrimaryRunner(t.task_id);
+        this._startTaskPrimaryRunnerLive(t.task_id);
         this._loadDispatch(t.task_id);
         const primaryStart = document.getElementById('task-primary-start');
         if (primaryStart) primaryStart.addEventListener('click', () => this.dispatchTask(t.task_id, 'codex'));

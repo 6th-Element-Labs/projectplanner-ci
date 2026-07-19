@@ -24,6 +24,12 @@ RUNNER_CONTROL_ACTIONS = {"snapshot", "kill", "restart", "health", "logs", "open
 # CO-13: inject additionally requires matching task_id on the control request.
 RUNNER_BIND_FIELDS = ("task_id", "claim_id", "host_id", "wake_id", "work_session_id")
 RUNNER_WATCHABLE_STATUSES = frozenset({"ready", "running"})
+RUNNER_TERMINAL_STATUSES = frozenset({
+    "completed", "failed", "cancelled", "expired", "lost", "killed", "exited",
+})
+RUNNER_FAILURE_TERMINAL_STATUSES = frozenset(
+    RUNNER_TERMINAL_STATUSES - {"completed"}
+)
 RUNNER_BIND_ERROR = "runner_bind_incomplete"
 RUNNER_INJECT_ERROR = "wrong_session"
 
@@ -674,6 +680,26 @@ def assert_runner_watchable(session: Optional[Dict[str, Any]]) -> Dict[str, Any]
             runner_session_id=str(session.get("runner_session_id") or ""),
             task_id=str(session.get("task_id") or ""),
         ) | {"message": "Runner session is stale; Watch/Chat refused until a live bind exists"}
+    metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+    control = session.get("control") if isinstance(session.get("control"), dict) else {}
+    if metadata.get("native_host_execution") is True and control.get("runner_open"):
+        transport_missing = []
+        if metadata.get("pty") is not True:
+            transport_missing.append("pty")
+        if not str(metadata.get("stream_bind") or "").strip():
+            transport_missing.append("stream_bind")
+        if str(metadata.get("stream_port") or "").strip() in {"", "0"}:
+            transport_missing.append("stream_port")
+        if transport_missing:
+            return runner_bind_incomplete(
+                transport_missing,
+                runner_session_id=str(session.get("runner_session_id") or ""),
+                task_id=str(session.get("task_id") or ""),
+            ) | {
+                "error": "runner_stream_not_ready",
+                "error_code": "runner_stream_not_ready",
+                "message": "Runner is bound but its live PTY relay is not ready",
+            }
     if is_direct_assignment_runner(session):
         status = str(session.get("status") or "").strip().lower()
         if status not in RUNNER_WATCHABLE_STATUSES:
@@ -929,6 +955,111 @@ def _clear_active_runner_pointer_in(c: sqlite3.Connection, task_id: str,
     c.execute("UPDATE tasks SET agent_state=?, updated_at=? WHERE task_id=?",
               (json.dumps(current, sort_keys=True), now or time.time(), task_id))
     return True
+
+
+def _release_terminal_runner_ownership_in(
+        c: sqlite3.Connection, record: Dict[str, Any], metadata: Dict[str, Any],
+        runner_session_id: str, actor: str, now: float) -> Optional[Dict[str, Any]]:
+    """Release only the claim owned by one terminal managed runner.
+
+    The runner row and Work Session remain immutable history.  The task receives a
+    compact recovery handoff, then an In-Progress implementation returns to Ready
+    while In-Review/Blocked workflow state is preserved.  Exact tuple checks make
+    repeated terminal heartbeats idempotent and prevent an old runner from releasing
+    a newer replacement's claim.
+    """
+    status = str(record.get("status") or "").strip().lower()
+    task_id = str(record.get("task_id") or "").strip()
+    claim_id = str(record.get("claim_id") or "").strip()
+    agent_id = str(record.get("agent_id") or "").strip()
+    if (status not in RUNNER_FAILURE_TERMINAL_STATUSES
+            or metadata.get("execution_connection_id")
+            or not (task_id and claim_id and agent_id)):
+        return None
+
+    claim = c.execute(
+        "SELECT * FROM task_claims WHERE id=?", (claim_id,),
+    ).fetchone()
+    if (not claim or str(claim["status"] or "") != "active"
+            or str(claim["task_id"] or "") != task_id
+            or str(claim["agent_id"] or "") != agent_id):
+        return None
+
+    task = c.execute(
+        "SELECT status, assignee, deliverable, agent_state FROM tasks WHERE task_id=?",
+        (task_id,),
+    ).fetchone()
+    work_session_id = str(metadata.get("work_session_id") or "").strip()
+    work_session = c.execute(
+        "SELECT * FROM work_sessions WHERE work_session_id=?",
+        (work_session_id,),
+    ).fetchone() if work_session_id else None
+    git_state = c.execute(
+        "SELECT branch, head_sha, pr_number, pr_url FROM task_git_state WHERE task_id=?",
+        (task_id,),
+    ).fetchone()
+    previous = {}
+    if task:
+        task_state = _json_obj(task["agent_state"] or "{}", {})
+        previous = dict(task_state.get("switchboard/recovery_handoff") or {})
+    else:
+        task_state = {}
+    attempt = max(1, int(previous.get("attempt") or 0) + 1)
+    ws = dict(work_session) if work_session else {}
+    gs = dict(git_state) if git_state else {}
+    handoff = {
+        "schema": "switchboard.runner_recovery_handoff.v1",
+        "attempt": attempt,
+        "project": metadata.get("project") or None,
+        "task_id": task_id,
+        "deliverable_id": (task["deliverable"] if task else None),
+        "role": metadata.get("role") or metadata.get("lifecycle_role") or "implementation",
+        "previous_runner_session_id": runner_session_id,
+        "previous_claim_id": claim_id,
+        "previous_work_session_id": work_session_id or None,
+        "runner_status": status,
+        "failure_reason": metadata.get("failure_reason") or metadata.get("last_error") or None,
+        "repository": ws.get("repo") or None,
+        "working_directory": ws.get("worktree_path") or ws.get("clone_path")
+        or record.get("cwd") or None,
+        "branch": gs.get("branch") or ws.get("branch") or None,
+        "head_sha": gs.get("head_sha") or ws.get("head_sha")
+        or metadata.get("source_sha") or None,
+        "pr_number": gs.get("pr_number") or None,
+        "pr_url": gs.get("pr_url") or None,
+        "log_path": metadata.get("log_path") or None,
+        "recorded_at": now,
+    }
+    task_state["switchboard/recovery_handoff"] = handoff
+
+    reason = f"terminal_runner:{runner_session_id}:{status}"
+    c.execute(
+        "UPDATE task_claims SET status='abandoned', abandon_reason=? "
+        "WHERE id=? AND status='active'",
+        (reason, claim_id),
+    )
+    c.execute(
+        "UPDATE resource_leases SET released_at=? WHERE resource_type='task' "
+        "AND task_id=? AND agent_id=? AND released_at IS NULL",
+        (now, task_id, agent_id),
+    )
+    if task:
+        next_status = "Not Started" if str(task["status"] or "") == "In Progress" \
+            else str(task["status"] or "")
+        c.execute(
+            "UPDATE tasks SET status=?, agent_state=?, "
+            "assignee=CASE WHEN assignee=? THEN NULL ELSE assignee END, updated_at=? "
+            "WHERE task_id=?",
+            (next_status, json.dumps(task_state, sort_keys=True), agent_id, now, task_id),
+        )
+    c.execute(
+        "INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+        (task_id, actor, "task.claim.released_by_terminal_runner",
+         json.dumps({"claim_id": claim_id, "runner_session_id": runner_session_id,
+                     "runner_status": status, "recovery_handoff": handoff},
+                    sort_keys=True), now),
+    )
+    return handoff
 
 
 def _renew_personal_claim_from_runner_in(
@@ -1362,9 +1493,7 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
     work_session_id = str(metadata.get("work_session_id") or "").strip()
     if (work_session_id
             and str(metadata.get("auth_lane") or "") == "codex_host_local"
-            and runner_status in {
-            "failed", "cancelled", "expired", "lost", "killed", "exited"
-    }):
+            and runner_status in RUNNER_FAILURE_TERMINAL_STATUSES):
         changed = c.execute(
             "UPDATE work_sessions SET status='expired', updated_at=?, updated_by=? "
             "WHERE work_session_id=? AND status IN ('active','proposed','blocked')",
@@ -1380,6 +1509,8 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
                              "work_session_id": work_session_id,
                              "runner_status": runner_status}, sort_keys=True), now),
             )
+    _release_terminal_runner_ownership_in(
+        c, record, metadata, runner_session_id, actor, now)
     _renew_personal_claim_from_runner_in(c, record, principal_id, now)
     c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
               (record.get("task_id") or None, actor, "runner.session_registered",

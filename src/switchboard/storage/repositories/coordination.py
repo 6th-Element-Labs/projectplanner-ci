@@ -1576,13 +1576,22 @@ def _recover_host_local_completed_execution_in(
             reasons.append("recovery_runner_binding_incomplete")
 
     claim = c.execute(
-        "SELECT task_id, agent_id, status, expires_at FROM task_claims WHERE id=?",
+        "SELECT task_id, agent_id, status, expires_at, abandon_reason "
+        "FROM task_claims WHERE id=?",
         (claim_id,),
     ).fetchone() if claim_id else None
+    claim_terminal_release = bool(
+        claim and runner
+        and str(claim["status"] or "") == "abandoned"
+        and str(claim["abandon_reason"] or "")
+        == (f"terminal_runner:{expected['runner_session_id']}:"
+            f"{str(runner.get('status') or '').lower()}")
+    )
     if (not claim or str(claim["task_id"] or "") != expected["task_id"]
             or str(claim["agent_id"] or "") != expected["agent_id"]
-            or str(claim["status"] or "") != "active"
-            or float(claim["expires_at"] or 0) <= now):
+            or (not claim_terminal_release
+                and (str(claim["status"] or "") != "active"
+                     or float(claim["expires_at"] or 0) <= now))):
         reasons.append("recovery_claim_not_active")
     session = c.execute(
         "SELECT task_id, agent_id, claim_id, status FROM work_sessions "

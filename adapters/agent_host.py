@@ -2216,6 +2216,33 @@ def run_once(inventory):
                     "agent_id": (w.get("selector") or {}).get("agent_id") or "",
                     "result": result,
                 })
+            completion_recorded = bool(
+                completion and not completion.get("error")
+                and not completion.get("error_code")
+            )
+            if started and (not registered or not completion_recorded):
+                # A native process without its durable runner/wake receipt cannot
+                # be discovered, watched, or safely deduplicated.  Stop it instead
+                # of leaving an invisible orphan, publish a terminal row when the
+                # registry is reachable, and leave the wake retryable.
+                failure_reason = (
+                    "direct_runner_registration_failed" if not registered
+                    else "direct_complete_wake_failed"
+                )
+                supervisor_action("kill", runner_session_id, {"grace_seconds": 2.0})
+                failed_rec = {
+                    **(rec or {}),
+                    "runner_session_id": runner_session_id,
+                    "status": "failed",
+                    "metadata": {
+                        **((rec or {}).get("metadata") or {}),
+                        "failure_reason": failure_reason,
+                    },
+                }
+                register_runner_session(failed_rec, w, inventory)
+                rec = {**(rec or {}), "reason": failure_reason,
+                       "failure_class": "failed_gate"}
+                started = False
             acted.append({
                 "wake_id": wake_id,
                 "started": started,
@@ -2232,7 +2259,7 @@ def run_once(inventory):
                 "host_id": host_id,
                 "runner_registered": registered,
                 "assignment_toml": assignment_path,
-                "completion_recorded": bool(completion and not completion.get("error")),
+                "completion_recorded": completion_recorded,
                 "provider_error": (rec or {}).get("provider_error"),
             })
             continue

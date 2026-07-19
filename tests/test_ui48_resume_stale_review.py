@@ -112,6 +112,8 @@ try:
     handoff_command = _codex_command(
         assignment, Path("/tmp/ui48-handoff"), "codex", "https://plan.example/mcp")
     ok("Replacement review handoff:" in handoff_command[-1]
+       and "agent_id=codex/" in handoff_command[-1]
+       and "Do not derive, slugify, or replace it" in handoff_command[-1]
        and "run-ui48-dead" not in handoff_command[-1]
        and "In Review" in handoff_command[-1],
        "a fresh reviewer receives the generated review handoff in its opening prompt")
@@ -151,6 +153,8 @@ try:
         "agent_id": f"codex/{resumable_id}", "runtime": "codex",
         "task_id": resumable_id, "status": "failed", "cwd": str(ROOT),
         "metadata": {"codex_conversation_id": "019f-ui48-conversation"},
+        "last_snapshot": {"head_sha": "b" * 40,
+                          "pr_url": "https://example/pr/49"},
     }, principal_id="principal/ui48-mac", actor=HOST, project=P)
     resumed_provider = dispatch.resume_review(
         resumable_id, actor=OWNER, principal_id=OWNER, project=P)

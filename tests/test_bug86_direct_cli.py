@@ -32,6 +32,7 @@ assignment = {
     "task_id": task_id,
     "deliverable_id": "agent-host-autopilot",
     "host_id": host_id,
+    "agent_id": f"codex/{task_id}",
     "prompt": "Do BUG-86 for deliverable agent-host-autopilot in project switchboard via Switchboard.",
     "repository": {
         "slug": "6th-Element-Labs/projectplanner",
@@ -142,6 +143,29 @@ launch_event = events[launch_index]
 loaded = json.loads(launch_event[2]["PM_DIRECT_CODEX_ASSIGNMENT_JSON"])
 ok(loaded == assignment,
    "the daemon passes the exact task/repo/prompt/MCP assignment to the CLI boot")
+with tempfile.TemporaryDirectory(prefix="bug86-assignment-") as assignment_tmp:
+    runner_root = Path(assignment_tmp) / "runners"
+    (runner_root / "run-direct-bug86").mkdir(parents=True)
+    old_runner_dir = os.environ.get("PM_AGENT_HOST_RUNNER_DIR")
+    old_runner_id = os.environ.get("PM_RUNNER_SESSION_ID")
+    try:
+        os.environ["PM_AGENT_HOST_RUNNER_DIR"] = str(runner_root)
+        os.environ["PM_RUNNER_SESSION_ID"] = "run-direct-bug86"
+        assignment_path = direct_codex_session._write_assignment_toml(
+            assignment, Path(assignment_tmp) / "workspace",
+            "codex/bug-86-direct", "a" * 40)
+        assignment_text = assignment_path.read_text(encoding="utf-8")
+    finally:
+        if old_runner_dir is None:
+            os.environ.pop("PM_AGENT_HOST_RUNNER_DIR", None)
+        else:
+            os.environ["PM_AGENT_HOST_RUNNER_DIR"] = old_runner_dir
+        if old_runner_id is None:
+            os.environ.pop("PM_RUNNER_SESSION_ID", None)
+        else:
+            os.environ["PM_RUNNER_SESSION_ID"] = old_runner_id
+ok('agent_id = "codex/BUG-86"' in assignment_text,
+   "assignment TOML pins the exact MCP-bound agent identity")
 ok(summary["acted"][0]["started"] is True
    and summary["acted"][0]["runner_registered"] is True
    and summary["acted"][0]["completion_recorded"] is True,

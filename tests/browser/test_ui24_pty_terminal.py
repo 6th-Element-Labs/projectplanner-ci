@@ -106,7 +106,7 @@ try:
     healthy = _wait_healthy()
     ok(healthy, "app.py boots and /health responds (required auth, throwaway DB)")
     index_html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
-    ok('js/runner-session.js?v=6' in index_html and 'app.js?v=53' in index_html,
+    ok('js/runner-session.js?v=6' in index_html and 'app.js?v=54' in index_html,
        "the deployed shell invalidates pre-Resume-review runner and modal assets")
     if not healthy:
         raise SystemExit("server did not become healthy — aborting")
@@ -140,6 +140,69 @@ try:
         wired = page.evaluate(
             "typeof TeepPlan !== 'undefined' && typeof TeepPlan.openRunnerSessionPanel === 'function'")
         ok(wired, "TeepPlan.openRunnerSessionPanel exists on the live page (module actually loaded)")
+
+        # ---- COORD-42: an open task modal follows the authoritative replacement ----
+        replacement = page.evaluate("""
+            async () => {
+                const modal = document.getElementById('task-modal');
+                modal.classList.add('show');
+                modal.dataset.taskId = 'COORD-42';
+                const root = document.createElement('div');
+                root.id = 'task-primary-runner';
+                root.dataset.taskId = 'COORD-42';
+                root.dataset.taskStatus = 'In Progress';
+                root.dataset.runnerSessionId = 'run_dead';
+                root.innerHTML = `
+                    <span id="task-primary-runner-title"></span>
+                    <span id="task-primary-runner-badge"></span>
+                    <span id="task-primary-runner-state"></span>
+                    <button id="task-primary-start"><span>Start</span></button>
+                    <button id="task-primary-resume-review"><span>Resume</span></button>
+                    <button id="task-primary-watch-here"><i></i><span>Watch</span></button>
+                    <button id="task-primary-watch-sidecar"><span>Sidecar</span></button>`;
+                document.body.appendChild(root);
+                const panel = document.createElement('div');
+                panel.id = 'runner-pty-panel';
+                document.body.appendChild(panel);
+                window.__coord42Opened = [];
+                const originalOpen = TeepPlan.openRunnerSessionPanel;
+                const originalFetch = window.fetch;
+                TeepPlan.openRunnerSessionPanel = async (taskId) => {
+                    window.__coord42Opened.push(taskId); return true;
+                };
+                window.fetch = async (url, options) => {
+                    if (String(url).includes('/ixp/v1/runner_sessions/watch')) {
+                        return new Response(JSON.stringify({
+                            watchable: true, refused: false,
+                            runner_session_id: 'run_replacement',
+                            bind: {task_id: 'COORD-42', claim_id: 'claim-new',
+                                   host_id: 'host/mac', wake_id: 'wake-new',
+                                   work_session_id: 'ws-new'},
+                            session: {runner_session_id: 'run_replacement', status: 'running'},
+                        }), {status: 200, headers: {'Content-Type': 'application/json'}});
+                    }
+                    return originalFetch(url, options);
+                };
+                await TeepPlan._loadTaskPrimaryRunner('COORD-42');
+                TeepPlan._startTaskPrimaryRunnerLive('COORD-42');
+                const result = {
+                    runner: root.dataset.runnerSessionId,
+                    state: root.dataset.sessionState,
+                    opened: [...window.__coord42Opened],
+                    polling: !!TeepPlan._taskPrimaryRunnerTimer,
+                };
+                TeepPlan._stopTaskPrimaryRunnerLive();
+                TeepPlan.openRunnerSessionPanel = originalOpen;
+                window.fetch = originalFetch;
+                root.remove(); panel.remove(); modal.classList.remove('show');
+                return result;
+            }
+        """)
+        ok(replacement["runner"] == "run_replacement" and replacement["state"] == "running",
+           f"task modal replaces the dead runner with the authoritative live bind ({replacement})")
+        ok(replacement["opened"] == ["COORD-42"],
+           "an already-open Watch panel is rebound to the replacement runner")
+        ok(replacement["polling"], "the open task modal polls for runner replacement")
 
         console_errors = []
         page.on("console", lambda m: console_errors.append(m.text) if m.type == "error" else None)
