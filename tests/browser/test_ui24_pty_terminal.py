@@ -105,6 +105,9 @@ def _wait_healthy(timeout=20.0):
 try:
     healthy = _wait_healthy()
     ok(healthy, "app.py boots and /health responds (required auth, throwaway DB)")
+    index_html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    ok('js/runner-session.js?v=6' in index_html and 'app.js?v=50' in index_html,
+       "the deployed shell invalidates pre-Resume-review runner and modal assets")
     if not healthy:
         raise SystemExit("server did not become healthy — aborting")
 
