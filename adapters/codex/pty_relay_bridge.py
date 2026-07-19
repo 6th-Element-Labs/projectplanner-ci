@@ -200,8 +200,23 @@ class LocalPtyRelayBridge:
             self._thread.join(timeout=timeout)
 
     def handle_control_frame(self, frame: str | bytes | dict[str, Any]) -> dict[str, Any]:
-        return apply_relay_control_frame(
-            self.control_url, self.control_ticket, frame)
+        decoded = domain.decode_frame(frame)
+        result = apply_relay_control_frame(
+            self.control_url, self.control_ticket, decoded)
+        request_id = str(decoded.get("request_id") or "").strip()
+        if request_id:
+            acknowledged = bool(result.get("ok")) and not result.get("error")
+            ack = domain.encode_frame("control_ack", {
+                "request_id": request_id,
+                "action": decoded.get("type") or "",
+                "ok": acknowledged,
+                "error": result.get("error") or result.get("reason") or "",
+            })
+            try:
+                self.send_to_relay(ack)
+            except Exception:
+                self._stop.set()
+        return result
 
 
 def build_local_bridge_urls(

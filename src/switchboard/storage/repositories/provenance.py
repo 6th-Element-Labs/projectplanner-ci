@@ -943,7 +943,8 @@ def _needs_live_pr_recheck(task: Dict[str, Any], state: Dict[str, Any]) -> bool:
 def _external_reconcile_findings(tasks: List[Dict[str, Any]],
                                  git_states: Dict[str, Dict[str, Any]],
                                  canonical_main_sha: str,
-                                 project: str = DEFAULT_PROJECT) -> Tuple[
+                                 project: str = DEFAULT_PROJECT,
+                                 run_discovery_backstops: bool = True) -> Tuple[
                                      List[Dict[str, Any]],
                                      Dict[str, Any],
                                      List[Dict[str, Any]],
@@ -1145,17 +1146,21 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
                                  "code": "merged_sha_mismatch",
                                  "detail": "Recorded merged_sha differs from GitHub PR merge_commit_sha."})
 
-    orphan_findings, orphan_backfilled, orphan_checks = _orphan_merge_discovery_findings(
-        tasks, git_states, project=project, repo=repo, token=token)
-    findings.extend(orphan_findings)
-    backfilled.extend(orphan_backfilled)
-    checks.update(orphan_checks)
+    if run_discovery_backstops:
+        orphan_findings, orphan_backfilled, orphan_checks = _orphan_merge_discovery_findings(
+            tasks, git_states, project=project, repo=repo, token=token)
+        findings.extend(orphan_findings)
+        backfilled.extend(orphan_backfilled)
+        checks.update(orphan_checks)
 
-    open_findings, open_advanced, open_checks = _open_pr_backstop_findings(
-        tasks, git_states, project=project, repo=repo, token=token)
-    findings.extend(open_findings)
-    backfilled.extend(open_advanced)
-    checks.update(open_checks)
+        open_findings, open_advanced, open_checks = _open_pr_backstop_findings(
+            tasks, git_states, project=project, repo=repo, token=token)
+        findings.extend(open_findings)
+        backfilled.extend(open_advanced)
+        checks.update(open_checks)
+    else:
+        checks["orphan_merge_discovery"] = "deferred_to_full_reconcile"
+        checks["open_pr_discovery"] = "deferred_to_full_reconcile"
     return findings, checks, backfilled
 
 
@@ -1277,24 +1282,49 @@ def _reconcile_cursor_key() -> str:
     return "reconcile.activity_cursor"
 
 
-def _reconcile_changed_task_ids(c: sqlite3.Connection, since_cursor: int) -> set:
-    if since_cursor <= 0:
-        return set()
+def _reconcile_activity_batch(
+    c: sqlite3.Connection, since_cursor: int, limit: int,
+) -> Tuple[set, int, bool]:
+    """Consume at most ``limit`` historical activity rows from one indexed page."""
+    bounded = max(1, min(int(limit), 1000))
     rows = c.execute(
-        "SELECT DISTINCT task_id FROM activity WHERE id>? AND task_id IS NOT NULL",
-        (int(since_cursor),),
+        "SELECT id, task_id FROM activity WHERE id>? ORDER BY id LIMIT ?",
+        (int(since_cursor), bounded + 1),
     ).fetchall()
-    return {str(row["task_id"]) for row in rows if row["task_id"]}
+    consumed = rows[:bounded]
+    next_cursor = int(consumed[-1]["id"]) if consumed else int(since_cursor)
+    task_ids = {str(row["task_id"]) for row in consumed if row["task_id"]}
+    return task_ids, next_cursor, len(rows) > bounded
 
 
-def reconcile(project: str = DEFAULT_PROJECT, incremental: bool = False) -> Dict[str, Any]:
+def _reconcile_task_page(
+    c: sqlite3.Connection, after_task_id: str, limit: int,
+) -> Tuple[List[sqlite3.Row], str, bool]:
+    """Round-robin through task history without loading the whole table."""
+    bounded = max(1, min(int(limit), 1000))
+    rows = c.execute(
+        "SELECT * FROM tasks WHERE task_id>? ORDER BY task_id LIMIT ?",
+        (str(after_task_id or ""), bounded + 1),
+    ).fetchall()
+    if not rows and after_task_id:
+        rows = c.execute(
+            "SELECT * FROM tasks ORDER BY task_id LIMIT ?", (bounded + 1,),
+        ).fetchall()
+    consumed = rows[:bounded]
+    next_cursor = str(consumed[-1]["task_id"]) if consumed else ""
+    return consumed, next_cursor, len(rows) > bounded
+
+
+def reconcile(project: str = DEFAULT_PROJECT, incremental: bool = False,
+              activity_limit: int = 200, task_limit: int = 200,
+              evidence_limit: int = 1000) -> Dict[str, Any]:
     """Local drift report for board provenance.
 
     Board-internal checks always run. When a canonical main SHA and local git checkout are
     available, reconcile also verifies recorded SHAs against git reachability. If GitHub repo
     config is present, PR records are checked through the GitHub API. Scheduled callers can
-    set incremental=True to restrict board-internal task checks to activity changed since the
-    last successful incremental run while still running external/time-based backstops.
+    set incremental=True to consume indexed activity/task pages with hard bounds. Full mode is
+    explicit because it may scan history and run GitHub orphan-discovery backstops.
     """
     now = time.time()
     agreement = _store_facade().get_working_agreement(project)
@@ -1303,27 +1333,49 @@ def reconcile(project: str = DEFAULT_PROJECT, incremental: bool = False) -> Dict
     git_states: Dict[str, Dict[str, Any]] = {}
     repo = _store_facade().get_project_github_repo(project)
     previous_cursor = int(_store_facade().get_meta(_reconcile_cursor_key(), 0, project=project) or 0) if incremental else 0
+    previous_task_cursor = str(_store_facade().get_meta(
+        "reconcile.task_cursor", "", project=project) or "") if incremental else ""
     changed_task_ids: set = set()
     checked_task_ids: set = set()
-    full_task_scan = not incremental or previous_cursor <= 0
+    activity_has_more = False
+    task_has_more = False
+    next_task_cursor = previous_task_cursor
     with _conn(project) as c:
-        changed_task_ids = _reconcile_changed_task_ids(c, previous_cursor)
-        rows = c.execute("SELECT * FROM tasks ORDER BY sort_order, task_id").fetchall()
+        if incremental:
+            changed_task_ids, cursor, activity_has_more = _reconcile_activity_batch(
+                c, previous_cursor, activity_limit)
+            bounded_tasks = max(1, min(int(task_limit), 1000))
+            changed_ids = sorted(changed_task_ids)[:bounded_tasks]
+            rows_by_id: Dict[str, sqlite3.Row] = {}
+            if changed_ids:
+                placeholders = ",".join("?" for _ in changed_ids)
+                for row in c.execute(
+                        f"SELECT * FROM tasks WHERE task_id IN ({placeholders})", changed_ids).fetchall():
+                    rows_by_id[str(row["task_id"])] = row
+            remaining = max(0, bounded_tasks - len(rows_by_id))
+            page_rows: List[sqlite3.Row] = []
+            if remaining:
+                page_rows, next_task_cursor, task_has_more = _reconcile_task_page(
+                    c, previous_task_cursor, remaining)
+                for row in page_rows:
+                    if len(rows_by_id) >= bounded_tasks:
+                        break
+                    rows_by_id.setdefault(str(row["task_id"]), row)
+            rows = list(rows_by_id.values())
+        else:
+            rows = c.execute("SELECT * FROM tasks ORDER BY sort_order, task_id").fetchall()
+            cursor = int(c.execute(
+                "SELECT COALESCE(MAX(id), 0) FROM activity").fetchone()[0])
         for row in rows:
             task = _task_row(row)
             git_state = _load_git_state(c, task["task_id"])
             tasks.append(task)
             status = task.get("status")
-            task_changed = task["task_id"] in changed_task_ids
-            task_mutable = _needs_live_pr_recheck(task, git_state)
-            should_check_task = full_task_scan or task_changed or task_mutable
             # PR-evidence hydration retired (ADR-0006): pr_number is now derived from a
             # recorded pr_url at write time (_upsert_git_state), and the sweep/open-PR
             # backstop recover dropped-webhook tasks by matching the PR's task-id — so
             # there is nothing to scrape from activity here.
             git_states[task["task_id"]] = git_state
-            if not should_check_task:
-                continue
             checked_task_ids.add(task["task_id"])
             if (status == "Done" and not _has_done_provenance(git_state)
                     and not (repo and git_state.get("pr_number"))):
@@ -1345,8 +1397,8 @@ def reconcile(project: str = DEFAULT_PROJECT, incremental: bool = False) -> Dict
             _upsert_git_state(c, task["task_id"], {"last_reconciled_at": now})
         stale_task_claims = c.execute(
             "SELECT id, task_id, agent_id, expires_at FROM task_claims "
-            "WHERE status='active' AND expires_at<=? ORDER BY expires_at",
-            (now,),
+            "WHERE status='active' AND expires_at<=? ORDER BY expires_at LIMIT ?",
+            (now, max(1, min(int(task_limit), 1000)) if incremental else 1000000),
         ).fetchall()
         for claim in stale_task_claims:
             findings.append({"severity": "medium", "task_id": claim["task_id"],
@@ -1354,7 +1406,8 @@ def reconcile(project: str = DEFAULT_PROJECT, incremental: bool = False) -> Dict
                              "detail": f"Active task claim {claim['id']} by {claim['agent_id']} expired without completion or abandon."})
         stale_file_leases = c.execute(
             "SELECT id, task_id, agent_id, claimed_at, ttl_minutes FROM file_leases "
-            "WHERE released_at IS NULL ORDER BY claimed_at"
+            "WHERE released_at IS NULL ORDER BY claimed_at LIMIT ?",
+            (max(1, min(int(task_limit), 1000)) if incremental else 1000000,),
         ).fetchall()
         for lease in stale_file_leases:
             expires_at = float(lease["claimed_at"] or 0) + int(lease["ttl_minutes"] or 0) * 60
@@ -1364,7 +1417,8 @@ def reconcile(project: str = DEFAULT_PROJECT, incremental: bool = False) -> Dict
                                  "detail": f"File lease {lease['id']} by {lease['agent_id']} expired without release."})
         stale_resource_leases = c.execute(
             "SELECT id, task_id, agent_id, resource_type, claimed_at, ttl_seconds FROM resource_leases "
-            "WHERE released_at IS NULL ORDER BY claimed_at"
+            "WHERE released_at IS NULL ORDER BY claimed_at LIMIT ?",
+            (max(1, min(int(task_limit), 1000)) if incremental else 1000000,),
         ).fetchall()
         for lease in stale_resource_leases:
             expires_at = float(lease["claimed_at"] or 0) + int(lease["ttl_seconds"] or 0)
@@ -1373,7 +1427,11 @@ def reconcile(project: str = DEFAULT_PROJECT, incremental: bool = False) -> Dict
                                  "code": "stale_resource_lease",
                                  "detail": f"{lease['resource_type']} lease {lease['id']} by {lease['agent_id']} expired without release."})
         tasks_by_id = {task["task_id"]: task for task in tasks}
-        for report in _store_facade()._evidence_claim_reports(c):
+        evidence_kwargs = ({
+            "task_ids": sorted(checked_task_ids),
+            "limit": max(1, min(int(evidence_limit), 5000)),
+        } if incremental else {})
+        for report in _store_facade()._evidence_claim_reports(c, **evidence_kwargs):
             if report.get("status") == "pass":
                 continue
             task_id = report.get("task_id")
@@ -1399,9 +1457,9 @@ def reconcile(project: str = DEFAULT_PROJECT, incremental: bool = False) -> Dict
                 "detail": detail,
                 "evidence_claim": report,
             })
-        cursor = c.execute("SELECT COALESCE(MAX(id), 0) FROM activity").fetchone()[0]
     external_findings, external_checks, backfilled = _external_reconcile_findings(
-        tasks, git_states, agreement.get("canonical_main_sha") or "", project=project)
+        tasks, git_states, agreement.get("canonical_main_sha") or "", project=project,
+        run_discovery_backstops=not incremental)
     findings.extend(external_findings)
     publication_findings, publication_checks = _store_facade()._publication_reconcile_findings(
         tasks, git_states, project=project)
@@ -1416,12 +1474,18 @@ def reconcile(project: str = DEFAULT_PROJECT, incremental: bool = False) -> Dict
                     {"findings": len(findings), "backfilled": backfilled},
                     task_id=None, project=project)
     if incremental:
-        cursor = _store_facade()._activity_cursor(project)
         _store_facade().set_meta(_reconcile_cursor_key(), cursor, project=project)
+        _store_facade().set_meta("reconcile.task_cursor", next_task_cursor, project=project)
         external_checks["incremental"] = True
         external_checks["since_activity_cursor"] = previous_cursor
+        external_checks["activity_batch_limit"] = max(1, min(int(activity_limit), 1000))
+        external_checks["activity_has_more"] = activity_has_more
         external_checks["changed_task_count"] = len(changed_task_ids)
         external_checks["board_task_checks"] = len(checked_task_ids)
+        external_checks["task_batch_limit"] = max(1, min(int(task_limit), 1000))
+        external_checks["task_cursor"] = next_task_cursor
+        external_checks["task_has_more"] = task_has_more
+        external_checks["evidence_batch_limit"] = max(1, min(int(evidence_limit), 5000))
     return {"project": project, "ok": not findings, "findings": findings,
             "activity_cursor": cursor, "checked_at": now,
             "external_checks": external_checks, "backfilled": backfilled}
@@ -1499,7 +1563,7 @@ def run_reconcile_alerts(project: str = DEFAULT_PROJECT,
                          min_severity: str = "medium",
                          dedupe_window_s: int = 3600,
                          now: Optional[float] = None,
-                         incremental: bool = False,
+                         incremental: bool = True,
                          requires_ack: bool = False,
                          close_stale_inbox: bool = True) -> Dict[str, Any]:
     """Run reconcile and send a deduped directed alert for actionable findings.

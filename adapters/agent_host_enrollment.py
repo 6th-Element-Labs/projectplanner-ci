@@ -1966,7 +1966,10 @@ def service_run(identity_path: Path, config_path: Path) -> None:
         env.get("PYTHONPATH", ""),
     )))
     daemon = Path(config["repo_root"]) / "adapters" / "agent_host.py"
-    os.execve(sys.executable, [sys.executable, str(daemon), "--interval", "10"], env)
+    # Durable controls are the recovery path when the live PTY relay is absent.
+    # Ten-second polling made a normal Watch reopen/chat fallback take 10-30s;
+    # two seconds keeps recovery responsive without turning this into a busy loop.
+    os.execve(sys.executable, [sys.executable, str(daemon), "--interval", "2"], env)
 
 
 def _platform(value: str = "") -> str:

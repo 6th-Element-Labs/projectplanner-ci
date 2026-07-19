@@ -106,7 +106,7 @@ try:
     healthy = _wait_healthy()
     ok(healthy, "app.py boots and /health responds (required auth, throwaway DB)")
     index_html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
-    ok('js/runner-session.js?v=6' in index_html and 'app.js?v=54' in index_html,
+    ok('js/runner-session.js?v=7' in index_html and 'app.js?v=54' in index_html,
        "the deployed shell invalidates pre-Resume-review runner and modal assets")
     if not healthy:
         raise SystemExit("server did not become healthy — aborting")
@@ -273,6 +273,38 @@ try:
            "discard scrollback and leak the old ResizeObserver on every drop)")
         ok(reused["line0"] == "UI-24 PLAYWRIGHT OK", "scrollback from before the simulated reconnect is still there")
 
+        reopen_ops = page.evaluate("""
+            async () => {
+                const originalFetch = window.fetch;
+                const originalOpenSocket = TeepPlan._runnerPtyOpenSocket;
+                const requests = [];
+                window.fetch = async (url, options) => {
+                    if (String(url) === '/ixp/v1/request_runner_open') {
+                        requests.push(JSON.parse(options.body));
+                        return new Response(JSON.stringify({requested: true}), {
+                            status: 200, headers: {'Content-Type': 'application/json'}
+                        });
+                    }
+                    if (String(url).includes('/pty/ticket')) {
+                        return new Response(JSON.stringify({relay_url: 'wss://relay.example/test'}), {
+                            status: 200, headers: {'Content-Type': 'application/json'}
+                        });
+                    }
+                    return originalFetch(url, options);
+                };
+                TeepPlan._runnerPtyOpenSocket = () => {};
+                await TeepPlan._runnerPtyConnect();
+                await TeepPlan._runnerPtyConnect();
+                await new Promise((resolve) => setTimeout(resolve, 25));
+                window.fetch = originalFetch;
+                TeepPlan._runnerPtyOpenSocket = originalOpenSocket;
+                return requests.map((request) => request.options?.client_request_id || '');
+            }
+        """)
+        ok(len(reopen_ops) == 2 and all(reopen_ops)
+           and reopen_ops[0] != reopen_ops[1],
+           f"every Watch reconnect issues a fresh host-open recovery operation ({reopen_ops})")
+
         # ---- a real keypress round-trips through xterm's onData -------------
         page.evaluate("""
             () => {
@@ -289,41 +321,78 @@ try:
         ok("\x03" in captured, "Ctrl-C forwards as the real interrupt byte (0x03), not a separate control path")
 
         # ---- the higher-level composer proves host delivery, not just queueing
-        injected = []
-
-        def _capture_inject(route):
-            injected.append(json.loads(route.request.post_data or "{}"))
-            route.fulfill(
-                status=200, content_type="application/json",
-                body='{"requested":true,"request_id":"runnerreq-ui24-chat"}',
-            )
-
-        page.route("**/ixp/v1/request_runner_inject", _capture_inject)
-        page.route("**/ixp/v1/runner_controls?**", lambda route: route.fulfill(
-            status=200, content_type="application/json",
-            body=(
-                '{"requests":[{"request_id":"runnerreq-ui24-chat",'
-                '"status":"completed","result":{"injected":true}}]}'
-            ),
-        ))
+        # Connected chat stays on the already-open WebSocket and is acknowledged
+        # only after the Mac's local PTY control returns.
+        page.evaluate("""
+            () => {
+                window.__ui24ChatFrames = [];
+                TeepPlan._runnerPty.ws = {
+                    readyState: WebSocket.OPEN,
+                    send: (raw) => window.__ui24ChatFrames.push(JSON.parse(raw)),
+                };
+            }
+        """)
+        binary_frame = page.evaluate("""
+            () => {
+                TeepPlan._runnerPtySendBinary(String.fromCharCode(0, 255));
+                return window.__ui24ChatFrames.at(-1);
+            }
+        """)
+        ok(binary_frame.get("type") == "input"
+           and binary_frame.get("data_b64") == "AP8=",
+           "xterm onBinary data preserves exact 8-bit values for legacy mouse reports")
         composer = page.locator("#runner-chat-input")
         composer.fill("do what it takes to unblock it")
+        chat_started = time.monotonic()
         composer.press("Enter")
         page.wait_for_selector("#runner-chat-log [data-runner-chat-status]", timeout=5000)
+        chat_frame = page.evaluate(
+            "window.__ui24ChatFrames.find((frame) => frame.purpose === 'chat')")
+        ok(chat_frame.get("type") == "input"
+           and chat_frame.get("purpose") == "chat"
+           and chat_frame.get("task_id") == "FAKE-TASK-1"
+           and chat_frame.get("request_id", "").startswith("runner-chat-"),
+           f"typed composer sends one exact task-bound chat frame on the live relay ({chat_frame})")
+        page.evaluate("""
+            ([requestId]) => TeepPlan._runnerPtyHandleFrame(
+                TeepPlan._runnerPty,
+                JSON.stringify({type: 'control_ack', request_id: requestId, ok: true}))
+        """, [chat_frame["request_id"]])
         page.wait_for_function(
             "document.querySelector('#runner-chat-log [data-runner-chat-status]')?.textContent === 'Delivered'",
             timeout=5000,
         )
-        ok(len(injected) == 1
-           and injected[0].get("task_id") == "FAKE-TASK-1"
-           and injected[0].get("runner_session_id") == "run_browsertest"
-           and injected[0].get("text") == "do what it takes to unblock it",
-           "typed composer Enter sends the exact task/session/text once")
+        chat_elapsed = time.monotonic() - chat_started
+        ok(chat_elapsed < 0.5,
+           f"connected chat delivery is acknowledgement/RTT-bound, not daemon-poll-bound ({chat_elapsed:.3f}s)")
         ok(composer.input_value() == ""
            and "Delivered to FAKE-TASK-1 · run_browsertest" in page.locator("#runner-pty-gate").inner_text(),
            "the composer clears only after acceptance and renders exact-run delivery confirmation")
-        page.unroute("**/ixp/v1/request_runner_inject", _capture_inject)
-        page.unroute("**/ixp/v1/runner_controls?**")
+
+        # A failed exact acknowledgement restores text. Retrying the same text
+        # creates a different operation id instead of reusing a poisoned effect.
+        composer.fill("retry this exact message")
+        composer.press("Enter")
+        failed_frame = page.evaluate(
+            "window.__ui24ChatFrames.filter((frame) => frame.purpose === 'chat').at(-1)")
+        page.evaluate("""
+            ([requestId]) => TeepPlan._runnerPtyHandleFrame(
+                TeepPlan._runnerPty,
+                JSON.stringify({type: 'control_ack', request_id: requestId,
+                                ok: false, error: 'local PTY timeout'}))
+        """, [failed_frame["request_id"]])
+        ok(composer.input_value() == "retry this exact message",
+           "failed live delivery restores the exact text for retry")
+        composer.press("Enter")
+        retried_frame = page.evaluate(
+            "window.__ui24ChatFrames.filter((frame) => frame.purpose === 'chat').at(-1)")
+        ok(retried_frame["request_id"] != failed_frame["request_id"],
+           "same-text retry receives a fresh operation id")
+        page.evaluate("""
+            ([requestId]) => TeepPlan._runnerPtyHandleFrame(
+                TeepPlan._runnerPty,
+                JSON.stringify({type: 'control_ack', request_id: requestId, ok: true}))
+        """, [retried_frame["request_id"]])
 
         # ---- resize computes real rows/cols from the actual container -------
         dims = page.evaluate("""

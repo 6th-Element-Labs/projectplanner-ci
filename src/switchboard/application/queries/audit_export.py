@@ -100,8 +100,30 @@ def _canonical_repo_root() -> str:
     )
 
 
-def _evidence_claim_reports(c: sqlite3.Connection) -> List[Dict[str, Any]]:
-    rows = _audit_table_rows(c, "activity", order_by="created_at, id")
+def _evidence_claim_reports(
+    c: sqlite3.Connection,
+    *,
+    task_ids: Optional[List[str]] = None,
+    limit: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    if task_ids is None and limit is None:
+        rows = _audit_table_rows(c, "activity", order_by="created_at, id")
+    else:
+        ids = [str(task_id) for task_id in (task_ids or []) if str(task_id)]
+        if not ids:
+            return []
+        placeholders = ",".join("?" for _ in ids)
+        params: List[Any] = list(ids)
+        sql = (
+            "SELECT * FROM activity WHERE task_id IN (" + placeholders + ") "
+            "AND (kind LIKE 'comment%' OR kind LIKE 'task.claim.completed%' "
+            "OR kind LIKE 'task.done_blocked%' OR kind LIKE 'task.offline_verified%' "
+            "OR kind LIKE 'task.offline_evidence_corrected%') "
+            "ORDER BY id DESC LIMIT ?"
+        )
+        params.append(max(1, int(limit or 1000)))
+        rows = [dict(row) for row in c.execute(sql, params).fetchall()]
+        rows.reverse()
     for row in rows:
         row["payload"] = _json_payload(row.get("payload") or "")
     return evidence_claims.evaluate_activities(rows, _canonical_repo_root())

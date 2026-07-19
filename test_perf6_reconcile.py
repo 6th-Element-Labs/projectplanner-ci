@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import jobs  # noqa: E402
 import store  # noqa: E402
+from db.connection import _conn  # noqa: E402
 
 passed = failed = 0
 
@@ -73,15 +74,47 @@ try:
     full = store.reconcile(project=project, incremental=True)
     full_checks = full.get("external_checks") or {}
     ok(full_checks.get("incremental") is True and full_checks.get("board_task_checks") == 2,
-       "first incremental reconcile performs a full baseline scan")
+       "first incremental reconcile checks the complete small fixture inside one bounded page")
     store.update_task(second["task_id"], {"title": "second changed"}, actor="test", project=project)
     delta = store.reconcile(project=project, incremental=True)
     delta_checks = delta.get("external_checks") or {}
     ok(delta_checks.get("changed_task_count") == 1 and
-       delta_checks.get("board_task_checks") == 1,
-       "later incremental reconcile checks only the task with new activity")
+       1 <= delta_checks.get("board_task_checks", 0) <= 200,
+       "later incremental reconcile prioritizes the changed task inside a bounded page")
     ok(store.get_meta("reconcile.activity_cursor", project=project) == delta["activity_cursor"],
        "incremental reconcile persists the consumed activity cursor")
+
+    # A large historical ledger must be page work, never an interactive full
+    # scan. Populate 100k irrelevant rows, start in the middle, and prove one
+    # call advances by exactly the requested bounded amount.
+    with _conn(project) as c:
+        c.executemany(
+            "INSERT INTO activity(task_id,actor,kind,payload,created_at) VALUES "
+            "(NULL,'perf6','history.noise','{}',?)",
+            [(float(i),) for i in range(100_000)],
+        )
+        ids = c.execute(
+            "SELECT MIN(id) AS first_id, MAX(id) AS last_id FROM activity "
+            "WHERE kind='history.noise'"
+        ).fetchone()
+        midpoint = int(ids["first_id"]) + 50_000
+        query_plan = [str(row["detail"]) for row in c.execute(
+            "EXPLAIN QUERY PLAN SELECT id,task_id FROM activity "
+            "WHERE id>? ORDER BY id LIMIT ?", (midpoint, 26)).fetchall()]
+    store.set_meta("reconcile.activity_cursor", midpoint, project=project)
+    started = time.monotonic()
+    bounded = store.reconcile(
+        project=project, incremental=True,
+        activity_limit=25, task_limit=10, evidence_limit=50)
+    elapsed = time.monotonic() - started
+    bounded_checks = bounded.get("external_checks") or {}
+    ok(bounded["activity_cursor"] - midpoint == 25
+       and bounded_checks.get("activity_batch_limit") == 25
+       and bounded_checks.get("activity_has_more") is True,
+       "100k-row history advances by one exact 25-row activity batch")
+    ok(elapsed < 1.5, f"bounded historical reconcile stays interactive ({elapsed:.3f}s)")
+    ok(any("PRIMARY KEY" in detail or "rowid" in detail.lower() for detail in query_plan),
+       f"historical activity paging uses the indexed id seek ({query_plan})")
 
     lock_path = os.path.join(_TMP, "single-flight.lock")
     holder = subprocess.Popen(

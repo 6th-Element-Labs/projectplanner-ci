@@ -17,12 +17,14 @@ FRAME_TYPES = frozenset({
     "ping",
     "pong",
     "backpressure",
+    "control_ack",
 })
 
 # Browser→host control frames require matching ticket scopes.
 BROWSER_TO_HOST_TYPES = frozenset({"input", "resize", "signal", "kill", "ping"})
 HOST_TO_BROWSER_TYPES = frozenset({
     "output", "state", "error", "close", "replay", "pong", "backpressure",
+    "control_ack",
 })
 
 # Browser tickets use watch/input/resize/signal/kill.

@@ -99,8 +99,13 @@ def create_router(*, resolve_project: ProjectResolver,
         return result
 
     @router.get("/ixp/v1/reconcile")
-    async def ixp_reconcile(project: str = Query(...)):
-        return store.reconcile(project=resolve_project(project))
+    async def ixp_reconcile(project: str = Query(...),
+                            full: bool = Query(False),
+                            activity_limit: int = Query(200, ge=1, le=1000),
+                            task_limit: int = Query(200, ge=1, le=1000)):
+        return store.reconcile(
+            project=resolve_project(project), incremental=not full,
+            activity_limit=activity_limit, task_limit=task_limit)
 
     @router.get("/ixp/v1/background_jobs")
     async def ixp_list_background_jobs():

@@ -155,6 +155,25 @@ try:
     ok("server_relay" not in (persisted_control.get("options") or {}),
        "server relay capabilities are delivered ephemerally and never persisted")
 
+    repeated_open = store.request_runner_control(
+        runner_id, "open", actor="ui40-operator",
+        principal_id="user/ui40-operator", project=P)
+    repeated_inject_1 = store.request_runner_control(
+        runner_id, "inject",
+        options={"task_id": tid, "text": "same text"},
+        actor="ui40-operator", principal_id="user/ui40-operator", project=P)
+    repeated_inject_2 = store.request_runner_control(
+        runner_id, "inject",
+        options={"task_id": tid, "text": "same text"},
+        actor="ui40-operator", principal_id="user/ui40-operator", project=P)
+    ok(repeated_open.get("requested") is True
+       and repeated_open.get("request_id") != control.get("request_id"),
+       "a later Watch open is a fresh recovery request, not a permanently deduped no-op")
+    ok(repeated_inject_1.get("requested") is True
+       and repeated_inject_2.get("requested") is True
+       and repeated_inject_1.get("request_id") != repeated_inject_2.get("request_id"),
+       "same-text durable chat retries cannot inherit an earlier failed external effect")
+
     # A terminal failed runner is the durable fallback for hosts that die before
     # their child can expire its Work Session explicitly.
     failed_task = store.create_task({

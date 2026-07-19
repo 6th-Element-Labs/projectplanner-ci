@@ -317,6 +317,10 @@
         const rp = this._runnerPty;
         if (!rp) return;
         if (rp.reconnectTimer) clearTimeout(rp.reconnectTimer);
+        if (rp.resizeTimer) clearTimeout(rp.resizeTimer);
+        Object.values(rp.pendingChat || {}).forEach((pending) => {
+            if (pending.timer) clearTimeout(pending.timer);
+        });
         if (rp.resizeObserver) { try { rp.resizeObserver.disconnect(); } catch (e) { /* ignore */ } }
         if (rp.ws) { try { rp.ws.close(); } catch (e) { /* ignore */ } }
         if (rp.term) { try { rp.term.dispose(); } catch (e) { /* ignore */ } }
@@ -478,10 +482,14 @@
                 project: window.PM_PROJECT || 'maxwell',
                 runner_session_id: rp.runnerSessionId,
                 reason: `operator watch on task ${rp.taskId}`,
+                // An open is a repeatable recovery operation, not a permanent
+                // side effect. A fresh operation id prevents an earlier verified
+                // open from suppressing the request needed after a server restart.
+                options: { client_request_id: this._runnerPtyRequestId('open') },
             }),
         }).then(async (res) => {
             const data = await res.json().catch(() => ({}));
-            if (!res.ok || data.error || data.requested === false) {
+            if (!res.ok || data.error || (data.requested === false && !data.verified)) {
                 throw new Error(this._runnerPtyApiError(
                     data,
                     data.requested === false ? (data.reason || 'refused') : `HTTP ${res.status}`,
@@ -553,17 +561,31 @@
         term.open(els.termMount);
         try { fitAddon.fit(); } catch (e) { /* container may be 0-sized mid-transition */ }
         term.onData((data) => this._runnerPtySendInput(data));
+        // xterm.js reserves onBinary for the small set of legacy mouse reports
+        // that are not UTF-8. Preserve those byte values instead of sending
+        // them through TextEncoder.
+        term.onBinary((data) => this._runnerPtySendBinary(data));
         rp.term = term;
         rp.fitAddon = fitAddon;
         rp.resizeObserver = new ResizeObserver(() => {
-            try { fitAddon.fit(); } catch (e) { return; }
-            this._runnerPtySendResize();
+            if (rp.resizeTimer) clearTimeout(rp.resizeTimer);
+            rp.resizeTimer = setTimeout(() => {
+                try { fitAddon.fit(); } catch (e) { return; }
+                this._runnerPtySendResize();
+            }, 50);
         });
         rp.resizeObserver.observe(els.termMount);
     },
 
     _runnerPtyEncodeFrame(type, payload) {
         return JSON.stringify(Object.assign({ type }, payload || {}));
+    },
+
+    _runnerPtyRequestId(prefix) {
+        const suffix = (window.crypto && typeof window.crypto.randomUUID === 'function')
+            ? window.crypto.randomUUID()
+            : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+        return `runner-${prefix || 'op'}-${suffix}`;
     },
 
     _runnerPtyB64FromString(str) {
@@ -577,6 +599,14 @@
         const rp = this._runnerPty;
         if (!rp || !rp.ws || rp.ws.readyState !== WebSocket.OPEN) return;
         rp.ws.send(this._runnerPtyEncodeFrame('input', { data_b64: this._runnerPtyB64FromString(data) }));
+    },
+
+    _runnerPtySendBinary(data) {
+        const rp = this._runnerPty;
+        if (!rp || !rp.ws || rp.ws.readyState !== WebSocket.OPEN) return;
+        let binary = '';
+        for (let i = 0; i < data.length; i++) binary += String.fromCharCode(data.charCodeAt(i) & 0xff);
+        rp.ws.send(this._runnerPtyEncodeFrame('input', { data_b64: btoa(binary) }));
     },
 
     _runnerPtySendResize() {
@@ -645,6 +675,27 @@
             this._runnerPtyGate(`Relay error: ${this.esc(frame.reason || frame.detail || 'unknown')}`, 'danger');
         } else if (type === 'close') {
             this._runnerPtyGate(`Session closed: ${this.esc(frame.reason || 'ended')}`, 'secondary');
+        } else if (type === 'control_ack') {
+            const pending = rp.pendingChat && rp.pendingChat[frame.request_id];
+            if (!pending) return;
+            delete rp.pendingChat[frame.request_id];
+            if (pending.timer) clearTimeout(pending.timer);
+            const badge = pending.entry && pending.entry.querySelector('[data-runner-chat-status]');
+            if (frame.ok) {
+                if (badge) {
+                    badge.className = 'badge bg-green-lt';
+                    badge.textContent = 'Delivered';
+                }
+                this._runnerPtyGate(`Delivered to ${rp.taskId} · ${rp.runnerSessionId}`, 'green');
+            } else {
+                if (badge) {
+                    badge.className = 'badge bg-red-lt';
+                    badge.textContent = 'Failed';
+                }
+                const els = this._runnerPtyEls();
+                if (els.chatInput && !els.chatInput.value) els.chatInput.value = pending.text;
+                this._runnerPtyGate(`Message was not delivered: ${this.esc(frame.error || 'runner refused input')}`, 'danger');
+            }
         }
     },
 
@@ -660,7 +711,46 @@
         if (!text) return;
         const injectKind = (kind || 'freeform').toLowerCase();
         if (els.chatSend) els.chatSend.disabled = true;
+        let entry = null;
+        if (els.chatLog) {
+            els.chatLog.insertAdjacentHTML('beforeend',
+                `<div class="d-flex align-items-start gap-1 mb-1"><span class="badge bg-yellow-lt" data-runner-chat-status>Sending</span><span>${this.esc(text)}</span></div>`);
+            entry = els.chatLog.lastElementChild;
+            els.chatLog.scrollTop = els.chatLog.scrollHeight;
+        }
         try {
+            // Normal Watch chat uses the already-connected full-duplex relay.
+            // The host acknowledges the exact local PTY write on the same socket,
+            // so delivery is RTT-bound instead of waiting for daemon polling.
+            if (rp.ws && rp.ws.readyState === WebSocket.OPEN) {
+                const requestId = this._runnerPtyRequestId('chat');
+                rp.pendingChat = rp.pendingChat || {};
+                if (els.chatInput) els.chatInput.value = '';
+                const timer = setTimeout(() => {
+                    const pending = rp.pendingChat && rp.pendingChat[requestId];
+                    if (!pending) return;
+                    delete rp.pendingChat[requestId];
+                    const badge = pending.entry && pending.entry.querySelector('[data-runner-chat-status]');
+                    if (badge) {
+                        badge.className = 'badge bg-red-lt';
+                        badge.textContent = 'No acknowledgement';
+                    }
+                    if (els.chatInput && !els.chatInput.value) els.chatInput.value = pending.text;
+                    this._runnerPtyGate('The live runner did not acknowledge the message. It was restored so you can retry.', 'danger');
+                }, 10000);
+                rp.pendingChat[requestId] = { entry, text, timer };
+                rp.ws.send(this._runnerPtyEncodeFrame('input', {
+                    request_id: requestId,
+                    purpose: 'chat',
+                    task_id: rp.taskId,
+                    data_b64: this._runnerPtyB64FromString(`${text}\r`),
+                }));
+                return;
+            }
+            // If the relay is reconnecting, retain the durable host queue as a
+            // fallback. Each attempt has a new id, so a prior timeout cannot
+            // permanently poison a retry of the same text.
+            const clientRequestId = this._runnerPtyRequestId('inject');
             const res = await fetch('/ixp/v1/request_runner_inject', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -671,21 +761,15 @@
                     text,
                     kind: injectKind,
                     reason: `operator ${injectKind} chat from task ${rp.taskId}`,
+                    options: { client_request_id: clientRequestId },
                 }),
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok || data.error) throw new Error(data.error || data.detail || data.message || `HTTP ${res.status}`);
             if (data.requested === false) {
-                throw new Error(data.reason || data.error || 'not accepted');
+                if (!data.verified) throw new Error(data.reason || data.error || 'not accepted');
             }
             if (els.chatInput) els.chatInput.value = '';
-            let entry = null;
-            if (els.chatLog) {
-                els.chatLog.insertAdjacentHTML('beforeend',
-                    `<div class="d-flex align-items-start gap-1 mb-1"><span class="badge bg-yellow-lt" data-runner-chat-status>Sending</span><span>${this.esc(text)}</span></div>`);
-                entry = els.chatLog.lastElementChild;
-                els.chatLog.scrollTop = els.chatLog.scrollHeight;
-            }
             this._runnerPtyAwaitChatDelivery(data.request_id, entry, text);
         } catch (e) {
             flash(`inject failed: ${e.message}`, 'danger');

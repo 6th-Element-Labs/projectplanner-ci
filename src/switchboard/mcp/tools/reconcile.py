@@ -30,11 +30,17 @@ def _services() -> ReconcileToolServices:
     return _SERVICES
 
 
-def reconcile(project: str = "maxwell") -> str:
-    """Run the local board/git-provenance drift report. This first pass catches board-internal
-    contradictions such as Done without merged_sha or In Review without PR/branch evidence."""
+def reconcile(project: str = "maxwell", full: bool = False,
+              activity_limit: int = 200, task_limit: int = 200) -> str:
+    """Run bounded incremental provenance reconciliation by default.
+
+    Set ``full=true`` only for an intentional offline audit; full mode scans historical
+    rows and runs GitHub orphan-discovery backstops.
+    """
     services = _services()
-    return services.dumps(store.reconcile(project=project))
+    return services.dumps(store.reconcile(
+        project=project, incremental=not full,
+        activity_limit=activity_limit, task_limit=task_limit))
 
 
 def reconcile_alerts(ctx: Context, project: str = "maxwell",

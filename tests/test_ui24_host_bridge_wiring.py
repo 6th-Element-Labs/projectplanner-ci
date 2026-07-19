@@ -146,6 +146,33 @@ ok(raised_after_stop,
 # ── Self-join + swallowed-exception regression: on_close firing from the ──
 # ── pump thread must not deadlock/leak, and a dead send must reach it ──
 from codex.pty_relay_bridge import LocalPtyRelayBridge, wait_until  # noqa: E402
+import codex.pty_relay_bridge as relay_bridge_module  # noqa: E402
+
+
+# Live browser chat carries a request id on the ordinary input frame. The Mac
+# must acknowledge only after the local PTY control call returns, on the same
+# low-latency socket used for terminal bytes.
+_ack_frames = []
+_real_apply_control = relay_bridge_module.apply_relay_control_frame
+relay_bridge_module.apply_relay_control_frame = lambda *_a, **_k: {"ok": True}
+try:
+    _ack_bridge = LocalPtyRelayBridge(
+        stream_url="http://127.0.0.1:1/stream",
+        control_url="http://127.0.0.1:1/control",
+        control_ticket="ack-ticket",
+        send_to_relay=_ack_frames.append,
+    )
+    _ack_result = _ack_bridge.handle_control_frame(domain.encode_frame(
+        "input", {"request_id": "runner-chat-ack-1"}, data=b"hello\r"))
+finally:
+    relay_bridge_module.apply_relay_control_frame = _real_apply_control
+ok(_ack_result.get("ok") is True and len(_ack_frames) == 1,
+   "local PTY input emits one exact delivery acknowledgement on the relay")
+_ack_payload = domain.decode_frame(_ack_frames[0])
+ok(_ack_payload.get("type") == "control_ack"
+   and _ack_payload.get("request_id") == "runner-chat-ack-1"
+   and _ack_payload.get("ok") is True,
+   "delivery acknowledgement binds success to the exact browser request id")
 
 
 class _OneShotStreamHandler(http.server.BaseHTTPRequestHandler):

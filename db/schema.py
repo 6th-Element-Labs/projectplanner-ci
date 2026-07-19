@@ -1082,6 +1082,8 @@ def apply_schema(c):
         CREATE INDEX IF NOT EXISTS ix_inbox_status ON inbox(status);
         CREATE INDEX IF NOT EXISTS ix_activity_task ON activity(task_id);
         CREATE INDEX IF NOT EXISTS ix_activity_ts ON activity(created_at);
+        CREATE INDEX IF NOT EXISTS ix_activity_task_id ON activity(task_id, id);
+        CREATE INDEX IF NOT EXISTS ix_activity_kind_id ON activity(kind, id);
         CREATE INDEX IF NOT EXISTS ix_chat_session ON chat(session);
         CREATE INDEX IF NOT EXISTS ix_leases_agent ON file_leases(agent_id);
         -- NARRATE-8 outbox access paths: idempotent emit (unique dedupe_key),

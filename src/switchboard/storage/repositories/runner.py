@@ -1587,6 +1587,13 @@ def request_runner_control(runner_session_id: str, action: str, reason: str = ""
     options = dict(options or {})
     if action not in RUNNER_CONTROL_ACTIONS:
         return {"requested": False, "error": "unsupported_action", "action": action}
+    if action in {"open", "inject"} and not str(
+            options.get("client_request_id") or "").strip():
+        # Open and inject are repeatable operations. They must not inherit a
+        # permanent external-effect result from an earlier open or same-text
+        # chat attempt. Callers that need HTTP retry idempotency may provide
+        # their own stable client_request_id; legacy callers receive a fresh id.
+        options["client_request_id"] = "runnerop-" + uuid.uuid4().hex
     with _conn(project) as c:
         row = c.execute("SELECT * FROM runner_sessions WHERE runner_session_id=?",
                         (runner_session_id,)).fetchone()
