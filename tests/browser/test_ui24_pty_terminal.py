@@ -106,7 +106,7 @@ try:
     healthy = _wait_healthy()
     ok(healthy, "app.py boots and /health responds (required auth, throwaway DB)")
     index_html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
-    ok('js/runner-session.js?v=6' in index_html and 'app.js?v=51' in index_html,
+    ok('js/runner-session.js?v=6' in index_html and 'app.js?v=52' in index_html,
        "the deployed shell invalidates pre-Resume-review runner and modal assets")
     if not healthy:
         raise SystemExit("server did not become healthy — aborting")
@@ -595,7 +595,11 @@ try:
                 fixture.innerHTML = TeepPlan.taskPrimaryRunnerHtml({
                     task_id: 'FAKE-TASK-1', status: 'In Review'
                 });
+                // Production Bootstrap modals stop the click before document;
+                // prove the rendered control owns its action without bubbling.
+                fixture.addEventListener('click', (event) => event.stopPropagation());
                 document.body.appendChild(fixture);
+                TeepPlan._bindTaskPrimaryResumeReview('FAKE-TASK-1');
             }
         """)
         page.evaluate("() => TeepPlan._loadTaskPrimaryRunner('FAKE-TASK-1')")

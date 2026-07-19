@@ -1909,6 +1909,35 @@ const TeepPlan = {
         <div id="runner-pty-details-mount" class="mb-3"></div>`;
     },
 
+    _resumeTaskReviewFromPrimary(button, taskId) {
+        const resume = this.resumeTaskReview
+            || window.SwitchboardRunnerSession?.methods?.resumeTaskReview;
+        if (!taskId || typeof resume !== 'function') {
+            const flash = document.getElementById('task-primary-flash');
+            if (flash) {
+                flash.className = 'small mt-1 text-danger';
+                flash.textContent = 'Resume review is unavailable. Refresh and try again.';
+            }
+            return;
+        }
+        resume.call(this, taskId, {
+            dockInto: document.getElementById('runner-pty-details-mount') || undefined,
+        });
+    },
+
+    _bindTaskPrimaryResumeReview(taskId) {
+        const button = document.getElementById('task-primary-resume-review');
+        if (!button || button.dataset.resumeReviewBound === 'true') return;
+        button.dataset.resumeReviewBound = 'true';
+        button.addEventListener('click', (e) => {
+            e.preventDefault();
+            // Bootstrap's modal boundary may stop bubbling before document.
+            // Own this critical action at the rendered control itself.
+            e.stopPropagation();
+            this._resumeTaskReviewFromPrimary(button, String(taskId || '').trim());
+        });
+    },
+
     async _loadTaskPrimaryRunner(taskId) {
         const root = document.getElementById('task-primary-runner');
         if (!root || root.dataset.taskId !== String(taskId || '')) return;
@@ -2105,6 +2134,7 @@ const TeepPlan = {
                     </div>
                 </div>
             </div>`;
+        this._bindTaskPrimaryResumeReview(t.task_id);
         this._renderActivity(t);
         this._loadTaskMonitors(t.task_id);
         this._initMergeGate(t.task_id);
@@ -4000,19 +4030,7 @@ const TeepPlan = {
             e.preventDefault();
             const root = button.closest('#task-primary-runner');
             const taskId = String(root?.dataset?.taskId || '').trim();
-            const resume = this.resumeTaskReview
-                || window.SwitchboardRunnerSession?.methods?.resumeTaskReview;
-            if (!taskId || typeof resume !== 'function') {
-                const flash = document.getElementById('task-primary-flash');
-                if (flash) {
-                    flash.className = 'small mt-1 text-danger';
-                    flash.textContent = 'Resume review is unavailable. Refresh and try again.';
-                }
-                return;
-            }
-            resume.call(this, taskId, {
-                dockInto: document.getElementById('runner-pty-details-mount') || undefined,
-            });
+            this._resumeTaskReviewFromPrimary(button, taskId);
         });
         ['f-search', 'f-ws', 'f-owner', 'f-assignee', 'f-risk', 'f-blocking', 'f-hidedone'].forEach((id) => {
             const el = document.getElementById(id);
