@@ -106,7 +106,7 @@ try:
     healthy = _wait_healthy()
     ok(healthy, "app.py boots and /health responds (required auth, throwaway DB)")
     index_html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
-    ok('js/runner-session.js?v=6' in index_html and 'app.js?v=50' in index_html,
+    ok('js/runner-session.js?v=6' in index_html and 'app.js?v=51' in index_html,
        "the deployed shell invalidates pre-Resume-review runner and modal assets")
     if not healthy:
         raise SystemExit("server did not become healthy — aborting")
@@ -586,6 +586,7 @@ try:
         # The task modal must perform the same stale discovery after a full
         # reload. Without include_stale it incorrectly renders Ready / Start
         # task for an In Review task whose reviewer crashed.
+        page.evaluate("() => TeepPlan._runnerPtyClose()")
         review_watch_calls.clear()
         page.evaluate("""
             () => {
@@ -612,6 +613,12 @@ try:
         ok("In Review" in modal_runner["badge"]
            and modal_runner["resumeVisible"] and modal_runner["startHidden"],
            "the task modal renders Resume review instead of Start task for a dead reviewer")
+        modal_resume_before = len(resume_requests)
+        page.locator('#task-primary-resume-review').click()
+        page.wait_for_timeout(2500)
+        ok(len(resume_requests) == modal_resume_before + 1
+           and resume_requests[-1].get("project") == "ui24-browser",
+           "the task modal Resume review button emits one project-bound replacement request")
         page.evaluate("() => document.getElementById('ui50-task-modal-runner-fixture').remove()")
         page.unroute("**/api/tasks/FAKE-TASK-1/resume-review**", _resume_review)
         page.unroute("**/ixp/v1/runner_sessions/watch?**", _review_watch)

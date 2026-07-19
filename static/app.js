@@ -2113,8 +2113,6 @@ const TeepPlan = {
         this._loadDispatch(t.task_id);
         const primaryStart = document.getElementById('task-primary-start');
         if (primaryStart) primaryStart.addEventListener('click', () => this.dispatchTask(t.task_id, 'codex'));
-        const primaryResumeReview = document.getElementById('task-primary-resume-review');
-        if (primaryResumeReview) primaryResumeReview.addEventListener('click', () => this.resumeTaskReview(t.task_id, { dockInto: document.getElementById('runner-pty-details-mount') || undefined }));
         const primaryWatchHere = document.getElementById('task-primary-watch-here');
         if (primaryWatchHere) primaryWatchHere.addEventListener('click', async () => {
             const runner = document.getElementById('task-primary-runner');
@@ -3993,6 +3991,29 @@ const TeepPlan = {
 
     // ---- events ----------------------------------------------------------
     wireEvents() {
+        // UI-52: the task modal body is rebuilt for every task. Delegate this
+        // critical action at the document boundary so a preceding runner-panel
+        // setup failure cannot leave a visible Resume review button inert.
+        document.addEventListener('click', (e) => {
+            const button = e.target.closest('#task-primary-resume-review');
+            if (!button) return;
+            e.preventDefault();
+            const root = button.closest('#task-primary-runner');
+            const taskId = String(root?.dataset?.taskId || '').trim();
+            const resume = this.resumeTaskReview
+                || window.SwitchboardRunnerSession?.methods?.resumeTaskReview;
+            if (!taskId || typeof resume !== 'function') {
+                const flash = document.getElementById('task-primary-flash');
+                if (flash) {
+                    flash.className = 'small mt-1 text-danger';
+                    flash.textContent = 'Resume review is unavailable. Refresh and try again.';
+                }
+                return;
+            }
+            resume.call(this, taskId, {
+                dockInto: document.getElementById('runner-pty-details-mount') || undefined,
+            });
+        });
         ['f-search', 'f-ws', 'f-owner', 'f-assignee', 'f-risk', 'f-blocking', 'f-hidedone'].forEach((id) => {
             const el = document.getElementById(id);
             const ev = (id === 'f-search') ? 'input' : 'change';
