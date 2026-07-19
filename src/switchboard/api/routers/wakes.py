@@ -18,6 +18,7 @@ import store
 from switchboard.api.deps import (
     is_narrow_agent_host_principal,
     require_agent_host_bootstrap_authority,
+    require_direct_task_completion_authority,
     require_agent_host_identity,
     resolve_agent_host_principal,
 )
@@ -87,7 +88,28 @@ def create_router(*, resolve_project: ProjectResolver,
                 policy.get("execution_mode") == "personal_agent_host"
                 or policy.get("require_exact_host_binding")
             )
-            if personal_exact:
+            direct_task = (
+                policy.get("mode") == "direct_task"
+                and policy.get("execution_mode") == "direct_personal_cli"
+                and policy.get("require_runner_bind") is False
+            )
+            if direct_task:
+                selector = dict(wake.get("selector") or {})
+                require_direct_task_completion_authority(
+                    principal,
+                    {
+                        "wake_id": wake_id,
+                        "host_id": str(selector.get("host_id") or ""),
+                        "runner_session_id": str(
+                            body.get("runner_session_id") or ""),
+                        "task_id": str(
+                            wake.get("task_id") or selector.get("task_id") or ""),
+                        "agent_id": str(
+                            body.get("agent_id") or selector.get("agent_id") or ""),
+                    },
+                    project,
+                )
+            elif personal_exact:
                 if str(execution.get("host_principal_id") or "") \
                         != str(principal.get("id") or ""):
                     raise HTTPException(

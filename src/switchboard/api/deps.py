@@ -154,6 +154,21 @@ def require_agent_host_bootstrap_authority(
     return result
 
 
+def require_direct_task_completion_authority(
+        principal: dict, binding: dict, project: str) -> dict:
+    """Fence a no-claim direct wake to its selected host and live native runner."""
+    if not is_narrow_agent_host_principal(principal):
+        return {"allowed": True, "legacy_or_operator": True}
+    host_id = str((binding or {}).get("host_id") or "").strip()
+    require_agent_host_identity(principal, host_id, project)
+    result = store.check_direct_task_completion_authority(
+        binding or {}, principal_id=str(principal.get("id") or ""),
+        project=project)
+    if not result.get("allowed"):
+        raise HTTPException(403, result)
+    return result
+
+
 def resolve_body_project(body: dict) -> str:
     """Require an explicit body ``project`` — no Maxwell omission fallback (SEG-4)."""
     from switchboard.api.project_scope import resolve_body_project_context

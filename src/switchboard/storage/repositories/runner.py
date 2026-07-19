@@ -46,6 +46,7 @@ __all__ = [
     "issue_direct_session_mcp_token",
     "get_direct_session_principal_by_token_any_project",
     "check_agent_host_bootstrap_authority",
+    "check_direct_task_completion_authority",
     "assert_runner_watchable",
     "resolve_task_active_runner",
     "resolve_runner_watch",
@@ -55,6 +56,99 @@ __all__ = [
     "claim_runner_control_request",
     "complete_runner_control_request",
 ]
+
+
+def check_direct_task_completion_authority(
+        binding: Dict[str, Any], *, principal_id: str,
+        project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Authorize completion of one no-claim direct personal-host wake.
+
+    Direct task wakes deliberately never enter the scheduler claim handshake.  The
+    durable authority tuple is instead the selected host on the pending wake plus
+    the already-registered native runner.  Every value is read back from storage;
+    the request body is only a lookup tuple.
+    """
+    supplied = {key: str((binding or {}).get(key) or "").strip() for key in (
+        "wake_id", "host_id", "runner_session_id", "task_id", "agent_id",
+    )}
+    supplied["task_id"] = supplied["task_id"].upper()
+    missing = sorted(key for key, value in supplied.items() if not value)
+    if missing:
+        return {
+            "allowed": False,
+            "error_code": "direct_task_completion_binding_incomplete",
+            "missing": missing,
+        }
+
+    with _conn(project) as c:
+        wake = c.execute(
+            "SELECT status, task_id, selector_json, policy_json "
+            "FROM wake_intents WHERE wake_id=?",
+            (supplied["wake_id"],),
+        ).fetchone()
+        runner = c.execute(
+            "SELECT host_id, agent_id, runtime, task_id, status, metadata_json, "
+            "principal_id FROM runner_sessions WHERE runner_session_id=?",
+            (supplied["runner_session_id"],),
+        ).fetchone()
+
+    reasons: List[str] = []
+    selector = _json_obj(wake["selector_json"], {}) if wake else {}
+    policy = _json_obj(wake["policy_json"], {}) if wake else {}
+    metadata = _json_obj(runner["metadata_json"], {}) if runner else {}
+    if not wake or str(wake["status"] or "") not in {"pending", "completed"}:
+        reasons.append("direct_wake_not_active")
+    if wake and not (
+            policy.get("mode") == "direct_task"
+            and policy.get("execution_mode") == "direct_personal_cli"
+            and policy.get("require_runner_bind") is False):
+        reasons.append("wake_not_direct_personal_cli")
+    expected_wake = {
+        "host_id": supplied["host_id"],
+        "task_id": supplied["task_id"],
+        "agent_id": supplied["agent_id"],
+    }
+    actual_wake = {
+        "host_id": str(selector.get("host_id") or ""),
+        "task_id": str(wake["task_id"] or selector.get("task_id") or "").upper()
+        if wake else "",
+        "agent_id": str(selector.get("agent_id") or ""),
+    }
+    for field, expected in expected_wake.items():
+        if actual_wake[field] != expected:
+            reasons.append(f"wake_{field}_mismatch")
+    if not runner:
+        reasons.append("direct_runner_not_found")
+    else:
+        expected_runner = {
+            "host_id": supplied["host_id"],
+            "agent_id": supplied["agent_id"],
+            "runtime": "codex",
+            "task_id": supplied["task_id"],
+            "principal_id": str(principal_id or ""),
+        }
+        for field, expected in expected_runner.items():
+            actual = str(runner[field] or "")
+            if field == "task_id":
+                actual = actual.upper()
+            if actual != expected:
+                reasons.append(f"runner_{field}_mismatch")
+        if str(runner["status"] or "").lower() not in {"ready", "running"}:
+            reasons.append("direct_runner_not_live")
+        if (str(metadata.get("wake_id") or "") != supplied["wake_id"]
+                or metadata.get("direct_assignment") is not True):
+            reasons.append("direct_runner_metadata_mismatch")
+    if reasons:
+        return {
+            "allowed": False,
+            "error_code": "direct_task_completion_binding_denied",
+            "reason_codes": sorted(set(reasons)),
+        }
+    return {
+        "allowed": True,
+        "schema": "switchboard.direct_task_completion_authority.v1",
+        **supplied,
+    }
 
 
 def issue_direct_session_mcp_token(
