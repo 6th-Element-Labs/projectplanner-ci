@@ -1892,6 +1892,15 @@ def complete_wake(wake_id: str, runner_session_id: str = "",
                     and float(runner.get("heartbeat_at") or 0)
                     + float(runner.get("heartbeat_ttl_s") or 60) > now
                 )
+                transport_missing = []
+                if (metadata.get("native_host_execution") is True
+                        and str(runner.get("runtime") or "") == "codex"):
+                    if metadata.get("pty") is not True:
+                        transport_missing.append("pty")
+                    if not str(metadata.get("stream_bind") or "").strip():
+                        transport_missing.append("stream_bind")
+                    if str(metadata.get("stream_port") or "").strip() in {"", "0"}:
+                        transport_missing.append("stream_port")
                 exact = bool(
                     runner
                     and str(runner.get("task_id") or "") == expected_task
@@ -1909,6 +1918,17 @@ def complete_wake(wake_id: str, runner_session_id: str = "",
                     and str(session["status"] or "") == "active"
                     and str(session["agent_id"] or "") == expected_agent
                 )
+                if exact and transport_missing:
+                    return {
+                        "completed": False,
+                        "reason": "runner_stream_not_ready",
+                        "error_code": "runner_stream_not_ready",
+                        "failure_class": "broken_connection",
+                        "missing": transport_missing,
+                        "wake_id": wake_id,
+                        "runner_session_id": runner_session_id or None,
+                        "retryable": True,
+                    }
                 if not exact:
                     return {
                         "completed": False,

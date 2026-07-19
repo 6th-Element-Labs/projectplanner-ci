@@ -85,6 +85,7 @@ def fake_launch(wake, _inventory, runner_session_id=None, extra_env=None):
         "cwd": f"/tmp/{wake['task_id']}",
         "wake_mode": "claim_next",
         "pty": True,
+        "stream_bind": "127.0.0.1",
         "stream_port": 64000 + len(launches),
         "control": {"runner_open": True, "runner_inject": True},
         "metadata": {"credential_admission_phase": "preclaim"},
@@ -111,6 +112,11 @@ def fake_wait(wake, _inventory, runner_session_id, **_kwargs):
                 "wake_id": wake["wake_id"],
                 "work_session_id": f"worksession-{wake['wake_id']}",
                 "credential_admission_phase": "claim_bound",
+                # Reproduce the real preclaim placeholders that used to erase
+                # the supervisor's already-live PTY during the final join.
+                "pty": False,
+                "stream_bind": None,
+                "stream_port": None,
             },
         },
     }
@@ -178,6 +184,15 @@ try:
        and all(row.get("claim_id") and row.get("work_session_id")
                and row.get("runner_registered") for row in successful),
        "each success completes with its own exact claim, Work Session, and Watch row")
+    joined = agent_host._enrich_bound_runner_record(
+        fake_launch(wakes[0], inventory, "run-transport-proof"),
+        fake_wait(wakes[0], inventory, "run-transport-proof")["session"],
+    )
+    ok(joined["pty"] is True and joined["stream_port"]
+       and "pty" not in joined["metadata"]
+       and "stream_bind" not in joined["metadata"]
+       and "stream_port" not in joined["metadata"],
+       "claim-bound preclaim placeholders cannot erase supervisor PTY transport")
     ok(len(final["acted"]) == 3
        and all(row.get("binding_pending") is False for row in final["acted"]),
        "the next nonblocking poll exposes every finalization receipt")

@@ -254,6 +254,34 @@ ok(renewed == [{
    and renewal[2]["heartbeat_ttl_s"] == 180,
    "each daemon tick renews the live direct task PTY without inventing claim state")
 
+# Autopilot workers heartbeat claim state from inside the child, but only the
+# supervisor knows the PTY coordinates. The host must continuously join both.
+heartbeat_calls.clear()
+agent_host._drain_runners = lambda selected_host: [{
+    "runner_session_id": "run-autopilot-watch",
+    "agent_id": "codex/ARCH-MS-123", "runtime": "codex",
+    "task_id": "ARCH-MS-123", "host_id": selected_host,
+    "claim_id": "taskclaim-123", "pid": 54321,
+    "status": "running", "alive": True, "cwd": str(ROOT),
+    "wake_mode": "claim_next",
+    "control": {"tier": "T3", "runner_open": True, "runner_inject": True},
+    "metadata": {
+        "wake_id": "wake-123", "work_session_id": "worksession-123",
+        "credential_admission_phase": "claim_bound", "pty": True,
+        "stream_bind": "127.0.0.1", "stream_port": 64123,
+        "native_host_execution": True,
+    },
+}]
+renewed_bound = agent_host.renew_live_direct_runners(inventory)
+bound_renewal = heartbeat_calls[0][2]
+ok(renewed_bound[0]["renewed"] is True
+   and bound_renewal["claim_id"] == "taskclaim-123"
+   and bound_renewal["metadata"]["work_session_id"] == "worksession-123"
+   and bound_renewal["metadata"]["pty"] is True
+   and bound_renewal["metadata"]["stream_port"] == 64123
+   and bound_renewal["metadata"].get("direct_assignment") is not True,
+   "each daemon tick repairs and renews claim-bound Autopilot PTY transport")
+
 # A failed session can leave its branch attached to the first worktree.  A
 # deliberate retry must therefore create a second worktree with a different
 # branch instead of dying before Codex starts.

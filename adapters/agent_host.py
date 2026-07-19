@@ -74,6 +74,11 @@ _BOUND_FINALIZERS_LOCK = threading.Lock()
 _BOUND_FINALIZERS = {}
 _BOUND_FINALIZER_RESULTS = []
 
+_RUNNER_TRANSPORT_METADATA_FIELDS = {
+    "pty", "stream_bind", "stream_port", "stream_url", "relay_url",
+    "local_stream_url", "transport", "browser_safe", "relay_required",
+}
+
 
 def _csv(value):
     if isinstance(value, list):
@@ -1511,17 +1516,38 @@ def _drain_runners(host_id, recover_stale_local=True):
             P_LIST_RUNNERS, host_id=host_id, include_stale="false")) or {}
         rows = result.get("sessions") or result.get("runner_sessions") or []
         sessions = rows if isinstance(rows, list) else []
-    merged = {row.get("runner_session_id"): dict(row) for row in local
-              if row.get("runner_session_id")}
+    local_by_id = {row.get("runner_session_id"): dict(row) for row in local
+                   if row.get("runner_session_id")}
+    merged = dict(local_by_id)
     for row in sessions:
         runner_id = row.get("runner_session_id")
         if runner_id:
-            merged[runner_id] = {**merged.get(runner_id, {}), **dict(row)}
+            local_row = local_by_id.get(runner_id, {})
+            combined = {**local_row, **dict(row)}
+            if local_row.get("alive") is True:
+                # Central identity/claim state is authoritative, but only the
+                # local supervisor can report the live PTY transport.  Repair
+                # an older preclaim placeholder on every daemon tick.
+                for key in ("pty", "stream_bind", "stream_port", "streamer_pid",
+                            "log_path", "pid", "alive"):
+                    if local_row.get(key) not in (None, ""):
+                        combined[key] = local_row.get(key)
+                combined["metadata"] = {
+                    **dict(row.get("metadata") or {}),
+                    **{key: local_row.get(key) for key in
+                       ("pty", "stream_bind", "stream_port")
+                       if local_row.get(key) not in (None, "")},
+                }
+                combined["control"] = {
+                    **dict(row.get("control") or {}),
+                    **dict(local_row.get("control") or {}),
+                }
+            merged[runner_id] = combined
     return list(merged.values())
 
 
 def renew_live_direct_runners(inventory):
-    """Keep browser Watch/Chat bound to every live direct Mac Codex PTY.
+    """Keep browser Watch/Chat bound to every live Mac Codex PTY.
 
     Direct-task wakes are acknowledged immediately after launch, so they leave
     the pending-wake feed while the native CLI continues working.  The launch
@@ -1529,9 +1555,10 @@ def renew_live_direct_runners(inventory):
     close/reopen of Watch loses the centrally discoverable row even though the
     supervisor-owned process and PTY are still alive.
 
-    ``_drain_runners`` joins local supervisor truth with the last central row.
-    That also repairs sessions launched by older Agent Host builds: their local
-    session.json did not persist wake_mode/wake_id, but the stale central row did.
+    Claim-bound Autopilot sessions need the same renewal.  The worker heartbeat
+    owns claim/Work Session state but cannot see the outer supervisor's PTY, so
+    this host heartbeat continuously joins both halves. ``_drain_runners`` also
+    repairs sessions whose central preclaim placeholders hid a live local PTY.
     """
     host_id = str((inventory or {}).get("host_id") or "")
     renewed = []
@@ -1541,7 +1568,10 @@ def renew_live_direct_runners(inventory):
             metadata.get("direct_assignment") is True
             or session.get("wake_mode") == "direct_task"
         )
-        if (not direct or session.get("alive") is not True
+        claim_id = str(session.get("claim_id") or "")
+        work_session_id = str(metadata.get("work_session_id") or "")
+        claim_bound = bool(claim_id and work_session_id)
+        if (not (direct or claim_bound) or session.get("alive") is not True
                 or str(session.get("status") or "").lower() != "running"):
             continue
         wake_id = str(metadata.get("wake_id") or session.get("wake_id") or "")
@@ -1555,7 +1585,7 @@ def renew_live_direct_runners(inventory):
             "agent_id": session.get("agent_id") or f"codex/{task_id}",
             "runtime": session.get("runtime") or "codex",
             "task_id": task_id,
-            "claim_id": "",
+            "claim_id": claim_id if claim_bound else "",
             "pid": session.get("pid"),
             "status": "running",
             "cwd": session.get("cwd") or inventory.get("repo_root"),
@@ -1566,9 +1596,12 @@ def renew_live_direct_runners(inventory):
             "metadata": {
                 **metadata,
                 "wake_id": wake_id,
-                "wake_mode": "direct_task",
-                "direct_assignment": True,
-                "assignment_schema": "switchboard.direct_cli_assignment.v1",
+                "wake_mode": ("direct_task" if direct else
+                              session.get("wake_mode") or "claim_next"),
+                **({
+                    "direct_assignment": True,
+                    "assignment_schema": "switchboard.direct_cli_assignment.v1",
+                } if direct else {}),
             },
             # Busy hosts may spend longer than one nominal tick finalizing other
             # work. A three-minute lease prevents a healthy direct PTY from
@@ -1797,6 +1830,12 @@ def _enrich_bound_runner_record(rec, session):
     session = dict(session or {})
     local_metadata = dict(rec.get("metadata") or {})
     bound_metadata = dict(session.get("metadata") or {})
+    # The worker publishes claim/Work Session authority before the Agent Host
+    # finalizer joins in the supervisor-owned PTY.  Its row inherits the
+    # preclaim transport placeholders (pty=false, null stream coordinates).
+    # Never let those placeholders overwrite the supervisor's live transport.
+    for key in _RUNNER_TRANSPORT_METADATA_FIELDS:
+        bound_metadata.pop(key, None)
     return {
         **rec,
         "agent_id": session.get("agent_id") or rec.get("agent_id"),
@@ -1815,12 +1854,29 @@ def _enrich_bound_runner_record(rec, session):
     }
 
 
+def _missing_local_runner_transport(rec):
+    """Return the missing supervisor-owned fields for a watchable local PTY."""
+    rec = dict(rec or {})
+    missing = []
+    if rec.get("pty") is not True:
+        missing.append("pty")
+    if not str(rec.get("stream_bind") or "").strip():
+        missing.append("stream_bind")
+    if str(rec.get("stream_port") or "").strip() in {"", "0"}:
+        missing.append("stream_port")
+    return missing
+
+
 def _finalize_bound_runner(wake, inventory, runner_session_id, rec):
     """Finish claim-bound admission without blocking host dispatch/heartbeats."""
     bound_result = wait_for_runner_binding(wake, inventory, runner_session_id)
     runner_registration = (bound_result or {}).get("session")
     started = bool((bound_result or {}).get("bound"))
     reason = (bound_result or {}).get("reason") or "runner_bind_timeout"
+    transport_missing = _missing_local_runner_transport(rec) if started else []
+    if transport_missing:
+        started = False
+        reason = "runner_stream_not_ready"
     if not started:
         supervisor_action("kill", runner_session_id, {"grace_seconds": 2.0})
         failed_rec = {
@@ -1831,6 +1887,8 @@ def _finalize_bound_runner(wake, inventory, runner_session_id, rec):
                 **((rec or {}).get("metadata") or {}),
                 "credential_admission_phase": "preclaim_failed",
                 "failure_reason": reason,
+                **({"missing_transport": transport_missing}
+                   if transport_missing else {}),
             },
         }
         runner_registration = register_runner_session(
