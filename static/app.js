@@ -4186,7 +4186,7 @@ const TeepPlan = {
                     // these pills always opened the authoring modal.
                     if (typeof this.openRunnerSessionPanel === 'function') {
                         const opened = await this.openRunnerSessionPanel(
-                            taskId, { fallbackIfNotWatchable: true });
+                            taskId, { fallbackIfNotWatchable: true, includeStale: true });
                         if (opened) return;
                     }
                     this.openNodeModal(taskId, node.getAttribute('data-linked-project'));

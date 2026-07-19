@@ -426,6 +426,53 @@ try:
            "an immediate close/reopen is not hidden later by the old close animation timer")
         page.evaluate("() => TeepPlan._runnerPtyClose()")
 
+        # ---- fresh reload can discover and open an existing stale runner ----
+        # A browser reload erases _runnerPtyLast. Production ARCH-MS-121 is
+        # already stale because its wrapper crashed, so its FIRST click after a
+        # reload must still open the runner surface instead of the authoring
+        # modal. Mock only the server response; drive the same real visible box.
+        stale_watch_urls = []
+
+        def _stale_watch(route):
+            stale_watch_urls.append(route.request.url)
+            route.fulfill(
+                status=200, content_type="application/json",
+                body=json.dumps({
+                    "watchable": False,
+                    "error_code": "runner_bind_incomplete",
+                    "message": "Session ended after worker failure",
+                    "sessions": [{
+                        "runner_session_id": "run_stale_after_reload",
+                        "host_id": "host/browser-test",
+                        "status": "failed",
+                        "stale": True,
+                    }],
+                }),
+            )
+
+        page.route("**/ixp/v1/runner_sessions/watch?**", _stale_watch)
+        page.evaluate("() => { TeepPlan._runnerPtyLast = null; }")
+        page.locator('.mission-dag-node[data-linked-task="FAKE-TASK-1"]').click()
+        page.wait_for_timeout(300)
+        fresh_stale_open = page.evaluate("""
+            () => ({
+                visible: !document.getElementById('runner-pty-panel').hidden,
+                title: document.getElementById('runner-pty-title').textContent,
+                gate: document.getElementById('runner-pty-gate').textContent,
+                nodeModalOpen: document.getElementById('dl-node-modal').classList.contains('show'),
+            })
+        """)
+        ok(len(stale_watch_urls) == 1 and "include_stale=true" in stale_watch_urls[0],
+           "a first dependency-box click after reload explicitly discovers stale runner history")
+        ok(fresh_stale_open["visible"]
+           and "run_stale_after_reload" in fresh_stale_open["title"]
+           and "Session ended after worker failure" in fresh_stale_open["gate"],
+           "the discovered stale runner opens a truthful runner window on the first click")
+        ok(not fresh_stale_open["nodeModalOpen"],
+           "fresh stale-runner discovery does not fall through to the authoring modal")
+        page.unroute("**/ixp/v1/runner_sessions/watch?**", _stale_watch)
+        page.evaluate("() => TeepPlan._runnerPtyClose()")
+
         ok(not console_errors, f"no uncaught console/page errors during the whole flow (got: {console_errors})")
 
         browser.close()

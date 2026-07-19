@@ -766,7 +766,8 @@
                 // bound terminal (the sidecar); otherwise fall back to the existing
                 // deliverable-link node-actions modal (UI-1).
                 if (typeof this.openRunnerSessionPanel === 'function') {
-                    const opened = await this.openRunnerSessionPanel(hit.id, { fallbackIfNotWatchable: true });
+                    const opened = await this.openRunnerSessionPanel(
+                        hit.id, { fallbackIfNotWatchable: true, includeStale: true });
                     if (opened) return;
                 }
                 this.openNodeModal(hit.id, hit.project_id);

@@ -89,6 +89,8 @@ ok("mission-dag-node" in APP and "await this.openRunnerSessionPanel" in APP,
    "the visible dependency-map pills use the same runner-first path as Mermaid graph nodes")
 ok("_runnerPtyLast" in RUNNER_SESSION and "include_stale=true" in RUNNER_SESSION,
    "closing a watched runner remembers repeat-click intent and reopens its truthful stale gate")
+ok("opts.includeStale" in RUNNER_SESSION and "!sessions.length" in RUNNER_SESSION,
+   "a fresh page can discover stale runner history while never-run tasks still fall back to authoring")
 ok("_runnerPtyCloseTimer" in RUNNER_SESSION,
    "a pending close animation cannot hide a runner panel that was immediately reopened")
 

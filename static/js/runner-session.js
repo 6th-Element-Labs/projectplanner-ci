@@ -333,7 +333,9 @@
     // The one entry point. opts.dockInto: mount inside the task modal's Dev tab
     // instead of opening the sidecar. opts.fallbackIfNotWatchable: return false
     // instead of opening a red gate state (lets callers like the mission graph
-    // click handler fall back to a different action for tasks with no live run).
+    // click handler fall back to a different action for tasks with no run).
+    // opts.includeStale discovers prior runner history after a full page reload,
+    // when the in-memory _runnerPtyLast hint no longer exists.
     async openRunnerSessionPanel(taskId, opts) {
         opts = opts || {};
         const id = String(taskId || '').trim();
@@ -345,7 +347,7 @@
         try {
             const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`
                 + `&task_id=${encodeURIComponent(id)}`
-                + (remembered ? '&include_stale=true' : '');
+                + ((remembered || opts.includeStale) ? '&include_stale=true' : '');
             watch = await (await fetch(`/ixp/v1/runner_sessions/watch?${q}`)).json();
         } catch (e) {
             if (opts.fallbackIfNotWatchable && !remembered) return false;
@@ -355,9 +357,12 @@
         }
         const watchable = watch && watch.watchable !== false && !watch.error && watch.error_code !== 'runner_bind_incomplete';
         if (!watchable) {
-            if (opts.fallbackIfNotWatchable && !remembered) return false;
-            const els = this._runnerPtyShowShell(opts.dockInto);
             const sessions = (watch && Array.isArray(watch.sessions)) ? watch.sessions : [];
+            // Preserve authoring fallback for tasks that have never had a
+            // runner. An ended/stale session is real runner history, so reopen
+            // its truthful gate instead of treating it as "no runner".
+            if (opts.fallbackIfNotWatchable && !remembered && !sessions.length) return false;
+            const els = this._runnerPtyShowShell(opts.dockInto);
             const rememberedSession = sessions.find((session) =>
                 String(session.runner_session_id || '') === String(remembered?.runnerSessionId || ''))
                 || sessions[0] || null;
