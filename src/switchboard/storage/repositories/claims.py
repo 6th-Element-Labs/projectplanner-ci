@@ -42,6 +42,44 @@ def _store_facade():
     return store
 
 
+def _review_continuation_wake_for_claim_in(
+        c: sqlite3.Connection, task_id: str, agent_id: str) -> Optional[Dict[str, Any]]:
+    """Return the exact live Resume-review wake authorizing an In Review claim.
+
+    A replacement reviewer still needs the ordinary task lease, but acquiring
+    that lease must not turn the workflow back into implementation work.  The
+    durable wake is the authority: it binds the exact task and agent and carries
+    the review-continuation contract created by ``dispatch.resume_review``.
+    """
+    rows = c.execute(
+        "SELECT wake_id, selector_json, policy_json FROM wake_intents "
+        "WHERE task_id=? AND status IN ('pending','claimed') "
+        "AND archived_at IS NULL ORDER BY requested_at DESC, wake_id DESC LIMIT 8",
+        (task_id,),
+    ).fetchall()
+    for row in rows:
+        try:
+            selector = json.loads(row["selector_json"] or "{}")
+            policy = json.loads(row["policy_json"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        assignment = policy.get("assignment") or {}
+        continuation = assignment.get("continuation") or {}
+        if (
+            str(selector.get("task_id") or "") == task_id
+            and str(selector.get("agent_id") or "") == agent_id
+            and str(assignment.get("task_id") or "") == task_id
+            and continuation.get("schema") == "switchboard.review_runner_continuation.v1"
+            and str(continuation.get("previous_runner_session_id") or "")
+        ):
+            return {
+                "wake_id": row["wake_id"],
+                "previous_runner_session_id": continuation["previous_runner_session_id"],
+                "mode": continuation.get("mode") or "replacement_handoff",
+            }
+    return None
+
+
 def _record_mission_claim_completion(mission_project: str, deliverable_id: str,
                                      task_project: str, task_id: str,
                                      claim_id: str, status: str,
@@ -600,8 +638,13 @@ def _claim_task_impl(task_id: str, agent_id: str,
                         "agent_id": active["agent_id"]}
             _store_facade()._idem_store(c, "claim_task", idem_key, actor, payload, response)
             return response
+        review_continuation = (
+            _review_continuation_wake_for_claim_in(c, task_id, agent_id)
+            if task.get("status") == "In Review" else None
+        )
         orphan_adoption = task.get("status") == "In Progress"
-        if task.get("status") not in READY_TASK_STATUSES and not orphan_adoption:
+        if (task.get("status") not in READY_TASK_STATUSES
+                and not orphan_adoption and not review_continuation):
             response = {"claimed": False, "reason": "status_not_ready",
                         "task_id": task_id, "status": task.get("status")}
             _store_facade()._idem_store(c, "claim_task", idem_key, actor, payload, response)
@@ -677,10 +720,14 @@ def _claim_task_impl(task_id: str, agent_id: str,
             (lease_id, agent_id, principal_id or None, task_id, "task",
              json.dumps([task_id]), now, ttl),
         )
-        c.execute("UPDATE tasks SET status='In Progress', assignee=?, updated_at=? WHERE task_id=?",
-                  (agent_id, now, task_id))
+        next_status = "In Review" if review_continuation else "In Progress"
+        c.execute("UPDATE tasks SET status=?, assignee=?, updated_at=? WHERE task_id=?",
+                  (next_status, agent_id, now, task_id))
         dispatch_reason = {"policy": "exact.v1", "requested_task_id": task_id,
                            "dependency_checked": True}
+        if review_continuation:
+            dispatch_reason["review_continuation"] = review_continuation
+            dispatch_reason["workflow_status_preserved"] = "In Review"
         if orphan_adoption:
             dispatch_reason["orphan_adopted"] = True
         if risk and override_identity_risk:

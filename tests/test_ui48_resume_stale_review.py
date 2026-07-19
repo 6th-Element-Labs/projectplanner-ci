@@ -118,6 +118,23 @@ try:
     ok(store.get_runner_session("run-ui48-dead", project=P) is not None
        and store.get_task(task_id, project=P).get("status") == "In Review",
        "the dead runner remains immutable history and workflow stays In Review")
+    claimed_review = store.claim_task(
+        task_id, f"codex/{task_id}", actor=HOST, project=P,
+        idem_key="ui48-review-continuation-claim")
+    ok(claimed_review.get("claimed") is True
+       and claimed_review.get("task", {}).get("status") == "In Review"
+       and claimed_review.get("dispatch_reason", {}).get(
+           "workflow_status_preserved") == "In Review",
+       "the replacement reviewer acquires its lease without leaving In Review")
+    unrelated_review = store.create_task({
+        "workstream_id": "UI", "title": "Unassigned review", "status": "In Review",
+    }, actor="ui48-test", project=P)
+    unauthorized_review_claim = store.claim_task(
+        unrelated_review["task_id"], f"codex/{unrelated_review['task_id']}",
+        actor=HOST, project=P)
+    ok(unauthorized_review_claim.get("claimed") is False
+       and unauthorized_review_claim.get("reason") == "status_not_ready",
+       "an ordinary agent still cannot claim an In Review task without the exact continuation wake")
     replay = dispatch.resume_review(
         task_id, actor=OWNER, principal_id=OWNER, project=P)
     ok(replay.get("wake_id") == resumed.get("wake_id")
