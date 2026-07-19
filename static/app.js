@@ -1912,16 +1912,37 @@ const TeepPlan = {
     _resumeTaskReviewFromPrimary(button, taskId) {
         const resume = this.resumeTaskReview
             || window.SwitchboardRunnerSession?.methods?.resumeTaskReview;
+        const flash = document.getElementById('task-primary-flash');
         if (!taskId || typeof resume !== 'function') {
-            const flash = document.getElementById('task-primary-flash');
             if (flash) {
                 flash.className = 'small mt-1 text-danger';
                 flash.textContent = 'Resume review is unavailable. Refresh and try again.';
             }
             return;
         }
-        resume.call(this, taskId, {
+        button.disabled = true;
+        if (flash) {
+            flash.className = 'small mt-1 text-secondary';
+            flash.textContent = 'Starting one replacement reviewer on your enrolled Mac…';
+        }
+        Promise.resolve(resume.call(this, taskId, {
             dockInto: document.getElementById('runner-pty-details-mount') || undefined,
+        })).then((started) => {
+            if (started) {
+                if (flash) flash.textContent = 'Replacement reviewer started.';
+                return;
+            }
+            button.disabled = false;
+            if (flash) {
+                flash.className = 'small mt-1 text-danger';
+                flash.textContent = 'Could not resume review: replacement runner was not started.';
+            }
+        }).catch((error) => {
+            button.disabled = false;
+            if (flash) {
+                flash.className = 'small mt-1 text-danger';
+                flash.textContent = `Could not resume review: ${error.message}`;
+            }
         });
     },
 
@@ -1929,13 +1950,13 @@ const TeepPlan = {
         const button = document.getElementById('task-primary-resume-review');
         if (!button || button.dataset.resumeReviewBound === 'true') return;
         button.dataset.resumeReviewBound = 'true';
-        button.addEventListener('click', (e) => {
+        // Match the proven runner-sidecar control: own this single action on
+        // the button instead of depending on propagation outside the modal.
+        button.onclick = (e) => {
             e.preventDefault();
-            // Bootstrap's modal boundary may stop bubbling before document.
-            // Own this critical action at the rendered control itself.
             e.stopPropagation();
             this._resumeTaskReviewFromPrimary(button, String(taskId || '').trim());
-        });
+        };
     },
 
     async _loadTaskPrimaryRunner(taskId) {
