@@ -1,0 +1,95 @@
+{
+  "schema": "switchboard.ingest_independence_verdict.v1",
+  "task_id": "ARCH-MS-119",
+  "deliverable_id": "arch-ms-ingest-service",
+  "observed_at": "2026-07-19T01:50:00Z",
+  "baseline_decision": "ARCH-MS-114 Tally No-Go; Tally remains modular code in the monolith",
+  "verdict": "nogo",
+  "process_build_authorized": false,
+  "production_cutover_authorized": false,
+  "blocking_gates": ["G2_idempotency_and_retry", "G4_auth_boundary", "G6_resource_budget"],
+  "go_only_tasks": ["ARCH-MS-120"],
+  "route_inventory": [
+    {"method":"POST","path":"/api/intake","handler":"intake_artifact","calls":["intake.ingest_and_triage"],"day_one":true,"project_binding":"required query -> resolve_project","effects":["rag corpus append","LLM triage","optional inbox insert"]},
+    {"method":"POST","path":"/api/intake/upload","handler":"intake_upload","calls":["attachments.extract","intake.ingest_and_triage","transcribe.is_media","transcribe.transcribe"],"day_one":false,"project_binding":"required query -> resolve_project","effects":["external transcription or local extraction","rag corpus append","LLM triage","optional inbox insert"]},
+    {"method":"GET","path":"/api/inbox","handler":"get_inbox","calls":["store.inbox_pending_count","store.list_inbox"],"day_one":true,"project_binding":"required query -> resolve_project","effects":[]},
+    {"method":"POST","path":"/api/inbox/{item_id}/confirm","handler":"confirm_inbox","calls":["inbox_mod.apply","store.get_inbox_item","store.set_inbox_status","store.update_inbox_triage"],"day_one":false,"project_binding":"required query -> resolve_project","effects":["task creates/updates","inbox triage/status updates"]},
+    {"method":"POST","path":"/api/inbox/confirm_all","handler":"confirm_all_inbox","calls":["inbox_mod.apply","store.list_inbox","store.set_inbox_status","store.update_inbox_triage"],"day_one":false,"project_binding":"required query -> resolve_project","effects":["multiple task creates/updates","multiple inbox updates"]},
+    {"method":"POST","path":"/api/inbox/{item_id}/dismiss","handler":"dismiss_inbox","calls":["store.get_inbox_item","store.set_inbox_status"],"day_one":false,"project_binding":"required query -> resolve_project","effects":["inbox status update"]},
+    {"method":"POST","path":"/api/inbox/simulate","handler":"simulate_inbox","calls":["inbox_mod.process"],"day_one":false,"project_binding":"body override or required query -> resolve_project","effects":["full email ingest/apply/reply/dispatch pipeline","inbox insert"]},
+    {"method":"POST","path":"/api/inbox/poll","handler":"poll_inbox_now","calls":[],"day_one":false,"project_binding":"required query authorizes call; poller independently routes each message","effects":["shared mailbox polling","per-message ingest/apply/reply/dispatch"]}
+  ],
+  "writer_inventory": [
+    {"flow":"text intake","entry":"POST /api/intake","ownership":"monolith","idempotency":"none","retry":"client retry can repeat corpus and triage effects","transaction":"no transaction spans corpus append, triage, and optional inbox insert"},
+    {"flow":"upload intake","entry":"POST /api/intake/upload","ownership":"monolith","idempotency":"none","retry":"client retry can repeat transcription/extraction, corpus, triage, and queue effects","transaction":"no transaction spans external work and durable effects"},
+    {"flow":"single confirm","entry":"POST /api/inbox/{item_id}/confirm","ownership":"monolith","idempotency":"no operation key","retry":"ambiguous retry can reapply task mutations","transaction":"task mutations and inbox triage/status use separate repository transactions"},
+    {"flow":"bulk confirm","entry":"POST /api/inbox/confirm_all","ownership":"monolith","idempotency":"no batch/revision key","retry":"partial failure/retry can replay a prefix","transaction":"loop of independent task and inbox transactions"},
+    {"flow":"dismiss","entry":"POST /api/inbox/{item_id}/dismiss","ownership":"monolith","idempotency":"repeat status assignment is value-idempotent","retry":"safe only while item identity and project remain stable","transaction":"single inbox status update"},
+    {"flow":"simulate/email process","entry":"POST /api/inbox/simulate and inbox.process","ownership":"monolith","idempotency":"check-then-insert by source/external_id without database uniqueness","retry":"concurrent or ambiguous retries can duplicate all upstream effects","transaction":"ingest, apply, notify, dispatch, inbox insert, and status update are not atomic"},
+    {"flow":"mailbox poll","entry":"POST /api/inbox/poll and inbox_source.poll","ownership":"monolith","idempotency":"inherits unsafe inbox.process dedupe","retry":"source retry can overlap or replay message processing","transaction":"shared poll plus per-message multi-effect pipeline"}
+  ],
+  "failure_semantics": {
+    "safe": false,
+    "blocking_findings": [
+      {"code":"dedupe_check_then_insert_without_unique_constraint","surface":"inbox.process + inbox_store + db/schema.py","detail":"inbox_exists precedes side effects and insert, while inbox has no UNIQUE(source, external_id); concurrent deliveries can both pass and duplicate effects."},
+      {"code":"intake_multi_effect_has_no_retry_ledger","surface":"intake.ingest_and_triage","detail":"RAG persistence precedes LLM triage and queue persistence without an operation/idempotency ledger, so partial failure and retry can duplicate durable chunks."},
+      {"code":"triage_queue_write_failure_swallowed","surface":"intake_inbox._queue_triage","detail":"A broad exception handler silently drops queue persistence failure and still returns success, making loss invisible to callers."}
+    ],
+    "required_for_reopen": ["database-enforced source/external_id uniqueness", "durable operation key and retry state for multi-effect intake", "visible/retryable queue failure", "transactional or compensating semantics for confirm/apply"]
+  },
+  "project_scope": {
+    "explicit_project_required": true,
+    "route_binding":"all eight routes call resolve_project; simulate permits an explicit body override",
+    "storage_isolation":"one SQLite database per Switchboard project",
+    "poller_rule":"the caller project authorizes polling, but each mailbox message is routed through the poller's address index",
+    "proof":"executable probe writes alpha while beta remains empty under concurrent WAL readers"
+  },
+  "auth_contract": {
+    "web_edge":"existing web authentication and project authorization wrap the monolith router",
+    "standalone_port_present": false,
+    "finding":"No IngestAuthPort or standalone principal/project authorization contract exists; extracting the router would bypass or network-wrap monolith auth coupling."
+  },
+  "sqlite_contention": {
+    "journal_mode":"wal",
+    "model":"one project writer plus three same-project readers and a second isolated project database",
+    "writer_transactions":80,
+    "reader_transactions":240,
+    "required_lock_errors":0,
+    "required_project_counts":{"alpha":80,"beta":0},
+    "required_quick_check":"ok",
+    "scope_note":"This proves ordinary isolated WAL access, not the unsafe application-level dedupe/transaction semantics."
+  },
+  "resource_budget": {
+    "host":"ip-172-31-45-202",
+    "measurement_sha":"c55fa5da48847a9609ed100f1ed34323ab4e8a70",
+    "measurement_scope":"current live post-Tally-decision box; Tally remains included in the projectplanner monolith, with Auth, Tasks, Coord, and Deliverables processes active",
+    "measurement_source":"accepted ARCH-MS-114 live host measurement; no standalone Tally deployment exists after its ratified No-Go",
+    "memory_total_bytes":1931714560,
+    "memory_available_bytes":605138944,
+    "swap_total_bytes":536866816,
+    "swap_free_bytes":533196800,
+    "current_unit_memory_bytes":{"projectplanner":188727296,"switchboard-auth":60256256,"switchboard-tasks":67719168,"switchboard-coord":66830336,"switchboard-deliverables":97587200},
+    "current_unit_memory_total_bytes":481120256,
+    "projected_ingest_rss_bytes":134217728,
+    "projection_basis":"128 MiB cap consistent with prior Python read-service gates; this is optimistic because upload/transcription stay out of day one; swap is excluded from resident reserve",
+    "projected_remaining_bytes":470921216,
+    "minimum_reserve_bytes":536870912,
+    "headroom_after_projection_bytes":-65949696,
+    "passed":false
+  },
+  "gates": {
+    "G1_route_writer_inventory":{"passed":true,"reason":"All eight routes and seven mutation flows are classified with calls, effects, ownership, idempotency, retry, and transaction semantics."},
+    "G2_idempotency_and_retry":{"passed":false,"reason":"Check-then-insert dedupe lacks a unique constraint; multi-effect intake has no retry ledger; queue persistence failures are swallowed."},
+    "G3_project_routing_isolation":{"passed":true,"reason":"Every route resolves project explicitly, storage is per-project, and the executable concurrent probe proves no cross-project writes."},
+    "G4_auth_boundary":{"passed":false,"reason":"Monolith edge auth exists, but there is no standalone Ingest auth/project authorization port safe to extract."},
+    "G5_sqlite_contention":{"passed":true,"reason":"Executable WAL probe requires zero lock errors, isolated project counts, and quick_check=ok."},
+    "G6_resource_budget":{"passed":false,"reason":"A 128 MiB Ingest process would leave 470921216 bytes available, 65949696 bytes below the required 512 MiB resident reserve on the current post-Tally-decision box."}
+  },
+  "nogo_exit": {
+    "blocked_task":"ARCH-MS-120",
+    "keep_in_process":true,
+    "ship_uvicorn":false,
+    "ship_caddy_cut":false,
+    "next_action":"Keep Ingest/inbox in-process. Reopen only after retry/idempotency and standalone auth gates pass and at least 65949696 additional bytes of resident headroom plus safety margin are measured."
+  }
+}
