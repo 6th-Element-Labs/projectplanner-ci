@@ -136,6 +136,8 @@ ok(agent_host.P_CLAIM_WAKE not in paths,
    "Mac boot does not call the scheduler ownership endpoint")
 ok(launch_index < register_index < complete_index,
    "PTY starts first, then becomes watchable, then the assignment is acknowledged")
+ok(events[register_index][3]["heartbeat_ttl_s"] == 180,
+   "direct PTY registration survives a busy daemon tick without flickering stale")
 launch_event = events[launch_index]
 loaded = json.loads(launch_event[2]["PM_DIRECT_CODEX_ASSIGNMENT_JSON"])
 ok(loaded == assignment,
@@ -224,7 +226,8 @@ ok(renewed == [{
    and renewal[0:2] == ("POST", agent_host.P_HEARTBEAT_RUNNER)
    and renewal[2]["metadata"]["wake_id"] == wake["wake_id"]
    and renewal[2]["task_id"] == task_id
-   and renewal[2]["claim_id"] == "",
+   and renewal[2]["claim_id"] == ""
+   and renewal[2]["heartbeat_ttl_s"] == 180,
    "each daemon tick renews the live direct task PTY without inventing claim state")
 
 # A failed session can leave its branch attached to the first worktree.  A

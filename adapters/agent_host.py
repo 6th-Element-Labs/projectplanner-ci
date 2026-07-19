@@ -917,7 +917,8 @@ def register_runner_session(rec, wake, inventory):
         "control": rec.get("control") or {"tier": "T3", "runner_kill": True,
                                            "managed_process": True},
         "metadata": metadata,
-        "heartbeat_ttl_s": 3600 if rec.get("cloud_session") else 60,
+        "heartbeat_ttl_s": (3600 if rec.get("cloud_session") else
+                            180 if rec.get("wake_mode") == "direct_task" else 60),
     }
     # Use hard POST when this registration claims to be claim-bound / watchable so
     # agent hosts fail closed instead of silently skipping (_try returns None).
@@ -1569,7 +1570,10 @@ def renew_live_direct_runners(inventory):
                 "direct_assignment": True,
                 "assignment_schema": "switchboard.direct_cli_assignment.v1",
             },
-            "heartbeat_ttl_s": 60,
+            # Busy hosts may spend longer than one nominal tick finalizing other
+            # work. A three-minute lease prevents a healthy direct PTY from
+            # flickering out of Watch between successful renewals.
+            "heartbeat_ttl_s": 180,
         }
         result = _try("POST", P_HEARTBEAT_RUNNER, body)
         renewed.append({
