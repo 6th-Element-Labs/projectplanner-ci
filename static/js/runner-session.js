@@ -432,9 +432,10 @@
         if (button) button.disabled = true;
         if (note) note.textContent = 'Starting one replacement reviewer on your enrolled Mac…';
         try {
-            const res = await fetch(`/api/tasks/${encodeURIComponent(id)}/resume-review`, {
+            const project = window.PM_PROJECT || 'maxwell';
+            const res = await fetch(`/api/tasks/${encodeURIComponent(id)}/resume-review?project=${encodeURIComponent(project)}`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ project: window.PM_PROJECT || 'maxwell' }),
+                body: JSON.stringify({ project }),
             });
             const result = await res.json();
             if (!res.ok || !result.resumed) throw new Error(result.reason || result.error || 'replacement runner was not started');

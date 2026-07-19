@@ -460,8 +460,13 @@ def create_router(*, resolve_project: ProjectResolver,
         @router.post("/api/tasks/{task_id}/resume-review")
         async def resume_task_review(request: Request, task_id: str,
                                      body: ResumeReviewBody = Body(
-                                         default=ResumeReviewBody())):
-            project = resolve_project(body.project)
+                                         default=ResumeReviewBody()),
+                                     project_query: Optional[str] = Query(
+                                         None, alias="project")):
+            # Older cached clients use the established project query parameter;
+            # UI-48's current client sends the typed JSON body. Accept both so a
+            # deploy cannot strand a stale review runner behind cached JS.
+            project = resolve_project(body.project or project_query)
             principal = resolve_principal(
                 request, project, ("write:tasks",), dev_actor="web")
             result = await asyncio.to_thread(
