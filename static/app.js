@@ -4151,7 +4151,7 @@ const TeepPlan = {
         const missionPage = document.getElementById('mission-page');
         if (missionPage && !this._missionWired) {
             this._missionWired = true;
-            missionPage.addEventListener('click', (e) => {
+            missionPage.addEventListener('click', async (e) => {
                 const autopilot = e.target.closest('[data-autopilot-action]');
                 if (autopilot && missionPage.contains(autopilot)) {
                     e.preventDefault();
@@ -4178,7 +4178,18 @@ const TeepPlan = {
                 const node = e.target.closest('.mission-dag-node');
                 if (node && missionPage.contains(node)) {
                     e.preventDefault();
-                    this.openNodeModal(node.getAttribute('data-linked-task'), node.getAttribute('data-linked-project'));
+                    const taskId = node.getAttribute('data-linked-task');
+                    // UI-24 / BUG-91: the compact task pills are the visible
+                    // dependency-map boxes most operators actually click. Keep
+                    // them on the same runner-first path as Mermaid SVG nodes;
+                    // previously only the SVG handler tried Watch/Chat while
+                    // these pills always opened the authoring modal.
+                    if (typeof this.openRunnerSessionPanel === 'function') {
+                        const opened = await this.openRunnerSessionPanel(
+                            taskId, { fallbackIfNotWatchable: true });
+                        if (opened) return;
+                    }
+                    this.openNodeModal(taskId, node.getAttribute('data-linked-project'));
                     return;
                 }
                 const a = e.target.closest('[data-linked-task]');

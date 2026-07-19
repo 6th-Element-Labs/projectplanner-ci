@@ -85,6 +85,8 @@ ok("openRunnerSessionPanel" in MISSION, "Mission graph node clicks can open the 
 ok("fallbackIfNotWatchable" in MISSION,
    "a task with no live runner falls back to the existing node-actions modal instead of a dead panel")
 ok("openNodeModal" in MISSION, "the pre-existing deliverable-link node modal is preserved as the fallback")
+ok("mission-dag-node" in APP and "await this.openRunnerSessionPanel" in APP,
+   "the visible dependency-map pills use the same runner-first path as Mermaid graph nodes")
 ok("_runnerPtyLast" in RUNNER_SESSION and "include_stale=true" in RUNNER_SESSION,
    "closing a watched runner remembers repeat-click intent and reopens its truthful stale gate")
 ok("_runnerPtyCloseTimer" in RUNNER_SESSION,
