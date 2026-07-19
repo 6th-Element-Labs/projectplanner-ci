@@ -339,6 +339,40 @@ try:
         ok(closed_state["rpNull"], "close() tears down the session state")
         ok(closed_state["hidden"], "close() hides the panel")
 
+        # ---- repeat Deliverable-node intent survives close + stale runner ---
+        # The task's live bind can disappear between closing the sidecar and
+        # clicking its graph box again. That second click still means "reopen
+        # the runner surface"; it must show the stale/bind gate in the sidecar,
+        # not silently fall through to the unrelated node-actions modal.
+        reopened = page.evaluate("""
+            async () => {
+                const opened = await TeepPlan.openRunnerSessionPanel(
+                    'FAKE-TASK-1', { fallbackIfNotWatchable: true });
+                return {
+                    opened,
+                    visible: !document.getElementById('runner-pty-panel').hidden,
+                    rememberedTask: TeepPlan._runnerPtyLast?.taskId || '',
+                    nodeModalOpen: document.getElementById('dl-node-modal').classList.contains('show'),
+                };
+            }
+        """)
+        ok(reopened["opened"] is True and reopened["visible"],
+           "re-clicking a task after close reopens the runner sidecar even when its bind is now stale")
+        ok(reopened["rememberedTask"] == "FAKE-TASK-1" and not reopened["nodeModalOpen"],
+           "repeat runner intent is preserved instead of falling through to the Deliverable node modal")
+        rapid_reopen = page.evaluate("""
+            async () => {
+                TeepPlan._runnerPtyClose();
+                const opened = await TeepPlan.openRunnerSessionPanel(
+                    'FAKE-TASK-1', { fallbackIfNotWatchable: true });
+                await new Promise((resolve) => setTimeout(resolve, 250));
+                return opened && !document.getElementById('runner-pty-panel').hidden;
+            }
+        """)
+        ok(rapid_reopen is True,
+           "an immediate close/reopen is not hidden later by the old close animation timer")
+        page.evaluate("() => TeepPlan._runnerPtyClose()")
+
         ok(not console_errors, f"no uncaught console/page errors during the whole flow (got: {console_errors})")
 
         browser.close()

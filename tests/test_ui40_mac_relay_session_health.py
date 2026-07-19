@@ -246,8 +246,8 @@ try:
     ok("const latest = new Map()" in app_js
        and "['active', 'proposed']" in app_js,
        "fleet dock selects one newest live attempt per task/agent")
-    ok(worker_py.count('"recoverable_post_execution_failure": True') >= 3,
-       "Mac worker labels every post-launch failure for exact server recovery")
+    ok(worker_py.count('"recoverable_post_execution_failure": True') >= 2,
+       "personal exact-host failures retain server recovery without rewriting generic launch wakes")
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
 

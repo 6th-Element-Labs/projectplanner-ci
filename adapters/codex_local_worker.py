@@ -647,13 +647,13 @@ def run(
                         heartbeat_thread.join()
                     _update_runner(
                         http, values, workspace=workspace, status=desired)
-                    if not succeeded:
-                        _complete_wake(http, values, {
-                            "started": False,
-                            "reason": reason or "post_execution_validation_failed",
-                            "task_id": values["task_id"],
-                            "recoverable_post_execution_failure": True,
-                        })
+                    # Generic host-local wakes acknowledge that the native
+                    # process launched; they are not task-outcome receipts.
+                    # A later executed-test/checkpoint failure must therefore
+                    # terminalize the runner and let the outer loop abandon the
+                    # claim, but must not rewrite the already-completed launch
+                    # wake. Personal exact-host wakes use ``finalize`` below
+                    # and retain the narrow completed -> failed recovery edge.
                     lifecycle_state["terminal"] = desired
                     return {"status": desired}
 
@@ -756,18 +756,21 @@ def run(
             heartbeat_thread.join()
         if runner_registered and not wake_completed:
             try:
-                # A failed personal wake receipt is accepted only after the exact
-                # bound runner is terminal. Publish that state before completion so
-                # the repository can distinguish a real launch failure from a
-                # still-running worker trying to abandon its wake.
+                # Publish the terminal runner first so the repository can
+                # distinguish a real execution failure from a still-running
+                # worker. Only personal exact-host wakes represent the full
+                # execution outcome and can use the narrow completed -> failed
+                # recovery receipt; generic wakes already durably acknowledged
+                # process launch and must not be rewritten here.
                 _update_runner(
                     http, values, workspace=workspace, status="failed")
-                _complete_wake(http, values, {
-                    "started": False,
-                    "reason": "native_codex_execution_failed",
-                    "task_id": values["task_id"],
-                    "recoverable_post_execution_failure": True,
-                })
+                if personal_bound:
+                    _complete_wake(http, values, {
+                        "started": False,
+                        "reason": "native_codex_execution_failed",
+                        "task_id": values["task_id"],
+                        "recoverable_post_execution_failure": True,
+                    })
                 wake_completed = True
             except Exception:
                 # The terminal runner tuple is durable and the identical wake receipt

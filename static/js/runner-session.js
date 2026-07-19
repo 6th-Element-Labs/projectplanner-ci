@@ -217,6 +217,10 @@
         this._runnerPtyBindShellOnce();
         const els = this._runnerPtyEls();
         if (!els.panel) return els;
+        if (this._runnerPtyCloseTimer) {
+            clearTimeout(this._runnerPtyCloseTimer);
+            this._runnerPtyCloseTimer = null;
+        }
         els.panel.hidden = false;
         if (dockInto) {
             dockInto.appendChild(els.panel);
@@ -283,9 +287,27 @@
 
     _runnerPtyClose() {
         const els = this._runnerPtyEls();
+        const rp = this._runnerPty;
+        if (rp && rp.taskId && rp.runnerSessionId) {
+            // Closing the presentation tears down the socket/terminal, but a
+            // repeat click on the same Deliverable node must keep meaning
+            // "reopen that runner", even if the runner becomes stale between
+            // the two clicks. The fresh watch gate remains authoritative.
+            this._runnerPtyLast = {
+                taskId: String(rp.taskId),
+                runnerSessionId: String(rp.runnerSessionId),
+            };
+        }
         if (els.panel) {
             els.panel.classList.remove('show');
-            setTimeout(() => { els.panel.hidden = true; }, 200);
+            if (this._runnerPtyCloseTimer) clearTimeout(this._runnerPtyCloseTimer);
+            this._runnerPtyCloseTimer = setTimeout(() => {
+                // A fast reopen cancels this timer in _runnerPtyShowShell. The
+                // identity guard prevents an old close animation from hiding a
+                // newly-opened panel if callbacks run in the same event turn.
+                if (!this._runnerPty) els.panel.hidden = true;
+                this._runnerPtyCloseTimer = null;
+            }, 200);
         }
         if (els.scrim) els.scrim.classList.remove('show');
         this._runnerPtyTeardown();
@@ -316,27 +338,41 @@
         opts = opts || {};
         const id = String(taskId || '').trim();
         if (!id) return false;
+        const remembered = (this._runnerPtyLast
+            && String(this._runnerPtyLast.taskId || '') === id)
+            ? this._runnerPtyLast : null;
         let watch;
         try {
-            const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&task_id=${encodeURIComponent(id)}`;
+            const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`
+                + `&task_id=${encodeURIComponent(id)}`
+                + (remembered ? '&include_stale=true' : '');
             watch = await (await fetch(`/ixp/v1/runner_sessions/watch?${q}`)).json();
         } catch (e) {
-            if (opts.fallbackIfNotWatchable) return false;
+            if (opts.fallbackIfNotWatchable && !remembered) return false;
             this._runnerPtyShowShell(opts.dockInto);
             this._runnerPtyGate(`Watch refused: ${this.esc(e.message)}`, 'danger');
             return true;
         }
         const watchable = watch && watch.watchable !== false && !watch.error && watch.error_code !== 'runner_bind_incomplete';
         if (!watchable) {
-            if (opts.fallbackIfNotWatchable) return false;
+            if (opts.fallbackIfNotWatchable && !remembered) return false;
             const els = this._runnerPtyShowShell(opts.dockInto);
-            if (els.title) els.title.textContent = id;
-            if (els.sub) els.sub.textContent = '';
+            const sessions = (watch && Array.isArray(watch.sessions)) ? watch.sessions : [];
+            const rememberedSession = sessions.find((session) =>
+                String(session.runner_session_id || '') === String(remembered?.runnerSessionId || ''))
+                || sessions[0] || null;
+            const rememberedSid = String(
+                watch?.runner_session_id || rememberedSession?.runner_session_id
+                || remembered?.runnerSessionId || '');
+            if (els.title) els.title.textContent = rememberedSid ? `${id} · ${rememberedSid}` : id;
+            if (els.sub) els.sub.textContent = String(rememberedSession?.host_id || '');
             if (els.live) els.live.hidden = true;
             const missing = (watch && watch.missing || []).join(', ') || 'bind fields';
+            const detail = watch?.message
+                || `Runner bind incomplete for Watch/Chat (missing: ${missing})`;
             this._runnerPtyGate(
                 `<span class="badge bg-red-lt me-1">${this.esc(watch?.error_code || watch?.error || 'runner_bind_incomplete')}</span>`
-                + `Runner bind incomplete for Watch/Chat <span class="text-secondary">(missing: ${this.esc(missing)})</span>`,
+                + this.esc(detail),
                 'danger',
             );
             return true;
@@ -352,6 +388,7 @@
             return true;
         }
         this._runnerPtyTeardown();
+        this._runnerPtyLast = { taskId: id, runnerSessionId: sid };
         if (els.title) els.title.textContent = `${id} · ${sid}`;
         if (els.sub) els.sub.textContent = `${(watch.bind && watch.bind.host_id) || ''}`.trim();
         this._runnerPtyGate('', 'secondary');

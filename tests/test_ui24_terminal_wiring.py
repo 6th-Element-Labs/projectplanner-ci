@@ -85,6 +85,10 @@ ok("openRunnerSessionPanel" in MISSION, "Mission graph node clicks can open the 
 ok("fallbackIfNotWatchable" in MISSION,
    "a task with no live runner falls back to the existing node-actions modal instead of a dead panel")
 ok("openNodeModal" in MISSION, "the pre-existing deliverable-link node modal is preserved as the fallback")
+ok("_runnerPtyLast" in RUNNER_SESSION and "include_stale=true" in RUNNER_SESSION,
+   "closing a watched runner remembers repeat-click intent and reopens its truthful stale gate")
+ok("_runnerPtyCloseTimer" in RUNNER_SESSION,
+   "a pending close animation cannot hide a runner panel that was immediately reopened")
 
 # ---- Proof Console retargeted to the panel, not an inline duplicate --------
 ok("openRunnerSessionPanel" in PROOF, "the Proof Console's Watch/Chat button opens the shared panel")

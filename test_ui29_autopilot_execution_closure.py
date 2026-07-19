@@ -360,14 +360,21 @@ evidence = codex_local_worker.run({
 }, codex_executable="/usr/bin/true", http=fake_http,
    runner=lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""))
 lifecycle = evidence.pop("_switchboard_personal_execution_lifecycle")
-lifecycle["complete"](evidence)
+failed_terminal = lifecycle["fail"]("executed_tests_failed")
 running = next(body for _method, path, body in updates
                if path == "/ixp/v1/register_runner_session"
                and body.get("status") == "running")
+failed_runner = next(body for _method, path, body in updates
+                     if path == "/ixp/v1/register_runner_session"
+                     and body.get("status") == "failed")
 ok(running["claim_id"] == "taskclaim-ui29-native"
    and running["metadata"]["work_session_id"] == "worksession-ui29-native"
    and running["metadata"]["auth_lane"] == "codex_host_local",
    "native Codex publishes the generic exact claim/session bind and heartbeat lifecycle")
+ok(failed_terminal.get("status") == "failed"
+   and failed_runner.get("runner_session_id") == "run-ui29-native"
+   and not any(path == "/txp/v1/complete_wake" for _method, path, _body in updates),
+   "generic host-local post-execution failure terminalizes the runner without rewriting its launch wake")
 
 print(f"\nUI-29 execution closure: {passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)
