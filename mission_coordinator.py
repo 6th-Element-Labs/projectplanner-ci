@@ -105,6 +105,10 @@ def _explicit_target_actions(mission_status: Dict[str, Any],
     target_milestone = policy.get("target_milestone_id") or ""
     if not target_task and not target_milestone:
         return list(mission_status.get("next_actions") or [])
+    milestone_statuses = {
+        str(row.get("id") or ""): str(row.get("status") or "").strip().lower()
+        for row in (mission_status.get("milestones") or [])
+    }
     actions: List[Dict[str, Any]] = []
     for link in mission_status.get("linked_tasks") or []:
         task_id = str(link.get("task_id") or "").upper()
@@ -117,7 +121,9 @@ def _explicit_target_actions(mission_status: Dict[str, Any],
             continue
         role = str(link.get("role") or "").strip().lower()
         metadata = link.get("metadata") or {}
-        if role in _NON_FLOW_LINK_ROLES or metadata.get("dispatch_eligible") is False:
+        if (milestone_statuses.get(milestone_id) == "skipped"
+                or role in _NON_FLOW_LINK_ROLES
+                or metadata.get("dispatch_eligible") is False):
             continue
         detail = link.get("task_detail") or {}
         if detail.get("error"):

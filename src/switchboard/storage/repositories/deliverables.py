@@ -2142,29 +2142,48 @@ def _link_blocks_delivery(link: Dict[str, Any]) -> bool:
     return bool(link.get("blocks_deliverable")) and role not in _NON_FLOW_LINK_ROLES
 
 
-def _link_automatic_dispatch_eligible(link: Dict[str, Any]) -> bool:
+def _link_automatic_dispatch_reason(
+    link: Dict[str, Any], milestone_status: str = "",
+) -> str:
+    """Explain the fail-closed automatic-dispatch decision for one link."""
+    if str(milestone_status or "").strip().lower() == "skipped":
+        return "milestone_skipped"
+    role = str(link.get("role") or "").strip().lower()
+    metadata = link.get("metadata") or {}
+    if role in _NON_FLOW_LINK_ROLES:
+        return f"context_role:{role}"
+    if metadata.get("dispatch_eligible") is False:
+        return "dispatch_eligible_false"
+    if not link.get("blocks_deliverable") and metadata.get("dispatch_eligible") is not True:
+        return "nonblocking_without_explicit_opt_in"
+    return "automatic_flow"
+
+
+def _link_automatic_dispatch_eligible(
+    link: Dict[str, Any], milestone_status: str = "",
+) -> bool:
     """Fail-closed generic deliverable dispatch scope (COORD-8).
 
     Blocking flow work is eligible by default. Nonblocking work requires the
     explicit per-link ``metadata.dispatch_eligible=true`` opt-in. Context roles
     and explicit false values are never generic automatic candidates.
     """
-    role = str(link.get("role") or "").strip().lower()
-    metadata = link.get("metadata") or {}
-    if role in _NON_FLOW_LINK_ROLES or metadata.get("dispatch_eligible") is False:
-        return False
-    if _link_blocks_delivery(link):
-        return True
-    return metadata.get("dispatch_eligible") is True
+    return _link_automatic_dispatch_reason(link, milestone_status) == "automatic_flow"
 
 
-def _mission_dispatch_scope(linked_tasks: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _mission_dispatch_scope(
+    linked_tasks: List[Dict[str, Any]],
+    milestone_statuses: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
     rows: List[Dict[str, Any]] = []
     blocking = blocking_done = automatic = 0
+    milestone_statuses = milestone_statuses or {}
     for link in linked_tasks:
         detail = link.get("task_detail") or {}
         blocks = _link_blocks_delivery(link)
-        eligible = _link_automatic_dispatch_eligible(link)
+        milestone_status = milestone_statuses.get(str(link.get("milestone_id") or ""), "")
+        reason = _link_automatic_dispatch_reason(link, milestone_status)
+        eligible = reason == "automatic_flow"
         terminal = bool(
             detail.get("status") == "Done"
             and (detail.get("provenance") or {}).get("terminal")
@@ -2172,20 +2191,11 @@ def _mission_dispatch_scope(linked_tasks: List[Dict[str, Any]]) -> Dict[str, Any
         blocking += int(blocks)
         blocking_done += int(blocks and terminal)
         automatic += int(eligible)
-        role = str(link.get("role") or "").strip().lower()
-        metadata = link.get("metadata") or {}
-        if role in _NON_FLOW_LINK_ROLES:
-            reason = f"context_role:{role}"
-        elif metadata.get("dispatch_eligible") is False:
-            reason = "dispatch_eligible_false"
-        elif not link.get("blocks_deliverable") and not eligible:
-            reason = "nonblocking_without_explicit_opt_in"
-        else:
-            reason = "automatic_flow" if eligible else "not_delivery_blocking"
         rows.append({
             "project_id": link.get("project_id"),
             "task_id": link.get("task_id"),
             "milestone_id": link.get("milestone_id"),
+            "milestone_status": milestone_status or None,
             "role": link.get("role"),
             "blocks_delivery": blocks,
             "automatic_dispatch_eligible": eligible,
@@ -2207,6 +2217,10 @@ def _mission_next_actions(deliverable: Dict[str, Any],
                           linked_tasks: List[Dict[str, Any]],
                           pending_proposal: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
     actions: List[Dict[str, Any]] = []
+    milestone_statuses = {
+        str(row.get("id") or ""): str(row.get("status") or "").strip().lower()
+        for row in (deliverable.get("milestones") or [])
+    }
     if pending_proposal and pending_proposal.get("status") == "proposed":
         actions.append(_action(
             "approve_breakdown", owner="project_owner", attention=True, delivery_impact="at_risk",
@@ -2216,10 +2230,13 @@ def _mission_next_actions(deliverable: Dict[str, Any],
     for link in linked_tasks:
         detail = link.get("task_detail") or {}
         blocks_delivery = _link_blocks_delivery(link)
-        automatic_eligible = _link_automatic_dispatch_eligible(link)
+        milestone_status = milestone_statuses.get(str(link.get("milestone_id") or ""), "")
+        dispatch_reason = _link_automatic_dispatch_reason(link, milestone_status)
+        automatic_eligible = dispatch_reason == "automatic_flow"
         link["dispatch_scope"] = {
             "blocks_delivery": blocks_delivery,
             "automatic_dispatch_eligible": automatic_eligible,
+            "reason": dispatch_reason,
         }
         if detail.get("error"):
             if blocks_delivery:
@@ -2429,7 +2446,11 @@ def _build_mission_status(project: str = DEFAULT_PROJECT, deliverable_id: str = 
         "progress": deliverable.get("progress") or deliverable_progress(deliverable),
         "milestones": milestones,
         "linked_tasks": linked_tasks,
-        "dispatch_scope": _mission_dispatch_scope(linked_tasks),
+        "dispatch_scope": _mission_dispatch_scope(
+            linked_tasks,
+            {str(row.get("id") or ""): str(row.get("status") or "").strip().lower()
+             for row in (deliverable.get("milestones") or [])},
+        ),
         "blockers": blockers,
         "active_work": active_work,
         "done_with_proof": done_with_proof,

@@ -86,6 +86,7 @@ try:
         "qa-claim-target",
         "RENDER-1",
         milestone_id=milestone_id,
+        data={"role": "contributes", "blocks_deliverable": True},
         actor="test",
         project="qa-claim-home",
     )
@@ -94,6 +95,7 @@ try:
         "qa-claim-target",
         "RENDER-2",
         milestone_id=other_milestone_id,
+        data={"role": "contributes", "blocks_deliverable": True},
         actor="test",
         project="qa-claim-home",
     )

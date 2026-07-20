@@ -314,11 +314,22 @@ class CoordinatorDaemon:
                           mission_status: Dict[str, Any]) -> list[Dict[str, Any]]:
         if scope.get("scope_type") == "task":
             task_id = str(scope.get("task_id") or "").upper()
+            task_project = str(scope.get("task_project") or "")
+            dispatch_link = next((
+                row for row in (mission_status.get("dispatch_scope") or {}).get("links") or []
+                if str(row.get("task_id") or "").upper() == task_id
+                and (not task_project or str(row.get("project_id") or "") == task_project)
+            ), None)
+            if dispatch_link is None or (
+                not dispatch_link.get("automatic_dispatch_eligible")
+                and dispatch_link.get("reason") != "nonblocking_without_explicit_opt_in"
+            ):
+                return []
             detail = self._task_detail(
-                mission_status, task_id, scope.get("task_project") or "")
+                mission_status, task_id, task_project)
             if not detail or self._terminal_task(detail):
                 return []
-            return [{"task_id": task_id, "task_project": scope.get("task_project") or "",
+            return [{"task_id": task_id, "task_project": task_project,
                      "action": "target_task"}]
         eligible = {
             (str(row.get("project_id") or ""), str(row.get("task_id") or "").upper())

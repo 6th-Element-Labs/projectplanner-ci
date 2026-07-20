@@ -33,6 +33,10 @@ from switchboard.storage.repositories.tasks import (
     _task_row,
     _task_tally_snapshot,
 )
+from switchboard.storage.repositories.deliverables import (
+    _link_automatic_dispatch_eligible,
+    _link_automatic_dispatch_reason,
+)
 
 
 def _store_facade():
@@ -164,6 +168,10 @@ def _claim_next_mission_scoped(agent_id: str, lanes: Any = None,
         deliverable = scope["deliverable"]
         resolved_deliverable_id = deliverable["id"]
         links = list(deliverable.get("task_links") or [])
+        milestone_statuses = {
+            str(row.get("id") or ""): str(row.get("status") or "").strip().lower()
+            for row in (deliverable.get("milestones") or [])
+        }
         if milestone_id:
             links = [l for l in links if (l.get("milestone_id") or "") == milestone_id]
         if not links:
@@ -190,14 +198,29 @@ def _claim_next_mission_scoped(agent_id: str, lanes: Any = None,
         skipped = {"active_claim": 0, "status": 0, "lane": 0, "dependencies": 0,
                    "human_approval": 0, "capability_mismatch": 0, "risk": 0, "budget": 0,
                    "identity_unknown": 0, "missing_task": 0, "unknown_project": 0,
-                   "work_session": 0}
+                   "work_session": 0, "link_policy": 0, "skipped_milestone": 0}
         human_gates: Dict[str, Dict[str, Any]] = {}
         identity_risks: Dict[str, Dict[str, Any]] = {}
         work_session_findings: Dict[str, Dict[str, Any]] = {}
+        link_policy_findings: Dict[str, Dict[str, Any]] = {}
 
         for link in links:
             task_project = (link.get("project_id") or "").strip()
             task_id = (link.get("task_id") or "").strip()
+            milestone_status = milestone_statuses.get(
+                str(link.get("milestone_id") or ""), "")
+            if not _link_automatic_dispatch_eligible(link, milestone_status):
+                reason = _link_automatic_dispatch_reason(link, milestone_status)
+                counter = "skipped_milestone" if reason == "milestone_skipped" else "link_policy"
+                skipped[counter] += 1
+                link_policy_findings[f"{task_project}:{task_id}"] = {
+                    "reason": reason,
+                    "role": link.get("role"),
+                    "milestone_id": link.get("milestone_id"),
+                    "milestone_status": milestone_status or None,
+                    "dispatch_eligible": (link.get("metadata") or {}).get("dispatch_eligible"),
+                }
+                continue
             if not _store_facade().has_project(task_project):
                 skipped["unknown_project"] += 1
                 continue
@@ -269,6 +292,7 @@ def _claim_next_mission_scoped(agent_id: str, lanes: Any = None,
             "human_gates": human_gates,
             "identity_risks": identity_risks,
             "work_session_findings": work_session_findings,
+            "link_policy_findings": link_policy_findings,
         }
         if not eligible:
             response = {
