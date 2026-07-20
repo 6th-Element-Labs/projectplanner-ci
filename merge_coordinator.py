@@ -361,6 +361,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     in_flight = count_armed_prs(prs) if args.in_flight < 0 else args.in_flight
 
     def gate_state_fn(pr, sha):
+        # SIMPLIFY-8: prefer the verify(sha) surface; live GH status fills contexts.
+        from switchboard.application.commands import verify_ci as verify_ci_command
+
+        def _reader(ctx_name: str):
+            if ctx_name != context:
+                return {}
+            return gate.latest_status(repo, sha, context, token=token) or {}
+
+        try:
+            verified = verify_ci_command.verify(
+                sha, project=args.project, ensure=False, status_reader=_reader)
+            mapped = {"green": "success", "pending": "pending", "red": "failure"}
+            state = mapped.get(str(verified.get("status") or ""), "")
+            if state:
+                return state
+        except Exception:
+            pass
         st = gate.latest_status(repo, sha, context, token=token)
         return (st or {}).get("state") or "missing"
 

@@ -6,7 +6,7 @@ from . import (ack_message, claim_external_effect, claim_next, claim_task, claim
                project_consolidation, project_lifecycle, project_metadata, project_purge,
                provider_credentials, register_agent, register_host, request_wake,
                review_verdicts, runner_control, send_agent_message, submit_bug,
-               update_deliverable, update_task,
+               update_deliverable, update_task, verify_ci,
                work_sessions)
 
 __all__ = [
@@ -16,6 +16,6 @@ __all__ = [
     "project_consolidation", "project_lifecycle", "project_metadata", "project_purge",
     "provider_credentials", "register_agent", "register_host", "request_wake",
     "review_verdicts", "runner_control", "send_agent_message", "submit_bug",
-    "update_deliverable", "update_task",
+    "update_deliverable", "update_task", "verify_ci",
     "work_sessions",
 ]

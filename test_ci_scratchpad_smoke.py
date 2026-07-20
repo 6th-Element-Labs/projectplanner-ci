@@ -52,14 +52,21 @@ pr_payload = {
 }
 
 os.environ["SWITCHBOARD_CI_SCRATCHPAD"] = "1"
-orig_scratchpad = github_sync.ci_scratchpad_dispatch.try_dispatch_scratchpad
+orig_verify = github_sync.verify_ci_command.verify
 orig_claim = github_sync._maybe_refresh_claim_gate
-github_sync.ci_scratchpad_dispatch.try_dispatch_scratchpad = lambda *a, **k: {
-    "dispatched": True,
-    "skip_reason": None,
-    "head_sha": VALID_SHA,
+github_sync.verify_ci_command.verify = lambda sha, **k: {
+    "ok": True,
+    "sha": sha or VALID_SHA,
+    "status": "pending",
+    "ensured": True,
     "run_id": "run-smoke",
-    "mirror_branch": f"ci/pr-999/{VALID_SHA[:12]}",
+    "ensure_result": {
+        "dispatched": True,
+        "skip_reason": None,
+        "head_sha": sha or VALID_SHA,
+        "run_id": "run-smoke",
+        "mirror_branch": f"ci/pr-999/{VALID_SHA[:12]}",
+    },
 }
 github_sync._maybe_refresh_claim_gate = lambda *a, **k: {"claim_gate_refreshed": True}
 
@@ -68,12 +75,12 @@ ok(opened["action"] == "pr_review_recorded"
    and opened["scratchpad_dispatched"]
    and opened["scratchpad_run_id"] == "run-smoke"
    and opened["pull_model_skip_reason"] == "scratchpad_primary",
-   "PR webhook triggers scratchpad path and keeps claim gate refresh")
+   "PR webhook triggers verify_ci ensure path and keeps claim gate refresh")
 
 runs = store.list_external_ci_runs(task_id=task["task_id"], project=P)
 ok(isinstance(runs, list), "external_ci_runs list API remains available for board evidence")
 
-github_sync.ci_scratchpad_dispatch.try_dispatch_scratchpad = orig_scratchpad
+github_sync.verify_ci_command.verify = orig_verify
 github_sync._maybe_refresh_claim_gate = orig_claim
 
 print(f"\nci_scratchpad_smoke: {passed} passed, {failed} failed")

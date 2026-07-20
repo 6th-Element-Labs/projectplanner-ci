@@ -44,6 +44,7 @@ EXTRACTED_MCP = {
     "request_external_ci_mirror_run": external_effects_tools,
     "poll_external_ci_mirror_run": external_effects_tools,
     "record_publication_evidence": external_effects_tools,
+    "verify_ci": external_effects_tools,
 }
 
 try:
@@ -74,8 +75,9 @@ try:
     router_effects = (
         ROOT / "src/switchboard/api/routers/external_effects.py").read_text(encoding="utf-8")
     ok("runner_control_command" in router_runner, "REST runner routes use shared command")
-    ok("effect_command" in router_effects and "merge_gate_command" in router_effects,
-       "REST effects/merge_gate routes use shared commands")
+    ok("effect_command" in router_effects and "merge_gate_command" in router_effects
+       and "verify_ci_command" in router_effects,
+       "REST effects/merge_gate/verify_ci routes use shared commands")
     ok("repositories" not in router_effects.split("claim_external_effect")[0]
        or "effect_command.claim_mapping_result" in router_effects,
        "effects claim path goes through command (not duplicated store branching)")

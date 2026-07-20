@@ -5,15 +5,34 @@ merge_gate mapping; CI mirror + publication stay behind existing modules.
 """
 from __future__ import annotations
 
-from typing import Callable
+from typing import Callable, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
+from pydantic import BaseModel, ConfigDict, Field
 
 import auth
 import external_ci_mirror
 import store
 from switchboard.application.commands import claim_external_effect as effect_command
 from switchboard.application.commands import merge_gate as merge_gate_command
+from switchboard.application.commands import verify_ci as verify_ci_command
+
+
+class VerifyCiBody(BaseModel):
+    """SIMPLIFY-8 typed IXP body — avoids growing the untyped body: dict ratchet."""
+
+    model_config = ConfigDict(extra="allow")
+
+    sha: str = ""
+    source_sha: str = ""
+    project: str = "switchboard"
+    ensure: bool = False
+    source_path: str = ""
+    task_id: str = ""
+    pr_number: int = 0
+    repo: str = ""
+    source_fetch_ref: str = ""
+    agent_id: Optional[str] = Field(default=None)
 
 
 ProjectResolver = Callable[[str], str]
@@ -116,6 +135,21 @@ def create_router(*, resolve_project: ProjectResolver,
         payload["project"] = project
         return merge_gate_command.execute_mapping_result(
             payload, actor=auth.actor(principal), principal_id=principal["id"])
+
+    @router.post("/ixp/v1/verify_ci")
+    async def ixp_verify_ci(request: Request, body: VerifyCiBody = Body(...)):
+        """SIMPLIFY-8: one SHA-keyed CI surface for PR heads and merge-group heads."""
+        payload = body.model_dump()
+        project = resolve_body_project(payload)
+        principal = resolve_principal(
+            request, project, ("write:ixp",),
+            dev_actor=payload.get("agent_id") or "agent")
+        payload["project"] = project
+        result = verify_ci_command.execute_mapping_result(
+            payload, actor=auth.actor(principal))
+        if result.get("error") and result.get("error_code") == "invalid_sha":
+            raise HTTPException(400, result)
+        return result
 
     @router.post("/ixp/v1/claim_external_effect")
     async def ixp_claim_external_effect(request: Request, body: dict = Body(...)):

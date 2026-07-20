@@ -55,28 +55,42 @@ mg_payload = {
     },
 }
 
-# ----- handle_merge_group -----------------------------------------------------------
-orig_dispatch = github_sync.ci_scratchpad_dispatch.try_dispatch_merge_group
+# ----- handle_merge_group (via SIMPLIFY-8 verify_ci) ---------------------------------
+orig_verify = github_sync.verify_ci_command.verify
 captured = {}
 
 
-def _stub_dispatch(head_sha, head_ref="", **k):
-    captured["head_sha"] = head_sha
-    captured["head_ref"] = head_ref
-    return {"dispatched": True, "skip_reason": None, "run_id": "run-mg", "head_sha": head_sha}
+def _stub_verify(sha, **k):
+    captured["sha"] = sha
+    captured["source_fetch_ref"] = k.get("source_fetch_ref")
+    captured["ensure"] = k.get("ensure")
+    return {
+        "ok": True,
+        "sha": sha,
+        "status": "pending",
+        "ensured": True,
+        "run_id": "run-mg",
+        "ensure_result": {
+            "dispatched": True,
+            "skip_reason": None,
+            "run_id": "run-mg",
+            "head_sha": sha,
+        },
+    }
 
 
-github_sync.ci_scratchpad_dispatch.try_dispatch_merge_group = _stub_dispatch
+github_sync.verify_ci_command.verify = _stub_verify
 
 res = github_sync.handle_merge_group(mg_payload, P)
 ok(res["action"] == "merge_group_ci_dispatched"
    and res["scratchpad_dispatched"] is True
    and res["scratchpad_run_id"] == "run-mg"
    and res["merge_group_head_sha"] == VALID_SHA,
-   "checks_requested on the canonical repo mirrors the merge-group head SHA")
-ok(captured.get("head_sha") == VALID_SHA
-   and captured.get("head_ref", "").endswith(VALID_SHA),
-   "the exact merge-group head SHA + ref are passed through to the mirror")
+   "checks_requested on the canonical repo verifies the merge-group head SHA")
+ok(captured.get("sha") == VALID_SHA
+   and captured.get("ensure") is True
+   and str(captured.get("source_fetch_ref") or "").endswith(VALID_SHA),
+   "the exact merge-group head SHA + ref are passed through verify_ci")
 
 ignored = github_sync.handle_merge_group({**mg_payload, "action": "destroyed"}, P)
 ok(ignored["action"] == "ignored", "a non checks_requested merge_group action is ignored")
@@ -92,7 +106,7 @@ noncanon = github_sync.handle_merge_group(
 ok(noncanon["action"] == "skipped" and noncanon["reason"] == "repo_role_not_canonical",
    "a merge_group on a non-canonical repo is skipped (verification only, never Done)")
 
-github_sync.ci_scratchpad_dispatch.try_dispatch_merge_group = orig_dispatch
+github_sync.verify_ci_command.verify = orig_verify
 
 # ----- try_dispatch_merge_group guard rails (no network) ----------------------------
 os.environ["SWITCHBOARD_CI_SCRATCHPAD"] = "0"

@@ -276,6 +276,46 @@ def dispatch_scratchpad():
     raise SystemExit(ci_scratchpad_dispatch.main(args))
 
 
+def verify():
+    """SIMPLIFY-8: manual re-verify for exactly one SHA.
+
+    Usage: python jobs.py verify --sha <40hex> [--project switchboard] [--ensure]
+    """
+    import argparse
+    from switchboard.application.commands import verify_ci as verify_ci_command
+
+    parser = argparse.ArgumentParser(
+        description="verify(sha) -> {pending|green|red, url, contexts, stall?}",
+    )
+    parser.add_argument("--sha", required=True, help="Exact source SHA to verify")
+    parser.add_argument("--project", default="switchboard")
+    parser.add_argument("--ensure", action="store_true",
+                        help="Request a re-verify if missing/stale")
+    parser.add_argument("--source-path", default="")
+    parser.add_argument("--task-id", default="")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(sys.argv[2:] if len(sys.argv) > 2 else ["--help"])
+    result = verify_ci_command.verify(
+        args.sha,
+        project=args.project,
+        ensure=bool(args.ensure),
+        source_path=args.source_path,
+        task_id=args.task_id,
+        actor="jobs/verify",
+    )
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        stall = f" stall={result.get('stall')}" if result.get("stall") else ""
+        print(
+            f"{result.get('status')} sha={result.get('sha')} "
+            f"url={result.get('url') or '-'}{stall}"
+        )
+        for ctx in result.get("contexts") or []:
+            print(f"  - {ctx.get('context')}: {ctx.get('state')}")
+    raise SystemExit(0 if result.get("ok") else 2)
+
+
 def merge_coordinator_plan():
     """Run the Switchboard merge-coordinator once (HARDEN-72 / CI-5, Lever 6).
 
@@ -311,6 +351,7 @@ JOBS = {"weekly_digest": weekly_digest, "poll_inbox": poll_inbox,
         "claim_gate_prs": claim_gate_prs,
         "dispatch_ci": dispatch_ci,
         "dispatch_scratchpad": dispatch_scratchpad,
+        "verify": verify,
         "merge_coordinator_plan": merge_coordinator_plan,
         "background_job": background_job}
 

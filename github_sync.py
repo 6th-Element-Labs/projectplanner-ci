@@ -13,6 +13,7 @@ import ci_scratchpad_dispatch
 import ci_verify_dispatch
 import store
 import task_id_parser
+from switchboard.application.commands import verify_ci as verify_ci_command
 
 # Re-export parser helpers for existing imports/tests.
 extract_task_ids = task_id_parser.extract_task_ids
@@ -221,16 +222,33 @@ def _maybe_refresh_claim_gate(repo: str, pr_number: Any, project: str = "") -> D
 def _maybe_dispatch_scratchpad_ci(
     repo: str, pr_number: Any, head_sha: str, project: str = ""
 ) -> Dict[str, Any]:
-    """CI-12 scratchpad relay: push ci/** on projectplanner-ci (push-triggered verify)."""
+    """CI-12 via SIMPLIFY-8 verify adapter (mirror plumbing stays inside verify_ci)."""
     if pr_number is None:
         return {"dispatched": False, "skip_reason": "missing_pr_number"}
+    sha = (head_sha or "").strip()
+    if not sha:
+        return {"dispatched": False, "skip_reason": "missing_head_sha", "pr": int(pr_number)}
     proj = (project or store.DEFAULT_PROJECT).strip()
-    return ci_scratchpad_dispatch.try_dispatch_scratchpad(
-        int(pr_number),
-        head_sha=head_sha or "",
-        repo=repo,
+    result = verify_ci_command.verify(
+        sha,
+        ensure=True,
         project=proj,
+        pr_number=int(pr_number),
+        repo=repo,
+        actor="github-webhook",
     )
+    ensure = result.get("ensure_result") or {}
+    return {
+        "dispatched": bool(ensure.get("dispatched") or (
+            result.get("ensured") and result.get("status") in {"pending", "green", "red"}
+            and not result.get("error"))),
+        "skip_reason": ensure.get("skip_reason") or result.get("error"),
+        "head_sha": result.get("sha") or sha,
+        "run_id": result.get("run_id") or ensure.get("run_id"),
+        "verify": result,
+        "error": result.get("error") or ensure.get("error"),
+        "pr": int(pr_number),
+    }
 
 
 def _maybe_trigger_ci(repo: str, pr_number: Any, head_sha: str, project: str = "") -> Dict[str, Any]:
@@ -287,17 +305,28 @@ def handle_merge_group(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
                 "repo": repo, "merge_group_head_sha": head_sha}
     if not head_sha:
         return {"action": "skipped", "reason": "missing_merge_group_head_sha", "repo": repo}
-    dispatch = ci_scratchpad_dispatch.try_dispatch_merge_group(
-        head_sha, head_ref, repo=repo, project=project)
+    result = verify_ci_command.verify(
+        head_sha,
+        ensure=True,
+        project=project,
+        repo=repo,
+        source_fetch_ref=head_ref or head_sha,
+        actor="github-webhook",
+    )
+    ensure = result.get("ensure_result") or {}
+    dispatched = bool(ensure.get("dispatched") or (
+        result.get("ensured") and not result.get("error")
+        and result.get("status") in {"pending", "green", "red"}))
     return {
-        "action": ("merge_group_ci_dispatched" if dispatch.get("dispatched")
+        "action": ("merge_group_ci_dispatched" if dispatched
                    else "merge_group_ci_skipped"),
         "repo": repo,
         "merge_group_head_sha": head_sha,
         "merge_group_head_ref": head_ref,
-        "scratchpad_dispatched": bool(dispatch.get("dispatched")),
-        "scratchpad_skip_reason": dispatch.get("skip_reason"),
-        "scratchpad_run_id": dispatch.get("run_id"),
+        "scratchpad_dispatched": dispatched,
+        "scratchpad_skip_reason": ensure.get("skip_reason") or result.get("error"),
+        "scratchpad_run_id": result.get("run_id") or ensure.get("run_id"),
+        "verify": result,
     }
 
 

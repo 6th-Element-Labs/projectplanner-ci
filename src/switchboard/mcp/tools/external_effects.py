@@ -16,6 +16,7 @@ import external_ci_mirror
 import store
 from switchboard.application.commands import claim_external_effect as effect_command
 from switchboard.application.commands import merge_gate as merge_gate_command
+from switchboard.application.commands import verify_ci as verify_ci_command
 
 
 @dataclass(frozen=True)
@@ -310,6 +311,32 @@ def poll_external_ci_mirror_run(run_id: str, source_path: str, ctx: Context,
         timeout_seconds=timeout_seconds))
 
 
+def verify_ci(sha: str, ctx: Context, project: str = "maxwell",
+              ensure: bool = False, source_path: str = "", task_id: str = "",
+              pr_number: int = 0, repo: str = "",
+              source_fetch_ref: str = "") -> str:
+    """SIMPLIFY-8: verify(sha) -> {pending|green|red, url, contexts, stall?}.
+
+    This is the only CI surface callers should use. Pass ensure=true to request a
+    re-verify for exactly one SHA; mirror/branch plumbing stays inside the adapter.
+    """
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:ixp",))
+    return services.dumps(verify_ci_command.execute_mapping_result(
+        {
+            "sha": sha,
+            "project": project,
+            "ensure": bool(ensure),
+            "source_path": source_path,
+            "task_id": task_id,
+            "pr_number": pr_number or 0,
+            "repo": repo,
+            "source_fetch_ref": source_fetch_ref,
+        },
+        actor=auth.actor(principal),
+    ))
+
+
 EXTERNAL_EFFECTS_TOOL_NAMES = (
     "claim_external_effect",
     "mark_external_effect_issued",
@@ -323,6 +350,7 @@ EXTERNAL_EFFECTS_TOOL_NAMES = (
     "record_publication_evidence",
     "request_external_ci_mirror_run",
     "poll_external_ci_mirror_run",
+    "verify_ci",
 )
 
 

@@ -82,19 +82,26 @@ csd.cvd.resolve_head_sha = orig_resolve
 csd.cvd.verify_commit_exists = orig_verify
 csd.external_ci_mirror.request_external_ci_mirror_run = orig_mirror
 
-orig_try = github_sync.ci_scratchpad_dispatch.try_dispatch_scratchpad
-github_sync.ci_scratchpad_dispatch.try_dispatch_scratchpad = lambda *a, **k: {
-    "dispatched": True,
-    "skip_reason": None,
-    "head_sha": VALID_SHA,
+orig_verify = github_sync.verify_ci_command.verify
+github_sync.verify_ci_command.verify = lambda sha, **k: {
+    "ok": True,
+    "sha": sha or VALID_SHA,
+    "status": "pending",
+    "ensured": True,
     "run_id": "run-test",
+    "ensure_result": {
+        "dispatched": True,
+        "skip_reason": None,
+        "head_sha": sha or VALID_SHA,
+        "run_id": "run-test",
+    },
 }
 orig_claim = github_sync._maybe_refresh_claim_gate
 github_sync._maybe_refresh_claim_gate = lambda *a, **k: {"claim_gate_refreshed": True}
 ci = github_sync._maybe_trigger_ci("6th-Element-Labs/projectplanner", 412, VALID_SHA, P)
 ok(ci["scratchpad_dispatched"] and ci["pull_model_skip_reason"] == "scratchpad_primary",
-   "github_sync routes verification through scratchpad when enabled")
-github_sync.ci_scratchpad_dispatch.try_dispatch_scratchpad = orig_try
+   "github_sync routes verification through verify_ci when scratchpad is enabled")
+github_sync.verify_ci_command.verify = orig_verify
 github_sync._maybe_refresh_claim_gate = orig_claim
 
 os.environ["SWITCHBOARD_CI_SCRATCHPAD"] = "0"

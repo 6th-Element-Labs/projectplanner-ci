@@ -1172,7 +1172,9 @@ const TeepPlan = {
         const bits = [`<span class="badge bg-${cls}-lt"><i class="ti ti-cloud-check me-1"></i>${this.esc(label)}</span>`];
         const runUrl = ci.run_url || latest.run_url || '';
         if (runUrl) bits.push(`<a class="small" href="${this.esc(runUrl)}" target="_blank" rel="noopener">run</a>`);
-        if (ci.source_sha) bits.push(`<span class="font-monospace small">${this.esc(String(ci.source_sha).slice(0, 12))}</span>`);
+        const sourceSha = ci.source_sha || latest.source_sha
+            || ((t && t.git_state && t.git_state.head_sha) || '');
+        if (sourceSha) bits.push(`<span class="font-monospace small">${this.esc(String(sourceSha).slice(0, 12))}</span>`);
         const sourceRepo = ci.source_repo || latest.source_repo || '';
         const ciRepo = ci.ci_repo || latest.ci_repo || latest.mirror_repo || '';
         const context = ci.status_context || latest.status_context || '';
@@ -1181,7 +1183,35 @@ const TeepPlan = {
             bits.push(`<span class="text-secondary small">${this.esc(proof)}</span>`);
         }
         if (gate.required && !ci.passed) bits.push(`<span class="text-danger small">${this.esc(gate.message || 'required')}</span>`);
+        // SIMPLIFY-8: re-verify is one SHA command; merge-gate Re-check stays separate.
+        if (sourceSha) {
+            bits.push(
+                `<button type="button" class="btn btn-sm btn-ghost-secondary ms-1"`
+                + ` data-verify-ci-sha="${this.esc(String(sourceSha))}"`
+                + ` data-verify-ci-task="${this.esc((t && t.task_id) || '')}"`
+                + ` onclick="window.__sbVerifyCi && window.__sbVerifyCi(this)">`
+                + `<i class="ti ti-refresh me-1"></i>Re-verify</button>`
+            );
+        }
         return bits.join(' ');
+    },
+    async verifyCiSha(sha, taskId) {
+        const project = this.project || (this.selectedProject && this.selectedProject.id) || 'switchboard';
+        const res = await fetch('/ixp/v1/verify_ci', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                sha,
+                project,
+                ensure: true,
+                task_id: taskId || '',
+            }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            throw new Error((body && (body.error || body.detail)) || res.statusText);
+        }
+        return body;
     },
     publicationDetail(t) {
         const pub = (t && t.publication) || {};
@@ -4395,3 +4425,28 @@ const TeepPlan = {
 };
 
 document.addEventListener('DOMContentLoaded', () => TeepPlan.init());
+
+// SIMPLIFY-8: Re-verify button in task external-CI detail (SHA-only ensure).
+window.__sbVerifyCi = async (btn) => {
+    if (!btn) return;
+    const sha = btn.getAttribute('data-verify-ci-sha') || '';
+    const taskId = btn.getAttribute('data-verify-ci-task') || '';
+    if (!sha) return;
+    const prev = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Verifying';
+    try {
+        const body = await TeepPlan.verifyCiSha(sha, taskId);
+        const stall = body.stall ? ` · stall=${body.stall}` : '';
+        btn.title = `${body.status || '?'}${stall}`;
+        if (typeof TeepPlan.loadTaskDetail === 'function' && taskId) {
+            try { await TeepPlan.loadTaskDetail(taskId); } catch (_e) { /* best-effort refresh */ }
+        }
+    } catch (err) {
+        btn.title = String(err && err.message ? err.message : err);
+        window.alert(`Re-verify failed: ${err && err.message ? err.message : err}`);
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = prev;
+    }
+};

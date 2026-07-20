@@ -251,6 +251,7 @@ PREFLIGHT_FINDING_SCHEMA = "switchboard.preflight_finding.v1"
 PREFLIGHT_CALIBRATION_SCHEMA = "switchboard.preflight_calibration.v1"
 PRE_TOOL_CHECK_SCHEMA = "switchboard.pre_tool_check.v1"
 MERGE_GATE_SCHEMA = "switchboard.merge_gate.v1"
+VERIFY_CI_SCHEMA = "switchboard.verify_ci.v1"
 REPO_PREFLIGHT_VERDICTS = {"pass", "warn", "deny"}
 REPO_PREFLIGHT_DENY_CLASSES = {
     "dirty_worktree",

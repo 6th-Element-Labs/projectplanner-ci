@@ -208,17 +208,12 @@ def collect_snapshot(db_path: str, project: str, *, now: float | None = None) ->
 
 
 def _ci_state(row: Mapping[str, Any] | None) -> str:
+    """Project board CI rows onto the SIMPLIFY-8 surface (pending|green|red)."""
     if not row:
         return "missing"
-    conclusion = _status(row.get("conclusion"))
-    status = _status(row.get("status"))
-    if conclusion in GREEN_CI:
-        return "green"
-    if conclusion in RED_CI or status in RED_CI:
-        return "red"
-    if status in PENDING_CI or not conclusion:
-        return "pending"
-    return "unknown"
+    from switchboard.application.commands.verify_ci import status_from_run
+    surface = status_from_run(row)
+    return surface if surface in {"pending", "green", "red"} else "unknown"
 
 
 def _priority(score: int) -> str:

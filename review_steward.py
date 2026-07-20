@@ -331,14 +331,23 @@ def _execute_action(action: Mapping[str, Any], *, project: str, actor: str,
         if action["action"] == ACTION_RERUN_CI:
             if scratchpad_dispatcher is None:
                 raise RuntimeError("scratchpad_dispatcher_required")
-            if not pr_number:
-                raise RuntimeError("pr_number_required_for_ci_rerun")
-            dispatch = scratchpad_dispatcher(
-                int(pr_number),
-                head_sha=head_sha,
-                project=project,
-            )
-            result["effects"].append({"kind": "scratchpad_dispatch", "payload": dispatch})
+            if not head_sha and not pr_number:
+                raise RuntimeError("sha_or_pr_required_for_ci_rerun")
+            try:
+                dispatch = scratchpad_dispatcher(
+                    int(pr_number or 0),
+                    head_sha=head_sha,
+                    project=project,
+                    task_id=task_id,
+                )
+            except TypeError:
+                # Injected test doubles may still use the pre-SIMPLIFY-8 signature.
+                dispatch = scratchpad_dispatcher(
+                    int(pr_number or 0),
+                    head_sha=head_sha,
+                    project=project,
+                )
+            result["effects"].append({"kind": "verify_ci", "payload": dispatch})
             result["status"] = "ci_rerun_requested" if dispatch.get("dispatched") else "ci_rerun_failed"
             if dispatch.get("error") or dispatch.get("skip_reason"):
                 result["error"] = dispatch.get("error") or dispatch.get("skip_reason")
@@ -452,11 +461,30 @@ def steward_project(project: str, *, actor: str = DEFAULT_ACTOR,
         if decision_writer is None:
             decision_writer = store.record_coordinator_decision
         if scratchpad_dispatcher is None and not dry_run:
-            import ci_scratchpad_dispatch
+            from switchboard.application.commands import verify_ci as verify_ci_command
 
-            def _dispatch(pr_number: int, head_sha: str = "", project: str = project):
-                return ci_scratchpad_dispatch.try_dispatch_scratchpad(
-                    pr_number, head_sha=head_sha, project=project)
+            def _dispatch(pr_number: int, head_sha: str = "", project: str = project,
+                          task_id: str = ""):
+                """SIMPLIFY-8: stewards re-verify through the SHA adapter only."""
+                result = verify_ci_command.verify(
+                    head_sha or "",
+                    ensure=True,
+                    project=project,
+                    pr_number=int(pr_number or 0),
+                    task_id=task_id,
+                    actor="review-steward",
+                )
+                ensure = result.get("ensure_result") or {}
+                return {
+                    "dispatched": bool(ensure.get("dispatched") or (
+                        result.get("ensured") and not result.get("error"))),
+                    "skip_reason": ensure.get("skip_reason") or result.get("error"),
+                    "head_sha": result.get("sha") or head_sha,
+                    "run_id": result.get("run_id") or ensure.get("run_id"),
+                    "verify": result,
+                    "error": result.get("error") or ensure.get("error"),
+                    "pr": int(pr_number or 0) or None,
+                }
 
             scratchpad_dispatcher = _dispatch
         if task_starter is None and not dry_run:
