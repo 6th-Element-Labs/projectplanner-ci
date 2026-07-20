@@ -43,6 +43,9 @@ BUNDLE_SCHEMA = "switchboard.agent_host_bundle.v1"
 LOCAL_STATE_SCHEMA = "switchboard.agent_host_local_state.v1"
 IDENTITY_SCHEMA = "switchboard.agent_host_identity.v1"
 SERVICE_LABEL = "com.6thelement.switchboard-agent-host"
+# BUG-99: deterministic runner-session PATH on macOS — Homebrew (arm64 + intel)
+# ahead of the system defaults so gh/codex resolve by name inside sessions.
+SERVICE_PATH_DARWIN = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 # Shared with agent_host.py's _declared_account_affinities() reader — a single
 # source so the filename/key can never silently drift between writer and reader
 # (a drift would fail silently: the reader's isinstance guard just returns []).
@@ -517,6 +520,13 @@ def render_service(target_platform: str, *, python: str, entrypoint: Path,
         payload = {
             "Label": SERVICE_LABEL,
             "ProgramArguments": arguments,
+            # BUG-99: launchd's default PATH (/usr/bin:/bin:/usr/sbin:/sbin)
+            # omits Homebrew, so runner sessions could not resolve gh (or even
+            # codex) by name. Task completion became nondeterministic: one
+            # session hand-rolled a urllib call against the GitHub API to open
+            # its PR while another honestly blocked on "gh is not installed".
+            # The service environment must make the finishing step boring.
+            "EnvironmentVariables": {"PATH": SERVICE_PATH_DARWIN},
             "RunAtLoad": True,
             "KeepAlive": {"SuccessfulExit": False},
             "ThrottleInterval": 5,
