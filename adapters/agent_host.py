@@ -505,9 +505,20 @@ def apply_authoritative_execution_policy(inventory, response):
         "allowed_lanes": lanes,
         "lane_mode": lane_mode,
     })
+    # BUG-91: runner_watch is a host-PROVEN fact, not an operator-grantable
+    # permission. The authoritative policy selects every other capability, but
+    # it can neither grant Watch to a host that cannot serve it (work would land
+    # on a host whose runner nobody can watch) nor strip it from one that can
+    # (registration advertised it, then the first heartbeat's policy replaced
+    # the list wholesale and silently un-advertised it — which would starve
+    # placement the moment PM_COORD_REQUIRE_RUNNER_WATCH is enforced).
+    capabilities = [item for item in (policy.get("capabilities") or [])
+                    if str(item).strip().lower() != RUNNER_WATCH_CAPABILITY]
+    if host_serves_runner_watch():
+        capabilities.append(RUNNER_WATCH_CAPABILITY)
     runtime.update({
         "lanes": lanes,
-        "capabilities": list(policy.get("capabilities") or []),
+        "capabilities": list(dict.fromkeys(capabilities)),
         "policy": host_policy,
     })
     runtime.setdefault("control", {})["host_policy"] = host_policy["mode"]
