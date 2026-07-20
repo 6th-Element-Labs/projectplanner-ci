@@ -473,7 +473,10 @@ def create_external_work_session(project, task_id, agent_id, runtime, source_pat
         raise RuntimeError("external source_path is not a git worktree")
     dirty = git("status", "--porcelain")
     if dirty:
-        raise RuntimeError("external source_path is dirty")
+        dirty_paths = [line[3:] if len(line) > 3 else line
+                       for line in dirty.splitlines() if line.strip()]
+        raise RuntimeError(
+            "external source_path is dirty: " + ", ".join(dirty_paths))
     fetched = subprocess.run(
         ["git", "-C", source_path, "fetch", "--prune", "origin"],
         capture_output=True, text=True, timeout=600, check=False,
@@ -490,6 +493,12 @@ def create_external_work_session(project, task_id, agent_id, runtime, source_pat
         raise RuntimeError("external canonical default branch is invalid")
     canonical_ref = f"origin/{default_branch}"
     head_sha = git("rev-parse", canonical_ref)
+    remote_head = git("ls-remote", "--exit-code", "origin", f"refs/heads/{default_branch}")
+    remote_sha = remote_head.split(None, 1)[0] if remote_head else ""
+    if not remote_sha or remote_sha != head_sha:
+        raise RuntimeError(
+            f"external source mirror is stale: {canonical_ref}={head_sha or '<missing>'}, "
+            f"origin refs/heads/{default_branch}={remote_sha or '<missing>'}")
     branch = git("branch", "--show-current")
     task_marker = str(task_id or "").strip().upper()
     isolate = str(os.environ.get(

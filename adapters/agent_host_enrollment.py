@@ -669,6 +669,78 @@ def _validated_source_repo_root(value: Path | str) -> Path:
     return resolved
 
 
+def _provision_host_source_mirror(source_repo: Path, state_root: Path) -> Path:
+    """Create/update the Agent Host's private clean source checkout.
+
+    ``source_repo`` is used only to discover the canonical origin URL.  Work
+    Sessions must never be based on that operator-owned checkout: an unrelated
+    untracked file there must not take the whole host out of service.
+    """
+    origin = subprocess.run(
+        ["git", "-C", str(source_repo), "remote", "get-url", "origin"],
+        capture_output=True, text=True, timeout=30, check=False)
+    origin_url = (origin.stdout or "").strip()
+    if origin.returncode != 0 or not origin_url:
+        raise EnrollmentError("source_repo_root must have a canonical origin remote")
+    repo_name = Path(origin_url.removesuffix(".git")).name or "canonical"
+    mirror_root = state_root / "source"
+    mirror = mirror_root / repo_name
+    mirror_root.mkdir(parents=True, mode=0o700, exist_ok=True)
+    os.chmod(mirror_root, 0o700)
+    if not mirror.exists():
+        cloned = subprocess.run(
+            ["git", "clone", "--no-local", origin_url, str(mirror)],
+            capture_output=True, text=True, timeout=600, check=False)
+        if cloned.returncode != 0:
+            raise EnrollmentError(
+                "host source mirror clone failed: "
+                + (cloned.stderr or "unknown git error").strip()[-500:])
+    validated = _validated_source_repo_root(mirror)
+    mirror_origin = subprocess.run(
+        ["git", "-C", str(validated), "remote", "get-url", "origin"],
+        capture_output=True, text=True, timeout=30, check=False)
+    if (mirror_origin.stdout or "").strip() != origin_url:
+        raise EnrollmentError("host source mirror origin does not match canonical origin")
+    fetched = subprocess.run(
+        ["git", "-C", str(validated), "fetch", "--prune", "origin"],
+        capture_output=True, text=True, timeout=600, check=False)
+    if fetched.returncode != 0:
+        raise EnrollmentError(
+            "host source mirror fetch failed: "
+            + (fetched.stderr or "unknown git error").strip()[-500:])
+    head_ref = subprocess.run(
+        ["git", "-C", str(validated), "symbolic-ref", "--short",
+         "refs/remotes/origin/HEAD"],
+        capture_output=True, text=True, timeout=30, check=False)
+    remote_tracking_ref = (head_ref.stdout or "").strip()
+    if head_ref.returncode != 0 or not remote_tracking_ref.startswith("origin/"):
+        raise EnrollmentError("host source mirror cannot resolve origin default branch")
+    branch = remote_tracking_ref.split("/", 1)[1]
+    local_head = subprocess.run(
+        ["git", "-C", str(validated), "rev-parse", remote_tracking_ref],
+        capture_output=True, text=True, timeout=30, check=False)
+    remote_head = subprocess.run(
+        ["git", "-C", str(validated), "ls-remote", "--exit-code", "origin",
+         f"refs/heads/{branch}"],
+        capture_output=True, text=True, timeout=60, check=False)
+    local_sha = (local_head.stdout or "").strip()
+    remote_sha = ((remote_head.stdout or "").strip().split(None, 1) or [""])[0]
+    if (local_head.returncode != 0 or remote_head.returncode != 0
+            or not remote_sha or local_sha != remote_sha):
+        raise EnrollmentError(
+            f"host source mirror is stale: {remote_tracking_ref}={local_sha or '<missing>'}, "
+            f"origin refs/heads/{branch}={remote_sha or '<missing>'}")
+    dirty = subprocess.run(
+        ["git", "-C", str(validated), "status", "--porcelain"],
+        capture_output=True, text=True, timeout=30, check=False)
+    dirty_paths = [line[3:] if len(line) > 3 else line
+                   for line in (dirty.stdout or "").splitlines() if line.strip()]
+    if dirty.returncode != 0 or dirty_paths:
+        names = ", ".join(dirty_paths) or "<git status failed>"
+        raise EnrollmentError(f"host source mirror is dirty: {names}")
+    return validated
+
+
 def _private_key_matches_fingerprint(private_key_pem: str, fingerprint: str) -> bool:
     """Cryptographically bind retry key material to its recorded public fingerprint."""
     try:
@@ -1107,8 +1179,9 @@ def _install_host_unlocked(*, bundle_dir: Path, public_key_path: Path, bootstrap
     state_path = state_root / "state.json"
     source_codex_home = Path(
         os.environ.get("CODEX_HOME") or (Path.home() / ".codex")).expanduser().resolve()
-    source_repo = _validated_source_repo_root(
+    operator_source_repo = _validated_source_repo_root(
         source_repo_root or selected.get("source_repo_root") or "")
+    source_repo = _provision_host_source_mirror(operator_source_repo, state_root)
     user_home = Path.home().expanduser().resolve()
     _validate_install_layout(
         prefix=prefix,
@@ -1432,8 +1505,9 @@ def update_host(*, bundle_dir: Path, public_key_path: Path, state_path: Path,
     config_path = Path(state["config_path"])
     config = _read_json(config_path)
     previous_config = dict(config)
-    source_repo = _validated_source_repo_root(
+    selected_source = _validated_source_repo_root(
         source_repo_root or config.get("source_repo_root") or "")
+    source_repo = _provision_host_source_mirror(selected_source, state_path.parent)
     current = prefix / "current"
     previous = current.resolve() if current.exists() else None
     release = _install_release(bundle_dir, manifest, prefix)
