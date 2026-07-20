@@ -16,12 +16,13 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
 
 __all__ = ["_READ_CACHE", "ttl_read_cache"]
 
 _READ_CACHE: Dict[str, Dict[str, Any]] = {}
 _READ_CACHE_TTL = float(os.environ.get("PM_READ_CACHE_TTL_S", "30") or 30)  # >poll interval so 5s mission/board polls hit the cache (was 3s → every poll missed); PM_READ_CACHE_TTL_S=3 reverts
+_READ_CACHE_MAX_ENTRIES = max(1, int(os.environ.get("PM_READ_CACHE_MAX_ENTRIES", "512") or 512))
 # Serve-stale-while-revalidate: when an entry's TTL has lapsed but its STAMP is unchanged,
 # the cached payload is still correct DATA (the stamp folds in every write) — only the few
 # un-stamped signals (claim expiry, presence) may have drifted. So we return it instantly
@@ -34,6 +35,20 @@ _READ_CACHE_STALE_REVALIDATE = (os.environ.get("PM_READ_CACHE_STALE_REVALIDATE",
 _READ_CACHE_REFRESHING: set = set()          # keys with an in-flight background rebuild (single-flight)
 _READ_CACHE_LOCK = threading.Lock()          # guards _READ_CACHE_REFRESHING + lazy pool init
 _READ_CACHE_REFRESH_POOL = None              # lazily-created ThreadPoolExecutor for background rebuilds
+
+
+def _store_entry(key: str, stamp: Any, payload: Any, at: Optional[float] = None) -> None:
+    """Insert one entry and evict oldest entries at the configured hard bound."""
+    _READ_CACHE[key] = {"stamp": stamp, "at": time.time() if at is None else at,
+                        "payload": payload}
+    overflow = len(_READ_CACHE) - _READ_CACHE_MAX_ENTRIES
+    if overflow > 0:
+        victims = [item for item in sorted(
+            _READ_CACHE, key=lambda item: _READ_CACHE[item]["at"]
+        ) if item != key][:overflow]
+        for victim in victims:
+            if victim != key:
+                _READ_CACHE.pop(victim, None)
 
 
 def _schedule_read_cache_refresh(key: str, stamp: Any, builder: Callable[[], Any]) -> None:
@@ -60,7 +75,7 @@ def _schedule_read_cache_refresh(key: str, stamp: Any, builder: Callable[[], Any
             payload = builder()
             cur = _READ_CACHE.get(key)
             if cur is None or cur["stamp"] == stamp:   # don't clobber a newer (changed-stamp) entry
-                _READ_CACHE[key] = {"stamp": stamp, "at": time.time(), "payload": payload}
+                _store_entry(key, stamp, payload)
         except Exception:
             pass                                        # keep the stale entry; retry on next expiry
         finally:
@@ -93,5 +108,5 @@ def ttl_read_cache(namespace: str, ident: str, stamp: Any,
             _schedule_read_cache_refresh(key, stamp, builder)
             return hit["payload"]                        # stale-while-revalidate
     payload = builder()                                  # cold, changed stamp, or revalidate off
-    _READ_CACHE[key] = {"stamp": stamp, "at": now, "payload": payload}
+    _store_entry(key, stamp, payload, now)
     return payload

@@ -26,20 +26,21 @@ def _digest_row(r):
             "content": r["content"], "meta": json.loads(r["meta"] or "{}")}
 
 
-def add_digest(since_ts: float, content: str, meta: Optional[Dict[str, Any]] = None) -> int:
-    with _conn() as c:
+def add_digest(since_ts: float, content: str, meta: Optional[Dict[str, Any]] = None,
+               project: str = DEFAULT_PROJECT) -> int:
+    with _conn(project) as c:
         cur = c.execute("INSERT INTO digests(created_at, since_ts, content, meta) VALUES (?,?,?,?)",
                         (time.time(), since_ts, content, json.dumps(meta or {})))
         return cur.lastrowid
 
 
-def last_digest() -> Optional[Dict[str, Any]]:
-    with _conn() as c:
+def last_digest(project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+    with _conn(project) as c:
         r = c.execute("SELECT * FROM digests ORDER BY id DESC LIMIT 1").fetchone()
         return _digest_row(r) if r else None
 
 
-def list_digests(limit: int = 20) -> List[Dict[str, Any]]:
-    with _conn() as c:
+def list_digests(limit: int = 20, project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    with _conn(project) as c:
         rows = c.execute("SELECT * FROM digests ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
         return [_digest_row(r) for r in rows]

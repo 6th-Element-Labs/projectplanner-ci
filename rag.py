@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 import os
+from collections import OrderedDict
 
 import httpx
 
@@ -23,7 +24,8 @@ EMBED_MODEL = os.environ.get("PM_LLM_EMBED_MODEL", "taikun-embed")
 PACK_VERSION = 1  # bump when the contextual-packing format changes -> re-embed the corpus
 
 _index = None  # static plan-docs (Maxwell plan): list of {text, file, embedding}
-_dyn = {}      # project -> dynamic ingested artifacts (emails/transcripts/docs) from that project's rag_docs
+_DYN_CACHE_MAX_PROJECTS = max(1, int(os.environ.get("PM_RAG_CACHE_MAX_PROJECTS", "32") or 32))
+_dyn = OrderedDict()  # project -> dynamic artifacts; bounded to avoid tenant-cardinality growth
 _dyn_ver = {}  # project -> rag_docs max id we last loaded — cheap per-project freshness check across processes
 
 
@@ -134,11 +136,17 @@ def _load_dyn(project=None):
     dynamic sets are segmented — a transcript ingested on project X never leaks into Y."""
     project = project or store.DEFAULT_PROJECT
     global _dyn, _dyn_ver
+    if not isinstance(_dyn, OrderedDict):
+        _dyn = OrderedDict(_dyn)
     ver = store.rag_docs_max_id(project)
     if project not in _dyn or ver != _dyn_ver.get(project):
         _dyn[project] = [{"file": r["label"], "text": r["text"], "embedding": r["embedding"]}
                          for r in store.all_rag_chunks(project)]
         _dyn_ver[project] = ver
+    _dyn.move_to_end(project)
+    while len(_dyn) > _DYN_CACHE_MAX_PROJECTS:
+        evicted, _ = _dyn.popitem(last=False)
+        _dyn_ver.pop(evicted, None)
     return _dyn[project]
 
 

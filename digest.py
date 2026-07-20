@@ -38,10 +38,10 @@ def _summarize_deltas(acts):
             "other_edits": edits, "comments": comments, "total_events": len(acts)}
 
 
-def _brief(sig, deltas, since_ts):
+def _brief(sig, deltas, since_ts, *, project):
     today = time.strftime("%Y-%m-%d")
     since = time.strftime("%Y-%m-%d", time.localtime(since_ts)) if since_ts else "the start"
-    proj = store.get_meta("project") or "the plan"
+    proj = store.get_meta("project", project=project) or project
     sig_trim = dict(sig)
     for k in ("overdue", "due_soon", "blocked", "ready", "critical_slip"):
         sig_trim[k] = sig_trim[k][:12]
@@ -60,20 +60,21 @@ def _brief(sig, deltas, since_ts):
     body = {"model": CHAT_MODEL, "messages": [{"role": "system", "content": system},
                                               {"role": "user", "content": user}],
             # UI-12: gateway callback attributes this call's spend to the digest job.
-            "metadata": {"source": "digest"}}
+            "metadata": {"source": "digest", "project": project}}
     r = httpx.post(f"{BASE}/chat/completions", headers={"Authorization": f"Bearer {KEY}"}, json=body, timeout=120)
     r.raise_for_status()
     return r.json()["choices"][0]["message"].get("content") or ""
 
 
-def generate_digest(since_ts=None):
+def generate_digest(since_ts=None, *, project="maxwell"):
     """Compute signals + deltas, write the brief, persist it. Returns the digest."""
-    sig = signals.compute_plan_signals()
+    sig = signals.compute_plan_signals(project=project)
     if since_ts is None:
-        last = store.last_digest()
+        last = store.last_digest(project=project)
         since_ts = last["created_at"] if last else (time.time() - 7 * 86400)
-    deltas = _summarize_deltas(store.activity_since(since_ts))
-    content = _brief(sig, deltas, since_ts)
-    did = store.add_digest(since_ts, content, {"counts": sig["counts"], "deltas": deltas})
+    deltas = _summarize_deltas(store.activity_since(since_ts, project=project))
+    content = _brief(sig, deltas, since_ts, project=project)
+    did = store.add_digest(
+        since_ts, content, {"counts": sig["counts"], "deltas": deltas}, project=project)
     return {"id": did, "content": content, "counts": sig["counts"],
             "deltas": deltas, "since_ts": since_ts, "created_at": time.time()}

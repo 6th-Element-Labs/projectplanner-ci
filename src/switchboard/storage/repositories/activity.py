@@ -141,9 +141,9 @@ def upsert_contact(email: str, name: Optional[str] = None, project: str = DEFAUL
         set_meta("contacts", c, project=project)
 
 
-def activity_since(ts: float) -> List[Dict[str, Any]]:
+def activity_since(ts: float, project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
     """Every activity event across all tasks since `ts` — the delta substrate."""
-    with _conn() as c:
+    with _conn(project) as c:
         rows = c.execute(
             "SELECT task_id, actor, kind, payload, created_at FROM activity WHERE created_at > ? ORDER BY created_at",
             (ts,)).fetchall()
