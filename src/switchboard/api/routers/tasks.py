@@ -26,6 +26,7 @@ from switchboard.application.commands import move_task as move_task_command
 from switchboard.application.commands import review_verdicts as review_verdict_commands
 from switchboard.application.commands import update_task as update_task_command
 from switchboard.application.queries import get_task as get_task_query
+from switchboard.application.queries import task_session as task_session_query
 from switchboard.application.queries import review_remediations as review_remediation_queries
 from switchboard.application.queries import review_verdicts as review_verdict_queries
 from switchboard.contracts.tasks.v1 import (
@@ -145,6 +146,14 @@ def create_router(*, resolve_project: ProjectResolver,
             if not task:
                 raise HTTPException(404, "task not found")
             return task
+
+        @router.get("/api/tasks/{task_id}/session")
+        async def get_task_session(task_id: str, project: str = Query(...)):
+            projection = task_session_query.execute_for(
+                task_id, project=resolve_project(project))
+            if not projection:
+                raise HTTPException(404, "task not found")
+            return projection
 
     if not thin_mode_a:
         @router.post("/api/tasks/{task_id}/review_verdict")
@@ -480,8 +489,12 @@ def create_router(*, resolve_project: ProjectResolver,
         @router.get("/api/tasks/{task_id}/dispatch/latest")
         async def task_dispatch_latest(task_id: str,
                                        project: str = Query(...)):
-            return await asyncio.to_thread(
-                dispatch.latest, task_id, resolve_project(project))
+            projection = await asyncio.to_thread(
+                task_session_query.execute_for, task_id,
+                project=resolve_project(project))
+            if not projection:
+                raise HTTPException(404, "task not found")
+            return dispatch.latest_from_task_session(projection)
 
         @router.post("/api/tasks/{task_id}/resume-review")
         async def resume_task_review(request: Request, task_id: str,

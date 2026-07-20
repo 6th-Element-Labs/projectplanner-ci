@@ -7,7 +7,7 @@ from switchboard.mcp.tools import tasks as task_tools
 
 
 TASK_TOOLS = (
-    "search_tasks", "get_task", "update_task", "create_task", "add_comment",
+    "search_tasks", "get_task", "get_task_session", "update_task", "create_task", "add_comment",
     "archive_task", "move_task", "add_dependency", "remove_dependency",
 )
 
@@ -36,6 +36,7 @@ for shared_call in (
     "create_task_command.execute_mapping_result",
     "update_task_command.execute_mapping_result",
     "get_task_query.execute_for",
+    "task_session_query.execute_for",
 ):
     ok(shared_call in adapter_source,
        f"task adapter preserves shared application seam: {shared_call}")

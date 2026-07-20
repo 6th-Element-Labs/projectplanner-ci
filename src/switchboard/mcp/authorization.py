@@ -170,7 +170,7 @@ READ_TOOLS = frozenset({
     "get_project", "get_project_board", "get_project_contract",
     "get_project_impact_report", "get_provider_connection",
     "get_review_remediation_metrics", "get_review_verdict",
-    "get_saturation_signals", "get_task", "get_task_tally", "get_work_session",
+    "get_saturation_signals", "get_task", "get_task_session", "get_task_tally", "get_work_session",
     "get_work_session_health", "get_working_agreement", "host_status",
     "list_active_agents", "list_active_leases", "list_active_resource_leases",
     "list_agent_hosts", "list_background_job_runs", "list_coordinator_decisions",

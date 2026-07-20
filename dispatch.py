@@ -618,35 +618,31 @@ def start_task(task_id, actor="user", project=store.DEFAULT_PROJECT,
                 "started": False, "attached": False,
                 "error": "task not found", "task_id": task_id, "project": project}
 
-    # 1) Attach to the live session when one exists. resolve_runner_watch is the
-    # single authority Watch itself uses, so "attachable" here === "watchable".
-    watch = store.resolve_runner_watch(task_id, include_stale=True, project=project)
-    if watch.get("watchable"):
-        session = watch.get("session") or {}
+    # 1) The TaskSession projection is the sole execution-state authority.
+    from switchboard.application.queries import task_session as task_session_query
+    task_session = task_session_query.execute_for(task_id, project=project)
+    session = (task_session or {}).get("active_runner")
+    if session:
         return {
             "schema": START_TASK_SCHEMA, "action": "attach",
             "started": False, "attached": True, "watchable": True,
             "task_id": task_id, "project": project,
-            "runner_session_id": watch.get("runner_session_id"),
-            "host_id": (watch.get("bind") or {}).get("host_id")
-            or session.get("host_id"),
+            "runner_session_id": session.get("runner_session_id"),
+            "host_id": session.get("host_id"),
         }
 
     # 2) Idempotency: an in-flight dispatch means the click already worked.
     # A second click (or a second surface) must not race a duplicate session.
-    active = store.list_wake_intents(
-        task_id=task_id, project=project, active_only=True, limit=10)
-    in_flight = [w for w in active
-                 if str(w.get("status") or "") in {"pending", "claimed"}]
-    if in_flight:
-        wake = in_flight[0]
+    attempt = (task_session or {}).get("active_attempt") or {}
+    if ((task_session or {}).get("lifecycle_phase") == "starting"
+            and str(attempt.get("status") or "") in {"pending", "claimed"}):
         return {
             "schema": START_TASK_SCHEMA, "action": "starting",
             "started": False, "attached": False, "watchable": False,
             "task_id": task_id, "project": project,
-            "wake_id": wake.get("wake_id"),
-            "wake_status": wake.get("status"),
-            "host_id": wake.get("claimed_by_host") or "",
+            "wake_id": attempt.get("wake_id"),
+            "wake_status": attempt.get("status"),
+            "host_id": attempt.get("host_id") or "",
             "message": "A session for this task is already starting.",
         }
 
@@ -779,55 +775,39 @@ def dispatch_to_co_fleet(task_id, actor="user", project=store.DEFAULT_PROJECT,
 
 
 def latest(task_id, project=store.DEFAULT_PROJECT):
-    """The current dispatch state for a task, for the Dev-tab panel."""
-    try:
-        wakes = [w for w in store.list_wake_intents(project=project)
-                 if w.get("task_id") == task_id]
-    except Exception:
-        wakes = []
-    wake = max(wakes, key=lambda w: w.get("requested_at") or 0, default=None)
-    try:
-        sessions = store.list_runner_sessions(task_id=task_id, project=project)
-    except Exception:
-        sessions = []
-    session = sessions[0] if sessions else None
-    t = store.get_task(task_id, project=project) or {}
-    git = t.get("git_state") or {}
-    pr_url = git.get("pr_url")
-    sel = (wake or {}).get("selector") or {}
-    session_metadata = (session or {}).get("metadata") or {}
-    wake_result = (wake or {}).get("result") or {}
-    nested_result = session_metadata.get("wake_result") or {}
-    session_url = (session_metadata.get("session_url") or nested_result.get("session_url")
-                   or wake_result.get("session_url"))
+    """Compatibility view over the authoritative TaskSession projection."""
+    from switchboard.application.queries import task_session as task_session_query
+    projection = task_session_query.execute_for(task_id, project=project)
+    return latest_from_task_session(projection or {})
 
-    if pr_url:
-        status_v = "pr"
-    elif session and not session.get("stale"):
-        status_v = "running"
-    elif wake and wake.get("status") == "claimed":
-        status_v = "claiming"
-    elif wake and wake.get("status") in ("pending", "requested", "", None):
+
+def latest_from_task_session(projection):
+    attempt = projection.get("active_attempt") or {}
+    session = projection.get("active_runner") or {}
+    pr = projection.get("pr_head") or {}
+    outcome = projection.get("last_dispatch_outcome") or {}
+    phase = projection.get("lifecycle_phase")
+    status_v = {"running": "running", "starting": "claiming",
+                "start_failed_retry": "failed", "review": "pr",
+                "merged": "pr"}.get(phase, "none")
+    if phase == "starting" and str(attempt.get("status") or "") in {
+            "pending", "requested", ""}:
         status_v = "queued"
-    elif wake:
-        status_v = wake.get("status") or "queued"
-    else:
-        status_v = "none"
-
+    metadata = session.get("metadata") or {}
+    result = attempt.get("result") or {}
     return {
         "status": status_v,
-        "wake_id": (wake or {}).get("wake_id"),
-        "wake_status": (wake or {}).get("status"),
-        "agent_id": (session or {}).get("agent_id") or sel.get("agent_id"),
-        "session_id": (session or {}).get("runner_session_id"),
-        "session_url": session_url,
-        "runtime": (session or {}).get("runtime") or sel.get("runtime"),
-        "provider_session_id": (session_metadata.get("provider_session_id")
-                                or nested_result.get("provider_session_id")
-                                or wake_result.get("provider_session_id")),
-        "vendor_id": (session_metadata.get("vendor_id") or nested_result.get("vendor_id")
-                      or wake_result.get("vendor_id")),
-        "pr_url": pr_url,
-        "lane": sel.get("lane") or t.get("_wsId"),
-        "execution_mode": (wake or {}).get("policy", {}).get("mode"),
+        "wake_id": attempt.get("wake_id"), "wake_status": attempt.get("status"),
+        "agent_id": session.get("agent_id") or attempt.get("agent_id"),
+        "session_id": session.get("runner_session_id"),
+        "session_url": metadata.get("session_url") or result.get("session_url"),
+        "runtime": session.get("runtime") or attempt.get("runtime"),
+        "provider_session_id": (metadata.get("provider_session_id")
+                                or result.get("provider_session_id")),
+        "vendor_id": metadata.get("vendor_id") or result.get("vendor_id"),
+        "pr_url": pr.get("pr_url"),
+        "lane": (projection.get("task") or {}).get("_wsId"),
+        "execution_mode": attempt.get("execution_mode"),
+        "failure_reason": outcome.get("reason"),
+        "task_session": projection,
     }

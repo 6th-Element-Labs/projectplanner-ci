@@ -46,6 +46,7 @@ try:
     expected = {
         ("GET", "/api/tasks"),
         ("GET", "/api/tasks/{task_id}"),
+        ("GET", "/api/tasks/{task_id}/session"),
         ("POST", "/api/tasks"),
         ("PATCH", "/api/tasks/{task_id}"),
         ("POST", "/api/tasks/{task_id}/review_verdict"),
