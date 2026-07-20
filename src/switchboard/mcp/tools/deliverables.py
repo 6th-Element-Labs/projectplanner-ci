@@ -15,6 +15,7 @@ import auth
 import deliverable_closure
 import store
 from switchboard.application.commands import create_deliverable as create_deliverable_command
+from switchboard.application.commands import update_deliverable as update_deliverable_command
 
 
 @dataclass(frozen=True)
@@ -80,6 +81,23 @@ def get_deliverable(deliverable_id: str, project: str = "maxwell") -> str:
     result = store.get_deliverable(deliverable_id, project=project)
     return services.dumps(result or {"error": "unknown deliverable",
                              "deliverable_id": deliverable_id, "project": project})
+
+
+def update_deliverable(deliverable_id: str, ctx: Context, project: str = "maxwell",
+                       title: str | None = None, status: str | None = None,
+                       end_state: str | None = None, purpose: str | None = None,
+                       metadata_json: str | None = None) -> str:
+    """Partially update a deliverable's contract, status, title, or metadata."""
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:tasks",))
+    supplied = {
+        "title": title, "status": status, "end_state": end_state,
+        "purpose": purpose, "metadata": metadata_json,
+    }
+    result = update_deliverable_command.execute_mapping_result(
+        deliverable_id, {key: value for key, value in supplied.items() if value is not None},
+        actor=auth.actor(principal), project=project)
+    return services.dumps(result)
 
 
 def list_deliverables(project: str = "maxwell", board_id: str = "") -> str:
@@ -521,6 +539,7 @@ def defer_deliverable_breakdown(proposal_id: str, reason: str, ctx: Context,
 
 DELIVERABLE_TOOL_NAMES = (
     "create_deliverable",
+    "update_deliverable",
     "get_deliverable",
     "list_deliverables",
     "add_deliverable_milestone",

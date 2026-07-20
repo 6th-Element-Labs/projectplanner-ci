@@ -57,7 +57,8 @@ def router_inventory(path: Path) -> list[dict[str, Any]]:
             if (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
                     and isinstance(call.func.value, ast.Name)
                     and call.func.value.id in {"store", "deliverable_closure",
-                                               "create_deliverable_command"}):
+                                               "create_deliverable_command",
+                                               "update_deliverable_command"}):
                 calls.add(f"{call.func.value.id}.{call.func.attr}")
         rows.append({"method": route[0], "path": route[1], "handler": node.name,
                      "calls": sorted(calls)})
@@ -137,7 +138,7 @@ def closure_transaction_proof(source: str) -> dict[str, Any]:
 
 def writer_transaction_inventory_complete(writers: list[dict[str, Any]]) -> bool:
     """Require every monolith writer to name its concrete boundary and transaction shape."""
-    return len(writers) == 19 and all(
+    return len(writers) == 20 and all(
         str(row.get("ownership") or "").strip() == "monolith"
         and bool(str(row.get("boundary_ref") or "").strip())
         and bool(str(row.get("transaction") or "").strip())
@@ -249,7 +250,7 @@ def evaluate(root: Path = ROOT, *, run_probe: bool = True) -> dict[str, Any]:
         "day_one_surface_exact": {(row.get("method"), row.get("path")) for row in reads} == DAY_ONE,
         "repository_calls_exact": call_match,
         "all_day_one_routes_read_only": all(row.get("writes") is False for row in reads),
-        "all_writers_remain_monolith": len(writers) == 19 and bool(
+        "all_writers_remain_monolith": len(writers) == 20 and bool(
             (verdict.get("writer_policy") or {}).get("all_inventory_entries_stay_on_monolith")),
         "writer_transactions_complete": writer_transactions_complete,
         "closure_transaction_atomic": bool(closure_proof.get("ok")) and bool(

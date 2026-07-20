@@ -356,6 +356,83 @@ def create_deliverable(data: Dict[str, Any], actor: str = "user",
     return get_deliverable(result, project=project) or {"error": "deliverable not found"}
 
 
+def update_deliverable(deliverable_id: str, updates: Dict[str, Any],
+                       actor: str = "user",
+                       project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Partially update a deliverable contract through the public write path."""
+    if not _store_facade().has_project(project):
+        return {"error": f"unknown project: {project}"}
+    allowed = {"title", "status", "end_state", "purpose", "metadata"}
+    unknown = sorted(set(updates or {}) - allowed)
+    if unknown:
+        return {"error": "unsupported deliverable update fields", "fields": unknown,
+                "allowed": sorted(allowed)}
+    if not updates:
+        return {"error": "at least one update field required", "allowed": sorted(allowed)}
+
+    with _store_facade()._conn(project) as c:
+        row = c.execute("SELECT * FROM deliverables WHERE id=?", (deliverable_id,)).fetchone()
+        if not row:
+            return {"error": "unknown deliverable", "deliverable_id": deliverable_id}
+        prior = _deliverable_row(row)
+        values: Dict[str, Any] = {}
+        if "title" in updates:
+            title = str(updates.get("title") or "").strip()
+            if not title:
+                return {"error": "title required"}
+            values["title"] = title
+        if "end_state" in updates:
+            values["end_state"] = updates.get("end_state")
+        if "purpose" in updates:
+            values["why_it_matters"] = updates.get("purpose")
+
+        requested_status = str(updates.get("status", prior["status"])).strip().lower()
+        if "status" in updates:
+            status_error = validate_deliverable_status(requested_status)
+            if status_error:
+                return status_error
+            values["status"] = requested_status
+
+        metadata_value = updates.get("metadata", prior.get("metadata", {}))
+        _, safe_metadata, policy_error = deliverable_policy.prepare_upsert(
+            c, deliverable_id, requested_status, metadata_value)
+        if policy_error:
+            return policy_error
+        if "metadata" in updates:
+            values["metadata_json"] = json.dumps(safe_metadata, sort_keys=True)
+
+        if requested_status == "in_progress" and prior["status"] != "in_progress" \
+                and _enforce_deliverable_intake():
+            candidate = dict(prior)
+            candidate.update(values)
+            intake_error = _validate_deliverable_intake(candidate)
+            if intake_error:
+                return intake_error
+
+        now = time.time()
+        assignments = [f"{field}=?" for field in values]
+        assignments.append("updated_at=?")
+        c.execute(f"UPDATE deliverables SET {', '.join(assignments)} WHERE id=?",
+                  [*values.values(), now, deliverable_id])
+        changes = {}
+        public_names = {"why_it_matters": "purpose", "metadata_json": "metadata"}
+        for field, value in values.items():
+            public = public_names.get(field, field)
+            before = prior.get("why_it_matters") if field == "why_it_matters" else prior.get(public)
+            after = safe_metadata if field == "metadata_json" else value
+            if before != after:
+                changes[public] = {"before": before, "after": after}
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (None, actor, "deliverable.updated",
+                   json.dumps({"deliverable_id": deliverable_id, "project_id": project,
+                               "changes": changes}, sort_keys=True), now))
+
+    narration_outbox.emit_deliverable_narration_request(
+        project, deliverable_id, cause_kind="deliverable.updated", actor=actor)
+    return get_deliverable(deliverable_id, project=project) or {
+        "error": "deliverable not found"}
+
+
 def add_deliverable_milestone(deliverable_id: str, data: Dict[str, Any],
                               actor: str = "user",
                               project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
@@ -2917,6 +2994,9 @@ class StoreDeliverablesRepository:
     def create_deliverable(self, *args, **kwargs):
         return create_deliverable(*args, **kwargs)
 
+    def update_deliverable(self, *args, **kwargs):
+        return update_deliverable(*args, **kwargs)
+
     def create_project_board(self, *args, **kwargs):
         return create_project_board(*args, **kwargs)
 
@@ -3012,6 +3092,7 @@ __all__ = [
     "get_project_board",
     "list_project_boards",
     "create_deliverable",
+    "update_deliverable",
     "add_deliverable_milestone",
     "link_task_to_deliverable",
     "link_tasks_to_deliverable",

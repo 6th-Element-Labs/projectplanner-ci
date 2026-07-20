@@ -5,7 +5,7 @@ etag boundaries; create_deliverable uses a shared application command.
 """
 from __future__ import annotations
 
-from typing import Callable, Literal
+from typing import Any, Callable, Literal
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from fastapi.responses import Response
@@ -15,6 +15,7 @@ import auth
 import deliverable_closure
 import store
 from switchboard.application.commands import create_deliverable as create_deliverable_command
+from switchboard.application.commands import update_deliverable as update_deliverable_command
 
 
 ProjectResolver = Callable[[str], str]
@@ -31,6 +32,18 @@ class AutopilotControlBody(BaseModel):
     profile_id: str = Field(default="autopilot-default", min_length=1, max_length=128)
     runtime: str = Field(default="codex", min_length=1, max_length=64)
     task_project: str = Field(default="", max_length=128)
+
+
+class UpdateDeliverableBody(BaseModel):
+    """Typed partial update for one deliverable contract."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = None
+    status: str | None = None
+    end_state: str | None = None
+    purpose: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 def create_router(*, resolve_project: ProjectResolver,
@@ -104,6 +117,20 @@ def create_router(*, resolve_project: ProjectResolver,
         result = store.get_deliverable(deliverable_id, project=project)
         if not result:
             raise HTTPException(404, "deliverable not found")
+        return result
+
+    @router.patch("/api/deliverables/{deliverable_id}")
+    async def update_deliverable(request: Request, deliverable_id: str,
+                                 body: UpdateDeliverableBody = Body(...),
+                                 project: str = Query(...)):
+        project = resolve_project(project)
+        principal = resolve_principal(request, project, ("write:tasks",), dev_actor="web")
+        result = update_deliverable_command.execute_mapping_result(
+            deliverable_id, body.model_dump(exclude_unset=True),
+            actor=auth.actor(principal), project=project)
+        if result.get("error"):
+            status_code = 404 if result["error"] == "unknown deliverable" else 400
+            raise HTTPException(status_code, result)
         return result
 
     @router.post("/api/deliverables/{deliverable_id}/milestones")

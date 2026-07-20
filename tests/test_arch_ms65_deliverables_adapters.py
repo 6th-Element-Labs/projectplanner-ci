@@ -32,6 +32,7 @@ def ok(condition, message):
 
 EXTRACTED_MCP = {
     "create_deliverable": deliverable_tools,
+    "update_deliverable": deliverable_tools,
     "get_deliverable": deliverable_tools,
     "list_deliverables": deliverable_tools,
     "add_deliverable_milestone": deliverable_tools,
@@ -131,6 +132,10 @@ try:
        "REST create_deliverable uses shared command")
     ok("create_deliverable_command.execute_mapping_result" in mcp_source,
        "MCP create_deliverable uses shared command")
+    ok("update_deliverable_command.execute_mapping_result" in router_source,
+       "REST update_deliverable uses shared command")
+    ok("update_deliverable_command.execute_mapping_result" in mcp_source,
+       "MCP update_deliverable uses shared command")
     breakdown_idx = router_source.find('@router.get("/api/deliverables/breakdown_proposals")')
     deliverable_idx = router_source.find('@router.get("/api/deliverables/{deliverable_id}")')
     ok(breakdown_idx != -1 and deliverable_idx != -1 and breakdown_idx < deliverable_idx,
