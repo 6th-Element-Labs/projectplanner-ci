@@ -1,0 +1,95 @@
+{
+  "schema": "switchboard.simplify10_execution_authority.v1",
+  "task": "SIMPLIFY-10",
+  "purpose": "One execution authority. Outside the task-execution service (and the launcher/persistence/host adapters it owns), no production path may assemble a wake, select a host, author an assignment payload, or resolve a runner id. Ceilings turn one way: lowering a measured count must lower the ceiling in the same change. Raising one requires an explicit justification in the PR.",
+  "service": {
+    "description": "The execution authority. These files ARE the service and are exempt by definition.",
+    "commands": "src/switchboard/application/commands/task_execution.py",
+    "projection": "src/switchboard/application/queries/task_session.py",
+    "launcher": "dispatch.py",
+    "persistence": [
+      "src/switchboard/storage/repositories/runner.py",
+      "src/switchboard/storage/repositories/coordination.py",
+      "runner_store.py",
+      "store.py"
+    ],
+    "host_adapters": [
+      "adapters/agent_host.py",
+      "adapters/direct_codex_session.py",
+      "adapters/codex/supervisor.py",
+      "co_fleet.py"
+    ],
+    "host_protocol": [
+      "src/switchboard/api/routers/runner.py",
+      "src/switchboard/api/routers/runner_pty.py",
+      "src/switchboard/api/routers/wakes.py",
+      "src/switchboard/api/routers/claims.py",
+      "src/switchboard/application/commands/runner_control.py",
+      "src/switchboard/application/commands/runner_pty.py",
+      "src/switchboard/application/commands/request_wake.py",
+      "src/switchboard/mcp/tools/runner.py",
+      "src/switchboard/mcp/tools/wakes.py"
+    ]
+  },
+  "scopes": {
+    "wake_assembly_outside_service": {
+      "description": "Non-service production files that build a wake intent themselves, or hand store.request_wake to something else as a callable.",
+      "measured": 3,
+      "ceiling": 3,
+      "known": {
+        "mission_coordinator.py": "coordinator auto-wake; owner SIMPLIFY-2 (one lifecycle owner)",
+        "review_steward.py": "steward wake_requester injection; owner SIMPLIFY-2",
+        "deliverable_closure/__init__.py": "closure-verifier message_only wake; owner SIMPLIFY-2"
+      }
+    },
+    "legacy_launcher_calls_outside_service": {
+      "description": "Non-service production files that reach the launcher (dispatch.dispatch / start_task / resume_review / dispatch_to_co_fleet / latest_from_task_session) directly instead of through a task-execution command. These bypass the attach/dedupe guard, so each one can still fork a second session.",
+      "measured": 4,
+      "ceiling": 4,
+      "known": {
+        "src/switchboard/api/routers/tasks.py": "legacy /dispatch, /dispatch/latest and /resume-review routes; owner SIMPLIFY-11 (delete the superseded paths)",
+        "src/switchboard/mcp/tools/ops.py": "dispatch_to_claude_code / _codex_cloud / _co_fleet fleet tools; owner SIMPLIFY-11",
+        "coordinator_dispatch.py": "T1 coordinator fleet dispatch; owner SIMPLIFY-2",
+        "inbox.py": "email-routed dispatch; owner SIMPLIFY-2"
+      }
+    },
+    "host_selection_outside_service": {
+      "description": "Non-service production code that picks which host runs a task.",
+      "measured": 0,
+      "ceiling": 0
+    },
+    "assignment_authoring_outside_service": {
+      "description": "Non-service production code that writes an assignment TOML as a source of truth.",
+      "measured": 0,
+      "ceiling": 0
+    },
+    "runner_resolution_outside_service": {
+      "description": "Non-service production files that decide which runner is current (resolve_runner_watch / resolve_task_active_runner / latest_dispatch_outcome) instead of reading the SIMPLIFY-1 projection.",
+      "measured": 1,
+      "ceiling": 1,
+      "known": {
+        "src/switchboard/storage/repositories/deliverables.py": "mission_status resolves the active runner per linked task — a second resolver beside the projection; owner SIMPLIFY-2"
+      }
+    },
+    "browser_execution_facts": {
+      "description": "static/**.js sites that use execution identity the server owns: assembling a wake payload, or sending a self-chosen runner_session_id to a control/PTY/watch endpoint.",
+      "measured": 17,
+      "ceiling": 17,
+      "known": {
+        "static/app.js": "Fleet tab wake modal + fleet runner control table + task-modal watch poll; owner UI-58 / SIMPLIFY-11",
+        "static/js/runner-session.js": "fleet-generic runner control table, the watch gate read, and the control-delivery poll; owner UI-57 / UI-58",
+        "static/js/proof-console.js": "Proof Console picks its own task and runner; owner UI-58"
+      }
+    },
+    "task_execution_surface": {
+      "description": "HARD ZERO. The task REST router and the task/task-execution MCP tool modules must never assemble a wake, select a host, author an assignment, or resolve a runner id: every execution fact comes from the service.",
+      "files": [
+        "src/switchboard/api/routers/tasks.py",
+        "src/switchboard/mcp/tools/tasks.py",
+        "src/switchboard/mcp/tools/task_execution.py"
+      ],
+      "measured": 0,
+      "ceiling": 0
+    }
+  }
+}

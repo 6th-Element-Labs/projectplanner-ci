@@ -436,18 +436,18 @@
                 + this.esc(detail) + extra,
                 dispatch?.state === 'needs_attention' ? 'warning' : 'danger',
             );
-            // COORD-44/UI-58: the refusal names the blocker; this is the one
-            // repair action. Start/Retry goes through the same start_task()
-            // operation as the task modal and MCP — never a bespoke wake.
+            // COORD-44/SIMPLIFY-10: the refusal names the blocker; this is the
+            // one repair action. Start and Retry are distinct service commands —
+            // retry supersedes the failed attempt instead of racing a second one.
             const gateEl = document.getElementById('runner-pty-gate');
             if (gateEl && !document.getElementById('runner-pty-start-retry')) {
                 const btn = document.createElement('button');
                 btn.type = 'button';
                 btn.id = 'runner-pty-start-retry';
                 btn.className = 'btn btn-primary btn-sm mt-2 d-block';
-                const verb = (dispatch && dispatch.state) || sessions.length ? 'Retry' : 'Start';
-                btn.innerHTML = `<i class="ti ti-player-play me-1"></i>${verb} on my Mac`;
-                btn.onclick = () => this.startTaskSession(id, opts);
+                const isRetry = !!((dispatch && dispatch.state) || sessions.length);
+                btn.innerHTML = `<i class="ti ti-player-play me-1"></i>${isRetry ? 'Retry' : 'Start'} on my Mac`;
+                btn.onclick = () => this.startTaskSession(id, opts, isRetry);
                 gateEl.appendChild(btn);
             }
             return true;
@@ -472,29 +472,43 @@
         return true;
     },
 
-    // COORD-44: one Start/Retry path for every surface. The server attaches,
-    // dedupes an in-flight start, or launches on the enrolled Mac; the browser
-    // only ever polls the authoritative watch gate afterwards.
-    async startTaskSession(taskId, opts) {
+    // COORD-44/SIMPLIFY-10: one Start/Retry path for every surface, through the
+    // task-execution command service. The server attaches, dedupes an in-flight
+    // start, supersedes a failed attempt, or launches on the enrolled Mac; the
+    // browser only polls the authoritative execution projection afterwards.
+    async startTaskSession(taskId, opts, retry = false) {
         const id = String(taskId || '').trim();
         if (!id) return false;
         const pending = document.getElementById('runner-pty-start-retry');
         if (pending) pending.disabled = true;
-        this._runnerPtyGate('Starting a session on your Mac…', 'secondary');
+        this._runnerPtyGate(
+            retry ? 'Superseding the last attempt…' : 'Starting a session on your Mac…',
+            'secondary');
         const project = window.PM_PROJECT || 'maxwell';
+        const path = retry
+            ? `api/tasks/${encodeURIComponent(id)}/execution/retry`
+            : `api/tasks/${encodeURIComponent(id)}/start`;
         let data;
         try {
-            const res = await fetch(`api/tasks/${encodeURIComponent(id)}/start`, {
+            const res = await fetch(path, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ project }),
             });
             data = await res.json();
         } catch (e) {
-            this._runnerPtyGate(`Start failed: ${this.esc(e.message)}`, 'danger');
+            this._runnerPtyGate(`${retry ? 'Retry' : 'Start'} failed: ${this.esc(e.message)}`, 'danger');
             return false;
         }
-        if (data.action === 'attach' || data.watchable === true) {
+        if (data.action === 'attach' || data.attached === true) {
             return this.openRunnerSessionPanel(id, opts);
+        }
+        if (data.action === 'superseding') {
+            // Never two sessions for one task: the live runner is stopping, so
+            // say so instead of launching a second one beside it.
+            this._runnerPtyGate(
+                `${this.esc(String(data.message || 'Stopping the live session first.'))} Retry again once it has ended.`,
+                'warning');
+            return true;
         }
         if (data.action === 'started' || data.action === 'starting') {
             this._runnerPtyGate(
@@ -504,19 +518,22 @@
             while (Date.now() < deadline) {
                 await new Promise((resolve) => setTimeout(resolve, 3000));
                 try {
-                    const q = `project=${encodeURIComponent(project)}&task_id=${encodeURIComponent(id)}`;
-                    const state = await (await fetch(`/ixp/v1/runner_sessions/watch?${q}`, { cache: 'no-store' })).json();
-                    if (state && state.watchable !== false && !state.error) {
+                    const q = `project=${encodeURIComponent(project)}`;
+                    const state = await (await fetch(
+                        `api/tasks/${encodeURIComponent(id)}/execution?${q}`,
+                        { cache: 'no-store' })).json();
+                    if (state && state.running === true) {
                         return this.openRunnerSessionPanel(id, opts);
                     }
-                } catch (e) { /* transient; keep polling the authoritative gate */ }
+                } catch (e) { /* transient; keep polling the authoritative projection */ }
             }
             this._runnerPtyGate('The session has not bound yet — reopen this panel to attach.', 'warning');
             return true;
         }
-        const reason = (data.dispatch && data.dispatch.message) || data.reason || data.error || 'start refused';
+        const reason = (data.last_dispatch_outcome && data.last_dispatch_outcome.message)
+            || data.message || data.error || 'start refused';
         this._runnerPtyGate(
-            `<span class="badge bg-red-lt me-1">${this.esc(String(data.error || 'start_failed'))}</span>`
+            `<span class="badge bg-red-lt me-1">${this.esc(String(data.start_error || data.error_code || 'start_failed'))}</span>`
             + this.esc(String(reason)),
             'danger');
         return true;
@@ -565,55 +582,38 @@
         const rp = this._runnerPty;
         if (!rp) return;
         this._runnerPtyGate('<span class="spinner-border spinner-border-sm me-1"></span>Connecting…', 'secondary');
-        // Ensure the host tunnel is attached (idempotent — a no-op if it's already
-        // live). Fire in parallel with our own ticket mint rather than awaiting it
-        // here (the browser can attach before the host does and will simply see no
-        // bytes until it does) — but still surface a refusal once it resolves,
-        // fail-closed, instead of leaving the terminal at "waiting for output"
-        // forever with no explanation.
-        fetch('/ixp/v1/request_runner_open', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                project: window.PM_PROJECT || 'maxwell',
-                runner_session_id: rp.runnerSessionId,
-                reason: `operator watch on task ${rp.taskId}`,
-                // An open is a repeatable recovery operation, not a permanent
-                // side effect. A fresh operation id prevents an earlier verified
-                // open from suppressing the request needed after a server restart.
-                options: { client_request_id: this._runnerPtyRequestId('open') },
-            }),
-        }).then(async (res) => {
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok || data.error || (data.requested === false && !data.verified)) {
-                throw new Error(this._runnerPtyApiError(
-                    data,
-                    data.requested === false ? (data.reason || 'refused') : `HTTP ${res.status}`,
-                ));
-            }
-        }).catch((e) => {
-            if (this._runnerPty === rp) {
-                this._runnerPtyGate(
-                    `Host tunnel did not open: ${this.esc(e.message)}. The relay ticket is live but no bytes will arrive.`,
-                    'danger');
-            }
-        });
+        // SIMPLIFY-10: one command opens the session. The server resolves which
+        // execution is current, attaches the host tunnel, and mints the relay
+        // ticket — the browser no longer sends a runner id it chose itself, so
+        // it can no longer attach to a session the server has superseded. A
+        // refusal arrives as one truthful reason instead of two half-failures.
         let ticket;
         try {
-            const res = await fetch(`/ixp/v1/runner_sessions/${encodeURIComponent(rp.runnerSessionId)}/pty/ticket`, {
+            const res = await fetch(`api/tasks/${encodeURIComponent(rp.taskId)}/execution/open`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    project: window.PM_PROJECT || 'maxwell',
-                    scopes: ['watch', 'input', 'resize', 'signal'],
-                }),
+                body: JSON.stringify({ project: window.PM_PROJECT || 'maxwell' }),
             });
             ticket = await res.json();
             if (!res.ok || ticket.error) {
                 throw new Error(this._runnerPtyApiError(ticket, `HTTP ${res.status}`));
             }
-            if (!ticket.relay_url) throw new Error('relay ticket has no browser-safe URL');
+            if (!ticket.relay_url) {
+                throw new Error(ticket.reason || 'relay ticket has no browser-safe URL');
+            }
+            // The server is authoritative for session identity; adopt whatever
+            // execution it actually opened.
+            if (ticket.execution_id) rp.runnerSessionId = ticket.execution_id;
         } catch (e) {
             this._runnerPtyGate(`Could not open a browser-safe relay ticket: ${this.esc(e.message)}`, 'danger');
             return;
+        }
+        if (ticket.opened === false) {
+            // The relay is live but the host tunnel was refused: say so rather
+            // than leaving the terminal at "waiting for output" with no reason.
+            this._runnerPtyGate(
+                `Host tunnel did not open: ${this.esc(String((ticket.host_open || {}).reason || 'refused'))}. `
+                + 'The relay ticket is live but no bytes will arrive.',
+                'danger');
         }
         try {
             await this._ensureXterm();
@@ -632,6 +632,16 @@
     },
 
     _runnerPtyApiError(payload, fallback) {
+        // Prefer a human string. Typed task-execution refusals return the
+        // envelope at the top level (message/error_code); legacy routes still
+        // nest under detail. Never String(object) → "[object Object]".
+        if (payload && typeof payload === 'object') {
+            if (typeof payload.message === 'string' && payload.message) return payload.message;
+            if (typeof payload.error === 'string' && payload.error) return payload.error;
+            if (typeof payload.error_code === 'string' && payload.error_code) {
+                return payload.error_code;
+            }
+        }
         const value = (payload && (payload.error || payload.detail || payload.message)) || fallback;
         if (typeof value === 'string') return value;
         if (value && typeof value === 'object') {
@@ -850,7 +860,6 @@
         }
         const text = ((els.chatInput && els.chatInput.value) || '').trim();
         if (!text) return;
-        const injectKind = (kind || 'freeform').toLowerCase();
         if (els.chatSend) els.chatSend.disabled = true;
         let entry = null;
         if (els.chatLog) {
@@ -889,29 +898,19 @@
                 return;
             }
             // If the relay is reconnecting, retain the durable host queue as a
-            // fallback. Each attempt has a new id, so a prior timeout cannot
-            // permanently poison a retry of the same text.
-            const clientRequestId = this._runnerPtyRequestId('inject');
-            const res = await fetch('/ixp/v1/request_runner_inject', {
+            // fallback — through the task-scoped send_message command, so the
+            // server still owns which execution receives the text.
+            const res = await fetch(`api/tasks/${encodeURIComponent(rp.taskId)}/execution/message`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    project: window.PM_PROJECT || 'maxwell',
-                    runner_session_id: rp.runnerSessionId,
-                    task_id: rp.taskId,
-                    text,
-                    kind: injectKind,
-                    reason: `operator ${injectKind} chat from task ${rp.taskId}`,
-                    options: { client_request_id: clientRequestId },
-                }),
+                body: JSON.stringify({ project: window.PM_PROJECT || 'maxwell', text }),
             });
             const data = await res.json().catch(() => ({}));
-            if (!res.ok || data.error) throw new Error(data.error || data.detail || data.message || `HTTP ${res.status}`);
-            if (data.requested === false) {
-                if (!data.verified) throw new Error(data.reason || data.error || 'not accepted');
+            if (!res.ok || data.error || data.error_code) {
+                throw new Error(this._runnerPtyApiError(data, `HTTP ${res.status}`));
             }
             if (els.chatInput) els.chatInput.value = '';
-            this._runnerPtyAwaitChatDelivery(data.request_id, entry, text);
+            this._runnerPtyAwaitChatDelivery(data.control_request_id, entry, text);
         } catch (e) {
             flash(`inject failed: ${e.message}`, 'danger');
             if (els.chatInput && !els.chatInput.value) els.chatInput.value = text;

@@ -43,7 +43,13 @@ ok("new window.FitAddon.FitAddon()" in RUNNER_SESSION, "the fit addon is instant
 ok("openRunnerSessionPanel" in RUNNER_SESSION, "openRunnerSessionPanel is the terminal's one entry point")
 ok("openRunnerWatch" not in COMPOSED, "the old badge-only openRunnerWatch is fully retired")
 ok("new WebSocket(" in RUNNER_SESSION, "a real browser WebSocket connects to the relay")
-ok("/pty/ticket" in RUNNER_SESSION, "the browser mints its own relay ticket via the synchronous pty/ticket endpoint")
+# SIMPLIFY-10: the browser no longer mints against a runner id it chose. One
+# task-scoped command opens the session; the server resolves the execution,
+# attaches the host tunnel, and mints the ticket.
+ok("/execution/open" in RUNNER_SESSION,
+   "the terminal opens through the task-scoped open_session command")
+ok("/pty/ticket" not in RUNNER_SESSION,
+   "the browser no longer mints its own relay ticket for a self-chosen runner")
 ok("request_runner_open" in RUNNER_SESSION,
    "opening watch also ensures the host tunnel via request_runner_open (idempotent)")
 ok("term.write(bytes)" in RUNNER_SESSION or "term.write(" in RUNNER_SESSION,

@@ -146,15 +146,22 @@ try:
        "the refusal carries the dispatcher's own latest verdict for context")
 
     # ---- 5) every surface references the same operation ---------------------
+    # SIMPLIFY-10 moved every surface onto the task_execution command service;
+    # dispatch.start_task is now the launcher that only the service calls.
     root = os.path.dirname(os.path.abspath(__file__))
     rest = open(os.path.join(root, "src/switchboard/api/routers/tasks.py")).read()
-    mcp = open(os.path.join(root, "src/switchboard/mcp/tools/ops.py")).read()
+    mcp = open(os.path.join(root, "src/switchboard/mcp/tools/task_execution.py")).read()
     authz = open(os.path.join(root, "src/switchboard/mcp/authorization.py")).read()
-    ok('"/api/tasks/{task_id}/start"' in rest and "dispatch.start_task" in rest,
+    service = open(os.path.join(
+        root, "src/switchboard/application/commands/task_execution.py")).read()
+    ok('"/api/tasks/{task_id}/start"' in rest
+       and 'task_execution_command.execute_mapping_result' in rest,
        "REST exposes the same start_task operation")
-    ok("def start_task" in mcp and "dispatch_mod.start_task" in mcp
+    ok("def start_task" in mcp and '_run("start_task"' in mcp
        and '"start_task"' in mcp,
        "MCP exposes the same start_task operation")
+    ok("dispatch_mod.start_task" in service,
+       "the service is the one caller of the start_task launcher")
     ok('"start_task"' in authz,
        "MCP authorization admits start_task as a write tool")
     coordinator = open(os.path.join(root, "mission_coordinator.py")).read()

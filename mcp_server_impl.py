@@ -40,6 +40,7 @@ from switchboard.mcp.tools import projects as project_tools
 from switchboard.mcp.tools import provider_credentials as provider_credential_tools
 from switchboard.mcp.tools import reconcile as reconcile_tools
 from switchboard.mcp.tools import reviews as review_tools
+from switchboard.mcp.tools import task_execution as task_execution_tools
 from switchboard.mcp.tools import tasks as task_tools
 from switchboard.mcp.tools import claims as claim_tools  # noqa: E402
 from switchboard.mcp.tools import wakes as wake_tools  # noqa: E402
@@ -162,6 +163,17 @@ _task_tool_functions = task_tools.register_task_tools(
     ),
 )
 globals().update(_task_tool_functions)
+
+# SIMPLIFY-10: the task-execution command set. Same service as the REST
+# /api/tasks/{task_id}/execution* routes, so both transports answer identically.
+_task_execution_tool_functions = task_execution_tools.register_task_execution_tools(
+    mcp,
+    task_execution_tools.TaskExecutionToolServices(
+        dumps=_dumps,
+        require_write=_require_write,
+    ),
+)
+globals().update(_task_execution_tool_functions)
 
 _review_tool_functions = review_tools.register_review_tools(
     mcp,

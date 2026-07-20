@@ -10,6 +10,7 @@ import asyncio
 from typing import Callable, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 import agent
@@ -24,6 +25,7 @@ from switchboard.api.idempotency import (
 from switchboard.application.commands import create_task as create_task_command
 from switchboard.application.commands import move_task as move_task_command
 from switchboard.application.commands import review_verdicts as review_verdict_commands
+from switchboard.application.commands import task_execution as task_execution_command
 from switchboard.application.commands import update_task as update_task_command
 from switchboard.application.queries import get_task as get_task_query
 from switchboard.application.queries import task_session as task_session_query
@@ -52,6 +54,22 @@ class StartTaskBody(BaseModel):
 
     project: Optional[str] = None
     role: Optional[str] = None
+
+
+class ExecutionCommandBody(BaseModel):
+    """Shared body for the SIMPLIFY-10 task-execution commands.
+
+    Deliberately has no ``execution_id``/``runner_session_id``/``host_id``: the
+    service resolves the current execution, so no client can pick one.
+    """
+
+    project: Optional[str] = None
+    role: Optional[str] = None
+    reason: Optional[str] = None
+    text: Optional[str] = None
+    scopes: Optional[list[str]] = None
+    ttl_seconds: Optional[int] = None
+    grace_seconds: Optional[int] = None
 
 
 def create_router(*, resolve_project: ProjectResolver,
@@ -475,6 +493,28 @@ def create_router(*, resolve_project: ProjectResolver,
                 raise HTTPException(404, "task not found")
             return result
 
+        async def run_execution_command(request: Request, command: str, task_id: str,
+                                        project: str, **kwargs):
+            """Run one task-execution command and render its shared envelope.
+
+            SIMPLIFY-10: the body is whatever the service returned — success or
+            typed error — so REST and MCP are byte-identical. Only the HTTP
+            status is added here, from the service's own error-code table.
+            Refusals use JSONResponse (not HTTPException) so FastAPI does not
+            wrap the typed envelope under ``detail``.
+            """
+            principal = resolve_principal(
+                request, project, ("write:tasks",), dev_actor="web")
+            result = await asyncio.to_thread(
+                task_execution_command.execute_mapping_result, command, task_id,
+                project=project, actor=auth.actor(principal),
+                principal_id=principal.get("id") or "", **kwargs)
+            if result.get("error_code"):
+                return JSONResponse(
+                    status_code=task_execution_command.error_status(result),
+                    content=result)
+            return result
+
         @router.post("/api/tasks/{task_id}/start")
         async def start_task_session(request: Request, task_id: str,
                                      body: StartTaskBody = Body(
@@ -482,16 +522,77 @@ def create_router(*, resolve_project: ProjectResolver,
             """COORD-44: the one Start/Retry entry — attach, dedupe, or start.
 
             Same operation the MCP adapter exposes; the browser never chooses a
-            runner or assembles a wake. See dispatch.start_task for the contract.
+            runner or assembles a wake. See the task_execution service contract.
             """
-            project = resolve_project(body.project)
-            principal = resolve_principal(
-                request, project, ("write:tasks",), dev_actor="web")
+            return await run_execution_command(
+                request, "start_task", task_id, resolve_project(body.project),
+                role=body.role or "implementation")
+
+        @router.get("/api/tasks/{task_id}/execution")
+        async def get_task_execution(task_id: str, project: str = Query(...)):
+            """The one authoritative answer to "what is running" for this task."""
             result = await asyncio.to_thread(
-                dispatch.start_task, task_id, auth.actor(principal), project,
-                principal.get("id") or "", body.role or "implementation")
-            if result.get("error") == "task not found":
-                raise HTTPException(404, "task not found")
+                task_execution_command.execute_mapping_result,
+                "get_task_execution", task_id, project=resolve_project(project))
+            if result.get("error_code"):
+                return JSONResponse(
+                    status_code=task_execution_command.error_status(result),
+                    content=result)
+            return result
+
+        @router.post("/api/tasks/{task_id}/execution/open")
+        async def open_task_execution(request: Request, task_id: str,
+                                      body: ExecutionCommandBody = Body(
+                                          default=ExecutionCommandBody())):
+            """Open a watchable terminal — the server picks the execution."""
+            return await run_execution_command(
+                request, "open_session", task_id, resolve_project(body.project),
+                scopes=body.scopes or None, ttl_seconds=int(body.ttl_seconds or 0))
+
+        @router.post("/api/tasks/{task_id}/execution/message")
+        async def message_task_execution(request: Request, task_id: str,
+                                         body: ExecutionCommandBody = Body(...)):
+            """Queue one message for the task's live execution session."""
+            return await run_execution_command(
+                request, "send_message", task_id, resolve_project(body.project),
+                text=body.text or "")
+
+        @router.post("/api/tasks/{task_id}/execution/stop")
+        async def stop_task_execution(request: Request, task_id: str,
+                                      body: ExecutionCommandBody = Body(
+                                          default=ExecutionCommandBody())):
+            """Stop the live runner and cancel any queued start, together."""
+            kwargs = {"reason": body.reason or "operator stop"}
+            if body.grace_seconds is not None:
+                kwargs["grace_seconds"] = int(body.grace_seconds)
+            return await run_execution_command(
+                request, "stop_task", task_id, resolve_project(body.project),
+                **kwargs)
+
+        @router.post("/api/tasks/{task_id}/execution/retry")
+        async def retry_task_execution(request: Request, task_id: str,
+                                       body: ExecutionCommandBody = Body(
+                                           default=ExecutionCommandBody())):
+            """Supersede the current attempt; never fork a second execution."""
+            return await run_execution_command(
+                request, "retry_task", task_id, resolve_project(body.project),
+                role=body.role or "implementation",
+                reason=body.reason or "operator retry")
+
+        @router.get("/api/tasks/{task_id}/execution/transcript")
+        async def get_task_execution_transcript(
+                task_id: str, project: str = Query(...),
+                execution_id: str = Query(""), limit: int = Query(20)):
+            """The durable record for one execution, live or completed."""
+            result = await asyncio.to_thread(
+                task_execution_command.execute_mapping_result,
+                "get_execution_transcript", task_id,
+                execution_id=execution_id, project=resolve_project(project),
+                limit=limit)
+            if result.get("error_code"):
+                return JSONResponse(
+                    status_code=task_execution_command.error_status(result),
+                    content=result)
             return result
 
         @router.get("/api/tasks/{task_id}/dispatch/latest")

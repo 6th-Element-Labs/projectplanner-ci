@@ -274,22 +274,24 @@ try:
            "discard scrollback and leak the old ResizeObserver on every drop)")
         ok(reused["line0"] == "UI-24 PLAYWRIGHT OK", "scrollback from before the simulated reconnect is still there")
 
+        # SIMPLIFY-10: one task-scoped command per reconnect. The browser sends
+        # no runner id at all — the server resolves the current execution,
+        # attaches the host tunnel, and mints the ticket. (The freshness of the
+        # host-open recovery operation is now a server property, proved in
+        # tests/test_simplify10_task_execution.py.)
         reopen_ops = page.evaluate("""
             async () => {
                 const originalFetch = window.fetch;
                 const originalOpenSocket = TeepPlan._runnerPtyOpenSocket;
                 const requests = [];
                 window.fetch = async (url, options) => {
-                    if (String(url) === '/ixp/v1/request_runner_open') {
-                        requests.push(JSON.parse(options.body));
-                        return new Response(JSON.stringify({requested: true}), {
-                            status: 200, headers: {'Content-Type': 'application/json'}
-                        });
-                    }
-                    if (String(url).includes('/pty/ticket')) {
-                        return new Response(JSON.stringify({relay_url: 'wss://relay.example/test'}), {
-                            status: 200, headers: {'Content-Type': 'application/json'}
-                        });
+                    if (String(url).includes('/execution/open')) {
+                        requests.push({url: String(url), body: JSON.parse(options.body)});
+                        return new Response(JSON.stringify({
+                            execution_id: TeepPlan._runnerPty.runnerSessionId,
+                            relay_url: 'wss://relay.example/test',
+                            opened: true, browser_safe: true,
+                        }), {status: 200, headers: {'Content-Type': 'application/json'}});
                     }
                     return originalFetch(url, options);
                 };
@@ -299,12 +301,16 @@ try:
                 await new Promise((resolve) => setTimeout(resolve, 25));
                 window.fetch = originalFetch;
                 TeepPlan._runnerPtyOpenSocket = originalOpenSocket;
-                return requests.map((request) => request.options?.client_request_id || '');
+                return requests;
             }
         """)
-        ok(len(reopen_ops) == 2 and all(reopen_ops)
-           and reopen_ops[0] != reopen_ops[1],
-           f"every Watch reconnect issues a fresh host-open recovery operation ({reopen_ops})")
+        ok(len(reopen_ops) == 2,
+           f"every Watch reconnect issues one open_session command ({len(reopen_ops)})")
+        ok(all("/FAKE-TASK-1/execution/open" in op["url"] for op in reopen_ops),
+           "the open command is task-scoped, not runner-scoped")
+        ok(all("runner_session_id" not in op["body"] and "execution_id" not in op["body"]
+               for op in reopen_ops),
+           "the browser never names which execution to open — the server decides")
 
         # ---- a real keypress round-trips through xterm's onData -------------
         page.evaluate("""
