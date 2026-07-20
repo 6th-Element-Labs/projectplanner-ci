@@ -208,6 +208,32 @@ def _write_built_bundle(output_dir: Path, manifest: dict[str, Any],
     )
 
 
+def _source_git_head(source_root: Path) -> str:
+    """Best-effort HEAD sha of the bundle source; empty when not a checkout."""
+    result = subprocess.run(
+        ["git", "-C", str(source_root), "rev-parse", "HEAD"],
+        capture_output=True, text=True, timeout=30, check=False)
+    return (result.stdout or "").strip() if result.returncode == 0 else ""
+
+
+def _auto_bundle_version(source_root: Path) -> str:
+    """BUG-109: derive the bundle version from the source commit count.
+
+    Two builders at the same commit produce the IDENTICAL version, and a later
+    commit always outranks an earlier one — so parallel release builds cannot
+    collide the way hand-picked numbers did (two independent "0.2.26"s, the
+    older-content one installing first and blocking the newer build).
+    """
+    result = subprocess.run(
+        ["git", "-C", str(source_root), "rev-list", "--count", "HEAD"],
+        capture_output=True, text=True, timeout=30, check=False)
+    count = (result.stdout or "").strip()
+    if result.returncode != 0 or not count.isdigit():
+        raise EnrollmentError(
+            "--version auto requires source_root to be a Git checkout")
+    return f"0.3.{count}"
+
+
 def create_signed_bundle(source_root: Path, output_dir: Path, version: str,
                          private_key_path: Path) -> dict[str, Any]:
     """Public bundle builder; split from verification to keep installer read-only."""
@@ -251,7 +277,9 @@ def create_signed_bundle(source_root: Path, output_dir: Path, version: str,
         mode = 0o755 if executable else 0o644
         os.chmod(target, mode)
         files.append({"path": relative.as_posix(), "sha256": _sha256(target), "mode": mode})
+    source_sha = _source_git_head(source_root)
     manifest = {
+        **({"source_sha": source_sha} if source_sha else {}),
         "schema": BUNDLE_SCHEMA,
         "version": version,
         "agent_host_version": version,
@@ -602,9 +630,25 @@ def control_service(target_platform: str, action: str, service_path: Path,
         raise EnrollmentError("target platform must be darwin or linux")
     for command in commands:
         result = runner(command, capture_output=True, text=True, check=False, timeout=30)
-        # Unloading an already-unloaded service is idempotent, including the
-        # first half of a restart/reload.
         unloading = len(command) > 1 and command[1] == "bootout"
+        bootstrapping = len(command) > 2 and command[1] == "bootstrap"
+        if bootstrapping and result.returncode == 5:
+            # Only EIO — the teardown-race signature observed live. Other
+            # bootstrap failures (including fixtures' injected rc 1) surface
+            # immediately so rollback semantics stay byte-identical.
+            # BUG-109: bootstrap races launchd's ASYNCHRONOUS teardown of the
+            # job the preceding bootout removed and fails with EIO (5). Wait
+            # for the label to disappear, then retry once. Observed live on
+            # the 0.2.27 install; the rollback fired and the host stayed on
+            # stale code until a manual bootout-first retry.
+            label_target = f"{command[2]}/{SERVICE_LABEL}"
+            deadline = time.time() + 5.0
+            while time.time() < deadline and runner(
+                    ["launchctl", "print", label_target], capture_output=True,
+                    text=True, check=False, timeout=30).returncode == 0:
+                time.sleep(0.2)
+            result = runner(command, capture_output=True, text=True,
+                            check=False, timeout=30)
         if result.returncode and not (unloading and result.returncode in {3, 5, 113}):
             raise EnrollmentError(
                 f"service {action} failed: {(result.stderr or result.stdout).strip()}")
@@ -2196,8 +2240,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "build-bundle":
+            version = (args.version if args.version != "auto"
+                       else _auto_bundle_version(args.source_root))
             result = create_signed_bundle(
-                args.source_root, args.output, args.version, args.signing_key)
+                args.source_root, args.output, version, args.signing_key)
         elif args.command == "verify-bundle":
             result = verify_bundle(args.bundle, args.public_key)
         elif args.command == "install":
