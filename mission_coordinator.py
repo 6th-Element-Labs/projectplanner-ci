@@ -11,8 +11,18 @@ agent-to-agent.
 """
 from __future__ import annotations
 
+import os
 import time
 from typing import Any, Dict, List, Optional
+
+
+def co_fleet_autopilot_paused() -> bool:
+    """COORD-45 (interim): pause AUTOMATIC fleet dispatch while no fleet host is
+    Watch-qualified. SEG-2 burned six attempts against co-general cap=4 over 31
+    hours; churning a capped, unqualified pool creates residue, not progress.
+    Manual dispatch and dispatch.start_task() are unaffected."""
+    return str(os.environ.get("PM_AUTOPILOT_COFLEET", "1")).strip().lower() in (
+        "0", "false", "no", "off")
 
 ACTION_PRIORITY: Dict[str, int] = {
     "request_human_approval": 0,
@@ -498,7 +508,8 @@ def run_coordinator_tick(
             result["status"] = "claimed" if claim.get("claimed") else "dispatch_blocked"
             if not claim.get("claimed"):
                 result["retry_after_seconds"] = int(claim.get("retry_after_seconds") or 120)
-        elif pol["auto_wake"] and pol["worker_wake_selector"]:
+        elif (pol["auto_wake"] and pol["worker_wake_selector"]
+              and not co_fleet_autopilot_paused()):
             selector = dict(pol["worker_wake_selector"])
             selector.setdefault("deliverable_id", deliverable_id)
             selector.setdefault("task_id", dispatch.get("task_id"))
@@ -574,6 +585,15 @@ def run_coordinator_tick(
             result["dispatch"] = wake
             result["status"] = "wake_requested" if wake.get("wake_id") else "dispatch_blocked"
             result["watch_gate"] = "awaiting_runner_bind"
+        elif pol["auto_wake"] and pol["worker_wake_selector"]:
+            # COORD-45 (interim): the auto branch above declined because fleet
+            # dispatch is paused. Say so truthfully instead of "dispatch_ready".
+            result["status"] = "dispatch_paused"
+            result["reason"] = (
+                "automatic co_fleet dispatch is paused (PM_AUTOPILOT_COFLEET=0): "
+                "fleet hosts are not Watch-qualified; use start_task/the UI Start button")
+            result["dispatch"] = dispatch
+            result["retry_after_seconds"] = 600
         else:
             result["status"] = "dispatch_ready"
             result["dispatch"] = dispatch

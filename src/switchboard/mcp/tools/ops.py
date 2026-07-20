@@ -158,9 +158,26 @@ def ingest_and_triage(kind: str, title: str, text: str, ctx: Context, project: s
     return services.dumps(intake_mod.ingest_and_triage(kind, title, text, project=project))
 
 
+def start_task(task_id: str, ctx: Context, project: str = "maxwell",
+               role: str = "implementation") -> str:
+    """COORD-44: start or resume THE task session — identical to the UI Start button.
+    Attaches when a live watchable runner exists, reports 'starting' when a dispatch
+    is already in flight (idempotent), otherwise starts one native Codex session on
+    the caller's enrolled watch-capable personal host. Callers never pick a runner
+    or assemble a wake; failures return the dispatcher's own truthful reason.
+    Personal-host starts require the caller principal to own the enrollment."""
+    services = _services()
+    principal = services.require_write(ctx, project)
+    import dispatch as dispatch_mod
+    return services.dumps(dispatch_mod.start_task(
+        task_id, actor=auth.actor(principal), project=project,
+        principal_id=str(principal.get("id") or ""), role=role))
+
+
 OPS_TOOL_NAMES = (
     "submit_bug", "generate_digest", "notify", "dispatch_to_claude_code",
     "dispatch_to_codex_cloud", "dispatch_to_co_fleet", "ingest_and_triage",
+    "start_task",
 )
 
 

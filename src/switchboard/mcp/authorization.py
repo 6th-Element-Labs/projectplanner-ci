@@ -225,7 +225,7 @@ WRITE_TOOLS = frozenset({
     "revoke_scoped_token", "rollback_project_consolidation",
     "rotate_provider_connection", "run_background_job", "run_mission_coordinator",
     "send_agent_message", "set_agent_state", "set_project_github_repo",
-    "set_project_repo_topology", "submit_bug", "submit_deliverable_outcome",
+    "set_project_repo_topology", "start_task", "submit_bug", "submit_deliverable_outcome",
     "sweep_monitors", "unlink_task_from_deliverable",
     "update_deliverable_breakdown_proposal", "update_kpi_value",
     "update_mission_narrative", "update_project", "update_task", "update_work_session",

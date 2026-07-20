@@ -165,6 +165,19 @@ try:
             route.fulfill(status=200, content_type="application/json",
                           body='{"dispatched": true, "wake_id": "wake-ui26-test", "work_hosts_online": 0}')
 
+        # COORD-44: the codex button now posts to the unified /start operation;
+        # claude-code keeps the queued dispatch endpoint. Mock both.
+        started = {}
+
+        def _capture_start(route):
+            req = route.request
+            if req.method == "POST":
+                started["body"] = req.post_data
+            route.fulfill(status=200, content_type="application/json",
+                          body='{"action": "started", "started": true, '
+                               '"wake_id": "wake-ui26-test", "work_hosts_online": 0}')
+
+        page.route(f"**/api/tasks/{task_id}/start**", _capture_start)
         page.route(f"**/api/tasks/{task_id}/dispatch**", _capture_dispatch)
         page.route(f"**/api/tasks/{task_id}/dispatch/latest**", lambda r: r.fulfill(
             status=200, content_type="application/json", body='{"status": "none"}'))
@@ -182,9 +195,9 @@ try:
         page.wait_for_function(
             "() => document.getElementById('edit-flash-dev')?.textContent.includes('Assigned')")
 
-        body = captured.get("body") or ""
-        ok('"runtime":"codex"' in body.replace(" ", ""),
-           f"the actual POST body sent to the backend carries runtime=codex (got: {body!r})")
+        body = started.get("body") or ""
+        ok(body and '"project"' in body and captured.get("body") is None,
+           f"the Codex button posts to the unified /start operation, not the queued dispatch endpoint (got: {body!r})")
 
         flash = page.locator("#edit-flash-dev").inner_text()
         ok("Assigned" in flash and "wake-ui26-test" in flash,

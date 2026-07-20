@@ -114,6 +114,17 @@ ok("dispatch?.state === 'needs_attention'" in RUNNER_SESSION,
    "a wake queued far too long renders as needs_attention rather than a hard error")
 ok("dispatch.dispatch_attempt" in RUNNER_SESSION,
    "a repeatedly-retried dispatch shows its attempt count instead of looking like a one-off")
+# COORD-44 / UI-58: the refusal gate carries the ONE repair action, and every
+# surface goes through the same start_task() operation — the browser never
+# assembles a wake or picks a runner.
+ok("runner-pty-start-retry" in RUNNER_SESSION and "startTaskSession" in RUNNER_SESSION,
+   "the refusal gate offers Start/Retry wired to the unified start operation")
+ok("/start`" in RUNNER_SESSION,
+   "the gate's Start/Retry calls the unified /start endpoint")
+ok("}/start`" in APP and "action === 'attach'" in APP,
+   "the task modal's codex Start uses the same /start endpoint and handles attach")
+ok("runtime: rt" in APP and "}/dispatch`" in APP,
+   "the claude-code queued dispatch path is preserved unchanged")
 ok("_runnerPtyCloseTimer" in RUNNER_SESSION,
    "a pending close animation cannot hide a runner panel that was immediately reopened")
 

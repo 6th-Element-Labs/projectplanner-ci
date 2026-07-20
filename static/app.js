@@ -2406,10 +2406,26 @@ const TeepPlan = {
         flash(rt === 'codex' ? 'Sending the task to your Mac…' : 'Queuing a Claude cloud session…');
         let data;
         try {
-            const res = await fetch(`api/tasks/${encodeURIComponent(id)}/dispatch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: proj, runtime: rt }) });
+            // COORD-44: codex starts go through the unified start_task operation
+            // (attach / dedupe-in-flight / start); claude-code keeps the queued
+            // fleet dispatch path.
+            const endpoint = rt === 'codex'
+                ? `api/tasks/${encodeURIComponent(id)}/start`
+                : `api/tasks/${encodeURIComponent(id)}/dispatch`;
+            const res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(rt === 'codex' ? { project: proj } : { project: proj, runtime: rt }) });
             data = await res.json();
         } catch (e) { return flash('Dispatch failed: ' + e.message, 'danger'); }
-        if (!data.dispatched) return flash('Dispatch failed: ' + (data.error || data.detail || 'unknown'), 'danger');
+        if (rt === 'codex' && (data.action === 'attach' || data.action === 'starting')) {
+            flash(data.action === 'attach'
+                ? 'A live session already exists — attaching.'
+                : 'A session for this task is already starting — attaching when it binds.', 'green');
+            this._loadDispatch(id);
+            this._loadTaskPrimaryRunner(id);
+            this._openDirectRunnerWhenReady(id);
+            return;
+        }
+        const started = data.dispatched || data.action === 'started';
+        if (!started) return flash('Dispatch failed: ' + (data.error || (data.dispatch && data.dispatch.message) || data.reason || data.detail || 'unknown'), 'danger');
         if (!data.work_hosts_online) {
             flash(rt === 'codex'
                 ? `Assigned (${data.assignment_id || data.wake_id}) — your Mac is offline or full, so it will start when the daemon reconnects.`

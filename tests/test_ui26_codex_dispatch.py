@@ -37,8 +37,13 @@ ok("this.dispatchTask(t.task_id, 'codex')" in APP,
 
 # ---- dispatchTask actually sends the runtime, doesn't just accept it -------
 ok("async dispatchTask(id, runtime)" in APP, "dispatchTask takes a runtime parameter")
-ok("body: JSON.stringify({ project: proj, runtime: rt })" in APP,
-   "the POST body carries the selected runtime to the existing dispatch endpoint")
+# COORD-44: codex starts go through the unified /start operation (attach /
+# dedupe-in-flight / start); the claude-code path still posts its runtime to
+# the queued dispatch endpoint.
+ok("JSON.stringify(rt === 'codex' ? { project: proj } : { project: proj, runtime: rt })" in APP,
+   "codex uses the unified /start operation while claude-code still carries its runtime to dispatch")
+ok("}/start`" in APP and "}/dispatch`" in APP,
+   "both endpoints remain reachable from the one dispatchTask entry point")
 
 # ---- confirm/flash copy is honest and runtime-specific, not copy-pasted ---
 ok("native Codex CLI" in APP and "your enrolled Mac" in APP,

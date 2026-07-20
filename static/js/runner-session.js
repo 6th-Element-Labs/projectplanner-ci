@@ -411,6 +411,20 @@
                 + this.esc(detail) + extra,
                 dispatch?.state === 'needs_attention' ? 'warning' : 'danger',
             );
+            // COORD-44/UI-58: the refusal names the blocker; this is the one
+            // repair action. Start/Retry goes through the same start_task()
+            // operation as the task modal and MCP — never a bespoke wake.
+            const gateEl = document.getElementById('runner-pty-gate');
+            if (gateEl && !document.getElementById('runner-pty-start-retry')) {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.id = 'runner-pty-start-retry';
+                btn.className = 'btn btn-primary btn-sm mt-2 d-block';
+                const verb = (dispatch && dispatch.state) || sessions.length ? 'Retry' : 'Start';
+                btn.innerHTML = `<i class="ti ti-player-play me-1"></i>${verb} on my Mac`;
+                btn.onclick = () => this.startTaskSession(id, opts);
+                gateEl.appendChild(btn);
+            }
             return true;
         }
         const sid = watch.runner_session_id || (watch.session || {}).runner_session_id || '';
@@ -430,6 +444,56 @@
         this._runnerPtyGate('', 'secondary');
         this._runnerPty = { taskId: id, runnerSessionId: sid, mode, reconnectAttempts: 0 };
         await this._runnerPtyConnect();
+        return true;
+    },
+
+    // COORD-44: one Start/Retry path for every surface. The server attaches,
+    // dedupes an in-flight start, or launches on the enrolled Mac; the browser
+    // only ever polls the authoritative watch gate afterwards.
+    async startTaskSession(taskId, opts) {
+        const id = String(taskId || '').trim();
+        if (!id) return false;
+        const pending = document.getElementById('runner-pty-start-retry');
+        if (pending) pending.disabled = true;
+        this._runnerPtyGate('Starting a session on your Mac…', 'secondary');
+        const project = window.PM_PROJECT || 'maxwell';
+        let data;
+        try {
+            const res = await fetch(`api/tasks/${encodeURIComponent(id)}/start`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ project }),
+            });
+            data = await res.json();
+        } catch (e) {
+            this._runnerPtyGate(`Start failed: ${this.esc(e.message)}`, 'danger');
+            return false;
+        }
+        if (data.action === 'attach' || data.watchable === true) {
+            return this.openRunnerSessionPanel(id, opts);
+        }
+        if (data.action === 'started' || data.action === 'starting') {
+            this._runnerPtyGate(
+                `Starting on ${this.esc(String(data.host_id || 'your Mac'))} — the live terminal opens as soon as the runner binds.`,
+                'secondary');
+            const deadline = Date.now() + 90000;
+            while (Date.now() < deadline) {
+                await new Promise((resolve) => setTimeout(resolve, 3000));
+                try {
+                    const q = `project=${encodeURIComponent(project)}&task_id=${encodeURIComponent(id)}`;
+                    const state = await (await fetch(`/ixp/v1/runner_sessions/watch?${q}`, { cache: 'no-store' })).json();
+                    if (state && state.watchable !== false && !state.error) {
+                        return this.openRunnerSessionPanel(id, opts);
+                    }
+                } catch (e) { /* transient; keep polling the authoritative gate */ }
+            }
+            this._runnerPtyGate('The session has not bound yet — reopen this panel to attach.', 'warning');
+            return true;
+        }
+        const reason = (data.dispatch && data.dispatch.message) || data.reason || data.error || 'start refused';
+        this._runnerPtyGate(
+            `<span class="badge bg-red-lt me-1">${this.esc(String(data.error || 'start_failed'))}</span>`
+            + this.esc(String(reason)),
+            'danger');
         return true;
     },
 

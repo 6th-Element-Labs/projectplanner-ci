@@ -60,6 +60,8 @@ try:
         ("POST", "/api/tasks/{task_id}/claims/{claim_id}/revoke"),
         ("POST", "/api/tasks/{task_id}/comment"),
         ("POST", "/api/tasks/{task_id}/dispatch"),
+        # COORD-44: the unified Start/Retry operation (attach / dedupe / start).
+        ("POST", "/api/tasks/{task_id}/start"),
         ("GET", "/api/tasks/{task_id}/dispatch/latest"),
         ("POST", "/api/tasks/{task_id}/resume-review"),
         ("POST", "/api/tasks/{task_id}/chat"),

@@ -585,6 +585,101 @@ def resume_review(task_id, actor="user", project=store.DEFAULT_PROJECT,
     }
 
 
+START_TASK_SCHEMA = "switchboard.task_session_start.v1"
+
+
+def start_task(task_id, actor="user", project=store.DEFAULT_PROJECT,
+               principal_id="", role="implementation"):
+    """COORD-44 core: the ONE way any surface starts or resumes a task session.
+
+    UI, MCP, and the coordinator all call this instead of assembling their own
+    wakes — three divergent launch paths (UI watch-resolve, autopilot co_fleet,
+    hand-run server scripts) were the root defect behind BUG-91's residue.
+
+    Contract, in priority order:
+      1. A live watchable runner exists            -> attach (never duplicate).
+      2. A dispatch for this task is already
+         pending/claimed                           -> starting (idempotent).
+      3. Otherwise                                 -> start on the caller's
+         enrolled watch-capable personal host (Mac-first while the AWS fleet
+         is unqualified).
+      4. Failure                                   -> one truthful reason plus
+         the dispatcher's latest verdict; never a zombie panel.
+
+    The server owns runner identity end to end; callers never pass a runner id.
+    """
+    task_id = str(task_id or "").strip().upper()
+    if not task_id:
+        return {"schema": START_TASK_SCHEMA, "action": "refused",
+                "started": False, "attached": False, "error": "task_id required"}
+    task = store.get_task(task_id, project=project)
+    if not task:
+        return {"schema": START_TASK_SCHEMA, "action": "refused",
+                "started": False, "attached": False,
+                "error": "task not found", "task_id": task_id, "project": project}
+
+    # 1) Attach to the live session when one exists. resolve_runner_watch is the
+    # single authority Watch itself uses, so "attachable" here === "watchable".
+    watch = store.resolve_runner_watch(task_id, include_stale=True, project=project)
+    if watch.get("watchable"):
+        session = watch.get("session") or {}
+        return {
+            "schema": START_TASK_SCHEMA, "action": "attach",
+            "started": False, "attached": True, "watchable": True,
+            "task_id": task_id, "project": project,
+            "runner_session_id": watch.get("runner_session_id"),
+            "host_id": (watch.get("bind") or {}).get("host_id")
+            or session.get("host_id"),
+        }
+
+    # 2) Idempotency: an in-flight dispatch means the click already worked.
+    # A second click (or a second surface) must not race a duplicate session.
+    active = store.list_wake_intents(
+        task_id=task_id, project=project, active_only=True, limit=10)
+    in_flight = [w for w in active
+                 if str(w.get("status") or "") in {"pending", "claimed"}]
+    if in_flight:
+        wake = in_flight[0]
+        return {
+            "schema": START_TASK_SCHEMA, "action": "starting",
+            "started": False, "attached": False, "watchable": False,
+            "task_id": task_id, "project": project,
+            "wake_id": wake.get("wake_id"),
+            "wake_status": wake.get("status"),
+            "host_id": wake.get("claimed_by_host") or "",
+            "message": "A session for this task is already starting.",
+        }
+
+    # 3) Start one on the enrolled personal host (the direct Mac path — the
+    # only launch path currently qualified to serve browser Watch).
+    result = dispatch(task_id, actor=actor, project=project,
+                      runtime=_CODEX_RUNTIME, principal_id=principal_id,
+                      role=role)
+    if result.get("dispatched"):
+        return {
+            "schema": START_TASK_SCHEMA, "action": "started",
+            "started": True, "attached": False, "watchable": False,
+            "task_id": task_id, "project": project,
+            "wake_id": result.get("wake_id"),
+            "host_id": result.get("host_id"),
+            "branch": result.get("branch"),
+            "execution_mode": result.get("execution_mode"),
+            "work_hosts_online": result.get("work_hosts_online"),
+        }
+
+    # 4) One truthful failure, with the dispatcher's own latest verdict so the
+    # operator sees "capacity exhausted ..." / "not enrolled", never a stale gate.
+    from switchboard.storage.repositories.runner import latest_dispatch_outcome
+    return {
+        "schema": START_TASK_SCHEMA, "action": "refused",
+        "started": False, "attached": False, "watchable": False,
+        "task_id": task_id, "project": project,
+        "error": result.get("error") or "start_failed",
+        "reason": result.get("reason") or "",
+        "dispatch": latest_dispatch_outcome(task_id, project=project),
+    }
+
+
 def dispatch_to_co_fleet(task_id, actor="user", project=store.DEFAULT_PROJECT,
                          runtime=_RUNTIME, capabilities=None,
                          runtime_config_ref="", allow_on_demand=False,

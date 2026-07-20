@@ -46,6 +46,13 @@ class ResumeReviewBody(BaseModel):
     project: Optional[str] = None
 
 
+class StartTaskBody(BaseModel):
+    """Typed request for the unified COORD-44 Start/Retry operation."""
+
+    project: Optional[str] = None
+    role: Optional[str] = None
+
+
 def create_router(*, resolve_project: ProjectResolver,
                   resolve_principal: PrincipalResolver,
                   thin_mode_a: bool = False,
@@ -447,6 +454,25 @@ def create_router(*, resolve_project: ProjectResolver,
             result = await asyncio.to_thread(
                 dispatch.dispatch, task_id, auth.actor(principal), project,
                 (body or {}).get("runtime") or "claude-code", principal.get("id") or "")
+            if result.get("error") == "task not found":
+                raise HTTPException(404, "task not found")
+            return result
+
+        @router.post("/api/tasks/{task_id}/start")
+        async def start_task_session(request: Request, task_id: str,
+                                     body: StartTaskBody = Body(
+                                         default=StartTaskBody())):
+            """COORD-44: the one Start/Retry entry — attach, dedupe, or start.
+
+            Same operation the MCP adapter exposes; the browser never chooses a
+            runner or assembles a wake. See dispatch.start_task for the contract.
+            """
+            project = resolve_project(body.project)
+            principal = resolve_principal(
+                request, project, ("write:tasks",), dev_actor="web")
+            result = await asyncio.to_thread(
+                dispatch.start_task, task_id, auth.actor(principal), project,
+                principal.get("id") or "", body.role or "implementation")
             if result.get("error") == "task not found":
                 raise HTTPException(404, "task not found")
             return result
