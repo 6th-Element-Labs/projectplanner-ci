@@ -28,6 +28,13 @@ _TERMINAL_OUTCOMES_RE = re.compile(
 _COMPLETION_POLICY_RE = re.compile(
     r"(?im)^\s*semantic_completion_policy\s*:\s*([^\n#]+)"
 )
+_ACCEPTANCE_REQUIRED_RE = re.compile(
+    r"(?im)^\s*acceptance_required\s*:\s*(true|yes|1)\b"
+)
+_REQUIRED_COMMANDS_RE = re.compile(
+    r"(?im)^\s*required_commands\s*:\s*([^\n#]+)"
+)
+MERGE_DONE_SCHEMA = "switchboard.merge_done_gate.v1"
 
 
 def _normalized_outcome(value: Any) -> str:
@@ -106,10 +113,7 @@ def terminal_outcomes(task: Mapping[str, Any]) -> set[str]:
     The marker is deliberately task-owned rather than completion-evidence-owned so an
     agent cannot waive a failed gate in the same payload that reports it.
     """
-    contract = "\n".join(
-        str(task.get(field) or "")
-        for field in ("description", "entry_criteria", "exit_criteria")
-    )
+    contract = _task_contract_text(task)
     allowed: set[str] = set()
     for match in _TERMINAL_OUTCOMES_RE.finditer(contract):
         allowed.update(
@@ -122,6 +126,68 @@ def terminal_outcomes(task: Mapping[str, Any]) -> set[str]:
             allowed.add("nogo")
             allowed.add("no-go")
     return allowed
+
+
+def _task_contract_text(task: Mapping[str, Any]) -> str:
+    return "\n".join(
+        str(task.get(field) or "")
+        for field in ("description", "entry_criteria", "exit_criteria")
+    )
+
+
+def acceptance_required(task: Mapping[str, Any]) -> bool:
+    """True when merge provenance alone must not set board Done.
+
+    SIMPLIFY-3 / COORD-44: multi-command specs opt in with
+    ``acceptance_required: true`` and/or ``required_commands: a, b, c``.
+    """
+    contract = _task_contract_text(task)
+    if _ACCEPTANCE_REQUIRED_RE.search(contract):
+        return True
+    match = _REQUIRED_COMMANDS_RE.search(contract)
+    if not match:
+        return False
+    commands = [item.strip() for item in re.split(r"[,]+", match.group(1)) if item.strip()]
+    return len(commands) > 1
+
+
+def merge_done_gate(task: Mapping[str, Any],
+                    evidence: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Gate board Done after a merge for multi-command / acceptance specs.
+
+    Merge evidence is always recorded; board Done requires acceptance_passed
+    (or no acceptance_required marker on the task).
+    """
+    evidence = dict(evidence or {})
+    if not acceptance_required(task):
+        return {
+            "schema": MERGE_DONE_SCHEMA,
+            "ok": True,
+            "status": "passed",
+            "task_id": task.get("task_id"),
+            "reasons": [],
+        }
+    if evidence.get("acceptance_passed") is True:
+        return {
+            "schema": MERGE_DONE_SCHEMA,
+            "ok": True,
+            "status": "passed",
+            "task_id": task.get("task_id"),
+            "reasons": [],
+        }
+    return {
+        "schema": MERGE_DONE_SCHEMA,
+        "ok": False,
+        "status": "merged_evidence_only",
+        "code": "acceptance_required",
+        "failure_class": "failed_gate",
+        "message": (
+            "Merge provenance recorded, but this task requires an acceptance "
+            "check before board Done (multi-command / acceptance_required)."
+        ),
+        "task_id": task.get("task_id"),
+        "reasons": ["acceptance_required"],
+    }
 
 
 def semantic_completion_gate(task: Mapping[str, Any],

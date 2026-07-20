@@ -33,6 +33,7 @@ from switchboard.domain.provenance.git import (
 )
 from switchboard.domain.provenance.semantic import (
     merge_completion_evidence,
+    merge_done_gate,
     semantic_completion_gate,
 )
 from switchboard.storage.repositories.tasks import _task_row
@@ -352,8 +353,20 @@ def _mark_task_merged_impl(task_id: str, merged_sha: str, pr_number: Optional[in
                                   sort_keys=True), now))
             return {"task_id": task_id, "status": "Blocked", "git_state": git_state,
                     "semantic_gate": semantic_gate, "merged": True}
+        merge_evidence = {
+            **(current.get("evidence") or {}),
+            "merged_sha": merged_sha,
+            "pr_number": pr_number,
+            "pr_url": pr_url,
+            "branch": branch,
+            "head_sha": head_sha,
+            **({"source": provenance_source} if provenance_source else {}),
+            **({"task_ids_found": task_ids_found} if task_ids_found else {}),
+        }
+        done_gate = merge_done_gate(task, merge_evidence)
+        target_status = "Done" if done_gate.get("ok") else "In Review"
         same_merge = (
-            row["status"] == "Done" and
+            row["status"] == target_status and
             current.get("merged_sha") == merged_sha and
             (pr_number is None or current.get("pr_number") == pr_number) and
             (not pr_url or current.get("pr_url") == pr_url) and
@@ -361,10 +374,11 @@ def _mark_task_merged_impl(task_id: str, merged_sha: str, pr_number: Optional[in
             (not head_sha or current.get("head_sha") == head_sha)
         )
         if same_merge:
-            return {"task_id": task_id, "status": "Done",
-                    "git_state": current, "idempotent": True}
-        c.execute("UPDATE tasks SET status='Done', updated_at=? WHERE task_id=?",
-                  (now, task_id))
+            return {"task_id": task_id, "status": target_status,
+                    "git_state": current, "idempotent": True,
+                    "merge_done_gate": done_gate}
+        c.execute("UPDATE tasks SET status=?, updated_at=? WHERE task_id=?",
+                  (target_status, now, task_id))
         git_state = _upsert_git_state(c, task_id, {
             "branch": branch or None,
             "head_sha": head_sha or None,
@@ -382,13 +396,18 @@ def _mark_task_merged_impl(task_id: str, merged_sha: str, pr_number: Optional[in
                 "head_sha": head_sha,
                 **({"source": provenance_source} if provenance_source else {}),
                 **({"task_ids_found": task_ids_found} if task_ids_found else {}),
+                **({"merged_evidence_only": True} if not done_gate.get("ok") else {}),
             },
         })
+        activity_kind = ("git.pr_merged" if done_gate.get("ok")
+                         else "git.pr_merged_evidence")
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
-                  (task_id, actor, "git.pr_merged",
+                  (task_id, actor, activity_kind,
                    json.dumps({"merged_sha": merged_sha, "pr_number": pr_number,
-                               "pr_url": pr_url}, sort_keys=True), now))
-    return {"task_id": task_id, "status": "Done", "git_state": git_state}
+                               "pr_url": pr_url, "merge_done_gate": done_gate},
+                              sort_keys=True), now))
+    return {"task_id": task_id, "status": target_status, "git_state": git_state,
+            "merge_done_gate": done_gate, "merged": True}
 
 
 def mark_task_default_branch_commit(task_id: str, commit_sha: str,

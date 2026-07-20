@@ -2089,9 +2089,13 @@ const TeepPlan = {
         const statusOpts = ['Not Started', 'In Progress', 'In Review', 'Blocked', 'Done'].map((s) =>
             `<option ${s === t.status ? 'selected' : ''}>${s}</option>`).join('');
         const prose = (v) => `<div style="white-space:pre-wrap">${this.esc(v || '—')}</div>`;
-        const sc = this.STATUS_COLOR[t.status] || 'secondary';
+        const honest = t.honest_display || {};
+        const displayLabel = honest.label || t.status || '';
+        const sc = honest.lifecycle_phase === 'start_failed_retry'
+            ? 'orange'
+            : (this.STATUS_COLOR[t.status] || 'secondary');
         document.getElementById('task-modal-title').innerHTML =
-            `<span class="status-dot bg-${sc} me-2" title="${this.esc(t.status || '')}"></span><span class="text-secondary fw-normal me-2">${this.esc(t.task_id)}</span>${this.esc(t.title)}`;
+            `<span class="status-dot bg-${sc} me-2" title="${this.esc(displayLabel)}"></span><span class="text-secondary fw-normal me-2">${this.esc(t.task_id)}</span>${this.esc(t.title)}`;
         const assignee = this.esc(t.assignee || '—');
         const blocks = this.tasks.filter((x) => (x.depends_on || []).includes(t.task_id)).map((x) => this.esc(x.task_id)).join(', ') || 'none';
         const wsLabel = this.esc(t._wsId || '') + (t._wsName ? ' · ' + this.esc(t._wsName) : '');
@@ -2109,6 +2113,12 @@ const TeepPlan = {
         const riskHtml = t.risk_level === 'High' ? '<span class="badge badge-outline text-red">High</span>' : (t.risk_level ? this.esc(t.risk_level) : '—');
         const tally = this.taskTally(t.task_id);
         const provenanceHtml = this.provenanceDetail(t);
+        const honestLine = honest.lifecycle_phase === 'start_failed_retry'
+            ? `<div class="alert alert-important alert-warning py-2 px-3 mb-3 small" role="status">
+                <strong>${this.esc(displayLabel)}</strong>
+                ${honest.reason ? `<div class="mt-1 text-secondary">${this.esc(honest.reason)}</div>` : ''}
+               </div>`
+            : '';
         document.getElementById('task-modal-title').innerHTML =
             `<span class="status-dot bg-${sc} me-2"></span><span class="text-secondary font-monospace fw-normal me-2">${this.esc(t.task_id)}</span>${this.esc(t.title)}${t.is_blocking ? ' <span class="badge bg-red-lt ms-2"><i class="ti ti-alert-triangle me-1"></i>Blocking</span>' : ''}`;
         document.getElementById('task-modal-body').innerHTML = `
@@ -2122,7 +2132,8 @@ const TeepPlan = {
             <div class="tab-content mt-3">
                 <div class="tab-pane fade show active" id="m-details" role="tabpanel">
                     <div class="progress progress-sm mb-3"><div class="progress-bar bg-${sc}" style="width:${pct}%"></div></div>
-                    <div class="text-secondary small mb-3 d-flex align-items-center"><span class="status-dot bg-${sc} me-2"></span>${this.esc(t.status || '—')} · ${pct}% complete</div>
+                    <div class="text-secondary small mb-3 d-flex align-items-center"><span class="status-dot bg-${sc} me-2"></span>${this.esc(displayLabel || '—')}${honest.lifecycle_phase === 'start_failed_retry' ? '' : ` · ${pct}% complete`}</div>
+                    ${honestLine}
                     ${this.taskNarrationHtml(t)}
                     <div class="subheader mb-2">Economics</div>
                     ${this.tallyDetailHtml(tally)}

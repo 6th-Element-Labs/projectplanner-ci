@@ -55,8 +55,13 @@ agent_host._drain_runners = lambda selected_host: [
 
 try:
     results = agent_host.renew_live_direct_runners(inventory)
+    # Index runner heartbeats only — SIMPLIFY-3 may also POST complete_wake
+    # for the same runner_session_id in the death tick (BUG-102 wake repair).
     by_id = {str(body.get("runner_session_id")): body
-             for _method, _path, body in posted}
+             for _method, _path, body in posted
+             if _path == agent_host.P_HEARTBEAT_RUNNER
+             or "heartbeat_ttl_s" in body
+             or body.get("status") in {"running", "exited", "failed"}}
 
     ok("run_live" in by_id and by_id["run_live"].get("status") == "running",
        "a supervisor-alive claim-bound session is still renewed as running")

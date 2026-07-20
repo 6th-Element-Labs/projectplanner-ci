@@ -1113,6 +1113,15 @@ def _build_board_payload(project: str, lite: bool, cards: bool = False) -> Dict[
     # The lite path uses the batched, enrichment-free loader (HARDEN-34); rollups
     # read only base fields (status/workstream/effort), so slim rows are enough.
     tasks = list_tasks_for_board(project) if lite else list_tasks(project=project)
+    # SIMPLIFY-3: attach honest_display only for In Progress corpses — keeps the
+    # HARDEN-34 budget for the rest of the board while fixing the SEG-5 lie.
+    try:
+        from switchboard.application.queries import task_session as task_session_query
+        for row in tasks:
+            if str(row.get("status") or "") == "In Progress":
+                task_session_query.attach_honest_display(row, project=project)
+    except Exception:
+        pass
     payload: Dict[str, Any] = {k: _store_facade().get_meta(k, project=project) for k in META_SECTIONS}
     payload["project"] = next((p for p in projects() if p["id"] == project), {
         "id": project,

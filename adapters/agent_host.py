@@ -1788,6 +1788,10 @@ def renew_live_direct_runners(inventory):
         # only local truth about the process, so report it the moment it flips.
         if (session.get("alive") is False and task_id
                 and str(session.get("status") or "").lower() not in _TERMINAL_RUNNER_STATES):
+            reason = str(
+                metadata.get("failure_reason")
+                or "supervisor reported the process exited"
+            ).strip()
             terminal = _try("POST", P_HEARTBEAT_RUNNER, {
                 "project": PROJECT,
                 "runner_session_id": session.get("runner_session_id"),
@@ -1795,13 +1799,39 @@ def renew_live_direct_runners(inventory):
                 "task_id": task_id,
                 "status": "exited",
                 "metadata": {**metadata,
-                             "failure_reason": "supervisor reported the process exited",
+                             "failure_reason": reason,
                              "terminalized_by": "host_supervisor"},
             })
+            wake_repaired = False
+            # SIMPLIFY-3 / BUG-102: same tick — if a wake is bound, force
+            # complete_wake(started=false) so claimed limbo cannot outlive the
+            # local death. Already-terminal rows stay skipped (BUG-91).
+            if wake_id and terminal and not terminal.get("error"):
+                completion = _try("POST", P_COMPLETE_WAKE, {
+                    "project": PROJECT,
+                    "wake_id": wake_id,
+                    "runner_session_id": session.get("runner_session_id") or "",
+                    "agent_id": session.get("agent_id") or f"codex/{task_id}",
+                    "result": {
+                        "started": False,
+                        "reason": reason,
+                        "error": reason,
+                        "failure_class": "launch_failed",
+                        "runner_session_id": session.get("runner_session_id"),
+                        "host_id": host_id,
+                        "task_id": task_id,
+                    },
+                })
+                wake_repaired = bool(
+                    completion and not completion.get("error")
+                    and not completion.get("error_code")
+                )
             renewed.append({
                 "runner_session_id": session.get("runner_session_id"),
                 "task_id": task_id,
+                "wake_id": wake_id or None,
                 "terminalized": bool(terminal and not terminal.get("error")),
+                "wake_repaired": wake_repaired,
             })
             continue
         if (not (direct or claim_bound) or session.get("alive") is not True

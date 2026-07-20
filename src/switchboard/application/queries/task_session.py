@@ -15,10 +15,125 @@ from switchboard.storage.repositories import tasks as tasks_repo
 
 
 SCHEMA = "switchboard.task_session.v1"
+DISPLAY_SCHEMA = "switchboard.task_honest_display.v1"
 TERMINAL_RUNNERS = {
     "completed", "failed", "cancelled", "expired", "lost", "killed",
     "exited", "stopped",
 }
+
+# Board / modal / dependency-graph labels derived from lifecycle_phase.
+# Durable workflow status stays untouched; this is the operator-facing truth.
+_PHASE_DISPLAY = {
+    "start_failed_retry": {
+        "label": "Start failed / Retry available",
+        "tone": "danger",
+        "graph_state": "start_failed",
+        "retry_available": True,
+    },
+    "starting": {
+        "label": "Starting",
+        "tone": "azure",
+        "graph_state": "in_progress",
+        "retry_available": False,
+    },
+    "running": {
+        "label": "In Progress",
+        "tone": "blue",
+        "graph_state": "in_progress",
+        "retry_available": False,
+    },
+    "review": {
+        "label": "In Review",
+        "tone": "yellow",
+        "graph_state": "in_review",
+        "retry_available": False,
+    },
+    "merged": {
+        "label": "Done",
+        "tone": "green",
+        "graph_state": "done",
+        "retry_available": False,
+    },
+    "blocked": {
+        "label": "Blocked",
+        "tone": "danger",
+        "graph_state": "blocked",
+        "retry_available": False,
+    },
+    "ready": {
+        "label": "Not Started",
+        "tone": "secondary",
+        "graph_state": "todo",
+        "retry_available": False,
+    },
+    "not_started": {
+        "label": "Not Started",
+        "tone": "secondary",
+        "graph_state": "todo",
+        "retry_available": False,
+    },
+}
+
+
+def display_projection(view: Optional[dict[str, Any]]) -> dict[str, Any]:
+    """Map a TaskSession view to the board/modal/graph operator label.
+
+    SIMPLIFY-3: a corpse that still has workflow status In Progress must never
+    paint as In Progress when the aggregate says start_failed_retry.
+    """
+    view = view if isinstance(view, dict) else {}
+    phase = str(view.get("lifecycle_phase") or "").strip()
+    outcome = view.get("last_dispatch_outcome") if isinstance(
+        view.get("last_dispatch_outcome"), dict) else {}
+    base = dict(_PHASE_DISPLAY.get(phase) or {
+        "label": (view.get("task") or {}).get("status") or phase or "Unknown",
+        "tone": "secondary",
+        "graph_state": "todo",
+        "retry_available": False,
+    })
+    reason = str(
+        outcome.get("reason")
+        or outcome.get("message")
+        or ""
+    ).strip()
+    if phase == "start_failed_retry" and not base.get("retry_available"):
+        base["retry_available"] = True
+    if outcome.get("retry_available") is True:
+        base["retry_available"] = True
+    return {
+        "schema": DISPLAY_SCHEMA,
+        "lifecycle_phase": phase or None,
+        "label": base["label"],
+        "tone": base["tone"],
+        "graph_state": base["graph_state"],
+        "retry_available": bool(base["retry_available"]),
+        "reason": reason,
+        "message": str(outcome.get("message") or reason or base["label"]),
+    }
+
+
+def attach_honest_display(task: Optional[dict[str, Any]], *,
+                          project: str) -> Optional[dict[str, Any]]:
+    """Attach lifecycle_phase + honest_display onto an already-loaded task dict.
+
+    Fail soft when runner/wake tables are absent (partial test DBs, early boot):
+    get_task must still return the durable row rather than 500.
+    """
+    if not task:
+        return task
+    task_id = str(task.get("task_id") or "").strip()
+    if not task_id:
+        return task
+    try:
+        view = execute_for(task_id, project=project, task=task)
+    except Exception:
+        return task
+    if not view:
+        return task
+    task["lifecycle_phase"] = view.get("lifecycle_phase")
+    task["honest_display"] = display_projection(view)
+    task["last_dispatch_outcome"] = view.get("last_dispatch_outcome")
+    return task
 
 
 def _deliverable(task_id: str, project: str) -> Optional[dict[str, Any]]:
@@ -83,12 +198,20 @@ def _phase(task: dict[str, Any], attempt: Optional[dict[str, Any]],
     return {"in_review": "review", "done": "merged"}.get(status, status or "ready")
 
 
-def execute_for(task_id: str, *, project: str) -> Optional[dict[str, Any]]:
-    """Return the only public read model for one task's execution session."""
+def execute_for(task_id: str, *, project: str,
+                task: Optional[dict[str, Any]] = None) -> Optional[dict[str, Any]]:
+    """Return the only public read model for one task's execution session.
+
+    Pass ``task`` when the caller already loaded the row (avoids get_task
+    recursion when attaching honest_display onto detail payloads).
+    """
     task_id = str(task_id or "").strip().upper()
-    task = tasks_repo.get_task(task_id, project=project)
+    if task is None:
+        task = tasks_repo.get_task(task_id, project=project)
     if not task:
         return None
+    # Prefer the caller's casing when a row was supplied.
+    task_id = str(task.get("task_id") or task_id).strip() or task_id
     sessions = runner_repo.list_runner_sessions(
         task_id=task_id, include_stale=True, project=project)
     resolution = runner_repo.resolve_task_active_runner(

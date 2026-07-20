@@ -2494,7 +2494,7 @@ def _build_deliverable_dependency_graph(project: str, deliverable: Dict[str, Any
         hit = _project_index(proj).get((task_id or "").strip().upper())
         if not hit:
             return None
-        return {
+        detail = {
             "task_id": hit.get("task_id"),
             "title": hit.get("title"),
             "status": hit.get("status"),
@@ -2502,7 +2502,17 @@ def _build_deliverable_dependency_graph(project: str, deliverable: Dict[str, Any
             "_wsId": hit.get("_wsId"),
             "depends_on": hit.get("depends_on") or [],
             "provenance": hit.get("provenance"),
+            "agent_state": hit.get("agent_state") or {},
+            "git_state": hit.get("git_state") or {},
         }
+        # SIMPLIFY-3: dependency map must not paint In-Progress corpses blue.
+        if str(detail.get("status") or "") == "In Progress":
+            try:
+                from switchboard.application.queries import task_session as task_session_query
+                task_session_query.attach_honest_display(detail, project=proj)
+            except Exception:
+                pass
+        return detail
 
     linked_tasks = []
     for link in (deliverable.get("task_links") or []):

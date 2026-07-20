@@ -158,7 +158,12 @@
 
     taskCard(t) {
         const done = t.status === 'Done';
-        const sc = this.STATUS_COLOR[t.status] || 'secondary';
+        const honest = t.honest_display || {};
+        // SIMPLIFY-3: prefer TaskSession label over raw workflow status.
+        const displayLabel = honest.label || t.status || '';
+        const sc = honest.lifecycle_phase === 'start_failed_retry'
+            ? 'orange'
+            : (this.STATUS_COLOR[t.status] || 'secondary');
         const deps = (t.depends_on || []).length;
         const tally = this.taskTally(t.task_id);
         const econ = this.tallyMini(tally);
@@ -167,17 +172,21 @@
         if (t.owner_org) meta.push(this.esc(t.owner_org));
         if (t.effort_days != null) meta.push(this.esc(t.effort_days) + 'd');
         if (deps) meta.push(`<i class="ti ti-link"></i>${deps}`);
+        const honestBadge = honest.lifecycle_phase === 'start_failed_retry'
+            ? `<span class="badge bg-orange-lt text-orange" title="${this.esc(honest.reason || honest.message || displayLabel)}">${this.esc(displayLabel)}</span>`
+            : '';
         return `
             <a href="#" class="d-block text-reset" data-task="${this.esc(t.task_id)}">
                 <div class="card card-sm mb-2"${done ? ' style="opacity:.55"' : ''}>
                     <div class="card-status-start bg-${sc}"></div>
                     <div class="card-body">
                         <div class="d-flex align-items-center gap-2 mb-1">
-                            <span class="status-dot bg-${sc}" title="${this.esc(t.status || '')}"></span>
+                            <span class="status-dot bg-${sc}" title="${this.esc(displayLabel)}"></span>
                             <span class="text-secondary small fw-medium text-uppercase">${this.esc(t._wsId)}</span>
                             <span class="ms-auto text-secondary small font-monospace">${this.esc(t.task_id)}</span>
                         </div>
                         <div class="fw-semibold lh-sm ${done ? 'text-decoration-line-through text-secondary' : 'text-body'}">${this.esc(t.title)}</div>
+                        ${honestBadge ? `<div class="mt-1">${honestBadge}</div>` : ''}
                         <div class="d-flex align-items-center gap-2 mt-2 text-secondary small">
                             <span>${meta.join(' · ')}</span>
                             ${t.risk_level === 'High' ? '<span class="badge badge-outline text-red">High risk</span>' : ''}

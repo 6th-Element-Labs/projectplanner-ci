@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 import store
 
+from switchboard.application.queries import task_session as task_session_query
 from switchboard.storage.repositories.protocols import TaskRepository
 
 from ..contracts.tasks import GetTaskQuery
@@ -21,7 +22,10 @@ def execute(
         tasks: Optional[TaskRepository] = None) -> Optional[dict[str, Any]]:
     """Return the full task detail for one task id, or ``None`` when absent."""
     repo = tasks or store.task_repository
-    return repo.get_task(query.task_id, project=query.project)
+    task = repo.get_task(query.task_id, project=query.project)
+    # SIMPLIFY-3: attach the TaskSession projection so modal/graph consumers
+    # never invent a second answer to "what is running?".
+    return task_session_query.attach_honest_display(task, project=query.project)
 
 
 def execute_for(

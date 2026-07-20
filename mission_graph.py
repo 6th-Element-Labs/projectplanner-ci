@@ -20,6 +20,7 @@ _STATE_CLASS = {
     "done": "doneNode",
     "done_unproven": "doneUnprovenNode",
     "in_progress": "progressNode",
+    "start_failed": "startFailedNode",
     "in_review": "reviewNode",
     "blocked": "blockedNode",
     "todo": "todoNode",
@@ -37,14 +38,26 @@ def _mermaid_id(task_id: str) -> str:
 
 def node_execution_state(detail: Dict[str, Any]) -> str:
     """Map task detail to a status color bucket:
-    done | done_unproven | in_progress | in_review | blocked | todo | missing.
+    done | done_unproven | in_progress | in_review | blocked | todo | missing
+    | start_failed.
 
     'done' is a Done task WITH recorded merge provenance (proof); a Done task
     without that proof is 'done_unproven', so the two stay visually distinct
     while both still read as Done.
+
+    SIMPLIFY-3: prefer TaskSession honest_display / lifecycle_phase over raw
+    workflow status so In-Progress corpses paint as start_failed.
     """
     if detail.get("error"):
         return "missing"
+    honest = detail.get("honest_display") if isinstance(
+        detail.get("honest_display"), dict) else {}
+    graph_state = str(honest.get("graph_state") or "").strip()
+    if graph_state:
+        return graph_state
+    phase = str(detail.get("lifecycle_phase") or "").strip()
+    if phase == "start_failed_retry":
+        return "start_failed"
     status = (detail.get("status") or "").strip()
     provenance = detail.get("provenance") or {}
     if status == "Done":
@@ -254,6 +267,7 @@ def build_dependency_graph(
             "done_count": sum(1 for n in node_list if n.get("state") == "done"),
             "done_unproven_count": sum(1 for n in node_list if n.get("state") == "done_unproven"),
             "in_progress_count": sum(1 for n in node_list if n.get("state") == "in_progress"),
+            "start_failed_count": sum(1 for n in node_list if n.get("state") == "start_failed"),
             "in_review_count": sum(1 for n in node_list if n.get("state") == "in_review"),
             "blocked_count": sum(1 for n in node_list if n.get("state") == "blocked"),
             "blocker_count": sum(1 for n in node_list if n.get("blocker")),
@@ -338,6 +352,7 @@ def render_mermaid_flowchart(nodes: List[Dict[str, Any]],
         "  classDef doneNode fill:#eaf7ee,stroke:#2fb344,color:#101114",
         "  classDef doneUnprovenNode fill:#e6f7f1,stroke:#12b886,color:#101114",
         "  classDef progressNode fill:#eaf1fa,stroke:#206bc4,color:#101114",
+        "  classDef startFailedNode fill:#fff0e8,stroke:#f76707,color:#101114",
         "  classDef reviewNode fill:#fff4cc,stroke:#e0a800,color:#101114",
         "  classDef blockedNode fill:#fdecec,stroke:#d63939,color:#101114",
         "  classDef todoNode fill:#f6f7f9,stroke:#c9ced6,color:#8b95a5",
