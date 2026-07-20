@@ -116,24 +116,34 @@ try:
            and "Start task" in page.locator("#task-primary-start").inner_text(),
            "the first Details surface exposes Start task without opening Dev")
 
-        def _watchable_runner(route):
+        # UI-58: the card reads the server-authoritative Task Execution
+        # projection, not the runner-watch surface. The intent is unchanged —
+        # a running task offers Watch live + Open side panel; a blocked live one
+        # becomes Talk to agent — only the endpoint and shape moved.
+        def _running_execution(route):
             route.fulfill(
                 status=200, content_type="application/json",
                 body=(
-                    '{"watchable":true,"runner_session_id":"run-ui26-live",'
-                    '"bind":{"host_id":"host/ui26-mac"},'
-                    '"session":{"runner_session_id":"run-ui26-live",'
-                    '"host_id":"host/ui26-mac","status":"running"}}'
+                    '{"schema":"switchboard.task_execution.v1",'
+                    '"command":"get_task_execution","running":true,'
+                    '"starting":false,"has_ended_session":false,'
+                    '"resumable_review":false,"lifecycle_phase":"running",'
+                    '"execution_id":"run-ui26-live",'
+                    '"execution":{"active_runner":{"runner_session_id":"run-ui26-live",'
+                    '"host_id":"host/ui26-mac","status":"running"},'
+                    '"active_host":{"host_id":"host/ui26-mac"}}}'
                 ),
             )
 
-        page.route("**/ixp/v1/runner_sessions/watch?**", _watchable_runner)
+        page.route("**/api/tasks/**/execution?**", _running_execution)
         page.evaluate("id => TeepPlan._loadTaskPrimaryRunner(id)", task_id)
         page.wait_for_selector("#task-primary-watch-here", state="visible", timeout=5000)
         ok(page.locator("#task-primary-watch-here").is_visible()
            and "Watch live" in page.locator("#task-primary-watch-here").inner_text()
            and page.locator("#task-primary-watch-sidecar").is_visible(),
            "a running task offers both Watch live and Open side panel on the modal")
+        ok(page.locator("#task-primary-stop").is_visible(),
+           "a running task offers Stop, wired to the Task Session stop command")
 
         page.locator("#task-primary-runner").evaluate(
             "element => { element.dataset.taskStatus = 'Blocked'; }")
@@ -143,7 +153,7 @@ try:
         ok("Blocked, agent still live" in page.locator("#task-primary-runner-title").inner_text()
            and "Talk to agent" in page.locator("#task-primary-watch-here").inner_text(),
            "a blocked task with a live session becomes a Talk to agent action")
-        page.unroute("**/ixp/v1/runner_sessions/watch?**", _watchable_runner)
+        page.unroute("**/api/tasks/**/execution?**", _running_execution)
 
         page.click('a[href="#m-dev"]')
         page.wait_for_selector("#edit-dispatch-codex", state="visible", timeout=5000)

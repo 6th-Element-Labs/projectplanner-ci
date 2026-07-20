@@ -8,8 +8,8 @@
 (function (global) {
     'use strict';
     const methods = {
-    XTERM_JS_SRC: 'https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js',
-    XTERM_FIT_SRC: 'https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js',
+    XTERM_JS_SRC: '/vendor/xterm/xterm.js',
+    XTERM_FIT_SRC: '/vendor/xterm/addon-fit.js',
 
     runnerControlHtml(t) {
         return `<div class="card mb-3" id="runner-control-panel" data-task-id="${this.esc(t.task_id)}">

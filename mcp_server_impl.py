@@ -52,6 +52,7 @@ from switchboard.mcp.tools import resources as resource_tools  # noqa: E402
 from switchboard.mcp.tools import tally as tally_tools  # noqa: E402
 from switchboard.mcp.tools import runner as runner_tools  # noqa: E402
 from switchboard.mcp.tools import external_effects as external_effects_tools  # noqa: E402
+from switchboard.mcp.tools import autopilot as autopilot_tools  # noqa: E402
 from switchboard.mcp.tools import deliverables as deliverable_tools  # noqa: E402
 
 store.init_project_registry()
@@ -286,6 +287,17 @@ _deliverable_tool_functions = deliverable_tools.register_deliverable_tools(
     ),
 )
 globals().update(_deliverable_tool_functions)
+
+# UI-58: the deliverable/task Autopilot command set. Same service as the REST
+# /api/deliverables/{id}/autopilot routes, so both transports answer identically.
+_autopilot_tool_functions = autopilot_tools.register_autopilot_tools(
+    mcp,
+    autopilot_tools.AutopilotToolServices(
+        dumps=_dumps,
+        require_write=_require_write,
+    ),
+)
+globals().update(_autopilot_tool_functions)
 
 # Compatibility aliases for direct Python callers while the monolith is strangled.
 _dep_ids = task_tools.dep_ids

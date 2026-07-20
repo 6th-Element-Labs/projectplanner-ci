@@ -17,12 +17,12 @@
     <link rel="icon" href="taikun-favicon.png" type="image/png"/>
     <link rel="shortcut icon" href="taikun-favicon.png" type="image/png"/>
     <!-- HARDEN-38: pin Tabler versions (was @latest — a Tabler release could break the UI without warning). These are the versions @latest resolved to at pin time. -->
-    <link href="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/css/tabler.min.css" rel="stylesheet"/>
-    <link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.44.0/dist/tabler-icons.min.css" rel="stylesheet"/>
+    <link href="/vendor/tabler/css/tabler.min.css" rel="stylesheet"/>
+    <link href="/vendor/tabler/css/tabler-icons.min.css" rel="stylesheet"/>
     <!-- UI-24: xterm.js CSS is small (~5KB) so it loads eagerly like the rest of the
          chrome; the JS bundle (~250KB) stays lazy via _ensureScript, loaded only when
          Watch/Chat actually opens (see static/js/runner-session.js). -->
-    <link href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css" rel="stylesheet"/>
+    <link href="/vendor/xterm/xterm.css" rel="stylesheet"/>
     <link href="taikun-tabler.css?v=23" rel="stylesheet"/>
     <!-- taikun-ui: brand + polish layer over Tabler (white canvas, soft cards, refined tabs/modal).
          Loaded after taikun-tabler.css?v=23 so it wins. -->
@@ -879,7 +879,7 @@
         window.TAIKUN_PICKER_BOOT = boot;
       })();
     </script>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/vendor/bootstrap/bootstrap.bundle.min.js"></script>
     <!-- HARDEN-38: Mermaid (~1MB) + ApexCharts (~500KB) are now lazy-loaded by app.js
          only when the Mission / Gantt tab opens — off the initial critical path. -->
     <script>window.TAIKUN_NO_BS_WIRE=true;</script>

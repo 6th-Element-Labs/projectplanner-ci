@@ -58,7 +58,8 @@ def router_inventory(path: Path) -> list[dict[str, Any]]:
                     and isinstance(call.func.value, ast.Name)
                     and call.func.value.id in {"store", "deliverable_closure",
                                                "create_deliverable_command",
-                                               "update_deliverable_command"}):
+                                               "update_deliverable_command",
+                                               "autopilot_command"}):
                 calls.add(f"{call.func.value.id}.{call.func.attr}")
         rows.append({"method": route[0], "path": route[1], "handler": node.name,
                      "calls": sorted(calls)})

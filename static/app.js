@@ -1493,13 +1493,13 @@ const TeepPlan = {
     // ~1MB Mermaid (Mission tab) and ~500KB ApexCharts (Gantt tab) stay off the
     // initial page load until their tab is actually opened.
     APEXCHARTS_SRC: '/vendor/apexcharts/apexcharts.min.js',
-    MERMAID_SRC: 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js',
+    MERMAID_SRC: '/vendor/mermaid/mermaid.min.js',
     // ELK is the Mermaid layout engine that gives the dependency map orthogonal
     // routing + far tidier packing of disconnected chains than dagre. It ships
     // ESM-only (no UMD build), so it can't go through _ensureScript's <script>
     // tag — we dynamic-import() and registerLayoutLoaders() it once, and fall
     // back to dagre if the import fails.
-    ELK_SRC: 'https://cdn.jsdelivr.net/npm/@mermaid-js/layout-elk@0/dist/mermaid-layout-elk.esm.min.mjs',
+    ELK_SRC: '/vendor/mermaid/mermaid-layout-elk.esm.min.mjs',
     _ensureScript(src, timeoutMs = 15000) {
         this._scriptPromises = this._scriptPromises || {};
         if (this._scriptPromises[src]) return this._scriptPromises[src];
@@ -1929,9 +1929,11 @@ const TeepPlan = {
                     </div>
                     <div class="btn-list flex-nowrap">
                         <button id="task-primary-start" class="btn btn-primary" type="button" hidden><i class="ti ti-player-play me-1"></i>Start task</button>
+                        <button id="task-primary-retry" class="btn btn-outline-primary" type="button" hidden><i class="ti ti-rotate me-1"></i>Retry</button>
                         <button id="task-primary-resume-review" class="btn btn-primary" type="button" hidden><i class="ti ti-refresh me-1"></i>Resume review</button>
                         <button id="task-primary-watch-here" class="btn btn-primary" type="button" hidden><i class="ti ti-terminal-2 me-1"></i><span>Watch live</span></button>
                         <button id="task-primary-watch-sidecar" class="btn btn-outline-primary" type="button" hidden><i class="ti ti-layout-sidebar-right me-1"></i>Open side panel</button>
+                        <button id="task-primary-stop" class="btn btn-outline-danger" type="button" hidden><i class="ti ti-player-stop me-1"></i>Stop</button>
                     </div>
                 </div>
             </div>
@@ -2024,19 +2026,35 @@ const TeepPlan = {
         const badge = document.getElementById('task-primary-runner-badge');
         const state = document.getElementById('task-primary-runner-state');
         const start = document.getElementById('task-primary-start');
+        const retry = document.getElementById('task-primary-retry');
         const resumeReview = document.getElementById('task-primary-resume-review');
         const watchHere = document.getElementById('task-primary-watch-here');
         const watchSidecar = document.getElementById('task-primary-watch-sidecar');
+        const stop = document.getElementById('task-primary-stop');
         const taskStatus = String(root.dataset.taskStatus || '');
+        // Toggle only buttons that exist: Stop/Retry are newer than some
+        // embedded card fixtures, and the card must never throw on a missing one.
+        const setHidden = (el, value) => { if (el) el.hidden = value; };
+        // UI-58: one server-authoritative answer to "what is running". The card
+        // no longer reads the runner-watch surface and picks a runner id itself;
+        // the Task Execution projection resolves the live session, and the
+        // Resume-review-vs-Start choice is a server-derived flag.
         try {
-            const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&task_id=${encodeURIComponent(taskId)}&include_stale=true`;
-            const res = await fetch(`/ixp/v1/runner_sessions/watch?${q}`, { cache: 'no-store' });
-            const watch = await res.json();
-            const live = res.ok && watch && watch.watchable !== false && !watch.error;
-            if (live) {
-                const session = watch.session || {};
-                const bind = watch.bind || {};
-                const liveRunnerId = String(watch.runner_session_id || session.runner_session_id || '');
+            const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`;
+            const res = await fetch(`api/tasks/${encodeURIComponent(taskId)}/execution?${q}`, { cache: 'no-store' });
+            let data = await res.json().catch(() => ({}));
+            if (res.status === 404) {
+                // No server-side execution record yet — a fresh, ready task.
+                data = { running: false, starting: false, has_ended_session: false,
+                    resumable_review: false };
+            } else if (!res.ok || data.error_code) {
+                throw new Error(data.message || data.error || `HTTP ${res.status}`);
+            }
+            const runner = (data.execution && data.execution.active_runner) || {};
+            const activeHost = (data.execution && data.execution.active_host) || {};
+            const hostId = runner.host_id || activeHost.host_id || 'your enrolled host';
+            if (data.running === true) {
+                const liveRunnerId = String(data.execution_id || runner.runner_session_id || '');
                 const previousRunnerId = String(root.dataset.runnerSessionId || '');
                 root.dataset.runnerSessionId = liveRunnerId;
                 const blocked = taskStatus === 'Blocked';
@@ -2045,14 +2063,16 @@ const TeepPlan = {
                 badge.innerHTML = '<span class="status-dot status-dot-animated bg-green me-1"></span>Agent live';
                 title.textContent = blocked ? 'Blocked, agent still live' : 'Codex is working';
                 state.innerHTML = blocked
-                    ? `This task is blocked, but <span class="font-monospace">${this.esc(watch.runner_session_id || session.runner_session_id || '')}</span> is still live on ${this.esc(bind.host_id || session.host_id || 'your enrolled host')}. Tell it how to repair the gate.`
-                    : `<span class="font-monospace">${this.esc(watch.runner_session_id || session.runner_session_id || '')}</span> on ${this.esc(bind.host_id || session.host_id || 'your enrolled host')} · connected to Switchboard`;
+                    ? `This task is blocked, but <span class="font-monospace">${this.esc(liveRunnerId)}</span> is still live on ${this.esc(hostId)}. Tell it how to repair the gate.`
+                    : `<span class="font-monospace">${this.esc(liveRunnerId)}</span> on ${this.esc(hostId)} · connected to Switchboard`;
                 start.hidden = true;
+                setHidden(retry, true);
                 resumeReview.hidden = true;
                 watchHere.hidden = false;
                 watchHere.querySelector('span').textContent = blocked ? 'Talk to agent' : 'Watch live';
                 watchHere.querySelector('i').className = `ti ti-${blocked ? 'message-circle' : 'terminal-2'} me-1`;
                 watchSidecar.hidden = false;
+                setHidden(stop, false);
                 if (previousRunnerId && previousRunnerId !== liveRunnerId
                         && document.getElementById('runner-pty-panel')) {
                     const mount = document.getElementById('runner-pty-details-mount')
@@ -2061,24 +2081,32 @@ const TeepPlan = {
                 }
             } else {
                 root.dataset.runnerSessionId = '';
-                const hasEndedSession = Array.isArray(watch && watch.sessions) && watch.sessions.length > 0;
-                const terminalRunnerStatuses = new Set(['completed', 'failed', 'cancelled', 'expired', 'lost', 'killed', 'exited']);
-                const hasDeadSession = hasEndedSession && watch.sessions.some((session) =>
-                    session.stale === true || terminalRunnerStatuses.has(String(session.status || '').toLowerCase()));
-                const resumableReview = taskStatus === 'In Review' && hasDeadSession;
-                root.dataset.sessionState = resumableReview ? 'review-stale' : (hasEndedSession ? 'ended' : 'ready');
-                badge.className = `badge bg-${resumableReview ? 'yellow' : (hasEndedSession ? 'red' : 'secondary')}-lt`;
-                badge.textContent = resumableReview ? 'In Review · runner stopped' : (hasEndedSession ? 'Runner stopped' : 'Ready');
-                title.textContent = resumableReview ? 'Review runner stopped' : (hasEndedSession ? 'Task runner stopped' : 'Ready for an agent');
-                state.textContent = resumableReview
+                const starting = data.starting === true;
+                const resumableReview = data.resumable_review === true;
+                const hasEndedSession = data.has_ended_session === true;
+                root.dataset.sessionState = starting ? 'starting'
+                    : resumableReview ? 'review-stale' : (hasEndedSession ? 'ended' : 'ready');
+                badge.className = `badge bg-${starting ? 'blue' : resumableReview ? 'yellow' : (hasEndedSession ? 'red' : 'secondary')}-lt`;
+                badge.textContent = starting ? 'Starting…'
+                    : resumableReview ? 'In Review · runner stopped'
+                    : (hasEndedSession ? 'Runner stopped' : 'Ready');
+                title.textContent = starting ? 'Starting a session'
+                    : resumableReview ? 'Review runner stopped'
+                    : (hasEndedSession ? 'Task runner stopped' : 'Ready for an agent');
+                state.textContent = starting
+                    ? 'A session is starting. The live terminal opens as soon as the runner binds.'
+                    : resumableReview
                     ? 'The task remains In Review. Start one replacement reviewer; the ended run stays in history.'
                     : hasEndedSession
-                    ? 'The previous runner ended. Its history is preserved.'
+                    ? 'The previous runner ended. Its history is preserved. Retry supersedes it — it never forks a second session.'
                     : 'The selected Mac will prepare the repository and open the live Codex session here.';
-                start.hidden = resumableReview;
+                start.hidden = resumableReview || starting;
+                // Retry supersedes a failed/ended attempt; Start begins the first.
+                setHidden(retry, !hasEndedSession || resumableReview);
                 resumeReview.hidden = !resumableReview;
                 watchHere.hidden = true;
                 watchSidecar.hidden = true;
+                setHidden(stop, !starting);
             }
         } catch (e) {
             root.dataset.sessionState = 'unavailable';
@@ -2087,9 +2115,42 @@ const TeepPlan = {
             title.textContent = 'Task session unavailable';
             state.textContent = `Runner status unavailable: ${e.message}`;
             start.hidden = false;
+            setHidden(retry, true);
             resumeReview.hidden = true;
             watchHere.hidden = true;
             watchSidecar.hidden = true;
+            setHidden(stop, true);
+        }
+    },
+
+    // UI-58: Stop and Retry go through the Task Session command service. The
+    // browser names only the task; the server resolves the execution, kills the
+    // runner and cancels any queued start (Stop), or supersedes the attempt
+    // without forking a second session (Retry). No runner id crosses the wire.
+    async _taskPrimaryExecutionCommand(taskId, command) {
+        const flash = document.getElementById('task-primary-flash');
+        const verb = command === 'stop' ? 'Stopping' : 'Retrying';
+        if (flash) { flash.className = 'small mt-1 text-secondary'; flash.textContent = `${verb} the session…`; }
+        try {
+            const res = await fetch(`api/tasks/${encodeURIComponent(taskId)}/execution/${command}`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ project: window.PM_PROJECT || 'maxwell' }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.error_code) {
+                throw new Error(data.message || data.error || `HTTP ${res.status}`);
+            }
+            if (flash) {
+                flash.className = 'small mt-1 text-secondary';
+                flash.textContent = command === 'stop'
+                    ? 'Stop requested. The runner is ending; a queued start (if any) was cancelled.'
+                    : data.action === 'superseding'
+                    ? 'Stopping the live session first — retry again once it has ended.'
+                    : 'Retry started. The prior attempt was superseded.';
+            }
+            await this._loadTaskPrimaryRunner(taskId);
+        } catch (e) {
+            if (flash) { flash.className = 'small mt-1 text-danger'; flash.textContent = `${command === 'stop' ? 'Stop' : 'Retry'} failed: ${e.message}`; }
         }
     },
 
@@ -2243,6 +2304,10 @@ const TeepPlan = {
         this._loadDispatch(t.task_id);
         const primaryStart = document.getElementById('task-primary-start');
         if (primaryStart) primaryStart.addEventListener('click', () => this.dispatchTask(t.task_id, 'codex'));
+        const primaryStop = document.getElementById('task-primary-stop');
+        if (primaryStop) primaryStop.addEventListener('click', () => this._taskPrimaryExecutionCommand(t.task_id, 'stop'));
+        const primaryRetry = document.getElementById('task-primary-retry');
+        if (primaryRetry) primaryRetry.addEventListener('click', () => this._taskPrimaryExecutionCommand(t.task_id, 'retry'));
         const primaryWatchHere = document.getElementById('task-primary-watch-here');
         if (primaryWatchHere) primaryWatchHere.addEventListener('click', async () => {
             const runner = document.getElementById('task-primary-runner');

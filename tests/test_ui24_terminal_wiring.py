@@ -29,13 +29,19 @@ def ok(condition, message):
 
 
 # ---- xterm.js is actually wired, not just aspirational -----------------------
-ok("@xterm/xterm" in INDEX, "xterm.js CSS is linked in index.html head (eager, small)")
-ok("XTERM_JS_SRC" in RUNNER_SESSION and "@xterm/xterm" in RUNNER_SESSION,
-   "xterm.js JS bundle URL is defined for lazy loading")
-ok("XTERM_FIT_SRC" in RUNNER_SESSION and "@xterm/addon-fit" in RUNNER_SESSION,
-   "the fit addon URL is defined for lazy loading")
+# BUG-110: xterm is vendored under /vendor/xterm/ (ApexCharts pattern) so hermetic
+# Playwright never depends on jsDelivr under parallel CI load.
+ok("/vendor/xterm/xterm.css" in INDEX, "xterm.js CSS is linked from the vendored static path (eager, small)")
+ok("XTERM_JS_SRC" in RUNNER_SESSION and "/vendor/xterm/xterm.js" in RUNNER_SESSION,
+   "xterm.js JS bundle URL is defined for lazy loading from /vendor/")
+ok("XTERM_FIT_SRC" in RUNNER_SESSION and "/vendor/xterm/addon-fit.js" in RUNNER_SESSION,
+   "the fit addon URL is defined for lazy loading from /vendor/")
 ok("_ensureXterm" in RUNNER_SESSION and "_ensureScript(this.XTERM_JS_SRC)" in RUNNER_SESSION,
    "xterm.js loads through the existing _ensureScript lazy-load helper (Mermaid/ApexCharts pattern)")
+ok("cdn.jsdelivr.net" not in RUNNER_SESSION,
+   "runner-session.js has no jsDelivr dependency")
+ok("cdn.jsdelivr.net" not in INDEX,
+   "index.html product chrome has no jsDelivr dependency (Tabler/xterm/Bootstrap vendored)")
 ok("new window.Terminal(" in RUNNER_SESSION, "a real Terminal instance is constructed")
 ok("new window.FitAddon.FitAddon()" in RUNNER_SESSION, "the fit addon is instantiated")
 

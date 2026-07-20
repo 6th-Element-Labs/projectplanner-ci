@@ -227,6 +227,11 @@ def _control(execution_id: str, action: str, *, reason: str, options: dict[str, 
 # 1. get_task_execution — the read model plus which commands are legal now.
 # --------------------------------------------------------------------------
 
+def _session_is_terminal(session: dict[str, Any]) -> bool:
+    return bool(session.get("stale")) or (
+        str(session.get("status") or "").lower() in runner_repo.RUNNER_TERMINAL_STATUSES)
+
+
 def get_task_execution(task_id: Any, *, project: str = DEFAULT_PROJECT) -> dict[str, Any]:
     """Return the one authoritative answer to "what is running" for a task."""
     task_id = _normalize(task_id)
@@ -234,12 +239,24 @@ def get_task_execution(task_id: Any, *, project: str = DEFAULT_PROJECT) -> dict[
     execution_id = _attempt_execution_id(projection)
     live = bool(projection.get("active_runner"))
     in_flight = _in_flight_wake(projection) is not None
+    # UI-58: the task-modal card must choose Resume-review vs Start without
+    # reading the runner-watch surface and inspecting sessions itself. Derive
+    # that distinction here so the browser reads one server-authoritative answer.
+    sessions = runner_repo.list_runner_sessions(
+        task_id=task_id, include_stale=True, project=project)
+    has_ended_session = (not live) and any(_session_is_terminal(s) for s in sessions)
+    task_status = str((projection.get("task") or {}).get("status") or "")
+    resumable_review = (
+        task_status == "In Review" and not live and not in_flight
+        and any(_session_is_terminal(s) for s in sessions))
     return _envelope(
         "get_task_execution", task_id, project,
         execution_id=execution_id or None,
         lifecycle_phase=projection.get("lifecycle_phase"),
         running=live,
         starting=in_flight,
+        has_ended_session=has_ended_session,
+        resumable_review=resumable_review,
         execution=projection,
         available_commands=sorted({
             "get_task_execution", "get_execution_transcript",

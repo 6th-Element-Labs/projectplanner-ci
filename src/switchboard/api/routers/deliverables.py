@@ -8,12 +8,13 @@ from __future__ import annotations
 from typing import Any, Callable, Literal
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 import auth
 import deliverable_closure
 import store
+from switchboard.application.commands import autopilot as autopilot_command
 from switchboard.application.commands import create_deliverable as create_deliverable_command
 from switchboard.application.commands import update_deliverable as update_deliverable_command
 
@@ -215,21 +216,23 @@ def create_router(*, resolve_project: ProjectResolver,
             raise HTTPException(code, result["error"])
         return etag_json(request, result, max_age=5)  # CONSOL-8: TTL+ETag poll parity
 
+    def _autopilot_json(result: dict):
+        """Render an autopilot envelope; a typed refusal keeps its body top-level.
+
+        UI-58: REST and MCP both return exactly what the command produced, so an
+        operator and an agent see byte-identical bodies. Only the HTTP status is
+        added here, from the service's own error-code table.
+        """
+        if result.get("error_code"):
+            return JSONResponse(
+                status_code=autopilot_command.error_status(result), content=result)
+        return result
+
     @router.get("/api/deliverables/{deliverable_id}/autopilot")
     def deliverable_autopilot_status(deliverable_id: str, project: str = Query(...)):
         """Return durable task/deliverable scopes for one mission cockpit."""
-        project = resolve_project(project)
-        if not store.get_deliverable(deliverable_id, project=project):
-            raise HTTPException(404, "unknown deliverable")
-        scopes = store.list_autopilot_scopes(
-            project=project, deliverable_id=deliverable_id,
-            status="active,paused", limit=500)
-        return {
-            "schema": "switchboard.autopilot_scope_list.v1",
-            "project_id": project,
-            "deliverable_id": deliverable_id,
-            "scopes": scopes,
-        }
+        return _autopilot_json(autopilot_command.execute_mapping_result(
+            "get_autopilot", deliverable_id, project=resolve_project(project)))
 
     @router.post("/api/deliverables/{deliverable_id}/autopilot")
     async def control_deliverable_autopilot(request: Request, deliverable_id: str,
@@ -237,23 +240,10 @@ def create_router(*, resolve_project: ProjectResolver,
                                             project: str = Query(...)):
         project = resolve_project(project)
         principal = resolve_principal(request, project, ("write:tasks",), dev_actor="web")
-        action = body.action
-        common = {
-            "project": project,
-            "profile_id": body.profile_id,
-            "deliverable_id": deliverable_id,
-            "scope_type": "deliverable",
-            "actor": auth.actor(principal),
-        }
-        if action == "start":
-            result = store.start_autopilot_scope(
-                **common, runtime=body.runtime)
-        else:
-            result = store.control_autopilot_scope(**common, action=action)
-        if result.get("error"):
-            code = 404 if "unknown" in result["error"] or "not found" in result["error"] else 400
-            raise HTTPException(code, result["error"])
-        return result
+        return _autopilot_json(autopilot_command.execute_mapping_result(
+            "control_autopilot", deliverable_id, project=project,
+            action=body.action, scope_type="deliverable", runtime=body.runtime,
+            profile_id=body.profile_id, actor=auth.actor(principal)))
 
     @router.post("/api/deliverables/{deliverable_id}/tasks/{task_id}/autopilot")
     async def control_task_autopilot(request: Request, deliverable_id: str, task_id: str,
@@ -261,25 +251,12 @@ def create_router(*, resolve_project: ProjectResolver,
                                      project: str = Query(...)):
         project = resolve_project(project)
         principal = resolve_principal(request, project, ("write:tasks",), dev_actor="web")
-        action = body.action
-        common = {
-            "project": project,
-            "profile_id": body.profile_id,
-            "deliverable_id": deliverable_id,
-            "scope_type": "task",
-            "task_project": body.task_project or project,
-            "task_id": task_id,
-            "actor": auth.actor(principal),
-        }
-        if action == "start":
-            result = store.start_autopilot_scope(
-                **common, runtime=body.runtime)
-        else:
-            result = store.control_autopilot_scope(**common, action=action)
-        if result.get("error"):
-            code = 404 if "unknown" in result["error"] or "not found" in result["error"] else 400
-            raise HTTPException(code, result["error"])
-        return result
+        return _autopilot_json(autopilot_command.execute_mapping_result(
+            "control_autopilot", deliverable_id, project=project,
+            action=body.action, scope_type="task",
+            task_project=body.task_project or project, task_id=task_id,
+            runtime=body.runtime, profile_id=body.profile_id,
+            actor=auth.actor(principal)))
 
     @router.post("/api/deliverables/{deliverable_id}/closure_verify")
     async def verify_deliverable_closure_route(request: Request, deliverable_id: str,

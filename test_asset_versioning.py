@@ -83,8 +83,12 @@ try:
         r'(?:src|href)="(?!https?://|//|/)([^"?]+\.(?:js|css))(\?v=[0-9a-f]+)?"', html)
     ok(bool(local_refs) and all(ver for _, ver in local_refs),
        "no local .js/.css reference is left without a content ?v=")
-    ok("https://cdn.jsdelivr.net/npm/bootstrap" in html,
-       "absolute/CDN references are left untouched (not rewritten)")
+    # BUG-110: Bootstrap (and Tabler/xterm/Mermaid) are vendored under /vendor/;
+    # absolute /vendor/ refs must stay absolute and are not content-hash rewritten.
+    ok('src="/vendor/bootstrap/bootstrap.bundle.min.js"' in html,
+       "absolute /vendor/ bootstrap reference is left as an absolute path (not rewritten)")
+    ok("cdn.jsdelivr.net" not in html,
+       "index.html has no jsDelivr CDN references after hermetic vendor cutover")
 
     # auth shells share the same treatment (login-global.html)
     ok(f"taikun-tabler.css?v={content_hash('taikun-tabler.css')}" in c.get("/login").text,

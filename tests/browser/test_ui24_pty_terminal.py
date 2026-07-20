@@ -18,7 +18,6 @@ same way the backend tests prove the relay side is correct in isolation.
 """
 from __future__ import annotations
 
-import base64
 import json
 import os
 import subprocess
@@ -190,9 +189,11 @@ try:
                     <span id="task-primary-runner-badge"></span>
                     <span id="task-primary-runner-state"></span>
                     <button id="task-primary-start"><span>Start</span></button>
+                    <button id="task-primary-retry"><span>Retry</span></button>
                     <button id="task-primary-resume-review"><span>Resume</span></button>
                     <button id="task-primary-watch-here"><i></i><span>Watch</span></button>
-                    <button id="task-primary-watch-sidecar"><span>Sidecar</span></button>`;
+                    <button id="task-primary-watch-sidecar"><span>Sidecar</span></button>
+                    <button id="task-primary-stop"><span>Stop</span></button>`;
                 document.body.appendChild(root);
                 const panel = document.createElement('div');
                 panel.id = 'runner-pty-panel';
@@ -204,14 +205,18 @@ try:
                     window.__coord42Opened.push(taskId); return true;
                 };
                 window.fetch = async (url, options) => {
-                    if (String(url).includes('/ixp/v1/runner_sessions/watch')) {
+                    // UI-58: the card resolves the live session from the Task
+                    // Execution projection GET (…/execution?project=…) — not the
+                    // /execution/open POST the PTY connect uses.
+                    if (String(url).includes('/execution?')) {
                         return new Response(JSON.stringify({
-                            watchable: true, refused: false,
-                            runner_session_id: 'run_replacement',
-                            bind: {task_id: 'COORD-42', claim_id: 'claim-new',
-                                   host_id: 'host/mac', wake_id: 'wake-new',
-                                   work_session_id: 'ws-new'},
-                            session: {runner_session_id: 'run_replacement', status: 'running'},
+                            schema: 'switchboard.task_execution.v1', running: true,
+                            starting: false, has_ended_session: false,
+                            resumable_review: false, lifecycle_phase: 'running',
+                            execution_id: 'run_replacement',
+                            execution: {active_runner: {runner_session_id: 'run_replacement',
+                                   host_id: 'host/mac', status: 'running'},
+                                   active_host: {host_id: 'host/mac'}},
                         }), {status: 200, headers: {'Content-Type': 'application/json'}});
                     }
                     return originalFetch(url, options);
@@ -256,7 +261,7 @@ try:
         # is the same lazy-load path a real watchable session would trigger.
         page.evaluate("() => TeepPlan._ensureXterm()")
         xterm_loaded = page.evaluate("typeof window.Terminal === 'function' && typeof window.FitAddon.FitAddon === 'function'")
-        ok(xterm_loaded, "xterm.js and the fit addon load from jsdelivr with the expected UMD globals")
+        ok(xterm_loaded, "xterm.js and the fit addon load from /vendor/xterm with the expected UMD globals")
         page.evaluate("""
             () => {
                 TeepPlan._runnerPty = { taskId: 'FAKE-TASK-1', runnerSessionId: 'run_browsertest',
@@ -891,11 +896,25 @@ try:
            and replacement["resumeHidden"],
            "the replacement becomes the active Watch runner without overwriting the stale identity")
 
-        # The task modal must perform the same stale discovery after a full
-        # reload. Without include_stale it incorrectly renders Ready / Start
-        # task for an In Review task whose reviewer crashed.
+        # UI-58: the task modal card now reads the server-authoritative Task
+        # Execution projection. The server owns the Resume-review-vs-Start
+        # decision (resumable_review), so the card no longer inspects sessions
+        # itself — it must render Resume review, not Start, for a dead reviewer.
         page.evaluate("() => TeepPlan._runnerPtyClose()")
-        review_watch_calls.clear()
+        card_execution_calls = []
+
+        def _review_execution(route):
+            card_execution_calls.append(route.request.url)
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({
+                "schema": "switchboard.task_execution.v1",
+                "command": "get_task_execution", "task_id": "FAKE-TASK-1",
+                "running": False, "starting": False,
+                "has_ended_session": True, "resumable_review": True,
+                "lifecycle_phase": "review", "execution_id": None,
+                "execution": {"active_runner": None},
+            }))
+
+        page.route("**/api/tasks/FAKE-TASK-1/execution?**", _review_execution)
         page.evaluate("""
             () => {
                 const fixture = document.createElement('div');
@@ -919,9 +938,9 @@ try:
                 startHidden: document.getElementById('task-primary-start').hidden,
             })
         """)
-        ok(len(review_watch_calls) == 1
-           and "include_stale=true" in review_watch_calls[0],
-           "the task modal explicitly requests stale runner history after reload")
+        ok(len(card_execution_calls) == 1
+           and "/api/tasks/FAKE-TASK-1/execution" in card_execution_calls[0],
+           "the task modal card resolves state from the server execution projection")
         ok("In Review" in modal_runner["badge"]
            and modal_runner["resumeVisible"] and modal_runner["startHidden"],
            "the task modal renders Resume review instead of Start task for a dead reviewer")
@@ -932,6 +951,7 @@ try:
            and resume_requests[-1].get("project") == "ui24-browser",
            "the task modal Resume review button emits one project-bound replacement request")
         page.evaluate("() => document.getElementById('ui50-task-modal-runner-fixture').remove()")
+        page.unroute("**/api/tasks/FAKE-TASK-1/execution?**", _review_execution)
         page.unroute("**/api/tasks/FAKE-TASK-1/resume-review**", _resume_review)
         page.unroute("**/ixp/v1/runner_sessions/watch?**", _review_watch)
         page.evaluate("() => TeepPlan._runnerPtyClose()")

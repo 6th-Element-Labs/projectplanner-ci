@@ -163,7 +163,8 @@ READ_TOOLS = frozenset({
     "get_background_job_run", "get_decision", "get_deliverable",
     "get_deliverable_breakdown_proposal", "get_deliverable_closure_report",
     "get_deliverable_dependency_graph", "get_deliverable_tally",
-    "get_execution_transcript", "get_external_ci_run", "get_kpi_tally", "get_lane_delta",
+    "get_autopilot", "get_execution_transcript", "get_external_ci_run",
+    "get_kpi_tally", "get_lane_delta",
     "get_mcp_observability", "get_message_status", "get_mission_brief",
     "get_mission_status", "get_narration_health", "get_plan_signals",
     "get_preflight_calibration", "get_preflight_run",
@@ -191,6 +192,7 @@ READ_TOOLS = frozenset({
 WRITE_TOOLS = frozenset({
     "abandon_claim", "ack_message", "acquire_provider_credential_lease",
     "add_comment", "add_deliverable_milestone", "add_dependency", "apply_cleanup",
+    "control_autopilot",
     "apply_project_consolidation", "approve_deliverable_breakdown", "archive_project",
     "archive_task", "archive_work_session_workspace", "cancel_monitor", "cancel_wake",
     "begin_agent_host_enrollment", "bind_host_native_provider_connection",
