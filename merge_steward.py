@@ -1,6 +1,6 @@
 """T3 policy-gated merge steward (COORD-7).
 
-Optional autopilot for **low-risk In Review** PRs only. Default posture is
+Optional autopilot for **eligible In Review** PRs. Default posture is
 dry-run: plan + COORD-3 decisions + activity artifact. Acting requires both
 ``PM_COORDINATOR_MERGE_ACT=1`` and an enabled merge policy.
 
@@ -9,7 +9,7 @@ Hard floor (never bypassed):
 * never set Done (webhook/reconcile only)
 * never arm when ``merge_gate`` is blocked
 * red/unknown checks, conflicts, stale branches, missing provenance,
-  human gates, high-risk tasks, and missing authority fail closed to
+  human gates, and missing authority fail closed to
   COORD-6 escalation
 * successful arm may trigger reconcile so Done provenance can land later
 """
@@ -31,7 +31,6 @@ ACTIVITY_KIND = "coordinator.merge_steward.tick"
 TIER = "T3"
 DEFAULT_ACTOR = "switchboard/coordinator-t3"
 DEFAULT_OPERATOR = "switchboard/operator"
-DEFAULT_RISK_CEILING = "Medium"
 DEFAULT_MAX_IN_FLIGHT = 3
 
 ACTION_ARM = "arm_auto_merge"
@@ -54,9 +53,6 @@ POLICY = {
     ACTION_NOOP: "coord.merge.noop",
 }
 
-RISK_RANK = {"low": 1, "medium": 2, "high": 3, "critical": 4}
-
-
 def enabled_from_env(name: str, default: bool = True) -> bool:
     return audit.enabled_from_env(name, default)
 
@@ -69,17 +65,12 @@ def _ci_state(ci: Mapping[str, Any] | None) -> str:
     return audit._ci_state(ci)
 
 
-def _risk_rank(value: Any) -> int:
-    return RISK_RANK.get(str(value or "").strip().lower(), 2)
-
-
 def default_merge_policy() -> dict[str, Any]:
     return {
         "schema": "switchboard.coordinator_policy.v1",
         "enabled": False,
         "tier": TIER,
         "dry_run_default": True,
-        "risk_ceiling": DEFAULT_RISK_CEILING,
         "max_in_flight": DEFAULT_MAX_IN_FLIGHT,
         "require_merge_gate_pass": True,
         "deny_human_gated": True,
@@ -107,9 +98,6 @@ def load_merge_policy(*, env: Mapping[str, str] | None = None,
         policy["enabled"] = enabled_from_env("PM_COORDINATOR_MERGE_ENABLED", False)
     if "PM_COORDINATOR_MERGE_AUTHORITY" in environ:
         policy["authority_granted"] = enabled_from_env("PM_COORDINATOR_MERGE_AUTHORITY", False)
-    ceiling = str(environ.get("PM_COORDINATOR_MERGE_RISK_CEILING") or "").strip()
-    if ceiling:
-        policy["risk_ceiling"] = ceiling
     try:
         if environ.get("PM_COORDINATOR_MERGE_MAX_IN_FLIGHT"):
             policy["max_in_flight"] = max(0, int(environ["PM_COORDINATOR_MERGE_MAX_IN_FLIGHT"]))
@@ -278,7 +266,6 @@ def plan_merge_actions(snapshot: Mapping[str, Any], *,
             "task_id": task_id,
             "status": task.get("status"),
             "risk_level": risk,
-            "risk_ceiling": pol.get("risk_ceiling"),
             "pr_number": pr_number,
             "pr_url": git_state.get("pr_url"),
             "head_sha": head_sha or None,
@@ -297,14 +284,6 @@ def plan_merge_actions(snapshot: Mapping[str, Any], *,
                 "In Review task is human-gated; T3 cannot merge it.",
                 base_inputs, escalation_class="human_gate_required", score=98,
                 skipped=[{"action": ACTION_ARM, "reason": "human_gate"}])
-            continue
-
-        if _risk_rank(risk) > _risk_rank(pol.get("risk_ceiling")):
-            add(task_id, ACTION_ESCALATE,
-                f"Task risk {risk} exceeds merge steward ceiling "
-                f"{pol.get('risk_ceiling')}.",
-                base_inputs, escalation_class="policy_violation", score=97,
-                skipped=[{"action": ACTION_ARM, "reason": "risk_ceiling"}])
             continue
 
         if pol.get("deny_blocking_tasks") and task.get("is_blocking"):
@@ -398,7 +377,7 @@ def plan_merge_actions(snapshot: Mapping[str, Any], *,
                 continue
 
         add(task_id, ACTION_ARM,
-            "Policy allows T3 arm of GitHub auto-merge for this low-risk green PR.",
+            "Policy allows T3 arm of GitHub auto-merge for this green PR.",
             base_inputs, score=80, merges=True,
             skipped=[{"action": ACTION_ESCALATE, "reason": "gate_passed"},
                      {"action": ACTION_HOLD_POLICY, "reason": "policy_enabled"}])
@@ -647,7 +626,6 @@ def steward_project(project: str, *, actor: str = DEFAULT_ACTOR,
                     "policy": {
                         "enabled": pol.get("enabled"),
                         "authority_granted": pol.get("authority_granted"),
-                        "risk_ceiling": pol.get("risk_ceiling"),
                         "max_in_flight": pol.get("max_in_flight"),
                     },
                     "action_inputs": action.get("inputs") or {},

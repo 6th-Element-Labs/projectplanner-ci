@@ -142,6 +142,13 @@ def make_db(path: Path) -> None:
 
 
 def test_plan_fail_closed_and_arm():
+    policy = ms.load_merge_policy(
+        env={"PM_COORDINATOR_MERGE_RISK_CEILING": "Low"},
+        meta={"risk_ceiling": "Low"},
+    )
+    ok("risk_ceiling" not in policy,
+       "legacy risk ceiling configuration is ignored and removed")
+
     with tempfile.TemporaryDirectory() as tmp:
         db_path = Path(tmp) / "board.db"
         make_db(db_path)
@@ -149,15 +156,15 @@ def test_plan_fail_closed_and_arm():
             str(db_path), "switchboard", now=NOW)
         # No authority / disabled → green M-1 escalates missing authority (fail closed)
         plan = ms.plan_merge_actions(snapshot, policy={
-            "enabled": True, "authority_granted": False, "risk_ceiling": "Medium",
+            "enabled": True, "authority_granted": False,
         }, now=NOW)
         by_task = {row["task_id"]: row for row in plan["actions"]}
         ok(by_task["M-2"]["action"] == ms.ACTION_ESCALATE
            and by_task["M-2"]["escalation_class"] == "red_ci_product_judgment",
            "red CI escalates")
         ok(by_task["M-3"]["action"] == ms.ACTION_ESCALATE
-           and by_task["M-3"]["escalation_class"] == "policy_violation",
-           "high risk above ceiling escalates")
+           and by_task["M-3"]["escalation_class"] == "absent_permission",
+           "risk label is informational; missing authority still fails closed")
         ok(by_task["M-4"]["action"] == ms.ACTION_ESCALATE
            and by_task["M-4"]["escalation_class"] == "human_gate_required",
            "human gate escalates")
@@ -173,18 +180,21 @@ def test_plan_fail_closed_and_arm():
 
         # Enabled + authority → M-1 arms
         plan2 = ms.plan_merge_actions(snapshot, policy={
-            "enabled": True, "authority_granted": True, "risk_ceiling": "Medium",
+            "enabled": True, "authority_granted": True,
             "max_in_flight": 3,
         }, now=NOW)
         by_task2 = {row["task_id"]: row for row in plan2["actions"]}
         ok(by_task2["M-1"]["action"] == ms.ACTION_ARM and by_task2["M-1"]["merges"] is True,
-           "policy-enabled green low-risk PR is armable")
+           "policy-enabled green PR is armable")
         ok(by_task2["M-1"]["policy_rule"] == "coord.merge.arm_auto_merge",
            "arm uses COORD-3 policy rule")
+        ok(by_task2["M-3"]["action"] == ms.ACTION_ARM
+           and by_task2["M-3"]["merges"] is True,
+           "high risk label does not block an otherwise eligible merge")
 
         # Saturated → hold backpressure
         plan3 = ms.plan_merge_actions(snapshot, policy={
-            "enabled": True, "authority_granted": True, "risk_ceiling": "Medium",
+            "enabled": True, "authority_granted": True,
         }, saturated=True, now=NOW)
         by_task3 = {row["task_id"]: row for row in plan3["actions"]}
         ok(by_task3["M-1"]["action"] == ms.ACTION_HOLD_BACKPRESSURE,
@@ -230,7 +240,7 @@ def test_dry_run_and_acting_hooks():
             "switchboard",
             dry_run=True,
             persist=True,
-            policy={"enabled": True, "authority_granted": True, "risk_ceiling": "Medium"},
+            policy={"enabled": True, "authority_granted": True},
             now=NOW,
             db_path_resolver=lambda _p: str(db_path),
             decision_writer=decision_writer,
@@ -259,7 +269,7 @@ def test_dry_run_and_acting_hooks():
             "switchboard",
             dry_run=False,
             persist=True,
-            policy={"enabled": True, "authority_granted": True, "risk_ceiling": "Medium",
+            policy={"enabled": True, "authority_granted": True,
                     "post_merge_reconcile": True},
             now=NOW,
             db_path_resolver=lambda _p: str(db_path),
@@ -285,7 +295,7 @@ def test_policy_disabled_holds():
         snapshot = __import__("coordinator_audit").collect_snapshot(
             str(db_path), "switchboard", now=NOW)
         plan = ms.plan_merge_actions(snapshot, policy={
-            "enabled": False, "authority_granted": True, "risk_ceiling": "Medium",
+            "enabled": False, "authority_granted": True,
         }, now=NOW)
         by_task = {row["task_id"]: row for row in plan["actions"]}
         ok(by_task["M-1"]["action"] == ms.ACTION_HOLD_POLICY,

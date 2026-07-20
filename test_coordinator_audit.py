@@ -173,6 +173,15 @@ def make_db(path: Path) -> None:
         )
 
 
+ok(not ca._human_gate({"description": "Keep explicit human gates unchanged"}),
+   "natural-language references do not invent a human gate")
+ok(ca._human_gate({"description": "human_gate required"}),
+   "an explicit legacy machine marker still requires a human gate")
+ok(ca._human_gate({"human_gate": {"required": True, "approved": False}}),
+   "structured unapproved human gate is authoritative")
+ok(not ca._human_gate({"human_gate": {"required": True, "approved": True}}),
+   "structured approved human gate is cleared")
+
 with tempfile.TemporaryDirectory() as temp:
     db_path = Path(temp) / "board.db"
     make_db(db_path)

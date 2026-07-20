@@ -6,11 +6,11 @@
 
 ## Mandate
 
-Optional **T3 merge steward** for **low-risk In Review** PRs only:
+Optional **T3 merge steward** for eligible **In Review** PRs:
 
-1. Inspect board-recorded PR / CI / dependency / session / risk state (T0 snapshot).
-2. Fail closed to COORD-6 escalation for red/unknown checks, conflicts, stale branches, missing provenance, human gates, high-risk tasks, and missing authority.
-3. When policy is **enabled** and **authority_granted**, arm GitHub auto-merge only for eligible green PRs under the risk ceiling and backpressure cap.
+1. Inspect board-recorded PR / CI / dependency / session state (T0 snapshot). Task risk labels remain informational.
+2. Fail closed to COORD-6 escalation for red/unknown checks, conflicts, stale branches, missing provenance, human gates, and missing authority.
+3. When policy is **enabled** and **authority_granted**, arm GitHub auto-merge only for eligible green PRs under the backpressure cap.
 4. After arming, optionally request `reconcile` so Done provenance can land via webhook — **never set Done**.
 5. Default posture is dry-run.
 
@@ -36,7 +36,6 @@ PM_COORDINATOR_MERGE_AUTHORITY=1 \
 | `PM_COORDINATOR_MERGE_LOG` | `1` | Persist activity + decisions |
 | `PM_COORDINATOR_MERGE_ENABLED` | `0` | Policy switch: allow arming when authority also granted |
 | `PM_COORDINATOR_MERGE_AUTHORITY` | `0` | Explicit T3 authority grant |
-| `PM_COORDINATOR_MERGE_RISK_CEILING` | `Medium` | Max `risk_level` eligible to arm |
 | `PM_COORDINATOR_MERGE_MAX_IN_FLIGHT` | `3` | Backpressure arm budget |
 | `PM_COORDINATOR_MERGE_SATURATED` | `0` | Force hold-all backpressure |
 | `PM_COORDINATOR_MERGE_IN_FLIGHT` | `0` | Current in-flight merges for budget math |
@@ -66,9 +65,8 @@ Every tick writes `switchboard.coordinator_decision.v1` rows and one
 |---|---|
 | Policy must explicitly allow merge | `enabled` + `authority_granted` |
 | Branch/checks/provenance gates | board CI + injectable/`store.merge_gate` |
-| Low-risk only | `risk_ceiling` (default Medium) |
 | Red/unknown/conflicts/stale/missing provenance fail closed | escalate via COORD-6 |
-| High-risk / human gate / missing authority fail closed | escalate |
+| Human gate / missing authority fail closed | escalate |
 | Successful merge → reconcile / Done verification | post-arm `reconcile`; never set Done |
 | Dry-run default | `steward_project(dry_run=True)` / `PM_COORDINATOR_MERGE_ACT=0` |
 

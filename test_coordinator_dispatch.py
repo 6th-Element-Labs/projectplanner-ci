@@ -44,7 +44,7 @@ def fake_snapshot(*, ready=True, hosts=True, stale_agent=False, human_gate=False
             "is_blocking": 1,
             "risk_level": "Medium",
             "_wsId": "RENDER",
-            "description": "Needs human_gate approval" if human_gate else "Ship it",
+            "description": "human_gate required" if human_gate else "Ship it",
             "owner_person_or_role": "human gate" if human_gate else "Agent",
         })
     hosts_rows = []

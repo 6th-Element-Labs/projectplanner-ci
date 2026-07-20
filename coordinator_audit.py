@@ -31,9 +31,8 @@ ACTIVE_SESSION_STATUSES = {"active", "proposed"}
 GREEN_CI = {"success", "succeeded", "passed", "pass", "green"}
 RED_CI = {"failure", "failed", "error", "cancelled", "canceled", "timed_out"}
 PENDING_CI = {"requested", "mirrored", "triggered", "pending", "queued", "running", "in_progress"}
-HUMAN_GATE_TERMS = (
-    "human_gate", "human gate", "human approval", "security review",
-    "sme review", "named reviewer", "bug intake",
+HUMAN_GATE_MARKERS = (
+    "human_gate required", "human_gate:required", "human_gate=true",
 )
 
 
@@ -69,11 +68,17 @@ def _depends_on(value: Any) -> list[str]:
 
 
 def _human_gate(task: Mapping[str, Any]) -> bool:
+    gate = task.get("human_gate")
+    if isinstance(gate, Mapping):
+        required = bool(gate.get("required") or gate.get("blocked"))
+        return required and not bool(gate.get("approved"))
+    if isinstance(gate, bool):
+        return gate
     text = " ".join(str(task.get(key) or "") for key in (
         "title", "description", "owner_person_or_role", "phase",
         "entry_criteria", "exit_criteria",
     )).lower()
-    return any(term in text for term in HUMAN_GATE_TERMS)
+    return any(marker in text for marker in HUMAN_GATE_MARKERS)
 
 
 def _digest(value: Any) -> str:
