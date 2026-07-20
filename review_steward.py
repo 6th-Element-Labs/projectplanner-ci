@@ -466,7 +466,7 @@ def steward_project(project: str, *, actor: str = DEFAULT_ACTOR,
             from switchboard.application.commands import task_execution
             task_messenger = task_execution.send_message
         if escalation_sender is None and not dry_run:
-            escalation_sender = store.send_message
+            escalation_sender = store.send_agent_message
 
     try:
         db_path = db_path_resolver(project)  # type: ignore[misc]
