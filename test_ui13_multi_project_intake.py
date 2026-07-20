@@ -5,8 +5,8 @@ Proves the acceptance criteria without a live mailbox or LLM gateway:
   1. corpus isolation  — a doc ingested on project X is searchable on X and INVISIBLE on Y;
   2. inbox isolation   — an inbox item added on X shows only on X (dedupe is per-board too);
   3. Maxwell unchanged — the default project still ingests/searches its own corpus;
-  4. routing           — inbox_routing.route resolves plus-address > sender-domain map >
-                         global-allowlist fallback -> default project (today's behavior).
+  4. routing           — inbox_routing.route resolves plus-address > sender-domain map and
+                         quarantines every message without exactly one explicit route.
 
 Each project is its own sqlite file (physical isolation, no project column) — the pattern
 every other store uses. Run directly: `python test_ui13_multi_project_intake.py`.
@@ -115,9 +115,9 @@ def test_inbox_isolation():
 
 
 def test_routing():
-    print("\n[4] inbox routing: plus-address > domain map > allowlist fallback")
+    print("\n[4] inbox routing: plus-address > domain map > quarantine")
     os.environ["PM_INBOX_ROUTES"] = "totalenergy.com=maxwell, acme.com=helm"
-    os.environ["PM_INBOX_ALLOWLIST"] = ""   # empty -> accept-all for unmapped senders (today's default)
+    inbox_routing.invalidate_routes()
 
     check(inbox_routing.route("Anyone <x@random.com>", "plan+switchboard@taikunai.com") == (True, "switchboard"),
           "plus-address plan+switchboard@ routes to switchboard (accepts)")
@@ -132,16 +132,12 @@ def test_routing():
     check(inbox_routing.route("bob@random.com",
                               "plan@taikunai.com, plan+helm@taikunai.com") == (True, "helm"),
           "plus-address is found even when it is not the first recipient (comma list)")
-    check(inbox_routing.route("stranger@nowhere.com", "plan@taikunai.com") == (True, "maxwell"),
-          "unmapped sender falls back to default project (accept-all allowlist)")
-    check(inbox_routing.route("x@random.com", "plan+bogus@taikunai.com") == (True, "maxwell"),
-          "unknown plus-tag is ignored -> falls back to default project")
-
-    os.environ["PM_INBOX_ALLOWLIST"] = "knownpartner.com"
-    check(inbox_routing.route("y@knownpartner.com", "plan@taikunai.com") == (True, "maxwell"),
-          "allowlisted unmapped sender is accepted -> default project")
-    check(inbox_routing.route("z@stranger.com", "plan@taikunai.com") == (False, "maxwell"),
-          "non-allowlisted unmapped sender is REJECTED (unchanged allowlist gate)")
+    check(inbox_routing.route("stranger@nowhere.com", "plan@taikunai.com") == (False, None),
+          "unmapped sender is quarantined without a default project")
+    check(inbox_routing.route("x@random.com", "plan+bogus@taikunai.com") == (False, None),
+          "unknown plus-tag is quarantined")
+    check(inbox_routing.route("x@random.com", "plan+helm@taikunai.com, plan+switchboard@taikunai.com")
+          == (False, None), "conflicting plus-tags are quarantined")
 
 
 def main():

@@ -25,7 +25,7 @@ source_functions = {
 }
 ok(not ({"route", "routes_map", "plus_project", "domain_project", "allow_sender"} & source_functions),
    "the IMAP adapter does not own routing policy")
-ok("inbox_routing.route(sender, recipients)" in source_text,
+ok("inbox_routing.route_decision(sender, recipients)" in source_text,
    "the IMAP adapter delegates routing through the package seam")
 
 # ARCH-MS-69 moved inbox poll into the intake_inbox router; jobs.py still polls.
