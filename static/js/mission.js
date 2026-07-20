@@ -257,22 +257,29 @@
 
     // NARRATE-4: CEO-voice deliverable header — the 3-4 sentence plain-English summary that
     // sits at the very top of the mission view, above the dependency map. Fresh -> callout;
-    // stale (linked-task fingerprint moved) -> old text muted with an "Updating…" badge.
+    // stale (linked-task fingerprint moved) -> live deterministic projection; the stored
+    // prose stays audit history and is never displayed as current truth.
     // Absent -> nothing (the structured "Live product brief" below still covers it).
+    _missionLiveSummary(s) {
+        const d = s.deliverable || {};
+        const progress = s.progress || {};
+        const title = d.title || s.deliverable_id || 'Deliverable';
+        const status = d.status || 'unknown';
+        const done = Number(progress.done_with_proof_count || 0);
+        const linked = Number(progress.linked_task_count || 0);
+        const noun = linked === 1 ? 'task' : 'tasks';
+        return `**${title}** is now _${status}_ — ${done} of ${linked} linked ${noun} complete.`;
+    },
+
     _missionCeoHeaderHtml(s) {
         const state = s.ceo_narrative_state || {};
-        const text = s.ceo_narrative;
-        const raw = s.ceo_narrative_raw;
+        const liveProjection = state.stale || state.display_source === 'live_projection';
+        const text = s.ceo_narrative || (liveProjection ? this._missionLiveSummary(s) : '');
         if (text) {
             return `<div class="mb-4">
-                <div class="subheader text-secondary mb-1"><i class="ti ti-message-chatbot me-1"></i>In plain English</div>
+                <div class="subheader text-secondary mb-1"><i class="ti ${liveProjection ? 'ti-refresh' : 'ti-message-chatbot'} me-1"></i>In plain English${liveProjection ? ' · live projection' : ''}</div>
                 <div class="markdown">${this.md(text)}</div>
-            </div>`;
-        }
-        if (raw && state.stale) {
-            return `<div class="mb-4">
-                <div class="subheader text-secondary mb-1"><i class="ti ti-refresh me-1"></i>In plain English · updating…</div>
-                <div class="markdown text-secondary">${this.md(raw)}</div>
+                ${liveProjection ? '<div class="text-secondary small mt-1">Stored narrative is updating; counts above are live.</div>' : ''}
             </div>`;
         }
         return '';
@@ -938,10 +945,16 @@
             const pr = (w.provenance || {}).pr_url || (w.git_state || {}).pr_url;
             return `<tr><td><a href="#" data-linked-task="${this.esc(w.task_id)}" data-linked-project="${this.esc(w.project_id)}">${this.esc(w.task_id)}</a></td><td>${this.esc(w.title || '')}</td><td>${this.esc((w.provenance || {}).label || 'Done with proof')}</td><td>${pr ? `<a href="${this.esc(pr)}" target="_blank" rel="noopener">PR</a>` : '—'}</td></tr>`;
         }).join('') || '<tr><td colspan="4" class="text-secondary">Nothing Done-with-proof yet</td></tr>';
-        const linkedRows = (s.linked_tasks || []).map((link) => {
+        const ledgerRows = (s.linked_tasks || []).map((link) => {
             const dtl = link.task_detail || link.task || {};
-            return `<tr><td>${this.esc(link.project_id || '')}</td><td><a href="#" data-linked-task="${this.esc(link.task_id)}" data-linked-project="${this.esc(link.project_id)}">${this.esc(link.task_id)}</a></td><td>${this.esc(dtl.title || dtl.error || '')}</td><td>${this._missionBadge(dtl.status || 'missing', this.STATUS_COLOR)}</td><td>${this.esc(link.milestone_id || '—')}</td><td>${this.esc(link.role || '—')}</td><td class="text-end">${dtl.status === 'Done' ? '<span class="text-secondary small">Done</span>' : this._taskAutopilotButtonHtml(link.task_id, link.project_id, true)}</td></tr>`;
-        }).join('') || '<tr><td colspan="7" class="text-secondary">No cross-project links</td></tr>';
+            const provenance = dtl.provenance || {};
+            const proof = provenance.label || (dtl.status === 'Done' ? 'Done — proof missing' : '—');
+            const action = dtl.status === 'Done'
+                ? '<span class="text-secondary small">Done</span>'
+                : this._taskAutopilotButtonHtml(link.task_id, link.project_id, true);
+            return `<tr data-mission-task-row="${this.esc(link.task_id)}" data-task-status="${this.esc(dtl.status || 'missing')}"><td>${this.esc(link.project_id || '')}</td><td><a href="#" data-linked-task="${this.esc(link.task_id)}" data-linked-project="${this.esc(link.project_id)}">${this.esc(link.task_id)}</a></td><td>${this.esc(dtl.title || dtl.error || '')}</td><td>${this._missionBadge(dtl.status || 'missing', this.STATUS_COLOR)}</td><td>${this.esc(link.milestone_id || '—')}</td><td>${this.esc(link.role || '—')}</td><td>${this.esc(proof)}</td><td class="text-end">${action}</td></tr>`;
+        }).join('') || '<tr><td colspan="8" class="text-secondary">No linked tasks</td></tr>';
+        const workLedger = `<div class="card mb-4" data-mission-work-ledger="all-linked-tasks"><div class="card-header"><div><h3 class="card-title">Work ledger — all linked tasks</h3><div class="text-secondary small">Lifecycle transitions update these rows in place. Completed work remains visible with its proof.</div></div></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Project</th><th>Task</th><th>Title</th><th>Status</th><th>Milestone</th><th>Role</th><th>Proof</th><th class="text-end">Autopilot</th></tr></thead><tbody>${ledgerRows}</tbody></table></div></div>`;
         // Blockers box removed — it dumped raw kinds like "dependency_unsatisfied". The
         // dependency map already outlines blockers with a thick dark border.
         const blockerHtml = '';
@@ -963,14 +976,13 @@
         // Lead with the story: headline → plain-English → what's blocked → the map →
         // breakdown/outcomes review → next action.
         const essentials = header + proofHtml + this._missionClosureHtml() + this._missionCeoHeaderHtml(s) + blockerHtml
-            + this._missionDependencyGraphHtml() + this._missionBreakdownHtml() + nextActions;
+            + this._missionDependencyGraphHtml() + workLedger + this._missionBreakdownHtml() + nextActions;
         // The rest (KPIs, brief, milestones, work tables, agents, linked tasks, policy) folds
         // into a disclosure so it's there when you want it, not a wall of ~15 cards up front.
         const detail = kpi + this._missionEconomicsHtml(s.economics) + this._missionKpiOutcomesHtml() + narrative + endState + milestoneMap +
-            `<div class="row g-3 mb-4"><div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Active work</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Task</th><th>Title</th><th>Status</th><th>Session</th><th>Assignee</th><th>Claims</th></tr></thead><tbody>${activeRows}</tbody></table></div></div></div>
+            `<div class="row g-3 mb-4"><div class="col-lg-6"><div class="card h-100"><div class="card-header"><div><h3 class="card-title">Active nonterminal work</h3><div class="text-secondary small">This is the active subset; the primary work ledger above retains every linked task.</div></div></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Task</th><th>Title</th><th>Status</th><th>Session</th><th>Assignee</th><th>Claims</th></tr></thead><tbody>${activeRows}</tbody></table></div></div></div>
             <div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Done with proof</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Task</th><th>Title</th><th>Provenance</th><th>PR</th></tr></thead><tbody>${doneRows}</tbody></table></div></div></div></div>` +
             agents +
-            `<div class="card mb-4"><div class="card-header"><h3 class="card-title">Linked tasks across projects</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Project</th><th>Task</th><th>Title</th><th>Status</th><th>Milestone</th><th>Role</th><th class="text-end">Autopilot</th></tr></thead><tbody>${linkedRows}</tbody></table></div></div>` +
             `<div class="row g-3"><div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Architecture / policy</h3></div><div class="card-body">${this._missionPolicyDrift(s)}</div></div></div>
             <div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Recent changes</h3></div><div class="card-body">${this._missionRecentChanges(s.linked_tasks)}</div></div></div></div>`;
         el.innerHTML = essentials +

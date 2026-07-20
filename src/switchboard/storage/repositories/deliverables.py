@@ -2569,6 +2569,24 @@ def _deliverable_activity(project: str, deliverable_id: str, limit: int = 12) ->
     return rows
 
 
+def _live_deliverable_summary(mission_status: Dict[str, Any]) -> str:
+    """Return a deterministic summary from the same projection as the cockpit counters.
+
+    A persisted CEO narrative is intentionally asynchronous.  When its source
+    fingerprint is stale, the old prose remains audit history but must never be
+    rendered as current truth.  This fallback keeps the headline useful without
+    introducing a second set of counts.
+    """
+    deliverable = mission_status.get("deliverable") or {}
+    progress = mission_status.get("progress") or {}
+    title = str(deliverable.get("title") or mission_status.get("deliverable_id") or "Deliverable")
+    status = str(deliverable.get("status") or "unknown")
+    done = int(progress.get("done_with_proof_count") or 0)
+    linked = int(progress.get("linked_task_count") or 0)
+    noun = "task" if linked == 1 else "tasks"
+    return f"**{title}** is now _{status}_ — {done} of {linked} linked {noun} complete."
+
+
 def _attach_mission_brief_fields(mission_status: Dict[str, Any],
                                  project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     if mission_status.get("error"):
@@ -2596,10 +2614,14 @@ def _attach_mission_brief_fields(mission_status: Dict[str, Any],
             "stale": ceo_stale,
             "source_fingerprint": current_fp,
             "stored_fingerprint": stored_fp,
+            "display_source": "live_projection" if ceo_stale else "stored_narrative",
+            "stored_narrative_hidden": ceo_stale,
             "message": ("CEO narration is regenerating; trust mission_status and provenance."
                         if ceo_stale else None),
         }
-        mission_status["ceo_narrative"] = None if ceo_stale else ceo_text
+        mission_status["ceo_narrative"] = (
+            _live_deliverable_summary(mission_status) if ceo_stale else ceo_text
+        )
         if ceo_stale:
             mission_status["ceo_narrative_raw"] = ceo_text
         mission_status["ceo_narrative_generated_at"] = metadata.get("ceo_narrative_generated_at")

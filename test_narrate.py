@@ -133,6 +133,12 @@ try:
     ms_stale = store.get_mission_status(project=PROJECT, deliverable_id="nar-deliverable")
     ok((ms_stale.get("ceo_narrative_state") or {}).get("stale") is True,
        "header flagged stale after a linked-task transition")
+    ok((ms_stale.get("ceo_narrative_state") or {}).get("display_source") == "live_projection",
+       "stale stored narration is replaced by the live mission projection")
+    ok("0 of 1 linked task complete" in (ms_stale.get("ceo_narrative") or ""),
+       "live replacement uses the current progress counters")
+    ok((ms_stale.get("ceo_narrative_raw") or "").startswith("CEO narration #1"),
+       "stale stored narration remains audit history but is not the display value")
     dres2 = narrate.run_deliverables(project=PROJECT, _llm_fn=dllm)
     ok(dllm.calls == 2 and len(dres2) == 1, "changed fingerprint triggers one header regeneration")
     ms_fresh = store.get_mission_status(project=PROJECT, deliverable_id="nar-deliverable")
