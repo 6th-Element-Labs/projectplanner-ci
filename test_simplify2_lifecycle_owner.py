@@ -106,6 +106,11 @@ ok(all(unit in redeploy for unit in (
     "projectplanner-coordinator-merge.timer",
     "projectplanner-coordinator-merge.service",
 )), "redeploy explicitly retires stale split lifecycle units")
+aux_units = redeploy.split("AUX_UNITS=(", 1)[1].split(")", 1)[0]
+ok("projectplanner-coordinator-autopilot.service" in aux_units
+   and 'systemctl is-active --quiet "$u"' in redeploy
+   and 'systemctl restart "$u"' in redeploy,
+   "redeploy restarts the active unified lifecycle owner after updating its code")
 ok('"decision_stream"' in daemon
    and "review_steward.steward_project" in daemon
    and "merge_steward.steward_project" in daemon,

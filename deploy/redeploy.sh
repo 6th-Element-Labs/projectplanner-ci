@@ -44,6 +44,7 @@ PRE_DELIVERABLES_CUT_SERVICES=(projectplanner-gateway projectplanner-mcp "${CUT_
 # `sudo systemctl enable --now <unit>` — this is a redeploy, not first-time provisioning.
 # First Auth/Tasks cutover: enable cut units BEFORE reloading Caddy (see PROVISION.md).
 AUX_UNITS=(projectplanner-agent-host.service
+    projectplanner-coordinator-autopilot.service
     projectplanner-monitors.timer projectplanner-reconcile.timer
     projectplanner-coordinator-audit.timer projectplanner-claim-gate.timer
     projectplanner-narrate.timer projectplanner-digest.timer projectplanner-inbox.timer
