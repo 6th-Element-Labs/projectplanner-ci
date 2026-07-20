@@ -130,6 +130,12 @@ def _snapshot(meta):
         "cwd": cwd,
         "branch": _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd),
         "head_sha": _git(["rev-parse", "HEAD"], cwd),
+        "origin_url": _git(["remote", "get-url", "origin"], cwd),
+        "upstream": _git(
+            ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd),
+        "status_porcelain": _git(
+            ["status", "--porcelain=v1", "--untracked-files=all"], cwd),
+        "diff_check": _git(["diff", "--check", "HEAD"], cwd),
         "log_tail": _tail(meta.get("log_path", "")),
     }
 

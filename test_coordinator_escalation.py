@@ -108,6 +108,13 @@ try:
     ok(second.get("deduped") and not second.get("delivered"),
        "same exception in the same dedupe window is not re-sent")
 
+    later = esc.deliver_human_escalation(
+        plan, store_mod=store, actor="agent/coordinator",
+        alert_to="switchboard/operator", notify_outbound=True,
+        now=1_700_000_000.0 + esc.DEFAULT_DEDUPE_WINDOW_S * 2)
+    ok(later.get("deduped") and not later.get("delivered"),
+       "unchanged escalation signature is not re-sent in a later time window")
+
     audit = store.audit_export(project="switchboard")
     ok(any(a.get("kind") == esc.ACTIVITY_KIND for a in audit.get("activity") or []),
        "activity log records coordinator.escalation")

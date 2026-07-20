@@ -530,7 +530,14 @@ try:
             }
         """)
         page.locator('.mission-dag-node[data-linked-task="FAKE-TASK-1"]').click()
-        page.wait_for_timeout(300)
+        # The delegated click performs an async runner lookup before reopening
+        # the sidecar.  A fixed 300 ms delay was fast enough locally but raced
+        # under the full GitHub runner load.  Wait for the user-visible state
+        # this assertion actually cares about instead.
+        page.wait_for_function("""
+            () => !document.getElementById('runner-pty-panel').hidden
+                && TeepPlan._runnerPtyLast?.taskId === 'FAKE-TASK-1'
+        """, timeout=5_000)
         clicked_reopen = page.evaluate("""
             () => ({
                 visible: !document.getElementById('runner-pty-panel').hidden,

@@ -906,6 +906,9 @@ def register_runner_session(rec, wake, inventory):
         "source_sha": execution.get("source_sha"),
         "execution_connection_id": execution.get("execution_connection_id"),
     }
+    host_preflight = _host_repo_preflight(rec, inventory, metadata)
+    if host_preflight:
+        metadata["host_repo_preflight"] = host_preflight
     # Prefer explicit host/<instance-id> from inventory; never invent task-row EC2 ids.
     host_id = inventory.get("host_id") or ""
     body = {
@@ -936,6 +939,75 @@ def register_runner_session(rec, wake, inventory):
         body["require_task_bind"] = True
         return _require("POST", P_REGISTER_RUNNER, body)
     return _try("POST", P_REGISTER_RUNNER, body)
+
+
+def _host_repo_preflight(rec, inventory, metadata=None):
+    """Return a host-attested Git snapshot for a host-local Work Session.
+
+    The coordinator cannot stat a Mac/AWS worker path.  The authenticated Agent
+    Host already owns the runner heartbeat, so attach the supervisor's local Git
+    snapshot to that same heartbeat and let the coordinator validate the binding.
+    """
+    rec = dict(rec or {})
+    metadata = dict(metadata or rec.get("metadata") or {})
+    runner_session_id = str(rec.get("runner_session_id") or "").strip()
+    work_session_id = str(
+        metadata.get("work_session_id") or rec.get("work_session_id") or "").strip()
+    if not runner_session_id or not work_session_id:
+        return None
+    try:
+        result = supervisor_action("snapshot", runner_session_id)
+    except Exception:
+        return None
+    if not isinstance(result, dict) or result.get("error"):
+        return None
+    snap = dict(result.get("last_snapshot") or result.get("snapshot") or result)
+    cwd = str(snap.get("cwd") or rec.get("cwd") or "").strip()
+    branch = str(snap.get("branch") or "").strip()
+    head_sha = str(snap.get("head_sha") or "").strip().lower()
+    status_porcelain = str(snap.get("status_porcelain") or "")
+    diff_check = str(snap.get("diff_check") or "")
+    findings = []
+    if not cwd or not branch or not re.fullmatch(r"[0-9a-f]{40}", head_sha):
+        findings.append({
+            "code": "host_git_snapshot_incomplete",
+            "message": "Agent Host could not resolve workspace, branch, and head SHA.",
+            "failure_class": "missing_data", "severity": "high", "blocking": True,
+        })
+    if status_porcelain:
+        findings.append({
+            "code": "dirty_worktree",
+            "message": "Agent Host reports uncommitted workspace changes.",
+            "failure_class": "dirty_work_session", "severity": "high", "blocking": True,
+        })
+    if diff_check:
+        findings.append({
+            "code": "git_diff_check_failed",
+            "message": "Agent Host git diff --check failed.",
+            "failure_class": "conflict_markers", "severity": "high", "blocking": True,
+        })
+    blocking = any(item.get("blocking") for item in findings)
+    return {
+        "schema": "switchboard.repo_preflight.v1",
+        "attestation_schema": "switchboard.agent_host_repo_preflight.v1",
+        "source": "agent_host_attestation",
+        "captured_at": float(snap.get("captured_at") or time.time()),
+        "host_id": str((inventory or {}).get("host_id") or rec.get("host_id") or ""),
+        "runner_session_id": runner_session_id,
+        "work_session_id": work_session_id,
+        "task_id": str(rec.get("task_id") or snap.get("task_id") or "").upper(),
+        "agent_id": str(rec.get("agent_id") or snap.get("agent_id") or ""),
+        "repo_path": cwd,
+        "branch": branch,
+        "head_sha": head_sha,
+        "origin_url": str(snap.get("origin_url") or ""),
+        "upstream": str(snap.get("upstream") or ""),
+        "dirty": bool(status_porcelain),
+        "conflict_marker_count": 1 if diff_check else 0,
+        "findings": findings,
+        "verdict": "deny" if blocking else "pass",
+        "ok": not blocking,
+    }
 
 
 def report_cloud_usage(rec, wake):
@@ -1608,6 +1680,10 @@ def renew_live_direct_runners(inventory):
             # flickering out of Watch between successful renewals.
             "heartbeat_ttl_s": 180,
         }
+        host_preflight = _host_repo_preflight(
+            session, inventory, body["metadata"])
+        if host_preflight:
+            body["metadata"]["host_repo_preflight"] = host_preflight
         result = _try("POST", P_HEARTBEAT_RUNNER, body)
         renewed.append({
             "runner_session_id": session.get("runner_session_id"),

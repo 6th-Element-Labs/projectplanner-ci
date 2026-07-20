@@ -468,9 +468,15 @@ def format_human_notification(plan: Dict[str, Any]) -> str:
 
 
 def _dedupe_idem_key(plan: Dict[str, Any], *, alert_to: str, window: int) -> str:
+    # A signature already identifies the material escalation state.  Including
+    # an hourly bucket here caused unchanged exceptions to page the operator
+    # again every hour (and twice when ticks straddled a bucket boundary).
+    # Keep ``window`` in the call contract for receipt compatibility, but do not
+    # make time passage alone a reason to send another email.
+    del window
     return (
         f"coord-esc:{plan.get('project_id')}:{plan.get('escalation_class')}:"
-        f"{plan.get('task_id') or '-'}:{plan.get('signature')}:{alert_to}:{window}"
+        f"{plan.get('task_id') or '-'}:{plan.get('signature')}:{alert_to}"
     )
 
 

@@ -1400,15 +1400,35 @@ def preflight_work_session(work_session_id: str, actor: str = "system",
     worktree_path = session.get("worktree_path") or session.get("clone_path") or ""
     if not worktree_path:
         return {"error": "work_session_missing_path", "work_session_id": work_session_id}
-    report = _store_facade().repo_preflight(
-        worktree_path,
-        project=project,
-        task_id=session.get("task_id") or "",
-        agent_id=session.get("agent_id") or "",
-        repo_role=session.get("repo_role") or "canonical",
-        expected_branch=expected_branch or session.get("branch") or "",
-        expected_base_ref=expected_base_ref,
-    )
+    if os.path.isdir(os.path.abspath(os.path.expanduser(worktree_path))):
+        report = _store_facade().repo_preflight(
+            worktree_path,
+            project=project,
+            task_id=session.get("task_id") or "",
+            agent_id=session.get("agent_id") or "",
+            repo_role=session.get("repo_role") or "canonical",
+            expected_branch=expected_branch or session.get("branch") or "",
+            expected_base_ref=expected_base_ref,
+        )
+    else:
+        report = _remote_host_preflight(
+            session,
+            project=project,
+            expected_branch=expected_branch or session.get("branch") or "",
+            expected_base_ref=expected_base_ref,
+        )
+        if report is None:
+            # Preserve the original fail-closed result when no fresh, exact host
+            # attestation is bound to this Work Session.
+            report = _store_facade().repo_preflight(
+                worktree_path,
+                project=project,
+                task_id=session.get("task_id") or "",
+                agent_id=session.get("agent_id") or "",
+                repo_role=session.get("repo_role") or "canonical",
+                expected_branch=expected_branch or session.get("branch") or "",
+                expected_base_ref=expected_base_ref,
+            )
     try:
         from switchboard.storage.repositories.preflight_runs import record_preflight_run
         recorded = record_preflight_run(
@@ -1446,6 +1466,94 @@ def preflight_work_session(work_session_id: str, actor: str = "system",
         "preflight_run": recorded,
         "updated": updated,
     }
+
+
+def _remote_host_preflight(session: Dict[str, Any], *, project: str,
+                           expected_branch: str = "",
+                           expected_base_ref: str = "") -> Optional[Dict[str, Any]]:
+    """Validate a fresh Agent Host Git attestation for a host-local workspace."""
+    now = time.time()
+    task_id = str(session.get("task_id") or "").upper()
+    agent_id = str(session.get("agent_id") or "")
+    work_session_id = str(session.get("work_session_id") or "")
+    with _conn(project) as c:
+        rows = c.execute(
+            "SELECT * FROM runner_sessions WHERE task_id=? AND agent_id=? "
+            "AND status IN ('ready','running') ORDER BY heartbeat_at DESC LIMIT 8",
+            (task_id, agent_id),
+        ).fetchall()
+    for row in rows:
+        runner = dict(row)
+        metadata = _json_obj(runner.get("metadata_json"), {})
+        if str(metadata.get("work_session_id") or "") != work_session_id:
+            continue
+        attested = metadata.get("host_repo_preflight")
+        if not isinstance(attested, dict):
+            continue
+        report = copy.deepcopy(attested)
+        findings = list(report.get("findings") or [])
+        ttl = max(10, int(runner.get("heartbeat_ttl_s") or 60))
+        captured_at = float(report.get("captured_at") or 0)
+        expected = {
+            "host_id": str(runner.get("host_id") or ""),
+            "runner_session_id": str(runner.get("runner_session_id") or ""),
+            "work_session_id": work_session_id,
+            "task_id": task_id,
+            "agent_id": agent_id,
+            "repo_path": str(session.get("worktree_path") or session.get("clone_path") or ""),
+            "branch": str(expected_branch or session.get("branch") or ""),
+        }
+        for field, value in expected.items():
+            actual = str(report.get(field) or "")
+            if field == "task_id":
+                actual = actual.upper()
+            if actual != value:
+                findings.append({
+                    "code": f"host_preflight_{field}_mismatch",
+                    "message": f"Agent Host preflight {field} does not match the bound session.",
+                    "failure_class": "failed_gate", "severity": "high", "blocking": True,
+                    "details": {"expected": value, "actual": actual},
+                })
+        if (float(runner.get("heartbeat_at") or 0) + ttl <= now
+                or captured_at <= 0 or captured_at + max(ttl, 180) <= now):
+            findings.append({
+                "code": "host_preflight_stale",
+                "message": "Agent Host preflight attestation is stale.",
+                "failure_class": "stale_branch", "severity": "high", "blocking": True,
+            })
+        head_sha = str(report.get("head_sha") or "").lower()
+        if not re.fullmatch(r"[0-9a-f]{40}", head_sha):
+            findings.append({
+                "code": "host_preflight_head_invalid",
+                "message": "Agent Host preflight has no valid exact head SHA.",
+                "failure_class": "missing_data", "severity": "high", "blocking": True,
+            })
+        topology = get_project_repo_topology(project)
+        role = ((topology.get("roles") or {}).get(session.get("repo_role") or "canonical") or {})
+        expected_repo = _repo_remote_slug(str(role.get("repo") or ""))
+        actual_repo = _repo_remote_slug(str(report.get("origin_url") or ""))
+        if expected_repo and actual_repo.lower() != expected_repo.lower():
+            findings.append({
+                "code": "host_preflight_repo_mismatch",
+                "message": "Agent Host origin does not match the project repo role.",
+                "failure_class": "wrong_repo", "severity": "high", "blocking": True,
+                "details": {"expected": expected_repo, "actual": actual_repo},
+            })
+        blocking = any(bool(item.get("blocking", True)) for item in findings)
+        report.update({
+            "schema": "switchboard.repo_preflight.v1",
+            "source": "agent_host_attestation",
+            "project": project,
+            "repo_role": session.get("repo_role") or "canonical",
+            "expected_branch": expected_branch,
+            "expected_base_ref": expected_base_ref,
+            "findings": findings,
+            "ok": not blocking,
+            "verdict": "deny" if blocking else "pass",
+            "validated_at": now,
+        })
+        return report
+    return None
 
 
 def _coerce_work_session_payload(value: Any) -> Tuple[Dict[str, Any], str]:
