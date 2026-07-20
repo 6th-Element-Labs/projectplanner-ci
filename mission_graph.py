@@ -349,14 +349,14 @@ def render_mermaid_flowchart(nodes: List[Dict[str, Any]],
         "",
         # UI-32: the house palette — soft fills, saturated strokes, near-black
         # text; waiting work recedes (grey text), live work reads at a glance.
-        "  classDef doneNode fill:#eaf7ee,stroke:#2fb344,color:#101114",
-        "  classDef doneUnprovenNode fill:#e6f7f1,stroke:#12b886,color:#101114",
-        "  classDef progressNode fill:#eaf1fa,stroke:#206bc4,color:#101114",
-        "  classDef startFailedNode fill:#fff0e8,stroke:#f76707,color:#101114",
-        "  classDef reviewNode fill:#fff4cc,stroke:#e0a800,color:#101114",
-        "  classDef blockedNode fill:#fdecec,stroke:#d63939,color:#101114",
-        "  classDef todoNode fill:#f6f7f9,stroke:#c9ced6,color:#8b95a5",
-        "  classDef externalNode fill:#fbfbfc,stroke:#adb5bd,color:#8b95a5,stroke-dasharray: 4 2",
+        "  classDef doneNode fill:#a3d9b7,stroke:#1e7e34,color:#101114",
+        "  classDef doneUnprovenNode fill:#a6e3d0,stroke:#12b886,color:#101114",
+        "  classDef progressNode fill:#8fb8fd,stroke:#0b5ed7,color:#101114",
+        "  classDef startFailedNode fill:#ffd8a8,stroke:#f76707,color:#101114",
+        "  classDef reviewNode fill:#ffe083,stroke:#e0a800,color:#101114",
+        "  classDef blockedNode fill:#f5a3a9,stroke:#c82333,color:#101114",
+        "  classDef todoNode fill:#e9ecef,stroke:#6c757d,color:#101114",
+        "  classDef externalNode fill:#f8f9fa,stroke:#adb5bd,color:#8b95a5,stroke-dasharray: 4 2",
     ])
     by_class: Dict[str, List[str]] = {}
     node_styles: Dict[str, List[str]] = {}   # mid -> extra style props, merged into one line
