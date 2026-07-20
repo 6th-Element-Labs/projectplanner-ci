@@ -9,10 +9,13 @@ Source-agnostic — takes a simulated email today and Slack later.
 """
 import email.utils
 import os
+from dataclasses import replace
 
 import intake
 import notify
 import store
+from switchboard.application.adapters.legacy_maxwell_default import project_context as maxwell_context
+from switchboard.application.queries.project_scope import require_explicit_project
 
 
 def _autonomous():
@@ -29,12 +32,13 @@ def _self_addrs():
     return out
 
 
-def _learn_contacts(*raw_header_values):
+def _learn_contacts(project_context, *raw_header_values):
     """Record every name<->email seen on the thread so the agent can resolve names later."""
     for raw in raw_header_values:
         for name, addr in email.utils.getaddresses([raw or ""]):
             if addr and "@" in addr:
-                store.upsert_contact(addr, (name or "").strip())
+                store.upsert_contact(addr, (name or "").strip(),
+                                     project=project_context.project_id)
 
 
 def _re_subject(subject):
@@ -122,7 +126,13 @@ def _dispatch_note(dispatched):
     return ("\n\n" + "\n".join(parts)) if parts else ""
 
 
-def _compose_reply(summary, applied):
+def _project_identity(project_context):
+    project_id = project_context.project_id
+    label = project_context.label or project_id
+    return {"id": project_id, "label": str(label)}
+
+
+def _compose_reply(summary, applied, project_context):
     lines = [summary or "Processed your message."]
     u, c = applied.get("updated", []), applied.get("created", [])
     if u or c:
@@ -131,11 +141,12 @@ def _compose_reply(summary, applied):
             lines.append("Applied — updated: " + ", ".join(u))
         if c:
             lines.append("Applied — created: " + ", ".join(c))
-    lines += ["", "— Maxwell · Project Maxwell assistant (plan.taikunai.com)"]
+    identity = _project_identity(project_context)
+    lines += ["", f"— {identity['label']} · {identity['label']} assistant (plan.taikunai.com)"]
     return "\n".join(lines)
 
 
-def _compose_review_reply(summary, proposals, new_tasks):
+def _compose_review_reply(summary, proposals, new_tasks, project_context):
     """Reply for REVIEW mode (PM_INBOX_AUTONOMOUS=0): nothing applied — tell the forwarder
     what was QUEUED for their confirmation, with a link to the Action Queue."""
     lines = [summary or "I reviewed your message."]
@@ -152,26 +163,38 @@ def _compose_review_reply(summary, proposals, new_tasks):
         lines += parts
     else:
         lines += ["", "No plan changes proposed — filed for reference."]
+    identity = _project_identity(project_context)
     lines += ["", "Review, edit & confirm in the Action Queue: https://plan.taikunai.com",
-              "", "— Maxwell · Project Maxwell assistant"]
+              "", f"— {identity['label']} · {identity['label']} assistant"]
     return "\n".join(lines)
 
 
-def process(source, external_id, sender, subject, text, headers=None, project=None):
+def process(source, external_id, sender, subject, text, headers=None, project=None,
+            project_context=None):
     """Dedupe -> ingest+triage -> (autonomous) apply + reply-all, else queue. Returns the item.
     headers={from,to,cc,date,message_id} drives recipient routing + threading. `project` scopes
     the whole pipeline — dedupe, corpus ingest, triage grounding, applied changes, and the inbox
     row all land on that project's board (the poller resolves it from sender/recipient routing)."""
-    project = project or store.DEFAULT_PROJECT
+    if project_context is None:
+        project_context = (require_explicit_project(project, source="inbox-routing")
+                           if (project or "").strip() else maxwell_context(label="Maxwell"))
+    project = project_context.project_id
+    if not project_context.label:
+        project_context = replace(
+            project_context,
+            label=str(store.get_meta("project", project, project=project) or project),
+        )
     if store.inbox_exists(source, external_id, project=project):
         return None
     headers = headers or {}
     headers.setdefault("from", sender)
-    _learn_contacts(headers.get("from") or sender, headers.get("to"), headers.get("cc"))
+    _learn_contacts(project_context, headers.get("from") or sender,
+                    headers.get("to"), headers.get("cc"))
     triage_error = ""
     try:
         result = intake.ingest_and_triage("email", subject or source, text,
-                                          applied_mode=_autonomous(), headers=headers, project=project)
+                                          applied_mode=_autonomous(), headers=headers, project=project,
+                                          project_context=project_context)
     except Exception as e:
         # A triage/LLM outage must never drop inbound mail: queue the raw item for
         # human review (no apply, no auto-reply) and record why triage is missing.
@@ -192,7 +215,7 @@ def process(source, external_id, sender, subject, text, headers=None, project=No
         to, cc = _recipients(sender, headers, result.get("recipients"))
         if to:
             try:
-                body = (_compose_reply(result.get("summary"), applied)
+                body = (_compose_reply(result.get("summary"), applied, project_context)
                         + _dispatch_note(dispatched) + _quoted_history(headers, text))
                 mid = headers.get("message_id")
                 reply_res = notify.reply(to, _re_subject(subject), body, cc=cc,
@@ -207,7 +230,8 @@ def process(source, external_id, sender, subject, text, headers=None, project=No
             to = [sender_addr]
             try:
                 body = (_compose_review_reply(result.get("summary"), triage["proposals"],
-                                              triage["new_tasks"]) + _quoted_history(headers, text))
+                                              triage["new_tasks"], project_context)
+                        + _quoted_history(headers, text))
                 mid = headers.get("message_id")
                 reply_res = notify.reply(to, _re_subject(subject), body, cc=cc,
                                          in_reply_to=mid, references=mid)

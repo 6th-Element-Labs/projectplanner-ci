@@ -117,23 +117,28 @@ _SEED_CONTACTS = {
 }
 
 
-def get_contacts() -> Dict[str, str]:
-    c = get_meta("contacts")
-    if not c:
+def get_contacts(project: str = DEFAULT_PROJECT) -> Dict[str, str]:
+    """Return contacts isolated to one project database.
+
+    The historical Maxwell seeds are intentionally Maxwell-only.  Seeding them
+    into a newly-created project is a project-boundary leak.
+    """
+    c = get_meta("contacts", project=project)
+    if not c and project == DEFAULT_PROJECT:
         c = dict(_SEED_CONTACTS)
-        set_meta("contacts", c)
-    return c
+        set_meta("contacts", c, project=project)
+    return c if isinstance(c, dict) else {}
 
 
-def upsert_contact(email: str, name: Optional[str] = None):
+def upsert_contact(email: str, name: Optional[str] = None, project: str = DEFAULT_PROJECT):
     email = (email or "").strip().lower()
     if not email or "@" not in email:
         return
-    c = get_contacts()
+    c = get_contacts(project=project)
     name = (name or "").strip()
     if email not in c or (name and not c.get(email)):
         c[email] = name or c.get(email) or email
-        set_meta("contacts", c)
+        set_meta("contacts", c, project=project)
 
 
 def activity_since(ts: float) -> List[Dict[str, Any]]:

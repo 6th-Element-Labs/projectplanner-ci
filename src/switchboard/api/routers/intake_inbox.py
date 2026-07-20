@@ -12,6 +12,7 @@ import inbox as inbox_mod
 import intake
 import store
 import transcribe
+from switchboard.domain.projects.context import ProjectContext
 
 
 ProjectResolver = Callable[[str], str]
@@ -174,13 +175,17 @@ def create_router(*, resolve_project: ProjectResolver, sibling_bc_only: bool = F
         if not text:
             raise HTTPException(400, "text required")
         project = resolve_project(body.get("project") or project)
+        # resolve_project is the ingress authority.  Thread its immutable result;
+        # do not perform a second registry lookup below the router.
+        project_context = ProjectContext(project_id=project, source="inbox-simulate")
         sender = body.get("sender") or "tester@taikunai.com"
         headers = {"from": sender, "to": body.get("to") or "", "cc": body.get("cc") or "",
                    "date": body.get("date") or "", "message_id": body.get("message_id") or ""}
         try:
             item = await asyncio.to_thread(
                 inbox_mod.process, "email-sim", "sim-" + os.urandom(6).hex(),
-                sender, body.get("subject") or "(simulated)", text, headers, project)
+                sender, body.get("subject") or "(simulated)", text, headers, None,
+                project_context)
         except Exception as e:
             raise HTTPException(502, f"inbox error: {e}")
         return item or {"deduped": True}

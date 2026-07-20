@@ -33,6 +33,7 @@ import attachments
 import inbox
 import scripts.switchboard_path  # noqa: F401
 from switchboard.integrations import inbox_routing
+from switchboard.domain.projects.context import ProjectContext
 
 log = logging.getLogger("inbox_source")
 
@@ -132,8 +133,11 @@ def poll(max_msgs=20):
                 "date": _decode(msg.get("Date")),
                 "message_id": msg.get("Message-ID"),
             }
+            # route() already resolved and validated the project against its routing
+            # index; preserve that one decision instead of consulting the registry again.
+            project_context = ProjectContext(project_id=project, source="inbox-routing")
             if inbox.process("email", mid, sender, subject, _message_text(msg),
-                             headers=headers, project=project):
+                             headers=headers, project_context=project_context):
                 queued += 1
         return {"polled": len(ids), "queued": queued, "disabled": False}
     finally:

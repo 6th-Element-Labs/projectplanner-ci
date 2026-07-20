@@ -204,10 +204,16 @@ _PROPOSABLE = ["title", "description", "status", "assignee", "owner_org", "owner
                "entry_criteria", "exit_criteria", "deliverable"]
 
 
-def _project_voice(project: str):
-    project_item = next((item for item in store.projects() if item["id"] == project), {})
-    label = project_item.get("label") or project
-    purpose = project_item.get("purpose") or store.project_access(project).get("purpose") or "its project outcomes"
+def _project_voice(project: str, label: str = ""):
+    # Inbound triage arrives with an already validated ProjectContext.  Do not
+    # re-read the shared registry while constructing its prompt.
+    if label:
+        purpose = store.get_meta("project_purpose", "its project outcomes", project=project)
+    else:
+        project_item = next((item for item in store.projects() if item["id"] == project), {})
+        label = project_item.get("label") or project
+        purpose = (project_item.get("purpose") or store.project_access(project).get("purpose")
+                   or "its project outcomes")
     if project == "helm":
         return {
             "who": "the Helm assistant",
@@ -520,12 +526,12 @@ def _result(answer, proposals, new_tasks, sources, recipients=None, dispatch_tar
             "sources": list(dict.fromkeys(sources))}
 
 
-def _system_triage(applied_mode=False, headers=None, project="maxwell"):
+def _system_triage(applied_mode=False, headers=None, project="maxwell", project_context=None):
     today = time.strftime("%Y-%m-%d")
     proj = store.get_meta("project", project=project) or project
-    voice = _project_voice(project)
-    contacts = (store.get_contacts() if project == "maxwell" else
-                (store.get_meta("contacts", {}, project=project) or {}))
+    voice = _project_voice(project, getattr(project_context, "label", ""))
+    contacts = ((store.get_contacts() if project == "maxwell"
+                 else store.get_contacts(project=project)) or {})
     contacts_text = ", ".join(f"{n} <{e}>" for e, n in
                               sorted(contacts.items(), key=lambda kv: (kv[1] or kv[0]))) or "(none)"
     h = headers or {}
@@ -574,10 +580,13 @@ def _system_triage(applied_mode=False, headers=None, project="maxwell"):
     )
 
 
-def triage(kind, title, text, applied_mode=False, headers=None, project="maxwell"):
+def triage(kind, title, text, applied_mode=False, headers=None, project="maxwell",
+           project_context=None):
     """Triage an inbound artifact against the plan. Returns {answer(summary), proposals, new_tasks,
     recipients, sources}. headers={from,to,cc,date} lets the agent reply-all / route to named people.
     project scopes the grounding tools (doc_search / search_tasks / get_task) to that board."""
+    if project_context is not None:
+        project = project_context.project_id
     artifact = f"INBOUND {kind.upper()}" + (f" — {title}" if title else "") + ":\n\n" + (text or "")
-    return run(None, artifact, system=_system_triage(applied_mode, headers, project), max_iters=TRIAGE_ITERS,
+    return run(None, artifact, system=_system_triage(applied_mode, headers, project, project_context), max_iters=TRIAGE_ITERS,
                project=project)

@@ -17,7 +17,9 @@ log = logging.getLogger("intake")
 
 
 def ingest_and_triage(kind, title, text, ingest=True, applied_mode=False, headers=None,
-                      project=None):
+                      project=None, project_context=None):
+    if project_context is not None:
+        project = project_context.project_id
     project = project or store.DEFAULT_PROJECT
     kind = (kind or "note").strip()
     title = (title or "").strip()
@@ -30,7 +32,8 @@ def ingest_and_triage(kind, title, text, ingest=True, applied_mode=False, header
     if redacted:
         log.warning("intake: redacted %d secret value(s) from %s before ingest/triage", redacted, label)
     chunks = rag.add_document(kind, label, text, project=project) if (ingest and text.strip()) else 0
-    result = agent.triage(kind, title, text, applied_mode=applied_mode, headers=headers, project=project)
+    result = agent.triage(kind, title, text, applied_mode=applied_mode, headers=headers,
+                          project=project, project_context=project_context)
     return {
         "summary": result.get("answer"),
         "proposals": result.get("proposals", []),
