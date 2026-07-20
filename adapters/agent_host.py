@@ -1749,6 +1749,60 @@ _TERMINAL_RUNNER_STATES = frozenset({
 })
 
 
+def converge_terminal_task_runners(inventory, heartbeat):
+    """Kill and acknowledge processes whose tasks are already terminal.
+
+    The server repeats a directive until this host publishes the terminal
+    runner heartbeat, making cleanup idempotent across a lost response or host
+    restart. Supervisor logs and PTY metadata are retained.
+    """
+    host_id = str((inventory or {}).get("host_id") or "")
+    cleanup = (heartbeat or {}).get("terminal_runner_cleanup") or {}
+    directives = cleanup.get("sessions") or []
+    outcomes = []
+    for directive in directives if isinstance(directives, list) else []:
+        runner_session_id = str(directive.get("runner_session_id") or "")
+        task_id = str(directive.get("task_id") or "")
+        if not runner_session_id or not task_id:
+            continue
+        health = supervisor_action("health", runner_session_id)
+        alive = bool(health and not health.get("error") and health.get("alive"))
+        killed = supervisor_action("kill", runner_session_id, {
+            "reason": directive.get("reason") or "task is terminal",
+            "task_id": task_id,
+        }) if alive else {"status": "already_exited", "alive": False}
+        kill_ok = not killed.get("error") and killed.get("alive") is not True
+        if kill_ok:
+            _drop_host_bridge(runner_session_id)
+        terminal = None
+        if kill_ok:
+            terminal_status = (
+                "completed" if directive.get("task_status") == "Done" else "cancelled"
+            )
+            terminal = _try("POST", P_HEARTBEAT_RUNNER, {
+                "project": PROJECT,
+                "runner_session_id": runner_session_id,
+                "host_id": host_id,
+                "task_id": task_id,
+                "status": terminal_status,
+                "metadata": {
+                    "terminalized_by": "terminal_task",
+                    "terminal_task_status": directive.get("task_status"),
+                    "terminal_cleanup_reason": directive.get("reason"),
+                },
+            })
+        outcomes.append({
+            "runner_session_id": runner_session_id,
+            "task_id": task_id,
+            "task_status": directive.get("task_status"),
+            "killed": kill_ok,
+            "terminalized": bool(terminal and not terminal.get("error")),
+            "error": killed.get("error") or (
+                (terminal or {}).get("error") if isinstance(terminal, dict) else None),
+        })
+    return outcomes
+
+
 def renew_live_direct_runners(inventory):
     """Keep browser Watch/Chat bound to every live Mac Codex PTY.
 
@@ -2473,6 +2527,13 @@ def run_once(inventory):
         advertised = _try("POST", P_REGISTER_HOST, registration_inventory(inventory))
         apply_authoritative_execution_policy(inventory, advertised)
         capacity = heartbeat_capacity(inventory)
+    terminal_runner_cleanup = converge_terminal_task_runners(inventory, heartbeat)
+    if terminal_runner_cleanup:
+        capacity = heartbeat_capacity(inventory)
+        heartbeat = _try("POST", P_HEARTBEAT_HOST, {
+            "project": PROJECT, "host_id": host_id,
+            "active_sessions": capacity["active_sessions"], "capacity": capacity,
+        }) or heartbeat
     runner_heartbeats = renew_live_direct_runners(inventory)
     local_auth = capacity.get("local_auth")
     if isinstance(local_auth, dict) and local_auth.get("available") is not True:
@@ -2483,6 +2544,7 @@ def run_once(inventory):
             "refused": [],
             "runner_controls": [],
             "runner_heartbeats": runner_heartbeats,
+            "terminal_runner_cleanup": terminal_runner_cleanup,
             "auth_available": False,
         }
     recovery = None
@@ -2513,6 +2575,7 @@ def run_once(inventory):
             "acted": finalized,
             "refused": [],
             "runner_controls": [],
+            "terminal_runner_cleanup": terminal_runner_cleanup,
             "postprocessing_recovery": recovery,
         }
     controls = handle_runner_controls(inventory)
@@ -2907,6 +2970,7 @@ def run_once(inventory):
             "refused": refused,
             "runner_controls": controls,
             "runner_heartbeats": runner_heartbeats,
+            "terminal_runner_cleanup": terminal_runner_cleanup,
             "postprocessing_recovery": recovery}
 
 

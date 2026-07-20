@@ -3208,6 +3208,11 @@ def heartbeat_host(host_id: str, active_sessions: Optional[int] = None,
                 current.update(capacity)
             if active_sessions is not None:
                 current["active_sessions"] = int(active_sessions)
+            runtime_profile = current.get("runtime_profile") or {}
+            profile_components = runtime_profile.get("components") or {}
+            reported_host_version = str(
+                profile_components.get("agent_host_version") or ""
+            ).strip()
             stored_runtimes = _json_obj(row["runtimes_json"], [])
             stored_limits = _json_obj(row["limits_json"], {})
             inventory_error = _enrollment_inventory_error(
@@ -3216,11 +3221,15 @@ def heartbeat_host(host_id: str, active_sessions: Optional[int] = None,
             if inventory_error:
                 return inventory_error
             c.execute(
-                "UPDATE agent_hosts SET heartbeat_at=?, capacity_json=?, status=?, last_error=? "
+                "UPDATE agent_hosts SET heartbeat_at=?, capacity_json=?, status=?, last_error=?, "
+                "agent_host_version=CASE WHEN ?!='' THEN ? ELSE agent_host_version END "
                 "WHERE host_id=?",
                 (now, json.dumps(current, sort_keys=True), status or "online",
-                 last_error or None, host_id),
+                 last_error or None, reported_host_version, reported_host_version, host_id),
             )
+            from .runner import terminal_task_cleanup_for_host_in
+            terminal_cleanup = terminal_task_cleanup_for_host_in(
+                c, host_id, actor, now)
             c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                       (None, actor, "agent_host.heartbeat",
                        json.dumps({"host_id": host_id, "capacity": current,
@@ -3231,6 +3240,7 @@ def heartbeat_host(host_id: str, active_sessions: Optional[int] = None,
             return _control_plane_unavailable("heartbeat_host", project, started_at, exc)
         raise
     result = _host_row(row, now=now)
+    result["terminal_runner_cleanup"] = terminal_cleanup
     if identity.get("required"):
         result["authoritative_execution_policy"] = dict(
             identity.get("execution_policy") or {})

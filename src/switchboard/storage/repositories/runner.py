@@ -45,6 +45,7 @@ __all__ = [
     "upsert_runner_session",
     "list_runner_sessions",
     "get_runner_session",
+    "terminal_task_cleanup_for_host_in",
     "runner_bind_tuple",
     "missing_runner_bind_fields",
     "runner_bind_incomplete",
@@ -67,6 +68,109 @@ __all__ = [
     "claim_runner_control_request",
     "complete_runner_control_request",
 ]
+
+
+def terminal_task_cleanup_for_host_in(
+        c: sqlite3.Connection, host_id: str, actor: str,
+        now: Optional[float] = None) -> Dict[str, Any]:
+    """Project terminal task truth into its live host-owned execution rows.
+
+    The host consumes these directives and kills the supervised process. Until
+    it acknowledges that kill, the central runner stays non-terminal so a lost
+    heartbeat response is retried. Work Sessions and leases close immediately
+    because the task is already the stronger lifecycle authority.
+    """
+    now = time.time() if now is None else float(now)
+    host_id = str(host_id or "").strip()
+    empty = {
+        "schema": "switchboard.terminal_runner_cleanup.v1",
+        "host_id": host_id,
+        "sessions": [],
+        "session_count": 0,
+        "closed_work_session_count": 0,
+        "released_resource_lease_count": 0,
+        "released_file_lease_count": 0,
+    }
+    if not host_id:
+        return empty
+    terminal_tasks = ("Done", "Cancelled", "Canceled")
+    terminal_runners = tuple(sorted(RUNNER_TERMINAL_STATUSES))
+    task_marks = ",".join("?" for _ in terminal_tasks)
+    runner_marks = ",".join("?" for _ in terminal_runners)
+    rows = c.execute(
+        "SELECT r.runner_session_id,r.task_id,r.status,r.metadata_json,t.status AS task_status "
+        "FROM runner_sessions r JOIN tasks t ON t.task_id=r.task_id "
+        f"WHERE r.host_id=? AND t.status IN ({task_marks}) "
+        f"AND lower(r.status) NOT IN ({runner_marks}) "
+        "ORDER BY r.started_at,r.runner_session_id",
+        (host_id, *terminal_tasks, *terminal_runners),
+    ).fetchall()
+    task_statuses = {
+        str(row["task_id"] or ""): str(row["task_status"] or "")
+        for row in rows if row["task_id"]
+    }
+    closed_work_sessions = 0
+    released_resource_leases = 0
+    released_file_leases = 0
+    for task_id, task_status in sorted(task_statuses.items()):
+        changed = c.execute(
+            "UPDATE work_sessions SET status='completed', completed_at=COALESCE(completed_at,?), "
+            "updated_at=?, updated_by=? WHERE task_id=? "
+            "AND status IN ('active','proposed','blocked')",
+            (now, now, actor, task_id),
+        )
+        closed_work_sessions += changed.rowcount
+        released_resource_leases += c.execute(
+            "UPDATE resource_leases SET released_at=? WHERE task_id=? AND released_at IS NULL",
+            (now, task_id),
+        ).rowcount
+        released_file_leases += c.execute(
+            "UPDATE file_leases SET released_at=? WHERE task_id=? AND released_at IS NULL",
+            (now, task_id),
+        ).rowcount
+        if changed.rowcount:
+            c.execute(
+                "INSERT INTO activity(task_id,actor,kind,payload,created_at) VALUES (?,?,?,?,?)",
+                (task_id, actor, "work_session.completed_by_terminal_task",
+                 json.dumps({"closed_count": changed.rowcount,
+                             "terminal_status": task_status}, sort_keys=True), now),
+            )
+    directives: List[Dict[str, Any]] = []
+    for row in rows:
+        metadata = _json_obj(row["metadata_json"], {})
+        first_request = not metadata.get("terminal_cleanup_requested_at")
+        metadata.update({
+            "terminal_cleanup_requested_at": (
+                metadata.get("terminal_cleanup_requested_at") or now),
+            "terminal_cleanup_task_status": row["task_status"],
+        })
+        c.execute(
+            "UPDATE runner_sessions SET metadata_json=?,updated_at=? WHERE runner_session_id=?",
+            (json.dumps(metadata, sort_keys=True), now, row["runner_session_id"]),
+        )
+        directive = {
+            "runner_session_id": row["runner_session_id"],
+            "task_id": row["task_id"],
+            "task_status": row["task_status"],
+            "runner_status": row["status"],
+            "action": "kill",
+            "reason": f"task is terminal: {row['task_status']}",
+        }
+        directives.append(directive)
+        if first_request:
+            c.execute(
+                "INSERT INTO activity(task_id,actor,kind,payload,created_at) VALUES (?,?,?,?,?)",
+                (row["task_id"], actor, "runner.terminal_cleanup_requested",
+                 json.dumps(directive, sort_keys=True), now),
+            )
+    return {
+        **empty,
+        "sessions": directives,
+        "session_count": len(directives),
+        "closed_work_session_count": closed_work_sessions,
+        "released_resource_lease_count": released_resource_leases,
+        "released_file_lease_count": released_file_leases,
+    }
 
 
 def check_direct_task_completion_authority(

@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""BUG-111: terminal tasks release host runners and Work Sessions."""
+from __future__ import annotations
+
+import os
+import shutil
+import tempfile
+from pathlib import Path
+
+from path_setup import ROOT  # noqa: F401
+
+
+TMP = Path(tempfile.mkdtemp(prefix="bug111-terminal-cleanup-"))
+os.environ["PM_DB_PATH"] = str(TMP / "maxwell.db")
+os.environ["PM_HELM_DB_PATH"] = str(TMP / "helm.db")
+os.environ["PM_SWITCHBOARD_DB_PATH"] = str(TMP / "switchboard.db")
+os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = str(TMP / "project_registry.db")
+os.environ["PM_DYNAMIC_PROJECTS_DIR"] = str(TMP)
+os.environ["PM_AUTH_MODE"] = "dev-open"
+
+import store  # noqa: E402
+from adapters import agent_host  # noqa: E402
+from db.connection import _conn  # noqa: E402
+
+
+P = "switchboard"
+passed = failed = 0
+
+
+def ok(condition, message):
+    global passed, failed
+    print(("  PASS  " if condition else "  FAIL  ") + message)
+    passed += int(bool(condition))
+    failed += int(not condition)
+
+
+try:
+    store.init_db(P)
+    task = store.create_task({
+        "workstream_id": "BUG", "title": "terminal runner cleanup proof",
+        "status": "Not Started", "ui_impact": "no",
+    }, actor="bug111-test", project=P)
+    task_id = task["task_id"]
+    host_id = "host/bug111-mac"
+    principal_id = "principal/bug111-host"
+    runner_id = "run_bug111_terminal"
+    work_session = store.create_work_session({
+        "agent_id": f"codex/{task_id}", "task_id": task_id,
+        "repo_role": "canonical", "branch": f"codex/{task_id}-proof",
+        "storage_mode": "worktree", "worktree_path": str(TMP),
+        "status": "active", "dirty_status": "clean",
+        "policy_profile": "code_strict",
+        "hygiene": {"repo_preflight": {"ok": True, "verdict": "pass", "findings": []}},
+    }, actor="bug111-test", project=P)["work_session"]
+    store.register_host({
+        "host_id": host_id, "agent_host_version": "0.2.25",
+        "runtimes": [{"runtime": "codex", "lanes": ["BUG"]}],
+        "limits": {"max_sessions": 8},
+        "capacity": {"active_sessions": 1, "headroom": 7},
+        "heartbeat_ttl_s": 60,
+    }, principal_id=principal_id, actor=host_id, project=P)
+    store.upsert_runner_session({
+        "runner_session_id": runner_id, "host_id": host_id,
+        "agent_id": f"codex/{task_id}", "runtime": "codex",
+        "task_id": task_id, "status": "running", "pid": 111,
+        "metadata": {"work_session_id": work_session["work_session_id"]},
+    }, principal_id=principal_id, actor=host_id, project=P)
+    with _conn(P) as c:
+        c.execute("UPDATE tasks SET status='Done' WHERE task_id=?", (task_id,))
+
+    heartbeat = store.heartbeat_host(
+        host_id, active_sessions=1,
+        capacity={"runtime_profile": {"components": {
+            "agent_host_version": "0.2.27",
+        }}},
+        principal_id=principal_id, actor=host_id, project=P)
+    cleanup = heartbeat.get("terminal_runner_cleanup") or {}
+    ok(heartbeat.get("agent_host_version") == "0.2.27",
+       "heartbeat runtime-profile version repairs the stale top-level host version")
+    ok(cleanup.get("session_count") == 1
+       and cleanup.get("sessions", [{}])[0].get("runner_session_id") == runner_id,
+       "terminal task produces an exact host cleanup directive")
+    closed = store.get_work_session(work_session["work_session_id"], project=P)
+    ok(closed.get("status") == "completed" and closed.get("completed_at"),
+       "terminal task idempotently completes its active Work Session")
+
+    second = store.heartbeat_host(
+        host_id, active_sessions=1,
+        capacity={"runtime_profile": {"components": {
+            "agent_host_version": "0.2.27",
+        }}},
+        principal_id=principal_id, actor=host_id, project=P)
+    ok((second.get("terminal_runner_cleanup") or {}).get(
+        "closed_work_session_count") == 0,
+       "a repeated heartbeat does not complete the Work Session twice")
+    with _conn(P) as c:
+        activity_count = c.execute(
+            "SELECT COUNT(*) FROM activity WHERE task_id=? "
+            "AND kind='runner.terminal_cleanup_requested'", (task_id,),
+        ).fetchone()[0]
+    ok(activity_count == 1,
+       "repeated cleanup delivery records only one request audit event")
+
+    calls = []
+    original_supervisor, original_try = agent_host.supervisor_action, agent_host._try
+
+    def fake_supervisor(action, selected_runner, options=None):
+        calls.append((action, selected_runner, dict(options or {})))
+        if action == "health":
+            return {"alive": True, "status": "running"}
+        return {"alive": False, "status": "killed"}
+
+    def fake_try(method, path, body=None):
+        calls.append((method, path, dict(body or {})))
+        return {"runner_session_id": (body or {}).get("runner_session_id"),
+                "status": (body or {}).get("status")}
+
+    agent_host.supervisor_action = fake_supervisor
+    agent_host._try = fake_try
+    try:
+        outcomes = agent_host.converge_terminal_task_runners(
+            {"host_id": host_id}, heartbeat)
+    finally:
+        agent_host.supervisor_action, agent_host._try = original_supervisor, original_try
+    terminal_posts = [body for method, path, body in calls
+                      if method == "POST" and path == agent_host.P_HEARTBEAT_RUNNER]
+    ok(outcomes and outcomes[0].get("killed") and outcomes[0].get("terminalized"),
+       "the Agent Host kills and acknowledges the terminal runner")
+    ok(terminal_posts and terminal_posts[0].get("status") == "completed"
+       and terminal_posts[0].get("metadata", {}).get("terminalized_by") == "terminal_task",
+       "the acknowledgement preserves successful task semantics and cleanup provenance")
+
+    store.upsert_runner_session({
+        "runner_session_id": runner_id, "host_id": host_id,
+        "task_id": task_id, "status": "completed",
+        "metadata": {"terminalized_by": "terminal_task"},
+    }, principal_id=principal_id, actor=host_id, project=P)
+    final_heartbeat = store.heartbeat_host(
+        host_id, active_sessions=0, principal_id=principal_id,
+        actor=host_id, project=P)
+    ok((final_heartbeat.get("terminal_runner_cleanup") or {}).get("session_count") == 0,
+       "the directive disappears after the terminal runner acknowledgement")
+finally:
+    shutil.rmtree(TMP, ignore_errors=True)
+
+print(f"\nBUG-111 terminal runner cleanup: {passed} passed, {failed} failed")
+raise SystemExit(1 if failed else 0)
