@@ -1102,9 +1102,10 @@ try:
        and mac_config["platform"] == "darwin"
        and mac_config["service_path"] == str(mac_paths["service_path"])
        and mac_config["repo_root"] == str(mac_paths["prefix"] / "current")
-       and Path(mac_config["source_repo_root"]).parent
+       and mac_config["source_repo_root"] == str(ROOT.resolve())
+       and Path(mac_config["work_source_root"]).parent
        == (mac_paths["state_root"] / "source").resolve()
-       and Path(mac_config["source_repo_root"]) != ROOT.resolve()
+       and Path(mac_config["work_source_root"]) != ROOT.resolve()
        and mac_codex_home == (mac_paths["state_root"] / "codex-home").resolve()
        and mac_codex_home != TEST_USER_CODEX_HOME.resolve()
        and json.loads((mac_codex_home / "auth.json").read_text())["tokens"][
@@ -2043,10 +2044,10 @@ try:
     service_text = linux_paths["service_path"].read_text()
     ok(linux_install["installed"] and "NoNewPrivileges=yes" in service_text
        and str(linux_paths["state_root"]) in service_text
-       and str(linux_source_repo) in service_text
-       and linux_source_repo.parent == (linux_paths["state_root"] / "source").resolve()
-       and linux_source_repo != ROOT.resolve()
-       and str(ROOT.resolve()) not in service_text
+       and linux_source_repo == ROOT.resolve()
+       and str(ROOT.resolve()) in service_text
+       and Path(linux_config_data["work_source_root"]).parent
+       == (linux_paths["state_root"] / "source").resolve()
        and str(linux_workspace_root) in service_text
        and str(linux_codex_home) in service_text
        and (linux_codex_home / "auth.json").is_file()
@@ -2100,17 +2101,15 @@ try:
        and launched_env.get("PM_AGENT_HOST_IDENTITY_PATH") == str(linux_identity.resolve())
        and launched_env.get("PM_AGENT_HOST_CONFIG_PATH") == str(linux_config.resolve())
        and launched_env.get("PM_REPO_ROOT") == str(linux_paths["prefix"] / "current")
-       and launched_env.get("PM_AGENT_HOST_SOURCE_REPO_ROOT")
-       == json.loads(linux_config.read_text())["source_repo_root"]
+       and launched_env.get("PM_AGENT_HOST_SOURCE_REPO_ROOT") == str(ROOT.resolve())
+       and launched_env.get("PM_AGENT_HOST_WORK_SOURCE_ROOT")
+       == json.loads(linux_config.read_text())["work_source_root"]
        and Path(captured_exec.get("arguments")[1]).resolve()
        == (linux_paths["prefix"] / "current" / "adapters" / "agent_host.py").resolve()
        and launched_env.get("PM_AGENT_HOST_STATE_PATH") == str(linux_state.resolve())
        and all(isinstance(value, str) for value in launched_env.values()),
        "service-run strips metered keys and binds the OS test-sandbox protection paths")
-    ok(separated_inventory["repo_root"] == str(linux_source_repo)
-       and Path(separated_inventory["repo_root"]) != ROOT.resolve()
-       and Path(separated_inventory["repo_root"]).parent
-       == (linux_paths["state_root"] / "source").resolve(),
+    ok(separated_inventory["repo_root"] == str(ROOT.resolve()),
        "Agent Host inventory uses the canonical work source, not its signed runtime")
     personal_auth = {
         "available": True,

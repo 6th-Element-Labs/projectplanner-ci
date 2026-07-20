@@ -56,7 +56,8 @@ def _run_git(source: Path, *args: str, timeout: int = 600) -> str:
 
 
 def _prepare_workspace(assignment: dict[str, Any]) -> tuple[Path, str, str]:
-    source_raw = str(os.environ.get("PM_AGENT_HOST_SOURCE_REPO_ROOT") or "").strip()
+    source_raw = str(os.environ.get("PM_AGENT_HOST_WORK_SOURCE_ROOT")
+                 or os.environ.get("PM_AGENT_HOST_SOURCE_REPO_ROOT") or "").strip()
     source = Path(source_raw).expanduser().resolve() if source_raw else None
     if not source or not source.is_dir() or source.is_symlink():
         raise RuntimeError("enrolled source repository is unavailable")
@@ -164,7 +165,7 @@ def _write_assignment_toml(
         "",
         "[repository]",
         f"slug = {_toml_string(repo.get('slug'))}",
-        f"source_root = {_toml_string(os.environ.get('PM_AGENT_HOST_SOURCE_REPO_ROOT'))}",
+        f"source_root = {_toml_string(os.environ.get('PM_AGENT_HOST_WORK_SOURCE_ROOT') or os.environ.get('PM_AGENT_HOST_SOURCE_REPO_ROOT'))}",
         f"workspace = {_toml_string(workspace)}",
         f"default_branch = {_toml_string(repo.get('default_branch') or 'master')}",
         f"branch = {_toml_string(branch)}",

@@ -689,7 +689,7 @@ def _provision_host_source_mirror(source_repo: Path, state_root: Path) -> Path:
     if origin.returncode != 0 or not origin_url:
         raise EnrollmentError("source_repo_root must have a canonical origin remote")
     repo_name = Path(origin_url.removesuffix(".git")).name or "canonical"
-    mirror_root = state_root / "source"
+    mirror_root = state_root.expanduser().resolve() / "source"
     mirror = mirror_root / repo_name
     mirror_root.mkdir(parents=True, mode=0o700, exist_ok=True)
     os.chmod(mirror_root, 0o700)
@@ -1197,9 +1197,12 @@ def _install_host_unlocked(*, bundle_dir: Path, public_key_path: Path, bootstrap
     state_path = state_root / "state.json"
     source_codex_home = Path(
         os.environ.get("CODEX_HOME") or (Path.home() / ".codex")).expanduser().resolve()
-    operator_source_repo = _validated_source_repo_root(
+    source_repo = _validated_source_repo_root(
         source_repo_root or selected.get("source_repo_root") or "")
-    source_repo = _provision_host_source_mirror(operator_source_repo, state_root)
+    # SIMPLIFY-4: the host provisions its own pristine mirror for Work Session
+    # worktrees, but host identity/inventory stays rooted at the canonical
+    # operator source and the systemd write set is unchanged.
+    work_source_root = _provision_host_source_mirror(source_repo, state_root)
     user_home = Path.home().expanduser().resolve()
     _validate_install_layout(
         prefix=prefix,
@@ -1347,6 +1350,7 @@ def _install_host_unlocked(*, bundle_dir: Path, public_key_path: Path, bootstrap
                 "config_path": str(config_path),
                 "state_path": str(state_path),
                 "source_repo_root": str(source_repo),
+                "work_source_root": str(work_source_root),
                 "base_url": base_url.rstrip("/"),
                 "owner_user_id": owner_user_id,
                 "allow_work": bool(allow_work),
@@ -1434,6 +1438,7 @@ def _install_host_unlocked(*, bundle_dir: Path, public_key_path: Path, bootstrap
         "service_path": str(service_path),
         "repo_root": str(prefix / "current"),
         "source_repo_root": str(source_repo),
+        "work_source_root": str(work_source_root),
         "runner_dir": str(state_root / "runner"),
         "runtime_root": str(state_root / "provider-runtimes"),
         "workspace_root": str(workspace_root),
@@ -1523,9 +1528,10 @@ def update_host(*, bundle_dir: Path, public_key_path: Path, state_path: Path,
     config_path = Path(state["config_path"])
     config = _read_json(config_path)
     previous_config = dict(config)
-    selected_source = _validated_source_repo_root(
+    source_repo = _validated_source_repo_root(
         source_repo_root or config.get("source_repo_root") or "")
-    source_repo = _provision_host_source_mirror(selected_source, state_path.parent)
+    work_source_root = _provision_host_source_mirror(source_repo, state_path.parent)
+    config["work_source_root"] = str(work_source_root)
     current = prefix / "current"
     previous = current.resolve() if current.exists() else None
     release = _install_release(bundle_dir, manifest, prefix)
@@ -2055,6 +2061,8 @@ def service_run(identity_path: Path, config_path: Path) -> None:
         "PM_CODEX_EXECUTABLE": local_auth.get("codex_executable") or "",
         "PM_REPO_ROOT": config["repo_root"],
         "PM_AGENT_HOST_SOURCE_REPO_ROOT": str(source_repo_root),
+        "PM_AGENT_HOST_WORK_SOURCE_ROOT": str(
+            config.get("work_source_root") or source_repo_root),
         "PM_RUNNER_DIR": config["runner_dir"],
         "PM_PROVIDER_RUNTIME_ROOT": config["runtime_root"],
         "PM_AGENT_HOST_VERSION": config.get("agent_host_version") or AGENT_HOST_VERSION,
