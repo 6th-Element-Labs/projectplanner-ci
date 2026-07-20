@@ -10,6 +10,8 @@ CO-12/CO-13: local sessions launch under a real PTY by default. A companion pty_
 holds the master fd, dual-writes stdout.log, serves authenticated HTTP chunked streams, and
 accepts bound-session POST injects for Mission panel chat.
 """
+from __future__ import annotations
+
 import argparse
 import fcntl
 import json
@@ -23,6 +25,24 @@ import termios
 import time
 import uuid
 from pathlib import Path
+
+
+_DARWIN_RUNNER_PATH_PREFIX = ("/opt/homebrew/bin", "/usr/local/bin")
+
+
+def _runner_environment(extra_env=None, platform_name=None):
+    """Build the environment inherited by the actual CLI process.
+
+    launchd configuration is reloaded by the installer, but the supervisor is
+    the final process-launch boundary.  Normalize PATH here as well so a stale
+    parent daemon can never produce another CLI missing Homebrew tools.
+    """
+    env = os.environ.copy()
+    env.update(extra_env or {})
+    if (platform_name or sys.platform) == "darwin":
+        parts = [part for part in str(env.get("PATH") or "").split(os.pathsep) if part]
+        env["PATH"] = os.pathsep.join(dict.fromkeys((*_DARWIN_RUNNER_PATH_PREFIX, *parts)))
+    return env
 
 DEFAULT_RUNNER_DIR = Path(os.environ.get("PM_RUNNER_DIR", ".switchboard/runner")).resolve()
 PTY_STREAM = Path(__file__).resolve().with_name("pty_stream.py")
@@ -118,8 +138,41 @@ def _tail(path, limit=4000):
         return ""
 
 
-def _snapshot(meta):
-    cwd = meta.get("cwd") or os.getcwd()
+def _assignment_workspace(meta, runner_dir=None):
+    """Return the direct assignment's task workspace, when safely recorded.
+
+    The supervisor starts ``direct_codex_session.py`` in the source repository,
+    then that helper creates an isolated worktree and execs Codex with ``-C``.
+    The durable assignment TOML is therefore the authority for the task cwd;
+    the supervisor's original process cwd is only the launcher cwd.
+    """
+    runner_session_id = str(meta.get("runner_session_id") or "").strip()
+    if not runner_session_id:
+        return ""
+    path = _session_dir(runner_session_id, runner_dir) / "assignment.toml"
+    try:
+        section = ""
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if line.startswith("[") and line.endswith("]"):
+                section = line[1:-1].strip()
+                continue
+            if section != "repository" or not line.startswith("workspace"):
+                continue
+            _key, separator, value = line.partition("=")
+            if not separator:
+                return ""
+            workspace = Path(json.loads(value.strip())).expanduser().resolve()
+            if workspace.is_dir() and not workspace.is_symlink():
+                return str(workspace)
+            return ""
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return ""
+    return ""
+
+
+def _snapshot(meta, runner_dir=None):
+    cwd = _assignment_workspace(meta, runner_dir) or meta.get("cwd") or os.getcwd()
     return {
         "captured_at": _now(),
         "runner_session_id": meta.get("runner_session_id"),
@@ -169,8 +222,7 @@ def start_session(command, agent_id, task_id="", claim_id="", cwd=None, runner_d
         raise ValueError(f"runner session already exists: {runner_session_id}")
     root.mkdir(parents=True)
     log_path = root / "stdout.log"
-    env = os.environ.copy()
-    env.update(extra_env or {})
+    env = _runner_environment(extra_env)
     env.update({
         "PM_RUNNER_SESSION_ID": runner_session_id,
         "PM_AGENT_ID": agent_id,
@@ -348,7 +400,7 @@ def status_session(runner_session_id, runner_dir=None):
 
 def snapshot_session(runner_session_id, runner_dir=None):
     meta = _read_meta(runner_session_id, runner_dir)
-    snap = _snapshot(meta)
+    snap = _snapshot(meta, runner_dir)
     meta["last_snapshot"] = snap
     meta["snapshot_at"] = snap["captured_at"]
     _write_json(_meta_path(runner_session_id, runner_dir), meta)
@@ -389,7 +441,7 @@ def _stop_pid(pid, grace_seconds=5.0, signal_name="TERM"):
 
 def kill_session(runner_session_id, runner_dir=None, grace_seconds=5.0, signal_name="TERM"):
     meta = _read_meta(runner_session_id, runner_dir)
-    snap = _snapshot(meta)
+    snap = _snapshot(meta, runner_dir)
     meta["last_snapshot"] = snap
     meta["stop_requested_at"] = _now()
     pid = int(meta.get("pid") or 0)

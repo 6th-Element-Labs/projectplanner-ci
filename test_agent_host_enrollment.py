@@ -1863,7 +1863,8 @@ try:
        and rotated["service_restarted"] is True
        and rotated["resumed"] is True
        and "rotation_pending_restart" not in mac_identity
-       and service_calls[-1][:3] == ["launchctl", "kickstart", "-k"],
+       and service_calls[-2][1] == "bootout"
+       and service_calls[-1][1] == "bootstrap",
        "bounded rotation recovery resumes a failed start without rotating again")
     ok(store.get_principal_by_token(PROJECT, initial_mac_token) is None
        and store.get_principal_by_token(PROJECT, rotated_token) is not None,
@@ -1895,9 +1896,9 @@ try:
         del kwargs
         failed_restart_calls.append(list(command))
         failed_new_restart = (
-            command[:3] == ["launchctl", "kickstart", "-k"]
+            command[1] == "bootstrap"
             and len([call for call in failed_restart_calls
-                     if call[:3] == ["launchctl", "kickstart", "-k"]]) == 1
+                     if call[1] == "bootstrap"]) == 1
         )
         return subprocess.CompletedProcess(
             command, 1 if failed_new_restart else 0, "",
@@ -1913,7 +1914,7 @@ try:
         rollback_visible = True
     rollback_restarts = [
         call for call in failed_restart_calls
-        if call[:3] == ["launchctl", "kickstart", "-k"]
+        if call[1] == "bootstrap"
     ]
     ok(rollback_visible and len(rollback_restarts) == 2
        and (mac_paths["prefix"] / "current").resolve().name == "0.2.1"

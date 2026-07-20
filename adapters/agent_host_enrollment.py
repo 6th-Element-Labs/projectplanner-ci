@@ -577,7 +577,14 @@ def control_service(target_platform: str, action: str, service_path: Path,
         elif action == "stop":
             commands = [["launchctl", "bootout", target]]
         elif action == "restart":
-            commands = [["launchctl", "kickstart", "-k", target]]
+            # kickstart restarts the process with launchd's already-loaded job
+            # definition.  It does not reload a changed plist, so updates to
+            # EnvironmentVariables (notably the Homebrew PATH used by gh/codex)
+            # never reach the daemon or its children.  Reload the definition.
+            commands = [
+                ["launchctl", "bootout", target],
+                ["launchctl", "bootstrap", domain, str(service_path)],
+            ]
         else:
             raise EnrollmentError(f"unsupported service action: {action}")
     elif target_platform == "linux":
@@ -595,8 +602,10 @@ def control_service(target_platform: str, action: str, service_path: Path,
         raise EnrollmentError("target platform must be darwin or linux")
     for command in commands:
         result = runner(command, capture_output=True, text=True, check=False, timeout=30)
-        # Stopping an already-unloaded service is idempotent.
-        if result.returncode and not (action == "stop" and result.returncode in {3, 5, 113}):
+        # Unloading an already-unloaded service is idempotent, including the
+        # first half of a restart/reload.
+        unloading = len(command) > 1 and command[1] == "bootout"
+        if result.returncode and not (unloading and result.returncode in {3, 5, 113}):
             raise EnrollmentError(
                 f"service {action} failed: {(result.stderr or result.stdout).strip()}")
 

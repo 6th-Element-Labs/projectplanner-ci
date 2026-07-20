@@ -242,7 +242,8 @@ def fake_heartbeat(method, path, body=None):
 
 agent_host._try = fake_heartbeat
 renewed = agent_host.renew_live_direct_runners(inventory)
-renewal = heartbeat_calls[0]
+renewal = next(row for row in heartbeat_calls
+               if row[0:2] == ("POST", agent_host.P_HEARTBEAT_RUNNER))
 ok(renewed == [{
        "runner_session_id": "run-direct-bug86", "task_id": task_id,
        "renewed": True, "error": None,

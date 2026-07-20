@@ -1687,7 +1687,17 @@ def renew_live_direct_runners(inventory):
     """
     host_id = str((inventory or {}).get("host_id") or "")
     renewed = []
-    for session in _drain_runners(host_id):
+    sessions = _drain_runners(host_id)
+    needs_late_binding = any(
+        (row.get("metadata") or {}).get("direct_assignment") is True
+        and not row.get("claim_id")
+        and not (row.get("metadata") or {}).get("work_session_id")
+        and row.get("alive") is True
+        and str(row.get("status") or "").lower() == "running"
+        for row in sessions
+    )
+    work_sessions = _drain_work_sessions() if needs_late_binding else []
+    for session in sessions:
         metadata = dict(session.get("metadata") or {})
         direct = bool(
             metadata.get("direct_assignment") is True
@@ -1695,6 +1705,29 @@ def renew_live_direct_runners(inventory):
         )
         claim_id = str(session.get("claim_id") or "")
         work_session_id = str(metadata.get("work_session_id") or "")
+        late_binding = _direct_work_session_binding(session, work_sessions)
+        if (not late_binding and needs_late_binding
+                and metadata.get("direct_assignment") is True
+                and not session.get("claim_id")
+                and not metadata.get("work_session_id")):
+            # A short task can create and complete its managed Work Session
+            # between two host ticks.  Query only this task's completed rows so
+            # the exact direct-session principal can still close the binding
+            # race without scanning historical Work Sessions fleet-wide.
+            completed = _drain_work_sessions(
+                task_id=str(session.get("task_id") or ""),
+                status="completed",
+            )
+            late_binding = _direct_work_session_binding(
+                session, completed, allowed_statuses={"completed"})
+        if late_binding:
+            claim_id = str(late_binding.get("claim_id") or "")
+            work_session_id = str(late_binding.get("work_session_id") or "")
+            metadata.update({
+                "work_session_id": work_session_id,
+                "credential_admission_phase": "claim_bound",
+                "late_bound_by": "agent_host_work_session_join",
+            })
         claim_bound = bool(claim_id and work_session_id)
         wake_id = str(metadata.get("wake_id") or session.get("wake_id") or "")
         task_id = str(session.get("task_id") or "")
@@ -1770,11 +1803,45 @@ def renew_live_direct_runners(inventory):
     return renewed
 
 
-def _drain_work_sessions():
+def _drain_work_sessions(*, task_id="", status="active"):
     result = _try("GET", _drain_query(
-        P_LIST_WORK_SESSIONS, status="active", include_expired="true")) or {}
+        P_LIST_WORK_SESSIONS, status=status, task_id=task_id,
+        include_expired="true")) or {}
     sessions = result.get("work_sessions") or []
     return sessions if isinstance(sessions, list) else []
+
+
+def _direct_work_session_binding(session, work_sessions, *, allowed_statuses=None):
+    """Find the one Work Session created by this exact direct Codex process.
+
+    Direct sessions intentionally launch before a claim exists.  The direct MCP
+    token later creates the claim and managed Work Session under a principal
+    derived from the runner id.  Join those two phases here; task/agent matching
+    alone is insufficient because retries may exist for the same task.
+    """
+    session = dict(session or {})
+    metadata = dict(session.get("metadata") or {})
+    runner_session_id = str(session.get("runner_session_id") or "").strip()
+    if (not runner_session_id
+            or metadata.get("direct_assignment") is not True
+            or session.get("claim_id")
+            or metadata.get("work_session_id")):
+        return None
+    expected_principal = f"direct-session/{runner_session_id}"
+    task_id = str(session.get("task_id") or "").upper()
+    agent_id = str(session.get("agent_id") or "")
+    allowed = {str(value).lower() for value in (allowed_statuses or {"active"})}
+    matches = []
+    for candidate in work_sessions or []:
+        if (str(candidate.get("status") or "").lower() not in allowed
+                or str(candidate.get("principal_id") or "") != expected_principal
+                or str(candidate.get("task_id") or "").upper() != task_id
+                or str(candidate.get("agent_id") or "") != agent_id
+                or not str(candidate.get("claim_id") or "").strip()
+                or not str(candidate.get("work_session_id") or "").strip()):
+            continue
+        matches.append(candidate)
+    return dict(matches[0]) if len(matches) == 1 else None
 
 
 def _release_provider_lease(lease_id, reason):
