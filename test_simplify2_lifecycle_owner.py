@@ -94,9 +94,8 @@ ok("task_execution.start_task" in mission + review
    and 'role="remediation"' in review
    and 'role="review_merge"' in review,
    "implementation, remediation, and review converge on start_task(role=...)")
-ok("escalation_sender = store.send_agent_message" in review
-   and "escalation_sender = store.send_message" not in review,
-   "acting lifecycle wires operator escalation to durable agent messaging")
+ok("escalation_sender" not in review and "ACTION_ESCALATE" not in review,
+   "routine review failures remain in the agent loop without an approval channel")
 ok("PM_AUTOPILOT_COFLEET" not in mission + daemon + jobs + redeploy,
    "the legacy fleet pause flag is retired")
 ok("coordinator_review" not in jobs and "coordinator_merge" not in jobs

@@ -570,7 +570,7 @@
     _missionPolicyDrift(status) {
         const d = status.deliverable || {};
         const driftBlockers = (status.blockers || []).filter((b) =>
-            ['external_ci', 'publication_evidence', 'human_gate'].includes(b.kind));
+            ['external_ci', 'publication_evidence'].includes(b.kind));
         let html = '';
         if (Object.keys(d.policy_constraints || {}).length) {
             html += `<div class="subheader mb-2">Policy constraints</div>${this._missionKv(d.policy_constraints)}`;

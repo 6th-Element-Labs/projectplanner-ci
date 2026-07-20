@@ -13,7 +13,6 @@ module has no independent scheduler or activation flag.
 """
 from __future__ import annotations
 
-import json
 import time
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
@@ -33,7 +32,7 @@ ACTION_RERUN_CI = "rerun_scratchpad_ci"
 ACTION_REMEDIATE_CI = "remediate_failed_ci"
 ACTION_HOLD_PENDING = "hold_pending_ci"
 ACTION_DISPATCH_REVIEW = "dispatch_review_merge"
-ACTION_ESCALATE = "escalate_human"
+ACTION_HOLD_GATE = "hold_mechanical_gate"
 ACTION_HOLD_DEPS = "hold_for_dependencies"
 ACTION_REPAIR_SESSION = "repair_session_before_review"
 ACTION_INSPECT_EVIDENCE = "inspect_missing_pr_or_offline_evidence"
@@ -44,7 +43,7 @@ POLICY = {
     ACTION_REMEDIATE_CI: "coord.review.remediate_failed_ci",
     ACTION_HOLD_PENDING: "coord.review.hold_pending_ci",
     ACTION_DISPATCH_REVIEW: "coord.review.dispatch_review_merge",
-    ACTION_ESCALATE: "coord.review.escalate_human_judgment",
+    ACTION_HOLD_GATE: "coord.review.hold_mechanical_gate",
     ACTION_HOLD_DEPS: "coord.review.hold_for_dependencies",
     ACTION_REPAIR_SESSION: "coord.review.repair_session",
     ACTION_INSPECT_EVIDENCE: "coord.review.inspect_evidence",
@@ -141,14 +140,14 @@ def plan_review_actions(snapshot: Mapping[str, Any], *,
             "skipped_alternatives": skipped or [],
             "mutates": action in {
                 ACTION_RERUN_CI, ACTION_REMEDIATE_CI,
-                ACTION_DISPATCH_REVIEW, ACTION_ESCALATE,
+                ACTION_DISPATCH_REVIEW,
             },
             "merges": False,
         })
 
     if not read_status.get("available"):
         add(
-            "", ACTION_ESCALATE,
+            "", ACTION_HOLD_GATE,
             "Review steward cannot read the project database and must fail closed.",
             {"error_code": read_status.get("error_code"),
              "error_type": read_status.get("error_type")},
@@ -219,7 +218,7 @@ def plan_review_actions(snapshot: Mapping[str, Any], *,
                 "Required CI is red; return the exact failure to an agent for repair.",
                 base_inputs, score=96,
                 skipped=[{"action": ACTION_RERUN_CI, "reason": "red_needs_code_repair"},
-                         {"action": ACTION_ESCALATE, "reason": "agent_remediation"},
+                         {"action": ACTION_HOLD_GATE, "reason": "agent_remediation"},
                          {"action": ACTION_DISPATCH_REVIEW, "reason": "ci_red"}])
             continue
 
@@ -228,7 +227,7 @@ def plan_review_actions(snapshot: Mapping[str, Any], *,
                 "Required CI is missing; request the first authoritative run.",
                 base_inputs, score=80,
                 skipped=[{"action": ACTION_DISPATCH_REVIEW, "reason": f"ci_{ci_state}"},
-                         {"action": ACTION_ESCALATE, "reason": "missing_ci_first_attempt"}])
+                         {"action": ACTION_HOLD_GATE, "reason": "missing_ci_first_attempt"}])
             continue
 
         if task_id in unsafe_tasks:
@@ -297,8 +296,7 @@ def _execute_action(action: Mapping[str, Any], *, project: str, actor: str,
                     operator_agent: str, dry_run: bool,
                     scratchpad_dispatcher: Callable[..., Any] | None,
                     task_starter: Callable[..., Any] | None,
-                    task_messenger: Callable[..., Any] | None,
-                    escalation_sender: Callable[..., Any] | None) -> dict[str, Any]:
+                    task_messenger: Callable[..., Any] | None) -> dict[str, Any]:
     chosen = {
         "action": action["action"],
         "task_id": action.get("task_id") or None,
@@ -314,7 +312,7 @@ def _execute_action(action: Mapping[str, Any], *, project: str, actor: str,
 
     if dry_run or action["action"] in {
         ACTION_HOLD_PENDING, ACTION_HOLD_DEPS, ACTION_REPAIR_SESSION,
-        ACTION_INSPECT_EVIDENCE, ACTION_NOOP,
+        ACTION_HOLD_GATE, ACTION_INSPECT_EVIDENCE, ACTION_NOOP,
     }:
         if dry_run and action.get("mutates"):
             result["status"] = "dry_run"
@@ -382,8 +380,10 @@ def _execute_action(action: Mapping[str, Any], *, project: str, actor: str,
                 f"PR: {inputs.get('pr_url') or pr_number}\n"
                 f"head_sha: {head_sha or 'unknown'}\n"
                 f"CI: {inputs.get('ci_state')} run={inputs.get('ci_run_id')}\n"
-                "Inspect mergeability and review comments. Do NOT merge unless "
-                "COORD-7 / T3 policy explicitly authorizes it."
+                "Inspect mergeability and review comments. If the exact-head review, "
+                "required CI, dependencies, and merge gate are green, merge through "
+                "the configured queue and reconcile Switchboard. Otherwise record the "
+                "mechanical failure and drive remediation; no human approval is required."
             )
             ensured = task_starter(
                 task_id, project=project, actor=actor, role="review_merge",
@@ -399,30 +399,6 @@ def _execute_action(action: Mapping[str, Any], *, project: str, actor: str,
             if refused:
                 result["error"] = ensured.get("error") or ensured.get("reason")
 
-        elif action["action"] == ACTION_ESCALATE:
-            if escalation_sender is None:
-                raise RuntimeError("escalation_sender_required")
-            body = (
-                f"COORD-5 escalation for {task_id or project}: {action.get('reason')}\n"
-                f"class={action.get('escalation_class')}\n"
-                f"inputs={json.dumps(inputs, sort_keys=True, default=str)}"
-            )
-            idem = (
-                f"coord5-escalate:{project}:{task_id or 'project'}:"
-                f"{action.get('escalation_class')}:{inputs.get('ci_run_id') or head_sha or 'na'}"
-            )
-            message = escalation_sender(
-                from_agent=actor, to_agent=operator_agent, message=body,
-                task_id=task_id or None, requires_ack=True,
-                ack_deadline_minutes=60, signal="coord.review.escalation",
-                priority=2, project=project, idem_key=idem,
-            )
-            result["effects"].append({
-                "kind": "escalation_message",
-                "payload": {"id": message.get("id"), "to_agent": operator_agent,
-                            "requires_ack": True},
-            })
-            result["status"] = "escalated"
         else:
             result["status"] = "observed"
     except Exception as exc:  # fail loud; decision result preserves the signal
@@ -447,7 +423,6 @@ def steward_project(project: str, *, actor: str = DEFAULT_ACTOR,
                     **_legacy_hooks: Any) -> dict[str, Any]:
     """Plan and optionally act on one project's In Review queue."""
     observed_at = float(time.time() if now is None else now)
-    escalation_sender = _legacy_hooks.get("message_sender")
     if db_path_resolver is None or (persist and (
             activity_writer is None or decision_writer is None)):
         import store
@@ -493,8 +468,6 @@ def steward_project(project: str, *, actor: str = DEFAULT_ACTOR,
         if task_messenger is None and not dry_run:
             from switchboard.application.commands import task_execution
             task_messenger = task_execution.send_message
-        if escalation_sender is None and not dry_run:
-            escalation_sender = store.send_agent_message
 
     try:
         db_path = db_path_resolver(project)  # type: ignore[misc]
@@ -514,7 +487,6 @@ def steward_project(project: str, *, actor: str = DEFAULT_ACTOR,
             dry_run=dry_run,
             scratchpad_dispatcher=scratchpad_dispatcher,
             task_starter=task_starter, task_messenger=task_messenger,
-            escalation_sender=escalation_sender,
         )
         executed.append({
             "task_id": action.get("task_id"),
@@ -604,7 +576,6 @@ def steward_project(project: str, *, actor: str = DEFAULT_ACTOR,
                         "ci_rerun_requested", "remediation_session_ensured",
                         "remediation_session_transitioning", "review_session_ensured",
                         "review_session_transitioning",
-                        "escalated",
                     }
                     for row in executed
                 )

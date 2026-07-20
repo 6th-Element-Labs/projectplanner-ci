@@ -12,7 +12,7 @@ Keep **In Review** work moving toward a trustworthy green **without merging**:
 2. Auto-request scratchpad CI when evidence is missing, up to a bounded retry budget.
 3. Call `Task Execution.start_task(role="remediation")` when CI is red.
 4. Call `Task Execution.start_task(role="review_merge")` when CI is green and deps/session look clear.
-5. Escalate only when bounded repair is exhausted or required evidence/authorization is unavailable.
+5. Keep routine CI, conflict, evidence, and session repair in the agent loop. Human interruption belongs only to the coordinator's bounded exception channel.
 6. **Never merge.** The following merge phase retains the mechanical gate.
 
 ## Lifecycle ownership
@@ -30,7 +30,7 @@ chooses a host.
 | Rerun scratchpad CI | `coord.review.rerun_scratchpad` |
 | Hold while CI pending | `coord.review.hold_pending_ci` |
 | Dispatch review_merge | `coord.review.dispatch_review_merge` |
-| Escalate human | `coord.review.escalate_human_judgment` |
+| Hold mechanical gate | `coord.review.hold_mechanical_gate` |
 | Hold for deps | `coord.review.hold_for_dependencies` |
 | Repair unsafe session | `coord.review.repair_session` |
 | Inspect missing PR/evidence | `coord.review.inspect_evidence` |
@@ -45,7 +45,7 @@ Every tick writes `switchboard.coordinator_decision.v1` rows (stable_key idempot
 | Auto-request mirror rerun on red/missing | `ACTION_RERUN_CI` → `try_dispatch_scratchpad` |
 | Ensure remediation | `start_task(role="remediation")` |
 | Ensure reviewer | `start_task(role="review_merge")` |
-| Escalate only when automation cannot proceed | retry exhausted / missing PR or authorization |
+| No routine human approval | CI/evidence/session failures hold or remediate; bounded exceptions are handled outside this phase |
 | Never merge in this phase | `merges=False`; merge remains the next internal phase |
 
 ## Tests

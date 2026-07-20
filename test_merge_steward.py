@@ -147,61 +147,50 @@ def make_db(path: Path) -> None:
 
 def test_plan_fail_closed_and_arm():
     policy = ms.load_merge_policy(
-        env={"PM_COORDINATOR_MERGE_RISK_CEILING": "Low"},
-        meta={"risk_ceiling": "Low"},
+        env={
+            "PM_COORDINATOR_MERGE_RISK_CEILING": "Low",
+            "PM_COORDINATOR_MERGE_ENABLED": "0",
+            "PM_COORDINATOR_MERGE_AUTHORITY": "0",
+        },
+        meta={"risk_ceiling": "Low", "enabled": False,
+              "authority_granted": False, "deny_blocking_tasks": True},
     )
-    ok("risk_ceiling" not in policy,
-       "legacy risk ceiling configuration is ignored and removed")
+    ok(not ({"risk_ceiling", "enabled", "authority_granted", "deny_blocking_tasks"}
+            & set(policy)),
+       "legacy subjective merge policy is ignored and removed")
 
     with tempfile.TemporaryDirectory() as tmp:
         db_path = Path(tmp) / "board.db"
         make_db(db_path)
         snapshot = __import__("coordinator_audit").collect_snapshot(
             str(db_path), "switchboard", now=NOW)
-        # No authority / disabled → green M-1 escalates missing authority (fail closed)
-        plan = ms.plan_merge_actions(snapshot, policy={
-            "enabled": True, "authority_granted": False,
-        }, now=NOW)
+        plan = ms.plan_merge_actions(snapshot, policy={"max_in_flight": 3}, now=NOW)
         by_task = {row["task_id"]: row for row in plan["actions"]}
-        ok(by_task["M-2"]["action"] == ms.ACTION_ESCALATE
+        ok(by_task["M-2"]["action"] == ms.ACTION_HOLD_GATE
            and by_task["M-2"]["escalation_class"] == "red_ci_product_judgment",
-           "red CI escalates")
-        ok(by_task["M-3"]["action"] == ms.ACTION_ESCALATE
-           and by_task["M-3"]["escalation_class"] == "absent_permission",
-           "risk label is informational; missing authority still fails closed")
-        ok(by_task["M-4"]["action"] == ms.ACTION_ESCALATE
-           and by_task["M-4"]["escalation_class"] == "absent_permission",
-           "legacy human-gate metadata does not override mechanical authority")
-        ok(by_task["M-5"]["action"] == ms.ACTION_ESCALATE
+           "red CI is recorded as a mechanical hold")
+        ok(by_task["M-3"]["action"] == ms.ACTION_ARM,
+           "high risk label is informational when mechanical gates pass")
+        ok(by_task["M-4"]["action"] == ms.ACTION_ARM,
+           "legacy human-gate text does not create an approval stage")
+        ok(by_task["M-5"]["action"] == ms.ACTION_HOLD_GATE
            and by_task["M-5"]["escalation_class"] == "missing_provenance",
-           "missing PR escalates")
+           "missing PR is recorded as a mechanical hold")
         ok(by_task["M-6"]["action"] == ms.ACTION_HOLD_PENDING,
            "pending CI holds without arming")
-        ok(by_task["M-1"]["action"] == ms.ACTION_ESCALATE
-           and by_task["M-1"]["escalation_class"] == "absent_permission",
-           "missing authority fail-closed even when CI green")
+        ok(by_task["M-1"]["action"] == ms.ACTION_ARM,
+           "green exact-head evidence arms without a separate approval switch")
         ok("M-7" not in by_task, "Not Started tasks are ignored")
         ok(by_task["M-8"]["action"] == ms.ACTION_VERIFY_POST_MERGE,
            "merged PR with missing Done provenance reconciles in the same lifecycle")
 
-        # Enabled + authority → M-1 arms
-        plan2 = ms.plan_merge_actions(snapshot, policy={
-            "enabled": True, "authority_granted": True,
-            "max_in_flight": 3,
-        }, now=NOW)
-        by_task2 = {row["task_id"]: row for row in plan2["actions"]}
-        ok(by_task2["M-1"]["action"] == ms.ACTION_ARM and by_task2["M-1"]["merges"] is True,
-           "policy-enabled green PR is armable")
-        ok(by_task2["M-1"]["policy_rule"] == "coord.merge.arm_auto_merge",
+        ok(by_task["M-1"]["merges"] is True,
+           "mechanically green PR is armable")
+        ok(by_task["M-1"]["policy_rule"] == "coord.merge.arm_auto_merge",
            "arm uses COORD-3 policy rule")
-        ok(by_task2["M-3"]["action"] == ms.ACTION_ARM
-           and by_task2["M-3"]["merges"] is True,
-           "high risk label does not block an otherwise eligible merge")
 
         # Saturated → hold backpressure
-        plan3 = ms.plan_merge_actions(snapshot, policy={
-            "enabled": True, "authority_granted": True,
-        }, saturated=True, now=NOW)
+        plan3 = ms.plan_merge_actions(snapshot, saturated=True, now=NOW)
         by_task3 = {row["task_id"]: row for row in plan3["actions"]}
         ok(by_task3["M-1"]["action"] == ms.ACTION_HOLD_BACKPRESSURE,
            "saturation holds arm")
@@ -246,7 +235,6 @@ def test_dry_run_and_acting_hooks():
             "switchboard",
             dry_run=True,
             persist=True,
-            policy={"enabled": True, "authority_granted": True},
             now=NOW,
             db_path_resolver=lambda _p: str(db_path),
             decision_writer=decision_writer,
@@ -275,8 +263,7 @@ def test_dry_run_and_acting_hooks():
             "switchboard",
             dry_run=False,
             persist=True,
-            policy={"enabled": True, "authority_granted": True,
-                    "post_merge_reconcile": True},
+            policy={"post_merge_reconcile": True},
             now=NOW,
             db_path_resolver=lambda _p: str(db_path),
             decision_writer=decision_writer,
@@ -290,28 +277,11 @@ def test_dry_run_and_acting_hooks():
         ok(any(row.get("task_id") == "M-1" for row in armed), "M-1 was armed")
         ok(any(row.get("task_id") == "M-8" for row in reconciled),
            "merged task immediately requests Done-provenance reconciliation")
-        ok(any((e["plan"] or {}).get("escalation_class") == "red_ci_product_judgment"
-               for e in escalated),
-           "red CI escalates via COORD-6 delivery hook")
-
-
-def test_policy_disabled_holds():
-    with tempfile.TemporaryDirectory() as tmp:
-        db_path = Path(tmp) / "board.db"
-        make_db(db_path)
-        snapshot = __import__("coordinator_audit").collect_snapshot(
-            str(db_path), "switchboard", now=NOW)
-        plan = ms.plan_merge_actions(snapshot, policy={
-            "enabled": False, "authority_granted": True,
-        }, now=NOW)
-        by_task = {row["task_id"]: row for row in plan["actions"]}
-        ok(by_task["M-1"]["action"] == ms.ACTION_HOLD_POLICY,
-           "disabled policy observes green PR without arming")
+        ok(not escalated, "routine mechanical failures never call human delivery")
 
 
 if __name__ == "__main__":
     test_plan_fail_closed_and_arm()
     test_merge_gate_classifier()
     test_dry_run_and_acting_hooks()
-    test_policy_disabled_holds()
     print("\nAll COORD-7 merge steward tests passed.")

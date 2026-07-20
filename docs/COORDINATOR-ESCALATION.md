@@ -13,17 +13,14 @@ Implementation: `coordinator_escalation.py`, wired from
 | Escalation class | Typical trigger |
 |---|---|
 | `budget_breach` | IRQ/NMI budget envelope |
-| `failed_gate` | Required CI/review red after bounded retries; broken task links |
-| `stale_branch_conflict` | PR conflicted / merge_gate branch_stale |
-| `missing_provenance` | Done without merged_sha / reconcile drift |
-| `absent_permission` | Missing scope/tier for an intended action |
-| `unreachable_agent_no_host` | `request_wake` finds no eligible host |
-| `unbound_identity` | Takeover / identity risk on the target |
 | `ambiguous_requirements` | Breakdown / unclear acceptance needs a decision |
 | `security_secrets_boundary` | Secrets or security boundary |
-| `policy_violation` | Action would violate project policy |
 | `repeated_failures` | Recurring monitor / retry ceiling |
-| `red_ci_product_judgment` | Red CI that needs product judgment, not another silent retry |
+
+Everything else is a machine-handled signal, not a notification: failed CI,
+conflicts, stale branches, missing provenance, capacity/no-host, identity repair,
+and legacy policy labels remain in the coordinator/agent loop. They can still be
+recorded as typed failure classes, but `should_notify_human` returns false.
 
 Agent-lane actions (`claim_task`, `resume_or_claim`, `verify_merge_provenance`)
 **never** call this channel.
@@ -47,10 +44,10 @@ Delivery path (mirrors `run_reconcile_alerts`):
 
 ## Tick integration
 
-On `human_required`, the mission coordinator classifies each escalation action and
-delivers. On `dispatch_blocked`, it escalates only for exception reasons (no host,
-absent permission, unbound identity) — a busy/empty claim queue stays silent to
-humans.
+On `human_required`, the mission coordinator classifies each action and delivers
+only the four irreducible decision classes above. `dispatch_blocked` remains
+visible and repairable but does not page for capacity, host, permission, identity,
+or an empty claim queue.
 
 COORD-3 continues to record `decision_kind=human_escalation` with the delivery
 receipt under `result.human_notifications`.

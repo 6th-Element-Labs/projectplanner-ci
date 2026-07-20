@@ -7,6 +7,7 @@ __pycache__/
 .venv/
 rag_cache.json
 .switchboard/
+.artifacts/
 
 # Local deploy/operator debris. Keep runtime state under /var/lib/projectplanner
 # in production; these patterns keep accidental local backups out of repo hygiene.

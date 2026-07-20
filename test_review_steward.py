@@ -290,8 +290,8 @@ def test_fail_closed_unavailable_db():
     )
     ok(receipt["ok"] is False, "missing DB fails closed")
     actions = receipt["plan"]["actions"]
-    ok(actions and actions[0]["action"] == rs.ACTION_ESCALATE,
-       "unavailable read path escalates")
+    ok(actions and actions[0]["action"] == rs.ACTION_HOLD_GATE,
+       "unavailable read path fails closed as a mechanical hold")
 
 
 if __name__ == "__main__":

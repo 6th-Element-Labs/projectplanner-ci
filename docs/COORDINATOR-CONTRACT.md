@@ -28,13 +28,15 @@ The coordinator is *the K8s scheduler, not a pod*: it schedules and supervises; 
 These are hard invariants. No coordinator action, policy, or autopilot loop may bypass them. They are enforced by existing control-plane code the coordinator calls *through*, never around:
 
 1. **Done is branch-proven, never coordinator-set** (FR-24). The coordinator may move work to `In Review` via a worker's `complete_claim`, but `Done` is reserved for GitHub/default-branch merge provenance stamped by the webhook/reconcile path, or verifier-stamped offline evidence. The coordinator MUST NOT call `update_task(status="Done")` — it fails closed anyway (`store.pr_backed_by_process` / `PR_BACKED_STATUSES`).
-2. **Safe-merge only** (FR-28). Any merge the coordinator arms or executes must pass `store.merge_gate`: canonical repo only, target = default branch, real PR evidence, session hygiene (no conflict markers / clean tree), required status contexts green, tests executed. A blocked finding stops the merge — the coordinator escalates, it does not override.
+2. **Safe-merge only** (FR-28). Any merge the coordinator arms or executes must pass `store.merge_gate`: canonical repo only, target = default branch, real PR evidence, session hygiene (no conflict markers / clean tree), required status contexts green, tests executed. A blocked finding stops the merge and returns the task to mechanical repair; the coordinator never overrides it.
 3. **Project boundaries are absolute.** A coordinator is scoped to exactly one project; every read and write carries that `project`, and its scoped token is minted per project (`create_scoped_token`). It can never read, write, dispatch, or merge across projects. Dispatch targets only that project's lanes and hosts.
 4. **Fail-fix-early, never green-wash** (FR-29 / `fail_fix_early_policy`). The coordinator surfaces missing data, red gates, absent hosts, permission denials, and provenance drift at the point of detection. It may use a fallback only when the fallback is *named* and preserves the original failing signal (monitor event / reconcile finding / task comment / blocker). It must never hide a failure behind an optimistic status, a placeholder, or a silent retry.
-5. **Mechanical release truth is authoritative.** Dependency readiness, exact-head independent review, required CI, mergeability, credentials, canonical provenance, and reconciliation are enforced uniformly. Legacy `human_gate` metadata is advisory and cannot stop dispatch, review, remediation, or merge.
+5. **Mechanical release truth is authoritative.** Dependency readiness, exact-head independent review, required CI, mergeability, credentials, canonical provenance, and reconciliation are enforced uniformly. Legacy approval metadata is retained for audit compatibility and cannot stop dispatch, review, remediation, or merge.
 6. **Active scope ownership cannot disappear.** Replacing or archiving a deliverable transfers its live Autopilot scope atomically to the declared replacement, or explicitly stops it with an audited reason and visible operator notification. The same durable `scope_id` and decision history cross a transfer; a live target conflict fails closed rather than creating a second execution stream.
 
-If a tier's automation would require breaking any of the above, that action is **not** in that tier — it escalates.
+If a tier's automation would require breaking any of the above, that action is
+**not** in that tier. It remains a mechanical hold unless it reaches one of the
+four exception-only human decision classes in the escalation contract.
 
 ---
 

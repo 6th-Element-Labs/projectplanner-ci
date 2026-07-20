@@ -1,16 +1,15 @@
-"""T3 policy-gated merge steward (COORD-7).
+"""T3 mechanically gated merge steward (COORD-7).
 
 Optional autopilot for **eligible In Review** PRs. Default posture is
-dry-run: plan + COORD-3 decisions + activity artifact. Acting requires both
-``PM_COORDINATOR_MERGE_ACT=1`` and an enabled merge policy.
+dry-run: plan + COORD-3 decisions + activity artifact. The lifecycle
+coordinator owns act/dry-run mode; this phase has no separate approval switch.
 
 Hard floor (never bypassed):
 
 * never set Done (webhook/reconcile only)
 * never arm when ``merge_gate`` is blocked
-* red/unknown checks, conflicts, stale branches, missing provenance,
-  missing authority and mechanical merge failures fail closed to
-  COORD-6 escalation
+* red/unknown checks, conflicts, stale branches, missing provenance, and
+  mechanical merge failures fail closed for autonomous repair
 * successful arm may trigger reconcile so Done provenance can land later
 """
 from __future__ import annotations
@@ -37,9 +36,8 @@ ACTION_ARM = "arm_auto_merge"
 ACTION_HOLD_PENDING = "hold_pending_ci"
 ACTION_HOLD_DEPS = "hold_for_dependencies"
 ACTION_HOLD_BACKPRESSURE = "hold_backpressure"
-ACTION_HOLD_POLICY = "hold_policy_disabled"
+ACTION_HOLD_GATE = "hold_mechanical_gate"
 ACTION_VERIFY_POST_MERGE = "verify_post_merge_provenance"
-ACTION_ESCALATE = "escalate_human"
 ACTION_NOOP = "noop"
 
 POLICY = {
@@ -47,14 +45,10 @@ POLICY = {
     ACTION_HOLD_PENDING: "coord.merge.hold_pending_ci",
     ACTION_HOLD_DEPS: "coord.merge.hold_for_dependencies",
     ACTION_HOLD_BACKPRESSURE: "coord.merge.hold_backpressure",
-    ACTION_HOLD_POLICY: "coord.merge.hold_policy_disabled",
+    ACTION_HOLD_GATE: "coord.merge.hold_mechanical_gate",
     ACTION_VERIFY_POST_MERGE: "coord.merge.verify_post_merge_provenance",
-    ACTION_ESCALATE: "coord.merge.escalate_blocked_gate",
     ACTION_NOOP: "coord.merge.noop",
 }
-
-def enabled_from_env(name: str, default: bool = True) -> bool:
-    return audit.enabled_from_env(name, default)
 
 
 def _status(value: Any) -> str:
@@ -68,15 +62,12 @@ def _ci_state(ci: Mapping[str, Any] | None) -> str:
 def default_merge_policy() -> dict[str, Any]:
     return {
         "schema": "switchboard.coordinator_policy.v1",
-        "enabled": False,
         "tier": TIER,
         "dry_run_default": True,
         "max_in_flight": DEFAULT_MAX_IN_FLIGHT,
         "require_merge_gate_pass": True,
-        "deny_blocking_tasks": False,
         "post_merge_reconcile": True,
         "arm_mode": "github_auto_merge_squash",
-        "authority_granted": False,
     }
 
 
@@ -93,17 +84,11 @@ def load_merge_policy(*, env: Mapping[str, str] | None = None,
                 policy[key] = nested[key]
 
     environ = env if env is not None else os.environ
-    if "PM_COORDINATOR_MERGE_ENABLED" in environ:
-        policy["enabled"] = enabled_from_env("PM_COORDINATOR_MERGE_ENABLED", False)
-    if "PM_COORDINATOR_MERGE_AUTHORITY" in environ:
-        policy["authority_granted"] = enabled_from_env("PM_COORDINATOR_MERGE_AUTHORITY", False)
     try:
         if environ.get("PM_COORDINATOR_MERGE_MAX_IN_FLIGHT"):
             policy["max_in_flight"] = max(0, int(environ["PM_COORDINATOR_MERGE_MAX_IN_FLIGHT"]))
     except (TypeError, ValueError):
         pass
-    policy["enabled"] = bool(policy.get("enabled"))
-    policy["authority_granted"] = bool(policy.get("authority_granted"))
     policy["require_merge_gate_pass"] = bool(policy.get("require_merge_gate_pass", True))
     policy["post_merge_reconcile"] = bool(policy.get("post_merge_reconcile", True))
     return policy
@@ -212,13 +197,13 @@ def plan_merge_actions(snapshot: Mapping[str, Any], *,
             "escalation_class": escalation_class,
             "inputs": inputs,
             "skipped_alternatives": skipped or [],
-            "mutates": action in {ACTION_ARM, ACTION_ESCALATE, ACTION_VERIFY_POST_MERGE},
+            "mutates": action in {ACTION_ARM, ACTION_VERIFY_POST_MERGE},
             "merges": bool(merges),
         })
 
     if not read_status.get("available"):
         add(
-            "", ACTION_ESCALATE,
+            "", ACTION_HOLD_GATE,
             "Merge steward cannot read the project database and must fail closed.",
             {"error_code": read_status.get("error_code"),
              "error_type": read_status.get("error_type")},
@@ -235,12 +220,6 @@ def plan_merge_actions(snapshot: Mapping[str, Any], *,
             "actions": actions,
             "summary": {"action_count": len(actions), "in_review_count": 0},
         }
-
-    if not pol.get("authority_granted"):
-        # Still plan fail-closed escalations for unsafe In Review items, but never arm.
-        authority_missing = True
-    else:
-        authority_missing = False
 
     tasks = [dict(row) for row in snapshot.get("tasks") or []]
     by_task = {str(row.get("task_id") or "").upper(): row for row in tasks}
@@ -271,8 +250,6 @@ def plan_merge_actions(snapshot: Mapping[str, Any], *,
             "ci_run_id": (latest or {}).get("run_id"),
             "open_dependencies": open_deps,
             "unsafe_session": task_id in unsafe_tasks,
-            "policy_enabled": bool(pol.get("enabled")),
-            "authority_granted": bool(pol.get("authority_granted")),
             "is_blocking": bool(task.get("is_blocking")),
         }
 
@@ -283,15 +260,8 @@ def plan_merge_actions(snapshot: Mapping[str, Any], *,
                 skipped=[{"action": ACTION_ARM, "reason": "already_merged"}])
             continue
 
-        if pol.get("deny_blocking_tasks") and task.get("is_blocking"):
-            add(task_id, ACTION_ESCALATE,
-                "Blocking tasks are denied by merge steward policy.",
-                base_inputs, escalation_class="policy_violation", score=94,
-                skipped=[{"action": ACTION_ARM, "reason": "blocking_denied"}])
-            continue
-
         if not pr_number:
-            add(task_id, ACTION_ESCALATE,
+            add(task_id, ACTION_HOLD_GATE,
                 "In Review has no recorded PR; cannot merge without provenance.",
                 base_inputs, escalation_class="missing_provenance", score=96,
                 skipped=[{"action": ACTION_ARM, "reason": "missing_pr"}])
@@ -305,7 +275,7 @@ def plan_merge_actions(snapshot: Mapping[str, Any], *,
             continue
 
         if ci_state in {"red", "missing", "unknown"}:
-            add(task_id, ACTION_ESCALATE,
+            add(task_id, ACTION_HOLD_GATE,
                 f"Checks are {ci_state}; merge steward fails closed.",
                 base_inputs,
                 escalation_class=("red_ci_product_judgment" if ci_state == "red"
@@ -315,8 +285,8 @@ def plan_merge_actions(snapshot: Mapping[str, Any], *,
             continue
 
         if task_id in unsafe_tasks:
-            add(task_id, ACTION_ESCALATE,
-                "Unsafe Work Session blocks policy-gated merge.",
+            add(task_id, ACTION_HOLD_GATE,
+                "Unsafe Work Session blocks mechanically gated merge.",
                 base_inputs, escalation_class="failed_gate", score=90,
                 skipped=[{"action": ACTION_ARM, "reason": "unsafe_session"}])
             continue
@@ -326,20 +296,6 @@ def plan_merge_actions(snapshot: Mapping[str, Any], *,
                 "Dependencies are not terminal; hold merge until they land.",
                 base_inputs, score=70,
                 skipped=[{"action": ACTION_ARM, "reason": "open_dependencies"}])
-            continue
-
-        if authority_missing:
-            add(task_id, ACTION_ESCALATE,
-                "Merge steward lacks explicit T3 authority; fail closed.",
-                base_inputs, escalation_class="absent_permission", score=99,
-                skipped=[{"action": ACTION_ARM, "reason": "missing_authority"}])
-            continue
-
-        if not pol.get("enabled"):
-            add(task_id, ACTION_HOLD_POLICY,
-                "Merge steward policy is disabled; observe only (no arm).",
-                base_inputs, score=40,
-                skipped=[{"action": ACTION_ARM, "reason": "policy_disabled"}])
             continue
 
         if saturated or arm_budget <= 0:
@@ -365,8 +321,8 @@ def plan_merge_actions(snapshot: Mapping[str, Any], *,
             }
             if not (gate.get("ok") is True or str(gate.get("status") or "").lower() == "passed"):
                 plan = classify_merge_gate_result(gate, project=project, task_id=task_id)
-                add(task_id, ACTION_ESCALATE,
-                    "merge_gate blocked; escalate instead of arming.",
+                add(task_id, ACTION_HOLD_GATE,
+                    "merge_gate blocked; keep the mechanical failure in the agent loop.",
                     base_inputs,
                     escalation_class=(plan or {}).get("escalation_class") or "failed_gate",
                     score=95,
@@ -374,10 +330,9 @@ def plan_merge_actions(snapshot: Mapping[str, Any], *,
                 continue
 
         add(task_id, ACTION_ARM,
-            "Policy allows T3 arm of GitHub auto-merge for this green PR.",
+            "All mechanical gates pass; arm GitHub auto-merge for this green PR.",
             base_inputs, score=80, merges=True,
-            skipped=[{"action": ACTION_ESCALATE, "reason": "gate_passed"},
-                     {"action": ACTION_HOLD_POLICY, "reason": "policy_enabled"}])
+            skipped=[{"action": ACTION_HOLD_GATE, "reason": "gate_passed"}])
         armed += 1
         arm_budget -= 1
 
@@ -394,7 +349,8 @@ def plan_merge_actions(snapshot: Mapping[str, Any], *,
             "action_count": len(actions),
             "in_review_count": len(in_review),
             "arm_count": sum(1 for row in actions if row["action"] == ACTION_ARM),
-            "escalate_count": sum(1 for row in actions if row["action"] == ACTION_ESCALATE),
+            "blocked_gate_count": sum(
+                1 for row in actions if row["action"] == ACTION_HOLD_GATE),
             "by_action": {
                 name: sum(1 for row in actions if row["action"] == name)
                 for name in sorted({row["action"] for row in actions})
@@ -403,7 +359,7 @@ def plan_merge_actions(snapshot: Mapping[str, Any], *,
         "caveats": [
             "Board-recorded CI/PR evidence is used unless merge_gate_fn is injected.",
             "T3 never sets Done; post-arm reconcile only verifies provenance later.",
-            "Acting requires PM_COORDINATOR_MERGE_ACT=1 and policy enabled+authority.",
+            "The lifecycle coordinator owns act/dry-run mode; no separate merge approval exists.",
         ],
     }
 
@@ -433,7 +389,7 @@ def _execute_action(action: Mapping[str, Any], *, project: str, actor: str,
 
     observe_only = {
         ACTION_HOLD_PENDING, ACTION_HOLD_DEPS, ACTION_HOLD_BACKPRESSURE,
-        ACTION_HOLD_POLICY, ACTION_NOOP,
+        ACTION_HOLD_GATE, ACTION_NOOP,
     }
     if dry_run or action["action"] in observe_only:
         if dry_run and action.get("mutates"):
@@ -466,26 +422,6 @@ def _execute_action(action: Mapping[str, Any], *, project: str, actor: str,
                     recon = reconcile_fn(project=project, task_id=task_id, actor=actor)
                     result["effects"].append({"kind": "reconcile", "payload": recon})
                     result["status"] = "auto_merge_armed_reconcile_requested"
-
-        elif action["action"] == ACTION_ESCALATE:
-            if escalate_fn is None:
-                raise RuntimeError("escalate_fn_required")
-            plan = escalation.build_escalation_plan(
-                escalation_class=str(action.get("escalation_class") or "failed_gate"),
-                project=project,
-                task_id=task_id,
-                failed_condition=str(action.get("reason") or "merge steward escalation"),
-                source={"kind": "merge_steward", "inputs": inputs},
-                blocks=["merge"],
-            )
-            if plan is None:
-                raise RuntimeError("escalation_plan_unavailable")
-            delivered = escalate_fn(plan, actor=actor, alert_to=operator_agent)
-            result["effects"].append({"kind": "escalation", "payload": delivered})
-            result["status"] = "escalated" if delivered.get("delivered") or delivered.get("deduped") \
-                else "escalation_failed"
-            if delivered.get("error"):
-                result["error"] = delivered.get("error")
 
         elif action["action"] == ACTION_VERIFY_POST_MERGE:
             if reconcile_fn is None:
@@ -621,8 +557,6 @@ def steward_project(project: str, *, actor: str = DEFAULT_ACTOR,
                     "project": project,
                     "dry_run": dry_run,
                     "policy": {
-                        "enabled": pol.get("enabled"),
-                        "authority_granted": pol.get("authority_granted"),
                         "max_in_flight": pol.get("max_in_flight"),
                     },
                     "action_inputs": action.get("inputs") or {},
@@ -697,7 +631,7 @@ def steward_project(project: str, *, actor: str = DEFAULT_ACTOR,
             "work_state_mutated": merged_effect or bool(
                 not dry_run and any(
                     row.get("result", {}).get("status") in {
-                        "escalated", "reconcile_requested",
+                        "reconcile_requested",
                     }
                     for row in executed
                 )

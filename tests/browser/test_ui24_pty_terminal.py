@@ -107,7 +107,7 @@ try:
     healthy = _wait_healthy()
     ok(healthy, "app.py boots and /health responds (required auth, throwaway DB)")
     index_html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
-    ok('js/runner-session.js?v=10' in index_html and 'app.js?v=55' in index_html,
+    ok('js/runner-session.js?v=10' in index_html and 'app.js?v=56' in index_html,
        "the deployed shell invalidates pre-Resume-review runner and modal assets")
     if not healthy:
         raise SystemExit("server did not become healthy — aborting")
@@ -141,6 +141,38 @@ try:
         wired = page.evaluate(
             "typeof TeepPlan !== 'undefined' && typeof TeepPlan.openRunnerSessionPanel === 'function'")
         ok(wired, "TeepPlan.openRunnerSessionPanel exists on the live page (module actually loaded)")
+
+        # ---- SIMPLIFY-6: blocking is dependency truth, never a human approval ----
+        blocking_modal = page.evaluate("""
+            async () => {
+                const previousTasks = TeepPlan.tasks;
+                const modal = document.getElementById('task-modal');
+                const shown = new Promise((resolve) =>
+                    modal.addEventListener('shown.bs.modal', resolve, {once: true}));
+                TeepPlan.tasks = [{
+                    task_id: 'SIMPLIFY-6', title: 'Mechanical gates',
+                    status: 'In Review', is_blocking: true, depends_on: [],
+                    risk_level: 'High', description: 'No approval stage',
+                }];
+                await TeepPlan.openTask('SIMPLIFY-6');
+                await shown;
+                const text = document.getElementById('task-modal-body').innerText;
+                const title = document.getElementById('task-modal-title').innerText;
+                TeepPlan._stopTaskPrimaryRunnerLive();
+                await new Promise((resolve) => {
+                    modal.addEventListener('hidden.bs.modal', resolve, {once: true});
+                    window.bootstrap.Modal.getOrCreateInstance(modal).hide();
+                });
+                document.getElementById('task-modal-body').innerHTML = '';
+                TeepPlan.tasks = previousTasks;
+                return {text, title};
+            }
+        """)
+        ok("Blocking" in blocking_modal["title"],
+           "a blocking task still shows dependency-critical truth")
+        ok("Human-gated" not in blocking_modal["text"]
+           and "maintainer must approve" not in blocking_modal["text"],
+           "the real task modal does not invent a human dispatch or merge approval")
 
         # ---- COORD-42: an open task modal follows the authoritative replacement ----
         replacement = page.evaluate("""

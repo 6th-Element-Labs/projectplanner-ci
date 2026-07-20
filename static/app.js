@@ -2207,7 +2207,6 @@ const TeepPlan = {
                 </div>
                 <div class="tab-pane fade" id="m-dev" role="tabpanel">
                     <p class="text-secondary">Start Codex on your enrolled Mac to open a native CLI for this task. The Mac daemon writes one assignment TOML, prepares the task workspace, preloads Switchboard MCP, and streams that same PTY here. Neither path merges or writes to main/master on its own.</p>
-                    ${t.is_blocking ? `<div class="alert alert-warning d-flex" role="alert"><i class="ti ti-shield-lock me-2 mt-1"></i><div><span class="fw-bold">Human-gated.</span> This task is blocking — a maintainer must approve both the dispatch and the resulting PR before anything merges.</div></div>` : ''}
                     ${this.controlTruthHtml(t)}
                     ${this.mergeGatePanelHtml(t)}
                     ${this.monitorControlHtml(t)}
