@@ -644,13 +644,35 @@ def _lexists(path: Path) -> bool:
 
 
 def _validated_source_repo_root(value: Path | str) -> Path:
-    """Return an exact Git work source without trusting the signed runtime tree."""
+    """Return an exact Git work source without trusting the signed runtime tree.
+
+    Canonicalizes firmlink ancestors (macOS ``/var`` → ``/private/var``,
+    ``/tmp`` → ``/private/tmp``) so a tempfile-backed state root is accepted.
+    Still fails closed on a leaf symlink — that is the redirect we refuse.
+    """
     raw = Path(value).expanduser()
-    if not raw.is_absolute() or raw.is_symlink():
-        raise EnrollmentError("source_repo_root must be an absolute non-symlink path")
-    resolved = raw.resolve()
-    if raw.absolute() != resolved or not resolved.is_dir():
-        raise EnrollmentError("source_repo_root must resolve directly to a directory")
+    if not raw.is_absolute():
+        raise EnrollmentError(
+            f"source_repo_root must be an absolute path (got {raw})")
+    if raw.is_symlink():
+        try:
+            target = os.readlink(raw)
+        except OSError:
+            target = "<unreadable>"
+        raise EnrollmentError(
+            f"source_repo_root must not be a symlink "
+            f"(got {raw} -> {target})")
+    try:
+        resolved = raw.resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise EnrollmentError(
+            f"source_repo_root does not exist (got {raw})") from exc
+    if not resolved.is_dir():
+        raise EnrollmentError(
+            f"source_repo_root must be a directory "
+            f"(got {raw} -> {resolved}; "
+            f"is_dir={resolved.is_dir()} is_file={resolved.is_file()} "
+            f"is_symlink={resolved.is_symlink()})")
 
     def git(*arguments: str) -> str:
         result = subprocess.run(

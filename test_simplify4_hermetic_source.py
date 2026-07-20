@@ -2,7 +2,6 @@
 """SIMPLIFY-4 / SIMPLIFY-13 regression proof for Agent Host Work Session sources."""
 import contextlib
 import io
-import os
 import shutil
 import subprocess
 import tempfile
@@ -18,7 +17,9 @@ def git(repo, *args):
         stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout.strip()
 
 
-root = Path(tempfile.mkdtemp(prefix="simplify4-")).resolve()
+# Leave unresolved on purpose (BUG-106): macOS tempfile paths firmlink
+# /var -> /private/var. Resolving here would hide the enrollment failure mode.
+root = Path(tempfile.mkdtemp(prefix="simplify4-"))
 try:
     origin = root / "origin.git"
     operator = root / "operator"
@@ -39,7 +40,7 @@ try:
     mirror = enrollment._provision_host_source_mirror(operator, state_root)
     (operator / "operator-only.tmp").write_text("dirty\n", encoding="utf-8")
     assert git(mirror, "status", "--porcelain") == ""
-    assert mirror != operator and mirror.parent == state_root / "source"
+    assert mirror != operator and mirror.parent == (state_root / "source").resolve()
 
     (mirror / "named-offender.tmp").write_text("dirty\n", encoding="utf-8")
     try:
