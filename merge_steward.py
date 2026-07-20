@@ -9,7 +9,7 @@ Hard floor (never bypassed):
 * never set Done (webhook/reconcile only)
 * never arm when ``merge_gate`` is blocked
 * red/unknown checks, conflicts, stale branches, missing provenance,
-  human gates, and missing authority fail closed to
+  missing authority and mechanical merge failures fail closed to
   COORD-6 escalation
 * successful arm may trigger reconcile so Done provenance can land later
 """
@@ -73,7 +73,6 @@ def default_merge_policy() -> dict[str, Any]:
         "dry_run_default": True,
         "max_in_flight": DEFAULT_MAX_IN_FLIGHT,
         "require_merge_gate_pass": True,
-        "deny_human_gated": True,
         "deny_blocking_tasks": False,
         "post_merge_reconcile": True,
         "arm_mode": "github_auto_merge_squash",
@@ -106,7 +105,6 @@ def load_merge_policy(*, env: Mapping[str, str] | None = None,
     policy["enabled"] = bool(policy.get("enabled"))
     policy["authority_granted"] = bool(policy.get("authority_granted"))
     policy["require_merge_gate_pass"] = bool(policy.get("require_merge_gate_pass", True))
-    policy["deny_human_gated"] = bool(policy.get("deny_human_gated", True))
     policy["post_merge_reconcile"] = bool(policy.get("post_merge_reconcile", True))
     return policy
 
@@ -273,18 +271,10 @@ def plan_merge_actions(snapshot: Mapping[str, Any], *,
             "ci_run_id": (latest or {}).get("run_id"),
             "open_dependencies": open_deps,
             "unsafe_session": task_id in unsafe_tasks,
-            "human_gate": audit._human_gate(task),
             "policy_enabled": bool(pol.get("enabled")),
             "authority_granted": bool(pol.get("authority_granted")),
             "is_blocking": bool(task.get("is_blocking")),
         }
-
-        if pol.get("deny_human_gated") and audit._human_gate(task):
-            add(task_id, ACTION_ESCALATE,
-                "In Review task is human-gated; T3 cannot merge it.",
-                base_inputs, escalation_class="human_gate_required", score=98,
-                skipped=[{"action": ACTION_ARM, "reason": "human_gate"}])
-            continue
 
         if pol.get("deny_blocking_tasks") and task.get("is_blocking"):
             add(task_id, ACTION_ESCALATE,

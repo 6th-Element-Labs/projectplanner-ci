@@ -122,12 +122,11 @@ try:
     ok(any(s.get("action") == "escalate_no_host" for s in plan_no.get("skipped") or []),
        "no eligible host escalates instead of silent drop")
 
-    # Human gate → escalate
+    # Legacy human-gate metadata is advisory and cannot block dispatch.
     snap_hg = fake_snapshot(ready=True, hosts=True, human_gate=True)
     plan_hg = cd.build_dispatch_plan(snap_hg)
-    ok(any(s.get("escalation_class") == "human_gate_required"
-           for s in plan_hg.get("skipped") or []),
-       "human-gated task escalates and is not dispatched")
+    ok(plan_hg.get("summary", {}).get("dispatch_selected") == 1,
+       "legacy human-gate metadata does not stop dispatch")
 
     # Stale live agent → nudge candidate
     snap_stale = fake_snapshot(ready=False, hosts=True, stale_agent=True)

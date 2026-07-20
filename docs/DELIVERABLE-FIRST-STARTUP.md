@@ -118,7 +118,6 @@ for action in status["next_actions"]:
   # approve_breakdown → approve_deliverable_breakdown(proposal_id=...)
   # claim_task → claim_next(deliverable_id=..., project="switchboard")
   # verify_merge_provenance → wait for webhook/reconcile; do not mark Done manually
-  # request_human_approval → send_agent_message to operator
   ...
 
 update_mission_narrative(

@@ -47,7 +47,8 @@ Agents file complete bug reports through `submit_bug(...)` over MCP or
 
 Successful submission creates one `BUG` task in `Triage` with structured `bug_report` state,
 source task/agent linkage, and the original evidence payload. Submission does not create
-implementation work, mark any task Ready, claim work, wake an agent, or bypass the human gate.
+implementation work by itself. Autopilot may subsequently classify and route the BUG through the
+normal audited task lifecycle without a separate approval gate.
 
 If `failure_class` is supplied, intake stores both `failure_class_detail` and a nested
 `fail_fix_signal` record. If the class is unknown, submission fails closed and returns the schema;
@@ -58,7 +59,7 @@ no BUG task is created.
 | Severity | Meaning | Default disposition |
 |---|---|---|
 | `critical` | Can corrupt board truth, bypass approval/auth, mark false Done, lose work, or dispatch unsafe work. | Human alert and block dependent release work. |
-| `high` | Breaks core coordination, CI/reconcile, task provenance, identity, or operator trust. | Triage immediately; conversion requires approval. |
+| `high` | Breaks core coordination, CI/reconcile, task provenance, identity, or operator trust. | Triage immediately and route to remediation. |
 | `medium` | Causes confusing UX, noisy state, flaky workflow, or localized adapter failure. | Triage and schedule by lane owner. |
 | `low` | Cosmetic, docs-only, or minor friction with no false-green risk. | Batch unless it blocks active work. |
 
@@ -78,7 +79,7 @@ fix owner, even if they appeared in different tasks. The canonical BUG task keep
 
 Duplicates should not spawn additional implementation work.
 
-## Approval States
+## Intake States
 
 Bug intake uses these states:
 
@@ -89,35 +90,17 @@ Bug intake uses these states:
 | `duplicate` | Linked to a canonical BUG task. |
 | `triaged` | Severity, owner surface, and repro quality are set. |
 | `conversion_proposed` | Intake recommends implementation work in another lane. |
-| `approved` | Human/coordinator policy approved conversion. |
-| `rejected` | Human/coordinator declined conversion. |
+| `routed` | Audited conversion entered the normal task lifecycle. |
+| `rejected` | The report was invalid, duplicate, or deliberately declined with rationale. |
 | `deferred` | Valid bug, not scheduled now. |
 
-Only `approved` conversion may create claimable implementation work.
+`routed` work is claimable when its ordinary dependency, identity, capability, Work Session, and
+capacity requirements pass. Historical `human_gate` records remain readable as
+`retired_nonblocking`; they do not affect scheduling or release.
 
-## Human Gate
+## Conversion Routing
 
-Converted work must carry a structured `human_gate` state until approved:
-
-```json
-{
-  "required": true,
-  "source_bug_task_id": "BUG-123",
-  "target_workstream": "HARDEN",
-  "severity": "high",
-  "approval_reason": "Why this bug should become implementation work",
-  "approved_by": "switchboard/operator",
-  "approved_at": "2026-07-02T00:00:00Z"
-}
-```
-
-Before `approved_by` is present, `claim_task` returns `human_approval_required` and `claim_next`
-skips the task under `dispatch_reason.skipped.human_approval`. This prevents intake from becoming
-a hidden dispatch path.
-
-## Conversion Policy
-
-When a bug is approved for implementation, the converted task must preserve:
+When a bug is routed for implementation, the converted task must preserve:
 
 - source BUG task id;
 - reporter and source task;
@@ -126,7 +109,7 @@ When a bug is approved for implementation, the converted task must preserve:
 - duplicate links;
 - target workstream;
 - acceptance criteria;
-- approver and approval time;
+- routing actor and time;
 - rationale for why implementation is warranted now.
 
 Rejected and deferred bugs remain auditable in BUG intake. They are not deleted and do not enter

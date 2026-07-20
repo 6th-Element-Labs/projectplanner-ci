@@ -55,12 +55,10 @@ session so the fleet stays in sync.
   observed behavior, expected behavior, repro steps, evidence, severity hint, affected surface,
   source task, source agent, and failure class when the report is a fail/fix signal.
 - Bug intake agents may file and triage `BUG` tasks automatically, dedupe duplicates, score
-  severity, and ask for missing evidence.
-- Bug intake agents may not create, prioritize, dispatch, claim, or wake implementation work
-  outside the `BUG` lane unless a human operator or explicit coordinator policy approves the
-  conversion.
-- Converted implementation work that still needs approval must carry `agent_state.human_gate`.
-  Until approved, `claim_task` fails with `human_approval_required` and `claim_next` skips it.
+  severity, ask for missing evidence, and route reproducible work into the normal task lifecycle.
+- Conversions preserve their source BUG, evidence, target lane, and rationale in the audit trail.
+  They require no separate human approval and follow the same dependency, claim, review, CI,
+  merge, and provenance rules as every other task.
 - See [`docs/BUG-INTAKE-CONTRACT.md`](BUG-INTAKE-CONTRACT.md).
 
 ## Git discipline

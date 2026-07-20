@@ -25,7 +25,6 @@ def co_fleet_autopilot_paused() -> bool:
         "0", "false", "no", "off")
 
 ACTION_PRIORITY: Dict[str, int] = {
-    "request_human_approval": 0,
     "approve_breakdown": 1,
     "repair_task_link": 2,
     "verify_merge_provenance": 3,
@@ -35,7 +34,6 @@ ACTION_PRIORITY: Dict[str, int] = {
 }
 
 HUMAN_ESCALATION = frozenset({
-    "request_human_approval",
     "approve_breakdown",
     "repair_task_link",
     "propose_breakdown",
@@ -145,15 +143,7 @@ def _explicit_target_actions(mission_status: Dict[str, Any],
             "attention": False,
             "delivery_impact": "none",
         }
-        gate = detail.get("human_gate") or {}
-        if gate.get("blocked"):
-            actions.append({
-                **common, "action": "request_human_approval",
-                "owner_type": "project_owner", "attention": True,
-                "label": "Approve the explicitly targeted task",
-                "reason": gate.get("reason") or "Human gate blocked",
-            })
-        elif status == "Not Started" and dependency.get("ready") and not claims:
+        if status == "Not Started" and dependency.get("ready") and not claims:
             actions.append({
                 **common, "action": "claim_task", "owner_type": "agent",
                 "label": "Agent will claim the explicitly targeted task",

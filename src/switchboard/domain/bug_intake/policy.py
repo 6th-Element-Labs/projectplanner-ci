@@ -15,39 +15,23 @@ BUG_INTAKE_POLICY = {
     "scope": "write:bug_intake",
     "agent_role": (
         "Receive agent-discovered bugs, normalize them into reproducible BUG reports, "
-        "dedupe them, score severity, and prepare approval-ready conversion proposals."
+        "dedupe them, score severity, and route them into the normal task lifecycle."
     ),
-    "allowed_without_human_approval": [
+    "allowed_automation": [
         "create or update BUG intake records through the dedicated bug-intake surface",
         "link duplicate BUG reports to a canonical BUG task",
         "request missing reproduction evidence from the reporting agent",
         "assign severity_hint and affected_surface on BUG intake records",
-    ],
-    "forbidden_without_human_approval": [
         "create implementation work outside the BUG lane",
         "mark converted implementation work Ready or claimable",
         "change priority, sort_order, is_blocking, or dependency-critical fields",
         "dispatch, claim, wake, or otherwise start implementation work",
-        "hide the original failing signal behind a green fallback",
     ],
-    "conversion_gate": {
-        "state_key": "human_gate",
-        "required_fields": [
-            "required",
-            "source_bug_task_id",
-            "target_workstream",
-            "severity",
-            "approval_reason",
-            "approved_by",
-            "approved_at",
-        ],
-        "unapproved_status": "human_approval_required",
-        "approved_statuses": ["approved", "accepted", "waived"],
+    "conversion_policy": {
+        "approval_required": False,
+        "audit_required": True,
+        "preserve_source_bug": True,
     },
-    "approval_authority": (
-        "A human operator or explicit coordinator policy may approve conversion. "
-        "The approver, target lane, source BUG task, evidence, and rationale must be audited."
-    ),
 }
 BUG_REPORT_REQUIRED_FIELDS = [
     "source_task",
@@ -110,7 +94,7 @@ FAIL_FIX_FAILURE_CLASSES = {
     "failed_gate": {
         "label": "Failed gate",
         "default_severity": "high",
-        "description": "A CI, QA, review, human gate, or lifecycle gate failed or was bypassed.",
+        "description": "A CI, QA, review, or lifecycle gate failed or was bypassed.",
         "expected_signal": "The gate failure is visible and blocks release/dispatch until repaired.",
     },
     "unreachable_agent": {

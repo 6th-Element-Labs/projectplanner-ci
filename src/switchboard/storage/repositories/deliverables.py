@@ -1936,15 +1936,6 @@ def _mission_blockers(deliverable: Dict[str, Any],
                     "blocking_task_id": blocking.get("task_id"),
                     "blocking_status": blocking.get("status"),
                 })
-        gate = detail.get("human_gate") or {}
-        if gate.get("blocked"):
-            blockers.append({
-                "kind": "human_gate",
-                "project_id": link.get("project_id"),
-                "task_id": detail.get("task_id"),
-                "title": detail.get("title"),
-                "reason": gate.get("reason"),
-            })
         session_health = detail.get("session_health") or {}
         if session_health.get("status") == "unsafe":
             for finding in session_health.get("findings") or []:
@@ -2149,16 +2140,6 @@ def _mission_next_actions(deliverable: Dict[str, Any],
                 delivery_impact="at_risk" if blocks_delivery or blocks else "none",
                 label="Agent will resume dropped work",
                 reason="In progress without an active claim",
-                project_id=link.get("project_id"), task_id=detail.get("task_id"),
-                title=detail.get("title"), lane=lane,
-                milestone_id=link.get("milestone_id")))
-        gate = detail.get("human_gate") or {}
-        if blocks_delivery and gate.get("blocked"):
-            actions.append(_action(
-                "request_human_approval", owner="project_owner", attention=True,
-                delivery_impact="blocking",
-                label="Approve to unblock a gated task",
-                reason=gate.get("reason") or "Human gate blocked",
                 project_id=link.get("project_id"), task_id=detail.get("task_id"),
                 title=detail.get("title"), lane=lane,
                 milestone_id=link.get("milestone_id")))

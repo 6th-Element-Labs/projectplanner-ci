@@ -73,8 +73,8 @@ def test_human_decisions_flagged():
                               "human_gate": {"blocked": True, "reason": "spend approval"}},
                    blocks=True)]
     ra = _find(store._mission_next_actions({}, gated, None), "request_human_approval")
-    check(ra and ra["attention"] and ra["delivery_impact"] == "blocking",
-          "request_human_approval is attention + blocking")
+    check(ra is None,
+          "legacy human-gate metadata creates no operator decision")
 
 
 def test_agent_and_coordinator_automatic():

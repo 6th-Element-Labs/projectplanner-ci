@@ -39,8 +39,8 @@ try:
        "claim_task stays agent-to-agent")
     ok(not esc.should_notify_human(action="verify_merge_provenance", automatic=True),
        "verify_merge_provenance stays agent-to-agent")
-    ok(esc.should_notify_human(action="request_human_approval", attention=True),
-       "request_human_approval pages humans")
+    ok(not esc.should_notify_human(action="request_human_approval", attention=True),
+       "retired human-gate actions never page humans")
     ok(esc.should_notify_human(escalation_class="no_eligible_host"),
        "no_eligible_host alias maps to human escalation")
     ok(esc.should_notify_human(escalation_class="budget_breach"),
@@ -49,17 +49,17 @@ try:
        "security/secrets boundary pages humans")
 
     plan = esc.build_escalation_plan(
-        escalation_class="human_gate_required",
+        escalation_class="budget_breach",
         project="switchboard",
         task_id="COORD-6",
         deliverable_id="demo",
-        failed_condition="Human gate blocked: spend approval",
+        failed_condition="Budget envelope exhausted",
     )
     ok(plan and plan["schema"] == esc.SCHEMA, "build_escalation_plan returns v1 schema")
     ok(plan["task_id"] == "COORD-6"
-       and "Human gate" in plan["failed_condition"]
+       and "Budget" in plan["failed_condition"]
        and plan["recommended_choices"]
-       and "Approve or reject" in plan["minimum_decision"],
+       and "Raise the budget" in plan["minimum_decision"],
        "plan includes task, failed condition, choices, minimum decision")
 
     body = esc.format_human_notification(plan)
@@ -67,7 +67,7 @@ try:
        and "Failed condition:" in body
        and "Minimum decision needed:" in body
        and "Recommended choices:" in body
-       and "[approve]" in body,
+       and "[raise_cap]" in body,
        "notification body is structured for operators")
 
     # Agent-lane action must not classify.
@@ -81,8 +81,8 @@ try:
          "reason": "Needs sign-off", "attention": True, "delivery_impact": "blocking"},
         project="switchboard", deliverable_id="coord-mission",
     )
-    ok(gate_plan and gate_plan["escalation_class"] == "human_gate_required",
-       "mission human gate classifies as human_gate_required")
+    ok(gate_plan is None,
+       "retired mission human-gate actions do not classify or notify")
 
     # --- delivery + dedupe against a real board DB ---
     first = esc.deliver_human_escalation(
@@ -173,38 +173,11 @@ try:
                 "auto_refresh_brief": False},
         idem_key="esc-tick-1",
     )
-    ok(tick.get("status") == "human_required", "tick status is human_required")
+    ok(tick.get("status") == "claimed", "legacy human-gate metadata does not stop claim")
     notes = tick.get("human_notifications") or []
-    ok(notes and notes[0].get("delivered") and notes[0].get("message_id"),
-       "tick delivers human escalation notification")
-    ok((notes[0].get("plan") or {}).get("escalation_class") == "human_gate_required",
-       "tick notification carries escalation_class")
-    ok((notes[0].get("plan") or {}).get("recommended_choices"),
-       "tick notification includes recommended choices")
-    ok(tick.get("decision", {}).get("decision_kind") == "human_escalation",
-       "tick still records COORD-3 human_escalation decision")
-
-    # Claim path (agent-to-agent) must not produce human notifications.
-    store.set_agent_state("RENDER-1", "human_gate", {
-        "required": True,
-        "approved": True,
-        "approved_by": "test",
-        "approval_reason": "Signed off",
-    }, project="qa-esc-target")
-    store.update_task("RENDER-1", {"status": "Not Started", "assignee": None},
-                      actor="test", project="qa-esc-target")
-    claim_tick = store.run_mission_coordinator_tick(
-        project="qa-esc-home",
-        deliverable_id="esc-mission",
-        coordinator_agent_id="agent/coordinator",
-        actor="test",
-        policy={"auto_claim": True, "worker_agent_id": "agent/worker",
-                "auto_refresh_brief": False},
-        idem_key="esc-tick-claim",
-    )
-    ok(claim_tick.get("status") == "claimed", "after approval, tick claims via agents")
-    ok(not (claim_tick.get("human_notifications") or []),
-       "successful claim path does not page humans")
+    ok(not notes, "legacy human-gate metadata produces no human notification")
+    ok(tick.get("decision", {}).get("decision_kind") != "human_escalation",
+       "legacy human-gate metadata never records a human escalation")
 
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)

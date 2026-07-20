@@ -30,7 +30,6 @@ from switchboard.domain.validation_policy import (
 )
 from switchboard.storage.repositories.tasks import (
     _deps_done,
-    _task_human_gate_state,
     _task_row,
     _task_tally_snapshot,
 )
@@ -225,11 +224,6 @@ def _claim_next_mission_scoped(agent_id: str, lanes: Any = None,
                 by_id = {t["task_id"]: t for t in [_task_row(r) for r in rows]}
                 if not _deps_done(task, by_id):
                     skipped["dependencies"] += 1
-                    continue
-                gate = _task_human_gate_state(task)
-                if gate["blocked"]:
-                    skipped["human_approval"] += 1
-                    human_gates[task_id] = gate
                     continue
                 identity_risk = _store_facade()._identity_takeover_risk_in(c, task_id, now)
                 if identity_risk and not override_identity_risk:
@@ -661,15 +655,6 @@ def _claim_task_impl(task_id: str, agent_id: str,
                         "task_id": task_id, "depends_on": task.get("depends_on") or []}
             _store_facade()._idem_store(c, "claim_task", idem_key, actor, payload, response)
             return response
-        gate = _task_human_gate_state(task)
-        if gate["blocked"]:
-            response = {"claimed": False, "reason": "human_approval_required",
-                        "task_id": task_id, "human_gate": gate}
-            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
-                      (task_id, actor, "task.claim_blocked_human_gate",
-                       json.dumps({"agent_id": agent_id, **response}, sort_keys=True), now))
-            _store_facade()._idem_store(c, "claim_task", idem_key, actor, payload, response)
-            return response
         risk = _store_facade()._identity_takeover_risk_in(c, task_id, now)
         if risk and not override_identity_risk:
             response = {"claimed": False, **risk,
@@ -878,11 +863,6 @@ def claim_next(agent_id: str, lanes: Any = None,
                 continue
             if not _deps_done(t, by_id):
                 skipped["dependencies"] += 1
-                continue
-            gate = _task_human_gate_state(t)
-            if gate["blocked"]:
-                skipped["human_approval"] += 1
-                human_gates[t["task_id"]] = gate
                 continue
             identity_risk = _store_facade()._identity_takeover_risk_in(c, t["task_id"], now)
             if identity_risk and not override_identity_risk:

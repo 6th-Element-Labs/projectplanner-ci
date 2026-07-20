@@ -39,7 +39,7 @@ artifact is written back only to the project it describes.
 | In Review plus green recorded CI, satisfied dependencies, safe session | `merge` | evaluate the canonical safe-merge gate; do not merge |
 | status/provenance drift, missing canonical SHA, stale reconcile evidence | `reconcile` | ask the operator/reconcile authority to inspect or repair |
 | expired claims/file leases/resource leases or a stale claim owner | `stale_claim` | inspect and release through the normal authority path |
-| fired monitors, human gates, missing hosts, unsafe sessions/read failures | `escalation` | surface the named failure class to a human |
+| fired monitors, missing hosts, unsafe sessions/read failures | `escalation` | surface the named failure class when automation cannot repair it |
 
 The loop also observes active agent and host heartbeats, Work Session hygiene, task dependencies,
 recorded PR state, the latest recorded external CI run per task, durable monitors, and recent

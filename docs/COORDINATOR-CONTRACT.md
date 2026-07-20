@@ -31,7 +31,7 @@ These are hard invariants. No coordinator action, policy, or autopilot loop may 
 2. **Safe-merge only** (FR-28). Any merge the coordinator arms or executes must pass `store.merge_gate`: canonical repo only, target = default branch, real PR evidence, session hygiene (no conflict markers / clean tree), required status contexts green, tests executed. A blocked finding stops the merge — the coordinator escalates, it does not override.
 3. **Project boundaries are absolute.** A coordinator is scoped to exactly one project; every read and write carries that `project`, and its scoped token is minted per project (`create_scoped_token`). It can never read, write, dispatch, or merge across projects. Dispatch targets only that project's lanes and hosts.
 4. **Fail-fix-early, never green-wash** (FR-29 / `fail_fix_early_policy`). The coordinator surfaces missing data, red gates, absent hosts, permission denials, and provenance drift at the point of detection. It may use a fallback only when the fallback is *named* and preserves the original failing signal (monitor event / reconcile finding / task comment / blocker). It must never hide a failure behind an optimistic status, a placeholder, or a silent retry.
-5. **Never routes around the human as merge/approval authority** (PRD non-goal §4). Human-gated work (bug-intake conversion, SME/security review, `human_gate` tasks) always escalates; the coordinator cannot self-approve it.
+5. **Mechanical release truth is authoritative.** Dependency readiness, exact-head independent review, required CI, mergeability, credentials, canonical provenance, and reconciliation are enforced uniformly. Legacy `human_gate` metadata is advisory and cannot stop dispatch, review, remediation, or merge.
 
 If a tier's automation would require breaking any of the above, that action is **not** in that tier — it escalates.
 
@@ -53,7 +53,7 @@ Tiers are cumulative: each includes the ones below it. **Default for a newly-reg
 - **May:** create project-scoped wake intents (`dispatch_to_claude_code` / `dispatch.dispatch` → `request_wake(policy={mode:"vendor_cloud"})`); post advisory coordination comments/heads-ups; write its own `set_agent_state`; select model tier / lane hints per PRD §20 (model right-sizing) as *dispatch metadata*.
 - **May NOT:** claim or complete a task itself; change a task's status, priority, `sort_order`, `is_blocking`, or dependencies; merge; create implementation tasks; dispatch work whose deps are unsatisfied or whose budget/policy forbids it; start work outside the project boundary.
 - **Scopes:** `read`, `write:ixp` (wake/coordination), `write:comments`.
-- **Escalate when:** no eligible host is online (surface `requested:false`, do not silently drop); a task is human-gated; budget policy would be exceeded by dispatching; identity/takeover risk on the target.
+- **Escalate when:** no eligible host is online (surface `requested:false`, do not silently drop); budget policy would be exceeded by dispatching; identity/takeover risk on the target.
 
 ### T2 — Review steward
 - **Mandate:** Keep In-Review work moving toward a *trustworthy* green, without deciding merge.
@@ -73,7 +73,7 @@ Tiers are cumulative: each includes the ones below it. **Default for a newly-reg
 ### T4 — Autopilot
 - **Mandate:** Run the full loop (dispatch → steward → merge) unattended **within an explicit envelope**.
 - **May:** chain T1–T3 autonomously for tasks that stay inside a declared **budget** (token/$), **project**, **lane set**, **risk ceiling**, and **time box**, under the budget governor (PRD §20): near-cap fires the IRQ ("wrap up / hand back"), at-cap fires the NMI (halt + escalate).
-- **May NOT:** exceed the envelope; act on anything requiring a human gate; disable its own kill switch; run without an active operator-approved autopilot grant.
+- **May NOT:** exceed the envelope; bypass mechanical release gates; disable its own kill switch; run without an active operator-approved autopilot grant.
 - **Scopes:** same as T3 — autopilot adds *autonomy*, never *authority*.
 - **Escalate when:** budget IRQ/NMI fires; any §5 class trips; the envelope is exhausted; an operator issues stop.
 
@@ -97,7 +97,6 @@ The coordinator maps every abnormal condition to a class that names *who is ping
 
 | Class | Trigger | Blocks | Notify |
 |---|---|---|---|
-| **human_gate_required** | task carries a `human_gate` / bug-intake conversion / SME/security review | dispatch + merge of that item | operator / named reviewer |
 | **budget_breach** | task/loop near cap (IRQ) or at cap (NMI) | further spend on that item | operator (Slack/Gmail) |
 | **failed_gate** | required CI/review gate red after bounded retries | merge | operator + task owner |
 | **stale_branch / conflict** | PR conflicted, non-fast-forward, or `merge_gate` `branch_stale`/`conflict_markers` | merge | task owner |
@@ -172,4 +171,4 @@ Escalation is **loud and structured** (a monitor event, blocker, or directed mes
 - Not an execution engine — the coordinator never dictates a task's steps (PRD §18); that stays the coding agent's judgment.
 - Not a governance principal — never `write:system`/`admin`, never mints tokens or edits access/policy.
 - Not a replacement for `run_mission_coordinator` — this contract is the **policy envelope** that loop (and any future coordinator) runs inside; the primitives (`claim_next`, `request_wake`, `merge_gate`, `reconcile`) are unchanged.
-- Not a human bypass — human-gated and merge/approval authority always escalates.
+- Not a release-truth bypass — exact-head review, CI, mergeability, credentials, and provenance remain mandatory.

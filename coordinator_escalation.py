@@ -20,7 +20,6 @@ DEFAULT_DEDUPE_WINDOW_S = 3600
 
 # Contract §5 classes plus COORD-6 aliases that map onto them.
 ESCALATION_CLASSES = frozenset({
-    "human_gate_required",
     "budget_breach",
     "failed_gate",
     "stale_branch_conflict",
@@ -37,8 +36,6 @@ ESCALATION_CLASSES = frozenset({
 
 # Mission next_actions that are operator attention — never agent-to-agent progress.
 MISSION_ACTION_CLASSES: Dict[str, str] = {
-    "request_human_approval": "human_gate_required",
-    "approve_breakdown": "human_gate_required",
     "repair_task_link": "failed_gate",
     "propose_breakdown": "ambiguous_requirements",
 }
@@ -49,9 +46,9 @@ AGENT_TO_AGENT_ACTIONS = frozenset({
     "resume_or_claim",
     "verify_merge_provenance",
 })
+RETIRED_HUMAN_GATE_ACTIONS = frozenset({"request_human_approval"})
 
 FAILURE_CLASS_BY_ESCALATION: Dict[str, str] = {
-    "human_gate_required": "failed_gate",
     "budget_breach": "failed_gate",
     "failed_gate": "failed_gate",
     "stale_branch_conflict": "stale_branch",
@@ -67,12 +64,6 @@ FAILURE_CLASS_BY_ESCALATION: Dict[str, str] = {
 }
 
 CHOICES_BY_CLASS: Dict[str, List[Dict[str, str]]] = {
-    "human_gate_required": [
-        {"id": "approve", "label": "Approve the human gate",
-         "effect": "Unblocks coordinator dispatch for this task"},
-        {"id": "reject", "label": "Reject / re-scope",
-         "effect": "Keep blocked; agent revises before retry"},
-    ],
     "budget_breach": [
         {"id": "raise_cap", "label": "Raise budget / envelope",
          "effect": "Allows further spend on this item"},
@@ -148,7 +139,6 @@ CHOICES_BY_CLASS: Dict[str, List[Dict[str, str]]] = {
 }
 
 MINIMUM_DECISION_BY_CLASS: Dict[str, str] = {
-    "human_gate_required": "Approve or reject the human gate on this task",
     "budget_breach": "Raise the budget envelope or halt further spend",
     "failed_gate": "Repair the failed gate or document an explicit exception",
     "stale_branch_conflict": "Resolve the conflict/stale branch or reassign ownership",
@@ -213,6 +203,10 @@ def should_notify_human(
     if automatic is True:
         return False
     action_name = str(action or "").strip()
+    if str(escalation_class or "").strip().lower() == "human_gate_required":
+        return False
+    if action_name in RETIRED_HUMAN_GATE_ACTIONS:
+        return False
     if action_name in AGENT_TO_AGENT_ACTIONS:
         return False
     klass = normalize_escalation_class(escalation_class)
@@ -302,8 +296,6 @@ def classify_mission_action(
     ):
         return None
     klass = MISSION_ACTION_CLASSES.get(name)
-    if not klass and action.get("attention") is True:
-        klass = "human_gate_required"
     if not klass:
         return None
     reason = (action.get("reason") or action.get("detail") or action.get("label")
@@ -412,9 +404,7 @@ def classify_audit_recommendation(
     if not klass and recommendation.get("category") == "escalation":
         # Infer from action name when audit did not stamp a class.
         action = str(recommendation.get("action") or "")
-        if "human_gate" in action:
-            klass = "human_gate_required"
-        elif "host" in action:
+        if "host" in action:
             klass = "unreachable_agent_no_host"
         elif "permission" in action or "scope" in action:
             klass = "absent_permission"
@@ -669,8 +659,6 @@ def classify_merge_gate_result(gate: Dict[str, Any], *, project: str,
     elif any(tok in blob for tok in (
             "absent_permission", "permission", "unauthorized", "authority")):
         klass = "absent_permission"
-    elif "human_gate" in blob:
-        klass = "human_gate_required"
     elif any(tok in blob for tok in (
             "required_status", "external_ci", "failed_gate", "red_ci", "checks")):
         klass = "failed_gate"

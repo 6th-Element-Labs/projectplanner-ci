@@ -185,7 +185,7 @@ def execute(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             "coordinator_sequence": [
                 "get_mission_status",
                 "run_mission_coordinator(deliverable_id=..., coordinator_agent_id=..., worker_agent_id=...)",
-                "Follow next_actions (approve_breakdown, claim_task, verify_merge_provenance, request_human_approval)",
+                "Follow next_actions (approve_breakdown, claim_task, verify_merge_provenance)",
                 "claim_next(deliverable_id=...) or approve_deliverable_breakdown",
                 "update_mission_narrative when material state changes",
             ],

@@ -201,16 +201,7 @@ def plan_review_actions(snapshot: Mapping[str, Any], *,
             "max_ci_reruns": int(max_ci_reruns),
             "open_dependencies": open_deps,
             "unsafe_session": task_id in unsafe_tasks,
-            "human_gate": audit._human_gate(task),
         }
-
-        if audit._human_gate(task):
-            add(task_id, ACTION_ESCALATE,
-                "In Review task is human-gated; T2 cannot clear it alone.",
-                base_inputs, escalation_class="human_gate_required", score=95,
-                skipped=[{"action": ACTION_DISPATCH_REVIEW, "reason": "human_gate"},
-                         {"action": ACTION_RERUN_CI, "reason": "human_gate"}])
-            continue
 
         if not pr_number:
             add(task_id, ACTION_INSPECT_EVIDENCE,

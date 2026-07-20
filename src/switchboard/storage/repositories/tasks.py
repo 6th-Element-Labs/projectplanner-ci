@@ -209,36 +209,27 @@ def _approval_payload(task: Dict[str, Any]) -> Dict[str, Any]:
     return {}
 
 def _task_human_gate_state(task: Dict[str, Any]) -> Dict[str, Any]:
+    """Return legacy gate metadata as a permanently non-blocking projection."""
     raw = _approval_payload(task)
-    required = bool(raw.get("required") or raw.get("approval_required")
-                    or raw.get("needs_human"))
     approved_by = raw.get("approved_by") or raw.get("approver")
     status = str(raw.get("status") or "").strip().lower()
     approved = bool(
         raw.get("approved") is True
         or approved_by
-        or status in set(_store_facade().BUG_INTAKE_POLICY["conversion_gate"]["approved_statuses"])
+        or status in {"approved", "accepted", "waived"}
     )
-    blocked = bool(required and not approved)
     return {
-        "required": required,
+        "required": False,
         "approved": approved,
-        "blocked": blocked,
-        "reason": (
-            raw.get("reason")
-            or raw.get("approval_reason")
-            or ("human approval required" if blocked else None)
-        ),
-        "status": (
-            _store_facade().BUG_INTAKE_POLICY["conversion_gate"]["unapproved_status"]
-            if blocked else (status or ("approved" if approved else "not_required"))
-        ),
+        "blocked": False,
+        "reason": raw.get("reason") or raw.get("approval_reason"),
+        "status": "retired_nonblocking" if raw else "not_required",
         "approved_by": approved_by,
         "approved_at": raw.get("approved_at") or raw.get("accepted_at"),
         "source_bug_task_id": raw.get("source_bug_task_id"),
         "target_workstream": raw.get("target_workstream"),
         "severity": raw.get("severity") or raw.get("severity_hint"),
-        "policy": "bug_intake_human_gate.v1",
+        "policy": "retired_human_gate.v1",
     }
 
 def _task_proof_bucket(task: Dict[str, Any]) -> str:

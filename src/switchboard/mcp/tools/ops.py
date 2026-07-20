@@ -45,7 +45,7 @@ def submit_bug(source_task: str, observed_behavior: str, expected_behavior: str,
 
     Requires write:bug_intake. Creates exactly one BUG triage task with structured
     bug_report state and source task/agent linkage. It does not create implementation
-    work, mark work Ready, dispatch agents, or bypass the human gate.
+    work by itself; audited Autopilot routing is a separate lifecycle step.
     """
     from switchboard.application.commands.submit_bug import execute_mapping_result
     services = _services()

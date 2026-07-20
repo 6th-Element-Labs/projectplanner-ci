@@ -155,8 +155,8 @@ def test_plan_actions():
            "red CI under retry budget requests scratchpad rerun")
         ok(by_task["R-3"]["action"] == rs.ACTION_RERUN_CI,
            "missing CI requests first scratchpad run")
-        ok(by_task["R-4"]["action"] == rs.ACTION_ESCALATE,
-           "human_gate escalates")
+        ok(by_task["R-4"]["action"] == rs.ACTION_RERUN_CI,
+           "legacy human-gate metadata follows the normal missing-CI path")
         ok(by_task["R-5"]["action"] == rs.ACTION_ESCALATE,
            "red after max retries escalates")
         ok("R-6" not in by_task, "non In-Review tasks are ignored")

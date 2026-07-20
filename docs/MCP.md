@@ -285,8 +285,8 @@ Bug intake rule:
   failure class / duplicate link.
 - `failure_class`, when present, must be one of the `fail_fix_signal.v1` classes. Unknown classes
   fail closed and return the schema instead of creating a BUG task.
-- It never creates implementation work, marks work Ready, claims work, wakes an agent, or bypasses
-  the human gate.
+- Submission itself never creates implementation work, marks work Ready, claims work, or wakes an
+  agent. Audited Autopilot routing is a separate lifecycle step and needs no approval gate.
 - REST parity lives at `POST /ixp/v1/bugs/submit`.
 
 Durable ack rule:

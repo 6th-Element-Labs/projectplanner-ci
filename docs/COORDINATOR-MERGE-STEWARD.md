@@ -9,7 +9,7 @@
 Optional **T3 merge steward** for eligible **In Review** PRs:
 
 1. Inspect board-recorded PR / CI / dependency / session state (T0 snapshot). Task risk labels remain informational.
-2. Fail closed to COORD-6 escalation for red/unknown checks, conflicts, stale branches, missing provenance, human gates, and missing authority.
+2. Fail closed to COORD-6 escalation for red/unknown checks, conflicts, stale branches, missing provenance, and missing authority.
 3. When policy is **enabled** and **authority_granted**, arm GitHub auto-merge only for eligible green PRs under the backpressure cap.
 4. After arming, optionally request `reconcile` so Done provenance can land via webhook — **never set Done**.
 5. Default posture is dry-run.

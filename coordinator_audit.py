@@ -31,11 +31,6 @@ ACTIVE_SESSION_STATUSES = {"active", "proposed"}
 GREEN_CI = {"success", "succeeded", "passed", "pass", "green"}
 RED_CI = {"failure", "failed", "error", "cancelled", "canceled", "timed_out"}
 PENDING_CI = {"requested", "mirrored", "triggered", "pending", "queued", "running", "in_progress"}
-HUMAN_GATE_MARKERS = (
-    "human_gate required", "human_gate:required", "human_gate=true",
-)
-
-
 def _json(value: Any, default: Any) -> Any:
     if isinstance(value, type(default)):
         return value
@@ -68,17 +63,12 @@ def _depends_on(value: Any) -> list[str]:
 
 
 def _human_gate(task: Mapping[str, Any]) -> bool:
-    gate = task.get("human_gate")
-    if isinstance(gate, Mapping):
-        required = bool(gate.get("required") or gate.get("blocked"))
-        return required and not bool(gate.get("approved"))
-    if isinstance(gate, bool):
-        return gate
-    text = " ".join(str(task.get(key) or "") for key in (
-        "title", "description", "owner_person_or_role", "phase",
-        "entry_criteria", "exit_criteria",
-    )).lower()
-    return any(marker in text for marker in HUMAN_GATE_MARKERS)
+    """Compatibility projection for retired task-level human gates.
+
+    Legacy records remain readable, but Autopilot no longer treats them as an
+    execution, review, or merge policy.  Mechanical gates remain authoritative.
+    """
+    return False
 
 
 def _digest(value: Any) -> str:
@@ -411,7 +401,6 @@ def build_plan(snapshot: Mapping[str, Any], *, max_recommendations: int = 100,
         missing_deps = [dep for dep in deps if dep not in by_task]
         open_deps = [dep for dep in deps if dep in by_task and
                      _status(by_task[dep].get("status")) not in TERMINAL_STATUSES]
-        gate = _human_gate(task)
         git_state = git_by_task.get(task_id, {})
         evidence = _json(git_state.get("evidence_json"), {})
         has_provenance = bool(
@@ -445,17 +434,7 @@ def build_plan(snapshot: Mapping[str, Any], *, max_recommendations: int = 100,
             )
 
         if status == "not started" and not missing_deps and not open_deps and not active_claims.get(task_id):
-            if gate:
-                recommend(
-                    "escalation", "request_human_gate_decision", "task", task_id,
-                    88 + _task_bonus(task),
-                    "The ready task is explicitly human-gated and cannot be dispatched by T0.",
-                    {"status": task.get("status"), "dependencies": deps,
-                     "owner": task.get("owner_person_or_role")},
-                    "human_gate_required",
-                )
-            else:
-                ready_tasks.append(task)
+            ready_tasks.append(task)
 
         if status != "in review":
             continue

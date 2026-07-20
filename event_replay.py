@@ -438,10 +438,6 @@ def simulate_dispatch(project: str, agent_id: str, *,
             if not store._deps_done(t, by_id):
                 skipped["dependencies"] += 1
                 continue
-            gate = store._task_human_gate_state(t)
-            if gate["blocked"]:
-                skipped["human_approval"] += 1
-                continue
             required_caps = store._task_required_capabilities(t)
             if required_caps and not set(required_caps).issubset(cap_set):
                 skipped["capability_mismatch"] += 1

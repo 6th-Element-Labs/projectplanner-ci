@@ -188,31 +188,11 @@ def build_dispatch_plan(snapshot: Mapping[str, Any], *,
     if audit_plan is None:
         audit_plan = audit_mod.build_plan(snapshot)
     recommendations = list(audit_plan.get("recommendations") or [])
-    # COORD-2 already escalates human-gated ready tasks (no consider_assignment).
-    # Surface those as T1 refuse-to-dispatch escalations so the trail is explicit.
     assignment_recs = [
         row for row in recommendations
         if row.get("category") == "assignment" and row.get("action") == "consider_assignment"
     ]
-    human_gate_recs = [
-        row for row in recommendations
-        if row.get("action") == "request_human_gate_decision"
-    ]
     candidates: List[Dict[str, Any]] = []
-    for row in human_gate_recs:
-        task_id = str(row.get("target_id") or "").upper()
-        task = _task_by_id(snapshot, task_id)
-        lane = _lane(task) or str((row.get("inputs") or {}).get("lane") or "").upper()
-        candidates.append({
-            "kind": "escalation",
-            "action": "escalate_human_gate",
-            "task_id": task_id,
-            "lane": lane,
-            "reason": "human_gate_required",
-            "policy_rule": "coord.dispatch.human_gate",
-            "escalation_class": "human_gate_required",
-            "audit_recommendation_id": row.get("recommendation_id"),
-        })
     for row in assignment_recs:
         task_id = str(row.get("target_id") or "").upper()
         task = _task_by_id(snapshot, task_id)
@@ -225,18 +205,6 @@ def build_dispatch_plan(snapshot: Mapping[str, Any], *,
                 "lane": lane,
                 "reason": "lane_not_in_allowlist",
                 "policy_rule": "coord.dispatch.lane_allowlist",
-                "audit_recommendation_id": row.get("recommendation_id"),
-            })
-            continue
-        if audit_mod._human_gate(task):
-            candidates.append({
-                "kind": "escalation",
-                "action": "escalate_human_gate",
-                "task_id": task_id,
-                "lane": lane,
-                "reason": "human_gate_required",
-                "policy_rule": "coord.dispatch.human_gate",
-                "escalation_class": "human_gate_required",
                 "audit_recommendation_id": row.get("recommendation_id"),
             })
             continue
@@ -505,15 +473,14 @@ def run_dispatch_tick(
     for skipped in plan.get("skipped") or []:
         kind = skipped.get("kind")
         decision_kind = {
-            "escalation": "human_escalation" if skipped.get("escalation_class") == "human_gate_required"
-            else "skip",
+            "escalation": "skip",
             "skip": "skip",
             "nudge": "nudge",
             "dispatch": "skip",
         }.get(kind, "skip")
         if kind == "escalation":
             escalations.append(dict(skipped))
-            decision_kind = "human_escalation" if skipped.get("escalation_class") == "human_gate_required" else "skip"
+            decision_kind = "skip"
         chosen = {
             "action": skipped.get("action"),
             "status": "skipped" if kind != "escalation" else "escalated",

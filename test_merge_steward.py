@@ -166,8 +166,8 @@ def test_plan_fail_closed_and_arm():
            and by_task["M-3"]["escalation_class"] == "absent_permission",
            "risk label is informational; missing authority still fails closed")
         ok(by_task["M-4"]["action"] == ms.ACTION_ESCALATE
-           and by_task["M-4"]["escalation_class"] == "human_gate_required",
-           "human gate escalates")
+           and by_task["M-4"]["escalation_class"] == "absent_permission",
+           "legacy human-gate metadata does not override mechanical authority")
         ok(by_task["M-5"]["action"] == ms.ACTION_ESCALATE
            and by_task["M-5"]["escalation_class"] == "missing_provenance",
            "missing PR escalates")

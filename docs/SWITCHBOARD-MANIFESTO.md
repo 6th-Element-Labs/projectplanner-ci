@@ -93,11 +93,11 @@ through real coordination failures and encoded those scars as invariants.
 The hosted moat is the coordination kernel:
 
 - append-only event history for agent work;
-- formal state machines for claims, leases, acks, wakes, approvals, and Done gates;
+- formal state machines for claims, leases, acks, wakes, and Done gates;
 - causal graph across tasks, agents, files, branches, PRs, messages, failures, costs, and
   outcomes;
 - deterministic replay of what happened and why;
-- scheduler that understands dependencies, capability, risk, cost, stale state, human gates,
+- scheduler that understands dependencies, capability, risk, cost, and stale state,
   and reliability;
 - monitors for drift, sleeping agents, unacked messages, broken provenance, dirty branches,
   and fake green states;
@@ -142,7 +142,7 @@ The scheduler should consider:
 - resource conflicts;
 - project and lane authority;
 - risk level;
-- human approval gates;
+- exact-head review and mechanical release gates;
 - active leases;
 - budget;
 - stale state;

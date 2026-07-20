@@ -10,7 +10,7 @@ Each tick:
 
 1. Opens a COORD-2 read-only snapshot / ranked plan for one project.
 2. Selects ready, unblocked `consider_assignment` recommendations (lane allowlist aware).
-3. Fails closed when the task is human-gated or no eligible host/agent exists.
+3. Fails closed when no eligible host/agent exists; legacy human-gate metadata is non-blocking.
 4. Optionally nudges live agent sessions whose heartbeat is older than the stale threshold.
 5. Records a `switchboard.coordinator_decision.v1` row for **every** candidate (act or skip).
 6. In act mode only: creates a wake via `dispatch.dispatch` and sends a directed claim-request message. It never claims or completes tasks.
@@ -59,5 +59,4 @@ Policy rules used:
 - `coord.dispatch.wake_ready_task`
 - `coord.dispatch.nudge_stale_session`
 - `coord.dispatch.no_host`
-- `coord.dispatch.human_gate`
 - `coord.dispatch.lane_allowlist`

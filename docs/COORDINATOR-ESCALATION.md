@@ -12,7 +12,6 @@ Implementation: `coordinator_escalation.py`, wired from
 
 | Escalation class | Typical trigger |
 |---|---|
-| `human_gate_required` | `human_gate`, bug-intake conversion, SME/security review |
 | `budget_breach` | IRQ/NMI budget envelope |
 | `failed_gate` | Required CI/review red after bounded retries; broken task links |
 | `stale_branch_conflict` | PR conflicted / merge_gate branch_stale |

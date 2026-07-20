@@ -330,7 +330,6 @@ class CoordinatorDaemon:
                 continue
             if action.get("action") not in {
                 "claim_task", "resume_or_claim", "verify_merge_provenance",
-                "request_human_approval",
             }:
                 continue
             by_task.setdefault(key, dict(action))
@@ -345,7 +344,6 @@ class CoordinatorDaemon:
             "claims": sorted(str(row.get("claim_id") or "")
                              for row in detail.get("active_claims") or []),
             "dependency": detail.get("dependency_state") or {},
-            "human_gate": detail.get("human_gate") or {},
             "provenance_terminal": (detail.get("provenance") or {}).get("terminal"),
             "action": candidate.get("action"),
         }

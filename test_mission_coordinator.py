@@ -219,8 +219,8 @@ try:
     }, project="qa-coord-target")
     gated = store.get_mission_status(project="qa-coord-home", deliverable_id="coord-mission")
     gated_plan = mission_coordinator.coordinator_tick_plan(gated)
-    ok(gated_plan.get("status") == "human_required",
-       "human gate escalates without auto-claim")
+    ok(gated_plan.get("status") == "dispatch_ready",
+       "legacy human-gate metadata remains dispatchable")
 
     gated_tick = store.run_mission_coordinator_tick(
         project="qa-coord-home",
@@ -230,10 +230,10 @@ try:
         policy={"auto_claim": True, "worker_agent_id": "agent/worker"},
         idem_key="tick-gated",
     )
-    ok(gated_tick.get("status") == "human_required" and gated_tick.get("escalations"),
-       "coordinator tick returns human_required for approval gates")
-    ok(gated_tick.get("decision", {}).get("decision_kind") == "human_escalation",
-       "human escalation is recorded as decision_kind=human_escalation")
+    ok(gated_tick.get("status") == "claimed" and not gated_tick.get("escalations"),
+       "coordinator claims despite legacy human-gate metadata")
+    ok(gated_tick.get("decision", {}).get("decision_kind") != "human_escalation",
+       "coordinator records no human escalation")
 
     store.set_agent_state("RENDER-1", "human_gate", {
         "required": True,
@@ -279,8 +279,8 @@ try:
         deliverable_id="coord-mission", project="qa-coord-home")
     ok(len(complete_trail) == 4 and
        {item.get("decision_kind") for item in complete_trail} ==
-       {"dispatch", "nudge", "human_escalation", "monitor"},
-       "decision trail stores claim, wake, escalation, and monitor without replay duplicates")
+       {"dispatch", "nudge", "monitor"},
+       "decision trail stores claims, wake, and monitor without replay duplicates")
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 

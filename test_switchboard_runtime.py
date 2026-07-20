@@ -124,9 +124,10 @@ try:
        "working agreement publishes the latency diagnostic path")
     bug_policy = agreement.get("bug_intake_policy", {})
     ok(bug_policy.get("scope") == "write:bug_intake" and
-       "create implementation work outside the BUG lane"
-       in bug_policy.get("forbidden_without_human_approval", []),
-       "working agreement publishes the bug intake human-gate contract")
+       bug_policy.get("conversion_policy", {}).get("approval_required") is False and
+       "dispatch, claim, wake, or otherwise start implementation work"
+       in bug_policy.get("allowed_automation", []),
+       "working agreement publishes autonomous audited bug conversion")
     ok(store.check_protocol_compatibility(agreement["protocol"])["compatible"] is True,
        "current protocol envelope is compatible")
     incompatible = store.check_protocol_compatibility({"version": "ixp.v9"})
@@ -1548,9 +1549,9 @@ try:
         "approval_reason": "Bug intake proposed an implementation task.",
     }, project=P)
     gated_detail = store.get_task(gated["task_id"], project=P)
-    ok(gated_detail["human_gate"]["blocked"] and
-       gated_detail["human_gate"]["status"] == "human_approval_required",
-       "task detail surfaces unapproved human-gate state")
+    ok(not gated_detail["human_gate"]["blocked"] and
+       gated_detail["human_gate"]["status"] == "retired_nonblocking",
+       "task detail preserves legacy human-gate metadata as non-blocking")
     exact_gated = store.claim_task(
         gated["task_id"],
         agent_id="codex/GATE#1",
@@ -1558,8 +1559,12 @@ try:
         actor=auth.actor(p),
         project=P,
     )
-    ok(not exact_gated.get("claimed") and exact_gated["reason"] == "human_approval_required",
-       "claim_task refuses unapproved human-gated work")
+    ok(exact_gated.get("claimed"),
+       "claim_task ignores retired human-gate metadata")
+    store.abandon_claim(
+        exact_gated["claim_id"], reason="exercise claim_next path",
+        actor=auth.actor(p), project=P,
+    )
     next_gated = store.claim_next(
         agent_id="codex/GATE#2",
         lanes=["GATE"],
@@ -1567,28 +1572,9 @@ try:
         actor=auth.actor(p),
         project=P,
     )
-    ok(not next_gated.get("claimed") and
-       next_gated["dispatch_reason"]["skipped"]["human_approval"] >= 1,
-       "claim_next skips unapproved human-gated work")
-    store.set_agent_state(gated["task_id"], "human_gate", {
-        "required": True,
-        "source_bug_task_id": "BUG-1",
-        "target_workstream": "HARDEN",
-        "severity": "high",
-        "approval_reason": "Human approved conversion to implementation work.",
-        "approved_by": "switchboard/operator",
-        "approved_at": "2026-07-02T00:00:00Z",
-    }, project=P)
-    approved_gated = store.claim_next(
-        agent_id="codex/GATE#3",
-        lanes=["GATE"],
-        principal_id=p["id"],
-        actor=auth.actor(p),
-        project=P,
-    )
-    ok(approved_gated.get("claimed") and
-       approved_gated["task"]["task_id"] == gated["task_id"],
-       "human-approved gated work becomes claimable")
+    ok(next_gated.get("claimed") and
+       next_gated["task"]["task_id"] == gated["task_id"],
+       "claim_next ignores retired human-gate metadata")
     override = store.create_task({
         "workstream_id": "OVERRIDE",
         "title": "operator needs to redirect this claim",

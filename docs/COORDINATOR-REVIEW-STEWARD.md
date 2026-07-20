@@ -11,7 +11,7 @@ Keep **In Review** work moving toward a trustworthy green **without merging**:
 1. Inspect board-recorded PR state, scratchpad `external_ci_run` evidence, deps, and unsafe sessions.
 2. Auto-request scratchpad CI (`dispatch_scratchpad` / `request_external_ci_mirror_run`) when CI is red or missing, up to a bounded retry budget.
 3. Dispatch a `review_merge/{task_id}` agent (message + `request_wake(mode=message_only)`) when CI is green and deps/session look clear.
-4. Escalate to `switchboard/operator` (requires_ack) only when policy needs human judgment — exhausted CI retries, human gates, missing PR evidence.
+4. Escalate only when bounded repair is exhausted or required evidence/authorization is unavailable.
 5. **Never merge.** Merges stay behind COORD-7 / T3 `merge_coordinator` + `merge_gate`.
 
 ## Run
@@ -59,7 +59,7 @@ Every tick writes `switchboard.coordinator_decision.v1` rows (stable_key idempot
 | Inspect PR / CI / mergeability inputs | `plan_review_actions` over T0 snapshot |
 | Auto-request mirror rerun on red/missing | `ACTION_RERUN_CI` → `try_dispatch_scratchpad` |
 | Dispatch review_merge | message + wake `kind=review_merge` |
-| Escalate only when policy requires | human_gate / retry exhausted / missing PR |
+| Escalate only when automation cannot proceed | retry exhausted / missing PR or authorization |
 | Never merge by default | `merges=False`; no `merge_coordinator` arm |
 
 ## Tests

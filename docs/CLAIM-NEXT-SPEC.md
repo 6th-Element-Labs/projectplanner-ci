@@ -195,13 +195,12 @@ A task is eligible when all are true:
 2. Its lane matches the requested lane set or the agent is lane-agnostic.
 3. Its status is in the configured ready set.
 4. All hard dependencies are complete or waived.
-5. It is not blocked on human approval.
-6. It has no active task claim.
-7. Its required resources are not held by another active lease.
-8. Its risk is within the agent's declared limit.
-9. Its model policy is compatible with the agent's advertised model/provider capability.
-10. Its remaining budget is compatible with the agent's cost profile.
-11. The authenticated principal is allowed to claim work in that project.
+5. It has no active task claim.
+6. Its required resources are not held by another active lease.
+7. Its risk is within the agent's declared limit.
+8. Its model policy is compatible with the agent's advertised model/provider capability.
+9. Its remaining budget is compatible with the agent's cost profile.
+10. The authenticated principal is allowed to claim work in that project.
 
 Default ready statuses:
 
@@ -217,34 +216,11 @@ Blocked, In Progress, Review, Done, Canceled
 
 Existing deployments may map their local statuses into this set.
 
-### 4.1 Human approval gates
+### 4.1 Retired human-gate metadata
 
-Some tasks are intentionally not claimable even when their dependencies are complete. Bug intake
-conversion is the first concrete case: a Bug Intake Agent may prepare implementation work, but the
-task must not enter dispatch until a human operator or explicit coordinator policy approves it.
-
-Human-gated work carries structured task state under `agent_state.human_gate`:
-
-```json
-{
-  "required": true,
-  "source_bug_task_id": "BUG-123",
-  "target_workstream": "HARDEN",
-  "severity": "high",
-  "approval_reason": "Why this bug should become implementation work",
-  "approved_by": "switchboard/operator",
-  "approved_at": "2026-07-02T00:00:00Z"
-}
-```
-
-Until approval is present:
-
-- `claim_task` fails closed with `reason=human_approval_required`;
-- `claim_next` skips the task and increments `dispatch_reason.skipped.human_approval`;
-- task detail exposes `human_gate.status=human_approval_required`.
-
-This keeps intake agents useful as sensors and triagers without making them a hidden
-implementation-dispatch path.
+Legacy tasks may contain `agent_state.human_gate`. It is preserved for audit compatibility but is
+projected as `required=false`, `blocked=false`, `status=retired_nonblocking`. Claim eligibility is
+decided only by the ordinary rules above.
 
 ---
 
