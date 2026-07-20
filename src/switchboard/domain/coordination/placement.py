@@ -12,6 +12,8 @@ import json
 from collections import OrderedDict, deque
 from typing import Any, Iterable, Mapping
 
+from switchboard.domain.coordination.runtime_profile import evaluate_runtime_profile
+
 
 PLACEMENT_SCHEMA = "switchboard.hybrid_placement_decision.v1"
 HOST_PLACEMENT_SCHEMA = "switchboard.agent_host_placement.v1"
@@ -130,6 +132,7 @@ def evaluate_host(
     scheduler = dict(policy.get("scheduler") or {})
     strict = str(scheduler.get("mode") or "") == "hybrid"
     placement = _host_placement(host)
+    request = dict(policy.get("placement") or {})
     kind = host_class(host)
     reasons: list[str] = []
 
@@ -141,6 +144,19 @@ def evaluate_host(
     runtime = _runtime_match(host, selector)
     if runtime is None:
         reasons.append("runtime_or_capability_mismatch")
+
+    profile_requirement = (
+        request.get("runtime_profile")
+        or selector.get("runtime_profile")
+        or {}
+    )
+    profile = host.get("runtime_profile")
+    if not isinstance(profile, Mapping):
+        capacity = host.get("capacity") or {}
+        profile = capacity.get("runtime_profile") if isinstance(capacity, Mapping) else None
+    profile_evaluation = evaluate_runtime_profile(profile, profile_requirement)
+    if not profile_evaluation["eligible"]:
+        reasons.append(profile_evaluation["reason_code"] or "runtime_profile_drift")
 
     maximum, active, available = _headroom(host, reserved_sessions)
     if available is not None and available <= 0:
@@ -186,7 +202,6 @@ def evaluate_host(
             if placement.get("supports_credential_leases") is not True:
                 reasons.append("credential_lease_not_supported")
 
-        request = dict(policy.get("placement") or {})
         repository = str(request.get("canonical_repo") or selector.get("canonical_repo") or "")
         if repository and repository not in _strings(placement.get("repositories")):
             reasons.append("repository_not_available")
@@ -217,6 +232,7 @@ def evaluate_host(
         if provider_capacity.get("allowed") is False:
             reasons.append("provider_subscription_capacity_denied")
 
+    profile_drift = [dict(item) for item in profile_evaluation.get("mismatches") or []]
     return {
         "host_id": host.get("host_id"),
         "host_class": kind,
@@ -229,6 +245,12 @@ def evaluate_host(
             "reserved_sessions": max(0, int(reserved_sessions)),
             "available_sessions": available,
         },
+        "runtime_profile": {
+            "advertised_hash": profile_evaluation.get("advertised_hash"),
+            "eligible": profile_evaluation.get("eligible") is True,
+            "reason_code": profile_evaluation.get("reason_code"),
+        },
+        "profile_drift": profile_drift,
     }
 
 
@@ -274,6 +296,16 @@ def plan_hybrid_placement(
 
     eligible.sort(key=rank)
     chosen = eligible[0] if eligible else None
+    profile_refusals = [
+        {
+            "host_id": candidate.get("host_id"),
+            "reason_code": (candidate.get("runtime_profile") or {}).get("reason_code"),
+            "reasons": [item.get("reason") for item in candidate.get("profile_drift") or []
+                        if item.get("reason")],
+        }
+        for candidate in candidates
+        if candidate.get("profile_drift")
+    ]
     request_error = _request_error(policy, project)
     provider_capacity = dict(policy.get("provider_capacity") or {})
     action = "wait"
@@ -299,6 +331,8 @@ def plan_hybrid_placement(
             "persistent_capacity_saturated" if saturated
             else "no_eligible_persistent_capacity"
         )
+    elif not chosen and profile_refusals:
+        reason_code = profile_refusals[0].get("reason_code") or "runtime_profile_drift"
 
     safe_request = {
         "project": project,
@@ -328,6 +362,7 @@ def plan_hybrid_placement(
         "candidate_count": len(candidates),
         "eligible_host_count": len(eligible),
         "candidates": candidates,
+        "refusal_details": profile_refusals,
     }
 
 

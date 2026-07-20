@@ -38,6 +38,10 @@ import urllib.error
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
+_ROOT = os.path.abspath(os.path.join(_HERE, ".."))
+_SRC = os.path.join(_ROOT, "src")
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
 import switchboard_core as sb  # noqa: E402  (reuses _http + agent_id, same contract)
 import co_drain  # noqa: E402
 from agent_host_enrollment import (  # noqa: E402
@@ -46,6 +50,11 @@ from agent_host_enrollment import (  # noqa: E402
     preflight_codex_local_auth,
 )
 from codex.cloud_adapter import launch_wake as launch_codex_cloud_wake  # noqa: E402
+from switchboard.domain.coordination.runtime_profile import (  # noqa: E402
+    RUNTIME_BINARIES,
+    build_runtime_profile,
+    runtime_env_key,
+)
 
 PROJECT = os.environ.get("PM_PROJECT", "switchboard")
 SUPERVISOR = os.path.join(_HERE, "codex", "supervisor.py")
@@ -118,6 +127,38 @@ def _csv(value):
 
 def _truthy(value):
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def effective_work_modules(runtimes):
+    """Return each runtime's effective module after the documented fallback."""
+    fallback = str(os.environ.get("PM_AGENT_WORK_MODULE") or "").strip()
+    out = {}
+    for runtime in runtimes or []:
+        runtime = str(runtime or "").strip()
+        if not runtime:
+            continue
+        out[runtime] = str(os.environ.get(runtime_env_key(runtime)) or fallback).strip()
+    return out
+
+
+def effective_runtime_profile(runtimes, runner_watch=None):
+    """Probe the current process environment and finishing toolchain."""
+    normalized = [str(runtime or "").strip() for runtime in runtimes or []
+                  if str(runtime or "").strip()]
+    binary_names = {"git", "gh"}
+    binary_names.update(
+        RUNTIME_BINARIES[runtime] for runtime in normalized
+        if runtime in RUNTIME_BINARIES
+    )
+    return build_runtime_profile(
+        runtimes=normalized,
+        work_modules=effective_work_modules(normalized),
+        auto_work_session=_truthy(os.environ.get("PM_AUTO_WORK_SESSION")),
+        agent_host_version=AGENT_HOST_VERSION,
+        binaries={name: bool(shutil.which(name)) for name in binary_names},
+        runner_watch=(host_serves_runner_watch()
+                      if runner_watch is None else bool(runner_watch)),
+    )
 
 
 def _memory_resources():
@@ -384,7 +425,8 @@ def default_inventory():
     # relay" -- not merely "I am a newer build". A version number would be the
     # easy signal and the wrong one: it says nothing about whether the relay
     # modules are actually installed on this image.
-    if host_serves_runner_watch():
+    runner_watch_proven = host_serves_runner_watch()
+    if runner_watch_proven:
         capabilities.append(RUNNER_WATCH_CAPABILITY)
     capabilities = list(dict.fromkeys(capabilities))
     if cloud_enabled:
@@ -392,6 +434,7 @@ def default_inventory():
         capabilities.append("cloud_execution")
     placement = placement_inventory(repo, runtime, policy)
     local_auth = _redacted_local_auth(runtime)
+    runtime_profile = effective_runtime_profile([runtime], runner_watch=runner_watch_proven)
     owner = {
         "user_id": os.environ.get("PM_HOST_OWNER_USER_ID") or None,
         "tenant_allowlist": placement.get("tenant_ids") or [],
@@ -422,6 +465,7 @@ def default_inventory():
             "identity": _identity_inventory(),
             "owner": owner,
             "local_auth": local_auth,
+            "runtime_profile": runtime_profile,
         },
         "heartbeat_ttl_s": 60,
     }
@@ -438,6 +482,12 @@ def heartbeat_capacity(inventory):
         "allow_work": bool((inventory.get("policy") or {}).get("allow_work")),
         "drain_state": ((capacity.get("placement") or {}).get("drain_state")
                         or capacity.get("drain_state") or "accepting"),
+        # Re-probe on every registration/heartbeat.  A daemon-start snapshot
+        # would miss an in-place binary removal or PATH/profile correction.
+        "runtime_profile": effective_runtime_profile([
+            entry.get("runtime") for entry in inventory.get("runtimes") or []
+            if isinstance(entry, dict)
+        ]),
     })
     return capacity
 

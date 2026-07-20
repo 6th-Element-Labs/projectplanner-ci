@@ -137,3 +137,10 @@ list_agent_hosts(project="switchboard")   -> runtimes[].capabilities includes "r
 list_runner_sessions(task_id="<canary>")  -> claim_id and metadata.work_session_id both set,
                                              metadata.pty true, control.runner_open true
 ```
+
+`list_agent_hosts` also exposes `runtime_profile.hash` and
+`runtime_profile.components`. Hybrid dispatch now requires the effective runtime module,
+automatic Work Sessions for `code_strict`, and the finishing binaries before selecting a host.
+Set `PM_EXPECTED_AGENT_HOST_VERSION` or `PM_EXPECTED_AGENT_HOST_PROFILE_HASH` on the coordinator
+when a rollout must fence placement to one exact Agent Host build/profile. These values are
+expectations only; they do not mutate the SSM parameter or any running host.

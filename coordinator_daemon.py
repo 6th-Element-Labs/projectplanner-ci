@@ -19,6 +19,9 @@ import time
 from typing import Any, Dict, Iterable, Mapping, Optional
 import uuid
 
+import scripts.switchboard_path  # noqa: F401 — make src/switchboard importable
+from switchboard.domain.coordination.runtime_profile import runtime_profile_requirement
+
 
 STATE_SCHEMA = "switchboard.coordinator_daemon_state.v1"
 CONTROL_SCHEMA = "switchboard.coordinator_daemon_control.v1"
@@ -68,6 +71,9 @@ class DaemonConfig:
     elastic_allow_on_demand: bool = True
     lifecycle_enabled: bool = True
     review_reserved_slots: int = 1
+    require_runner_watch: bool = False
+    expected_agent_host_version: str = ""
+    expected_agent_host_profile_hash: str = ""
 
     @classmethod
     def from_env(cls, environ: Optional[Mapping[str, str]] = None) -> "DaemonConfig":
@@ -103,6 +109,12 @@ class DaemonConfig:
                 "PM_COORDINATOR_AUTOPILOT_LIFECYCLE", True, env),
             review_reserved_slots=max(
                 1, int(env.get("PM_COORDINATOR_REVIEW_RESERVED_SLOTS", "1"))),
+            require_runner_watch=enabled_from_env(
+                "PM_COORD_REQUIRE_RUNNER_WATCH", False, env),
+            expected_agent_host_version=(
+                env.get("PM_EXPECTED_AGENT_HOST_VERSION") or "").strip(),
+            expected_agent_host_profile_hash=(
+                env.get("PM_EXPECTED_AGENT_HOST_PROFILE_HASH") or "").strip(),
         )
 
 
@@ -496,6 +508,13 @@ class CoordinatorDaemon:
                 "canonical_repo": "6th-Element-Labs/projectplanner",
                 "session_policy": "code_strict",
                 "isolation": "task_worktree",
+                "runtime_profile": runtime_profile_requirement(
+                    self.config.worker_runtime,
+                    session_policy="code_strict",
+                    require_runner_watch=self.config.require_runner_watch,
+                    agent_host_version=self.config.expected_agent_host_version,
+                    expected_profile_hash=self.config.expected_agent_host_profile_hash,
+                ),
             },
         }
 

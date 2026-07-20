@@ -30,6 +30,7 @@ from switchboard.domain.coordination.placement import (
     claim_decision,
     plan_hybrid_placement,
 )
+from switchboard.domain.coordination.runtime_profile import evaluate_runtime_profile
 from switchboard.domain.coordination.terminal import TERMINAL_WAKE_STATUSES
 from switchboard.domain.ixp.protocol import (
     PROTOCOL_ENVELOPE,
@@ -107,6 +108,7 @@ def _audit_policy(policy: Dict[str, Any]) -> Dict[str, Any]:
             "session_policy": placement.get("session_policy"),
             "isolation": placement.get("isolation"),
             "runtime_binaries": placement.get("runtime_binaries") or [],
+            "runtime_profile": placement.get("runtime_profile") or {},
             "resources": {
                 key: resources.get(key) for key in ("cpu", "memory_mb", "disk_gb")
                 if resources.get(key) is not None
@@ -3021,6 +3023,12 @@ def _host_row(row: sqlite3.Row, now: Optional[float] = None) -> Dict[str, Any]:
         "stale": now >= expires_at or d.get("status") != "online",
         "available_sessions": (max(0, max_sessions - active)
                                if max_sessions is not None else None),
+        # Additive read-model field: list_agent_hosts exposes the advertised
+        # hash and components without a host-table migration.
+        "runtime_profile": (
+            dict(capacity.get("runtime_profile") or {})
+            if isinstance(capacity.get("runtime_profile"), dict) else None
+        ),
     })
     return d
 
@@ -3044,6 +3052,11 @@ def _host_can_handle(host: Dict[str, Any], selector: Dict[str, Any]) -> bool:
         return False
     if host.get("available_sessions") is not None and host["available_sessions"] <= 0:
         return False
+    requirement = selector.get("runtime_profile") or {}
+    if requirement:
+        profile = host.get("runtime_profile")
+        if not evaluate_runtime_profile(profile, requirement).get("eligible"):
+            return False
     return any(_runtime_matches_selector(rt, selector) for rt in host.get("runtimes") or [])
 
 

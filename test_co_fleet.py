@@ -243,6 +243,12 @@ queued_wake = next(item for item in store.list_wake_intents(project="switchboard
 ok((queued_wake.get("policy") or {}).get("runtime_config_ref")
    == "ssm:/switchboard/co/runtime/test",
    "wake stores only the opaque runtime-config reference")
+profile_requirement = (((queued_wake.get("policy") or {}).get("placement") or {})
+                       .get("runtime_profile") or {})
+ok(profile_requirement.get("schema") == "switchboard.runtime_profile_requirement.v1"
+   and profile_requirement.get("components", {}).get("auto_work_session") is True
+   and profile_requirement.get("components", {}).get("binaries", {}).get("gh") is True,
+   "CO placement persists the coordinator's code-strict runtime-profile requirement")
 
 binding_task = store.create_task({
     "workstream_id": "CO", "workstream_name": "CO", "title": "BYOA fleet proof", "phase": "Build",

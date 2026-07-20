@@ -151,6 +151,28 @@ Required operations:
 A stale host must not be selected for a wake intent. Stale host state is evidence, not failure:
 it tells the operator no always-on worker is currently listening.
 
+### Effective runtime profile (SIMPLIFY-5)
+
+Every Agent Host registration and heartbeat carries
+`capacity.runtime_profile` (`switchboard.agent_host_runtime_profile.v1`). The profile includes
+only non-secret finishing facts: the effective work module for each advertised runtime,
+`PM_AUTO_WORK_SESSION`, `agent_host_version`, presence of `git`, `gh`, and the runtime CLI, and
+the host-proven `runner_watch` relay fact. Its `hash` is SHA-256 over the version and canonical
+components. `list_agent_hosts` also exposes the same object at top-level `runtime_profile` so
+operators do not have to infer effective configuration from a launch script or SSH autopsy.
+
+Hybrid placement carries a `switchboard.runtime_profile_requirement.v1` subset. A missing,
+tampered, or drifted profile excludes the host and records the exact component, for example
+`profile drift: PM_AGENT_WORK_MODULE_CODEX=claude_personal_worker:run (expected
+adapters.codex_local_worker:run)`. `PM_EXPECTED_AGENT_HOST_VERSION` and
+`PM_EXPECTED_AGENT_HOST_PROFILE_HASH` are optional coordinator rollout fences for an exact build
+or complete profile. This is admission and observation only; Switchboard does not rewrite host
+configuration.
+
+`runner_watch` remains host-proven. A placement requirement may demand it, but cannot add it to
+an advertisement. A host whose PTY/relay imports fail advertises `false` and is refused when
+Watch is required.
+
 ### Personal host enrollment (ADAPTER-18)
 
 User-owned macOS and Linux hosts enroll through the signed, versioned lifecycle in

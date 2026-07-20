@@ -12,6 +12,7 @@ import re
 import time
 
 import store
+from switchboard.domain.coordination.runtime_profile import runtime_profile_requirement
 
 _RUNTIME = "claude-code"
 _CODEX_RUNTIME = "codex"
@@ -23,6 +24,20 @@ _BINDING_REQUIRED = (
     "tenant_id", "user_id", "provider", "provider_account_id",
     "credential_reference",
 )
+
+
+def _env_truthy(name):
+    return str(os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _expected_runtime_profile(runtime, *, session_policy="code_strict"):
+    return runtime_profile_requirement(
+        runtime,
+        session_policy=session_policy,
+        require_runner_watch=_env_truthy("PM_COORD_REQUIRE_RUNNER_WATCH"),
+        agent_host_version=os.environ.get("PM_EXPECTED_AGENT_HOST_VERSION", ""),
+        expected_profile_hash=os.environ.get("PM_EXPECTED_AGENT_HOST_PROFILE_HASH", ""),
+    )
 
 
 def _co_account_binding(task_id, project, account_binding):
@@ -737,6 +752,13 @@ def dispatch_to_co_fleet(task_id, actor="user", project=store.DEFAULT_PROJECT,
             "session_policy": str(task.get("policy_profile") or "code_strict"),
             "isolation": "task_worktree",
             **dict(placement or {}),
+            # The coordinator owns the expected identity.  Callers may add
+            # resource constraints, but cannot silently bypass the finishing
+            # profile that prevents wrong-module / missing-gh placements.
+            "runtime_profile": _expected_runtime_profile(
+                selected_runtime,
+                session_policy=str(task.get("policy_profile") or "code_strict"),
+            ),
         },
     }
     if binding is not None:
@@ -752,11 +774,17 @@ def dispatch_to_co_fleet(task_id, actor="user", project=store.DEFAULT_PROJECT,
         return {"dispatched": False, "task_id": task_id, "project": project,
                 "error": wake.get("error") or wake.get("reason") or "wake not created"}
     if wake.get("status") == "failed":
+        refusal_details = (wake.get("placement") or {}).get("refusal_details") or []
+        named_refusals = [
+            reason for detail in refusal_details for reason in detail.get("reasons") or []
+            if reason
+        ]
         return {
             "dispatched": False, "task_id": task_id, "project": project,
             "wake_id": wake.get("wake_id"), "wake_status": "failed",
             "error": "hybrid_placement_denied",
-            "reason": (wake.get("placement") or {}).get("reason_code")
+            "reason": (named_refusals[0] if named_refusals else None)
+            or (wake.get("placement") or {}).get("reason_code")
             or (wake.get("result") or {}).get("reason"),
         }
     store.add_comment(
