@@ -80,6 +80,22 @@ ROOT = Path(__file__).resolve().parent
 PROJECT = "switchboard"
 passed = failed = 0
 
+# BUG-113: _provision_host_source_mirror clones the passed source_repo_root's
+# *origin remote*, and ROOT's origin is the real (private) GitHub URL — every
+# fixture that used ROOT was doing a live network+auth-dependent clone, which
+# intermittently failed under CI contention (short-lived token vs. a slower
+# suite run). Only the two fixtures that assert host identity binds to the
+# real canonical checkout (decision #359) need ROOT itself; every other
+# fixture just needs *a* valid git checkout with a resolvable origin, so it
+# gets a local, network-free one instead.
+_LOCAL_ORIGIN_BARE = TMP / "local-origin.git"
+subprocess.run(
+    ["git", "clone", "--bare", "-q", str(ROOT), str(_LOCAL_ORIGIN_BARE)],
+    check=True)
+LOCAL_SOURCE_REPO = TMP / "local-source-checkout"
+subprocess.run(
+    ["git", "clone", "-q", str(_LOCAL_ORIGIN_BARE), str(LOCAL_SOURCE_REPO)], check=True)
+
 
 def ok(condition, message):
     global passed, failed
@@ -88,13 +104,13 @@ def ok(condition, message):
     failed += int(not condition)
 
 
-def paths(name: str) -> dict[str, Path]:
+def paths(name: str, source_repo_root: Path | None = None) -> dict[str, Path]:
     root = TMP / name
     return {
         "prefix": root / "prefix",
         "config_root": root / "config",
         "state_root": root / "state",
-        "source_repo_root": ROOT,
+        "source_repo_root": source_repo_root or LOCAL_SOURCE_REPO,
         "log_root": root / "logs",
         "service_path": root / "service" / (
             "agent-host.plist" if "mac" in name else "agent-host.service"),
@@ -1064,7 +1080,7 @@ try:
        "a post-completion install can be revoked directly from its durable finalization journal")
 
     mac_bootstrap = begin("host/adapter18-macos")
-    mac_paths = paths("macos")
+    mac_paths = paths("macos", source_repo_root=ROOT)
     mac_install = enrollment.install_host(
         bundle_dir=bundle_020,
         public_key_path=public_path,
@@ -2017,7 +2033,7 @@ try:
        "a completed revoke remains locally uninstallable without manual cleanup")
 
     linux_bootstrap = begin("host/adapter18-linux")
-    linux_paths = paths("linux")
+    linux_paths = paths("linux", source_repo_root=ROOT)
     linux_install = enrollment.install_host(
         bundle_dir=bundle_020,
         public_key_path=public_path,
