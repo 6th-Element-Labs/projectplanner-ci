@@ -7,6 +7,7 @@ serialization remain edge concerns; persistence stays behind ``store``.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 from typing import Any, Callable
 
 from mcp.server.fastmcp import Context
@@ -110,12 +111,14 @@ def _scoped_token_auth_project(project: str) -> str:
 
 def create_scoped_token(ctx: Context, project: str = "maxwell", kind: str = "agent",
                         display_name: str = "", scopes: str = "", role: str = "",
-                        principal_id: str = "") -> str:
+                        principal_id: str = "", allowed_projects: str = "",
+                        purpose: str = "", expires_in_seconds: int = 0) -> str:
     """Create one project-scoped bearer token for REST/MCP callers.
 
-    Requires write:system on the target project. Pass project='*' for an operator token that
-    receives explicit audited grants on every current board; future boards remain denied until
-    separately granted. `role` is a preset such as viewer, contributor, operator, or admin;
+    Requires write:system on the target project. Pass project='*' only for an operator token and
+    provide an explicit ``allowed_projects`` set, ``purpose``, and positive
+    ``expires_in_seconds``. Future boards remain denied. `role` is a preset such as viewer,
+    contributor, operator, or admin;
     `scopes` can also be a comma/newline list. The raw token is returned once and is never stored,
     so capture it immediately.
     """
@@ -131,6 +134,22 @@ def create_scoped_token(ctx: Context, project: str = "maxwell", kind: str = "age
     normalized_kind = store.validate_principal_kind(kind or "agent")
     if not normalized_kind:
         return services.dumps({"error": "kind must be one of: " + ", ".join(sorted(store.VALID_PRINCIPAL_KINDS))})
+    requested_projects = store.coerce_csv_list(allowed_projects)
+    if store.is_global_project_binding(binding):
+        purpose = (purpose or "").strip()
+        if not requested_projects:
+            return services.dumps({"error": "allowed_projects required for operator token"})
+        unknown = sorted(set(requested_projects) - set(store.project_ids()))
+        if unknown:
+            return services.dumps({"error": "unknown allowed project(s): " + ", ".join(unknown)})
+        if not purpose:
+            return services.dumps({"error": "purpose required for operator token"})
+        try:
+            expires_in_seconds = int(expires_in_seconds)
+        except (TypeError, ValueError):
+            expires_in_seconds = 0
+        if expires_in_seconds <= 0:
+            return services.dumps({"error": "positive expires_in_seconds required for operator token"})
     raw_token = auth.new_secret_token()
     created = store.create_principal(
         kind=normalized_kind,
@@ -145,16 +164,18 @@ def create_scoped_token(ctx: Context, project: str = "maxwell", kind: str = "age
     operator_grants = []
     if store.is_global_project_binding(binding):
         grant_role = resolved.get("role") or "custom"
-        for project_row in store.projects():
+        expires_at = time.time() + expires_in_seconds
+        for project_id in sorted(set(requested_projects)):
             grant = store.grant_project_role(
-                project_row["id"], "principal", created["id"], grant_role,
-                created_by=auth.actor(principal), scopes=resolved["scopes"])
+                project_id, "principal", created["id"], grant_role,
+                created_by=auth.actor(principal), scopes=resolved["scopes"],
+                purpose=purpose, expires_at=expires_at)
             if grant.get("error"):
                 store.revoke_principal_token(
                     created["id"], project=auth_project, actor=auth.actor(principal))
                 return services.dumps({
                     "error": "operator_grant_failed",
-                    "project": project_row["id"],
+                    "project": project_id,
                     "detail": grant,
                 })
             operator_grants.append({
@@ -163,6 +184,8 @@ def create_scoped_token(ctx: Context, project: str = "maxwell", kind: str = "age
                 "scopes": grant.get("scopes") or [],
                 "created_at": grant.get("created_at"),
                 "created_by": grant.get("created_by"),
+                "purpose": grant.get("purpose"),
+                "expires_at": grant.get("expires_at"),
             })
     public = store.public_principal_record(created, project=auth_project)
     store.append_activity(

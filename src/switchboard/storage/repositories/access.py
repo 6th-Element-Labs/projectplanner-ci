@@ -540,7 +540,8 @@ def project_access(project_id: str) -> Dict[str, Any]:
 
 def grant_project_role(project_id: str, subject_kind: str, subject_id: str, role: str,
                        created_by: str = "system",
-                       scopes: Optional[List[str]] = None) -> Dict[str, Any]:
+                       scopes: Optional[List[str]] = None,
+                       purpose: str = "", expires_at: Optional[float] = None) -> Dict[str, Any]:
     init_project_registry()
     if not has_project(project_id):
         return {"error": f"unknown project: {project_id}"}
@@ -551,6 +552,14 @@ def grant_project_role(project_id: str, subject_kind: str, subject_id: str, role
         return {"error": "subject_kind must be user, principal, agent, or system"}
     if not subject_id:
         return {"error": "subject_id required"}
+    purpose = (purpose or "").strip()
+    if expires_at is not None:
+        try:
+            expires_at = float(expires_at)
+        except (TypeError, ValueError):
+            return {"error": "expires_at must be a unix timestamp"}
+        if expires_at <= time.time():
+            return {"error": "expires_at must be in the future"}
     grant_scopes = scopes if scopes is not None else role_scopes(role)
     if not grant_scopes:
         return {"error": f"unknown role: {role}"}
@@ -558,11 +567,14 @@ def grant_project_role(project_id: str, subject_kind: str, subject_id: str, role
     with _registry_conn() as c:
         c.execute(
             "INSERT INTO project_role_grants(project_id, subject_kind, subject_id, role, scopes, "
-            "created_at, created_by, revoked_at) VALUES (?,?,?,?,?,?,?,NULL) "
+            "created_at, created_by, revoked_at, purpose, expires_at) "
+            "VALUES (?,?,?,?,?,?,?,NULL,?,?) "
             "ON CONFLICT(project_id, subject_kind, subject_id, role) DO UPDATE SET "
-            "scopes=excluded.scopes, revoked_at=NULL, created_by=excluded.created_by",
+            "scopes=excluded.scopes, revoked_at=NULL, created_by=excluded.created_by, "
+            "created_at=excluded.created_at, purpose=excluded.purpose, expires_at=excluded.expires_at",
             (project_id, subject_kind, subject_id, role,
-             json.dumps(sorted(set(grant_scopes)), sort_keys=True), now, created_by),
+             json.dumps(sorted(set(grant_scopes)), sort_keys=True), now, created_by,
+             purpose, expires_at),
         )
         row = c.execute(
             "SELECT * FROM project_role_grants WHERE project_id=? AND subject_kind=? "
@@ -612,7 +624,8 @@ def list_project_role_grants(project_id: str, include_revoked: bool = False) -> 
     q = "SELECT * FROM project_role_grants WHERE project_id=?"
     params: List[Any] = [project_id]
     if not include_revoked:
-        q += " AND revoked_at IS NULL"
+        q += " AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>?)"
+        params.append(time.time())
     q += " ORDER BY subject_kind, subject_id, role"
     with _registry_conn() as c:
         rows = c.execute(q, params).fetchall()
@@ -640,7 +653,8 @@ def principal_project_grants(principal_id: str,
         "AND subject_kind IN ('principal','user')")
     params: List[Any] = [principal_id]
     if not include_revoked:
-        query += " AND revoked_at IS NULL"
+        query += " AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>?)"
+        params.append(time.time())
     query += " ORDER BY project_id, subject_kind, role"
     with _registry_conn() as c:
         rows = c.execute(query, params).fetchall()

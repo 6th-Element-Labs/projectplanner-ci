@@ -50,6 +50,10 @@ REGISTRY_COLUMN_MIGRATIONS: List[Tuple[str, str, str, str, str]] = [
      "ALTER TABLE projects ADD COLUMN purge_intent_id TEXT", ""),
     ("access18_project_access_updated_by", "project_access", "updated_by",
      "ALTER TABLE project_access ADD COLUMN updated_by TEXT", ""),
+    ("seg5_project_role_grants_purpose", "project_role_grants", "purpose",
+     "ALTER TABLE project_role_grants ADD COLUMN purpose TEXT", ""),
+    ("seg5_project_role_grants_expires_at", "project_role_grants", "expires_at",
+     "ALTER TABLE project_role_grants ADD COLUMN expires_at REAL", ""),
 ]
 
 

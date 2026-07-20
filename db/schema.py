@@ -73,6 +73,8 @@ def init_project_registry() -> None:
                 created_at   REAL NOT NULL,
                 created_by   TEXT,
                 revoked_at   REAL,
+                purpose      TEXT,
+                expires_at   REAL,
                 PRIMARY KEY (project_id, subject_kind, subject_id, role)
             );
             """

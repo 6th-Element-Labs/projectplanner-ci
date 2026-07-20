@@ -62,6 +62,7 @@ class _Ctx:
 _stub_heavy_imports()
 import auth        # noqa: E402
 import mcp_server  # noqa: E402
+import store       # noqa: E402
 
 
 P = "switchboard"
@@ -111,7 +112,8 @@ try:
 
     global_created = json.loads(mcp_server.create_scoped_token(
         ctx, project="*", kind="agent", display_name="global cloud agent", role="admin",
-        principal_id="agent-global-cloud-test"))
+        principal_id="agent-global-cloud-test", allowed_projects="helm,maxwell",
+        purpose="incident response", expires_in_seconds=3600))
     global_token = global_created.get("token")
     global_principal = global_created.get("principal") or {}
     ok(global_created.get("project") == "*" and global_principal.get("project") == "*",
@@ -122,6 +124,32 @@ try:
     maxwell_auth = auth.authenticate("maxwell", global_token, ("write:tasks",))
     ok(maxwell_auth["id"] == global_principal["id"],
        "global token authenticates for writes on maxwell")
+    try:
+        auth.authenticate("switchboard", global_token, ("write:tasks",))
+        ungranted_authenticates = True
+    except PermissionError:
+        ungranted_authenticates = False
+    ok(not ungranted_authenticates, "operator token is denied on a project outside its allowlist")
+    grants = global_created.get("operator_grants") or []
+    ok(all(g.get("purpose") == "incident response" and g.get("expires_at") for g in grants),
+       "operator grants audit purpose, actor, allowed project, and expiry")
+    original_roles = store.principal_project_roles
+    role_reads = []
+    store.principal_project_roles = lambda project, principal_id: (
+        role_reads.append((project, principal_id)) or original_roles(project, principal_id))
+    auth.authenticate("maxwell", global_token, ("write:tasks",))
+    store.principal_project_roles = original_roles
+    ok(len(role_reads) == 1, "one authorization performs one project-grant lookup")
+
+    revoked_grant = store.revoke_project_role(
+        "helm", "principal", global_principal["id"], "admin", created_by="test-operator")
+    ok(revoked_grant.get("revoked") is True, "operator project grant can be revoked")
+    try:
+        auth.authenticate("helm", global_token, ("write:tasks",))
+        revoked_grant_authenticates = True
+    except PermissionError:
+        revoked_grant_authenticates = False
+    ok(not revoked_grant_authenticates, "operator grant revocation propagates on the next request")
     mcp_server.revoke_scoped_token(global_principal["id"], ctx, project=P)
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)

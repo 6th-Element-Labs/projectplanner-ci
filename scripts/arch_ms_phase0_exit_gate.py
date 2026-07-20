@@ -37,7 +37,12 @@ MOVED_ACCESS_FUNCTIONS = (
 # evolve deliberately.  Keep such exceptions explicit so the audit continues to
 # catch accidental changes to every other moved function without forcing fixes
 # back into the monolith or pretending the extracted repository is immutable.
-EVOLVED_ACCESS_FUNCTIONS = ("projects", "set_project_access", "ensure_user")
+EVOLVED_ACCESS_FUNCTIONS = (
+    "projects", "set_project_access", "ensure_user",
+    # SEG-5 adds audited purpose/expiry to cross-project operator grants and
+    # filters expired grants from active authorization reads.
+    "grant_project_role", "list_project_role_grants",
+)
 
 REQUIRED_ARTIFACTS = (
     "pyproject.toml", ".python-version", "uv.lock",

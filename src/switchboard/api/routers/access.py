@@ -59,6 +59,8 @@ def create_router(*, resolve_project: ProjectResolver,
             role=(body or {}).get("role") or "",
             created_by=auth.actor(principal),
             scopes=store.coerce_csv_list((body or {}).get("scopes")) or None,
+            purpose=(body or {}).get("purpose") or "",
+            expires_at=(body or {}).get("expires_at"),
         )
         if result.get("error"):
             raise HTTPException(400, result["error"])
