@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from constants import DEFAULT_PROJECT
+from switchboard.application.queries import task_session
 from switchboard.storage.repositories import runner as runner_repo
 
 
@@ -97,9 +98,25 @@ def resolve_watch(
         include_stale: bool = False,
         project: Optional[str] = None) -> dict[str, Any]:
     """Fail-closed Watch/Chat gate (COORD-34 / UI-17)."""
-    return runner_repo.resolve_runner_watch(
-        task_id, include_stale=include_stale,
-        project=project or DEFAULT_PROJECT)
+    projection = task_session.execute_for(task_id, project=project or DEFAULT_PROJECT)
+    if projection is None:
+        return runner_repo.runner_bind_incomplete(["task_id"], task_id=task_id) | {
+            "message": "task not found", "task_session": None,
+        }
+    session = projection.get("active_runner")
+    if session:
+        verdict = runner_repo.assert_runner_watchable(session)
+        return {**verdict, "sessions": [session], "enough_for_panel": True,
+                "task_session": projection}
+    outcome = projection.get("last_dispatch_outcome") or {}
+    attempt_runner = ((projection.get("active_attempt") or {}).get("runner"))
+    return runner_repo.runner_bind_incomplete(
+        list(runner_repo.RUNNER_BIND_FIELDS), task_id=task_id) | {
+        "message": outcome.get("message") or "No live runner is registered for this task",
+        "sessions": [attempt_runner] if attempt_runner else [],
+        "enough_for_panel": False, "task_session": projection,
+        **({"dispatch": outcome} if outcome else {}),
+    }
 
 
 def list_control_requests(

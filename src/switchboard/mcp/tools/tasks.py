@@ -18,6 +18,7 @@ from switchboard.application.commands import create_task as create_task_command
 from switchboard.application.commands import move_task as move_task_command
 from switchboard.application.commands import update_task as update_task_command
 from switchboard.application.queries import get_task as get_task_query
+from switchboard.application.queries import task_session as task_session_query
 
 
 @dataclass(frozen=True)
@@ -74,6 +75,12 @@ def get_task(task_id: str, project: str = "maxwell") -> str:
     project selects the board ('maxwell' default, 'helm', or 'switchboard')."""
     task = get_task_query.execute_for(task_id, project=project)
     return _services().dumps(agent._task_brief(task, full=True)) if task else "no such task"
+
+
+def get_task_session(task_id: str, project: str = "maxwell") -> str:
+    """Authoritative wake/claim/Work Session/runner projection for one task."""
+    projection = task_session_query.execute_for(task_id, project=project)
+    return _services().dumps(projection) if projection else "no such task"
 
 
 def update_task(task_id: str, ctx: Context, title: str = "", description: str = "",
@@ -259,7 +266,7 @@ def remove_dependency(task_id: str, depends_on: str, ctx: Context,
 
 
 TASK_TOOL_NAMES = (
-    "search_tasks", "get_task", "update_task", "create_task", "add_comment",
+    "search_tasks", "get_task", "get_task_session", "update_task", "create_task", "add_comment",
     "archive_task", "move_task", "add_dependency", "remove_dependency",
 )
 
