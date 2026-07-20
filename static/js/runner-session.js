@@ -288,15 +288,13 @@
     _runnerPtyClose() {
         const els = this._runnerPtyEls();
         const rp = this._runnerPty;
-        if (rp && rp.taskId && rp.runnerSessionId) {
-            // Closing the presentation tears down the socket/terminal, but a
-            // repeat click on the same Deliverable node must keep meaning
-            // "reopen that runner", even if the runner becomes stale between
-            // the two clicks. The fresh watch gate remains authoritative.
-            this._runnerPtyLast = {
-                taskId: String(rp.taskId),
-                runnerSessionId: String(rp.runnerSessionId),
-            };
+        if (rp && rp.taskId) {
+            // BUG-91: remember only WHICH TASK the operator was watching, never
+            // which runner. A repeat click still means "reopen the runner
+            // surface for this task", but the runner identity is resolved from
+            // the server on every open. Pinning an id here is what let a dead
+            // historical row win over a newer live runner.
+            this._runnerPtyIntentTask = String(rp.taskId);
         }
         if (els.panel) {
             els.panel.classList.remove('show');
@@ -339,14 +337,15 @@
     // instead of opening a red gate state (lets callers like the mission graph
     // click handler fall back to a different action for tasks with no run).
     // opts.includeStale discovers prior runner history after a full page reload,
-    // when the in-memory _runnerPtyLast hint no longer exists.
+    // when the in-memory task-intent hint no longer exists.
     async openRunnerSessionPanel(taskId, opts) {
         opts = opts || {};
         const id = String(taskId || '').trim();
         if (!id) return false;
-        const remembered = (this._runnerPtyLast
-            && String(this._runnerPtyLast.taskId || '') === id)
-            ? this._runnerPtyLast : null;
+        // Task-scoped intent only (BUG-91). It decides whether to keep the click
+        // on the runner surface and whether to look through stale history — it
+        // never decides WHICH runner is shown. The server picks that, every time.
+        const remembered = String(this._runnerPtyIntentTask || '') === id;
         let watch;
         try {
             const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`
@@ -370,40 +369,47 @@
             // its truthful gate instead of treating it as "no runner".
             if (opts.fallbackIfNotWatchable && !remembered && !sessions.length) return false;
             const els = this._runnerPtyShowShell(opts.dockInto);
-            const rememberedSession = sessions.find((session) =>
-                String(session.runner_session_id || '') === String(remembered?.runnerSessionId || ''))
-                || sessions[0] || null;
-            const rememberedSid = String(
-                watch?.runner_session_id || rememberedSession?.runner_session_id
-                || remembered?.runnerSessionId || '');
-            // A stale/bind-incomplete result has no live _runnerPty object, so
-            // _runnerPtyClose() cannot recover its identity during teardown.
-            // Remember it as soon as discovery succeeds. Subsequent clicks can
-            // then reopen the same truthful gate even if the authoritative
-            // session list no longer includes that historical row.
-            if (rememberedSid) {
-                this._runnerPtyLast = { taskId: id, runnerSessionId: rememberedSid };
-            }
-            if (els.title) els.title.textContent = rememberedSid ? `${id} · ${rememberedSid}` : id;
-            if (els.sub) els.sub.textContent = String(rememberedSession?.host_id || '');
+            // BUG-91: the server orders sessions newest-first and its refusal
+            // names the row it judged. Take that answer verbatim. Never revive a
+            // previously-shown runner id the server no longer reports — a task
+            // accumulates one row per dispatch attempt, so a remembered id is
+            // routinely older than the truth.
+            const currentSession = sessions[0] || null;
+            const currentSid = String(
+                watch?.runner_session_id || currentSession?.runner_session_id || '');
+            this._runnerPtyIntentTask = id;
+            if (els.title) els.title.textContent = currentSid ? `${id} · ${currentSid}` : id;
+            if (els.sub) els.sub.textContent = String(currentSession?.host_id || '');
             if (els.live) els.live.hidden = true;
             const localTask = (this.tasks || []).find((task) => String(task.task_id || '') === id);
             const taskStatus = String(opts.taskStatus || localTask?.status || '');
             const endedStatuses = new Set(['completed', 'failed', 'cancelled', 'expired', 'lost', 'killed', 'exited']);
-            const ended = rememberedSession && (
-                rememberedSession.stale === true
-                || endedStatuses.has(String(rememberedSession.status || '').toLowerCase()));
-            if (resumeBox) resumeBox.hidden = !(taskStatus === 'In Review' && rememberedSid && ended);
-            if (resumeButton && taskStatus === 'In Review' && rememberedSid && ended) {
+            const ended = currentSession && (
+                currentSession.stale === true
+                || endedStatuses.has(String(currentSession.status || '').toLowerCase()));
+            if (resumeBox) resumeBox.hidden = !(taskStatus === 'In Review' && currentSid && ended);
+            if (resumeButton && taskStatus === 'In Review' && currentSid && ended) {
                 resumeButton.onclick = () => this.resumeTaskReview(id, opts);
             }
             const missing = (watch && watch.missing || []).join(', ') || 'bind fields';
             const detail = watch?.message
                 || `Runner bind incomplete for Watch/Chat (missing: ${missing})`;
+            // BUG-91: when the run never started, the dispatcher's reason is the
+            // useful thing to show ("capacity exhausted for co-general: cap=4").
+            // "Runner session is stale" describes the debris, not the problem.
+            const dispatch = watch?.dispatch || null;
+            const label = dispatch?.state || watch?.error_code || watch?.error
+                || 'runner_bind_incomplete';
+            const badgeClass = dispatch?.state === 'needs_attention' ? 'bg-orange-lt' : 'bg-red-lt';
+            let extra = '';
+            if (dispatch && Number(dispatch.dispatch_attempt) > 1) {
+                extra += `<div class="mt-1 text-secondary">Dispatch attempt ${this.esc(String(dispatch.dispatch_attempt))}`
+                    + `${dispatch.host_id ? ` · last host ${this.esc(String(dispatch.host_id))}` : ''}</div>`;
+            }
             this._runnerPtyGate(
-                `<span class="badge bg-red-lt me-1">${this.esc(watch?.error_code || watch?.error || 'runner_bind_incomplete')}</span>`
-                + this.esc(detail),
-                'danger',
+                `<span class="badge ${badgeClass} me-1">${this.esc(label)}</span>`
+                + this.esc(detail) + extra,
+                dispatch?.state === 'needs_attention' ? 'warning' : 'danger',
             );
             return true;
         }
@@ -418,7 +424,7 @@
             return true;
         }
         this._runnerPtyTeardown();
-        this._runnerPtyLast = { taskId: id, runnerSessionId: sid };
+        this._runnerPtyIntentTask = id;
         if (els.title) els.title.textContent = `${id} · ${sid}`;
         if (els.sub) els.sub.textContent = `${(watch.bind && watch.bind.host_id) || ''}`.trim();
         this._runnerPtyGate('', 'secondary');
@@ -446,7 +452,7 @@
             if (note) note.textContent = result.continuation_mode === 'resume_conversation'
                 ? 'Resuming the same Codex conversation…'
                 : 'Replacement started with the saved review handoff…';
-            this._runnerPtyLast = null;
+            this._runnerPtyIntentTask = null;
             const deadline = Date.now() + 30000;
             while (Date.now() < deadline) {
                 await new Promise((resolve) => setTimeout(resolve, 1000));

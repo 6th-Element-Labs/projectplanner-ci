@@ -69,6 +69,36 @@ P_LIST_WORK_SESSIONS = "/ixp/v1/work_sessions"
 P_TALLY_SPEND = "/tally/v1/spend/ingest"
 MESSAGE_ONLY_LANE = "__MESSAGE_ONLY__"
 AGENT_HOST_VERSION = os.environ.get("PM_AGENT_HOST_VERSION", "0.2.0")
+# Advertised when this build can serve browser Watch/Chat (supervisor PTY +
+# outbound relay). Placement keys off this instead of sniffing version strings.
+RUNNER_WATCH_CAPABILITY = "runner_watch"
+
+
+def host_serves_runner_watch():
+    """True only when this host can really deliver browser Watch/Chat.
+
+    BUG-91: the capability gates placement, so a false positive puts work on a
+    host whose runner nobody can watch -- the exact failure it exists to prevent.
+    It therefore proves the relay path by importing the modules that carry it,
+    the same ones _ensure_host_bridge needs at runtime. An image missing them
+    advertises nothing and is skipped rather than silently accepting the work.
+    """
+    try:
+        from switchboard.application import runner_pty_relay  # noqa: F401
+        from codex.pty_stream import build_control_url  # noqa: F401
+        from codex.pty_host_ws_client import open_host_bridge  # noqa: F401
+    except Exception:
+        try:
+            root = os.path.abspath(os.path.join(_HERE, ".."))
+            for candidate in (root, os.path.join(root, "src")):
+                if candidate not in sys.path:
+                    sys.path.insert(0, candidate)
+            from switchboard.application import runner_pty_relay  # noqa: F401,F811
+            from codex.pty_stream import build_control_url  # noqa: F401,F811
+            from codex.pty_host_ws_client import open_host_bridge  # noqa: F401,F811
+        except Exception:
+            return False
+    return True
 _LOCAL_AUTH_LAST_PROBE_AT = 0.0
 _BOUND_FINALIZERS_LOCK = threading.Lock()
 _BOUND_FINALIZERS = {}
@@ -349,6 +379,13 @@ def default_inventory():
     # this in configuration lets co-general/co-build use the same immutable AMI while
     # still failing closed when a heavy-build wake lands on a general worker.
     capabilities.extend(_csv(os.environ.get("PM_HOST_CAPABILITIES", "")))
+    # BUG-91: self-declare Watch/Chat only when this host can genuinely serve it.
+    # The claim must mean "I can deliver PTY output, accept input, and reach the
+    # relay" -- not merely "I am a newer build". A version number would be the
+    # easy signal and the wrong one: it says nothing about whether the relay
+    # modules are actually installed on this image.
+    if host_serves_runner_watch():
+        capabilities.append(RUNNER_WATCH_CAPABILITY)
     capabilities = list(dict.fromkeys(capabilities))
     if cloud_enabled:
         profiles.append("cloud_execution")
@@ -1618,6 +1655,11 @@ def _drain_runners(host_id, recover_stale_local=True):
     return list(merged.values())
 
 
+_TERMINAL_RUNNER_STATES = frozenset({
+    "completed", "failed", "cancelled", "expired", "lost", "killed", "exited", "stopped",
+})
+
+
 def renew_live_direct_runners(inventory):
     """Keep browser Watch/Chat bound to every live Mac Codex PTY.
 
@@ -1643,11 +1685,34 @@ def renew_live_direct_runners(inventory):
         claim_id = str(session.get("claim_id") or "")
         work_session_id = str(metadata.get("work_session_id") or "")
         claim_bound = bool(claim_id and work_session_id)
+        wake_id = str(metadata.get("wake_id") or session.get("wake_id") or "")
+        task_id = str(session.get("task_id") or "")
+        # BUG-91: an exited process must go terminal NOW, not drift to stale and
+        # then expired. A row that merely stops being renewed still looks like a
+        # live session for a whole lease, and stays the newest thing the browser
+        # can find for the task long after that. The supervisor's `alive` is the
+        # only local truth about the process, so report it the moment it flips.
+        if (session.get("alive") is False and task_id
+                and str(session.get("status") or "").lower() not in _TERMINAL_RUNNER_STATES):
+            terminal = _try("POST", P_HEARTBEAT_RUNNER, {
+                "project": PROJECT,
+                "runner_session_id": session.get("runner_session_id"),
+                "host_id": host_id,
+                "task_id": task_id,
+                "status": "exited",
+                "metadata": {**metadata,
+                             "failure_reason": "supervisor reported the process exited",
+                             "terminalized_by": "host_supervisor"},
+            })
+            renewed.append({
+                "runner_session_id": session.get("runner_session_id"),
+                "task_id": task_id,
+                "terminalized": bool(terminal and not terminal.get("error")),
+            })
+            continue
         if (not (direct or claim_bound) or session.get("alive") is not True
                 or str(session.get("status") or "").lower() != "running"):
             continue
-        wake_id = str(metadata.get("wake_id") or session.get("wake_id") or "")
-        task_id = str(session.get("task_id") or "")
         if not wake_id or not task_id:
             continue
         body = {

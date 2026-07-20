@@ -90,13 +90,30 @@ ok("fallbackIfNotWatchable" in MISSION,
 ok("openNodeModal" in MISSION, "the pre-existing deliverable-link node modal is preserved as the fallback")
 ok("mission-dag-node" in APP and "await this.openRunnerSessionPanel" in APP,
    "the visible dependency-map pills use the same runner-first path as Mermaid graph nodes")
-ok("_runnerPtyLast" in RUNNER_SESSION and "include_stale=true" in RUNNER_SESSION,
+ok("_runnerPtyIntentTask" in RUNNER_SESSION and "include_stale=true" in RUNNER_SESSION,
    "closing a watched runner remembers repeat-click intent and reopens its truthful stale gate")
 ok("opts.includeStale" in RUNNER_SESSION and "!sessions.length" in RUNNER_SESSION,
    "a fresh page can discover stale runner history while never-run tasks still fall back to authoring")
-ok("if (rememberedSid)" in RUNNER_SESSION
-   and "this._runnerPtyLast = { taskId: id, runnerSessionId: rememberedSid }" in RUNNER_SESSION,
-   "a discovered stale runner retains its identity across close/reopen even if later discovery is empty")
+# BUG-91: one task accumulates one runner row per dispatch attempt (SEG-2 held 8
+# rows across 3 hosts and 31 hours). A client-side memo of WHICH runner therefore
+# outranked the truth on every reopen. The memo is now a task id only; the server
+# — which already orders sessions newest-first and returns the first watchable
+# one — is the sole authority on runner identity.
+ok("rememberedSid" not in RUNNER_SESSION and "rememberedSession" not in RUNNER_SESSION,
+   "no client-side memo of a runner identity survives anywhere in the open path")
+ok("this._runnerPtyIntentTask = id;" in RUNNER_SESSION
+   and "runnerSessionId: rememberedSid" not in RUNNER_SESSION,
+   "the remembered hint is a bare task id, never a {taskId, runnerSessionId} pair")
+ok("const currentSession = sessions[0] || null;" in RUNNER_SESSION,
+   "the refused-gate path shows the server's newest session, not a remembered one")
+# BUG-91: when nothing started, the dispatcher's reason ("capacity exhausted for
+# co-general: cap=4") is the useful message — not a description of the debris.
+ok("watch?.dispatch" in RUNNER_SESSION,
+   "the refusal gate reads the server's dispatch outcome")
+ok("dispatch?.state === 'needs_attention'" in RUNNER_SESSION,
+   "a wake queued far too long renders as needs_attention rather than a hard error")
+ok("dispatch.dispatch_attempt" in RUNNER_SESSION,
+   "a repeatedly-retried dispatch shows its attempt count instead of looking like a one-off")
 ok("_runnerPtyCloseTimer" in RUNNER_SESSION,
    "a pending close animation cannot hide a runner panel that was immediately reopened")
 

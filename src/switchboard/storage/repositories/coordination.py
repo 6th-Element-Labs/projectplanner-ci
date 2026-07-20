@@ -2032,6 +2032,32 @@ def complete_wake(wake_id: str, runner_session_id: str = "",
                                    "runner_session_id": runner_session_id or None,
                                    "agent_id": agent_id or None,
                                    "result": result}, sort_keys=True), now))
+            # BUG-91: a dispatch attempt that never started must leave no live
+            # task runner behind. Every failure path (capacity_unavailable,
+            # registration timeout, launch failure) funnels through here, so this
+            # is the one place that reliably closes the wrapper rows a failed
+            # attempt raced into existence. `keep` protects the runner a
+            # successful attempt actually bound, so retries supersede their
+            # predecessors without deleting the evidence.
+            if status != "completed" or result.get("started") is False:
+                from .runner import terminalize_wake_runners_in
+                closed_runners = terminalize_wake_runners_in(
+                    c, wake_id,
+                    reason=str(result.get("reason") or result.get("error") or "")
+                    or f"wake {status}",
+                    keep=runner_session_id or "",
+                    now=now,
+                )
+                if closed_runners:
+                    c.execute(
+                        "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                        "VALUES (?,?,?,?,?)",
+                        (wake.get("task_id"), actor, "runner.terminalized_by_wake_failure",
+                         json.dumps({"wake_id": wake_id, "status": status,
+                                     "runner_session_ids": closed_runners,
+                                     "reason": result.get("reason")
+                                     or result.get("error") or ""},
+                                    sort_keys=True), now))
             if status == "completed" and runner_session_id and not personal:
                 selector = wake.get("selector") or {}
                 # A delegated worker may have rebound the preclaim runner row to its

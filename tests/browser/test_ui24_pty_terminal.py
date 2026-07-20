@@ -107,7 +107,7 @@ try:
     healthy = _wait_healthy()
     ok(healthy, "app.py boots and /health responds (required auth, throwaway DB)")
     index_html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
-    ok('js/runner-session.js?v=8' in index_html and 'app.js?v=54' in index_html,
+    ok('js/runner-session.js?v=9' in index_html and 'app.js?v=54' in index_html,
        "the deployed shell invalidates pre-Resume-review runner and modal assets")
     if not healthy:
         raise SystemExit("server did not become healthy — aborting")
@@ -536,12 +536,12 @@ try:
         # this assertion actually cares about instead.
         page.wait_for_function("""
             () => !document.getElementById('runner-pty-panel').hidden
-                && TeepPlan._runnerPtyLast?.taskId === 'FAKE-TASK-1'
+                && TeepPlan._runnerPtyIntentTask === 'FAKE-TASK-1'
         """, timeout=5_000)
         clicked_reopen = page.evaluate("""
             () => ({
                 visible: !document.getElementById('runner-pty-panel').hidden,
-                rememberedTask: TeepPlan._runnerPtyLast?.taskId || '',
+                rememberedTask: TeepPlan._runnerPtyIntentTask || '',
                 nodeModalOpen: document.getElementById('dl-node-modal').classList.contains('show'),
             })
         """)
@@ -562,7 +562,7 @@ try:
                 return {
                     opened,
                     visible: !document.getElementById('runner-pty-panel').hidden,
-                    rememberedTask: TeepPlan._runnerPtyLast?.taskId || '',
+                    rememberedTask: TeepPlan._runnerPtyIntentTask || '',
                     nodeModalOpen: document.getElementById('dl-node-modal').classList.contains('show'),
                 };
             }
@@ -585,7 +585,7 @@ try:
         page.evaluate("() => TeepPlan._runnerPtyClose()")
 
         # ---- fresh reload can discover and open an existing stale runner ----
-        # A browser reload erases _runnerPtyLast. Production ARCH-MS-121 is
+        # A browser reload erases the task-intent hint. Production ARCH-MS-121 is
         # already stale because its wrapper crashed, so its FIRST click after a
         # reload must still open the runner surface instead of the authoring
         # modal. Mock only the server response; drive the same real visible box.
@@ -614,7 +614,7 @@ try:
             )
 
         page.route("**/ixp/v1/runner_sessions/watch?**", _stale_watch)
-        page.evaluate("() => { TeepPlan._runnerPtyLast = null; }")
+        page.evaluate("() => { TeepPlan._runnerPtyIntentTask = null; }")
         page.locator('.mission-dag-node[data-linked-task="FAKE-TASK-1"]').click()
         page.wait_for_timeout(300)
         fresh_stale_open = page.evaluate("""
@@ -645,21 +645,117 @@ try:
             () => ({
                 visible: !document.getElementById('runner-pty-panel').hidden,
                 title: document.getElementById('runner-pty-title').textContent,
-                rememberedTask: TeepPlan._runnerPtyLast?.taskId || '',
-                rememberedSession: TeepPlan._runnerPtyLast?.runnerSessionId || '',
+                rememberedTask: TeepPlan._runnerPtyIntentTask || '',
                 nodeModalOpen: document.getElementById('dl-node-modal').classList.contains('show'),
             })
         """)
         ok(len(stale_watch_urls) == 2 and "include_stale=true" in stale_watch_urls[1],
            "reopening a closed stale runner performs the authoritative stale lookup")
+        # BUG-91: the reopen keeps the operator on the runner surface because the
+        # TASK intent survived — not because a runner id was memoised. When the
+        # authoritative lookup reports no session, the panel must not resurrect
+        # the identity it happened to show a moment ago.
         ok(stale_reopen_after_empty_lookup["visible"]
-           and "run_stale_after_reload" in stale_reopen_after_empty_lookup["title"]
-           and stale_reopen_after_empty_lookup["rememberedTask"] == "FAKE-TASK-1"
-           and stale_reopen_after_empty_lookup["rememberedSession"] == "run_stale_after_reload",
-           "the stale runner reopens after an empty follow-up lookup using its remembered identity")
+           and stale_reopen_after_empty_lookup["rememberedTask"] == "FAKE-TASK-1",
+           "task intent alone reopens the runner surface after an empty follow-up lookup")
+        ok("run_stale_after_reload" not in stale_reopen_after_empty_lookup["title"],
+           "an empty authoritative lookup never resurrects the previously-shown runner identity")
         ok(not stale_reopen_after_empty_lookup["nodeModalOpen"],
            "an empty follow-up lookup does not fall through to the authoring modal")
         page.unroute("**/ixp/v1/runner_sessions/watch?**", _stale_watch)
+        page.evaluate("() => TeepPlan._runnerPtyClose()")
+
+        # ---- a NEWER live runner always outranks the one last shown ----------
+        # The exact BUG-91 production shape: SEG-2 held 8 runner rows across 3
+        # hosts and 31 hours because every failed dispatch attempt registered
+        # another. Before this fix the client memoised whichever id it showed
+        # first and re-selected it on every reopen, so a newer live runner could
+        # never win and Watch stayed pinned to a dead row forever.
+        newer_watch_urls = []
+
+        def _newer_runner_watch(route):
+            newer_watch_urls.append(route.request.url)
+            if len(newer_watch_urls) == 1:
+                # First click: only the old dead attempt exists.
+                route.fulfill(
+                    status=200, content_type="application/json",
+                    body=json.dumps({
+                        "watchable": False,
+                        "error_code": "runner_bind_incomplete",
+                        "message": "Runner session is stale; Watch/Chat refused until a live bind exists",
+                        "runner_session_id": "run_old_dead_attempt",
+                        "sessions": [{
+                            "runner_session_id": "run_old_dead_attempt",
+                            "host_id": "host/i-old", "status": "expired", "stale": True,
+                        }],
+                    }),
+                )
+                return
+            # A retry has since produced a live, fully-bound runner. The server
+            # orders newest-first and returns the first watchable row.
+            route.fulfill(
+                status=200, content_type="application/json",
+                body=json.dumps({
+                    "watchable": True,
+                    "runner_session_id": "run_new_live_attempt",
+                    "task_id": "FAKE-TASK-1",
+                    "bind": {"host_id": "host/i-new"},
+                    "sessions": [
+                        {"runner_session_id": "run_new_live_attempt",
+                         "host_id": "host/i-new", "status": "running", "stale": False},
+                        {"runner_session_id": "run_old_dead_attempt",
+                         "host_id": "host/i-old", "status": "expired", "stale": True},
+                    ],
+                }),
+            )
+
+        page.route("**/ixp/v1/runner_sessions/watch?**", _newer_runner_watch)
+        # Same hermetic handoff as the Resume-review case below: this test proves
+        # WHICH runner gets selected, not the already-covered relay handshake.
+        # Without this the mocked live runner would ask the throwaway server for
+        # a real PTY ticket and log a 403.
+        savedConnect = page.evaluate("""
+            () => {
+                window.__ui24SavedConnect = TeepPlan._runnerPtyConnect;
+                TeepPlan._runnerPtyConnect = async () => {
+                    document.getElementById('runner-pty-live').hidden = false;
+                };
+                return true;
+            }
+        """)
+        ok(savedConnect, "the newer-runner case stubs the relay handshake to stay hermetic")
+        page.evaluate("() => { TeepPlan._runnerPtyIntentTask = null; }")
+        page.locator('.mission-dag-node[data-linked-task="FAKE-TASK-1"]').click()
+        page.wait_for_timeout(300)
+        pinned_to_dead = page.evaluate(
+            "() => document.getElementById('runner-pty-title').textContent")
+        ok("run_old_dead_attempt" in pinned_to_dead,
+           "the first click shows the only runner that exists — the dead attempt")
+
+        page.get_by_role("button", name="Close Watch/Chat").click()
+        page.wait_for_timeout(300)
+        page.locator('.mission-dag-node[data-linked-task="FAKE-TASK-1"]').click()
+        page.wait_for_timeout(400)
+        after_newer = page.evaluate("""
+            () => ({
+                title: document.getElementById('runner-pty-title').textContent,
+                liveSession: TeepPlan._runnerPty?.runnerSessionId || '',
+                intent: TeepPlan._runnerPtyIntentTask || '',
+            })
+        """)
+        ok("run_new_live_attempt" in after_newer["title"]
+           and "run_old_dead_attempt" not in after_newer["title"],
+           "reopening after a newer live runner appears binds the NEW runner, never the remembered dead one")
+        ok(after_newer["liveSession"] == "run_new_live_attempt",
+           "the live PTY session object is the newer runner, so Watch/Chat attaches to the real process")
+        ok(after_newer["intent"] == "FAKE-TASK-1",
+           "only the task intent persisted across the close/reopen")
+        page.unroute("**/ixp/v1/runner_sessions/watch?**", _newer_runner_watch)
+        page.evaluate("""
+            () => {
+                if (window.__ui24SavedConnect) TeepPlan._runnerPtyConnect = window.__ui24SavedConnect;
+            }
+        """)
         page.evaluate("() => TeepPlan._runnerPtyClose()")
 
         # ---- stale In Review runner gets one visible replacement action -----
@@ -706,7 +802,7 @@ try:
             )
 
         page.route("**/api/tasks/FAKE-TASK-1/resume-review**", _resume_review)
-        page.evaluate("() => { TeepPlan._runnerPtyLast = null; }")
+        page.evaluate("() => { TeepPlan._runnerPtyIntentTask = null; }")
         page.evaluate("() => TeepPlan.openRunnerSessionPanel('FAKE-TASK-1', {includeStale: true, taskStatus: 'In Review'})")
         page.wait_for_timeout(300)
         ok(page.get_by_role("button", name="Resume review").is_visible(),

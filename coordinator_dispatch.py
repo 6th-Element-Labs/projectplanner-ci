@@ -34,6 +34,14 @@ DEFAULT_POLICY: Dict[str, Any] = {
     "allow_self_claim": False,
     "send_claim_request_message": True,
     "post_task_comment": True,
+    # BUG-91: only place Watch-requiring work on hosts that can actually show
+    # the operator the run. Ships OFF and is enabled with
+    # PM_COORD_REQUIRE_RUNNER_WATCH=1 -- hosts must first roll out the build that
+    # advertises `runner_watch`, or enabling this would starve dispatch fleet-wide
+    # (every host registered before that build advertises no such capability).
+    # Rollout order: deploy agent hosts -> confirm the capability is advertised
+    # -> flip this on.
+    "require_runner_watch": False,
 }
 
 
@@ -55,6 +63,8 @@ def _normalize_policy(policy: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     out["worker_agent_id"] = str(out.get("worker_agent_id") or "").strip()
     out["allow_self_claim"] = bool(out.get("allow_self_claim"))
     out["nudge_stale_after_seconds"] = max(60, int(out["nudge_stale_after_seconds"] or 600))
+    out["require_runner_watch"] = enabled_from_env(
+        "PM_COORD_REQUIRE_RUNNER_WATCH", bool(out.get("require_runner_watch", False)))
     return out
 
 
@@ -77,8 +87,31 @@ def _task_by_id(snapshot: Mapping[str, Any], task_id: str) -> Dict[str, Any]:
     return {}
 
 
+RUNNER_WATCH_CAPABILITY = "runner_watch"
+
+
+def host_serves_runner_watch(host: Mapping[str, Any]) -> bool:
+    """True when this host advertises that it can serve browser Watch/Chat.
+
+    BUG-91: CO-fleet workers accepted Watch-requiring work and then published
+    runner rows with no PTY, no stream binding and runner_open/runner_inject
+    false -- every one of the 84 measured AWS rows. The operator clicked the task
+    and got a refusal for a session that could never have been watchable. A host
+    that cannot show the run must not be handed work that promises it.
+    """
+    for entry in host.get("runtimes") or []:
+        if not isinstance(entry, dict):
+            continue
+        capabilities = {str(item).strip().lower()
+                        for item in (entry.get("capabilities") or [])}
+        if RUNNER_WATCH_CAPABILITY in capabilities:
+            return True
+    return False
+
+
 def _active_hosts(snapshot: Mapping[str, Any], *, lane: str = "",
-                  runtime: str = "") -> List[Dict[str, Any]]:
+                  runtime: str = "", require_runner_watch: bool = False
+                  ) -> List[Dict[str, Any]]:
     now = float(snapshot.get("observed_at") or time.time())
     hosts = []
     for host in snapshot.get("hosts") or []:
@@ -107,6 +140,8 @@ def _active_hosts(snapshot: Mapping[str, Any], *, lane: str = "",
                     runtimes.append(str(rt.get("runtime")).strip().lower())
             if runtimes and runtime not in runtimes:
                 continue
+        if require_runner_watch and not host_serves_runner_watch(host):
+            continue
         hosts.append(dict(host))
     return hosts
 
@@ -208,7 +243,17 @@ def build_dispatch_plan(snapshot: Mapping[str, Any], *,
         runtime = pol["default_runtime"]
         if pol["allowed_runtimes"] and runtime not in pol["allowed_runtimes"]:
             runtime = pol["allowed_runtimes"][0]
-        hosts = _active_hosts(snapshot, lane=lane, runtime=runtime)
+        hosts = _active_hosts(snapshot, lane=lane, runtime=runtime,
+                              require_runner_watch=pol["require_runner_watch"])
+        # BUG-91: say so out loud when watch capability is what excluded a host,
+        # rather than reporting an indistinguishable "no eligible host".
+        watch_excluded = []
+        if pol["require_runner_watch"] and not hosts:
+            watch_excluded = [
+                str(host.get("host_id") or "")
+                for host in _active_hosts(snapshot, lane=lane, runtime=runtime)
+                if not host_serves_runner_watch(host)
+            ]
         agents = _live_agents(snapshot, lane=lane)
         if not hosts and not agents:
             candidates.append({
@@ -217,7 +262,10 @@ def build_dispatch_plan(snapshot: Mapping[str, Any], *,
                 "task_id": task_id,
                 "lane": lane,
                 "runtime": runtime,
-                "reason": "no_eligible_host_or_agent",
+                **({"excluded_not_watch_capable": watch_excluded}
+                   if watch_excluded else {}),
+                "reason": ("no_watch_capable_host" if watch_excluded
+                           else "no_eligible_host_or_agent"),
                 "policy_rule": "coord.dispatch.no_host",
                 "escalation_class": "no_host",
                 "audit_recommendation_id": row.get("recommendation_id"),

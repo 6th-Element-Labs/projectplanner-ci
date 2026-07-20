@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
 import sqlite3
 import time
 import urllib.parse
@@ -55,6 +56,9 @@ __all__ = [
     "check_agent_host_bootstrap_authority",
     "check_direct_task_completion_authority",
     "assert_runner_watchable",
+    "latest_dispatch_outcome",
+    "TERMINAL_RUNNER_STATES",
+    "terminalize_wake_runners_in",
     "resolve_task_active_runner",
     "resolve_runner_watch",
     "_clear_active_runner_pointer_in",
@@ -780,6 +784,78 @@ def assert_runner_watchable(session: Optional[Dict[str, Any]]) -> Dict[str, Any]
     }
 
 
+STALE_PENDING_WAKE_S = float(os.environ.get("PM_STALE_PENDING_WAKE_S", "1800") or 1800)
+
+
+def latest_dispatch_outcome(task_id: str, *,
+                            project: str = DEFAULT_PROJECT,
+                            now: Optional[float] = None) -> Dict[str, Any]:
+    """Why this task has no runner, in the dispatcher's own words.
+
+    BUG-91: when Watch/Chat refuses, the operator needs the reason the run never
+    started -- "capacity exhausted for co-general: cap=4" -- not a description of
+    the debris that failure left behind. The dispatcher already records that on
+    the wake; this surfaces it next to the refusal.
+
+    Also reports a wake that has sat queued too long. One SEG-2 wake stayed
+    pending for 30.7 hours across six dispatch attempts while silently
+    accumulating runner rows; that needs to read as "needs attention", not as a
+    task that simply has no runner.
+    """
+    task_id = str(task_id or "").strip()
+    if not task_id:
+        return {}
+    now = time.time() if now is None else now
+    with _conn(project) as c:
+        rows = c.execute(
+            "SELECT wake_id, status, requested_at, claimed_at, completed_at, "
+            "claimed_by_host, result_json, policy_json FROM wake_intents "
+            "WHERE task_id=? ORDER BY COALESCE(requested_at,0) DESC LIMIT 20",
+            (task_id,),
+        ).fetchall()
+    attempts = 0
+    for row in rows:
+        status = str(row["status"] or "")
+        if status in {"pending", "claimed"}:
+            waiting_s = max(0.0, now - float(row["requested_at"] or now))
+            policy = _json_obj(row["policy_json"], {})
+            attempts = max(attempts, int(policy.get("dispatch_attempt") or 0))
+            return {
+                "state": "needs_attention" if waiting_s >= STALE_PENDING_WAKE_S
+                         else ("dispatching" if status == "claimed" else "queued"),
+                "wake_id": str(row["wake_id"] or ""),
+                "wake_status": status,
+                "waiting_seconds": round(waiting_s),
+                "dispatch_attempt": attempts,
+                "host_id": str(row["claimed_by_host"] or ""),
+                "message": (
+                    f"No run has started yet — queued {round(waiting_s / 3600, 1)}h"
+                    f"{f' across {attempts} dispatch attempts' if attempts else ''}."
+                    if waiting_s >= STALE_PENDING_WAKE_S
+                    else "A run is being dispatched for this task."
+                ),
+            }
+        if status == "failed":
+            result = _json_obj(row["result_json"], {})
+            reason = str(result.get("reason") or result.get("error") or "").strip()
+            policy = _json_obj(row["policy_json"], {})
+            return {
+                "state": str(result.get("failure_class") or "launch_failed"),
+                "wake_id": str(row["wake_id"] or ""),
+                "wake_status": status,
+                "failure_class": str(result.get("failure_class") or ""),
+                "reason": reason,
+                "failed_at": result.get("failed_at") or row["completed_at"],
+                "dispatch_attempt": int(policy.get("dispatch_attempt") or 0),
+                "host_id": str(row["claimed_by_host"] or ""),
+                "message": (f"The last dispatch failed: {reason}" if reason
+                            else "The last dispatch failed before any run started."),
+            }
+        if status == "completed":
+            return {}
+    return {}
+
+
 def resolve_runner_watch(task_id: str, *, include_stale: bool = False,
                          project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     """Pick a Watch/Chat-ready runner for a task, or return a typed refusal.
@@ -795,10 +871,13 @@ def resolve_runner_watch(task_id: str, *, include_stale: bool = False,
     sessions = list_runner_sessions(
         task_id=task_id, include_stale=include_stale, project=project)
     if not sessions:
+        # BUG-91: name the dispatch failure, not the absence it caused.
+        dispatch = latest_dispatch_outcome(task_id, project=project)
         return runner_bind_incomplete(list(RUNNER_BIND_FIELDS), task_id=task_id) | {
-            "message": "No runner sessions are registered for this task",
+            "message": dispatch.get("message")
+            or "No runner sessions are registered for this task",
             "sessions": [],
-        }
+        } | ({"dispatch": dispatch} if dispatch else {})
     refusals: List[Dict[str, Any]] = []
     for session in sessions:
         verdict = assert_runner_watchable(session)
@@ -811,12 +890,17 @@ def resolve_runner_watch(task_id: str, *, include_stale: bool = False,
         refusals.append(verdict)
     best = refusals[0] if refusals else runner_bind_incomplete(
         list(RUNNER_BIND_FIELDS), task_id=task_id)
+    # Every row for this task is unwatchable. If a dispatch explains why nothing
+    # is running, that reason outranks a description of the leftover row.
+    dispatch = latest_dispatch_outcome(task_id, project=project)
+    if dispatch.get("message"):
+        best = {**best, "message": dispatch["message"]}
     return {
         **best,
         "sessions": sessions,
         "enough_for_panel": False,
         "candidates": len(sessions),
-    }
+    } | ({"dispatch": dispatch} if dispatch else {})
 
 
 def resolve_task_active_runner(task_id: str, *, agent_state: Optional[Dict[str, Any]] = None,
@@ -958,6 +1042,74 @@ def _maybe_set_active_runner_pointer(c: sqlite3.Connection, record: Dict[str, An
     current["active_runner_host_id"] = record.get("host_id")
     c.execute("UPDATE tasks SET agent_state=?, updated_at=? WHERE task_id=?",
               (json.dumps(current, sort_keys=True), now, task_id))
+
+
+TERMINAL_RUNNER_STATES = frozenset({
+    "completed", "failed", "cancelled", "expired", "lost", "killed", "exited", "stopped",
+})
+
+
+def terminalize_wake_runners_in(c: sqlite3.Connection, wake_id: str, *,
+                                reason: str = "", keep: str = "",
+                                now: Optional[float] = None) -> List[str]:
+    """Close out every non-terminal runner row left by one dispatch attempt.
+
+    BUG-91: a dispatch that reports ``started: false`` (capacity exhausted,
+    registration timeout, launch failure) never produced a task session, yet the
+    supervised wrapper it raced had already published a ``runner_sessions`` row.
+    Nothing terminalized that row, so it merely aged into ``stale`` and then
+    ``expired`` while still being the newest thing the browser could find for the
+    task — which is what made Watch/Chat refuse with a truthful-but-useless
+    "Runner session is stale" instead of naming the real dispatch failure.
+
+    ``keep`` preserves the runner a successful attempt actually bound, so a retry
+    supersedes its predecessors without ever deleting evidence.
+
+    Critically, this NEVER closes a claim-bound runner. Dispatch attempts against
+    one wake overlap and finish out of order -- SEG-2 accumulated three runner
+    rows for a single wake across two hosts and 31 hours. If attempt A has
+    produced a real claim-bound session and slower attempt B then reports
+    failure, B must not kill A's running work. Only a claim-bound session's own
+    lifecycle (its process exiting, or its own completion) may terminalize it;
+    a different attempt's receipt may only clear unbound wrapper debris.
+    """
+    wake_id = str(wake_id or "").strip()
+    if not wake_id:
+        return []
+    now = time.time() if now is None else now
+    keep = str(keep or "").strip()
+    closed: List[str] = []
+    rows = c.execute(
+        "SELECT runner_session_id, task_id, status, claim_id, metadata_json "
+        "FROM runner_sessions WHERE metadata_json LIKE ?",
+        (f'%"{wake_id}"%',),
+    ).fetchall()
+    for row in rows:
+        runner_session_id = str(row["runner_session_id"] or "")
+        if not runner_session_id or runner_session_id == keep:
+            continue
+        metadata = _json_obj(row["metadata_json"], {})
+        # LIKE is only a cheap prefilter; the wake id must match exactly.
+        if str(metadata.get("wake_id") or "") != wake_id:
+            continue
+        if str(row["status"] or "").strip().lower() in TERMINAL_RUNNER_STATES:
+            continue
+        # A claim + Work Session means this row is a real session some attempt
+        # actually established. Never collateral-damage it from another attempt.
+        if (str(row["claim_id"] or "").strip()
+                and str(metadata.get("work_session_id") or "").strip()):
+            continue
+        metadata["failure_reason"] = reason or "dispatch attempt never started"
+        metadata["terminalized_by"] = "wake_failure"
+        c.execute(
+            "UPDATE runner_sessions SET status='failed', metadata_json=?, updated_at=? "
+            "WHERE runner_session_id=?",
+            (json.dumps(metadata, sort_keys=True), now, runner_session_id),
+        )
+        _clear_active_runner_pointer_in(c, str(row["task_id"] or ""),
+                                        runner_session_id, now=now)
+        closed.append(runner_session_id)
+    return closed
 
 
 def _clear_active_runner_pointer_in(c: sqlite3.Connection, task_id: str,
