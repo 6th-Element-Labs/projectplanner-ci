@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""SIMPLIFY-4 regression proof for Agent Host Work Session sources."""
+"""SIMPLIFY-4 / SIMPLIFY-13 regression proof for Agent Host Work Session sources."""
+import contextlib
+import io
 import os
 import shutil
 import subprocess
@@ -73,7 +75,46 @@ try:
             raise AssertionError("stale mirror was accepted")
     finally:
         core.subprocess.run = original_run
+
+    # SIMPLIFY-13: install/update fetch is best-effort — a network blip must not
+    # refuse enrollment. Work Session provision remains the hard freshness gate.
+    original_enrollment_run = enrollment.subprocess.run
+
+    def fetch_blip(command, **kwargs):
+        if (len(command) >= 4 and command[0] == "git"
+                and command[1] == "-C" and command[3] == "fetch"):
+            return subprocess.CompletedProcess(
+                command, 1, "", "fatal: unable to access origin (network blip)")
+        return original_enrollment_run(command, **kwargs)
+
+    enrollment.subprocess.run = fetch_blip
+    try:
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            again = enrollment._provision_host_source_mirror(operator, state_root)
+        assert again == mirror, "install-time fetch failure refused the host"
+        warned = err.getvalue()
+        assert "WARNING" in warned and "fetch" in warned.lower(), warned
+    finally:
+        enrollment.subprocess.run = original_enrollment_run
+
+    def suppress_install_fetch(command, **kwargs):
+        if (len(command) >= 4 and command[0] == "git"
+                and command[1] == "-C" and command[3] == "fetch"):
+            return subprocess.CompletedProcess(command, 0, "", "")
+        return original_enrollment_run(command, **kwargs)
+
+    enrollment.subprocess.run = suppress_install_fetch
+    try:
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            still = enrollment._provision_host_source_mirror(operator, state_root)
+        assert still == mirror, "install-time stale mirror refused the host"
+        warned = err.getvalue()
+        assert "WARNING" in warned and "stale" in warned.lower(), warned
+    finally:
+        enrollment.subprocess.run = original_enrollment_run
 finally:
     shutil.rmtree(root, ignore_errors=True)
 
-print("SIMPLIFY-4 hermetic source proof passed")
+print("SIMPLIFY-4/13 hermetic source proof passed")

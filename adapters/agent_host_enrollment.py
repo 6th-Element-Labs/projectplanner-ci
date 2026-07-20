@@ -675,6 +675,12 @@ def _provision_host_source_mirror(source_repo: Path, state_root: Path) -> Path:
     ``source_repo`` is used only to discover the canonical origin URL.  Work
     Sessions must never be based on that operator-owned checkout: an unrelated
     untracked file there must not take the whole host out of service.
+
+    Install/update-time ``git fetch`` and freshness checks are best-effort with a
+    loud WARNING — a transient network blip must not refuse enrollment. Hard
+    freshness refusal lives in Work Session provisioning
+    (``create_external_work_session``). Integrity still fails closed here: failed
+    initial clone, origin mismatch, and a dirty mirror.
     """
     origin = subprocess.run(
         ["git", "-C", str(source_repo), "remote", "get-url", "origin"],
@@ -705,31 +711,43 @@ def _provision_host_source_mirror(source_repo: Path, state_root: Path) -> Path:
         ["git", "-C", str(validated), "fetch", "--prune", "origin"],
         capture_output=True, text=True, timeout=600, check=False)
     if fetched.returncode != 0:
-        raise EnrollmentError(
-            "host source mirror fetch failed: "
-            + (fetched.stderr or "unknown git error").strip()[-500:])
+        detail = (fetched.stderr or "unknown git error").strip()[-500:]
+        print(
+            "WARNING: host source mirror fetch failed at install/update "
+            f"(continuing; Work Session provision enforces freshness): {detail}",
+            file=sys.stderr,
+        )
     head_ref = subprocess.run(
         ["git", "-C", str(validated), "symbolic-ref", "--short",
          "refs/remotes/origin/HEAD"],
         capture_output=True, text=True, timeout=30, check=False)
     remote_tracking_ref = (head_ref.stdout or "").strip()
     if head_ref.returncode != 0 or not remote_tracking_ref.startswith("origin/"):
-        raise EnrollmentError("host source mirror cannot resolve origin default branch")
-    branch = remote_tracking_ref.split("/", 1)[1]
-    local_head = subprocess.run(
-        ["git", "-C", str(validated), "rev-parse", remote_tracking_ref],
-        capture_output=True, text=True, timeout=30, check=False)
-    remote_head = subprocess.run(
-        ["git", "-C", str(validated), "ls-remote", "--exit-code", "origin",
-         f"refs/heads/{branch}"],
-        capture_output=True, text=True, timeout=60, check=False)
-    local_sha = (local_head.stdout or "").strip()
-    remote_sha = ((remote_head.stdout or "").strip().split(None, 1) or [""])[0]
-    if (local_head.returncode != 0 or remote_head.returncode != 0
-            or not remote_sha or local_sha != remote_sha):
-        raise EnrollmentError(
-            f"host source mirror is stale: {remote_tracking_ref}={local_sha or '<missing>'}, "
-            f"origin refs/heads/{branch}={remote_sha or '<missing>'}")
+        print(
+            "WARNING: host source mirror cannot resolve origin default branch at "
+            "install/update (continuing; Work Session provision enforces freshness)",
+            file=sys.stderr,
+        )
+    else:
+        branch = remote_tracking_ref.split("/", 1)[1]
+        local_head = subprocess.run(
+            ["git", "-C", str(validated), "rev-parse", remote_tracking_ref],
+            capture_output=True, text=True, timeout=30, check=False)
+        remote_head = subprocess.run(
+            ["git", "-C", str(validated), "ls-remote", "--exit-code", "origin",
+             f"refs/heads/{branch}"],
+            capture_output=True, text=True, timeout=60, check=False)
+        local_sha = (local_head.stdout or "").strip()
+        remote_sha = ((remote_head.stdout or "").strip().split(None, 1) or [""])[0]
+        if (local_head.returncode != 0 or remote_head.returncode != 0
+                or not remote_sha or local_sha != remote_sha):
+            print(
+                "WARNING: host source mirror is stale at install/update "
+                f"(continuing; Work Session provision enforces freshness): "
+                f"{remote_tracking_ref}={local_sha or '<missing>'}, "
+                f"origin refs/heads/{branch}={remote_sha or '<missing>'}",
+                file=sys.stderr,
+            )
     dirty = subprocess.run(
         ["git", "-C", str(validated), "status", "--porcelain"],
         capture_output=True, text=True, timeout=30, check=False)
