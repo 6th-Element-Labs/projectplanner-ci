@@ -1,9 +1,9 @@
 # Coordinator Agent — Operating Contract & Escalation Policy
 
-- **Status:** Draft v1 (COORD-1). T0 observer shipped by COORD-2; T2 review steward shipped by COORD-5 (dry-run default); higher acting tiers remain gated behind this contract.
+- **Status:** SIMPLIFY-2 lifecycle ownership implemented. COORD modules remain internal policy phases, not independent schedulers.
 - **Owner:** Product / Control Plane
 - **Relates to:** [PRD §6, §18, FR-23–29](PRD-AGENT-COORDINATION-LAYER.md) · [AGENT-HOST-SPEC](AGENT-HOST-SPEC.md) · [ADR-0003 work provenance](decisions/0003-work-provenance-and-reconciliation.md) · [T0 audit loop](COORDINATOR-AUDIT-LOOP.md) · [T2 review steward](COORDINATOR-REVIEW-STEWARD.md) · `mission_coordinator.py` · `dispatch.py` · `merge_coordinator.py` · `review_steward.py`
-- **One line:** The Coordinator is a first-class Switchboard role that orchestrates **plan + dispatch** across a fleet — it decides *what work is ready, who should do it, and when* — and **never executes a task's steps, never merges outside the safe path, and never sets Done.** It holds *less* authority than a coding agent, not more, and every capability is opt-in per project at a named risk tier.
+- **One line:** One Coordinator leader owns Ready → implementation → review/remediation → merge → reconcile. Every session ensure is `Task Execution.start_task(role=...)`; internal COORD modules preserve their gates but own no queue or timer.
 
 ---
 
@@ -14,7 +14,7 @@ Switchboard already coordinates *what work exists and what it depends on* (the b
 | | Coding agent | Coordinator agent |
 |---|---|---|
 | Job (PRD §18) | **Execute** one task's steps (write code, judgment) | **Plan + dispatch**: route work, steward review/merge, escalate |
-| Writes | its own branch/PR; `claim`/`complete_claim` on its task | wake intents, comments, (at high tiers) safe merges — never task *content* |
+| Writes | its own branch/PR; `claim`/`complete_claim` on its task | calls Task Execution, records decisions, and arms safe merges — never task *content* |
 | Merge authority | its own PR via safe-merge | arms/executes safe merges only (T3+), canonical-only |
 | Sets `Done`? | No — records evidence → In Review | **No — never.** Only the webhook/reconcile path stamps Done |
 | Default posture | claims and works | **read-only observer** until explicitly elevated |
@@ -32,6 +32,7 @@ These are hard invariants. No coordinator action, policy, or autopilot loop may 
 3. **Project boundaries are absolute.** A coordinator is scoped to exactly one project; every read and write carries that `project`, and its scoped token is minted per project (`create_scoped_token`). It can never read, write, dispatch, or merge across projects. Dispatch targets only that project's lanes and hosts.
 4. **Fail-fix-early, never green-wash** (FR-29 / `fail_fix_early_policy`). The coordinator surfaces missing data, red gates, absent hosts, permission denials, and provenance drift at the point of detection. It may use a fallback only when the fallback is *named* and preserves the original failing signal (monitor event / reconcile finding / task comment / blocker). It must never hide a failure behind an optimistic status, a placeholder, or a silent retry.
 5. **Mechanical release truth is authoritative.** Dependency readiness, exact-head independent review, required CI, mergeability, credentials, canonical provenance, and reconciliation are enforced uniformly. Legacy `human_gate` metadata is advisory and cannot stop dispatch, review, remediation, or merge.
+6. **Active scope ownership cannot disappear.** Replacing or archiving a deliverable transfers its live Autopilot scope atomically to the declared replacement, or explicitly stops it with an audited reason and visible operator notification. The same durable `scope_id` and decision history cross a transfer; a live target conflict fails closed rather than creating a second execution stream.
 
 If a tier's automation would require breaking any of the above, that action is **not** in that tier — it escalates.
 
@@ -61,7 +62,7 @@ Tiers are cumulative: each includes the ones below it. **Default for a newly-reg
 - **May NOT:** merge, mark Done, or waive a red/required check.
 - **Scopes:** T1 + (no new write scope — CI/mirror runs and review requests are `write:ixp` coordination actions).
 - **Escalate when:** a required gate is red after bounded retries; a PR is conflicted/stale; review is required but unavailable; a flake pattern is detected (surface it, don't retry-until-green).
-- **Shipped by COORD-5:** [`COORDINATOR-REVIEW-STEWARD.md`](COORDINATOR-REVIEW-STEWARD.md) / `review_steward.py` / `jobs.py coordinator_review` (dry-run default).
+- **Internal phase:** [`COORDINATOR-REVIEW-STEWARD.md`](COORDINATOR-REVIEW-STEWARD.md) / `review_steward.py`, invoked only by the lifecycle leader in production.
 
 ### T3 — Merge steward
 - **Mandate:** Land PRs that already satisfy *every* safe-merge condition, in dependency order with backpressure.

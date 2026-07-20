@@ -984,6 +984,8 @@ def register_runner_session(rec, wake, inventory):
     policy = wake.get("policy") or {}
     binding = (policy.get("account_binding") or {})
     execution = policy.get("execution_binding") or {}
+    assignment = policy.get("assignment") or {}
+    lifecycle = policy.get("lifecycle") or {}
     metadata = {
         "wake_id": wake.get("wake_id"),
         "wake_mode": rec.get("wake_mode"),
@@ -1000,8 +1002,11 @@ def register_runner_session(rec, wake, inventory):
         "credential_lease_id": binding.get("credential_lease_id"),
         "provider": binding.get("provider"),
         "account_affinity_id": binding.get("account_affinity_id"),
+        "role": assignment.get("role") or lifecycle.get("role") or "implementation",
+        "lifecycle_role": assignment.get("role") or lifecycle.get("role") or "implementation",
         **(rec.get("metadata") or {}),
-        "source_sha": execution.get("source_sha"),
+        "source_sha": (execution.get("source_sha") or assignment.get("source_sha")
+                       or lifecycle.get("source_sha")),
         "execution_connection_id": execution.get("execution_connection_id"),
     }
     host_preflight = _host_repo_preflight(rec, inventory, metadata)

@@ -6,23 +6,12 @@ chosen or skipped without reading chat transcripts.
 
 COORD-6: when the tick requires a human exception, deliver a structured
 operator notification (task + failed condition + choices + minimum decision)
-via ``coordinator_escalation`` — normal claim/wake/monitor progress stays
-agent-to-agent.
+via ``coordinator_escalation`` — normal session/monitor progress stays autonomous.
 """
 from __future__ import annotations
 
-import os
 import time
 from typing import Any, Dict, List, Optional
-
-
-def co_fleet_autopilot_paused() -> bool:
-    """COORD-45 (interim): pause AUTOMATIC fleet dispatch while no fleet host is
-    Watch-qualified. SEG-2 burned six attempts against co-general cap=4 over 31
-    hours; churning a capped, unqualified pool creates residue, not progress.
-    Manual dispatch and dispatch.start_task() are unaffected."""
-    return str(os.environ.get("PM_AUTOPILOT_COFLEET", "1")).strip().lower() in (
-        "0", "false", "no", "off")
 
 ACTION_PRIORITY: Dict[str, int] = {
     "approve_breakdown": 1,
@@ -48,21 +37,31 @@ POLICY_RULES = {
     "monitor": "coord.tick.monitor_in_review",
     "dispatch_ready": "coord.tick.dispatch_priority",
     "unknown_action": "coord.tick.unknown_action",
-    "claimed": "coord.tick.dispatch_claim",
     "dispatch_blocked": "coord.tick.dispatch_blocked",
-    "wake_requested": "coord.tick.dispatch_wake",
+    "session_ensured": "coord.tick.ensure_task_session",
+    "session_transitioning": "coord.tick.transition_task_session",
 }
+
+
+def _lifecycle_role(store_mod: Any, project: str, task_id: str) -> str:
+    """Return the one role the lifecycle owner must ensure for this task."""
+    list_remediations = getattr(store_mod, "list_review_remediations", None)
+    if callable(list_remediations):
+        try:
+            queued = list_remediations(
+                task_id=task_id, status="queued", project=project)
+            if queued:
+                return "remediation"
+        except Exception:
+            pass
+    return "implementation"
 
 
 def _normalize_policy(policy: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     base = {
         "auto_refresh_brief": True,
-        "auto_claim": True,
-        "auto_wake": False,
+        "auto_start": True,
         "monitor_in_review": True,
-        "worker_agent_id": "",
-        "worker_wake_selector": {},
-        "worker_wake_policy": {},
         "allowed_lanes": [],
         "denied_lanes": [],
         "target_task_id": "",
@@ -71,11 +70,6 @@ def _normalize_policy(policy: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     }
     if isinstance(policy, dict):
         base.update({k: v for k, v in policy.items() if k in base})
-    base["worker_agent_id"] = (base.get("worker_agent_id") or "").strip()
-    selector = base.get("worker_wake_selector")
-    base["worker_wake_selector"] = selector if isinstance(selector, dict) else {}
-    wake_policy = base.get("worker_wake_policy")
-    base["worker_wake_policy"] = wake_policy if isinstance(wake_policy, dict) else {}
     lanes = base.get("allowed_lanes")
     if isinstance(lanes, str):
         lanes = lanes.split(",")
@@ -250,9 +244,7 @@ def coordinator_tick_plan(mission_status: Dict[str, Any],
     elif action in AUTO_CLAIM:
         plan["status"] = "dispatch_ready"
         plan["dispatch"] = selected
-        plan["auto_claim"] = bool(pol["auto_claim"])
-        plan["auto_wake"] = bool(pol["auto_wake"])
-        plan["worker_agent_id"] = pol["worker_agent_id"]
+        plan["auto_start"] = bool(pol["auto_start"])
     else:
         plan["status"] = "unknown_action"
         plan["retry_after_seconds"] = 120
@@ -330,12 +322,9 @@ def _record_tick_decision(
         "action_priority": dict(ACTION_PRIORITY),
         "selection_tiebreak": ["task_id"],
         "policy": {
-            "auto_claim": bool(policy.get("auto_claim")),
-            "auto_wake": bool(policy.get("auto_wake")),
+            "auto_start": bool(policy.get("auto_start")),
             "auto_refresh_brief": bool(policy.get("auto_refresh_brief")),
             "monitor_in_review": bool(policy.get("monitor_in_review")),
-            "worker_agent_id": policy.get("worker_agent_id") or "",
-            "worker_wake_selector": policy.get("worker_wake_selector") or {},
             "allowed_lanes": policy.get("allowed_lanes") or [],
             "denied_lanes": policy.get("denied_lanes") or [],
             "target_task_id": policy.get("target_task_id") or "",
@@ -351,8 +340,8 @@ def _record_tick_decision(
     decision_kind = {
         "human_required": "human_escalation",
         "monitor": "monitor",
-        "claimed": "dispatch",
-        "wake_requested": "nudge",
+        "session_ensured": "action",
+        "session_transitioning": "action",
         "dispatch_ready": "recommendation",
         "dispatch_blocked": "skip",
         "idle": "skip",
@@ -405,6 +394,7 @@ def run_coordinator_tick(
     actor: str = "system",
     policy: Optional[Dict[str, Any]] = None,
     store_mod: Any = None,
+    task_starter: Any = None,
     idem_key: str = "",
 ) -> Dict[str, Any]:
     """Execute one deliverable-scoped coordinator tick with auditing."""
@@ -474,116 +464,50 @@ def run_coordinator_tick(
         result["status"] = status
     else:
         dispatch = plan.get("dispatch") or {}
-        worker = pol["worker_agent_id"] or (coordinator_agent_id or actor or "").strip()
-        if pol["auto_claim"] and worker:
-            claim = store_mod.claim_next(
-                agent_id=worker,
-                project=mission_project,
-                deliverable_id=deliverable_id,
-                actor=actor,
-                idem_key=(f"{idem_key}:claim" if idem_key else
-                          f"coord-{deliverable_id}-{dispatch.get('task_id')}-{int(now // 60)}"),
-            )
+        if pol["auto_start"]:
+            task_id = str(dispatch.get("task_id") or "").upper()
+            task_project = str(dispatch.get("project_id") or mission_project)
+            role = _lifecycle_role(store_mod, task_project, task_id)
+            if task_starter is None:
+                from switchboard.application.commands import task_execution
+                task_starter = task_execution.start_task
+            access = getattr(store_mod, "project_access", lambda *_a, **_k: {})
+            principal_id = str((access(task_project) or {}).get("owner_user_id") or "")
+            try:
+                ensured = task_starter(
+                    task_id, project=task_project, actor=actor,
+                    principal_id=principal_id, role=role)
+            except Exception as exc:  # fail visibly; the next tick may retry
+                ensured = {"action": "refused", "error": type(exc).__name__,
+                           "reason": str(exc), "task_id": task_id,
+                           "project": task_project, "role": role}
+            ensured = {**ensured, "task_project": task_project,
+                       "role": ensured.get("role") or role}
             executed.append({
-                "kind": "claim_next",
+                "kind": "start_task",
                 "deliverable_id": deliverable_id,
-                "worker_agent_id": worker,
-                "claimed": bool(claim.get("claimed")),
-                "claim_id": claim.get("claim_id"),
-                "task_id": (claim.get("task") or {}).get("task_id"),
-                "task_project": claim.get("task_project"),
-                "reason": claim.get("reason"),
+                "task_id": task_id,
+                "task_project": task_project,
+                "role": role,
+                "action": ensured.get("action"),
+                "wake_id": ensured.get("wake_id"),
+                "execution_id": ensured.get("execution_id"),
+                "reason": ensured.get("reason") or ensured.get("error"),
             })
-            result["dispatch"] = claim
-            result["status"] = "claimed" if claim.get("claimed") else "dispatch_blocked"
-            if not claim.get("claimed"):
-                result["retry_after_seconds"] = int(claim.get("retry_after_seconds") or 120)
-        elif (pol["auto_wake"] and pol["worker_wake_selector"]
-              and not co_fleet_autopilot_paused()):
-            selector = dict(pol["worker_wake_selector"])
-            selector.setdefault("deliverable_id", deliverable_id)
-            selector.setdefault("task_id", dispatch.get("task_id"))
-            selector.setdefault("project_id", dispatch.get("project_id"))
-            selector.setdefault("lane", dispatch.get("lane"))
-            selector.setdefault(
-                "agent_id",
-                f"{selector.get('runtime') or 'codex'}/{dispatch.get('task_id')}",
+            result["dispatch"] = ensured
+            refused = ensured.get("action") == "refused" or bool(ensured.get("error"))
+            transitioning = ensured.get("action") == "transitioning"
+            if role == "remediation" and not refused and not transitioning:
+                marker = getattr(store_mod, "mark_review_remediation_ensured", None)
+                if callable(marker):
+                    marker(task_id, wake_id=str(ensured.get("wake_id") or ""),
+                           actor=actor, project=task_project)
+            result["status"] = (
+                "dispatch_blocked" if refused else
+                "session_transitioning" if transitioning else
+                "session_ensured"
             )
-            wake_policy = {
-                **pol["worker_wake_policy"],
-                "target_task_id": dispatch.get("task_id"),
-                "target_project_id": dispatch.get("project_id") or mission_project,
-                "require_runner_bind": True,
-            }
-            wake_policy.setdefault("mode", "claim_next")
-            prior_wakes = []
-            list_wakes = getattr(store_mod, "list_wake_intents", None)
-            if callable(list_wakes):
-                try:
-                    listed = list_wakes(
-                        project=mission_project,
-                        task_id=str(dispatch.get("task_id") or ""),
-                        deliverable_id=str(deliverable_id or ""),
-                    )
-                    prior_wakes = listed if isinstance(listed, list) else []
-                except Exception:
-                    prior_wakes = []
-            matching = [
-                row for row in prior_wakes
-                if str(row.get("task_id") or "") == str(dispatch.get("task_id") or "")
-                and str((row.get("selector") or {}).get("deliverable_id") or "")
-                == str(deliverable_id or "")
-            ]
-            active = [row for row in matching
-                      if str(row.get("status") or "") in {"pending", "claimed"}]
-            attempt = 1 + len([
-                row for row in matching
-                if str(row.get("status") or "")
-                in {"completed", "failed", "cancelled", "expired"}
-            ])
-            wake_policy["dispatch_attempt"] = attempt
-            if active:
-                wake = sorted(
-                    active, key=lambda row: float(row.get("requested_at") or 0))[-1]
-                wake = {**wake, "requested": False, "reason": "active_wake_exists"}
-            else:
-                wake = store_mod.request_wake(
-                    selector,
-                    reason=f"Mission coordinator dispatch for {deliverable_id}",
-                    source=actor,
-                    task_id=dispatch.get("task_id") or "",
-                    actor=actor,
-                    project=mission_project,
-                    idem_key=(f"coord-wake-v3-{deliverable_id}-"
-                              f"{dispatch.get('task_id')}-{attempt}"),
-                    policy=wake_policy,
-                )
-            executed.append({
-                "kind": "request_wake",
-                "deliverable_id": deliverable_id,
-                "requested": bool(wake.get("requested", wake.get("wake_id"))),
-                "wake_id": wake.get("wake_id"),
-                "reason": wake.get("reason"),
-                # COORD-34: wake alone is not Watch-ready. Agent Host must
-                # register_runner_session with full task/claim/host/wake/work_session
-                # bind before Mission UI may open the panel.
-                "watch_gate": "awaiting_runner_bind",
-                "watch_requires": [
-                    "task_id", "claim_id", "host_id", "wake_id", "work_session_id",
-                ],
-            })
-            result["dispatch"] = wake
-            result["status"] = "wake_requested" if wake.get("wake_id") else "dispatch_blocked"
-            result["watch_gate"] = "awaiting_runner_bind"
-        elif pol["auto_wake"] and pol["worker_wake_selector"]:
-            # COORD-45 (interim): the auto branch above declined because fleet
-            # dispatch is paused. Say so truthfully instead of "dispatch_ready".
-            result["status"] = "dispatch_paused"
-            result["reason"] = (
-                "automatic co_fleet dispatch is paused (PM_AUTOPILOT_COFLEET=0): "
-                "fleet hosts are not Watch-qualified; use start_task/the UI Start button")
-            result["dispatch"] = dispatch
-            result["retry_after_seconds"] = 600
+            result["retry_after_seconds"] = 120 if refused else 15 if transitioning else 30
         else:
             result["status"] = "dispatch_ready"
             result["dispatch"] = dispatch

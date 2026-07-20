@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import mission_coordinator  # noqa: E402
 import store  # noqa: E402
+from switchboard.application.commands import task_execution  # noqa: E402
 
 passed = failed = 0
 
@@ -27,6 +28,14 @@ def ok(condition, message):
 
 
 try:
+    starts = []
+
+    def fake_start_task(task_id, **kwargs):
+        starts.append({"task_id": task_id, **kwargs})
+        return {"action": "started", "started": True,
+                "wake_id": f"wake-{len(starts)}", "role": kwargs.get("role")}
+
+    task_execution.start_task = fake_start_task
     store.init_project_registry()
     store.init_db("switchboard")
     home = store.create_project("Coord Home", project_id="qa-coord-home", actor="test")
@@ -134,7 +143,7 @@ try:
     ok(lane_fail_closed.get("status") == "idle",
        "lane allowlist fails closed when an action has no lane metadata")
     plan = mission_coordinator.coordinator_tick_plan(
-        status, policy={"auto_claim": True, "worker_agent_id": "agent/worker"})
+        status, policy={"auto_start": True})
     ok(plan.get("status") == "dispatch_ready" and
        plan.get("dispatch", {}).get("action") == "claim_task",
        "coordinator plan selects claim_task for ready linked work")
@@ -156,14 +165,14 @@ try:
         deliverable_id="coord-mission",
         coordinator_agent_id="agent/coordinator",
         actor="test",
-        policy={"auto_claim": True, "worker_agent_id": "agent/worker",
-                "auto_refresh_brief": True},
+        policy={"auto_start": True, "auto_refresh_brief": True},
         idem_key="tick-1",
     )
     ok(tick.get("schema") == "switchboard.mission_coordinator_tick.v1",
        "coordinator tick returns v1 schema")
-    ok(tick.get("status") == "claimed" and tick.get("dispatch", {}).get("claimed"),
-       "coordinator tick claims ready linked task via deliverable scope")
+    ok(tick.get("status") == "session_ensured"
+       and tick.get("dispatch", {}).get("started"),
+       "coordinator tick ensures the ready linked task session")
     ok(tick.get("dispatch", {}).get("task_project") == "qa-coord-target",
        "coordinator dispatch records cross-project task_project")
     ok(tick.get("deliverable_id") == "coord-mission",
@@ -175,7 +184,7 @@ try:
     expected_tick_id = store.coordinator_decision_id(
         project="qa-coord-home", task_id="RENDER-1",
         deliverable_id="coord-mission", coordinator_agent_id="agent/coordinator",
-        decision_kind="dispatch", inputs_snapshot={}, policy_rule="",
+        decision_kind="action", inputs_snapshot={}, policy_rule="",
         chosen_action={}, stable_key="tick-1")
     ok(tick.get("decision_id") == expected_tick_id,
        "caller idem_key is the durable coordinator decision identity")
@@ -194,7 +203,6 @@ try:
            for a in audit.get("activity") or []),
        "coordinator tick is audited on mission-home project")
 
-    store.abandon_claim(tick["dispatch"]["claim_id"], "test reset", project="qa-coord-target")
     store.update_task("RENDER-1", {"status": "Not Started", "assignee": None},
                       actor="test", project="qa-coord-target")
 
@@ -203,15 +211,14 @@ try:
         deliverable_id="coord-mission",
         coordinator_agent_id="agent/coordinator",
         actor="test",
-        policy={"auto_claim": False, "auto_wake": True,
-                "worker_wake_selector": {"runtime": "codex"}},
+        policy={"auto_start": True},
         idem_key="tick-wake",
     )
     wake_decision = wake_tick.get("decision") or {}
-    ok(wake_tick.get("status") == "wake_requested" and
-       wake_decision.get("decision_kind") == "nudge" and
+    ok(wake_tick.get("status") == "session_ensured" and
+       wake_decision.get("decision_kind") == "action" and
        wake_decision.get("result", {}).get("dispatch", {}).get("wake_id"),
-       "agent wake persists the selected task and observed nudge result")
+       "start_task persists the selected task and observed ensure result")
 
     store.set_agent_state("RENDER-1", "human_gate", {
         "required": True,
@@ -227,11 +234,11 @@ try:
         deliverable_id="coord-mission",
         coordinator_agent_id="agent/coordinator",
         actor="test",
-        policy={"auto_claim": True, "worker_agent_id": "agent/worker"},
+        policy={"auto_start": True},
         idem_key="tick-gated",
     )
-    ok(gated_tick.get("status") == "claimed" and not gated_tick.get("escalations"),
-       "coordinator claims despite legacy human-gate metadata")
+    ok(gated_tick.get("status") == "session_ensured" and not gated_tick.get("escalations"),
+       "coordinator ensures a session despite legacy human-gate metadata")
     ok(gated_tick.get("decision", {}).get("decision_kind") != "human_escalation",
        "coordinator records no human escalation")
 
@@ -267,20 +274,19 @@ try:
         deliverable_id="coord-mission",
         coordinator_agent_id="agent/coordinator",
         actor="test",
-        policy={"auto_claim": True, "worker_agent_id": "agent/worker",
-                "auto_refresh_brief": True},
+        policy={"auto_start": True, "auto_refresh_brief": True},
         idem_key="tick-1",
     )
-    ok(idem_repeat.get("status") == "claimed" and idem_repeat.get("dispatch", {}).get("claimed"),
+    ok(idem_repeat.get("status") == "session_ensured"
+       and idem_repeat.get("dispatch", {}).get("started"),
        "coordinator tick is idempotent by idem_key")
     ok(idem_repeat.get("decision_id") == tick.get("decision_id"),
        "idempotent tick returns the same durable decision id")
     complete_trail = store.list_coordinator_decisions(
         deliverable_id="coord-mission", project="qa-coord-home")
     ok(len(complete_trail) == 4 and
-       {item.get("decision_kind") for item in complete_trail} ==
-       {"dispatch", "nudge", "monitor"},
-       "decision trail stores claims, wake, and monitor without replay duplicates")
+       {item.get("decision_kind") for item in complete_trail} == {"action", "monitor"},
+       "decision trail stores session ensures and monitor without replay duplicates")
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 

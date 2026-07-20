@@ -1,9 +1,11 @@
 """Automatic, bounded remediation of durable review verdicts (COORD-20).
 
-A ``changes_requested`` verdict is not merely a comment.  It becomes a
-task-scoped acceptance contract, reopens the work for ``claim_next``, and
-queues one idempotent worker wake.  A verdict on a new head closes the prior
-round; repeated or judgment-class findings fail closed through COORD-6.
+A ``changes_requested`` verdict is not merely a comment. It becomes a
+task-scoped acceptance contract and reopens the work for the lifecycle
+coordinator. The coordinator then ensures the remediation session through the
+same ``start_task(role=...)`` command as every other transition. A verdict on a
+new head closes the prior round; repeated or judgment-class findings fail
+closed through COORD-6.
 """
 from __future__ import annotations
 
@@ -18,7 +20,6 @@ from constants import DEFAULT_PROJECT
 from db.connection import _conn, _write_through
 from switchboard.storage.repositories.coordination import (
     deliver_coordination_escalation,
-    request_wake,
 )
 
 
@@ -271,11 +272,46 @@ class ReviewRemediationRepository:
             return staged
 
         if staged.get("needs_wake"):
-            staged = self._ensure_wake(staged, actor=actor, project=project)
+            staged["needs_wake"] = False
+            staged["needs_lifecycle_ensure"] = True
         if staged.get("escalation_required"):
             staged["human_escalation"] = self._deliver_escalation(
                 staged, actor=actor, project=project)
         return staged
+
+    def mark_ensured(self, task_id: str, *, wake_id: str = "", actor: str,
+                     project: str = DEFAULT_PROJECT) -> dict[str, Any]:
+        """Mark the latest queued round as owned by the lifecycle coordinator."""
+        task_id = str(task_id or "").strip().upper()
+        now = time.time()
+
+        def persist() -> dict[str, Any]:
+            with _conn(project) as c:
+                row = c.execute(
+                    "SELECT * FROM review_remediations WHERE task_id=? AND status='queued' "
+                    "ORDER BY round_no DESC LIMIT 1", (task_id,),
+                ).fetchone()
+                if not row:
+                    return {"marked": False, "reason": "queued_remediation_not_found",
+                            "task_id": task_id}
+                c.execute(
+                    "UPDATE review_remediations SET status='remediating', wake_id=?, "
+                    "updated_at=? WHERE remediation_id=?",
+                    (str(wake_id or ""), now, row["remediation_id"]),
+                )
+                c.execute(
+                    "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                    "VALUES (?,?,?,?,?)",
+                    (task_id, actor, "review.remediation_session_ensured", json.dumps({
+                        "remediation_id": row["remediation_id"],
+                        "wake_id": str(wake_id or "") or None,
+                    }, sort_keys=True), now),
+                )
+                return {"marked": True, "task_id": task_id,
+                        "remediation_id": row["remediation_id"],
+                        "status": "remediating", "wake_id": str(wake_id or "") or None}
+
+        return _write_through(project, persist)
 
     def _resolve_pass_impl(self, verdict: Mapping[str, Any], *, actor: str,
                            project: str) -> dict[str, Any]:
@@ -464,75 +500,6 @@ class ReviewRemediationRepository:
                 "max_rounds": max_rounds,
             })
             return result
-
-    def _ensure_wake(self, remediation: Mapping[str, Any], *, actor: str,
-                     project: str) -> dict[str, Any]:
-        row = dict(remediation)
-        task_id = str(row.get("task_id") or "")
-        remediation_id = str(row.get("remediation_id") or "")
-        selector = {
-            "runtime": row.get("worker_runtime") or "codex",
-            "lane": row.get("lane") or "",
-            "task_id": task_id,
-            "remediation_id": remediation_id,
-            "capabilities": ["code_review_remediation"],
-        }
-        policy = {
-            "mode": "claim_next",
-            "task_id": task_id,
-            "session_policy_profile": "code_strict",
-            "remediation": {
-                "remediation_id": remediation_id,
-                "round": row.get("round_no"),
-                "acceptance_criteria": row.get("acceptance_criteria") or [],
-                "requires_adversarial_review": bool(row.get("requires_adversarial_review")),
-            },
-        }
-        wake = request_wake(
-            selector=selector,
-            reason=f"Automatic review remediation round {row.get('round_no')} for {task_id}",
-            source="switchboard/auto-remediation", policy=policy, task_id=task_id,
-            actor="switchboard/auto-remediation",
-            idem_key=f"review-remediation-wake:{row.get('verdict_id')}",
-            project=project,
-        )
-        effect = wake.get("effect") or {}
-        readback = effect.get("readback") or {}
-        wake_id = str(wake.get("wake_id") or readback.get("wake_id") or "")
-        failed = bool(wake.get("error") or not wake_id)
-        now = time.time()
-        def persist_wake_result() -> sqlite3.Row:
-            with _conn(project) as c:
-                c.execute(
-                    "UPDATE review_remediations SET status=?, wake_id=?, "
-                    "human_intervention_required=CASE WHEN ? THEN 1 ELSE human_intervention_required END, "
-                    "updated_at=? WHERE remediation_id=?",
-                    ("wake_failed" if failed else "wake_requested", wake_id or None,
-                     int(failed), now, remediation_id),
-                )
-                c.execute(
-                    "INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
-                    (task_id, "switchboard/auto-remediation",
-                     "review.remediation_wake_failed" if failed else "review.remediation_wake_requested",
-                     json.dumps({
-                         "remediation_id": remediation_id, "wake_id": wake_id or None,
-                         "wake_status": wake.get("status"), "error": wake.get("error"),
-                     }, sort_keys=True), now),
-                )
-                return c.execute(
-                    "SELECT * FROM review_remediations WHERE remediation_id=?", (remediation_id,),
-                ).fetchone()
-
-        stored = _write_through(project, persist_wake_result)
-        result = _remediation_from_row(stored)
-        result.update({
-            "idempotent_replay": bool(row.get("idempotent_replay")),
-            "needs_wake": False,
-            "wake": wake,
-            "escalation_required": bool(result["human_intervention_required"]),
-            "escalation_reason": "wake_failed" if failed else row.get("escalation_reason"),
-        })
-        return result
 
     @staticmethod
     def _deliver_escalation(remediation: Mapping[str, Any], *, actor: str,
@@ -733,6 +700,12 @@ def list_review_remediations(*, task_id: str = "", status: str = "",
         task_id=task_id, status=status, project=project)
 
 
+def mark_review_remediation_ensured(task_id: str, *, wake_id: str = "", actor: str,
+                                    project: str = DEFAULT_PROJECT) -> dict[str, Any]:
+    return default_review_remediation_repository.mark_ensured(
+        task_id, wake_id=wake_id, actor=actor, project=project)
+
+
 def review_remediation_metrics(*, task_id: str = "", project: str = DEFAULT_PROJECT
                                ) -> dict[str, Any]:
     return default_review_remediation_repository.metrics(task_id=task_id, project=project)
@@ -761,7 +734,8 @@ __all__ = [
     "ACCEPTANCE_SCHEMA", "DEFAULT_MAX_ROUNDS", "REMEDIATION_METRICS_SCHEMA",
     "REMEDIATION_SCHEMA", "REMEDIATION_SUMMARY_SCHEMA", "ReviewRemediationRepository",
     "default_review_remediation_repository", "get_review_remediation",
-    "handle_review_verdict", "list_review_remediations", "record_review_save",
+    "handle_review_verdict", "list_review_remediations", "mark_review_remediation_ensured",
+    "record_review_save",
     "required_review_mode", "required_review_mode_in", "resolve_human_review_authority",
     "review_remediation_metrics",
     "review_remediation_summary_in",

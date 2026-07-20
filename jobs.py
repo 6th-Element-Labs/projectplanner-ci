@@ -7,8 +7,6 @@ workflow engine. Each job is a plain function; the timer invokes this module.
   python jobs.py reconcile_alerts # run reconcile and send deduped drift alerts
   python jobs.py coordinator_audit
                                   # emit T0 read-only ranked coordinator plans
-  python jobs.py coordinator_review
-                                  # T2 review steward (dry-run by default; COORD-5)
   python jobs.py background_job <job_name>
                                    # run a checkpointed background job (RECON-10)
 
@@ -253,78 +251,6 @@ def coordinator_audit():
     return result
 
 
-def coordinator_review():
-    """Run the COORD-5 T2 review steward across selected projects.
-
-    Default is dry-run: plan + COORD-3 decisions + activity artifact, no CI/wake
-    side effects. Set ``PM_COORDINATOR_REVIEW_ACT=1`` only after dry-run receipts look
-    right. Never merges (COORD-7 / T3 only).
-    """
-    import review_steward as review_mod
-
-    projects = _configured_projects("PM_COORDINATOR_REVIEW_PROJECTS", "switchboard")
-    persist = review_mod.enabled_from_env("PM_COORDINATOR_REVIEW_LOG", True)
-    dry_run = not review_mod.enabled_from_env("PM_COORDINATOR_REVIEW_ACT", False)
-    max_ci_reruns = int(os.environ.get("PM_COORDINATOR_REVIEW_MAX_CI_RERUNS", "2"))
-    actor = (os.environ.get("PM_COORDINATOR_REVIEW_ACTOR") or
-             "switchboard/coordinator-t2").strip()
-    operator = (os.environ.get("PM_COORDINATOR_REVIEW_OPERATOR") or
-                "switchboard/operator").strip()
-    review_runtime = (os.environ.get("PM_COORDINATOR_REVIEW_RUNTIME") or
-                      "cursor").strip()
-    result = review_mod.steward_projects(
-        projects,
-        actor=actor,
-        dry_run=dry_run,
-        persist=persist,
-        max_ci_reruns=max_ci_reruns,
-        operator_agent=operator,
-        review_runtime=review_runtime,
-    )
-    print(json.dumps(result, sort_keys=True))
-    if not result.get("ok"):
-        raise RuntimeError("coordinator review steward failed closed; inspect the receipt")
-    return result
-
-
-def coordinator_merge():
-    """Run the COORD-7 T3 merge steward across selected projects.
-
-    Default is dry-run: plan + COORD-3 decisions + activity artifact, no GitHub arm.
-    Acting requires ``PM_COORDINATOR_MERGE_ACT=1`` plus policy enabled/authority env
-    flags. Never sets Done — post-arm reconcile only.
-    """
-    import merge_steward as merge_mod
-
-    projects = _configured_projects("PM_COORDINATOR_MERGE_PROJECTS", "switchboard")
-    persist = merge_mod.enabled_from_env("PM_COORDINATOR_MERGE_LOG", True)
-    dry_run = not merge_mod.enabled_from_env("PM_COORDINATOR_MERGE_ACT", False)
-    actor = (os.environ.get("PM_COORDINATOR_MERGE_ACTOR") or
-             "switchboard/coordinator-t3").strip()
-    operator = (os.environ.get("PM_COORDINATOR_MERGE_OPERATOR") or
-                "switchboard/operator").strip()
-    saturated = merge_mod.enabled_from_env("PM_COORDINATOR_MERGE_SATURATED", False)
-    try:
-        in_flight = int(os.environ.get("PM_COORDINATOR_MERGE_IN_FLIGHT", "0") or 0)
-    except ValueError:
-        in_flight = 0
-    policy = merge_mod.load_merge_policy()
-    result = merge_mod.steward_projects(
-        projects,
-        actor=actor,
-        dry_run=dry_run,
-        persist=persist,
-        policy=policy,
-        saturated=saturated,
-        in_flight=in_flight,
-        operator_agent=operator,
-    )
-    print(json.dumps(result, sort_keys=True))
-    if not result.get("ok"):
-        raise RuntimeError("coordinator merge steward failed closed; inspect the receipt")
-    return result
-
-
 def claim_gate_prs():
     """Post SESSION-12 claim-gate commit statuses for open fleet PRs (CI-7).
 
@@ -382,8 +308,6 @@ JOBS = {"weekly_digest": weekly_digest, "poll_inbox": poll_inbox,
         "sweep_monitors": sweep_monitors,
         "reconcile_alerts": reconcile_alerts,
         "coordinator_audit": coordinator_audit,
-        "coordinator_review": coordinator_review,
-        "coordinator_merge": coordinator_merge,
         "claim_gate_prs": claim_gate_prs,
         "dispatch_ci": dispatch_ci,
         "dispatch_scratchpad": dispatch_scratchpad,

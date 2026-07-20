@@ -183,13 +183,14 @@ try:
                for s in (rest_list.json().get("sessions") or [])),
        "plain list_runner_sessions(task_id) is enough to locate panel target")
 
-    # ---- Mission coordinator wake annotates awaiting bind ----------------------
+    # ---- Mission coordinator delegates bind ownership to Task Execution ---------
     import mission_coordinator  # noqa: E402
     src = Path(ROOT) / "mission_coordinator.py"
     text = src.read_text(encoding="utf-8")
-    ok("watch_gate" in text and "awaiting_runner_bind" in text
-       and "watch_requires" in text,
-       "mission_coordinator wake path documents awaiting_runner_bind gate")
+    ok("task_execution.start_task" in text
+       and "request_wake(" not in text
+       and '"kind": "start_task"' in text,
+       "mission coordinator delegates runner binding to the one Execution authority")
 
     # ---- UI needles for UI-17/UI-24 Watch open ---------------------------------
     app_js = read_frontend_source(str(ROOT))

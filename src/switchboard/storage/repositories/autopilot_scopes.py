@@ -19,6 +19,163 @@ SUPPORTED_RUNTIMES = frozenset({
 })
 
 
+def _scope_result_with_transition(row: Any, transition: Dict[str, Any]) -> str:
+    """Preserve the decision stream while appending one bounded scope handoff audit."""
+    try:
+        result = json.loads(row["last_result_json"] or "{}")
+    except (TypeError, ValueError):
+        result = {}
+    if not isinstance(result, dict):
+        result = {}
+    history = result.get("scope_transitions")
+    if not isinstance(history, list):
+        history = []
+    result["scope_transition"] = transition
+    result["scope_transitions"] = [*history, transition][-20:]
+    return json.dumps(result, sort_keys=True)
+
+
+def transition_deliverable_scopes_in(
+        connection: Any, *, source_deliverable_id: str,
+        replacement_deliverable_id: str = "", actor: str,
+        reason: str = "", now: Optional[float] = None) -> Dict[str, Any]:
+    """Atomically transfer or explicitly stop every live scope for a deliverable.
+
+    This accepts the caller's existing connection so the deliverable mutation and
+    scope mutation are one SQLite transaction. A replacement retains each scope_id
+    and its prior result/decision stream. Without a replacement, stopping also
+    writes the audit event and operator-attention message before commit.
+    """
+    source = str(source_deliverable_id or "").strip()
+    replacement = str(replacement_deliverable_id or "").strip()
+    at = time.time() if now is None else float(now)
+    if not source:
+        return {"error": "source_deliverable_id required"}
+    if replacement == source:
+        return {"error": "replacement deliverable must differ from source",
+                "deliverable_id": source}
+
+    rows = connection.execute(
+        "SELECT * FROM autopilot_scopes WHERE deliverable_id=? "
+        "AND status IN ('active','paused') ORDER BY created_at, scope_id",
+        (source,),
+    ).fetchall()
+    if replacement:
+        target = connection.execute(
+            "SELECT 1 FROM deliverables WHERE id=?", (replacement,)).fetchone()
+        if not target:
+            return {"error": "unknown replacement deliverable",
+                    "replacement_deliverable_id": replacement}
+        if not rows:
+            return {
+                "action": "no_live_scope",
+                "deliverable_id": source,
+                "replacement_deliverable_id": replacement,
+                "scope_ids": [],
+                "scope_count": 0,
+                "operator_message_id": None,
+                "reason": str(reason or "").strip() or
+                          f"deliverable replaced by {replacement}",
+            }
+        conflicts = connection.execute(
+            "SELECT scope_id,profile_id,scope_type,task_project,task_id "
+            "FROM autopilot_scopes WHERE deliverable_id=? "
+            "AND status IN ('active','paused') ORDER BY scope_id",
+            (replacement,),
+        ).fetchall()
+        if conflicts:
+            return {
+                "error": "replacement deliverable already has a live autopilot scope",
+                "replacement_deliverable_id": replacement,
+                "conflicting_scope_ids": [row["scope_id"] for row in conflicts],
+                "action": "stop the conflicting scope or omit the replacement to stop the source",
+            }
+        missing_task_links = []
+        for row in rows:
+            if row["scope_type"] != "task":
+                continue
+            linked = connection.execute(
+                "SELECT 1 FROM deliverable_task_links WHERE deliverable_id=? "
+                "AND project_id=? AND task_id=? LIMIT 1",
+                (replacement, row["task_project"], row["task_id"]),
+            ).fetchone()
+            if not linked:
+                missing_task_links.append({"scope_id": row["scope_id"],
+                                           "task_project": row["task_project"],
+                                           "task_id": row["task_id"]})
+        if missing_task_links:
+            return {
+                "error": "replacement deliverable does not preserve task scope links",
+                "replacement_deliverable_id": replacement,
+                "missing_task_links": missing_task_links,
+            }
+
+    action = "transferred" if replacement else "stopped"
+    default_reason = (
+        f"deliverable replaced by {replacement}" if replacement
+        else "deliverable archived without a replacement"
+    )
+    transition_reason = str(reason or "").strip() or default_reason
+    scope_ids = []
+    for row in rows:
+        transition = {
+            "action": action,
+            "actor": actor,
+            "at": at,
+            "from_deliverable_id": source,
+            "to_deliverable_id": replacement or None,
+            "reason": transition_reason,
+            "generation": int(row["generation"] or 1) + 1,
+        }
+        scope_ids.append(row["scope_id"])
+        if replacement:
+            connection.execute(
+                "UPDATE autopilot_scopes SET deliverable_id=?, generation=generation+1, "
+                "updated_at=?, last_result_json=? WHERE scope_id=?",
+                (replacement, at, _scope_result_with_transition(row, transition),
+                 row["scope_id"]),
+            )
+        else:
+            connection.execute(
+                "UPDATE autopilot_scopes SET status='stopped', generation=generation+1, "
+                "updated_at=?, last_result_json=? WHERE scope_id=?",
+                (at, _scope_result_with_transition(row, transition), row["scope_id"]),
+            )
+
+    payload = {
+        "action": action,
+        "deliverable_id": source,
+        "replacement_deliverable_id": replacement or None,
+        "scope_ids": scope_ids,
+        "reason": transition_reason,
+    }
+    message_id = None
+    if rows:
+        if not replacement:
+            message = (
+                f"Autopilot stopped for deliverable {source}: {transition_reason}. "
+                f"Stopped scope(s): {', '.join(scope_ids)}."
+            )
+            cursor = connection.execute(
+                "INSERT INTO agent_messages(from_agent,to_agent,task_id,message,"
+                "requires_ack,ack_deadline,sent_at) VALUES (?,?,?,?,?,?,?)",
+                ("switchboard/autopilot", "switchboard/operator", None, message,
+                 1, None, at),
+            )
+            message_id = cursor.lastrowid
+            payload["operator_message_id"] = message_id
+        connection.execute(
+            "INSERT INTO activity(task_id,actor,kind,payload,created_at) VALUES (?,?,?,?,?)",
+            (None, actor, f"autopilot.scope_{action}",
+             json.dumps(payload, sort_keys=True), at),
+        )
+    return {
+        **payload,
+        "scope_count": len(scope_ids),
+        "operator_message_id": message_id,
+    }
+
+
 def _row(row: Any) -> Dict[str, Any]:
     item = dict(row)
     try:
@@ -231,4 +388,5 @@ __all__ = [
     "StoreAutopilotScopeRepository", "default_autopilot_scope_repository",
     "list_autopilot_scopes", "get_autopilot_scope", "start_autopilot_scope",
     "control_autopilot_scope", "update_autopilot_scope",
+    "transition_deliverable_scopes_in",
 ]

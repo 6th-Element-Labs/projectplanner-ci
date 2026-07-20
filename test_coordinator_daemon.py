@@ -124,8 +124,8 @@ class FakeStore:
         if idem_key not in self.effects:
             self.cursor += 1
             self.effects[idem_key] = {
-                "status": "wake_requested", "decision_id": f"decision-{self.cursor}",
-                "dispatch": {"wake_id": f"wake-{self.cursor}"},
+                "status": "session_ensured", "decision_id": f"decision-{self.cursor}",
+                "dispatch": {"wake_id": f"wake-{self.cursor}", "role": "implementation"},
             }
         return dict(self.effects[idem_key])
 
@@ -152,12 +152,15 @@ first = daemon_mod.CoordinatorDaemon(
 run1 = first.tick_project("switchboard")
 ok(run1["status"] == "running" and run1["receipts"][0]["deliverable_id"] == "deliverable-a",
    "leader processes one bounded operator-started scope")
+ok(run1["decision_stream"][-1]["action"] == "start_task"
+   and run1["decision_stream"][-1]["task_id"] == "TASK-A",
+   "leader emits one ordered lifecycle decision stream")
 state1 = run1["state"]
 ok(state1["sequence"] == 1 and state1["last_deliverable_id"] == "deliverable-a",
    "sequence and deliverable cursor persist after the idempotent effect")
 policy = [call[2] for call in store.calls if call[0] == "mission"][-1]
-ok(policy["allowed_lanes"] == ["CO", "COORD"] and policy["auto_wake"] is True,
-   "project/lane policy and acting wake mode reach the mission coordinator")
+ok(policy["allowed_lanes"] == ["CO", "COORD"] and policy["auto_start"] is True,
+   "project/lane policy and acting session ensure reach the mission coordinator")
 
 second = daemon_mod.CoordinatorDaemon(
     config, store_mod=store, instance_id="instance-two", clock=clock)
@@ -202,9 +205,9 @@ ok("wake-generation-1" in retry_key
    "terminal wake advances the durable retry generation without a task-state change")
 
 policy_variant = daemon_mod.DaemonConfig(
-    profile_id="test", projects=("switchboard",), allowed_lanes=("CO", "COORD"),
+    profile_id="test", projects=("switchboard",), allowed_lanes=("CO",),
     act=True, max_deliverables_per_tick=1, heartbeat_seconds=10,
-    lease_ttl_seconds=30, elastic_runtime_config_ref="ssm:/new-runtime-policy",
+    lease_ttl_seconds=30,
 )
 store.set_meta(daemon_mod._state_key("test"), state1, project="switchboard")
 clock.value += 31

@@ -1,6 +1,6 @@
-# Coordinator Review Steward (COORD-5 / T2)
+# Coordinator Review Phase (COORD-5 / SIMPLIFY-2)
 
-- **Status:** Implemented (dry-run default)
+- **Status:** Internal phase of the lifecycle coordinator
 - **Owner:** Coordinator Runtime
 - **Relates to:** [COORDINATOR-CONTRACT](COORDINATOR-CONTRACT.md) §3 T2 · [COORDINATOR-AUDIT-LOOP](COORDINATOR-AUDIT-LOOP.md) · `review_steward.py` · `ci_scratchpad_dispatch.py` · COORD-6 escalation · COORD-7 merge steward
 
@@ -9,34 +9,19 @@
 Keep **In Review** work moving toward a trustworthy green **without merging**:
 
 1. Inspect board-recorded PR state, scratchpad `external_ci_run` evidence, deps, and unsafe sessions.
-2. Auto-request scratchpad CI (`dispatch_scratchpad` / `request_external_ci_mirror_run`) when CI is red or missing, up to a bounded retry budget.
-3. Dispatch a `review_merge/{task_id}` agent (message + `request_wake(mode=message_only)`) when CI is green and deps/session look clear.
-4. Escalate only when bounded repair is exhausted or required evidence/authorization is unavailable.
-5. **Never merge.** Merges stay behind COORD-7 / T3 `merge_coordinator` + `merge_gate`.
+2. Auto-request scratchpad CI when evidence is missing, up to a bounded retry budget.
+3. Call `Task Execution.start_task(role="remediation")` when CI is red.
+4. Call `Task Execution.start_task(role="review_merge")` when CI is green and deps/session look clear.
+5. Escalate only when bounded repair is exhausted or required evidence/authorization is unavailable.
+6. **Never merge.** The following merge phase retains the mechanical gate.
 
-## Run
+## Lifecycle ownership
 
-```bash
-# Dry-run (default): plan + COORD-3 decisions + activity artifact, no side effects
-python jobs.py coordinator_review
-
-# Acting (operator-approved)
-PM_COORDINATOR_REVIEW_ACT=1 python jobs.py coordinator_review
-```
-
-### Env
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `PM_COORDINATOR_REVIEW_PROJECTS` | `switchboard` | CSV / `all` project allowlist |
-| `PM_COORDINATOR_REVIEW_ACT` | `0` | `1` enables mutating effects |
-| `PM_COORDINATOR_REVIEW_LOG` | `1` | Persist activity + decisions |
-| `PM_COORDINATOR_REVIEW_MAX_CI_RERUNS` | `2` | Terminal CI attempts before escalate |
-| `PM_COORDINATOR_REVIEW_ACTOR` | `switchboard/coordinator-t2` | Decision/activity actor |
-| `PM_COORDINATOR_REVIEW_OPERATOR` | `switchboard/operator` | Escalation mailbox |
-| `PM_COORDINATOR_REVIEW_RUNTIME` | `cursor` | Wake selector runtime for review_merge |
-
-Systemd units: `deploy/projectplanner-coordinator-review.{service,timer}` (timer every 5 minutes; service ships with `PM_COORDINATOR_REVIEW_ACT=0`).
+`coordinator_daemon.py` invokes this module inside its single leader tick. There is no
+`jobs.py coordinator_review` entry point, queue, service, or timer. `dry_run=True`
+remains available only for tests and diagnostics. Session placement and idempotency
+belong to Task Execution; this phase never assembles a wake, injects a runner, or
+chooses a host.
 
 ## Policy rules (COORD-3)
 
@@ -58,9 +43,10 @@ Every tick writes `switchboard.coordinator_decision.v1` rows (stable_key idempot
 |---|---|
 | Inspect PR / CI / mergeability inputs | `plan_review_actions` over T0 snapshot |
 | Auto-request mirror rerun on red/missing | `ACTION_RERUN_CI` → `try_dispatch_scratchpad` |
-| Dispatch review_merge | message + wake `kind=review_merge` |
+| Ensure remediation | `start_task(role="remediation")` |
+| Ensure reviewer | `start_task(role="review_merge")` |
 | Escalate only when automation cannot proceed | retry exhausted / missing PR or authorization |
-| Never merge by default | `merges=False`; no `merge_coordinator` arm |
+| Never merge in this phase | `merges=False`; merge remains the next internal phase |
 
 ## Tests
 

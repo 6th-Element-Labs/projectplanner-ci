@@ -165,18 +165,15 @@ try:
     ok('"start_task"' in authz,
        "MCP authorization admits start_task as a write tool")
     coordinator = open(os.path.join(root, "mission_coordinator.py")).read()
-    ok("co_fleet_autopilot_paused" in coordinator
-       and "PM_AUTOPILOT_COFLEET" in coordinator,
-       "the coordinator can pause automatic fleet dispatch while it is unqualified")
+    launcher_source = open(os.path.join(root, "dispatch.py")).read()
+    ok("PM_AUTOPILOT_COFLEET" not in coordinator + launcher_source,
+       "the retired PM_AUTOPILOT_COFLEET pause no longer exists")
 
-    # ---- 6) the pause flag actually gates the auto branch -------------------
-    import mission_coordinator as mc
-    os.environ["PM_AUTOPILOT_COFLEET"] = "0"
-    ok(mc.co_fleet_autopilot_paused() is True,
-       "PM_AUTOPILOT_COFLEET=0 pauses automatic fleet dispatch")
-    os.environ.pop("PM_AUTOPILOT_COFLEET", None)
-    ok(mc.co_fleet_autopilot_paused() is False,
-       "the pause defaults off so existing deployments are unaffected")
+    # ---- 6) placement is command-owned and acceptance-gated -----------------
+    ok("def _aws_canary_qualified" in launcher_source
+       and 'get_task("DOGFOOD-20"' in launcher_source
+       and "use_aws_overflow = bool(aws_qualified and not personal_host_live)" in launcher_source,
+       "start_task prefers an enrolled Mac and permits AWS overflow only after DOGFOOD-20")
 
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)

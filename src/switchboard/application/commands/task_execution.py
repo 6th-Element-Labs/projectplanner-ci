@@ -138,6 +138,19 @@ def _in_flight_wake(projection: dict[str, Any]) -> Optional[dict[str, Any]]:
     return attempt
 
 
+def _execution_role(projection: dict[str, Any]) -> str:
+    """Resolve the lifecycle role from the one TaskSession projection."""
+    runner = projection.get("active_runner") or {}
+    metadata = runner.get("metadata") if isinstance(runner.get("metadata"), dict) else {}
+    attempt = projection.get("active_attempt") or {}
+    return str(
+        metadata.get("role")
+        or metadata.get("lifecycle_role")
+        or attempt.get("role")
+        or "implementation"
+    ).strip().lower()
+
+
 def _require_live_runner(projection: dict[str, Any], task_id: str,
                          project: str) -> dict[str, Any]:
     runner = projection.get("active_runner")
@@ -244,6 +257,7 @@ def get_task_execution(task_id: Any, *, project: str = DEFAULT_PROJECT) -> dict[
 
 def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "user",
                principal_id: str = "", role: str = "implementation",
+               instruction: str = "", findings: Optional[list[dict[str, Any]]] = None,
                launcher: Optional[Callable[..., dict[str, Any]]] = None) -> dict[str, Any]:
     """Start or resume THE task session (COORD-44 contract, service-owned).
 
@@ -253,12 +267,67 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
     task_id = _normalize(task_id)
     if not task_id:
         raise TaskExecutionError("invalid_input", "task_id required", project=project)
-    _projection(task_id, project)
+    projection = _projection(task_id, project)
+    lifecycle_role = {
+        "review": "review_merge",
+        "reviewer": "review_merge",
+        "review_merge": "review_merge",
+        "remediation": "remediation",
+        "implementation": "implementation",
+    }.get(str(role or "implementation").strip().lower())
+    if lifecycle_role is None:
+        raise TaskExecutionError(
+            "invalid_input", "unsupported lifecycle role",
+            task_id=task_id, project=project, role=role,
+        )
+    pr_head = projection.get("pr_head") or {}
+    source_sha = (
+        str(pr_head.get("head_sha") or "").strip().lower()
+        if lifecycle_role in {"review_merge", "remediation"}
+        and isinstance(pr_head, dict) else ""
+    )
+    if lifecycle_role in {"review_merge", "remediation"} and not source_sha:
+        raise TaskExecutionError(
+            "start_refused",
+            f"{lifecycle_role} requires the current PR head",
+            task_id=task_id, project=project, role=lifecycle_role,
+        )
+    active_role = _execution_role(projection)
+    active_runner = projection.get("active_runner") or {}
+    pending = _in_flight_wake(projection)
+    if active_runner and active_role != lifecycle_role:
+        superseded = _supersede(
+            projection, task_id, project, actor=actor, principal_id=principal_id,
+            reason=f"lifecycle role transition {active_role} -> {lifecycle_role}",
+            grace_seconds=DEFAULT_GRACE_SECONDS,
+        )
+        return _envelope(
+            "start_task", task_id, project,
+            action="transitioning", started=False, attached=False,
+            execution_id=None, wake_id=None, host_id=active_runner.get("host_id"),
+            role=lifecycle_role, previous_role=active_role,
+            superseded_execution_id=superseded.get("execution_id") or None,
+            lifecycle_phase="stopping",
+        )
+    if pending and active_role != lifecycle_role:
+        cancelled = coordination_repo.cancel_wake(
+            str(pending.get("wake_id")),
+            reason=f"lifecycle role transition {active_role} -> {lifecycle_role}",
+            actor=actor, project=project,
+        )
+        if cancelled.get("error"):
+            raise TaskExecutionError(
+                "control_refused", str(cancelled.get("error")),
+                task_id=task_id, project=project, role=lifecycle_role,
+                previous_role=active_role, wake_id=pending.get("wake_id"),
+            )
     if launcher is None:
         import dispatch as dispatch_mod
         launcher = dispatch_mod.start_task
     result = launcher(task_id, actor=actor, project=project,
-                      principal_id=principal_id, role=role)
+                      principal_id=principal_id, role=lifecycle_role,
+                      source_sha=source_sha, instruction=instruction,
+                      findings=list(findings or []))
     action = str(result.get("action") or "")
     if action == "refused":
         raise TaskExecutionError(
@@ -276,6 +345,7 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
         execution_id=result.get("runner_session_id") or None,
         wake_id=result.get("wake_id") or None,
         host_id=result.get("host_id") or None,
+        role=lifecycle_role,
         lifecycle_phase=("running" if result.get("attached")
                          else "starting" if action in {"started", "starting"} else None),
     )

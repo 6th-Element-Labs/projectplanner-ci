@@ -153,21 +153,20 @@ try:
     ]
     acceptance = json.loads(detail.get("exit_criteria") or "{}")
     ok(first.get("created") is True
-       and remediation.get("status") == "wake_requested",
-       "changes_requested durably queues one remediation round and worker wake")
+       and remediation.get("status") == "queued"
+       and remediation.get("needs_lifecycle_ensure") is True,
+       "changes_requested durably queues one lifecycle-owned remediation round")
     ok(detail.get("status") == "Not Started" and detail.get("assignee") is None,
        "In Review task is reopened as ready unclaimed remediation work")
     ok(acceptance.get("schema") == ACCEPTANCE_SCHEMA
        and [row["id"] for row in acceptance.get("findings") or []] == ["COORD20-1"],
        "next claim acceptance criteria are exactly the open auto finding")
-    ok(len(wakes) == 1
-       and (wakes[0].get("policy") or {}).get("mode") == "claim_next"
-       and (wakes[0].get("selector") or {}).get("task_id") == task_id,
-       "wake is task-scoped, idempotent, and instructs the host to claim_next")
+    ok(len(wakes) == 0,
+       "verdict persistence creates no independent worker wake")
     ok(remediation.get("requires_adversarial_review") is True,
        "lease/concurrency remediation forces adversarial re-review on the new head")
-    ok(len(write_through_calls) >= 2,
-       "queue creation and wake state+audit persistence both use single-writer transactions")
+    ok(len(write_through_calls) >= 1,
+       "queue creation uses the single-writer transaction")
 
     replay = commands.execute_mapping(
         verdict(task_id, HEAD_1, [concurrency]),
@@ -178,8 +177,8 @@ try:
     ]
     ok(replay.get("idempotent_replay") is True
        and replay.get("auto_remediation", {}).get("idempotent_replay") is True
-       and len(replay_wakes) == 1,
-       "verdict replay creates neither a second remediation nor a second wake")
+       and len(replay_wakes) == 0,
+       "verdict replay creates neither a second remediation nor an independent wake")
 
     move_to_review(task_id, HEAD_2)
     direct_error = ""
@@ -274,7 +273,7 @@ try:
        "human resolution restores original acceptance and is excluded from hands-off proof")
 
     # Repeated auto rounds are bounded.  New-head review closes the previous unit;
-    # round three exceeds the configured budget and stops at COORD-6 without a wake.
+    # round three exceeds the configured budget and stops at COORD-6.
     bounded_task = reviewable_task("bounded remediation fixture", "4" * 40)
     round1 = commands.execute_mapping(
         verdict(bounded_task, "4" * 40, [finding("COORD20-R1")]),
@@ -293,13 +292,13 @@ try:
         row for row in store.list_wake_intents(project=PROJECT)
         if row.get("task_id") == bounded_task
     ]
-    ok(round1.get("auto_remediation", {}).get("status") == "wake_requested"
-       and round2.get("auto_remediation", {}).get("status") == "wake_requested"
+    ok(round1.get("auto_remediation", {}).get("status") == "queued"
+       and round2.get("auto_remediation", {}).get("status") == "queued"
        and round3.get("auto_remediation", {}).get("status") == "escalated",
        "two remediation rounds run automatically and the third fails closed to COORD-6")
-    ok(len(bounded_rows) == 3 and len(bounded_wakes) == 2
+    ok(len(bounded_rows) == 3 and len(bounded_wakes) == 0
        and store.get_task(bounded_task, project=PROJECT).get("status") == "Blocked",
-       "round budget prevents retry storms and emits no extra worker wake")
+       "round budget prevents retry storms without creating worker wakes")
 
 finally:
     if "real_write_through" in locals():

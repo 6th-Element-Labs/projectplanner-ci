@@ -287,27 +287,28 @@ ok(accepted.get("status") == "completed",
    "wake completes after the exact active claim and Work Session are durable")
 
 
-# Coordinator retry generations suppress active duplicates and advance after a
-# failed/legacy terminal attempt.
-class WakeStore:
+# The coordinator repeats one idempotent Task Execution ensure; it never assembles
+# retry wakes itself.
+class LifecycleStore:
     def __init__(self):
-        self.rows = [{
-            "wake_id": "wake-old", "task_id": "UI-99", "status": "failed",
-            "requested_at": 1,
-            "selector": {"deliverable_id": "deliverable-ui29"},
-        }]
-        self.calls = []
-    def list_wake_intents(self, **_kwargs):
-        return list(self.rows)
-    def request_wake(self, selector, **kwargs):
-        self.calls.append({"selector": selector, **kwargs})
-        return {"wake_id": "wake-retry", "status": "pending"}
+        self.ensure_calls = []
+        self.launch_count = 0
     def record_coordinator_decision(self, **kwargs):
         return {"decision_id": "decision-ui29", **kwargs}
     def append_activity(self, *_args, **_kwargs):
         return 1
 
-fake = WakeStore()
+fake = LifecycleStore()
+
+
+def ensure_task(task_id, **kwargs):
+    fake.ensure_calls.append({"task_id": task_id, **kwargs})
+    if not fake.launch_count:
+        fake.launch_count += 1
+        return {"action": "started", "started": True,
+                "wake_id": "wake-one", "role": kwargs.get("role")}
+    return {"action": "starting", "started": False,
+            "wake_id": "wake-one", "role": kwargs.get("role")}
 mission = {
     "deliverable_id": "deliverable-ui29",
     "progress": {"linked_task_count": 1, "done_with_proof_ratio": 0},
@@ -318,26 +319,15 @@ mission = {
 }
 mission_coordinator.run_coordinator_tick(
     mission, mission_project="switchboard", store_mod=fake,
-    policy={"auto_refresh_brief": False, "auto_claim": False, "auto_wake": True,
-            "worker_wake_selector": {"runtime": "codex"},
-            "worker_wake_policy": {"mode": "co_fleet"}},
-    actor="ui29-test")
-call = fake.calls[0]
-ok(call["idem_key"].endswith("-2")
-   and call["policy"]["dispatch_attempt"] == 2
-   and call["policy"]["require_runner_bind"] is True,
-   "failed pre-claim startup advances one crash-safe retry generation")
-fake.rows.append({
-    "wake_id": "wake-active", "task_id": "UI-99", "status": "pending",
-    "requested_at": 2, "selector": {"deliverable_id": "deliverable-ui29"},
-})
+    policy={"auto_refresh_brief": False, "auto_start": True},
+    task_starter=ensure_task, actor="ui29-test")
 mission_coordinator.run_coordinator_tick(
     mission, mission_project="switchboard", store_mod=fake,
-    policy={"auto_refresh_brief": False, "auto_claim": False, "auto_wake": True,
-            "worker_wake_selector": {"runtime": "codex"},
-            "worker_wake_policy": {"mode": "co_fleet"}},
-    actor="ui29-test")
-ok(len(fake.calls) == 1, "an active exact wake suppresses duplicate dispatch")
+    policy={"auto_refresh_brief": False, "auto_start": True},
+    task_starter=ensure_task, actor="ui29-test")
+ok(len(fake.ensure_calls) == 2 and fake.launch_count == 1
+   and all(row.get("role") == "implementation" for row in fake.ensure_calls),
+   "repeated lifecycle ensures produce one launch while the exact attempt is active")
 
 
 # Native Codex host-local mode accepts the claim and managed Work Session created

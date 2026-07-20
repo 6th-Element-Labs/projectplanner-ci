@@ -4,17 +4,16 @@ Keeps In-Review work moving toward a trustworthy green without merging:
 
 * inspect board-recorded PR / scratchpad CI / dependency / session state
 * request authoritative CI when evidence is missing
-* route red CI to the live author or a replacement remediation session
-* dispatch a ``review_merge`` agent when CI is green and mergeability looks clear
+* ensure a remediation task session when CI is red
+* ensure a ``review_merge`` task session when CI is green and deps are clear
 * reserve human/operator escalation for irreducible product decisions
 
-Default posture is dry-run (observe + log decisions). Acting requires an explicit
-env flag. Merges remain COORD-7 / T3 only.
+The lifecycle leader selects dry-run versus acting for the whole tick. This
+module has no independent scheduler or activation flag.
 """
 from __future__ import annotations
 
 import json
-import os
 import time
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
@@ -25,12 +24,10 @@ PLAN_SCHEMA = "switchboard.coordinator_review_plan.v1"
 RUN_SCHEMA = "switchboard.coordinator_review_run.v1"
 ACTIVITY_SCHEMA = "switchboard.coordinator_review_activity.v1"
 ACTIVITY_KIND = "coordinator.review_steward.tick"
-REVIEW_MERGE_SIGNAL = "review_merge.dispatch"
 TIER = "T2"
 DEFAULT_ACTOR = "switchboard/coordinator-t2"
 DEFAULT_OPERATOR = "switchboard/operator"
 DEFAULT_MAX_CI_RERUNS = 2
-DEFAULT_REVIEW_RUNTIME = "cursor"
 
 ACTION_RERUN_CI = "rerun_scratchpad_ci"
 ACTION_REMEDIATE_CI = "remediate_failed_ci"
@@ -55,10 +52,6 @@ POLICY = {
 }
 
 
-def enabled_from_env(name: str, default: bool = True) -> bool:
-    return audit.enabled_from_env(name, default)
-
-
 def _status(value: Any) -> str:
     return audit._status(value)
 
@@ -69,10 +62,6 @@ def _depends_on(value: Any) -> list[str]:
 
 def _ci_state(ci: Mapping[str, Any] | None) -> str:
     return audit._ci_state(ci)
-
-
-def _review_merge_agent(task_id: str) -> str:
-    return f"review_merge/{task_id}"
 
 
 def _ci_runs_for_task(snapshot: Mapping[str, Any], task_id: str,
@@ -305,13 +294,11 @@ def _remediation_prompt(task_id: str, inputs: Mapping[str, Any]) -> str:
 
 
 def _execute_action(action: Mapping[str, Any], *, project: str, actor: str,
-                    operator_agent: str, review_runtime: str, dry_run: bool,
+                    operator_agent: str, dry_run: bool,
                     scratchpad_dispatcher: Callable[..., Any] | None,
-                    message_sender: Callable[..., Any] | None,
-                    wake_requester: Callable[..., Any] | None,
-                    runner_resolver: Callable[..., Any] | None,
-                    runner_control_requester: Callable[..., Any] | None,
-                    remediation_dispatcher: Callable[..., Any] | None) -> dict[str, Any]:
+                    task_starter: Callable[..., Any] | None,
+                    task_messenger: Callable[..., Any] | None,
+                    escalation_sender: Callable[..., Any] | None) -> dict[str, Any]:
     chosen = {
         "action": action["action"],
         "task_id": action.get("task_id") or None,
@@ -357,59 +344,30 @@ def _execute_action(action: Mapping[str, Any], *, project: str, actor: str,
                 result["error"] = dispatch.get("error") or dispatch.get("skip_reason")
 
         elif action["action"] == ACTION_REMEDIATE_CI:
-            if runner_resolver is None or runner_control_requester is None:
-                raise RuntimeError("runner_remediation_hooks_required")
+            if task_starter is None:
+                raise RuntimeError("task_starter_required")
             prompt = _remediation_prompt(task_id, inputs)
-            resolution = runner_resolver(task_id, project=project)
-            session = dict((resolution or {}).get("session") or {})
-            runner_id = str(session.get("runner_session_id") or "")
-            idem = (
-                f"coord5-remediate:{project}:{task_id}:"
-                f"{head_sha or inputs.get('ci_run_id') or 'unknown'}"
+            ensured = task_starter(
+                task_id, project=project, actor=actor, role="remediation",
+                instruction=prompt)
+            result["effects"].append({"kind": "start_task", "payload": ensured})
+            if ensured.get("attached") and task_messenger is not None:
+                message = task_messenger(
+                    task_id, prompt, project=project, actor=actor)
+                result["effects"].append({"kind": "send_message", "payload": message})
+            refused = ensured.get("action") == "refused" or bool(ensured.get("error"))
+            transitioning = ensured.get("action") == "transitioning"
+            result["status"] = (
+                "remediation_session_failed" if refused else
+                "remediation_session_transitioning" if transitioning else
+                "remediation_session_ensured"
             )
-            if (resolution or {}).get("active") and runner_id:
-                control = runner_control_requester(
-                    runner_id, "inject", reason="coordinator_red_ci_remediation",
-                    options={
-                        "task_id": task_id,
-                        "text": prompt,
-                        "kind": "message",
-                        "client_request_id": idem,
-                    },
-                    actor=actor, project=project,
-                )
-                result["effects"].append({
-                    "kind": "runner_inject",
-                    "payload": {
-                        "runner_session_id": runner_id,
-                        "request_id": control.get("request_id"),
-                        "requested": control.get("requested"),
-                        "reason": control.get("reason"),
-                    },
-                })
-                if control.get("requested") or control.get("verified"):
-                    result["status"] = "remediation_sent_to_live_runner"
-                else:
-                    result["status"] = "remediation_inject_failed"
-                    result["error"] = control.get("error") or control.get("reason")
-            else:
-                if remediation_dispatcher is None:
-                    raise RuntimeError("remediation_dispatcher_required")
-                dispatch = remediation_dispatcher(
-                    task_id, project=project, role="remediation",
-                    source_sha=head_sha, instruction=prompt,
-                )
-                result["effects"].append({"kind": "remediation_dispatch", "payload": dispatch})
-                if dispatch.get("dispatched"):
-                    result["status"] = "remediation_runner_dispatched"
-                else:
-                    result["status"] = "remediation_dispatch_failed"
-                    result["error"] = dispatch.get("error") or dispatch.get("reason")
+            if refused:
+                result["error"] = ensured.get("error") or ensured.get("reason")
 
         elif action["action"] == ACTION_DISPATCH_REVIEW:
-            if message_sender is None or wake_requester is None:
-                raise RuntimeError("dispatch_hooks_required")
-            agent_id = _review_merge_agent(task_id)
+            if task_starter is None:
+                raise RuntimeError("task_starter_required")
             prompt = (
                 f"Review {task_id} via Switchboard and merge if green.\n"
                 f"PR: {inputs.get('pr_url') or pr_number}\n"
@@ -418,47 +376,23 @@ def _execute_action(action: Mapping[str, Any], *, project: str, actor: str,
                 "Inspect mergeability and review comments. Do NOT merge unless "
                 "COORD-7 / T3 policy explicitly authorizes it."
             )
-            idem = f"coord5-review-merge:{project}:{task_id}:{head_sha or 'no-sha'}"
-            message = message_sender(
-                from_agent=actor, to_agent=agent_id, message=prompt,
-                task_id=task_id, requires_ack=False, signal=REVIEW_MERGE_SIGNAL,
-                priority=1, project=project, idem_key=f"{idem}:msg",
+            ensured = task_starter(
+                task_id, project=project, actor=actor, role="review_merge",
+                instruction=prompt)
+            result["effects"].append({"kind": "start_task", "payload": ensured})
+            refused = ensured.get("action") == "refused" or bool(ensured.get("error"))
+            transitioning = ensured.get("action") == "transitioning"
+            result["status"] = (
+                "review_session_failed" if refused else
+                "review_session_transitioning" if transitioning else
+                "review_session_ensured"
             )
-            wake = wake_requester(
-                selector={"runtime": review_runtime, "agent_id": agent_id},
-                reason=f"Review/merge stewardship for {task_id}",
-                source=f"coordinator:{actor}",
-                policy={
-                    "mode": "message_only",
-                    "kind": "review_merge",
-                    "role": "review_merge",
-                    "task_id": task_id,
-                    "project": project,
-                    "pr_number": pr_number,
-                    "head_sha": head_sha or None,
-                    "source_sha": head_sha or None,
-                    "message_id": message.get("id"),
-                },
-                actor=actor, project=project, idem_key=idem,
-            )
-            result["effects"].extend([
-                {"kind": "agent_message", "payload": {"id": message.get("id"),
-                                                      "to_agent": agent_id}},
-                {"kind": "wake", "payload": {
-                    "wake_id": wake.get("wake_id"),
-                    "requested": wake.get("requested", bool(wake.get("wake_id"))),
-                    "error": wake.get("error"),
-                }},
-            ])
-            if wake.get("error") or not wake.get("wake_id"):
-                result["status"] = "dispatch_failed"
-                result["error"] = wake.get("error") or wake.get("reason") or "wake_not_created"
-            else:
-                result["status"] = "review_merge_dispatched"
+            if refused:
+                result["error"] = ensured.get("error") or ensured.get("reason")
 
         elif action["action"] == ACTION_ESCALATE:
-            if message_sender is None:
-                raise RuntimeError("message_sender_required")
+            if escalation_sender is None:
+                raise RuntimeError("escalation_sender_required")
             body = (
                 f"COORD-5 escalation for {task_id or project}: {action.get('reason')}\n"
                 f"class={action.get('escalation_class')}\n"
@@ -468,7 +402,7 @@ def _execute_action(action: Mapping[str, Any], *, project: str, actor: str,
                 f"coord5-escalate:{project}:{task_id or 'project'}:"
                 f"{action.get('escalation_class')}:{inputs.get('ci_run_id') or head_sha or 'na'}"
             )
-            message = message_sender(
+            message = escalation_sender(
                 from_agent=actor, to_agent=operator_agent, message=body,
                 task_id=task_id or None, requires_ack=True,
                 ack_deadline_minutes=60, signal="coord.review.escalation",
@@ -494,19 +428,17 @@ def steward_project(project: str, *, actor: str = DEFAULT_ACTOR,
                     dry_run: bool = True, persist: bool = True,
                     max_ci_reruns: int = DEFAULT_MAX_CI_RERUNS,
                     operator_agent: str = DEFAULT_OPERATOR,
-                    review_runtime: str = DEFAULT_REVIEW_RUNTIME,
                     now: float | None = None,
                     db_path_resolver: Callable[[str], str] | None = None,
                     activity_writer: Callable[..., Any] | None = None,
                     decision_writer: Callable[..., Any] | None = None,
                     scratchpad_dispatcher: Callable[..., Any] | None = None,
-                    message_sender: Callable[..., Any] | None = None,
-                    wake_requester: Callable[..., Any] | None = None,
-                    runner_resolver: Callable[..., Any] | None = None,
-                    runner_control_requester: Callable[..., Any] | None = None,
-                    remediation_dispatcher: Callable[..., Any] | None = None) -> dict[str, Any]:
+                    task_starter: Callable[..., Any] | None = None,
+                    task_messenger: Callable[..., Any] | None = None,
+                    **_legacy_hooks: Any) -> dict[str, Any]:
     """Plan and optionally act on one project's In Review queue."""
     observed_at = float(time.time() if now is None else now)
+    escalation_sender = _legacy_hooks.get("message_sender")
     if db_path_resolver is None or (persist and (
             activity_writer is None or decision_writer is None)):
         import store
@@ -527,32 +459,14 @@ def steward_project(project: str, *, actor: str = DEFAULT_ACTOR,
                     pr_number, head_sha=head_sha, project=project)
 
             scratchpad_dispatcher = _dispatch
-        if message_sender is None and not dry_run:
-            message_sender = store.send_agent_message
-        if wake_requester is None and not dry_run:
-            wake_requester = store.request_wake
-        if runner_resolver is None and not dry_run:
-            runner_resolver = store.resolve_task_active_runner
-        if runner_control_requester is None and not dry_run:
-            runner_control_requester = store.request_runner_control
-        if remediation_dispatcher is None and not dry_run:
-            import dispatch as task_dispatch
-
-            project_owner = str((store.project_access(project) or {}).get("owner_user_id") or "")
-
-            def _dispatch_remediation(task_id: str, **kwargs: Any) -> dict[str, Any]:
-                return task_dispatch.dispatch(
-                    task_id,
-                    actor=actor,
-                    project=str(kwargs.get("project") or project),
-                    runtime="codex",
-                    principal_id=project_owner,
-                    role="remediation",
-                    source_sha=str(kwargs.get("source_sha") or ""),
-                    instruction=str(kwargs.get("instruction") or ""),
-                )
-
-            remediation_dispatcher = _dispatch_remediation
+        if task_starter is None and not dry_run:
+            from switchboard.application.commands import task_execution
+            task_starter = task_execution.start_task
+        if task_messenger is None and not dry_run:
+            from switchboard.application.commands import task_execution
+            task_messenger = task_execution.send_message
+        if escalation_sender is None and not dry_run:
+            escalation_sender = store.send_message
 
     try:
         db_path = db_path_resolver(project)  # type: ignore[misc]
@@ -569,12 +483,10 @@ def steward_project(project: str, *, actor: str = DEFAULT_ACTOR,
     for action in plan["actions"]:
         outcome = _execute_action(
             action, project=project, actor=actor, operator_agent=operator_agent,
-            review_runtime=review_runtime, dry_run=dry_run,
+            dry_run=dry_run,
             scratchpad_dispatcher=scratchpad_dispatcher,
-            message_sender=message_sender, wake_requester=wake_requester,
-            runner_resolver=runner_resolver,
-            runner_control_requester=runner_control_requester,
-            remediation_dispatcher=remediation_dispatcher,
+            task_starter=task_starter, task_messenger=task_messenger,
+            escalation_sender=escalation_sender,
         )
         executed.append({
             "task_id": action.get("task_id"),
@@ -661,8 +573,9 @@ def steward_project(project: str, *, actor: str = DEFAULT_ACTOR,
             "work_state_mutated": bool(
                 not dry_run and any(
                     row.get("result", {}).get("status") in {
-                        "ci_rerun_requested", "remediation_sent_to_live_runner",
-                        "remediation_runner_dispatched", "review_merge_dispatched",
+                        "ci_rerun_requested", "remediation_session_ensured",
+                        "remediation_session_transitioning", "review_session_ensured",
+                        "review_session_transitioning",
                         "escalated",
                     }
                     for row in executed
@@ -677,7 +590,6 @@ def steward_projects(projects: Iterable[str], *, actor: str = DEFAULT_ACTOR,
                      dry_run: bool = True, persist: bool = True,
                      max_ci_reruns: int = DEFAULT_MAX_CI_RERUNS,
                      operator_agent: str = DEFAULT_OPERATOR,
-                     review_runtime: str = DEFAULT_REVIEW_RUNTIME,
                      now: float | None = None,
                      **hooks: Any) -> dict[str, Any]:
     receipts = []
@@ -688,7 +600,7 @@ def steward_projects(projects: Iterable[str], *, actor: str = DEFAULT_ACTOR,
         receipts.append(steward_project(
             project, actor=actor, dry_run=dry_run, persist=persist,
             max_ci_reruns=max_ci_reruns, operator_agent=operator_agent,
-            review_runtime=review_runtime, now=now, **hooks,
+            now=now, **hooks,
         ))
     return {
         "schema": RUN_SCHEMA,

@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import coordinator_escalation as esc  # noqa: E402
 import mission_coordinator  # noqa: E402
 import store  # noqa: E402
+from switchboard.application.commands import task_execution  # noqa: E402
 
 passed = failed = 0
 
@@ -31,6 +32,10 @@ def ok(condition, message):
 
 
 try:
+    task_execution.start_task = lambda task_id, **kwargs: {
+        "action": "started", "started": True, "wake_id": "wake-escalation-test",
+        "role": kwargs.get("role"), "task_id": task_id,
+    }
     store.init_project_registry()
     store.init_db("switchboard")
 
@@ -185,11 +190,11 @@ try:
         deliverable_id="esc-mission",
         coordinator_agent_id="agent/coordinator",
         actor="test",
-        policy={"auto_claim": True, "worker_agent_id": "agent/worker",
-                "auto_refresh_brief": False},
+        policy={"auto_start": True, "auto_refresh_brief": False},
         idem_key="esc-tick-1",
     )
-    ok(tick.get("status") == "claimed", "legacy human-gate metadata does not stop claim")
+    ok(tick.get("status") == "session_ensured",
+       "legacy human-gate metadata does not stop session ensure")
     notes = tick.get("human_notifications") or []
     ok(not notes, "legacy human-gate metadata produces no human notification")
     ok(tick.get("decision", {}).get("decision_kind") != "human_escalation",

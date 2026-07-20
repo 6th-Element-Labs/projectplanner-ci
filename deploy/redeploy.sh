@@ -48,6 +48,10 @@ AUX_UNITS=(projectplanner-agent-host.service
     projectplanner-coordinator-audit.timer projectplanner-claim-gate.timer
     projectplanner-narrate.timer projectplanner-digest.timer projectplanner-inbox.timer
     projectplanner-summarize.timer projectplanner-backup.timer)
+RETIRED_LIFECYCLE_UNITS=(projectplanner-coordinator-review.timer
+    projectplanner-coordinator-review.service
+    projectplanner-coordinator-merge.timer
+    projectplanner-coordinator-merge.service)
 
 section() { printf '\n== %s ==\n' "$1"; }
 
@@ -293,6 +297,10 @@ rollback_guard_arm restore_tasks_cut_topology cleanup_redeploy_snapshot
 
 # 4. Sync systemd units into /etc and pick up unit-file changes.
 section "systemd units"
+for unit in "${RETIRED_LIFECYCLE_UNITS[@]}"; do
+    sudo systemctl disable --now "$unit" >/dev/null 2>&1 || true
+    sudo rm -f "/etc/systemd/system/$unit"
+done
 sudo cp deploy/*.service deploy/*.timer /etc/systemd/system/
 # HARDEN-55: re-assert the least-privilege posture (dedicated service account, root-owned
 # read-only code tree, service-owned data dir incl. the CI-12 source clone). Idempotent.

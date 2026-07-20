@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import coordinator_daemon  # noqa: E402
 import store  # noqa: E402
+from switchboard.application.commands import task_execution  # noqa: E402
 
 
 passed = failed = 0
@@ -31,6 +32,14 @@ def ok(condition, message):
 
 
 try:
+    ensures = []
+
+    def fake_start_task(task_id, **kwargs):
+        ensures.append({"task_id": task_id, **kwargs})
+        return {"action": "started", "started": True,
+                "wake_id": f"wake-{task_id}", "role": kwargs.get("role")}
+
+    task_execution.start_task = fake_start_task
     store.init_project_registry()
     store.init_db("switchboard")
     created = store.create_project("UI-27", project_id="qa-ui27", actor="test")
@@ -107,18 +116,18 @@ try:
     daemon = coordinator_daemon.CoordinatorDaemon(
         coordinator_daemon.DaemonConfig(
             profile_id="autopilot-default", projects=("qa-ui27",), act=True,
-            worker_runtime="codex", max_tasks_per_scope_tick=8),
+            max_tasks_per_scope_tick=8),
         store_mod=store, instance_id="ui27-test")
     first_wave = daemon._run_scope("qa-ui27", deliverable_scope)
     task_ids = {row.get("task_id") for row in first_wave.get("receipts") or []}
     ok(first_wave.get("candidate_count") == 2 and task_ids == {"AUTO-1", "AUTO-3"},
        "deliverable Start fans out across the complete ready frontier")
-    wakes = store.list_wake_intents(project="qa-ui27")
-    ok({row.get("task_id") for row in wakes} == {"AUTO-1", "AUTO-3"},
-       "each ready frontier task receives its own runtime wake")
+    ok({row.get("task_id") for row in ensures} == {"AUTO-1", "AUTO-3"}
+       and all(row.get("role") == "implementation" for row in ensures),
+       "each ready frontier task receives its own role-aware session ensure")
     daemon._run_scope("qa-ui27", deliverable_scope)
-    ok(len(store.list_wake_intents(project="qa-ui27")) == len(wakes),
-       "repeated daemon ticks do not duplicate wakes")
+    ok(len(ensures) == 2,
+       "repeated daemon ticks replay the same durable ensure receipts")
 
     mission = store.get_mission_status(
         project="qa-ui27", deliverable_id="ui27-deliverable")
@@ -132,8 +141,7 @@ try:
             "UPDATE tasks SET status='Done', updated_at=updated_at+1 WHERE task_id='AUTO-1'")
     unblocked = daemon._run_scope("qa-ui27", blocked_scope)
     ok([row.get("task_id") for row in unblocked.get("receipts") or []] == ["AUTO-2"]
-       and any(row.get("task_id") == "AUTO-2"
-               for row in store.list_wake_intents(project="qa-ui27")),
+       and any(row.get("task_id") == "AUTO-2" for row in ensures),
        "an armed blocked task dispatches automatically when its dependency becomes Done")
 
     source = open("static/js/mission.js", encoding="utf-8").read()

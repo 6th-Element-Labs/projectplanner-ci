@@ -44,6 +44,8 @@ class UpdateDeliverableBody(BaseModel):
     end_state: str | None = None
     purpose: str | None = None
     metadata: dict[str, Any] | None = None
+    replacement_deliverable_id: str | None = None
+    scope_transition_reason: str | None = None
 
 
 def create_router(*, resolve_project: ProjectResolver,
@@ -421,12 +423,17 @@ def create_router(*, resolve_project: ProjectResolver,
     async def archive_deliverable_route(request: Request, deliverable_id: str,
                                         body: dict = Body(default={}),
                                         project: str = Query(...)):
-        """UI-11: archive a deliverable (or restore it). Body {"archived": bool} (default true)."""
+        """Archive/restore, atomically transferring or stopping live Autopilot scope."""
         project = resolve_project(project)
         principal = resolve_principal(request, project, ("write:tasks",), dev_actor="web")
         archived = True if not body else bool(body.get("archived", True))
         result = store.archive_deliverable(
-            deliverable_id, project=project, actor=auth.actor(principal), archived=archived)
+            deliverable_id, project=project, actor=auth.actor(principal), archived=archived,
+            replacement_deliverable_id=str(
+                body.get("replacement_deliverable_id") or "") if body else "",
+            scope_transition_reason=str(
+                body.get("scope_transition_reason") or "") if body else "",
+        )
         if result.get("error"):
             raise HTTPException(400, result["error"])
         return result

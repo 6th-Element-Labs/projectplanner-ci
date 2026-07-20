@@ -229,35 +229,23 @@ def test_acting_mode_reruns_and_dispatches():
         db_path = Path(tmp) / "board.db"
         make_db(db_path)
         dispatches = []
-        remediation_dispatches = []
-        controls = []
-        messages = []
-        wakes = []
+        starts = []
+        task_messages = []
 
         def scratchpad_dispatcher(pr_number, head_sha="", project="switchboard"):
             dispatches.append({"pr": pr_number, "head_sha": head_sha, "project": project})
             return {"dispatched": True, "pr": pr_number, "head_sha": head_sha}
 
-        def message_sender(**kwargs):
-            messages.append(kwargs)
-            return {"id": len(messages)}
+        def task_starter(task_id, **kwargs):
+            starts.append({"task_id": task_id, **kwargs})
+            return {"action": "attach" if task_id == "R-2" else "started",
+                    "attached": task_id == "R-2", "started": task_id != "R-2",
+                    "execution_id": f"run-{task_id.lower()}",
+                    "role": kwargs.get("role")}
 
-        def wake_requester(**kwargs):
-            wakes.append(kwargs)
-            return {"wake_id": f"wake-{len(wakes)}", "requested": True}
-
-        def runner_resolver(task_id, project="switchboard"):
-            if task_id == "R-2":
-                return {"active": True, "session": {"runner_session_id": "run-r2"}}
-            return {"active": False}
-
-        def runner_control_requester(runner_id, action, **kwargs):
-            controls.append((runner_id, action, kwargs))
-            return {"requested": True, "request_id": "runnerreq-r2"}
-
-        def remediation_dispatcher(task_id, **kwargs):
-            remediation_dispatches.append((task_id, kwargs))
-            return {"dispatched": True, "wake_id": f"wake-remediate-{task_id}"}
+        def task_messenger(task_id, text, **kwargs):
+            task_messages.append({"task_id": task_id, "text": text, **kwargs})
+            return {"queued": True}
 
         receipt = rs.steward_project(
             "switchboard",
@@ -267,39 +255,28 @@ def test_acting_mode_reruns_and_dispatches():
             now=NOW,
             db_path_resolver=lambda _project: str(db_path),
             scratchpad_dispatcher=scratchpad_dispatcher,
-            message_sender=message_sender,
-            wake_requester=wake_requester,
-            runner_resolver=runner_resolver,
-            runner_control_requester=runner_control_requester,
-            remediation_dispatcher=remediation_dispatcher,
+            task_starter=task_starter,
+            task_messenger=task_messenger,
         )
         actions = {row["task_id"]: row for row in receipt["executed"]}
         ok(not any(d["pr"] in {12, 15} for d in dispatches),
            "red CI never wastes time rerunning unchanged code")
         ok(any(d["pr"] == 13 for d in dispatches), "missing CI triggers scratchpad dispatcher")
-        ok(actions["R-2"]["result"]["status"] == "remediation_sent_to_live_runner",
-           "red CI is injected into the live task runner")
-        ok(controls and controls[0][0:2] == ("run-r2", "inject"),
-           "live remediation uses the bound runner control")
-        control_options = controls[0][2]["options"]
-        ok(control_options["task_id"] == "R-2"
-           and control_options["client_request_id"].endswith(":h2"),
-           "runner remediation is exact-task and exact-head idempotent")
-        ok(actions["R-5"]["result"]["status"] == "remediation_runner_dispatched",
-           "red CI without a live runner starts a replacement remediation runner")
-        ok(remediation_dispatches
-           and remediation_dispatches[0][0] == "R-5"
-           and remediation_dispatches[0][1]["role"] == "remediation"
-           and remediation_dispatches[0][1]["source_sha"] == "h5",
-           "replacement remediation is bound to the exact task and head")
-        ok(actions["R-1"]["result"]["status"] == "review_merge_dispatched",
-           "green CI dispatches review_merge")
-        ok(any(m.get("to_agent") == "review_merge/R-1" for m in messages),
-           "review_merge agent receives directed message")
-        ok(any((w.get("policy") or {}).get("kind") == "review_merge" for w in wakes),
-           "wake policy kind is review_merge")
-        ok(not any(m.get("requires_ack") for m in messages),
-           "red CI does not generate an operator escalation")
+        ok(actions["R-2"]["result"]["status"] == "remediation_session_ensured",
+           "red CI ensures the task's remediation session")
+        ok(task_messages and task_messages[0]["task_id"] == "R-2"
+           and "exact head h2" in task_messages[0]["text"],
+           "an attached remediation receives the exact-head instruction")
+        ok(actions["R-5"]["result"]["status"] == "remediation_session_ensured",
+           "red CI without a live runner ensures a remediation session")
+        ok(any(row["task_id"] == "R-5" and row["role"] == "remediation"
+               and "exact head h5" in row["instruction"] for row in starts),
+           "remediation uses the one role-aware start_task operation")
+        ok(actions["R-1"]["result"]["status"] == "review_session_ensured",
+           "green CI ensures a reviewer session")
+        ok(any(row["task_id"] == "R-1" and row["role"] == "review_merge"
+               and "head_sha: h1" in row["instruction"] for row in starts),
+           "review uses the same role-aware start_task operation")
         ok(receipt["effects"]["merged"] is False, "acting mode still never merges")
 
 

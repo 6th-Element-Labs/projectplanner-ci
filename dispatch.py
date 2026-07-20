@@ -603,8 +603,15 @@ def resume_review(task_id, actor="user", project=store.DEFAULT_PROJECT,
 START_TASK_SCHEMA = "switchboard.task_session_start.v1"
 
 
+def _aws_canary_qualified(project):
+    """AWS overflow is unavailable until its explicit acceptance task is Done."""
+    canary = store.get_task("DOGFOOD-20", project=project) or {}
+    return str(canary.get("status") or "").strip().lower() == "done"
+
+
 def start_task(task_id, actor="user", project=store.DEFAULT_PROJECT,
-               principal_id="", role="implementation"):
+               principal_id="", role="implementation", source_sha="",
+               instruction="", findings=None):
     """COORD-44 core: the ONE way any surface starts or resumes a task session.
 
     UI, MCP, and the coordinator all call this instead of assembling their own
@@ -661,11 +668,49 @@ def start_task(task_id, actor="user", project=store.DEFAULT_PROJECT,
             "message": "A session for this task is already starting.",
         }
 
-    # 3) Start one on the enrolled personal host (the direct Mac path — the
-    # only launch path currently qualified to serve browser Watch).
-    result = dispatch(task_id, actor=actor, project=project,
-                      runtime=_CODEX_RUNTIME, principal_id=principal_id,
-                      role=role)
+    lifecycle_role = {
+        "review": "review_merge",
+        "reviewer": "review_merge",
+        "review_merge": "review_merge",
+        "remediation": "remediation",
+        "implementation": "implementation",
+    }.get(str(role or "implementation").strip().lower())
+    if lifecycle_role is None:
+        return {"schema": START_TASK_SCHEMA, "action": "refused",
+                "started": False, "attached": False,
+                "error": "unsupported_lifecycle_role", "task_id": task_id,
+                "project": project, "role": role}
+
+    # The command owns placement. Resolve the project owner for autonomous
+    # lifecycle ticks, prefer that owner's live Mac, and only overflow to AWS
+    # after DOGFOOD-20 has terminal Done provenance.
+    if not principal_id:
+        principal_id = str((store.project_access(project) or {}).get("owner_user_id") or "")
+    lane = task.get("_wsId") or ""
+    personal_host_id, personal_host_live = _personal_host_target(
+        project, principal_id, lane)
+    aws_qualified = _aws_canary_qualified(project)
+    use_aws_overflow = bool(aws_qualified and not personal_host_live)
+
+    if use_aws_overflow:
+        runtime_config_ref = str(
+            os.environ.get("PM_COORDINATOR_AUTOPILOT_RUNTIME_CONFIG_REF")
+            or os.environ.get("PM_CO_RUNTIME_CONFIG_REF") or ""
+        ).strip()
+        result = dispatch_to_co_fleet(
+            task_id, actor=actor, project=project, runtime=_CODEX_RUNTIME,
+            runtime_config_ref=runtime_config_ref,
+            allow_on_demand=_env_truthy("PM_COORDINATOR_AUTOPILOT_ALLOW_ON_DEMAND"),
+            role=lifecycle_role, source_sha=source_sha,
+            instruction=instruction, findings=findings,
+        )
+    else:
+        result = dispatch(
+            task_id, actor=actor, project=project,
+            runtime=_CODEX_RUNTIME, principal_id=principal_id,
+            role=lifecycle_role, source_sha=source_sha,
+            instruction=instruction, findings=findings,
+        )
     if result.get("dispatched"):
         return {
             "schema": START_TASK_SCHEMA, "action": "started",
@@ -676,6 +721,8 @@ def start_task(task_id, actor="user", project=store.DEFAULT_PROJECT,
             "branch": result.get("branch"),
             "execution_mode": result.get("execution_mode"),
             "work_hosts_online": result.get("work_hosts_online"),
+            "placement": "aws_overflow" if use_aws_overflow else "mac_preferred",
+            "role": lifecycle_role,
         }
 
     # 4) One truthful failure, with the dispatcher's own latest verdict so the
@@ -687,6 +734,9 @@ def start_task(task_id, actor="user", project=store.DEFAULT_PROJECT,
         "task_id": task_id, "project": project,
         "error": result.get("error") or "start_failed",
         "reason": result.get("reason") or "",
+        "placement": "aws_overflow" if use_aws_overflow else "mac_preferred",
+        "aws_canary_qualified": aws_qualified,
+        "preferred_host_id": personal_host_id,
         "dispatch": latest_dispatch_outcome(task_id, project=project),
     }
 
@@ -694,7 +744,9 @@ def start_task(task_id, actor="user", project=store.DEFAULT_PROJECT,
 def dispatch_to_co_fleet(task_id, actor="user", project=store.DEFAULT_PROJECT,
                          runtime=_RUNTIME, capabilities=None,
                          runtime_config_ref="", allow_on_demand=False,
-                         account_binding=None, placement=None):
+                         account_binding=None, placement=None,
+                         role="implementation", source_sha="", instruction="",
+                         findings=None):
     """Queue a task for the elastic CO worker fleet.
 
     ``runtime_config_ref`` is an SSM parameter or Secrets Manager *reference*.
@@ -759,6 +811,12 @@ def dispatch_to_co_fleet(task_id, actor="user", project=store.DEFAULT_PROJECT,
                 selected_runtime,
                 session_policy=str(task.get("policy_profile") or "code_strict"),
             ),
+        },
+        "lifecycle": {
+            "role": str(role or "implementation").strip().lower(),
+            "source_sha": str(source_sha or "").strip().lower() or None,
+            "instruction": str(instruction or "").strip() or None,
+            "findings": list(findings or []),
         },
     }
     if binding is not None:

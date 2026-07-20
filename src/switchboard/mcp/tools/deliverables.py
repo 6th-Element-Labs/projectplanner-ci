@@ -86,13 +86,17 @@ def get_deliverable(deliverable_id: str, project: str = "maxwell") -> str:
 def update_deliverable(deliverable_id: str, ctx: Context, project: str = "maxwell",
                        title: str | None = None, status: str | None = None,
                        end_state: str | None = None, purpose: str | None = None,
-                       metadata_json: str | None = None) -> str:
-    """Partially update a deliverable's contract, status, title, or metadata."""
+                       metadata_json: str | None = None,
+                       replacement_deliverable_id: str | None = None,
+                       scope_transition_reason: str | None = None) -> str:
+    """Update a deliverable; replacement transfers live Autopilot scope atomically."""
     services = _services()
     principal = services.require_write(ctx, project, ("write:tasks",))
     supplied = {
         "title": title, "status": status, "end_state": end_state,
         "purpose": purpose, "metadata": metadata_json,
+        "replacement_deliverable_id": replacement_deliverable_id,
+        "scope_transition_reason": scope_transition_reason,
     }
     result = update_deliverable_command.execute_mapping_result(
         deliverable_id, {key: value for key, value in supplied.items() if value is not None},
@@ -359,18 +363,15 @@ def generate_mission_brief(deliverable_id: str, ctx: Context, project: str = "ma
 
 def run_mission_coordinator(deliverable_id: str, ctx: Context, project: str = "maxwell",
                           board_id: str = "", mission_id: str = "",
-                          coordinator_agent_id: str = "", worker_agent_id: str = "",
-                          auto_claim: bool = True, auto_wake: bool = False,
+                          coordinator_agent_id: str = "", auto_start: bool = True,
                           auto_refresh_brief: bool = True, policy_json: str = "",
                           idem_key: str = "") -> str:
     """Run one deliverable-scoped coordinator tick: refresh brief, dispatch, monitor, or escalate."""
     services = _services()
     principal = services.require_write(ctx, project, ("write:tasks",))
     policy = {
-        "auto_claim": auto_claim,
-        "auto_wake": auto_wake,
+        "auto_start": auto_start,
         "auto_refresh_brief": auto_refresh_brief,
-        "worker_agent_id": worker_agent_id,
     }
     if policy_json:
         try:

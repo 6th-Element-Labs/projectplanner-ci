@@ -71,13 +71,9 @@ ok(agent_host.eligible_runtime(cross_lane_wake, inventory) is not None,
    "project-wide Mac accepts an exact task from any project lane")
 
 
-class WakeStore:
+class LifecycleStore:
     def __init__(self):
-        self.wake = None
-
-    def request_wake(self, selector, **kwargs):
-        self.wake = {"selector": selector, **kwargs}
-        return {"wake_id": "wake-ui28", "status": "pending", "eligible_host_count": 0}
+        self.starts = []
 
     def record_coordinator_decision(self, **kwargs):
         return {"decision_id": "decision-ui28", **kwargs}
@@ -86,7 +82,7 @@ class WakeStore:
         return 1
 
 
-wake_store = WakeStore()
+lifecycle_store = LifecycleStore()
 mission_status = {
     "deliverable_id": "deliverable-ui28",
     "progress": {"linked_task_count": 1, "done_with_proof_ratio": 0},
@@ -96,34 +92,26 @@ mission_status = {
         "project_id": "switchboard", "lane": "ARCH-MS", "title": "Fan out",
     }],
 }
-wake_policy = {
-    "mode": "co_fleet",
-    "runtime_config_ref": "ssm:/switchboard/co/runtime/autopilot",
-    "allow_on_demand": True,
-    "scheduler": {"mode": "hybrid", "prefer_persistent": True,
-                  "allow_persistent": True, "allow_ephemeral": True,
-                  "burst_enabled": True},
-    "placement": {"canonical_repo": "6th-Element-Labs/projectplanner",
-                  "session_policy": "code_strict", "isolation": "task_worktree"},
-}
+def task_starter(task_id, **kwargs):
+    lifecycle_store.starts.append({"task_id": task_id, **kwargs})
+    return {"action": "started", "started": True, "wake_id": "wake-ui28",
+            "role": kwargs.get("role"), "placement": "mac_preferred"}
+
+
 tick = mission_coordinator.run_coordinator_tick(
-    mission_status, mission_project="switchboard", store_mod=wake_store,
-    policy={"auto_refresh_brief": False, "auto_claim": False, "auto_wake": True,
-            "worker_wake_selector": {"runtime": "codex"},
-            "worker_wake_policy": wake_policy},
-    actor="ui28-test", idem_key="ui28-test")
-selector = (wake_store.wake or {}).get("selector") or {}
-persisted_policy = (wake_store.wake or {}).get("policy") or {}
-ok(tick.get("status") == "wake_requested"
-   and selector.get("task_id") == "ARCH-MS-119"
-   and selector.get("project_id") == "switchboard"
-   and selector.get("lane") == "ARCH-MS"
-   and selector.get("agent_id") == "codex/ARCH-MS-119",
-   "Autopilot wake binds the exact task, project, lane, runtime, and agent")
-ok(persisted_policy.get("mode") == "co_fleet"
-   and (persisted_policy.get("scheduler") or {}).get("mode") == "hybrid"
-   and persisted_policy.get("allow_on_demand") is True,
-   "the same wake fills persistent Macs first and authorizes guarded AWS burst")
+    mission_status, mission_project="switchboard", store_mod=lifecycle_store,
+    policy={"auto_refresh_brief": False, "auto_start": True},
+    task_starter=task_starter, actor="ui28-test", idem_key="ui28-test")
+started = lifecycle_store.starts[0] if lifecycle_store.starts else {}
+ok(tick.get("status") == "session_ensured"
+   and started.get("task_id") == "ARCH-MS-119"
+   and started.get("project") == "switchboard"
+   and started.get("role") == "implementation",
+   "Autopilot ensures the exact task through start_task")
+source = Path("dispatch.py").read_text()
+ok("DOGFOOD-20" in source and "mac_preferred" in source
+   and "aws_overflow" in source and "PM_AUTOPILOT_COFLEET" not in source,
+   "start_task prefers Mac and gates AWS overflow on DOGFOOD-20")
 
 config = coordinator_daemon.DaemonConfig.from_env({
     "PM_COORDINATOR_AUTOPILOT_PROJECTS": "switchboard",
@@ -131,12 +119,9 @@ config = coordinator_daemon.DaemonConfig.from_env({
         "ssm:/switchboard/co/runtime/autopilot",
     "PM_COORDINATOR_AUTOPILOT_ACT": "1",
 })
-daemon = coordinator_daemon.CoordinatorDaemon(config, store_mod=object())
-elastic = daemon._worker_wake_policy()
 ok(config.max_deliverables_per_tick == 64
    and config.max_tasks_per_scope_tick == 64
-   and elastic.get("mode") == "co_fleet"
-   and (elastic.get("scheduler") or {}).get("burst_enabled") is True,
+   and config.act is True,
    "one sweep schedules sixty selected deliverables without an eight-task throttle")
 
 app_source = Path("static/app.js").read_text()

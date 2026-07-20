@@ -106,6 +106,8 @@ def make_db(path: Path) -> None:
                  "[]", None, None, "Medium", 0, 6, NOW - 30),
                 ("M-7", "Not review", "", "Runtime", None, "P0", "Not Started",
                  "[]", None, None, "Low", 0, 7, NOW - 20),
+                ("M-8", "Merged pending reconcile", "", "Runtime", None, "P0", "In Review",
+                 "[]", None, None, "Low", 0, 8, NOW - 10),
             ],
         )
         db.executemany(
@@ -121,6 +123,8 @@ def make_db(path: Path) -> None:
                  None, 0, None, NOW - 10, "{}", NOW - 10),
                 ("M-6", "agent/m-6", "h6", NOW - 100, 26, "https://example/pr/26", None,
                  None, 0, None, NOW - 10, "{}", NOW - 10),
+                ("M-8", "agent/m-8", "h8", NOW - 100, 28, "https://example/pr/28", "m8",
+                 NOW - 5, 0, None, NOW - 5, "{}", NOW - 5),
             ],
         )
         db.executemany(
@@ -177,6 +181,8 @@ def test_plan_fail_closed_and_arm():
            and by_task["M-1"]["escalation_class"] == "absent_permission",
            "missing authority fail-closed even when CI green")
         ok("M-7" not in by_task, "Not Started tasks are ignored")
+        ok(by_task["M-8"]["action"] == ms.ACTION_VERIFY_POST_MERGE,
+           "merged PR with missing Done provenance reconciles in the same lifecycle")
 
         # Enabled + authority → M-1 arms
         plan2 = ms.plan_merge_actions(snapshot, policy={
@@ -282,7 +288,8 @@ def test_dry_run_and_acting_hooks():
         ok(act["effects"]["merged"] is True, "acting arms auto-merge for eligible PR")
         ok(act["effects"]["done_set"] is False, "acting never sets Done")
         ok(any(row.get("task_id") == "M-1" for row in armed), "M-1 was armed")
-        ok(reconciled, "post-arm reconcile requested")
+        ok(any(row.get("task_id") == "M-8" for row in reconciled),
+           "merged task immediately requests Done-provenance reconciliation")
         ok(any((e["plan"] or {}).get("escalation_class") == "red_ci_product_judgment"
                for e in escalated),
            "red CI escalates via COORD-6 delivery hook")

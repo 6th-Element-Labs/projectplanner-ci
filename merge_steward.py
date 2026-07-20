@@ -276,6 +276,13 @@ def plan_merge_actions(snapshot: Mapping[str, Any], *,
             "is_blocking": bool(task.get("is_blocking")),
         }
 
+        if git_state.get("merged_sha") and not git_state.get("in_main_content"):
+            add(task_id, ACTION_VERIFY_POST_MERGE,
+                "A merge SHA is recorded but Done provenance has not landed; reconcile now.",
+                base_inputs, score=98, merges=False,
+                skipped=[{"action": ACTION_ARM, "reason": "already_merged"}])
+            continue
+
         if pol.get("deny_blocking_tasks") and task.get("is_blocking"):
             add(task_id, ACTION_ESCALATE,
                 "Blocking tasks are denied by merge steward policy.",

@@ -144,7 +144,7 @@ Rules for coordinators:
 | `get_mission_status` | `deliverable_id` or `board_id`/`mission_id` |
 | `claim_next` | `deliverable_id`, optional `milestone_id`; `project`=mission home |
 | `complete_claim` | evidence: `deliverable_id`, `mission_project`, `milestone_id` |
-| `run_mission_coordinator` | `deliverable_id`, `coordinator_agent_id`, `worker_agent_id`, optional `policy_json` |
+| `run_mission_coordinator` | `deliverable_id`, `coordinator_agent_id`, `auto_start`, optional `policy_json` |
 | `get_working_agreement` | includes `deliverable_first_startup` and `session_start_sequence_deliverable` |
 
 See also [`DELIVERABLES-MISSION-MODEL.md`](DELIVERABLES-MISSION-MODEL.md) and [`MCP.md`](MCP.md).

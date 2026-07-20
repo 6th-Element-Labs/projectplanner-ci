@@ -50,6 +50,13 @@ state.
 - `kpi_links_json`
 - `metadata_json`
 
+An active deliverable is also an execution-scope owner. A PATCH with
+`replacement_deliverable_id` stores that pointer and transfers any live
+Autopilot scope in the same transaction. The scope keeps its identity and
+decision stream. Archiving without a replacement stops the scope with an
+audited reason and an acknowledged operator message; target conflicts fail
+closed so board surgery cannot fork execution.
+
 `deliverable_milestones`
 
 - `id`: scoped under the deliverable when generated, such as
@@ -178,6 +185,8 @@ Initial REST routes:
 - `GET /api/deliverables?project={project}&board_id={board_id}`
 - `POST /api/deliverables?project={project}`
 - `GET /api/deliverables/{deliverable_id}?project={project}`
+- `PATCH /api/deliverables/{deliverable_id}?project={project}`
+- `POST /api/deliverables/{deliverable_id}/archive?project={project}`
 - `POST /api/deliverables/{deliverable_id}/milestones?project={project}`
 - `POST /api/deliverables/{deliverable_id}/task_links?project={project}`
 
@@ -231,8 +240,8 @@ deliverable records into linked project databases.
 `run_mission_coordinator` executes one deliverable-scoped coordinator tick. It reads
 `get_mission_status.next_actions`, refreshes the mission brief when stale, and either:
 
-- **dispatches** ready linked work via `claim_next(deliverable_id=...)` when `auto_claim` and
-  `worker_agent_id` are set;
+- **ensures** ready linked work via `Task Execution.start_task(role="implementation")`
+  when `auto_start` is set;
 - **monitors** In Review tasks via `verify_merge_provenance` (never marks Done);
 - **escalates** to humans for approval gates, breakdown approval, or blocked decisions; or
 - returns **idle** / **mission_complete** when there is nothing to do.

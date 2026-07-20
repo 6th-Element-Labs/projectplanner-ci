@@ -362,7 +362,10 @@ def update_deliverable(deliverable_id: str, updates: Dict[str, Any],
     """Partially update a deliverable contract through the public write path."""
     if not _store_facade().has_project(project):
         return {"error": f"unknown project: {project}"}
-    allowed = {"title", "status", "end_state", "purpose", "metadata"}
+    allowed = {
+        "title", "status", "end_state", "purpose", "metadata",
+        "replacement_deliverable_id", "scope_transition_reason",
+    }
     unknown = sorted(set(updates or {}) - allowed)
     if unknown:
         return {"error": "unsupported deliverable update fields", "fields": unknown,
@@ -393,12 +396,17 @@ def update_deliverable(deliverable_id: str, updates: Dict[str, Any],
                 return status_error
             values["status"] = requested_status
 
+        replacement_deliverable_id = str(
+            updates.get("replacement_deliverable_id") or "").strip()
         metadata_value = updates.get("metadata", prior.get("metadata", {}))
         _, safe_metadata, policy_error = deliverable_policy.prepare_upsert(
             c, deliverable_id, requested_status, metadata_value)
         if policy_error:
             return policy_error
-        if "metadata" in updates:
+        if replacement_deliverable_id:
+            safe_metadata = dict(safe_metadata)
+            safe_metadata["replacement_deliverable_id"] = replacement_deliverable_id
+        if "metadata" in updates or "replacement_deliverable_id" in updates:
             values["metadata_json"] = json.dumps(safe_metadata, sort_keys=True)
 
         if requested_status == "in_progress" and prior["status"] != "in_progress" \
@@ -410,6 +418,25 @@ def update_deliverable(deliverable_id: str, updates: Dict[str, Any],
                 return intake_error
 
         now = time.time()
+        scope_transition = None
+        if replacement_deliverable_id or (
+                requested_status == "archived" and prior["status"] != "archived"):
+            # Local import avoids a repository import cycle. Passing this connection
+            # makes the deliverable update and durable execution-scope transition one
+            # transaction, so the coordinator can never observe split ownership.
+            from switchboard.storage.repositories.autopilot_scopes import (
+                transition_deliverable_scopes_in,
+            )
+            scope_transition = transition_deliverable_scopes_in(
+                c,
+                source_deliverable_id=deliverable_id,
+                replacement_deliverable_id=replacement_deliverable_id,
+                actor=actor,
+                reason=str(updates.get("scope_transition_reason") or ""),
+                now=now,
+            )
+            if scope_transition.get("error"):
+                return scope_transition
         assignments = [f"{field}=?" for field in values]
         assignments.append("updated_at=?")
         c.execute(f"UPDATE deliverables SET {', '.join(assignments)} WHERE id=?",
@@ -429,8 +456,11 @@ def update_deliverable(deliverable_id: str, updates: Dict[str, Any],
 
     narration_outbox.emit_deliverable_narration_request(
         project, deliverable_id, cause_kind="deliverable.updated", actor=actor)
-    return get_deliverable(deliverable_id, project=project) or {
+    result = get_deliverable(deliverable_id, project=project) or {
         "error": "deliverable not found"}
+    if scope_transition is not None and not result.get("error"):
+        result["autopilot_scope_transition"] = scope_transition
+    return result
 
 
 def add_deliverable_milestone(deliverable_id: str, data: Dict[str, Any],
@@ -1102,23 +1132,33 @@ def list_deliverable_summaries(project: str = DEFAULT_PROJECT,
 
 
 def archive_deliverable(deliverable_id: str, project: str = DEFAULT_PROJECT,
-                        actor: str = "user", archived: bool = True) -> Dict[str, Any]:
+                        actor: str = "user", archived: bool = True,
+                        replacement_deliverable_id: str = "",
+                        scope_transition_reason: str = "") -> Dict[str, Any]:
     """UI-11: archive a deliverable (or restore it) by flipping its status to/from
     'archived'. Archived deliverables are hidden from the picker by default but remain
     fully readable — nothing is deleted. Restore lands in 'in_review' (the operator can
     re-mark it Done)."""
     if not _store_facade().has_project(project):
         return {"error": f"unknown project: {project}"}
-    deliverable = get_deliverable(deliverable_id, project=project)
-    if not deliverable:
-        return {"error": "unknown deliverable", "deliverable_id": deliverable_id}
     new_status = "archived" if archived else "in_review"
-    now = time.time()
-    with _store_facade()._conn(project) as c:
-        c.execute("UPDATE deliverables SET status=?, updated_at=? WHERE id=?",
-                  (new_status, now, deliverable_id))
-    return {"ok": True, "deliverable_id": deliverable_id, "status": new_status,
-            "archived": archived, "actor": actor}
+    updates: Dict[str, Any] = {"status": new_status}
+    if archived and replacement_deliverable_id:
+        updates["replacement_deliverable_id"] = replacement_deliverable_id
+    if archived and scope_transition_reason:
+        updates["scope_transition_reason"] = scope_transition_reason
+    result = update_deliverable(
+        deliverable_id, updates, actor=actor, project=project)
+    if result.get("error"):
+        return result
+    return {
+        "ok": True,
+        "deliverable_id": deliverable_id,
+        "status": new_status,
+        "archived": archived,
+        "actor": actor,
+        "autopilot_scope_transition": result.get("autopilot_scope_transition"),
+    }
 
 
 def deliverable_progress(deliverable: Dict[str, Any]) -> Dict[str, Any]:

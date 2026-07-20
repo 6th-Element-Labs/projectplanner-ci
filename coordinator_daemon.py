@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Durable operator-scoped coordinator daemon (COORD-8 / UI-27).
+"""Durable operator-scoped lifecycle coordinator (COORD-8 / SIMPLIFY-2).
 
 The daemon is intentionally a thin control shell around the existing mission
 coordinator. It adds a single-leader lease, presence heartbeat, project/lane
 allowlists, durable pause controls, operator-started scopes, and a crash-safe
 round-robin cursor.
-All task effects still pass through the existing claim/wake/review policy gates.
+All task-session effects pass through ``Task Execution.start_task(role=...)``.
 """
 from __future__ import annotations
 
@@ -20,7 +20,6 @@ from typing import Any, Dict, Iterable, Mapping, Optional
 import uuid
 
 import scripts.switchboard_path  # noqa: F401 — make src/switchboard importable
-from switchboard.domain.coordination.runtime_profile import runtime_profile_requirement
 
 
 STATE_SCHEMA = "switchboard.coordinator_daemon_state.v1"
@@ -55,8 +54,6 @@ class DaemonConfig:
     projects: tuple[str, ...] = ("switchboard",)
     allowed_lanes: tuple[str, ...] = ()
     actor: str = "switchboard/coordinator-autopilot"
-    worker_agent_id: str = ""
-    worker_runtime: str = "codex"
     act: bool = False
     poll_seconds: int = 30
     heartbeat_seconds: int = 30
@@ -67,13 +64,8 @@ class DaemonConfig:
     # limits.
     max_deliverables_per_tick: int = 64
     max_tasks_per_scope_tick: int = 64
-    elastic_runtime_config_ref: str = ""
-    elastic_allow_on_demand: bool = True
     lifecycle_enabled: bool = True
     review_reserved_slots: int = 1
-    require_runner_watch: bool = False
-    expected_agent_host_version: str = ""
-    expected_agent_host_profile_hash: str = ""
 
     @classmethod
     def from_env(cls, environ: Optional[Mapping[str, str]] = None) -> "DaemonConfig":
@@ -86,9 +78,6 @@ class DaemonConfig:
             allowed_lanes=_csv(env.get("PM_COORDINATOR_AUTOPILOT_LANES", ""), upper=True),
             actor=(env.get("PM_COORDINATOR_AUTOPILOT_ACTOR")
                    or "switchboard/coordinator-autopilot").strip(),
-            worker_agent_id=(env.get("PM_COORDINATOR_AUTOPILOT_WORKER_AGENT") or "").strip(),
-            worker_runtime=(env.get("PM_COORDINATOR_AUTOPILOT_WORKER_RUNTIME")
-                            or "codex").strip(),
             act=enabled_from_env("PM_COORDINATOR_AUTOPILOT_ACT", False, env),
             poll_seconds=max(1, int(env.get("PM_COORDINATOR_AUTOPILOT_POLL_SECONDS", "30"))),
             heartbeat_seconds=heartbeat,
@@ -100,21 +89,10 @@ class DaemonConfig:
                 1, int(env.get("PM_COORDINATOR_AUTOPILOT_MAX_DELIVERABLES", "64"))),
             max_tasks_per_scope_tick=max(
                 1, int(env.get("PM_COORDINATOR_AUTOPILOT_MAX_TASKS_PER_SCOPE", "64"))),
-            elastic_runtime_config_ref=(
-                env.get("PM_COORDINATOR_AUTOPILOT_RUNTIME_CONFIG_REF")
-                or env.get("PM_CO_RUNTIME_CONFIG_REF") or "").strip(),
-            elastic_allow_on_demand=enabled_from_env(
-                "PM_COORDINATOR_AUTOPILOT_ALLOW_ON_DEMAND", True, env),
             lifecycle_enabled=enabled_from_env(
                 "PM_COORDINATOR_AUTOPILOT_LIFECYCLE", True, env),
             review_reserved_slots=max(
                 1, int(env.get("PM_COORDINATOR_REVIEW_RESERVED_SLOTS", "1"))),
-            require_runner_watch=enabled_from_env(
-                "PM_COORD_REQUIRE_RUNNER_WATCH", False, env),
-            expected_agent_host_version=(
-                env.get("PM_EXPECTED_AGENT_HOST_VERSION") or "").strip(),
-            expected_agent_host_profile_hash=(
-                env.get("PM_EXPECTED_AGENT_HOST_PROFILE_HASH") or "").strip(),
         )
 
 
@@ -180,11 +158,13 @@ class CoordinatorDaemon:
         self._stop = False
 
     def _drain_lifecycle(self, project: str) -> Dict[str, Any]:
-        """Run T2 before T3 in the leader tick; both retain their native gates."""
+        """Drain review, merge, and reconcile as phases of this leader tick."""
         if not self.config.lifecycle_enabled:
             return {"status": "disabled"}
         if self.lifecycle_runner is not None:
-            return dict(self.lifecycle_runner(project=project, daemon=self) or {})
+            result = dict(self.lifecycle_runner(project=project, daemon=self) or {})
+            result.setdefault("decision_stream", [])
+            return result
         # Small hermetic fakes used by daemon tests do not expose a database path.
         if not callable(getattr(self.store, "_resolve", None)):
             return {"status": "unavailable"}
@@ -194,8 +174,19 @@ class CoordinatorDaemon:
             project, actor=self.config.actor, dry_run=not self.config.act)
         merge = merge_steward.steward_project(
             project, actor=self.config.actor, dry_run=not self.config.act)
+        stream = []
+        for phase, receipt in (("review", review), ("merge_reconcile", merge)):
+            for row in receipt.get("executed") or []:
+                stream.append({
+                    "phase": phase,
+                    "task_id": row.get("task_id"),
+                    "action": row.get("action"),
+                    "status": (row.get("result") or {}).get("status"),
+                    "decision_id": row.get("decision_id"),
+                })
         return {"status": "drained", "review": review, "merge": merge,
-                "reserved_slots": self.config.review_reserved_slots}
+                "reserved_slots": self.config.review_reserved_slots,
+                "decision_stream": stream}
 
     def _state(self, project: str) -> Dict[str, Any]:
         saved = self.store.get_meta(
@@ -421,13 +412,7 @@ class CoordinatorDaemon:
                 project, deliverable_id, task_id)
             policy = {
                 "auto_refresh_brief": not receipts,
-                "auto_claim": bool(self.config.act and self.config.worker_agent_id),
-                "auto_wake": bool(self.config.act and not self.config.worker_agent_id),
-                "worker_agent_id": self.config.worker_agent_id,
-                "worker_wake_selector": ({"runtime": scope.get("runtime")
-                                           or self.config.worker_runtime}
-                                          if self.config.act else {}),
-                "worker_wake_policy": self._worker_wake_policy(),
+                "auto_start": bool(self.config.act),
                 "allowed_lanes": list(self.config.allowed_lanes),
                 "denied_lanes": list(denied_lanes),
                 "target_task_id": task_id,
@@ -462,7 +447,7 @@ class CoordinatorDaemon:
             })
         waiting_receipts = [
             receipt for receipt in receipts
-            if receipt.get("status") == "wake_requested"
+            if receipt.get("status") == "dispatch_blocked"
             and "eligible_host_count" in (receipt.get("dispatch") or {})
             and int((receipt.get("dispatch") or {}).get("eligible_host_count") or 0) == 0
         ]
@@ -486,38 +471,6 @@ class CoordinatorDaemon:
             ticked_at=float(self.clock()))
         return result
 
-    def _worker_wake_policy(self) -> Dict[str, Any]:
-        """Use already-paid Macs first and burst to guarded AWS capacity."""
-        reference = self.config.elastic_runtime_config_ref
-        if not reference:
-            return {"mode": "claim_next"}
-        return {
-            "mode": "co_fleet",
-            "runtime_config_ref": reference,
-            "allow_on_demand": self.config.elastic_allow_on_demand,
-            "registration_timeout_s": 180,
-            "scheduler": {
-                "mode": "hybrid",
-                "prefer_persistent": True,
-                "allow_persistent": True,
-                "allow_ephemeral": True,
-                "burst_enabled": True,
-                "max_host_loss_reschedules": 3,
-            },
-            "placement": {
-                "canonical_repo": "6th-Element-Labs/projectplanner",
-                "session_policy": "code_strict",
-                "isolation": "task_worktree",
-                "runtime_profile": runtime_profile_requirement(
-                    self.config.worker_runtime,
-                    session_policy="code_strict",
-                    require_runner_watch=self.config.require_runner_watch,
-                    agent_host_version=self.config.expected_agent_host_version,
-                    expected_profile_hash=self.config.expected_agent_host_profile_hash,
-                ),
-            },
-        }
-
     def tick_project(self, project: str) -> Dict[str, Any]:
         if project not in self.config.projects:
             return {"project": project, "status": "denied_project"}
@@ -536,6 +489,7 @@ class CoordinatorDaemon:
 
         receipts = []
         lifecycle = self._drain_lifecycle(project)
+        decision_stream = list(lifecycle.get("decision_stream") or [])
         for scope in self._ordered_scopes(project, state):
             # Controls are re-read between effects so an operator pause is bounded
             # by one scope tick rather than the whole project sweep.
@@ -556,6 +510,18 @@ class CoordinatorDaemon:
                 "task_receipts": result.get("receipts") or [],
                 "error": result.get("error"),
             })
+            for task_receipt in result.get("receipts") or []:
+                decision_stream.append({
+                    "phase": "implementation_or_remediation",
+                    "scope_id": scope.get("scope_id"),
+                    "deliverable_id": deliverable_id,
+                    "task_id": task_receipt.get("task_id"),
+                    "action": "start_task",
+                    "role": ((task_receipt.get("dispatch") or {}).get("role")
+                             or "implementation"),
+                    "status": task_receipt.get("status"),
+                    "decision_id": task_receipt.get("decision_id"),
+                })
             # Persist only after the scope's idempotent task ticks return. A crash
             # before this write reuses the same candidate revision keys on restart.
             state.update({
@@ -579,6 +545,7 @@ class CoordinatorDaemon:
              "instance_id": self.instance_id, "project": project,
              "status": status, "acting": self.config.act,
              "lifecycle_status": lifecycle.get("status"),
+             "decision_stream": decision_stream,
              "receipt_count": len(receipts),
              "scope_ids": [row["scope_id"] for row in receipts],
              "deliverable_ids": [row["deliverable_id"] for row in receipts],
@@ -587,7 +554,8 @@ class CoordinatorDaemon:
         )
         return {"schema": RUN_SCHEMA, "project": project, "status": status,
                 "leader": True, "acting": self.config.act, "receipts": receipts,
-                "lifecycle": lifecycle, "state": state}
+                "lifecycle": lifecycle, "decision_stream": decision_stream,
+                "state": state}
 
     def tick(self) -> Dict[str, Any]:
         receipts = [self.tick_project(project) for project in self.config.projects]
