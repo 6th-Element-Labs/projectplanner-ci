@@ -9,15 +9,11 @@ One mailbox, many boards (UI-13): a message is routed to a project by, in order,
   1. plus-addressing — plan+<project>@taikunai.com on any recipient (zero-config, same mailbox);
   2. the sender-domain map — per-project associations edited from Settings → Communications
      (UI-14) merged over the PM_INBOX_ROUTES env bootstrap (e.g. 'totalenergy.com=maxwell');
-  3. otherwise the global PM_INBOX_ALLOWLIST gate -> the default project (today's behavior, unchanged).
-A routing match (1 or 2) also ACCEPTS the message; unmatched senders still pass through the
-allowlist so nothing that arrives today stops arriving. Each project's inbox/corpus is isolated
-in its own DB file, so a routed message lands only on that board.
+Messages without exactly one explicit route are moved to the mailbox quarantine folder. They do
+not enter a project database or invoke ingestion, triage, replies, dispatch, embeddings, or LLMs.
 
 Config (.env, all optional):
   PM_IMAP_HOST(=imap.gmail.com)  PM_IMAP_USER  PM_IMAP_PASSWORD(app password)
-  PM_INBOX_ALLOWLIST   comma list; an UNMAPPED message is accepted if its From contains any
-                       entry (empty = accept all — tighten in prod). Routing (below) bypasses it.
   PM_INBOX_ROUTES      comma list of 'domain=project' (e.g. 'totalenergy.com=maxwell'); a sender
                        whose domain matches (or is a subdomain of) an entry routes to that project.
 """
@@ -36,6 +32,28 @@ from switchboard.integrations import inbox_routing
 from switchboard.domain.projects.context import ProjectContext
 
 log = logging.getLogger("inbox_source")
+
+
+def _quarantine(m, message_id, reason):
+    """Move an unroutable message outside INBOX without touching any project state."""
+    folder = (os.environ.get("PM_INBOX_QUARANTINE_FOLDER") or "Switchboard-Quarantine").strip()
+    try:
+        m.create(folder)  # idempotent on common IMAP servers; ALREADYEXISTS is harmless
+        typ, _ = m.copy(message_id, folder)
+        if str(typ).upper() != "OK":
+            raise RuntimeError(f"IMAP quarantine copy failed: {typ}")
+        typ, _ = m.store(message_id, "+FLAGS", "(\\Deleted)")
+        if str(typ).upper() != "OK":
+            raise RuntimeError(f"IMAP source-delete flag failed: {typ}")
+    except Exception:
+        # fetch() marks mail seen. Restore UNSEEN on any quarantine failure so a
+        # transient mailbox error cannot silently strand the message.
+        try:
+            m.store(message_id, "-FLAGS", "(\\Seen)")
+        except Exception:
+            pass
+        raise
+    log.warning("Live Inbox: quarantined message %s (%s)", message_id, reason)
 
 
 def _decode(s):
@@ -105,7 +123,8 @@ def poll(max_msgs=20):
         _typ, data = m.search(None, "UNSEEN")
         ids = (data[0].split() if data and data[0] else [])[:max_msgs]
         self_addr = (os.environ.get("PM_IMAP_USER") or "").lower()
-        queued = 0
+        queued = quarantined = 0
+        quarantine_reasons = {}
         for i in ids:
             _typ, msg_data = m.fetch(i, "(RFC822)")   # fetching marks \Seen -> not re-polled
             msg = email.message_from_bytes(msg_data[0][1])
@@ -121,9 +140,13 @@ def poll(max_msgs=20):
                 ", ".join(msg.get_all("Delivered-To") or []),
                 ", ".join(msg.get_all("X-Original-To") or []),
             ] if p)
-            accept, project = inbox_routing.route(sender, recipients)
-            if not accept:
+            decision = inbox_routing.route_decision(sender, recipients)
+            if not decision.accepted:
+                _quarantine(m, i, decision.reason)
+                quarantined += 1
+                quarantine_reasons[decision.reason] = quarantine_reasons.get(decision.reason, 0) + 1
                 continue
+            project = decision.project
             subject = _decode(msg.get("Subject"))
             mid = msg.get("Message-ID") or f"{subject}:{msg.get('Date')}"
             headers = {
@@ -139,7 +162,10 @@ def poll(max_msgs=20):
             if inbox.process("email", mid, sender, subject, _message_text(msg),
                              headers=headers, project_context=project_context):
                 queued += 1
-        return {"polled": len(ids), "queued": queued, "disabled": False}
+        if quarantined:
+            m.expunge()
+        return {"polled": len(ids), "queued": queued, "quarantined": quarantined,
+                "quarantine_reasons": quarantine_reasons, "disabled": False}
     finally:
         try:
             m.logout()

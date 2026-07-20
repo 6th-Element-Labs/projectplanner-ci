@@ -117,6 +117,14 @@ def set_inbound_domains(project, domains):
     if conflicts:
         return {"error": "domain already associated with another project: " + "; ".join(conflicts)}
     set_meta(INBOUND_KEY, clean, project=project)
+    # The shared-inbox hot path reads one immutable routing index. Invalidate it only
+    # after the configuration write succeeds; the next message rebuilds the complete
+    # index before publishing it to readers.
+    try:
+        from switchboard.integrations import inbox_routing
+        inbox_routing.invalidate_routes()
+    except ImportError:
+        pass
     return {"inbound_domains": clean}
 
 
