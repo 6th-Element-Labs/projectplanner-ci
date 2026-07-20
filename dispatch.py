@@ -603,6 +603,11 @@ def resume_review(task_id, actor="user", project=store.DEFAULT_PROJECT,
 START_TASK_SCHEMA = "switchboard.task_session_start.v1"
 
 
+def _planned_runner_session_id(wake_id, host_id):
+    from switchboard.domain.runner_pty import planned_runner_session_id
+    return planned_runner_session_id(wake_id, host_id)
+
+
 def _aws_canary_qualified(project):
     """AWS overflow is unavailable until its explicit acceptance task is Done."""
     canary = store.get_task("DOGFOOD-20", project=project) or {}
@@ -658,13 +663,17 @@ def start_task(task_id, actor="user", project=store.DEFAULT_PROJECT,
     attempt = (task_session or {}).get("active_attempt") or {}
     if ((task_session or {}).get("lifecycle_phase") == "starting"
             and str(attempt.get("status") or "") in {"pending", "claimed"}):
+        pending_wake_id = str(attempt.get("wake_id") or "")
+        pending_host_id = str(attempt.get("host_id") or "")
         return {
             "schema": START_TASK_SCHEMA, "action": "starting",
             "started": False, "attached": False, "watchable": False,
             "task_id": task_id, "project": project,
-            "wake_id": attempt.get("wake_id"),
+            "wake_id": pending_wake_id,
             "wake_status": attempt.get("status"),
-            "host_id": attempt.get("host_id") or "",
+            "host_id": pending_host_id,
+            "runner_session_id": _planned_runner_session_id(
+                pending_wake_id, pending_host_id) or None,
             "message": "A session for this task is already starting.",
         }
 
@@ -712,12 +721,16 @@ def start_task(task_id, actor="user", project=store.DEFAULT_PROJECT,
             instruction=instruction, findings=findings,
         )
     if result.get("dispatched"):
+        wake_id = str(result.get("wake_id") or "")
+        host_id = str(result.get("host_id") or "")
         return {
             "schema": START_TASK_SCHEMA, "action": "started",
             "started": True, "attached": False, "watchable": False,
             "task_id": task_id, "project": project,
-            "wake_id": result.get("wake_id"),
-            "host_id": result.get("host_id"),
+            "wake_id": wake_id,
+            "host_id": host_id,
+            "runner_session_id": _planned_runner_session_id(
+                wake_id, host_id) or None,
             "branch": result.get("branch"),
             "execution_mode": result.get("execution_mode"),
             "work_hosts_online": result.get("work_hosts_online"),
@@ -855,6 +868,7 @@ def dispatch_to_co_fleet(task_id, actor="user", project=store.DEFAULT_PROJECT,
     )
     return {"dispatched": True, "task_id": task_id, "project": project,
             "wake_id": wake["wake_id"], "wake_status": wake.get("status"),
+            "host_id": (wake.get("placement") or {}).get("selected_host_id"),
             "lane": lane, "runtime": selected_runtime, "capabilities": required,
             "execution_mode": "co_fleet", "allow_on_demand": bool(allow_on_demand),
             "account_affinity_id": (binding or {}).get("account_affinity_id")}

@@ -511,6 +511,37 @@
             return true;
         }
         if (data.action === 'started' || data.action === 'starting') {
+            // SIMPLIFY-9: Starting is opening. The server reserves the
+            // deterministic session and returns a browser capability before
+            // the host process exists; the hub buffers this attach until the
+            // executor dials in.
+            if (data.execution_id && data.relay_url) {
+                const els = this._runnerPtyShowShell(opts && opts.dockInto);
+                const mode = opts && opts.dockInto ? 'docked' : 'sidecar';
+                this._runnerPtyTeardown();
+                this._runnerPtyIntentTask = id;
+                if (els.title) els.title.textContent = `${id} · ${data.execution_id}`;
+                if (els.sub) els.sub.textContent = String(data.host_id || '').trim();
+                const rp = {
+                    taskId: id,
+                    runnerSessionId: data.execution_id,
+                    mode,
+                    reconnectAttempts: 0,
+                    relayUrl: data.relay_url,
+                    relayExpiresAt: Number(data.expires_at || 0),
+                };
+                this._runnerPty = rp;
+                try {
+                    await this._ensureXterm();
+                    if (this._runnerPty !== rp) return true;
+                    this._runnerPtyMountTerminal(rp);
+                    this._runnerPtyGate('Connected to the reserved session — waiting for the host…', 'secondary');
+                    this._runnerPtyOpenSocket(rp, rp.relayUrl, false);
+                } catch (e) {
+                    this._runnerPtyGate(`Terminal renderer unavailable: ${this.esc(e.message)}`, 'danger');
+                }
+                return true;
+            }
             this._runnerPtyGate(
                 `Starting on ${this.esc(String(data.host_id || 'your Mac'))} — the live terminal opens as soon as the runner binds.`,
                 'secondary');
@@ -588,24 +619,32 @@
         // it can no longer attach to a session the server has superseded. A
         // refusal arrives as one truthful reason instead of two half-failures.
         let ticket;
-        try {
-            const res = await fetch(`api/tasks/${encodeURIComponent(rp.taskId)}/execution/open`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ project: window.PM_PROJECT || 'maxwell' }),
-            });
-            ticket = await res.json();
-            if (!res.ok || ticket.error) {
-                throw new Error(this._runnerPtyApiError(ticket, `HTTP ${res.status}`));
+        const reusable = rp.relayUrl && (!rp.relayExpiresAt
+            || Date.now() < (Number(rp.relayExpiresAt) - 15) * 1000);
+        if (reusable) {
+            ticket = { relay_url: rp.relayUrl, execution_id: rp.runnerSessionId, opened: true };
+        } else {
+            try {
+                const res = await fetch(`api/tasks/${encodeURIComponent(rp.taskId)}/execution/open`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ project: window.PM_PROJECT || 'maxwell' }),
+                });
+                ticket = await res.json();
+                if (!res.ok || ticket.error) {
+                    throw new Error(this._runnerPtyApiError(ticket, `HTTP ${res.status}`));
+                }
+                if (!ticket.relay_url) {
+                    throw new Error(ticket.reason || 'relay ticket has no browser-safe URL');
+                }
+                // The server is authoritative for session identity; adopt whatever
+                // execution it actually opened.
+                if (ticket.execution_id) rp.runnerSessionId = ticket.execution_id;
+                rp.relayUrl = ticket.relay_url;
+                rp.relayExpiresAt = Number(ticket.expires_at || 0);
+            } catch (e) {
+                this._runnerPtyGate(`Could not open a browser-safe relay ticket: ${this.esc(e.message)}`, 'danger');
+                return;
             }
-            if (!ticket.relay_url) {
-                throw new Error(ticket.reason || 'relay ticket has no browser-safe URL');
-            }
-            // The server is authoritative for session identity; adopt whatever
-            // execution it actually opened.
-            if (ticket.execution_id) rp.runnerSessionId = ticket.execution_id;
-        } catch (e) {
-            this._runnerPtyGate(`Could not open a browser-safe relay ticket: ${this.esc(e.message)}`, 'danger');
-            return;
         }
         if (ticket.opened === false) {
             // The relay is live but the host tunnel was refused: say so rather
@@ -682,8 +721,63 @@
         rp.resizeObserver.observe(els.termMount);
     },
 
-    _runnerPtyEncodeFrame(type, payload) {
-        return JSON.stringify(Object.assign({ type }, payload || {}));
+    _runnerPtyTypeIds: {
+        ready: 1, exit: 2, out: 3, in: 4, resize: 5, signal: 6, snapshot: 7,
+    },
+
+    _runnerPtyEncodeFrame(type, payload, dataBytes) {
+        // SIMPLIFY-9 binary wire: SB1\0 + type_id + u16 header_len + u32 data_len + JSON header + data
+        const typeId = this._runnerPtyTypeIds[type];
+        if (!typeId) throw new Error(`unknown_frame_type:${type}`);
+        const headerObj = Object.assign({}, payload || {});
+        delete headerObj.type;
+        delete headerObj.data;
+        delete headerObj.data_b64;
+        const headerJson = JSON.stringify(headerObj);
+        const headerBytes = new TextEncoder().encode(headerJson);
+        const data = dataBytes
+            ? (dataBytes instanceof Uint8Array ? dataBytes : new Uint8Array(dataBytes))
+            : new Uint8Array(0);
+        const out = new Uint8Array(4 + 1 + 2 + 4 + headerBytes.length + data.length);
+        out[0] = 0x53; out[1] = 0x42; out[2] = 0x31; out[3] = 0x00; // SB1\0
+        out[4] = typeId & 0xff;
+        out[5] = (headerBytes.length >> 8) & 0xff;
+        out[6] = headerBytes.length & 0xff;
+        out[7] = (data.length >>> 24) & 0xff;
+        out[8] = (data.length >>> 16) & 0xff;
+        out[9] = (data.length >>> 8) & 0xff;
+        out[10] = data.length & 0xff;
+        out.set(headerBytes, 11);
+        if (data.length) out.set(data, 11 + headerBytes.length);
+        return out.buffer;
+    },
+
+    _runnerPtyDecodeFrame(raw) {
+        const bytes = raw instanceof ArrayBuffer
+            ? new Uint8Array(raw)
+            : (raw instanceof Uint8Array ? raw : null);
+        if (!bytes || bytes.length < 11 || bytes[0] !== 0x53 || bytes[1] !== 0x42
+            || bytes[2] !== 0x31 || bytes[3] !== 0x00) {
+            return null;
+        }
+        const typeId = bytes[4];
+        const headerLen = (bytes[5] << 8) | bytes[6];
+        const dataLen = ((bytes[7] << 24) | (bytes[8] << 16) | (bytes[9] << 8) | bytes[10]) >>> 0;
+        const idToType = { 1: 'ready', 2: 'exit', 3: 'out', 4: 'in', 5: 'resize', 6: 'signal', 7: 'snapshot' };
+        const type = idToType[typeId];
+        if (!type) return null;
+        const headerStart = 11;
+        const dataStart = headerStart + headerLen;
+        if (dataLen > 16 * 1024 * 1024 || dataStart + dataLen !== bytes.length) return null;
+        let header = {};
+        if (headerLen) {
+            try {
+                header = JSON.parse(new TextDecoder().decode(bytes.subarray(headerStart, dataStart)));
+            } catch (e) { return null; }
+        }
+        const frame = Object.assign({}, header, { type });
+        if (dataLen) frame.data = bytes.subarray(dataStart, dataStart + dataLen);
+        return frame;
     },
 
     _runnerPtyRequestId(prefix) {
@@ -693,25 +787,22 @@
         return `runner-${prefix || 'op'}-${suffix}`;
     },
 
-    _runnerPtyB64FromString(str) {
-        const bytes = new TextEncoder().encode(str);
-        let binary = '';
-        bytes.forEach((b) => { binary += String.fromCharCode(b); });
-        return btoa(binary);
+    _runnerPtyUtf8Bytes(str) {
+        return new TextEncoder().encode(str);
     },
 
     _runnerPtySendInput(data) {
         const rp = this._runnerPty;
         if (!rp || !rp.ws || rp.ws.readyState !== WebSocket.OPEN) return;
-        rp.ws.send(this._runnerPtyEncodeFrame('input', { data_b64: this._runnerPtyB64FromString(data) }));
+        rp.ws.send(this._runnerPtyEncodeFrame('in', {}, this._runnerPtyUtf8Bytes(data)));
     },
 
     _runnerPtySendBinary(data) {
         const rp = this._runnerPty;
         if (!rp || !rp.ws || rp.ws.readyState !== WebSocket.OPEN) return;
-        let binary = '';
-        for (let i = 0; i < data.length; i++) binary += String.fromCharCode(data.charCodeAt(i) & 0xff);
-        rp.ws.send(this._runnerPtyEncodeFrame('input', { data_b64: btoa(binary) }));
+        const bytes = new Uint8Array(data.length);
+        for (let i = 0; i < data.length; i++) bytes[i] = data.charCodeAt(i) & 0xff;
+        rp.ws.send(this._runnerPtyEncodeFrame('in', {}, bytes));
     },
 
     _runnerPtySendResize() {
@@ -724,6 +815,7 @@
         let ws;
         try {
             ws = new WebSocket(relayUrl);
+            ws.binaryType = 'arraybuffer';
         } catch (e) {
             this._runnerPtyGate(`Could not open the relay socket: ${this.esc(e.message)}`, 'danger');
             return;
@@ -766,21 +858,17 @@
     },
 
     _runnerPtyHandleFrame(rp, raw) {
-        let frame;
-        try { frame = JSON.parse(raw); } catch (e) { return; }
+        const frame = this._runnerPtyDecodeFrame(raw);
+        if (!frame) return;
         const type = frame.type;
-        if (type === 'output' || type === 'replay') {
-            if (!frame.data_b64 || !rp.term) return;
-            const binary = atob(frame.data_b64);
-            const bytes = new Uint8Array(binary.length);
-            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-            rp.term.write(bytes);
+        if (type === 'out' || type === 'snapshot') {
+            if (!frame.data || !rp.term) return;
+            rp.term.write(frame.data);
             this._runnerPtyGate('', 'secondary');
-        } else if (type === 'error') {
-            this._runnerPtyGate(`Relay error: ${this.esc(frame.reason || frame.detail || 'unknown')}`, 'danger');
-        } else if (type === 'close') {
-            this._runnerPtyGate(`Session closed: ${this.esc(frame.reason || 'ended')}`, 'secondary');
-        } else if (type === 'control_ack') {
+        } else if (type === 'exit') {
+            this._runnerPtyGate(`Session closed: ${this.esc(frame.reason || frame.detail || 'ended')}`, 'secondary');
+        } else if (type === 'ready' && frame.request_id) {
+            // Delivery ack for Watch chat (replaces legacy control_ack).
             const pending = rp.pendingChat && rp.pendingChat[frame.request_id];
             if (!pending) return;
             delete rp.pendingChat[frame.request_id];
@@ -820,12 +908,11 @@
                             this._runnerPtyGate('The message reached Codex, but Watch disconnected before Enter. Press Enter after reconnecting.', 'danger');
                             return;
                         }
-                        rp.ws.send(this._runnerPtyEncodeFrame('input', {
+                        rp.ws.send(this._runnerPtyEncodeFrame('in', {
                             request_id: submitId,
                             purpose: 'chat_submit',
                             task_id: rp.taskId,
-                            data_b64: this._runnerPtyB64FromString('\r'),
-                        }));
+                        }, this._runnerPtyUtf8Bytes('\r')));
                     }, 75);
                     return;
                 }
@@ -889,12 +976,11 @@
                     this._runnerPtyGate('The live runner did not acknowledge the message. It was restored so you can retry.', 'danger');
                 }, 10000);
                 rp.pendingChat[requestId] = { entry, text, phase: 'text', timer };
-                rp.ws.send(this._runnerPtyEncodeFrame('input', {
+                rp.ws.send(this._runnerPtyEncodeFrame('in', {
                     request_id: requestId,
                     purpose: 'chat_text',
                     task_id: rp.taskId,
-                    data_b64: this._runnerPtyB64FromString(text),
-                }));
+                }, this._runnerPtyUtf8Bytes(text)));
                 return;
             }
             // If the relay is reconnecting, retain the durable host queue as a

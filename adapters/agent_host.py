@@ -1156,8 +1156,9 @@ def _tcp_port_open(host, port, timeout_s=0.5):
         return False
 
 
-# UI-24: one HostBridgeSession per live runner_session_id — the host-tunnel
-# WebSocket + LocalPtyRelayBridge that actually feeds RelayHub.attach_host().
+# SIMPLIFY-9: one HostBridgeSession per live runner_session_id — the host
+# tunnel WS. PTY I/O is owned by the executor (master_fd + file log); there is
+# no LocalPtyRelayBridge / localhost /stream+/control hop on the Watch path.
 _HOST_BRIDGES = {}
 _HOST_BRIDGES_LOCK = threading.Lock()
 
@@ -1172,28 +1173,39 @@ def _drop_host_bridge(runner_session_id):
             pass
 
 
-def _ensure_host_bridge(*, runner_session_id, host_id, binding, local_stream_url,
-                         stream_bind, stream_port, public_base,
-                         host_relay_url=""):
-    """Idempotently ensure a live host tunnel is pumping this session's PTY
-    bytes into the relay. Re-entrant across poll-loop iterations: a healthy
-    existing bridge is a no-op; a dead one is replaced."""
+def _ensure_host_bridge(*, runner_session_id, host_id, binding, public_base,
+                         host_relay_url="", master_fd=None, child_pid=0,
+                         log_path=""):
+    """Idempotently ensure a live host tunnel for this session.
+
+    Starting *is* opening: dial /pty/host immediately. Optional master_fd makes
+    this process the executor (PTY I/O + stdout.log). Re-entrant across
+    poll-loop iterations: a healthy existing bridge is a no-op; a dead one is
+    replaced. No localhost stream/control URLs are required.
+    """
+    relay_ws_url = str(host_relay_url or "").strip()
+    # Ticket renewal must reach an already-running executor before the
+    # idempotency return. The companion watches this file and reconnects with
+    # the new URL; an in-process bridge rotates directly.
+    if relay_ws_url:
+        try:
+            from codex import supervisor as _sup
+            relay_path = _sup._session_dir(runner_session_id) / "host_relay.url"
+            relay_path.parent.mkdir(parents=True, exist_ok=True)
+            relay_path.write_text(relay_ws_url, encoding="utf-8")
+        except Exception:
+            pass
     with _HOST_BRIDGES_LOCK:
         existing = _HOST_BRIDGES.get(runner_session_id)
         if existing is not None and existing.is_alive():
+            if relay_ws_url:
+                existing.update_relay_url(relay_ws_url)
             return existing
-    # Lock released here: opening a bridge below is network-bound (up to
-    # HostTunnelConnection's 10s connect timeout) and must not hold
-    # _HOST_BRIDGES_LOCK for that long, or it would block every other
-    # runner_session's lookups/drops. Safe only because agent_host's poll
-    # loop calls this synchronously for one runner_session_id at a time; a
-    # concurrent caller could race two bridges into existence here.
     if existing is not None:
         _drop_host_bridge(runner_session_id)
 
     try:
         from switchboard.application import runner_pty_relay as pty_relay
-        from codex.pty_stream import build_control_url, mint_control_ticket
         from codex.pty_host_ws_client import open_host_bridge
     except ModuleNotFoundError:
         _root = os.path.abspath(os.path.join(_HERE, ".."))
@@ -1202,10 +1214,8 @@ def _ensure_host_bridge(*, runner_session_id, host_id, binding, local_stream_url
         if _HERE not in sys.path:
             sys.path.insert(0, _HERE)
         from switchboard.application import runner_pty_relay as pty_relay
-        from codex.pty_stream import build_control_url, mint_control_ticket
         from codex.pty_host_ws_client import open_host_bridge
 
-    relay_ws_url = str(host_relay_url or "").strip()
     if not relay_ws_url:
         # Legacy/in-process compatibility. Real enrolled hosts receive a
         # server-minted one-session URL in the claimed control request because
@@ -1216,19 +1226,23 @@ def _ensure_host_bridge(*, runner_session_id, host_id, binding, local_stream_url
             public_base, runner_session_id, host_ticket)
         relay_ws_url = relay_ws_url + "&" + urllib.parse.urlencode({"host_id": host_id})
 
-    control_ticket, _control_exp = mint_control_ticket(
-        runner_session_id=runner_session_id, host_id=host_id,
-        actions=["input", "resize", "signal"], ttl_seconds=3600)
-    control_url = build_control_url(
-        bind_host=stream_bind, port=stream_port,
-        runner_session_id=runner_session_id, public_base="")
+    # Publish the host relay URL for the executor companion (same Mac/AWS binary)
+    # so it can dial without a localhost HTTP hop. The companion owns master_fd
+    # and is the single outbound WS speaker when master_fd is not in-process.
+    try:
+        from codex import supervisor as _sup
+        ready = _sup._session_dir(runner_session_id) / "host_relay.url"
+        ready.parent.mkdir(parents=True, exist_ok=True)
+        ready.write_text(relay_ws_url, encoding="utf-8")
+    except Exception:
+        pass
 
     session = open_host_bridge(
         runner_session_id=runner_session_id,
         relay_ws_url=relay_ws_url,
-        local_stream_url=local_stream_url,
-        local_control_url=control_url,
-        control_ticket=control_ticket,
+        master_fd=master_fd,
+        child_pid=int(child_pid or 0),
+        log_path=str(log_path or ""),
         on_close=lambda reason: _drop_host_bridge(runner_session_id),
     )
     with _HOST_BRIDGES_LOCK:
@@ -1268,11 +1282,20 @@ def supervisor_action(action, runner_session_id, options=None):
         stream_bind = str(meta.get("stream_bind") or "127.0.0.1")
         streamer_alive = bool(streamer_pid and _pid_alive(streamer_pid))
         port_listening = _tcp_port_open(stream_bind, stream_port) if stream_port else False
-        if not (meta.get("pty") and control.get("runner_open") and stream_port
-                and meta.get("alive") and streamer_alive and port_listening):
+        public_base = str(
+            os.environ.get("PM_RUNNER_PTY_RELAY_PUBLIC_BASE")
+            or os.environ.get("PM_SWITCHBOARD_PUBLIC_BASE")
+            or ""
+        ).rstrip("/")
+        # SIMPLIFY-9: starting IS opening. With a non-loopback public base, return
+        # session_id + ticket immediately; Watch is another attach. Localhost
+        # streamer is not required on the browser path.
+        pty_alive = bool(meta.get("pty") and control.get("runner_open") and meta.get("alive"))
+        legacy_streamer_ok = bool(stream_port and streamer_alive and port_listening)
+        if not pty_alive and not legacy_streamer_ok:
             return {
                 "error": "not_supported",
-                "reason": "runner_open requires a live PTY-backed local session with an active streamer",
+                "reason": "runner_open requires a live PTY-backed local session",
             }
         host_id = str(meta.get("host_id") or os.environ.get("PM_HOST_ID") or "")
         ticket, expires_at = mint_ticket(
@@ -1280,23 +1303,20 @@ def supervisor_action(action, runner_session_id, options=None):
             host_id=host_id,
             ttl_seconds=int(options.get("ttl_seconds") or 900),
         )
-        local_stream_url = build_stream_url(
-            bind_host=stream_bind,
-            port=stream_port,
-            runner_session_id=runner_session_id,
-            ticket=ticket,
-            public_base="",
-        )
-        public_base = str(
-            os.environ.get("PM_RUNNER_PTY_RELAY_PUBLIC_BASE")
-            or os.environ.get("PM_SWITCHBOARD_PUBLIC_BASE")
-            or ""
-        ).rstrip("/")
+        local_stream_url = ""
+        if legacy_streamer_ok:
+            local_stream_url = build_stream_url(
+                bind_host=stream_bind,
+                port=stream_port,
+                runner_session_id=runner_session_id,
+                ticket=ticket,
+                public_base="",
+            )
         # Prefer Switchboard relay when a non-loopback public base is configured
         # so browsers never receive a host-local 127.0.0.1 URL (ADAPTER-22).
         use_relay = False
         relay_url = ""
-        transport = "http_chunked"
+        transport = "http_chunked" if local_stream_url else "switchboard_pty_relay"
         browser_safe = False
         relay_required = True
         stream_url = local_stream_url
@@ -1385,23 +1405,25 @@ def supervisor_action(action, runner_session_id, options=None):
                     return _open_fail_closed(
                         "relay_mint_failed", str(mint_exc) or type(mint_exc).__name__)
                 try:
-                    # UI-24: attach the host side of the relay so the browser
-                    # ticket above actually has something to watch. Without
-                    # this, attach_host() is never called outside tests and
-                    # the browser sits connected with no bytes arriving.
+                    # SIMPLIFY-9: dial host tunnel immediately (no localhost stream).
+                    # Hub buffers until the executor owning master_fd attaches.
                     _ensure_host_bridge(
                         runner_session_id=runner_session_id,
                         host_id=host_id,
                         binding=binding,
-                        local_stream_url=local_stream_url,
-                        stream_bind=stream_bind,
-                        stream_port=stream_port,
                         public_base=public_base,
                         host_relay_url=host_relay_url,
+                        log_path=str(meta.get("log_path") or ""),
+                        child_pid=int(meta.get("pid") or 0),
                     )
                 except Exception as bridge_exc:
                     return _open_fail_closed(
                         "host_bridge_failed", str(bridge_exc) or type(bridge_exc).__name__)
+        elif not legacy_streamer_ok:
+            return {
+                "error": "not_supported",
+                "reason": "runner_open requires relay public base or a live local streamer",
+            }
         metadata = {
             "pty": True,
             "stream_url": stream_url,
@@ -1409,8 +1431,9 @@ def supervisor_action(action, runner_session_id, options=None):
             "transport": transport,
             "browser_safe": browser_safe,
             "relay_required": relay_required,
-            "local_stream_url": local_stream_url,
         }
+        if local_stream_url:
+            metadata["local_stream_url"] = local_stream_url
         if use_relay and relay_url:
             metadata["relay_url"] = relay_url
             try:
@@ -1422,8 +1445,8 @@ def supervisor_action(action, runner_session_id, options=None):
             if sanitize_browser_stream_metadata is not None:
                 metadata = sanitize_browser_stream_metadata(
                     metadata, relay_url=relay_url)
-                # Keep host-private loopback coordinate after sanitize.
-                metadata["local_stream_url"] = local_stream_url
+                if local_stream_url:
+                    metadata["local_stream_url"] = local_stream_url
         return {
             "opened": True,
             "runner_session_id": runner_session_id,
@@ -1879,6 +1902,24 @@ def renew_live_direct_runners(inventory):
         if host_preflight:
             body["metadata"]["host_repo_preflight"] = host_preflight
         result = _try("POST", P_HEARTBEAT_RUNNER, body)
+        server_relay = (
+            (result or {}).get("server_relay")
+            if isinstance(result, dict) else None
+        ) or {}
+        if server_relay.get("host_url"):
+            try:
+                _ensure_host_bridge(
+                    runner_session_id=str(session.get("runner_session_id") or ""),
+                    host_id=host_id,
+                    binding=dict(server_relay.get("binding") or {}),
+                    public_base="",
+                    host_relay_url=str(server_relay.get("host_url") or ""),
+                    child_pid=int(session.get("pid") or 0),
+                    log_path=str(session.get("log_path") or metadata.get("log_path") or ""),
+                )
+            except Exception as exc:
+                if isinstance(result, dict):
+                    result["host_relay_error"] = type(exc).__name__
         renewed.append({
             "runner_session_id": session.get("runner_session_id"),
             "task_id": task_id,
@@ -1939,8 +1980,14 @@ def _release_provider_lease(lease_id, reason):
 
 
 def _runner_session_id_for_wake(wake, host_id):
-    source = f"{wake.get('wake_id') or ''}:{host_id or ''}"
-    return "run_" + hashlib.sha256(source.encode()).hexdigest()[:16]
+    try:
+        from switchboard.domain.runner_pty import planned_runner_session_id
+    except ModuleNotFoundError:
+        _root = os.path.abspath(os.path.join(_HERE, ".."))
+        if os.path.join(_root, "src") not in sys.path:
+            sys.path.insert(0, os.path.join(_root, "src"))
+        from switchboard.domain.runner_pty import planned_runner_session_id
+    return planned_runner_session_id(wake.get("wake_id"), host_id)
 
 
 def _bound_finalizer_key(wake, inventory, runner_session_id):
@@ -2551,6 +2598,24 @@ def run_once(inventory):
                     "auth_lane": "enrolled_agent_host_token",
                 }
                 runner_registration = register_runner_session(rec, w, inventory)
+                server_relay = (
+                    (runner_registration or {}).get("server_relay")
+                    if isinstance(runner_registration, dict) else None
+                ) or {}
+                if server_relay.get("host_url"):
+                    try:
+                        _ensure_host_bridge(
+                            runner_session_id=runner_session_id,
+                            host_id=host_id,
+                            binding=dict(server_relay.get("binding") or {}),
+                            public_base="",
+                            host_relay_url=str(server_relay.get("host_url") or ""),
+                            child_pid=int((rec or {}).get("pid") or 0),
+                            log_path=str((rec or {}).get("log_path") or ""),
+                        )
+                    except Exception as exc:
+                        if isinstance(runner_registration, dict):
+                            runner_registration["host_relay_error"] = type(exc).__name__
             else:
                 runner_registration = None
             registered = bool(

@@ -6,22 +6,19 @@ processes it launched or that registered a stable runner_session_id. The supervi
 session record, injects PM_RUNNER_SESSION_ID/PM_AGENT_ID into the child environment, and can
 terminate the child process group with a pre-kill snapshot.
 
-CO-12/CO-13: local sessions launch under a real PTY by default. A companion pty_stream process
-holds the master fd, dual-writes stdout.log, serves authenticated HTTP chunked streams, and
-accepts bound-session POST injects for Mission panel chat.
+CO-12/CO-13/SIMPLIFY-9: local sessions launch under a real PTY by default. A companion
+pty_stream / host-executor process holds the master fd, dual-writes stdout.log, and
+(when host_relay.url is published) dials one binary WS to Switchboard. Legacy local
+HTTP stream/inject remains for tooling; the browser Watch path does not use it.
 """
 from __future__ import annotations
 
 import argparse
-import fcntl
 import json
 import os
-import pty
 import signal
-import struct
 import subprocess
 import sys
-import termios
 import time
 import uuid
 from pathlib import Path
@@ -68,11 +65,6 @@ def _initial_pty_size(env):
         _pty_dimension(env.get("PM_RUNNER_PTY_ROWS"), DEFAULT_PTY_ROWS),
         _pty_dimension(env.get("PM_RUNNER_PTY_COLS"), DEFAULT_PTY_COLS),
     )
-
-
-def _set_pty_size(fd, rows, cols):
-    packed = struct.pack("HHHH", int(rows), int(cols), 0, 0)
-    fcntl.ioctl(int(fd), termios.TIOCSWINSZ, packed)
 
 
 def _now():
@@ -239,23 +231,17 @@ def start_session(command, agent_id, task_id="", claim_id="", cwd=None, runner_d
     ready_path = root / "stream_ready.json"
     host_id = str(env.get("PM_HOST_ID") or env.get("PM_CO_HOST_ID") or "")
     if use_pty:
-        master_fd, slave_fd = pty.openpty()
-        # macOS and Linux both create a new PTY at 0x0. Full-screen CLIs render
-        # unusably (often one character per line) before a browser can send its
-        # first resize. Give the child a sane screen from its very first byte;
-        # an attached Watch terminal may resize it normally afterwards.
         initial_rows, initial_cols = _initial_pty_size(env)
-        _set_pty_size(slave_fd, initial_rows, initial_cols)
         env.setdefault("TERM", os.environ.get("TERM") or "xterm-256color")
         proc = None
         streamer = None
         stream_log = None
         stream_error_path = root / "pty_stream.stderr.log"
         try:
-            # Make Watch/Chat ready before the worker can emit output or exit. Starting
-            # the child first created a real race: a fast authorization failure could
-            # close the slave PTY while the companion was still importing, so the
-            # supervisor deleted the only log and mislabeled the launch as no-PTY.
+            # SIMPLIFY-9: the executor is the one lifecycle authority for the
+            # terminal process. It performs openpty + spawn, owns the master fd,
+            # file log, and one outbound WebSocket. The supervisor only waits for
+            # its ready receipt and persists control metadata.
             stream_log = stream_error_path.open("ab")
             streamer = subprocess.Popen(
                 [
@@ -263,14 +249,17 @@ def start_session(command, agent_id, task_id="", claim_id="", cwd=None, runner_d
                     str(PTY_STREAM),
                     "--runner-session-id", runner_session_id,
                     "--log-path", str(log_path),
-                    "--master-fd", str(master_fd),
                     "--host-id", host_id,
                     "--task-id", str(task_id or ""),
                     "--bind-host", os.environ.get("PM_RUNNER_STREAM_BIND", "127.0.0.1"),
                     "--port", str(int(os.environ.get("PM_RUNNER_STREAM_PORT", "0") or 0)),
                     "--ready-path", str(ready_path),
+                    "--child-command-json", json.dumps(list(command)),
+                    "--child-cwd", str(Path(cwd or os.getcwd()).resolve()),
+                    "--initial-rows", str(initial_rows),
+                    "--initial-cols", str(initial_cols),
                 ],
-                pass_fds=(master_fd,),
+                env=env,
                 start_new_session=True,
                 close_fds=True,
                 stdin=subprocess.DEVNULL,
@@ -283,7 +272,8 @@ def start_session(command, agent_id, task_id="", claim_id="", cwd=None, runner_d
             ready = _await_stream_ready(ready_path)
             stream_bind = ready.get("bind_host") or os.environ.get("PM_RUNNER_STREAM_BIND", "127.0.0.1")
             stream_port = ready.get("port")
-            if not stream_port:
+            child_pid = int(ready.get("child_pid") or 0)
+            if not stream_port or not child_pid:
                 companion_error = _tail(stream_error_path).strip()
                 companion_status = streamer.poll()
                 detail = companion_error or (
@@ -292,34 +282,19 @@ def start_session(command, agent_id, task_id="", claim_id="", cwd=None, runner_d
                 )
                 raise RuntimeError(
                     f"pty_stream companion failed to become ready: {detail}")
+            # Minimal process handle facade; the child belongs to the executor,
+            # so the supervisor must never waitpid/reap it.
+            class _ExecutorChild:
+                def __init__(self, pid):
+                    self.pid = int(pid)
 
-            proc = subprocess.Popen(
-                command,
-                cwd=cwd or os.getcwd(),
-                env=env,
-                stdin=slave_fd,
-                stdout=slave_fd,
-                stderr=slave_fd,
-                start_new_session=True,
-                close_fds=True,
-            )
-            os.close(slave_fd)
-            slave_fd = -1
-            os.close(master_fd)
-            master_fd = -1
+                def poll(self):
+                    return None if _pid_running(self.pid) else 0
+
+            proc = _ExecutorChild(child_pid)
         except Exception:
             if stream_log is not None:
                 stream_log.close()
-            if slave_fd >= 0:
-                try:
-                    os.close(slave_fd)
-                except OSError:
-                    pass
-            if master_fd >= 0:
-                try:
-                    os.close(master_fd)
-                except OSError:
-                    pass
             if proc is not None and proc.poll() is None:
                 try:
                     os.killpg(proc.pid, signal.SIGKILL)

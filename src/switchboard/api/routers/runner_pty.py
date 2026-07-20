@@ -150,16 +150,36 @@ def create_router(
             return
         await websocket.accept()
         loop = asyncio.get_running_loop()
-        outbound: asyncio.Queue[Optional[str]] = asyncio.Queue(maxsize=256)
+        # Bounded outbound queue: when full, put blocks → TCP backpressure slows
+        # the host reader instead of dropping the browser (SIMPLIFY-9).
+        outbound: asyncio.Queue[Optional[bytes]] = asyncio.Queue(maxsize=256)
         closed = {"flag": False}
 
-        def send_fn(frame: str) -> None:
+        client_ref = {"id": ""}
+
+        def send_fn(frame: bytes) -> bool:
             if closed["flag"]:
-                return
+                return False
+            value = bytes(frame)
             try:
-                loop.call_soon_threadsafe(outbound.put_nowait, frame)
+                same_loop = asyncio.get_running_loop() is loop
+            except RuntimeError:
+                same_loop = False
+            if not same_loop:
+                # Cross-thread revocation/replay is rare. A coroutine waiting on
+                # the bounded queue preserves the frame instead of dropping it.
+                asyncio.run_coroutine_threadsafe(outbound.put(value), loop)
+                return True
+            if outbound.full():
+                _hub().set_browser_backpressure(
+                    runner_session_id, client_ref["id"], True)
+                return False
+            try:
+                outbound.put_nowait(value)
             except Exception:
                 closed["flag"] = True
+                return False
+            return True
 
         def close_fn() -> None:
             closed["flag"] = True
@@ -174,13 +194,18 @@ def create_router(
             await websocket.close(code=4403, reason=str(attached.get("error") or "denied")[:120])
             return
         client_id = str(attached.get("client_id") or "")
+        client_ref["id"] = client_id
 
         async def writer() -> None:
             while not closed["flag"]:
                 frame = await outbound.get()
                 if frame is None:
                     break
-                await websocket.send_text(frame)
+                await websocket.send_bytes(frame)
+                if outbound.qsize() < max(1, outbound.maxsize // 2):
+                    _hub().set_browser_backpressure(
+                        runner_session_id, client_id, False)
+                    _hub().flush_browser(runner_session_id, client_id)
             try:
                 await websocket.close(code=4401, reason="ticket_revoked")
             except Exception:
@@ -189,9 +214,16 @@ def create_router(
         writer_task = asyncio.create_task(writer())
         try:
             while not closed["flag"]:
-                message = await websocket.receive_text()
+                while _hub().browser_should_pause(runner_session_id):
+                    await asyncio.sleep(domain.DEFAULT_WRITE_COALESCE_MS / 1000.0)
+                message = await websocket.receive()
+                if message.get("type") == "websocket.disconnect":
+                    break
+                raw = message.get("bytes") or message.get("text") or b""
+                if isinstance(raw, str):
+                    raw = raw.encode("utf-8")
                 result = _hub().route_browser_to_host(
-                    runner_session_id, client_id, message)
+                    runner_session_id, client_id, raw)
                 if result.get("error") == "revoked":
                     break
                 if not result.get("ok") and result.get("error") in {
@@ -199,11 +231,11 @@ def create_router(
                     "task_mismatch", "session_closed",
                 }:
                     err = domain.encode_frame(
-                        "error",
+                        "exit",
                         {"reason": result.get("error"),
                          "detail": result.get("reason") or ""},
                     )
-                    await websocket.send_text(err)
+                    await websocket.send_bytes(err)
         except WebSocketDisconnect:
             pass
         finally:
@@ -241,16 +273,28 @@ def create_router(
             return
         await websocket.accept()
         loop = asyncio.get_running_loop()
-        outbound: asyncio.Queue[Optional[str]] = asyncio.Queue(maxsize=256)
+        outbound: asyncio.Queue[Optional[bytes]] = asyncio.Queue(maxsize=256)
         closed = {"flag": False}
 
-        def send_fn(frame: str) -> None:
+        def send_fn(frame: bytes) -> bool:
             if closed["flag"]:
-                return
+                return False
+            value = bytes(frame)
             try:
-                loop.call_soon_threadsafe(outbound.put_nowait, frame)
+                same_loop = asyncio.get_running_loop() is loop
+            except RuntimeError:
+                same_loop = False
+            if not same_loop:
+                asyncio.run_coroutine_threadsafe(outbound.put(value), loop)
+                return True
+            if outbound.full():
+                return False
+            try:
+                outbound.put_nowait(value)
             except Exception:
                 closed["flag"] = True
+                return False
+            return True
 
         def close_fn() -> None:
             closed["flag"] = True
@@ -270,7 +314,9 @@ def create_router(
                 frame = await outbound.get()
                 if frame is None:
                     break
-                await websocket.send_text(frame)
+                await websocket.send_bytes(frame)
+                if outbound.qsize() < max(1, outbound.maxsize // 2):
+                    _hub().flush_host(runner_session_id)
             try:
                 await websocket.close(code=4401, reason="ticket_revoked")
             except Exception:
@@ -279,12 +325,24 @@ def create_router(
         writer_task = asyncio.create_task(writer())
         try:
             while not closed["flag"]:
-                message = await websocket.receive_text()
-                result = _hub().route_host_to_browsers(runner_session_id, message)
+                # Do not receive another host frame while any browser retains
+                # undelivered output. This lets WebSocket/TCP flow control reach
+                # the executor and therefore stops its PTY master reads.
+                while _hub().host_should_pause(runner_session_id):
+                    await asyncio.sleep(domain.DEFAULT_WRITE_COALESCE_MS / 1000.0)
+                message = await websocket.receive()
+                if message.get("type") == "websocket.disconnect":
+                    break
+                raw = message.get("bytes") or message.get("text") or b""
+                if isinstance(raw, str):
+                    raw = raw.encode("utf-8")
+                result = _hub().route_host_to_browsers(runner_session_id, raw)
                 if result.get("error") == "revoked":
                     break
         except WebSocketDisconnect:
-            _hub().close_session(runner_session_id, reason="host_disconnect")
+            # Symmetric reconnect: host disconnect detaches only — session stays
+            # open so the host (or a replacement) can reattach.
+            pass
         finally:
             closed["flag"] = True
             writer_task.cancel()

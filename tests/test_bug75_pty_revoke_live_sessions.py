@@ -19,6 +19,7 @@ os.environ["PM_RUNNER_PTY_RELAY_SECRET"] = "bug75-relay-secret"
 
 import store  # noqa: E402
 from switchboard.application import runner_pty_relay as relay  # noqa: E402
+from switchboard.domain import runner_pty as domain  # noqa: E402
 from switchboard.storage.repositories import runner_pty_revocations as rev_store  # noqa: E402
 
 PROJECT = "switchboard"
@@ -60,7 +61,7 @@ ticket, payload = relay.mint_capability_ticket(
 jti = str(payload["jti"])
 expires_at = float(payload["exp"])
 
-frames: list[str] = []
+frames: list[bytes] = []
 closed = {"n": 0}
 hub.attach_browser(
     "run_bug75",
@@ -74,7 +75,9 @@ ok(hub.session_info("run_bug75").get("browser_count") == 1, "browser attached be
 ok(relay.revoke_ticket_jti(
     jti, project=PROJECT, expires_at=expires_at, hub=hub),
    "revoke_ticket_jti succeeds with project+expiry")
-ok(closed["n"] == 1 and any("ticket_revoked" in f for f in frames),
+ok(closed["n"] == 1 and any(
+    domain.decode_frame(frame).get("reason") == "ticket_revoked"
+    for frame in frames),
    "revoke closes the live browser client immediately")
 ok(hub.session_info("run_bug75").get("browser_count") == 0,
    "hub browser count drops after revoke")

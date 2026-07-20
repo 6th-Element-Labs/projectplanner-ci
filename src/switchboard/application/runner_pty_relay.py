@@ -15,7 +15,7 @@ from switchboard.api.routers.auth.jwt_util import encode as jwt_encode
 from switchboard.domain import pty_screen
 from switchboard.domain import runner_pty as domain
 
-SendFn = Callable[[str], None]
+SendFn = Callable[[bytes], Optional[bool]]
 CloseFn = Callable[[], None]
 
 # In-process cache: jti -> expires_at (unix seconds). Shared DB is authoritative
@@ -355,7 +355,7 @@ class _BrowserClient:
     send_fn: SendFn
     scopes: list[str]
     ticket_jti: str
-    queue: list[str] = field(default_factory=list)
+    queue: list[bytes] = field(default_factory=list)
     disconnected: bool = False
     last_active: float = field(default_factory=time.time)
     close_fn: CloseFn | None = None
@@ -368,8 +368,9 @@ class _RelaySession:
     host_send: SendFn | None = None
     host_ticket_jti: str = ""
     host_close_fn: CloseFn | None = None
+    host_queue: list[bytes] = field(default_factory=list)
     browsers: dict[str, _BrowserClient] = field(default_factory=dict)
-    replay: list[str] = field(default_factory=list)
+    replay: list[bytes] = field(default_factory=list)
     replay_bytes: int = 0
     # UI-25: headless screen model fed by the PTY byte stream, so a newly
     # attached browser gets a full-frame snapshot of the current screen
@@ -380,6 +381,8 @@ class _RelaySession:
     last_active: float = field(default_factory=time.time)
     closed: bool = False
     close_reason: str = ""
+    backpressure: bool = False
+    backpressured_browsers: set[str] = field(default_factory=set)
 
 
 class RelayHub:
@@ -465,11 +468,18 @@ class RelayHub:
                         "error": "host_mismatch",
                         "reason": "host_id_mismatch",
                     }
+                pending_reservation = (
+                    str(existing.binding.get("permission_profile") or "")
+                    == "operator_watch_pending"
+                )
                 for key in ("task_id", "claim_id", "wake_id", "work_session_id",
                             "runner_session_id"):
                     have = str(existing.binding.get(key) or "").strip()
                     want = str(bind.get(key) or "").strip()
-                    if have and want and have != want:
+                    mutable_pending = pending_reservation and key in {
+                        "claim_id", "work_session_id",
+                    }
+                    if have and want and have != want and not mutable_pending:
                         return {"ok": False, "error": f"{key}_mismatch"}
                 # BUG-74: one active host tunnel — never silently replace host_send.
                 if existing.host_send is not None:
@@ -479,6 +489,11 @@ class RelayHub:
                         "reason": "single_host_tunnel",
                     }
             session = self.ensure_session(session_id, bind)
+            if existing is not None and pending_reservation:
+                # Host authentication upgrades the reservation to the durable
+                # claim/Work Session bind without changing its exact
+                # runner/task/host/wake identity.
+                session.binding = domain.merge_binding(bind)
             if session.closed:
                 return {"ok": False, "error": "session_closed", "reason": session.close_reason}
             jti = str(bind.get("jti") or "").strip()
@@ -489,7 +504,14 @@ class RelayHub:
             session.host_ticket_jti = jti
             session.host_close_fn = close_fn
             session.last_active = time.time()
-            return {"ok": True, "runner_session_id": session.runner_session_id}
+            buffered = len(session.host_queue)
+        drained = self._drain_host(session_id)
+        return {
+            "ok": True,
+            "runner_session_id": str(session_id),
+            "buffered_frames": buffered,
+            "backpressure": not drained,
+        }
 
     def detach_host(self, session_id: str, send_fn: SendFn | None = None) -> None:
         with self._lock:
@@ -522,14 +544,23 @@ class RelayHub:
         if jti and is_jti_revoked(jti, project=project):
             return {"ok": False, "error": "revoked", "reason": "ticket_revoked"}
         with self._lock:
-            session = self.ensure_session(sid, ticket_payload)
+            existing = self._sessions.get(sid)
+            session = self.ensure_session(
+                sid, ticket_payload if existing is None else None)
             if session.closed:
                 return {"ok": False, "error": "session_closed", "reason": session.close_reason}
             # Fail closed on cross-session/host/task when session already bound.
+            pending_reservation = (
+                str(ticket_payload.get("permission_profile") or "")
+                == "operator_watch_pending"
+            )
             for key in ("host_id", "task_id", "claim_id", "wake_id", "work_session_id"):
                 have = str(session.binding.get(key) or "").strip()
                 want = str(ticket_payload.get(key) or "").strip()
-                if have and want and have != want:
+                mutable_pending = pending_reservation and key in {
+                    "claim_id", "work_session_id",
+                }
+                if have and want and have != want and not mutable_pending:
                     return {"ok": False, "error": f"{key}_mismatch"}
             cid = str(client_id or uuid.uuid4().hex)
             client = _BrowserClient(
@@ -551,7 +582,7 @@ class RelayHub:
             replay_frames = [] if snapshot else list(session.replay)
         sent_snapshot = False
         if snapshot:
-            snapshot_frame = domain.encode_frame("replay", {}, data=snapshot)
+            snapshot_frame = domain.encode_frame("snapshot", {}, data=snapshot)
             sent_snapshot = self._enqueue_browser(
                 session_id, cid, snapshot_frame, is_replay=True)
         for encoded in replay_frames:
@@ -569,7 +600,7 @@ class RelayHub:
         token = str(jti or "").strip()
         if not token:
             return {"ok": True, "browsers": 0, "hosts": 0}
-        close_frame = domain.encode_frame("close", {"reason": reason})
+        close_frame = domain.encode_frame("exit", {"reason": reason})
         browser_targets: list[tuple[str, str, SendFn, CloseFn | None]] = []
         host_targets: list[tuple[str, SendFn, CloseFn | None]] = []
         with self._lock:
@@ -581,12 +612,14 @@ class RelayHub:
                     browser_targets.append(
                         (sid, cid, client.send_fn, client.close_fn))
                     session.browsers.pop(cid, None)
+                    session.backpressured_browsers.discard(cid)
                 if session.host_ticket_jti == token and session.host_send is not None:
                     host_targets.append(
                         (sid, session.host_send, session.host_close_fn))
                     session.host_send = None
                     session.host_ticket_jti = ""
                     session.host_close_fn = None
+                session.backpressure = bool(session.backpressured_browsers)
         for _sid, _cid, send_fn, close_fn in browser_targets:
             try:
                 send_fn(close_frame)
@@ -632,6 +665,8 @@ class RelayHub:
             if not session:
                 return
             session.browsers.pop(str(client_id), None)
+            session.backpressured_browsers.discard(str(client_id))
+            session.backpressure = bool(session.backpressured_browsers)
 
     def route_browser_to_host(
         self,
@@ -644,13 +679,9 @@ class RelayHub:
         except ValueError as exc:
             return {"ok": False, "error": "malformed_frame", "reason": str(exc)}
         kind = decoded["type"]
-        if kind == "ping":
-            pong = domain.encode_frame("pong", {"ts": decoded.get("ts") or time.time()})
-            self._send_to_browser(session_id, client_id, pong)
-            return {"ok": True, "type": "pong"}
-        if kind == "close":
+        if kind == "exit":
             self.detach_browser(session_id, client_id)
-            return {"ok": True, "type": "close"}
+            return {"ok": True, "type": "exit"}
         revoked_send: SendFn | None = None
         revoked_close: CloseFn | None = None
         host_send: SendFn | None = None
@@ -668,14 +699,13 @@ class RelayHub:
                 session.browsers.pop(str(client_id), None)
             else:
                 scopes = set(client.scopes)
-                if kind == "input" and "input" not in scopes:
+                if kind == "in" and "input" not in scopes:
                     return {"ok": False, "error": "missing_scope", "reason": "input"}
                 if kind == "resize" and "resize" not in scopes:
                     return {"ok": False, "error": "missing_scope", "reason": "resize"}
                 if kind == "signal" and "signal" not in scopes:
                     return {"ok": False, "error": "missing_scope", "reason": "signal"}
-                # kill is a logical control; may arrive as type=signal name=kill or type via payload
-                if kind not in {"input", "resize", "signal"}:
+                if kind not in {"in", "resize", "signal"}:
                     return {"ok": False, "error": "unsupported_frame", "reason": kind}
                 if str(decoded.get("action") or "").lower() == "kill" or (
                     kind == "signal" and str(decoded.get("name") or "").upper() == "KILL"
@@ -697,7 +727,7 @@ class RelayHub:
             try:
                 if revoked_send is not None:
                     revoked_send(domain.encode_frame(
-                        "close", {"reason": "ticket_revoked"}))
+                        "exit", {"reason": "ticket_revoked"}))
             except Exception:
                 pass
             if revoked_close is not None:
@@ -706,18 +736,25 @@ class RelayHub:
                 except Exception:
                     pass
             return {"ok": False, "error": "revoked", "reason": "ticket_revoked"}
-        if host_send is None:
-            return {"ok": False, "error": "host_detached"}
         encoded = domain.encode_frame(
             kind,
             {k: v for k, v in decoded.items() if k not in {"type", "data", "data_b64"}},
             data=decoded.get("data") if isinstance(decoded.get("data"), (bytes, bytearray)) else None,
         )
-        try:
-            host_send(encoded)
-        except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "error": "host_send_failed", "reason": type(exc).__name__}
-        return {"ok": True, "type": kind}
+        with self._lock:
+            session = self._sessions.get(str(session_id))
+            if not session or session.closed:
+                return {"ok": False, "error": "session_closed"}
+            session.host_queue.append(encoded)
+            buffered = len(session.host_queue)
+        drained = self._drain_host(session_id)
+        return {
+            "ok": True,
+            "type": kind,
+            "buffered": buffered if not drained else 0,
+            "backpressure": not drained,
+            "host_attached": host_send is not None,
+        }
 
     def route_host_to_browsers(
         self,
@@ -729,11 +766,8 @@ class RelayHub:
         except ValueError as exc:
             return {"ok": False, "error": "malformed_frame", "reason": str(exc)}
         kind = decoded["type"]
-        if kind not in domain.HOST_TO_BROWSER_TYPES and kind != "ping":
+        if kind not in domain.HOST_TO_BROWSER_TYPES:
             return {"ok": False, "error": "unsupported_frame", "reason": kind}
-        if kind == "ping":
-            # Host ping is answered locally; browsers do not need it.
-            return {"ok": True, "type": "ping"}
         encoded = domain.encode_frame(
             kind,
             {k: v for k, v in decoded.items() if k not in {"type", "data", "data_b64"}},
@@ -754,27 +788,27 @@ class RelayHub:
                 session.host_send = None
                 session.host_ticket_jti = ""
                 session.host_close_fn = None
-            elif session.closed and kind not in {"close", "error"}:
+            elif session.closed and kind != "exit":
                 return {"ok": False, "error": "session_closed"}
             else:
                 session.last_active = time.time()
-                if kind in {"output", "state", "replay"}:
+                if kind in {"out", "ready", "snapshot"}:
                     self._append_replay(session, encoded, domain.frame_byte_size(decoded))
                     # UI-25: keep the screen model current so late joiners can be
                     # handed a full frame. Only real output bytes carry screen state.
-                    if kind == "output":
+                    if kind == "out":
                         data = decoded.get("data")
                         if isinstance(data, (bytes, bytearray)):
                             session.screen.feed(bytes(data))
                 client_ids = list(session.browsers.keys())
-                if kind in {"close", "error"}:
+                if kind == "exit":
                     session.closed = True
                     session.close_reason = str(decoded.get("reason") or kind)
         if host_send is not None or host_close is not None:
             try:
                 if host_send is not None:
                     host_send(domain.encode_frame(
-                        "close", {"reason": "ticket_revoked"}))
+                        "exit", {"reason": "ticket_revoked"}))
             except Exception:
                 pass
             if host_close is not None:
@@ -784,37 +818,99 @@ class RelayHub:
                     pass
             return {"ok": False, "error": "revoked", "reason": "ticket_revoked"}
         delivered = 0
+        backpressure = False
         for cid in client_ids:
-            if self._enqueue_browser(session_id, cid, encoded):
+            result = self._enqueue_browser(session_id, cid, encoded)
+            if result:
                 delivered += 1
-        if kind in {"close", "error"}:
+            else:
+                # Queue pressure or slow client — keep browser; signal host to slow.
+                backpressure = True
+        if kind == "exit":
             with self._lock:
                 session = self._sessions.get(str(session_id))
                 if session:
                     session.browsers.clear()
+                    session.backpressured_browsers.clear()
+                    session.backpressure = False
                     session.host_send = None
                     session.host_ticket_jti = ""
                     session.host_close_fn = None
-        return {"ok": True, "type": kind, "delivered": delivered}
+                    session.host_queue.clear()
+        if backpressure:
+            with self._lock:
+                session = self._sessions.get(str(session_id))
+                if session:
+                    session.backpressure = True
+        return {
+            "ok": True,
+            "type": kind,
+            "delivered": delivered,
+            "backpressure": backpressure,
+        }
 
     def publish_output(self, session_id: str, data: bytes,
                        *, replay: bool = False) -> dict[str, Any]:
-        kind = "replay" if replay else "output"
+        kind = "snapshot" if replay else "out"
         return self.route_host_to_browsers(
             session_id, domain.encode_frame(kind, data=data or b""))
 
     def close_session(self, session_id: str, *, reason: str = "closed") -> dict[str, Any]:
         return self.route_host_to_browsers(
             session_id,
-            domain.encode_frame("close", {"reason": reason}),
+            domain.encode_frame("exit", {"reason": reason}),
         )
 
     def error_session(self, session_id: str, *, reason: str = "error",
                       message: str = "") -> dict[str, Any]:
         return self.route_host_to_browsers(
             session_id,
-            domain.encode_frame("error", {"reason": reason, "message": message}),
+            domain.encode_frame("exit", {"reason": reason, "message": message}),
         )
+
+    def set_browser_backpressure(
+        self, session_id: str, client_id: str, value: bool = True,
+    ) -> None:
+        with self._lock:
+            session = self._sessions.get(str(session_id))
+            if not session:
+                return
+            cid = str(client_id or "")
+            if value and cid:
+                session.backpressured_browsers.add(cid)
+            elif cid:
+                session.backpressured_browsers.discard(cid)
+            session.backpressure = bool(session.backpressured_browsers)
+
+    def set_backpressure(self, session_id: str, value: bool = True) -> None:
+        """Compatibility helper for non-router bridges and older tests."""
+        self.set_browser_backpressure(session_id, "__transport__", value)
+
+    def clear_backpressure(self, session_id: str) -> None:
+        with self._lock:
+            session = self._sessions.get(str(session_id))
+            if session:
+                session.backpressured_browsers.clear()
+                session.backpressure = False
+
+    def flush_browser(self, session_id: str, client_id: str) -> bool:
+        """Retry bytes retained when the WebSocket outbound queue was full."""
+        return self._drain_browser(session_id, client_id)
+
+    def host_should_pause(self, session_id: str) -> bool:
+        with self._lock:
+            session = self._sessions.get(str(session_id))
+            return bool(session and session.backpressure)
+
+    def browser_should_pause(self, session_id: str) -> bool:
+        """Stop browser receives when host input is waiting for WS capacity."""
+        with self._lock:
+            session = self._sessions.get(str(session_id))
+            return bool(
+                session and len(session.host_queue) >= self.browser_queue_limit)
+
+    def flush_host(self, session_id: str) -> bool:
+        return self._drain_host(session_id)
 
     def cleanup_expired(self, *, now: float | None = None) -> list[str]:
         ts = float(now if now is not None else time.time())
@@ -841,11 +937,13 @@ class RelayHub:
                 "replay_frames": len(session.replay),
                 "closed": session.closed,
                 "close_reason": session.close_reason,
+                "backpressure": session.backpressure,
+                "host_buffered_frames": len(session.host_queue),
                 "created_at": session.created_at,
                 "last_active": session.last_active,
             }
 
-    def _append_replay(self, session: _RelaySession, encoded: str, nbytes: int) -> None:
+    def _append_replay(self, session: _RelaySession, encoded: bytes, nbytes: int) -> None:
         session.replay.append(encoded)
         session.replay_bytes += max(0, int(nbytes))
         while (
@@ -866,10 +964,14 @@ class RelayHub:
         self,
         session_id: str,
         client_id: str,
-        encoded: str,
+        encoded: bytes,
         *,
         is_replay: bool = False,
     ) -> bool:
+        """Enqueue+drain a frame to a browser. On overflow or send failure, keep
+        the browser attached and signal backpressure so the host slows PTY reads
+        instead of silently disconnecting the watcher (SIMPLIFY-9).
+        """
         with self._lock:
             session = self._sessions.get(str(session_id))
             if not session:
@@ -877,39 +979,78 @@ class RelayHub:
             client = session.browsers.get(str(client_id))
             if not client or client.disconnected:
                 return False
-            if len(client.queue) >= self.browser_queue_limit:
-                bp = domain.encode_frame(
-                    "backpressure",
-                    {"reason": "queue_overflow", "limit": self.browser_queue_limit},
-                )
-                try:
-                    client.send_fn(bp)
-                except Exception:
-                    pass
-                client.disconnected = True
-                session.browsers.pop(str(client_id), None)
-                return False
+            # The limit is a flow-control high-water mark, not a loss policy.
+            # Retain the boundary frame, then stop reading the host socket so
+            # TCP pressure reaches the executor's master-fd loop.
             client.queue.append(encoded)
+            if len(client.queue) >= self.browser_queue_limit:
+                session.backpressured_browsers.add(str(client_id))
+                session.backpressure = True
+        return self._drain_browser(session_id, client_id)
+
+    def _drain_browser(self, session_id: str, client_id: str) -> bool:
+        with self._lock:
+            session = self._sessions.get(str(session_id))
+            if not session:
+                return False
+            client = session.browsers.get(str(client_id))
+            if not client or client.disconnected:
+                return False
             send_fn = client.send_fn
-            # Drain immediately for callable bridges / tests.
             pending = list(client.queue)
             client.queue.clear()
-        for item in pending:
+        for index, item in enumerate(pending):
             try:
-                send_fn(item)
+                accepted = send_fn(item)
+                if accepted is False:
+                    raise BlockingIOError("browser_outbound_full")
             except Exception:
+                # Slow/stuck client: hold the browser, ask host to pause reads.
                 with self._lock:
                     session = self._sessions.get(str(session_id))
                     if session:
                         client = session.browsers.get(str(client_id))
                         if client:
-                            client.disconnected = True
-                            session.browsers.pop(str(client_id), None)
+                            # Preserve the failed frame and everything behind it,
+                            # in order. The host route stops receiving until this
+                            # queue drains, so no terminal bytes are discarded.
+                            client.queue[0:0] = pending[index:]
+                            session.backpressured_browsers.add(str(client_id))
+                            session.backpressure = True
                 return False
+        with self._lock:
+            session = self._sessions.get(str(session_id))
+            if session:
+                session.backpressured_browsers.discard(str(client_id))
+                session.backpressure = bool(session.backpressured_browsers)
         return True
 
-    def _send_to_browser(self, session_id: str, client_id: str, encoded: str) -> None:
+    def _send_to_browser(self, session_id: str, client_id: str, encoded: bytes) -> None:
         self._enqueue_browser(session_id, client_id, encoded)
+
+    def _drain_host(self, session_id: str) -> bool:
+        """Deliver retained browser control frames to the attached executor."""
+        with self._lock:
+            session = self._sessions.get(str(session_id))
+            if not session or session.closed:
+                return False
+            send_fn = session.host_send
+            if send_fn is None:
+                return False
+            pending = list(session.host_queue)
+            session.host_queue.clear()
+        for index, encoded in enumerate(pending):
+            try:
+                accepted = send_fn(encoded)
+                if accepted is False:
+                    raise BlockingIOError("host_outbound_full")
+            except Exception:
+                with self._lock:
+                    session = self._sessions.get(str(session_id))
+                    if session and not session.closed:
+                        session.host_queue[0:0] = pending[index:]
+                return False
+        return True
 
 
 # Process-wide default hub used by the API router.

@@ -1,7 +1,9 @@
-"""Host-side bridge between local PTY companion HTTP and Switchboard relay frames.
+"""DEPRECATED (SIMPLIFY-9): localhost HTTP ↔ relay bridge.
 
-Tests can inject callable send/recv helpers; production may wrap a WebSocket client
-later. Control POSTs use stdlib urllib so no extra dependency is required.
+The browser Watch path no longer uses LocalPtyRelayBridge or the companion
+``/stream``+``/control`` hop. Prefer ``pty_host_ws_client.PtyHostExecutor``,
+which owns ``master_fd``, logs to stdout.log, and speaks one binary WS to
+Switchboard. This module remains for legacy unit tests only.
 """
 from __future__ import annotations
 
@@ -27,7 +29,7 @@ except ModuleNotFoundError:
     from codex import pty_stream  # type: ignore
 
 
-SendFn = Callable[[str], None]
+SendFn = Callable[[bytes], None]
 OnCloseFn = Callable[[str], None]
 
 
@@ -70,7 +72,7 @@ def apply_relay_control_frame(
     """Map a browser→host relay frame onto the companion `/control` POST."""
     decoded = domain.decode_frame(frame)
     kind = decoded["type"]
-    if kind == "input":
+    if kind in {"input", "in"}:
         payload: dict[str, Any] = {}
         if isinstance(decoded.get("data"), (bytes, bytearray)):
             import base64
@@ -162,7 +164,7 @@ class LocalPtyRelayBridge:
             def on_bytes(data: bytes) -> None:
                 if not data or self._stop.is_set():
                     return
-                frame = domain.encode_frame("output", data=data)
+                frame = domain.encode_frame("out", data=data)
                 try:
                     self.send_to_relay(frame)
                 except Exception:
@@ -173,7 +175,7 @@ class LocalPtyRelayBridge:
             reason = "eof" if result.get("ok") else str(result.get("error") or "stream_error")
             try:
                 self.send_to_relay(domain.encode_frame(
-                    "close" if result.get("ok") else "error",
+                    "exit",
                     {"reason": reason, "message": result.get("message") or ""},
                 ))
             except Exception:
@@ -206,10 +208,11 @@ class LocalPtyRelayBridge:
         request_id = str(decoded.get("request_id") or "").strip()
         if request_id:
             acknowledged = bool(result.get("ok")) and not result.get("error")
-            ack = domain.encode_frame("control_ack", {
+            ack = domain.encode_frame("ready", {
                 "request_id": request_id,
                 "action": decoded.get("type") or "",
                 "ok": acknowledged,
+                "ack": True,
                 "error": result.get("error") or result.get("reason") or "",
             })
             try:

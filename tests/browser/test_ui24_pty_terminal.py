@@ -265,8 +265,7 @@ try:
                 TeepPlan._runnerPtyMountTerminal(TeepPlan._runnerPty);
                 const text = '\\x1b[32mUI-24 PLAYWRIGHT OK\\x1b[0m\\r\\n';
                 const bytes = new TextEncoder().encode(text);
-                let bin = ''; bytes.forEach(b => bin += String.fromCharCode(b));
-                const frame = JSON.stringify({type: 'output', data_b64: btoa(bin)});
+                const frame = TeepPlan._runnerPtyEncodeFrame('out', {}, bytes);
                 TeepPlan._runnerPtyHandleFrame(TeepPlan._runnerPty, frame);
             }
         """)
@@ -306,11 +305,9 @@ try:
            "discard scrollback and leak the old ResizeObserver on every drop)")
         ok(reused["line0"] == "UI-24 PLAYWRIGHT OK", "scrollback from before the simulated reconnect is still there")
 
-        # SIMPLIFY-10: one task-scoped command per reconnect. The browser sends
-        # no runner id at all — the server resolves the current execution,
-        # attaches the host tunnel, and mints the ticket. (The freshness of the
-        # host-open recovery operation is now a server property, proved in
-        # tests/test_simplify10_task_execution.py.)
+        # SIMPLIFY-9: reconnect reuses the one unexpired session capability.
+        # Once a refresh is needed it is task-scoped; the browser still sends no
+        # runner id and the server resolves the current execution.
         reopen_ops = page.evaluate("""
             async () => {
                 const originalFetch = window.fetch;
@@ -336,8 +333,8 @@ try:
                 return requests;
             }
         """)
-        ok(len(reopen_ops) == 2,
-           f"every Watch reconnect issues one open_session command ({len(reopen_ops)})")
+        ok(len(reopen_ops) == 1,
+           f"two reconnects share one unexpired session capability ({len(reopen_ops)} refresh)")
         ok(all("/FAKE-TASK-1/execution/open" in op["url"] for op in reopen_ops),
            "the open command is task-scoped, not runner-scoped")
         ok(all("runner_session_id" not in op["body"] and "execution_id" not in op["body"]
@@ -367,50 +364,71 @@ try:
                 window.__ui24ChatFrames = [];
                 TeepPlan._runnerPty.ws = {
                     readyState: WebSocket.OPEN,
-                    send: (raw) => window.__ui24ChatFrames.push(JSON.parse(raw)),
+                    send: (raw) => window.__ui24ChatFrames.push(TeepPlan._runnerPtyDecodeFrame(raw)),
                 };
             }
         """)
         binary_frame = page.evaluate("""
             () => {
                 TeepPlan._runnerPtySendBinary(String.fromCharCode(0, 255));
-                return window.__ui24ChatFrames.at(-1);
+                const frame = window.__ui24ChatFrames.at(-1);
+                return {
+                    type: frame.type,
+                    data: Array.from(frame.data || []),
+                };
             }
         """)
-        ok(binary_frame.get("type") == "input"
-           and binary_frame.get("data_b64") == "AP8=",
+        ok(binary_frame.get("type") == "in"
+           and binary_frame.get("data") == [0, 255],
            "xterm onBinary data preserves exact 8-bit values for legacy mouse reports")
         composer = page.locator("#runner-chat-input")
         composer.fill("do what it takes to unblock it")
         chat_started = time.monotonic()
         composer.press("Enter")
         page.wait_for_selector("#runner-chat-log [data-runner-chat-status]", timeout=5000)
-        chat_frame = page.evaluate(
-            "window.__ui24ChatFrames.find((frame) => frame.purpose === 'chat_text')")
-        ok(chat_frame.get("type") == "input"
+        chat_frame = page.evaluate("""
+            () => {
+                const frame = window.__ui24ChatFrames.find((f) => f.purpose === 'chat_text');
+                return {
+                    type: frame.type,
+                    purpose: frame.purpose,
+                    task_id: frame.task_id,
+                    request_id: frame.request_id,
+                    text: new TextDecoder().decode(frame.data || new Uint8Array()),
+                };
+            }
+        """)
+        ok(chat_frame.get("type") == "in"
            and chat_frame.get("purpose") == "chat_text"
            and chat_frame.get("task_id") == "FAKE-TASK-1"
            and chat_frame.get("request_id", "").startswith("runner-chat-"),
            f"typed composer sends exact task-bound text on the live relay ({chat_frame})")
-        ok(base64.b64decode(chat_frame["data_b64"]) == b"do what it takes to unblock it",
+        ok(chat_frame.get("text") == "do what it takes to unblock it",
            "composer text is delivered without bundling Enter into the paste burst")
         page.evaluate("""
             ([requestId]) => TeepPlan._runnerPtyHandleFrame(
                 TeepPlan._runnerPty,
-                JSON.stringify({type: 'control_ack', request_id: requestId, ok: true}))
+                TeepPlan._runnerPtyEncodeFrame('ready', {request_id: requestId, ok: true, ack: true}))
         """, [chat_frame["request_id"]])
         page.wait_for_function(
             "window.__ui24ChatFrames.some((frame) => frame.purpose === 'chat_submit')",
             timeout=5000,
         )
-        submit_frame = page.evaluate(
-            "window.__ui24ChatFrames.find((frame) => frame.purpose === 'chat_submit')")
-        ok(base64.b64decode(submit_frame["data_b64"]) == b"\r",
+        submit_frame = page.evaluate("""
+            () => {
+                const frame = window.__ui24ChatFrames.find((f) => f.purpose === 'chat_submit');
+                return {
+                    request_id: frame.request_id,
+                    text: new TextDecoder().decode(frame.data || new Uint8Array()),
+                };
+            }
+        """)
+        ok(submit_frame.get("text") == "\r",
            "composer sends Enter as a separate PTY keypress after text acknowledgement")
         page.evaluate("""
             ([requestId]) => TeepPlan._runnerPtyHandleFrame(
                 TeepPlan._runnerPty,
-                JSON.stringify({type: 'control_ack', request_id: requestId, ok: true}))
+                TeepPlan._runnerPtyEncodeFrame('ready', {request_id: requestId, ok: true, ack: true}))
         """, [submit_frame["request_id"]])
         page.wait_for_function(
             "document.querySelector('#runner-chat-log [data-runner-chat-status]')?.textContent === 'Delivered'",
@@ -432,8 +450,9 @@ try:
         page.evaluate("""
             ([requestId]) => TeepPlan._runnerPtyHandleFrame(
                 TeepPlan._runnerPty,
-                JSON.stringify({type: 'control_ack', request_id: requestId,
-                                ok: false, error: 'local PTY timeout'}))
+                TeepPlan._runnerPtyEncodeFrame('ready', {
+                    request_id: requestId, ok: false, ack: true,
+                    error: 'local PTY timeout'}))
         """, [failed_frame["request_id"]])
         ok(composer.input_value() == "retry this exact message",
            "failed live delivery restores the exact text for retry")
@@ -445,7 +464,7 @@ try:
         page.evaluate("""
             ([requestId]) => TeepPlan._runnerPtyHandleFrame(
                 TeepPlan._runnerPty,
-                JSON.stringify({type: 'control_ack', request_id: requestId, ok: true}))
+                TeepPlan._runnerPtyEncodeFrame('ready', {request_id: requestId, ok: true, ack: true}))
         """, [retried_frame["request_id"]])
 
         # ---- resize computes real rows/cols from the actual container -------

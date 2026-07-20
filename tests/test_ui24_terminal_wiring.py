@@ -60,12 +60,18 @@ ok("_runnerPtySendResize" in RUNNER_SESSION and "ResizeObserver" in RUNNER_SESSI
    "container resize forwards a resize frame")
 ok("_runnerPtyEncodeFrame('resize', { rows: rp.term.rows, cols: rp.term.cols })" in RUNNER_SESSION,
    "resize frames carry rows/cols matching the relay frame contract")
+ok("binaryType = 'arraybuffer'" in RUNNER_SESSION and "_runnerPtyDecodeFrame" in RUNNER_SESSION,
+   "browser uses binary SB1 frames (SIMPLIFY-9)")
+ok("_runnerPtyEncodeFrame('in'" in RUNNER_SESSION or "encodeFrame('in'" in RUNNER_SESSION
+   or "type === 'out'" in RUNNER_SESSION,
+   "browser speaks out/in (not JSON data_b64 output/input)")
 
 # ---- reconnect / replay, not a dead connection on drop ----------------------
 ok("scheduleReconnect" in RUNNER_SESSION or "reconnectAttempts" in RUNNER_SESSION,
    "a dropped relay connection retries with backoff")
-ok("'replay'" in RUNNER_SESSION or '"replay"' in RUNNER_SESSION,
-   "replay frames are handled the same as output frames")
+ok("'snapshot'" in RUNNER_SESSION or '"snapshot"' in RUNNER_SESSION
+   or "type === 'snapshot'" in RUNNER_SESSION,
+   "snapshot frames are handled the same as out frames")
 ok("rp.reconnectAttempts = 0" in RUNNER_SESSION, "a successful (re)connect resets the backoff counter")
 
 # ---- one terminal, two doors: sidecar <-> docked reparenting, never duplicated
@@ -127,6 +133,11 @@ ok("runner-pty-start-retry" in RUNNER_SESSION and "startTaskSession" in RUNNER_S
    "the refusal gate offers Start/Retry wired to the unified start operation")
 ok("/start`" in RUNNER_SESSION,
    "the gate's Start/Retry calls the unified /start endpoint")
+ok("data.execution_id && data.relay_url" in RUNNER_SESSION
+   and "Connected to the reserved session" in RUNNER_SESSION,
+   "Start opens the reserved relay immediately instead of waiting for runner registration")
+ok("rp.relayUrl" in RUNNER_SESSION and "rp.relayExpiresAt" in RUNNER_SESSION,
+   "browser reconnect reuses the pending capability until its explicit expiry")
 ok("}/start`" in APP and "action === 'attach'" in APP,
    "the task modal's codex Start uses the same /start endpoint and handles attach")
 ok("runtime: rt" in APP and "}/dispatch`" in APP,

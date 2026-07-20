@@ -1,11 +1,13 @@
-"""Host-local PTY byte stream + inject for dedicated Codex runner sessions (CO-12/13).
+"""Host-local PTY executor companion for dedicated Codex runner sessions.
 
-A short-lived companion process inherits the PTY master fd, dual-writes output to
-stdout.log, serves authenticated HTTP chunked streams, and accepts authenticated
-POST inject payloads that write into the bound PTY (Mission panel chat).
+A short-lived companion process inherits the PTY master fd and dual-writes
+output to stdout.log. SIMPLIFY-9: when ``host_relay.url`` appears in the
+session directory (or ``--relay-ws-url`` is set), the companion dials ONE
+outbound binary WebSocket to Switchboard and pumps PTY I/O there — no
+localhost HTTP hop on the browser Watch path.
 
-ADAPTER-22 adds an authenticated `/control` endpoint for raw input, resize, and
-signal frames used by the Switchboard browser PTY relay bridge.
+Legacy authenticated HTTP ``/stream``+``/control``+``/inject`` remain available
+for local CO-12 tooling and tests; the browser path must not depend on them.
 """
 from __future__ import annotations
 
@@ -14,8 +16,10 @@ import base64
 import fcntl
 import json
 import os
+import pty
 import select
 import struct
+import subprocess
 import sys
 import termios
 import threading
@@ -327,6 +331,10 @@ class _Fanout:
                 self._clients.remove(write_chunk)
             except ValueError:
                 pass
+
+    def snapshot(self) -> bytes:
+        with self._lock:
+            return bytes(self._replay)
 
     def publish(self, data: bytes) -> None:
         if not data:
@@ -650,6 +658,49 @@ def _make_handler(
     return Handler
 
 
+def _relay_url_path(runner_session_id: str, ready_path: str = "") -> Path:
+    if ready_path:
+        return Path(ready_path).resolve().parent / "host_relay.url"
+    try:
+        from codex.supervisor import _session_dir
+    except ModuleNotFoundError:
+        from adapters.codex.supervisor import _session_dir  # type: ignore
+    return _session_dir(runner_session_id) / "host_relay.url"
+
+
+def _start_host_ws_executor(
+    *,
+    master_fd: int,
+    log_path: str,
+    runner_session_id: str,
+    relay_ws_url: str,
+    child_pid: int = 0,
+    initial_snapshot: bytes = b"",
+    target_label: str = "",
+) -> Any:
+    """Dial Switchboard and pump master_fd (file logging stays in the executor)."""
+    try:
+        from adapters.codex.pty_host_ws_client import open_host_bridge
+    except ModuleNotFoundError:
+        from codex.pty_host_ws_client import open_host_bridge  # type: ignore
+    bridge = open_host_bridge(
+        runner_session_id=runner_session_id,
+        relay_ws_url=relay_ws_url,
+        master_fd=master_fd,
+        child_pid=child_pid,
+        target_label=target_label,
+        log_path=log_path,
+        dial=True,
+    )
+    if initial_snapshot:
+        from switchboard.domain import runner_pty as pty_domain
+        bridge.conn.send(
+            pty_domain.encode_frame("snapshot", data=initial_snapshot),
+            timeout=None,
+        )
+    return bridge
+
+
 def serve(
     *,
     master_fd: int,
@@ -660,12 +711,57 @@ def serve(
     port: int = 0,
     ready_path: str = "",
     task_id: str = "",
+    relay_ws_url: str = "",
+    child_pid: int = 0,
+    child_process: Any = None,
+    target_label: str = "",
+    child_command: list[str] | None = None,
+    child_cwd: str = "",
+    initial_rows: int = 40,
+    initial_cols: int = 120,
 ) -> int:
+    slave_fd = -1
+    if child_command:
+        # This process is the execution authority: it allocates the PTY before
+        # launch, then spawns the CLI only after legacy local tooling has bound
+        # successfully. Browser Watch never uses that HTTP listener.
+        master_fd, slave_fd = pty.openpty()
+        set_pty_winsize(slave_fd, initial_rows, initial_cols)
+    if int(master_fd) < 0:
+        raise ValueError("master_fd_or_child_command_required")
     fanout = _Fanout(Path(log_path))
     write_lock = threading.Lock()
-    server = ThreadingHTTPServer((bind_host, int(port)), _make_handler(
-        fanout, runner_session_id, host_id, master_fd, write_lock,
-        bound_task_id=str(task_id or "")))
+    try:
+        server = ThreadingHTTPServer((bind_host, int(port)), _make_handler(
+            fanout, runner_session_id, host_id, master_fd, write_lock,
+            bound_task_id=str(task_id or "")))
+    except Exception:
+        fanout.close()
+        if slave_fd >= 0:
+            os.close(slave_fd)
+        if child_command:
+            os.close(master_fd)
+        raise
+    if child_command:
+        try:
+            child_process = subprocess.Popen(
+                list(child_command),
+                cwd=child_cwd or os.getcwd(),
+                env=os.environ.copy(),
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                start_new_session=True,
+                close_fds=True,
+            )
+            child_pid = int(child_process.pid)
+        except Exception:
+            server.server_close()
+            fanout.close()
+            os.close(master_fd)
+            raise
+        finally:
+            os.close(slave_fd)
     actual_port = int(server.server_address[1])
     if ready_path:
         Path(ready_path).write_text(json.dumps({
@@ -673,16 +769,58 @@ def serve(
             "bind_host": bind_host,
             "port": actual_port,
             "pid": os.getpid(),
+            "executor_pid": os.getpid(),
+            "child_pid": int(child_pid or 0),
             "task_id": task_id or "",
             "stream_path": f"/runner/v1/sessions/{runner_session_id}/stream",
             "inject_path": f"/runner/v1/sessions/{runner_session_id}/inject",
             "control_path": f"/runner/v1/sessions/{runner_session_id}/control",
         }), encoding="utf-8")
 
-    def pump() -> None:
+    host_session = {"bridge": None}
+    relay_url = str(relay_ws_url or os.environ.get("PM_RUNNER_HOST_RELAY_URL") or "").strip()
+    url_path = _relay_url_path(runner_session_id, ready_path)
+
+    def _maybe_attach_host_ws() -> None:
+        nonlocal relay_url
+        published_url = ""
+        if url_path.exists():
+            try:
+                published_url = url_path.read_text(encoding="utf-8").strip()
+            except Exception:
+                published_url = ""
+        if published_url and published_url != relay_url:
+            relay_url = published_url
+            bridge = host_session.get("bridge")
+            if bridge is not None:
+                bridge.update_relay_url(relay_url)
+        if host_session["bridge"] is not None:
+            return
+        if not relay_url:
+            return
         try:
-            while True:
-                readable, _, _ = select.select([master_fd], [], [], 0.5)
+            host_session["bridge"] = _start_host_ws_executor(
+                master_fd=master_fd,
+                log_path=log_path,
+                runner_session_id=runner_session_id,
+                relay_ws_url=relay_url,
+                child_pid=int(child_pid or 0),
+                initial_snapshot=fanout.snapshot(),
+                target_label=target_label,
+            )
+        except Exception as exc:  # noqa: BLE001
+            sys.stderr.write(f"host_ws_attach_failed:{type(exc).__name__}:{exc}\n")
+
+    # When the host WS attaches, stop the local select loop from consuming
+    # bytes — PtyHostExecutor owns the read (+ stdout.log). Until then, pump
+    # for local HTTP clients + file logging.
+    def pump_until_host_ws() -> None:
+        try:
+            while host_session["bridge"] is None:
+                _maybe_attach_host_ws()
+                if host_session["bridge"] is not None:
+                    break
+                readable, _, _ = select.select([master_fd], [], [], 0.25)
                 if not readable:
                     continue
                 try:
@@ -692,6 +830,13 @@ def serve(
                 if not data:
                     break
                 fanout.publish(data)
+            # Host WS executor is pumping; keep HTTP server alive for inject/CO-12
+            # until the process exits (executor stop closes master_fd).
+            bridge = host_session.get("bridge")
+            if bridge is not None:
+                while bridge.is_alive():
+                    _maybe_attach_host_ws()
+                    time.sleep(0.5)
         finally:
             fanout.close()
             try:
@@ -699,31 +844,55 @@ def serve(
             except Exception:
                 pass
 
-    threading.Thread(target=pump, name="pty-pump", daemon=True).start()
+    threading.Thread(target=pump_until_host_ws, name="pty-pump", daemon=True).start()
     try:
-        server.serve_forever(poll_interval=0.5)
+        server.serve_forever(poll_interval=0.05)
     finally:
         fanout.close()
+        bridge = host_session.get("bridge")
+        if bridge is not None:
+            try:
+                bridge.stop()
+            except Exception:
+                pass
         try:
             os.close(master_fd)
         except OSError:
             pass
+        if child_process is not None:
+            try:
+                child_process.wait(timeout=1.0)
+            except Exception:
+                pass
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="PTY stream companion for CO-12/CO-13")
+    parser = argparse.ArgumentParser(description="PTY host executor companion (SIMPLIFY-9)")
     parser.add_argument("--runner-session-id", required=True)
     parser.add_argument("--log-path", required=True)
-    parser.add_argument("--master-fd", type=int, required=True)
+    parser.add_argument("--master-fd", type=int, default=-1)
     parser.add_argument("--host-id", default="")
     parser.add_argument("--task-id", default="")
     parser.add_argument("--bind-host", default=os.environ.get("PM_RUNNER_STREAM_BIND", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("PM_RUNNER_STREAM_PORT", "0") or 0))
     parser.add_argument("--ready-path", default="")
+    parser.add_argument("--relay-ws-url", default=os.environ.get("PM_RUNNER_HOST_RELAY_URL", ""))
+    parser.add_argument("--child-command-json", default="")
+    parser.add_argument("--child-cwd", default=os.getcwd())
+    parser.add_argument("--initial-rows", type=int, default=40)
+    parser.add_argument("--initial-cols", type=int, default=120)
     args = parser.parse_args(argv)
+    master_fd = int(args.master_fd)
+    command = None
+    if args.child_command_json:
+        command = json.loads(args.child_command_json)
+        if not isinstance(command, list) or not all(isinstance(v, str) for v in command):
+            raise ValueError("child_command_must_be_string_array")
+    if master_fd < 0 and not command:
+        raise ValueError("master_fd_or_child_command_required")
     return serve(
-        master_fd=args.master_fd,
+        master_fd=master_fd,
         log_path=args.log_path,
         runner_session_id=args.runner_session_id,
         host_id=args.host_id,
@@ -731,6 +900,15 @@ def main(argv: list[str] | None = None) -> int:
         port=args.port,
         ready_path=args.ready_path,
         task_id=args.task_id,
+        relay_ws_url=args.relay_ws_url,
+        child_command=command,
+        child_cwd=args.child_cwd,
+        initial_rows=max(1, min(1000, int(args.initial_rows))),
+        initial_cols=max(1, min(1000, int(args.initial_cols))),
+        target_label=str(
+            os.environ.get("PM_AGENT_HOST_PLATFORM")
+            or os.environ.get("PM_HOST_PLATFORM")
+            or sys.platform),
     )
 
 

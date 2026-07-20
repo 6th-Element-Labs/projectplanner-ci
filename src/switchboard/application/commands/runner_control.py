@@ -17,8 +17,20 @@ def upsert_session_mapping_result(
     """Register or heartbeat one supervised runner session."""
     record = dict(data or {})
     project = record.pop("project", None) or DEFAULT_PROJECT
-    return runner_repo.upsert_runner_session(
+    result = runner_repo.upsert_runner_session(
         record, principal_id=principal_id, actor=actor, project=project)
+    # SIMPLIFY-9: every authenticated registration/heartbeat renews the
+    # executor's short-lived outbound relay ticket. It is response-only and is
+    # never persisted with the runner row.
+    if not result.get("error"):
+        session_id = str(
+            result.get("runner_session_id")
+            or record.get("runner_session_id") or record.get("id") or "")
+        session = runner_repo.get_runner_session(session_id, project=project)
+        if session:
+            result["server_relay"] = runner_repo._server_relay_options(
+                session, user_id=principal_id, project=project)
+    return result
 
 
 def request_mapping_result(

@@ -1,31 +1,64 @@
-"""Browser PTY relay frame contract and bind/capability constants (ADAPTER-22)."""
+"""Browser PTY relay frame contract and bind/capability constants (SIMPLIFY-9).
+
+Binary wire format (one session transport):
+  magic ``b"SB1\\0"`` + uint8 type_id + uint16 BE header_len + uint32 BE data_len
+  + JSON header UTF-8 + raw data bytes.
+
+Message kinds: ready, exit, out, in, resize, signal, snapshot.
+Legacy JSON+base64 names are accepted on decode only for migration helpers.
+"""
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
+import struct
 from typing import Any, Mapping, MutableMapping, Optional
 
 FRAME_TYPES = frozenset({
-    "output",
-    "input",
+    "ready",
+    "exit",
+    "out",
+    "in",
     "resize",
     "signal",
-    "state",
-    "error",
-    "close",
-    "replay",
-    "ping",
-    "pong",
-    "backpressure",
-    "control_ack",
+    "snapshot",
 })
 
+# Legacy names accepted on decode only (never produced by encode_frame).
+_LEGACY_TYPE_MAP = {
+    "output": "out",
+    "input": "in",
+    "close": "exit",
+    "error": "exit",
+    "replay": "snapshot",
+    "state": "ready",
+    # Dropped first-class kinds — map to nearest survivor when present.
+    "ping": "ready",
+    "pong": "ready",
+    "backpressure": "ready",
+    "control_ack": "ready",
+}
+
+TYPE_IDS = {
+    "ready": 1,
+    "exit": 2,
+    "out": 3,
+    "in": 4,
+    "resize": 5,
+    "signal": 6,
+    "snapshot": 7,
+}
+_ID_TO_TYPE = {v: k for k, v in TYPE_IDS.items()}
+
+FRAME_MAGIC = b"SB1\0"
+_HEADER_STRUCT = struct.Struct(">BHI")  # type_id, header_len, data_len
+MAX_HEADER_BYTES = 0xFFFF
+MAX_DATA_BYTES = 16 * 1024 * 1024
+
 # Browser→host control frames require matching ticket scopes.
-BROWSER_TO_HOST_TYPES = frozenset({"input", "resize", "signal", "kill", "ping"})
-HOST_TO_BROWSER_TYPES = frozenset({
-    "output", "state", "error", "close", "replay", "pong", "backpressure",
-    "control_ack",
-})
+BROWSER_TO_HOST_TYPES = frozenset({"in", "resize", "signal"})
+HOST_TO_BROWSER_TYPES = frozenset({"out", "ready", "exit", "snapshot"})
 
 # Browser tickets use watch/input/resize/signal/kill.
 # Host PTY tunnel uses a distinct host_tunnel scope (BUG-74) — never interchangeable.
@@ -57,47 +90,119 @@ DEFAULT_REPLAY_BYTE_LIMIT = 65536
 DEFAULT_IDLE_TTL_SECONDS = 900
 DEFAULT_ABSOLUTE_TTL_SECONDS = 3600
 DEFAULT_TICKET_TTL_SECONDS = 900
+DEFAULT_WRITE_COALESCE_MS = 12  # 8–16ms coalescing window for host→hub out frames
 
 TRANSPORT_SWITCHBOARD_PTY_RELAY = "switchboard_pty_relay"
 RELAY_PATH_TEMPLATE = "/ixp/v1/runner_sessions/{runner_session_id}/pty"
 HOST_RELAY_PATH_TEMPLATE = "/ixp/v1/runner_sessions/{runner_session_id}/pty/host"
 
 
-def encode_frame(frame_type: str, payload: Optional[Mapping[str, Any]] = None,
-                 *, data: bytes | None = None) -> str:
-    """Encode a JSON text frame. Binary bodies use base64 field ``data_b64``."""
+def planned_runner_session_id(wake_id: Any, host_id: Any) -> str:
+    """Return the one deterministic execution id reserved by Start and the host."""
+    wake = str(wake_id or "").strip()
+    host = str(host_id or "").strip()
+    if not wake or not host:
+        return ""
+    return "run_" + hashlib.sha256(f"{wake}:{host}".encode("utf-8")).hexdigest()[:16]
+
+
+def _normalize_type(frame_type: str, *, for_encode: bool) -> str:
     kind = str(frame_type or "").strip().lower()
-    if kind not in FRAME_TYPES:
-        raise ValueError(f"unknown_frame_type:{kind}")
-    body: dict[str, Any] = {"type": kind}
+    if kind in FRAME_TYPES:
+        return kind
+    mapped = _LEGACY_TYPE_MAP.get(kind)
+    if mapped and not for_encode:
+        return mapped
+    raise ValueError(f"unknown_frame_type:{kind}")
+
+
+def encode_frame(frame_type: str, payload: Optional[Mapping[str, Any]] = None,
+                 *, data: bytes | None = None) -> bytes:
+    """Encode a binary frame. Production path never emits JSON text or data_b64."""
+    kind = _normalize_type(frame_type, for_encode=True)
+    header: dict[str, Any] = {}
     if payload:
         for key, value in payload.items():
-            if key in {"type", "data_b64"}:
+            if key in {"type", "data", "data_b64"}:
                 continue
-            body[key] = value
-    if data is not None:
-        body["data_b64"] = base64.b64encode(data).decode("ascii")
-    return json.dumps(body, separators=(",", ":"), sort_keys=True)
+            # Keep JSON-serializable header fields only.
+            if isinstance(value, (bytes, bytearray)):
+                continue
+            header[key] = value
+    header_bytes = json.dumps(header, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    body = b"" if data is None else bytes(data)
+    if len(header_bytes) > MAX_HEADER_BYTES:
+        raise ValueError("frame_header_too_large")
+    if len(body) > MAX_DATA_BYTES:
+        raise ValueError("frame_data_too_large")
+    type_id = TYPE_IDS[kind]
+    wire = FRAME_MAGIC + _HEADER_STRUCT.pack(type_id, len(header_bytes), len(body))
+    return wire + header_bytes + body
 
 
 def decode_frame(raw: str | bytes | Mapping[str, Any]) -> dict[str, Any]:
-    """Decode a JSON text frame into a dict with normalized ``type`` and optional bytes."""
+    """Decode a binary (or legacy JSON) frame into a dict with ``type`` + optional ``data``."""
     if isinstance(raw, Mapping):
-        frame = dict(raw)
-    else:
-        text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw or "")
+        return _decode_mapping(dict(raw))
+
+    if isinstance(raw, (bytes, bytearray)):
+        blob = bytes(raw)
+        if blob.startswith(FRAME_MAGIC):
+            return _decode_binary(blob)
+        # Legacy JSON text delivered as bytes.
         try:
-            frame = json.loads(text or "{}")
+            text = blob.decode("utf-8")
         except Exception as exc:  # noqa: BLE001
             raise ValueError("malformed_frame") from exc
+        return _decode_json_text(text)
+
+    return _decode_json_text(str(raw or ""))
+
+
+def _decode_binary(blob: bytes) -> dict[str, Any]:
+    if len(blob) < 4 + _HEADER_STRUCT.size:
+        raise ValueError("malformed_frame")
+    type_id, header_len, data_len = _HEADER_STRUCT.unpack_from(blob, 4)
+    start = 4 + _HEADER_STRUCT.size
+    end_header = start + header_len
+    end_data = end_header + data_len
+    if (end_data != len(blob) or header_len > MAX_HEADER_BYTES
+            or data_len > MAX_DATA_BYTES):
+        raise ValueError("malformed_frame")
+    kind = _ID_TO_TYPE.get(int(type_id))
+    if kind is None:
+        raise ValueError(f"unknown_frame_type_id:{type_id}")
+    header_raw = blob[start:end_header]
+    try:
+        header = json.loads(header_raw.decode("utf-8") or "{}") if header_raw else {}
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError("malformed_frame") from exc
+    if not isinstance(header, dict):
+        raise ValueError("malformed_frame")
+    out: dict[str, Any] = dict(header)
+    out["type"] = kind
+    if data_len:
+        out["data"] = blob[end_header:end_data]
+    return out
+
+
+def _decode_json_text(text: str) -> dict[str, Any]:
+    try:
+        frame = json.loads(text or "{}")
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError("malformed_frame") from exc
     if not isinstance(frame, dict):
         raise ValueError("malformed_frame")
-    kind = str(frame.get("type") or "").strip().lower()
-    if kind not in FRAME_TYPES:
-        raise ValueError(f"unknown_frame_type:{kind}")
+    return _decode_mapping(frame)
+
+
+def _decode_mapping(frame: dict[str, Any]) -> dict[str, Any]:
+    kind = _normalize_type(str(frame.get("type") or ""), for_encode=False)
     out: dict[str, Any] = dict(frame)
     out["type"] = kind
-    if "data_b64" in frame and frame.get("data_b64") is not None:
+    if isinstance(frame.get("data"), (bytes, bytearray)):
+        out["data"] = bytes(frame["data"])
+    elif "data_b64" in frame and frame.get("data_b64") is not None:
         try:
             out["data"] = base64.b64decode(str(frame.get("data_b64") or ""), validate=False)
         except Exception as exc:  # noqa: BLE001
@@ -106,13 +211,18 @@ def decode_frame(raw: str | bytes | Mapping[str, Any]) -> dict[str, Any]:
 
 
 def frame_byte_size(frame: Mapping[str, Any]) -> int:
-    """Approximate serialized size for replay/backpressure accounting."""
+    """Approximate payload size for replay/backpressure accounting."""
     if "data" in frame and isinstance(frame.get("data"), (bytes, bytearray)):
         return len(frame["data"])
     if frame.get("data_b64"):
         return max(0, (len(str(frame["data_b64"])) * 3) // 4)
     try:
-        return len(json.dumps(frame, separators=(",", ":"), sort_keys=True))
+        encoded = encode_frame(
+            str(frame.get("type") or "out"),
+            {k: v for k, v in frame.items() if k not in {"type", "data", "data_b64"}},
+            data=frame.get("data") if isinstance(frame.get("data"), (bytes, bytearray)) else None,
+        )
+        return len(encoded)
     except Exception:
         return 0
 

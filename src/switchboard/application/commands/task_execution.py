@@ -337,17 +337,45 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
             start_error=result.get("error"),
             last_dispatch_outcome=result.get("dispatch"),
         )
+    execution_id = str(result.get("runner_session_id") or "").strip()
+    wake_id = str(result.get("wake_id") or "").strip()
+    host_id = str(result.get("host_id") or "").strip()
+    descriptor: dict[str, Any] = {}
+    if execution_id and result.get("attached"):
+        descriptor = runner_pty_command.mint_ticket_for_session(
+            runner_session_id=execution_id,
+            project=project,
+            scopes=list(DEFAULT_WATCH_SCOPES),
+            actor=principal_id or actor,
+        )
+    elif execution_id and wake_id and host_id and action in {"started", "starting"}:
+        descriptor = runner_pty_command.mint_ticket_for_pending_direct_session(
+            runner_session_id=execution_id,
+            task_id=task_id,
+            wake_id=wake_id,
+            host_id=host_id,
+            project=project,
+            user_id=principal_id or actor,
+            scopes=list(DEFAULT_WATCH_SCOPES),
+        )
     return _envelope(
         "start_task", task_id, project,
         action=action or "started",
         started=bool(result.get("started")),
         attached=bool(result.get("attached")),
-        execution_id=result.get("runner_session_id") or None,
-        wake_id=result.get("wake_id") or None,
-        host_id=result.get("host_id") or None,
+        execution_id=execution_id or None,
+        wake_id=wake_id or None,
+        host_id=host_id or None,
         role=lifecycle_role,
         lifecycle_phase=("running" if result.get("attached")
                          else "starting" if action in {"started", "starting"} else None),
+        transport=descriptor.get("transport"),
+        relay_path=descriptor.get("relay_path"),
+        relay_url=descriptor.get("relay_url"),
+        ticket=descriptor.get("ticket"),
+        scopes=descriptor.get("scopes"),
+        expires_at=descriptor.get("expires_at"),
+        browser_safe=descriptor.get("browser_safe"),
     )
 
 

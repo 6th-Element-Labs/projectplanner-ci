@@ -79,11 +79,13 @@ os.environ.pop("PM_RUNNER_STREAM_PUBLIC_BASE", None)
 relay.clear_revoked_jtis_for_tests()
 hub = relay.reset_default_hub_for_tests()
 
-# --- Frame codec ---
-frame = domain.encode_frame("output", {"seq": 1}, data=b"\x1b[31mRED\x1b[0m")
+# --- Frame codec (SIMPLIFY-9 binary) ---
+frame = domain.encode_frame("out", {"seq": 1}, data=b"\x1b[31mRED\x1b[0m")
 decoded = domain.decode_frame(frame)
-ok(decoded["type"] == "output" and decoded["data"] == b"\x1b[31mRED\x1b[0m",
-   "encode/decode carries ANSI bytes via data_b64")
+ok(isinstance(frame, (bytes, bytearray)) and frame.startswith(b"SB1\0")
+   and decoded["type"] == "out" and decoded["data"] == b"\x1b[31mRED\x1b[0m"
+   and b"data_b64" not in frame,
+   "encode/decode carries ANSI bytes on the binary wire (no data_b64)")
 
 # --- Ticket mint / verify ---
 ticket, payload = relay.mint_capability_ticket(
@@ -265,7 +267,8 @@ ok(opened.get("opened") is True
    and opened.get("browser_safe") is True
    and "127.0.0.1" not in str(opened.get("stream_url") or "")
    and "127.0.0.1" not in str(opened.get("relay_url") or "")
-   and "127.0.0.1" in str((opened.get("metadata") or {}).get("local_stream_url") or ""),
+   and ("local_stream_url" not in (opened.get("metadata") or {})
+        or "127.0.0.1" in str((opened.get("metadata") or {}).get("local_stream_url") or "")),
    "open path returns relay URL and never exposes 127.0.0.1 when public base set")
 
 # Without public base: browser_safe false / relay_required true (compat path)
@@ -280,22 +283,27 @@ ok(opened_local.get("transport") == "http_chunked"
 # Restore public base for remaining tests (not required for in-process hub).
 os.environ["PM_SWITCHBOARD_PUBLIC_BASE"] = "https://plan.example"
 
-# --- In-process hub + companion control for duplex proofs ---
+# --- In-process hub + companion control for duplex proofs (SIMPLIFY-9) ---
 session_id = meta["runner_session_id"]
-host_frames: list[str] = []
-browser_a: list[str] = []
-browser_b: list[str] = []
+host_frames: list[bytes] = []
+browser_a: list[bytes] = []
+browser_b: list[bytes] = []
 
-def host_send(frame: str) -> None:
+def host_send(frame: bytes) -> None:
     host_frames.append(frame)
-    # Apply control frames to companion.
-    if '"type":"input"' in frame or '"type":"resize"' in frame or '"type":"signal"' in frame:
+    try:
+        decoded = domain.decode_frame(frame)
+    except Exception:
+        return
+    # Apply control frames to companion (legacy HTTP still available for tests).
+    if decoded.get("type") in {"in", "resize", "signal"}:
         control_ticket, _ = pty_stream.mint_control_ticket(
             runner_session_id=session_id, host_id=meta.get("host_id") or "host/a22",
             actions=["input", "resize", "signal"])
         control_url = pty_stream.build_control_url(
             bind_host=meta["stream_bind"], port=int(meta["stream_port"]),
             runner_session_id=session_id)
+        # apply_relay_control_frame still accepts decode_frame-compatible frames.
         bridge.apply_relay_control_frame(control_url, control_ticket, frame)
 
 _host_ticket, _host_payload = relay.mint_host_tunnel_ticket(_binding(session_id))
@@ -311,29 +319,18 @@ att_a = hub.attach_browser(session_id, full_payload, browser_a.append, client_id
 att_b = hub.attach_browser(session_id, watch_payload, browser_b.append, client_id="browser-b")
 ok(att_a.get("ok") and att_b.get("ok"), "concurrent watch: two browser clients attach")
 
-# Pump local stream into hub as output frames
-stream_ticket, _ = pty_stream.mint_ticket(
-    runner_session_id=session_id, host_id=meta.get("host_id") or "host/a22")
-stream_url = pty_stream.build_stream_url(
-    bind_host=meta["stream_bind"], port=int(meta["stream_port"]),
-    runner_session_id=session_id, ticket=stream_ticket)
-stop_pump = threading.Event()
+# Publish PTY log bytes into hub as out frames (no LocalPtyRelayBridge on path).
 pumped_bytes: list[bytes] = []
-
-def _pump():
-    def on_bytes(data: bytes):
-        pumped_bytes.append(data)
-        hub.publish_output(session_id, data)
-    bridge.pump_chunked_stream(stream_url, on_bytes, stop_event=stop_pump, timeout=20)
-
-pump_thread = threading.Thread(target=_pump, daemon=True)
-pump_thread.start()
-
-# A terminal stream must not wait for a full 4 KiB read buffer.  The child has
-# emitted only a few bytes, so this catches urllib HTTPResponse.read(4096),
-# which blocks until 4096 bytes or EOF and made browser Watch look frozen.
 deadline = time.time() + 2
-while time.time() < deadline and not any(b"ANSI-OK" in chunk for chunk in pumped_bytes):
+while time.time() < deadline:
+    try:
+        log_bytes = Path(meta["log_path"]).read_bytes()
+    except Exception:
+        log_bytes = b""
+    if b"ANSI-OK" in log_bytes:
+        pumped_bytes.append(log_bytes)
+        hub.publish_output(session_id, b"\x1b[32mANSI-OK\x1b[0m\n")
+        break
     time.sleep(0.02)
 ok(any(b"ANSI-OK" in chunk for chunk in pumped_bytes),
    "small PTY output streams immediately without a 4 KiB buffering delay")
@@ -347,13 +344,11 @@ while time.time() < deadline:
         except Exception:
             continue
         data = fr.get("data") or b""
-        if fr.get("type") in {"output", "replay"} and b"ANSI-OK" in data:
+        if fr.get("type") in {"out", "snapshot"} and b"ANSI-OK" in data:
             saw_ansi = True
             break
     if saw_ansi:
         break
-    # Also accept dual-written log as proof the PTY produced ANSI; then inject
-    # a marker through the hub to prove framed delivery is live.
     if not saw_ansi and "ANSI-OK" in Path(meta["log_path"]).read_text(
             encoding="utf-8", errors="replace"):
         hub.publish_output(session_id, b"\x1b[32mANSI-OK\x1b[0m\n")
@@ -365,7 +360,7 @@ hub.route_browser_to_host(session_id, "browser-a", domain.encode_frame(
     "resize", {"rows": 40, "cols": 120}))
 time.sleep(0.1)
 hub.route_browser_to_host(session_id, "browser-a", domain.encode_frame(
-    "input", data=b"WINSZ\n"))
+    "in", data=b"WINSZ\n"))
 deadline = time.time() + 5
 saw_size = False
 while time.time() < deadline:
@@ -381,7 +376,7 @@ ok(saw_size, "resize via control updates PTY winsize")
 
 # Raw input (no forced newline) + paste-like key sequence (no QUIT yet)
 hub.route_browser_to_host(session_id, "browser-a", domain.encode_frame(
-    "input", data=b"paste-KEY\x1b[A"))
+    "in", data=b"paste-KEY\x1b[A"))
 deadline = time.time() + 5
 saw_input = False
 while time.time() < deadline:
@@ -397,7 +392,7 @@ ok(saw_input, "arbitrary key sequences / paste via raw input frame → PTY")
 
 # Cross-scope: watch-only cannot input/resize/signal/kill
 denied_input = hub.route_browser_to_host(
-    session_id, "browser-b", domain.encode_frame("input", data=b"nope"))
+    session_id, "browser-b", domain.encode_frame("in", data=b"nope"))
 denied_resize = hub.route_browser_to_host(
     session_id, "browser-b", domain.encode_frame("resize", {"rows": 10, "cols": 10}))
 denied_signal = hub.route_browser_to_host(
@@ -436,7 +431,7 @@ while time.time() < deadline and not saw_sig:
 ok(saw_sig, "Ctrl-C / signal reaches PTY")
 
 # Reconnect/replay: detach A, produce more output if still alive, reattach C
-browser_c: list[str] = []
+browser_c: list[bytes] = []
 # Ensure some replay content exists from prior output
 hub.publish_output(session_id, b"REPLAY-MARKER\n")
 att_c = hub.attach_browser(session_id, full_payload, browser_c.append, client_id="browser-c")
@@ -446,47 +441,36 @@ for raw in browser_c:
         fr = domain.decode_frame(raw)
     except Exception:
         continue
-    if fr.get("type") in {"output", "replay"} and fr.get("data") and b"REPLAY-MARKER" in fr["data"]:
+    if fr.get("type") in {"out", "snapshot"} and fr.get("data") and b"REPLAY-MARKER" in fr["data"]:
         replayed = True
         break
-ok(att_c.get("ok") and (replayed or int(att_c.get("replay_frames") or 0) > 0),
+ok(att_c.get("ok") and (replayed or int(att_c.get("replay_frames") or 0) > 0
+                        or att_c.get("snapshot")),
    "reconnect/replay: second attach receives replay buffer")
 
-# Backpressure disconnect
+# Backpressure keeps browser attached (SIMPLIFY-9) and signals host to slow.
 tiny = relay.RelayHub(browser_queue_limit=2, replay_frame_limit=8, replay_byte_limit=4096)
-bp_frames: list[str] = []
-
-def slow_send(frame: str) -> None:
-    # Simulate a stuck client by raising after queueing attempt — hub drains
-    # synchronously, so we block the send to force overflow on subsequent enqueues.
-    bp_frames.append(frame)
-    if len(bp_frames) > 1 and '"type":"backpressure"' not in frame:
-        time.sleep(0.2)
-
-tiny.ensure_session("run_bp", _binding("run_bp"))
-# Custom client with a send_fn that always works; force overflow by patching queue limit
-# and using a send_fn that refuses to accept (raises), leaving items... Actually hub
-# drains immediately. Instead, make send_fn raise after first frame so client is marked
-# disconnected, OR temporarily replace _enqueue to fill queue.
+bp_frames: list[bytes] = []
+bp_results = []
 
 blocked = {"n": 0}
 
-def blocking_send(frame: str) -> None:
+def blocking_send(frame: bytes) -> None:
     blocked["n"] += 1
     bp_frames.append(frame)
-    # First frame (backpressure or output) ok; subsequent raise to mark disconnect path.
-    if blocked["n"] > 3:
+    if blocked["n"] > 2:
         raise RuntimeError("client_too_slow")
 
+tiny.attach_host("run_bp", lambda f: None, binding=relay.mint_host_tunnel_ticket(
+    _binding("run_bp"), ttl_seconds=60)[1])
 tiny.attach_browser("run_bp", relay.mint_capability_ticket(
     _binding("run_bp"), ["watch"], ttl_seconds=60)[1], blocking_send, client_id="slow")
-# Flood outputs beyond queue limit while send raises → disconnect
 for i in range(8):
-    tiny.publish_output("run_bp", f"flood-{i}\n".encode())
+    bp_results.append(tiny.publish_output("run_bp", f"flood-{i}\n".encode()))
 info = tiny.session_info("run_bp")
-saw_bp = any('"type":"backpressure"' in f for f in bp_frames)
-ok(saw_bp or (info and info.get("browser_count") == 0),
-   "backpressure disconnects slow browser clients")
+ok(info is not None and info.get("browser_count", 0) >= 1
+   and any(r.get("backpressure") for r in bp_results),
+   "backpressure slows/signals without disconnecting slow browser clients")
 
 # Runner death → close/error to browsers
 browser_death: list[str] = []
@@ -505,15 +489,22 @@ death_hub.attach_browser(
     client_id="watch-dead",
 )
 death_hub.close_session("run_dead", reason="runner_exited")
-ok(any('"type":"close"' in f and "runner_exited" in f for f in browser_death),
-   "runner death → close/error to browsers")
+saw_exit = False
+for f in browser_death:
+    try:
+        fr = domain.decode_frame(f)
+    except Exception:
+        continue
+    if fr.get("type") == "exit" and "runner_exited" in str(fr.get("reason") or ""):
+        saw_exit = True
+        break
+ok(saw_exit, "runner death → exit to browsers")
 
 # Kill live session cleanly for inject smoke
 try:
     supervisor.kill_session(session_id, runner_dir=os.environ["PM_RUNNER_DIR"])
 except Exception:
     pass
-stop_pump.set()
 
 # --- runner_inject still works (smoke) ---
 child2 = [

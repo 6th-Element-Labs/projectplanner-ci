@@ -64,6 +64,20 @@ def mint_ticket_for_session(
     session = runner_repo.get_runner_session(sid, project=project_id)
     if not session:
         return {"error": "runner_session_not_found", "error_code": "not_found"}
+    metadata = session.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    runtime = str(session.get("runtime") or metadata.get("runtime") or "").lower()
+    # Vendor-cloud executions are asynchronous job APIs, not interactive
+    # xterms. Only enrolled Mac/AWS Agent Hosts run this PTY executor.
+    if (metadata.get("cloud_session") is True
+            or metadata.get("vendor_id")
+            or runtime in {"claude-cloud", "codex-cloud", "vendor_cloud"}):
+        return {
+            "error": "vendor_cloud_job_api_not_pty",
+            "error_code": "not_supported",
+            "runner_session_id": sid,
+        }
     missing = runner_repo.missing_runner_bind_fields(session)
     if missing and not runner_repo.is_direct_assignment_runner(session):
         return runner_repo.runner_bind_incomplete(missing, task_id=session.get("task_id") or "")
@@ -111,6 +125,68 @@ def mint_ticket_for_session(
         "transport": domain.TRANSPORT_SWITCHBOARD_PTY_RELAY,
         "browser_safe": bool(public_base) and not relay.is_loopback_url(public_base),
         "binding": {k: binding[k] for k in domain.TICKET_BIND_FIELDS},
+    }
+    if descriptor["browser_safe"]:
+        descriptor["relay_url"] = relay.public_relay_url(public_base, sid, ticket)
+        descriptor["relay_path"] = domain.RELAY_PATH_TEMPLATE.format(
+            runner_session_id=sid)
+    return descriptor
+
+
+def mint_ticket_for_pending_direct_session(
+    *,
+    runner_session_id: str,
+    task_id: str,
+    wake_id: str,
+    host_id: str,
+    project: str,
+    user_id: str,
+    scopes: Any,
+    ttl_seconds: int = domain.DEFAULT_TICKET_TTL_SECONDS,
+) -> dict[str, Any]:
+    """Reserve a Watch attachment before the Agent Host has registered.
+
+    The deterministic execution id plus pending/* placeholders let the RelayHub
+    accept the browser now. An authenticated host ticket may upgrade only the
+    claim/Work Session fields while runner/task/host/wake remain exact.
+    """
+    sid = str(runner_session_id or "").strip()
+    wake = str(wake_id or "").strip()
+    host = str(host_id or "").strip()
+    task = str(task_id or "").strip().upper()
+    if not sid or not wake or not host or not task:
+        return {"error": "pending_runner_bind_incomplete", "error_code": "invalid_input"}
+    pending_ref = f"pending/{sid}"
+    binding = domain.merge_binding({
+        "tenant_id": "tenant/default",
+        "user_id": str(user_id or "operator"),
+        "project_id": str(project or DEFAULT_PROJECT),
+        "task_id": task,
+        "claim_id": pending_ref,
+        "work_session_id": pending_ref,
+        "runner_session_id": sid,
+        "host_id": host,
+        "wake_id": wake,
+        "execution_connection_id": pending_ref,
+        "source_sha": pending_ref,
+        "permission_profile": "operator_watch_pending",
+    })
+    try:
+        ticket, payload = relay.mint_capability_ticket(
+            binding, scopes, ttl_seconds=ttl_seconds)
+    except ValueError as exc:
+        return {"error": str(exc), "error_code": "invalid_ticket_request"}
+    public_base = relay.public_base_from_env()
+    descriptor: dict[str, Any] = {
+        "minted": True,
+        "pending": True,
+        "runner_session_id": sid,
+        "ticket": ticket,
+        "scopes": payload.get("scopes") or [],
+        "expires_at": payload.get("exp"),
+        "transport": domain.TRANSPORT_SWITCHBOARD_PTY_RELAY,
+        "browser_safe": bool(public_base) and not relay.is_loopback_url(public_base),
+        "binding": binding,
     }
     if descriptor["browser_safe"]:
         descriptor["relay_url"] = relay.public_relay_url(public_base, sid, ticket)

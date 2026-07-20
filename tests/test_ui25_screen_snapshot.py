@@ -80,18 +80,27 @@ hub.ensure_session(SID, {"runner_session_id": SID})
 paint = (b"\x1b[2J\x1b[H\x1b[1mCODEX PANEL v9\x1b[0m\r\n"
          b"\x1b[36mmodel: gpt-5.6-sol\x1b[0m\r\n"
          b"> prompt")
-hub.route_host_to_browsers(SID, domain.encode_frame("output", {}, data=paint))
+hub.route_host_to_browsers(SID, domain.encode_frame("out", {}, data=paint))
 
 # Now churn enough additional output to roll the paint frame out of the ring.
 for i in range(30):
-    hub.route_host_to_browsers(SID, domain.encode_frame("output", {}, data=b" ." + str(i).encode()))
+    hub.route_host_to_browsers(SID, domain.encode_frame("out", {}, data=b" ." + str(i).encode()))
 
 session = hub._sessions[SID]
-ring_has_marker = any("CODEX PANEL" in f for f in session.replay)
+ring_has_marker = False
+for f in session.replay:
+    try:
+        fr = domain.decode_frame(f)
+    except Exception:
+        continue
+    data = fr.get("data") or b""
+    if b"CODEX PANEL" in data:
+        ring_has_marker = True
+        break
 ok(not ring_has_marker, "the initial paint has rolled OUT of the byte-replay ring (idle-TUI case)")
 
 # A browser attaches now (late join to the idle session).
-frames: list[str] = []
+frames: list[bytes] = []
 res = hub.attach_browser(SID, {"scopes": ["watch"], "runner_session_id": SID}, frames.append)
 ok(res.get("ok"), "browser attaches")
 ok(res.get("snapshot") is True, "attach delivered a screen SNAPSHOT (not just the rolled ring)")
@@ -111,7 +120,7 @@ ok("model: gpt-5.6-sol" in recovered, "the full current screen is reconstructed,
 
 # Fallback: a brand-new session with nothing drawn yet must still use byte-replay.
 hub.ensure_session("run_empty", {"runner_session_id": "run_empty"})
-hub.route_host_to_browsers("run_empty", domain.encode_frame("output", {}, data=b"just streaming logs\r\n"))
+hub.route_host_to_browsers("run_empty", domain.encode_frame("out", {}, data=b"just streaming logs\r\n"))
 res2 = hub.attach_browser("run_empty", {"scopes": ["watch"], "runner_session_id": "run_empty"}, [].append)
 ok(res2.get("ok"), "a streaming session still attaches")
 # (snapshot may be True here too since any output builds a screen; the key
