@@ -83,6 +83,12 @@ def get_task_session(task_id: str, project: str = "maxwell") -> str:
     return _services().dumps(projection) if projection else "no such task"
 
 
+def task_session_doctor(task_id: str, project: str = "maxwell") -> str:
+    """One blocker and one repair action from the authoritative Task Session aggregate."""
+    projection = task_session_query.doctor_for(task_id, project=project)
+    return _services().dumps(projection) if projection else "no such task"
+
+
 def update_task(task_id: str, ctx: Context, title: str = "", description: str = "",
                 status: str = "", owner_org: str = "", owner_person_or_role: str = "",
                 assignee: str = "", phase: str = "", start_date: str = "",
@@ -266,7 +272,7 @@ def remove_dependency(task_id: str, depends_on: str, ctx: Context,
 
 
 TASK_TOOL_NAMES = (
-    "search_tasks", "get_task", "get_task_session", "update_task", "create_task", "add_comment",
+    "search_tasks", "get_task", "get_task_session", "task_session_doctor", "update_task", "create_task", "add_comment",
     "archive_task", "move_task", "add_dependency", "remove_dependency",
 )
 

@@ -7,7 +7,7 @@ from switchboard.mcp.tools import tasks as task_tools
 
 
 TASK_TOOLS = (
-    "search_tasks", "get_task", "get_task_session", "update_task", "create_task", "add_comment",
+    "search_tasks", "get_task", "get_task_session", "task_session_doctor", "update_task", "create_task", "add_comment",
     "archive_task", "move_task", "add_dependency", "remove_dependency",
 )
 

@@ -155,6 +155,14 @@ def create_router(*, resolve_project: ProjectResolver,
                 raise HTTPException(404, "task not found")
             return projection
 
+        @router.get("/api/tasks/{task_id}/session/doctor")
+        async def task_session_doctor(task_id: str, project: str = Query(...)):
+            projection = task_session_query.doctor_for(
+                task_id, project=resolve_project(project))
+            if not projection:
+                raise HTTPException(404, "task not found")
+            return projection
+
     if not thin_mode_a:
         @router.post("/api/tasks/{task_id}/review_verdict")
         async def record_review_verdict(request: Request, task_id: str,

@@ -23,8 +23,9 @@
                     <span id="runner-control-flash" class="small text-secondary ms-auto"></span>
                 </div>
             </div>
-            <div class="card-body py-3" id="runner-control-body">
-                <div class="text-secondary small">Loading runner sessions…</div>
+            <div class="card-body py-3">
+                <div id="task-session-doctor" class="alert alert-secondary py-2 mb-3" role="status">Checking task session…</div>
+                <div id="runner-control-body"><div class="text-secondary small">Loading runner sessions…</div></div>
             </div>
         </div>`;
     },
@@ -33,6 +34,7 @@
         const body = document.getElementById('runner-control-body');
         const count = document.getElementById('runner-control-count');
         if (!body) return;
+        await this._loadTaskSessionDoctor(taskId);
         let data;
         try {
             const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&task_id=${encodeURIComponent(taskId)}&include_stale=false`;
@@ -66,6 +68,29 @@
             btn.addEventListener('click', () => this.openRunnerSessionPanel(
                 btn.getAttribute('data-runner-watch-task') || taskId));
         });
+    },
+
+    async _loadTaskSessionDoctor(taskId) {
+        const el = document.getElementById('task-session-doctor');
+        if (!el) return;
+        try {
+            const project = encodeURIComponent(window.PM_PROJECT || 'maxwell');
+            const doctor = await (await fetch(`/api/tasks/${encodeURIComponent(taskId)}/session/doctor?project=${project}`, { cache: 'no-store' })).json();
+            const repair = doctor.repair || {};
+            const tone = doctor.blocked_at ? 'warning' : (doctor.watchable_now ? 'azure' : 'secondary');
+            el.className = `alert alert-${tone} py-2 mb-3 d-flex align-items-center gap-2`;
+            el.innerHTML = `<span class="flex-fill">${this.esc(doctor.message || 'Task session status unavailable.')}</span>
+                <button type="button" class="btn btn-sm btn-outline-${tone}" data-doctor-action="${this.esc(repair.action || 'reopen')}">${this.esc(repair.label || 'Reopen task session')}</button>`;
+            el.querySelector('[data-doctor-action]')?.addEventListener('click', () => {
+                const action = repair.action || 'reopen';
+                if (action === 'watch' || action === 'reopen') this.openRunnerSessionPanel(taskId);
+                else if (action === 'retry' || action === 'start') document.getElementById('task-primary-start')?.click();
+                else this._loadTaskSessionDoctor(taskId);
+            });
+        } catch (e) {
+            el.className = 'alert alert-danger py-2 mb-3';
+            el.textContent = `Task session status unavailable: ${e.message}`;
+        }
     },
 
     _runnerSessionRow(s) {

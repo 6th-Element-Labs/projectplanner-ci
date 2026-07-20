@@ -16,6 +16,7 @@ from switchboard.storage.repositories import tasks as tasks_repo
 
 SCHEMA = "switchboard.task_session.v1"
 DISPLAY_SCHEMA = "switchboard.task_honest_display.v1"
+DOCTOR_SCHEMA = "switchboard.task_session_doctor.v1"
 TERMINAL_RUNNERS = {
     "completed", "failed", "cancelled", "expired", "lost", "killed",
     "exited", "stopped",
@@ -260,4 +261,61 @@ def execute_for(task_id: str, *, project: str,
                     else None),
         "transcript_ref": (metadata.get("transcript_ref") or metadata.get("session_url")
                            or metadata.get("provider_session_id") or None),
+    }
+
+
+def doctor_for(task_id: str, *, project: str) -> Optional[dict[str, Any]]:
+    """Return one operator answer derived only from the Task Session aggregate."""
+    session = execute_for(task_id, project=project)
+    if not session:
+        return None
+
+    state = str(session.get("lifecycle_phase") or "ready")
+    runner = session.get("active_runner") if isinstance(
+        session.get("active_runner"), dict) else {}
+    attempt = session.get("active_attempt") if isinstance(
+        session.get("active_attempt"), dict) else {}
+    outcome = session.get("last_dispatch_outcome") if isinstance(
+        session.get("last_dispatch_outcome"), dict) else {}
+    execution_id = str(
+        runner.get("runner_session_id")
+        or attempt.get("runner_session_id")
+        or attempt.get("wake_id")
+        or ""
+    ) or None
+    watchable_now = bool(runner and not runner.get("stale")
+                         and str(runner.get("status") or "").lower() not in TERMINAL_RUNNERS)
+
+    blocked_at = None
+    message = "No execution is running."
+    repair = {"action": "start", "label": "Start task"}
+    if state == "running" and watchable_now:
+        message = "The task has a live execution ready to watch."
+        repair = {"action": "watch", "label": "Watch execution"}
+    elif state == "running":
+        blocked_at = "watch"
+        message = "The live execution cannot be watched from this host."
+        repair = {"action": "reopen", "label": "Reopen task session"}
+    elif state == "starting":
+        message = "The execution is starting."
+        repair = {"action": "reopen", "label": "Refresh task session"}
+    elif outcome:
+        blocked_at = str(outcome.get("state") or "start")
+        message = str(outcome.get("message") or outcome.get("reason")
+                      or "The last start attempt failed.")
+        repair = {"action": "retry", "label": "Retry start"}
+    elif state in {"review", "merged", "done"}:
+        message = "The latest execution has ended."
+        repair = {"action": "reopen", "label": "Reopen task session"}
+
+    return {
+        "schema": DOCTOR_SCHEMA,
+        "state": state,
+        "blocked_at": blocked_at,
+        "message": message,
+        "repair": repair,
+        "execution_id": execution_id,
+        "watchable_now": watchable_now,
+        # Reopening is presentation-only and always resolves this aggregate again.
+        "reopenable": True,
     }
