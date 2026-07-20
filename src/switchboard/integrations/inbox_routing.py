@@ -49,7 +49,8 @@ def _build_index(env_routes: str) -> RouteIndex:
     """Merge deploy bootstrap routes with operator-managed project associations.
 
     The web-managed map wins conflicts because it is the live operator surface.
-    Failure to read that map is visible but does not disable the environment map.
+    Failure to build the complete validated map rejects routing rather than publishing
+    a partial index.
     """
     routes: dict[str, str] = {}
     valid_projects = frozenset(store.project_ids())

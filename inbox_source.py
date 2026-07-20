@@ -162,8 +162,6 @@ def poll(max_msgs=20):
             if inbox.process("email", mid, sender, subject, _message_text(msg),
                              headers=headers, project_context=project_context):
                 queued += 1
-        if quarantined:
-            m.expunge()
         return {"polled": len(ids), "queued": queued, "quarantined": quarantined,
                 "quarantine_reasons": quarantine_reasons, "disabled": False}
     finally:
