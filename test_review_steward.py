@@ -151,14 +151,14 @@ def test_plan_actions():
         ok(by_task["R-1"]["action"] == rs.ACTION_DISPATCH_REVIEW,
            "green CI + clear deps dispatches review_merge")
         ok(by_task["R-1"]["merges"] is False, "green path never marks merges=True")
-        ok(by_task["R-2"]["action"] == rs.ACTION_RERUN_CI,
-           "red CI under retry budget requests scratchpad rerun")
+        ok(by_task["R-2"]["action"] == rs.ACTION_REMEDIATE_CI,
+           "red CI routes to an agent for remediation")
         ok(by_task["R-3"]["action"] == rs.ACTION_RERUN_CI,
            "missing CI requests first scratchpad run")
         ok(by_task["R-4"]["action"] == rs.ACTION_RERUN_CI,
            "legacy human-gate metadata follows the normal missing-CI path")
-        ok(by_task["R-5"]["action"] == rs.ACTION_ESCALATE,
-           "red after max retries escalates")
+        ok(by_task["R-5"]["action"] == rs.ACTION_REMEDIATE_CI,
+           "persistently red CI remains in autonomous remediation")
         ok("R-6" not in by_task, "non In-Review tasks are ignored")
         ok(plan["summary"]["in_review_count"] == 5, "in_review_count excludes Not Started")
 
@@ -229,6 +229,8 @@ def test_acting_mode_reruns_and_dispatches():
         db_path = Path(tmp) / "board.db"
         make_db(db_path)
         dispatches = []
+        remediation_dispatches = []
+        controls = []
         messages = []
         wakes = []
 
@@ -244,6 +246,19 @@ def test_acting_mode_reruns_and_dispatches():
             wakes.append(kwargs)
             return {"wake_id": f"wake-{len(wakes)}", "requested": True}
 
+        def runner_resolver(task_id, project="switchboard"):
+            if task_id == "R-2":
+                return {"active": True, "session": {"runner_session_id": "run-r2"}}
+            return {"active": False}
+
+        def runner_control_requester(runner_id, action, **kwargs):
+            controls.append((runner_id, action, kwargs))
+            return {"requested": True, "request_id": "runnerreq-r2"}
+
+        def remediation_dispatcher(task_id, **kwargs):
+            remediation_dispatches.append((task_id, kwargs))
+            return {"dispatched": True, "wake_id": f"wake-remediate-{task_id}"}
+
         receipt = rs.steward_project(
             "switchboard",
             dry_run=False,
@@ -254,20 +269,37 @@ def test_acting_mode_reruns_and_dispatches():
             scratchpad_dispatcher=scratchpad_dispatcher,
             message_sender=message_sender,
             wake_requester=wake_requester,
+            runner_resolver=runner_resolver,
+            runner_control_requester=runner_control_requester,
+            remediation_dispatcher=remediation_dispatcher,
         )
         actions = {row["task_id"]: row for row in receipt["executed"]}
-        ok(any(d["pr"] == 12 for d in dispatches), "red CI triggers scratchpad dispatcher")
+        ok(not any(d["pr"] in {12, 15} for d in dispatches),
+           "red CI never wastes time rerunning unchanged code")
         ok(any(d["pr"] == 13 for d in dispatches), "missing CI triggers scratchpad dispatcher")
+        ok(actions["R-2"]["result"]["status"] == "remediation_sent_to_live_runner",
+           "red CI is injected into the live task runner")
+        ok(controls and controls[0][0:2] == ("run-r2", "inject"),
+           "live remediation uses the bound runner control")
+        control_options = controls[0][2]["options"]
+        ok(control_options["task_id"] == "R-2"
+           and control_options["client_request_id"].endswith(":h2"),
+           "runner remediation is exact-task and exact-head idempotent")
+        ok(actions["R-5"]["result"]["status"] == "remediation_runner_dispatched",
+           "red CI without a live runner starts a replacement remediation runner")
+        ok(remediation_dispatches
+           and remediation_dispatches[0][0] == "R-5"
+           and remediation_dispatches[0][1]["role"] == "remediation"
+           and remediation_dispatches[0][1]["source_sha"] == "h5",
+           "replacement remediation is bound to the exact task and head")
         ok(actions["R-1"]["result"]["status"] == "review_merge_dispatched",
            "green CI dispatches review_merge")
         ok(any(m.get("to_agent") == "review_merge/R-1" for m in messages),
            "review_merge agent receives directed message")
         ok(any((w.get("policy") or {}).get("kind") == "review_merge" for w in wakes),
            "wake policy kind is review_merge")
-        ok(actions["R-5"]["result"]["status"] == "escalated",
-           "exhausted retries escalate with requires_ack path")
-        ok(any(m.get("requires_ack") for m in messages),
-           "escalation messages require ack")
+        ok(not any(m.get("requires_ack") for m in messages),
+           "red CI does not generate an operator escalation")
         ok(receipt["effects"]["merged"] is False, "acting mode still never merges")
 
 

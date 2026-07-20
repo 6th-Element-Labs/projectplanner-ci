@@ -41,12 +41,23 @@ try:
        "verify_merge_provenance stays agent-to-agent")
     ok(not esc.should_notify_human(action="request_human_approval", attention=True),
        "retired human-gate actions never page humans")
-    ok(esc.should_notify_human(escalation_class="no_eligible_host"),
-       "no_eligible_host alias maps to human escalation")
+    ok(not esc.should_notify_human(action="repair_task_link", attention=True),
+       "repairable mission work never pages humans")
+    ok(esc.should_notify_human(action="propose_breakdown"),
+       "an ambiguous product breakdown may request a human decision")
+    ok(not esc.should_notify_human(escalation_class="no_eligible_host"),
+       "no eligible host stays inside automatic fleet repair")
     ok(esc.should_notify_human(escalation_class="budget_breach"),
        "budget_breach pages humans")
     ok(esc.should_notify_human(escalation_class="security/secrets boundary"),
        "security/secrets boundary pages humans")
+    for routine in (
+        "failed_gate", "missing_provenance", "absent_permission",
+        "unreachable_agent_no_host", "unbound_identity", "policy_violation",
+        "red_ci_product_judgment",
+    ):
+        ok(not esc.should_notify_human(escalation_class=routine, attention=True),
+           f"routine class {routine} never pages even when marked attention")
 
     plan = esc.build_escalation_plan(
         escalation_class="budget_breach",
@@ -119,14 +130,19 @@ try:
     ok(any(a.get("kind") == esc.ACTIVITY_KIND for a in audit.get("activity") or []),
        "activity log records coordinator.escalation")
 
-    # Dispatch blocked without host → escalate; generic claim miss → do not.
+    # Dispatch/fleet failures are automatic repair work, not operator decisions.
     no_host = esc.classify_dispatch_blocked(
         {"requested": False, "eligible_host_count": 0,
          "reason": "No eligible host in switchboard"},
         project="switchboard", task_id="COORD-4",
     )
     ok(no_host and no_host["escalation_class"] == "unreachable_agent_no_host",
-       "no eligible host escalates")
+       "no eligible host remains classified for internal diagnostics")
+    no_host_delivery = esc.deliver_human_escalation(
+        no_host, store_mod=store, actor="agent/coordinator",
+        alert_to="switchboard/operator", notify_outbound=True)
+    ok(no_host_delivery.get("skipped") == "not_human_exception",
+       "classified fleet failure does not email the operator")
     ok(esc.classify_dispatch_blocked(
         {"claimed": False, "reason": "no ready unblocked tasks"},
         project="switchboard") is None,

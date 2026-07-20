@@ -3,9 +3,10 @@
 Keeps In-Review work moving toward a trustworthy green without merging:
 
 * inspect board-recorded PR / scratchpad CI / dependency / session state
-* auto-request scratchpad CI rerun on red or missing CI (bounded retries)
+* request authoritative CI when evidence is missing
+* route red CI to the live author or a replacement remediation session
 * dispatch a ``review_merge`` agent when CI is green and mergeability looks clear
-* escalate to a human/operator only when policy requires judgment (COORD-6 path)
+* reserve human/operator escalation for irreducible product decisions
 
 Default posture is dry-run (observe + log decisions). Acting requires an explicit
 env flag. Merges remain COORD-7 / T3 only.
@@ -32,6 +33,7 @@ DEFAULT_MAX_CI_RERUNS = 2
 DEFAULT_REVIEW_RUNTIME = "cursor"
 
 ACTION_RERUN_CI = "rerun_scratchpad_ci"
+ACTION_REMEDIATE_CI = "remediate_failed_ci"
 ACTION_HOLD_PENDING = "hold_pending_ci"
 ACTION_DISPATCH_REVIEW = "dispatch_review_merge"
 ACTION_ESCALATE = "escalate_human"
@@ -42,6 +44,7 @@ ACTION_NOOP = "noop"
 
 POLICY = {
     ACTION_RERUN_CI: "coord.review.rerun_scratchpad",
+    ACTION_REMEDIATE_CI: "coord.review.remediate_failed_ci",
     ACTION_HOLD_PENDING: "coord.review.hold_pending_ci",
     ACTION_DISPATCH_REVIEW: "coord.review.dispatch_review_merge",
     ACTION_ESCALATE: "coord.review.escalate_human_judgment",
@@ -147,7 +150,10 @@ def plan_review_actions(snapshot: Mapping[str, Any], *,
             "escalation_class": escalation_class,
             "inputs": inputs,
             "skipped_alternatives": skipped or [],
-            "mutates": action in {ACTION_RERUN_CI, ACTION_DISPATCH_REVIEW, ACTION_ESCALATE},
+            "mutates": action in {
+                ACTION_RERUN_CI, ACTION_REMEDIATE_CI,
+                ACTION_DISPATCH_REVIEW, ACTION_ESCALATE,
+            },
             "merges": False,
         })
 
@@ -219,21 +225,21 @@ def plan_review_actions(snapshot: Mapping[str, Any], *,
                          {"action": ACTION_DISPATCH_REVIEW, "reason": "ci_not_green"}])
             continue
 
-        if ci_state in {"red", "missing", "unknown"}:
-            if terminal_attempts >= int(max_ci_reruns) and ci_state == "red":
-                add(task_id, ACTION_ESCALATE,
-                    "Required CI stays red after bounded steward reruns.",
-                    base_inputs, escalation_class="failed_gate", score=96,
-                    skipped=[{"action": ACTION_RERUN_CI, "reason": "retry_budget_exhausted"},
-                             {"action": ACTION_DISPATCH_REVIEW, "reason": "ci_red"}])
-            else:
-                add(task_id, ACTION_RERUN_CI,
-                    "Latest board-recorded CI is red or missing; request a scratchpad rerun.",
-                    base_inputs, score=90 if ci_state == "red" else 80,
-                    skipped=[{"action": ACTION_DISPATCH_REVIEW, "reason": f"ci_{ci_state}"},
-                             {"action": ACTION_ESCALATE,
-                              "reason": "retries_remain" if ci_state == "red"
-                              else "missing_ci_first_attempt"}])
+        if ci_state == "red":
+            add(task_id, ACTION_REMEDIATE_CI,
+                "Required CI is red; return the exact failure to an agent for repair.",
+                base_inputs, score=96,
+                skipped=[{"action": ACTION_RERUN_CI, "reason": "red_needs_code_repair"},
+                         {"action": ACTION_ESCALATE, "reason": "agent_remediation"},
+                         {"action": ACTION_DISPATCH_REVIEW, "reason": "ci_red"}])
+            continue
+
+        if ci_state in {"missing", "unknown"}:
+            add(task_id, ACTION_RERUN_CI,
+                "Required CI is missing; request the first authoritative run.",
+                base_inputs, score=80,
+                skipped=[{"action": ACTION_DISPATCH_REVIEW, "reason": f"ci_{ci_state}"},
+                         {"action": ACTION_ESCALATE, "reason": "missing_ci_first_attempt"}])
             continue
 
         if task_id in unsafe_tasks:
@@ -286,11 +292,26 @@ def _decision_title(action: Mapping[str, Any]) -> str:
     return f"T2 review steward: {action.get('action')} for {task_id}"
 
 
+def _remediation_prompt(task_id: str, inputs: Mapping[str, Any]) -> str:
+    return (
+        f"CI is red for {task_id} at exact head {inputs.get('head_sha') or 'unknown'}.\n"
+        f"PR: {inputs.get('pr_url') or inputs.get('pr_number')}\n"
+        f"CI run: {inputs.get('ci_run_url') or inputs.get('ci_run_id') or 'unknown'}\n"
+        "Inspect the failing checks and logs, repair the product code or tests, run the "
+        "relevant checks locally, push a new head, and continue the Switchboard lifecycle. "
+        "When green, review and merge through Switchboard. Do not ask the operator to "
+        "manually relay this failure."
+    )
+
+
 def _execute_action(action: Mapping[str, Any], *, project: str, actor: str,
                     operator_agent: str, review_runtime: str, dry_run: bool,
                     scratchpad_dispatcher: Callable[..., Any] | None,
                     message_sender: Callable[..., Any] | None,
-                    wake_requester: Callable[..., Any] | None) -> dict[str, Any]:
+                    wake_requester: Callable[..., Any] | None,
+                    runner_resolver: Callable[..., Any] | None,
+                    runner_control_requester: Callable[..., Any] | None,
+                    remediation_dispatcher: Callable[..., Any] | None) -> dict[str, Any]:
     chosen = {
         "action": action["action"],
         "task_id": action.get("task_id") or None,
@@ -334,6 +355,56 @@ def _execute_action(action: Mapping[str, Any], *, project: str, actor: str,
             result["status"] = "ci_rerun_requested" if dispatch.get("dispatched") else "ci_rerun_failed"
             if dispatch.get("error") or dispatch.get("skip_reason"):
                 result["error"] = dispatch.get("error") or dispatch.get("skip_reason")
+
+        elif action["action"] == ACTION_REMEDIATE_CI:
+            if runner_resolver is None or runner_control_requester is None:
+                raise RuntimeError("runner_remediation_hooks_required")
+            prompt = _remediation_prompt(task_id, inputs)
+            resolution = runner_resolver(task_id, project=project)
+            session = dict((resolution or {}).get("session") or {})
+            runner_id = str(session.get("runner_session_id") or "")
+            idem = (
+                f"coord5-remediate:{project}:{task_id}:"
+                f"{head_sha or inputs.get('ci_run_id') or 'unknown'}"
+            )
+            if (resolution or {}).get("active") and runner_id:
+                control = runner_control_requester(
+                    runner_id, "inject", reason="coordinator_red_ci_remediation",
+                    options={
+                        "task_id": task_id,
+                        "text": prompt,
+                        "kind": "message",
+                        "client_request_id": idem,
+                    },
+                    actor=actor, project=project,
+                )
+                result["effects"].append({
+                    "kind": "runner_inject",
+                    "payload": {
+                        "runner_session_id": runner_id,
+                        "request_id": control.get("request_id"),
+                        "requested": control.get("requested"),
+                        "reason": control.get("reason"),
+                    },
+                })
+                if control.get("requested") or control.get("verified"):
+                    result["status"] = "remediation_sent_to_live_runner"
+                else:
+                    result["status"] = "remediation_inject_failed"
+                    result["error"] = control.get("error") or control.get("reason")
+            else:
+                if remediation_dispatcher is None:
+                    raise RuntimeError("remediation_dispatcher_required")
+                dispatch = remediation_dispatcher(
+                    task_id, project=project, role="remediation",
+                    source_sha=head_sha, instruction=prompt,
+                )
+                result["effects"].append({"kind": "remediation_dispatch", "payload": dispatch})
+                if dispatch.get("dispatched"):
+                    result["status"] = "remediation_runner_dispatched"
+                else:
+                    result["status"] = "remediation_dispatch_failed"
+                    result["error"] = dispatch.get("error") or dispatch.get("reason")
 
         elif action["action"] == ACTION_DISPATCH_REVIEW:
             if message_sender is None or wake_requester is None:
@@ -430,7 +501,10 @@ def steward_project(project: str, *, actor: str = DEFAULT_ACTOR,
                     decision_writer: Callable[..., Any] | None = None,
                     scratchpad_dispatcher: Callable[..., Any] | None = None,
                     message_sender: Callable[..., Any] | None = None,
-                    wake_requester: Callable[..., Any] | None = None) -> dict[str, Any]:
+                    wake_requester: Callable[..., Any] | None = None,
+                    runner_resolver: Callable[..., Any] | None = None,
+                    runner_control_requester: Callable[..., Any] | None = None,
+                    remediation_dispatcher: Callable[..., Any] | None = None) -> dict[str, Any]:
     """Plan and optionally act on one project's In Review queue."""
     observed_at = float(time.time() if now is None else now)
     if db_path_resolver is None or (persist and (
@@ -457,6 +531,28 @@ def steward_project(project: str, *, actor: str = DEFAULT_ACTOR,
             message_sender = store.send_agent_message
         if wake_requester is None and not dry_run:
             wake_requester = store.request_wake
+        if runner_resolver is None and not dry_run:
+            runner_resolver = store.resolve_task_active_runner
+        if runner_control_requester is None and not dry_run:
+            runner_control_requester = store.request_runner_control
+        if remediation_dispatcher is None and not dry_run:
+            import dispatch as task_dispatch
+
+            project_owner = str((store.project_access(project) or {}).get("owner_user_id") or "")
+
+            def _dispatch_remediation(task_id: str, **kwargs: Any) -> dict[str, Any]:
+                return task_dispatch.dispatch(
+                    task_id,
+                    actor=actor,
+                    project=str(kwargs.get("project") or project),
+                    runtime="codex",
+                    principal_id=project_owner,
+                    role="remediation",
+                    source_sha=str(kwargs.get("source_sha") or ""),
+                    instruction=str(kwargs.get("instruction") or ""),
+                )
+
+            remediation_dispatcher = _dispatch_remediation
 
     try:
         db_path = db_path_resolver(project)  # type: ignore[misc]
@@ -476,6 +572,9 @@ def steward_project(project: str, *, actor: str = DEFAULT_ACTOR,
             review_runtime=review_runtime, dry_run=dry_run,
             scratchpad_dispatcher=scratchpad_dispatcher,
             message_sender=message_sender, wake_requester=wake_requester,
+            runner_resolver=runner_resolver,
+            runner_control_requester=runner_control_requester,
+            remediation_dispatcher=remediation_dispatcher,
         )
         executed.append({
             "task_id": action.get("task_id"),
@@ -562,7 +661,9 @@ def steward_project(project: str, *, actor: str = DEFAULT_ACTOR,
             "work_state_mutated": bool(
                 not dry_run and any(
                     row.get("result", {}).get("status") in {
-                        "ci_rerun_requested", "review_merge_dispatched", "escalated",
+                        "ci_rerun_requested", "remediation_sent_to_live_runner",
+                        "remediation_runner_dispatched", "review_merge_dispatched",
+                        "escalated",
                     }
                     for row in executed
                 )

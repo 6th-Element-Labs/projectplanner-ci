@@ -34,6 +34,16 @@ ESCALATION_CLASSES = frozenset({
     "red_ci_product_judgment",
 })
 
+# Only decisions that software cannot safely make belong in the operator inbox.
+# CI, provenance, capacity, routing, identity and merge-policy states are normal
+# software-factory work and must remain inside the coordinator/agent loop.
+HUMAN_DECISION_CLASSES = frozenset({
+    "ambiguous_requirements",
+    "budget_breach",
+    "repeated_failures",
+    "security_secrets_boundary",
+})
+
 # Mission next_actions that are operator attention — never agent-to-agent progress.
 MISSION_ACTION_CLASSES: Dict[str, str] = {
     "repair_task_link": "failed_gate",
@@ -199,7 +209,11 @@ def should_notify_human(
     attention: Optional[bool] = None,
     automatic: Optional[bool] = None,
 ) -> bool:
-    """Fail-closed filter: only exception classes / attention actions page humans."""
+    """Return true only for a curated, irreducible human decision.
+
+    Merely carrying an ``attention`` bit is not authority to contact a person.
+    Producers must classify the condition as one of ``HUMAN_DECISION_CLASSES``.
+    """
     if automatic is True:
         return False
     action_name = str(action or "").strip()
@@ -211,11 +225,9 @@ def should_notify_human(
         return False
     klass = normalize_escalation_class(escalation_class)
     if klass:
-        return True
+        return klass in HUMAN_DECISION_CLASSES
     if action_name in MISSION_ACTION_CLASSES:
-        return True
-    if attention is True:
-        return True
+        return MISSION_ACTION_CLASSES[action_name] in HUMAN_DECISION_CLASSES
     return False
 
 
@@ -246,8 +258,6 @@ def build_escalation_plan(
     """Build a structured ``switchboard.coordinator_escalation.v1`` payload."""
     klass = normalize_escalation_class(escalation_class)
     if not klass:
-        return None
-    if not should_notify_human(escalation_class=klass):
         return None
     task = (task_id or "").strip()
     condition = (failed_condition or "").strip() or f"Exception class `{klass}` requires a human decision"
