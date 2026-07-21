@@ -369,6 +369,37 @@ def _decision_title(action: Mapping[str, Any]) -> str:
     return f"T3 merge steward: {action.get('action')} for {task_id}"
 
 
+def _arm_with_github_context(*, project: str, pr_number: Any,
+                             store_mod: Any) -> dict[str, Any]:
+    """Resolve the canonical repo and credential, then arm GitHub auto-merge.
+
+    Repository identity comes from the project's board-owned repo topology rather
+    than the coordinator process checkout. Credentials use the same resolution as
+    the standalone merge coordinator. Both are required so acting mode fails
+    closed instead of silently targeting a default or unauthenticated repository.
+    """
+    if not pr_number:
+        return {"ok": False, "error": "pr_number_required"}
+
+    repo = str(store_mod.get_project_github_repo(project) or "").strip()
+    if not repo:
+        return {"ok": False, "error": "canonical_github_repo_required",
+                "project": project, "pr_number": pr_number}
+
+    gate = mc._load_gate()
+    token = str(gate._token() or "").strip()
+    if not token:
+        return {"ok": False, "error": "github_token_required",
+                "project": project, "repo": repo, "pr_number": pr_number}
+
+    armed = mc._enable_auto_merge(gate, repo, int(pr_number), token)
+    receipt = {"project": project, "repo": repo, "pr_number": int(pr_number),
+               "github": armed}
+    if int(armed.get("returncode") or 0) != 0:
+        return {"ok": False, "error": "github_auto_merge_failed", **receipt}
+    return {"ok": True, **receipt}
+
+
 def _execute_action(action: Mapping[str, Any], *, project: str, actor: str,
                     operator_agent: str, dry_run: bool, policy: Mapping[str, Any],
                     arm_fn: Callable[..., Any] | None,
@@ -484,17 +515,12 @@ def steward_project(project: str, *, actor: str = DEFAULT_ACTOR,
             merge_gate_fn = _gate
         if arm_fn is None and not dry_run:
             def _arm(**kwargs: Any) -> dict[str, Any]:
-                # Prefer GitHub auto-merge via merge_coordinator helper when available.
-                number = kwargs.get("pr_number")
-                if not number:
-                    return {"ok": False, "error": "pr_number_required"}
                 try:
-                    from merge_coordinator import _enable_auto_merge
-                    # Token/repo resolution stays inside merge_coordinator.main path;
-                    # when called without GitHub context, fail closed loudly.
-                    return {"ok": False, "error": "arm_requires_github_context",
-                            "pr_number": number,
-                            "hint": "Wire arm_fn or run merge_coordinator --arm"}
+                    return _arm_with_github_context(
+                        project=str(kwargs.get("project") or project),
+                        pr_number=kwargs.get("pr_number"),
+                        store_mod=store,
+                    )
                 except Exception as exc:  # noqa: BLE001
                     return {"ok": False, "error": str(exc)}
 

@@ -14,6 +14,11 @@ Merge phase for eligible **In Review** PRs:
 4. After arming, request `reconcile` so Done provenance can land via webhook — **never set Done directly**.
 5. If a merge SHA is already recorded but canonical provenance is missing, reconcile immediately.
 
+Acting mode resolves the target repository from the project's canonical
+`repo_topology` role and resolves credentials through the same GitHub token chain
+as `merge_coordinator.py`. Missing repository context, missing credentials, and a
+non-zero `gh pr merge --auto` result fail closed as an arm failure.
+
 ## Lifecycle ownership
 
 `coordinator_daemon.py` invokes this module after the review phase in the same

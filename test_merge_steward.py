@@ -280,8 +280,86 @@ def test_dry_run_and_acting_hooks():
         ok(not escalated, "routine mechanical failures never call human delivery")
 
 
+def test_default_arm_resolves_real_github_context():
+    calls = []
+
+    class FakeStore:
+        @staticmethod
+        def get_project_github_repo(project):
+            calls.append(("repo", project))
+            return "example/projectplanner"
+
+    class FakeGate:
+        @staticmethod
+        def _token():
+            calls.append(("token",))
+            return "secret-token"
+
+    original_load_gate = ms.mc._load_gate
+    original_enable = ms.mc._enable_auto_merge
+    try:
+        ms.mc._load_gate = lambda: FakeGate
+
+        def enable(gate, repo, number, token):
+            calls.append(("arm", gate, repo, number, token))
+            return {"pr": number, "returncode": 0, "stderr": ""}
+
+        ms.mc._enable_auto_merge = enable
+        receipt = ms._arm_with_github_context(
+            project="switchboard", pr_number=42, store_mod=FakeStore)
+    finally:
+        ms.mc._load_gate = original_load_gate
+        ms.mc._enable_auto_merge = original_enable
+
+    ok(receipt["ok"] is True and receipt["repo"] == "example/projectplanner",
+       "default arm resolves the board canonical repository")
+    ok(("arm", FakeGate, "example/projectplanner", 42, "secret-token") in calls,
+       "default arm passes repository, PR, and credential to GitHub")
+    ok("secret-token" not in repr(receipt), "arm receipt does not expose the credential")
+
+    class MissingRepoStore:
+        @staticmethod
+        def get_project_github_repo(_project):
+            return ""
+
+    missing_repo = ms._arm_with_github_context(
+        project="switchboard", pr_number=42, store_mod=MissingRepoStore)
+    ok(missing_repo["error"] == "canonical_github_repo_required",
+       "default arm fails closed without board-owned repository context")
+
+    class MissingTokenGate:
+        @staticmethod
+        def _token():
+            return ""
+
+    original_load_gate = ms.mc._load_gate
+    try:
+        ms.mc._load_gate = lambda: MissingTokenGate
+        missing_token = ms._arm_with_github_context(
+            project="switchboard", pr_number=42, store_mod=FakeStore)
+    finally:
+        ms.mc._load_gate = original_load_gate
+    ok(missing_token["error"] == "github_token_required",
+       "default arm fails closed without a GitHub credential")
+
+    original_load_gate = ms.mc._load_gate
+    original_enable = ms.mc._enable_auto_merge
+    try:
+        ms.mc._load_gate = lambda: FakeGate
+        ms.mc._enable_auto_merge = lambda *_args: {
+            "pr": 42, "returncode": 1, "stderr": "merge refused"}
+        failed_arm = ms._arm_with_github_context(
+            project="switchboard", pr_number=42, store_mod=FakeStore)
+    finally:
+        ms.mc._load_gate = original_load_gate
+        ms.mc._enable_auto_merge = original_enable
+    ok(failed_arm["error"] == "github_auto_merge_failed",
+       "default arm reports a mechanical GitHub merge failure")
+
+
 if __name__ == "__main__":
     test_plan_fail_closed_and_arm()
     test_merge_gate_classifier()
     test_dry_run_and_acting_hooks()
+    test_default_arm_resolves_real_github_context()
     print("\nAll COORD-7 merge steward tests passed.")
