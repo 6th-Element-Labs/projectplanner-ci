@@ -103,8 +103,10 @@ def dispatch_to_claude_code(task_id: str, ctx: Context, project: str = "maxwell"
     (deploy/switchboard-agent-host-work.service.example). project selects the board."""
     services = _services()
     principal = services.require_write(ctx, project)
-    import dispatch as dispatch_mod
-    return services.dumps(dispatch_mod.dispatch(task_id, actor=auth.actor(principal), project=project))
+    from switchboard.application.commands import task_execution
+    return services.dumps(task_execution.execute_mapping_result(
+        "start_task", task_id, actor=auth.actor(principal), project=project,
+        runtime="claude-code"))
 
 
 def dispatch_to_codex_cloud(task_id: str, ctx: Context,
@@ -118,9 +120,10 @@ def dispatch_to_codex_cloud(task_id: str, ctx: Context,
     """
     services = _services()
     principal = services.require_write(ctx, project)
-    import dispatch as dispatch_mod
-    return services.dumps(dispatch_mod.dispatch(
-        task_id, actor=auth.actor(principal), project=project, runtime="codex"))
+    from switchboard.application.commands import task_execution
+    return services.dumps(task_execution.execute_mapping_result(
+        "start_task", task_id, actor=auth.actor(principal), project=project,
+        runtime="codex"))
 
 
 def dispatch_to_co_fleet(task_id: str, runtime_config_ref: str, ctx: Context,
@@ -136,17 +139,10 @@ def dispatch_to_co_fleet(task_id: str, runtime_config_ref: str, ctx: Context,
     """
     services = _services()
     principal = services.require_write(ctx, project)
-    try:
-        account_binding = json.loads(account_binding_json) if account_binding_json else None
-    except json.JSONDecodeError as exc:
-        return services.dumps({"dispatched": False, "error": "invalid_account_binding",
-                       "reason": f"invalid JSON: {exc.msg}"})
-    import dispatch as dispatch_mod
-    return services.dumps(dispatch_mod.dispatch_to_co_fleet(
-        task_id, actor=auth.actor(principal), project=project, runtime=runtime,
-        capabilities=[item.strip() for item in capabilities.split(",") if item.strip()],
-        runtime_config_ref=runtime_config_ref, allow_on_demand=allow_on_demand,
-        account_binding=account_binding))
+    from switchboard.application.commands import task_execution
+    return services.dumps(task_execution.execute_mapping_result(
+        "start_task", task_id, actor=auth.actor(principal), project=project,
+        runtime=runtime))
 
 
 def ingest_and_triage(kind: str, title: str, text: str, ctx: Context, project: str = "maxwell") -> str:

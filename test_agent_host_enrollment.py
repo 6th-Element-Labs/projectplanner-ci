@@ -95,6 +95,13 @@ subprocess.run(
 LOCAL_SOURCE_REPO = TMP / "local-source-checkout"
 subprocess.run(
     ["git", "clone", "-q", str(_LOCAL_ORIGIN_BARE), str(LOCAL_SOURCE_REPO)], check=True)
+os.environ.update({
+    # Keep the real canonical URL in installed identity/config assertions while
+    # making every clone/fetch in this test process network- and credential-free.
+    "GIT_CONFIG_COUNT": "1",
+    "GIT_CONFIG_KEY_0": f"url.{_LOCAL_ORIGIN_BARE.as_uri()}.insteadOf",
+    "GIT_CONFIG_VALUE_0": "https://github.com/6th-Element-Labs/projectplanner.git",
+})
 
 
 def ok(condition, message):

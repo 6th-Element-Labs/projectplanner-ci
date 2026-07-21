@@ -26,6 +26,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -52,6 +53,13 @@ from agent_host_enrollment import (  # noqa: E402
     preflight_codex_local_auth,
 )
 from codex.cloud_adapter import launch_wake as launch_codex_cloud_wake  # noqa: E402
+from switchboard.connect import (  # noqa: E402
+    Ack,
+    Assignment,
+    HostRuntimeConfig,
+    ResourceLimits,
+    build_launch_spec,
+)
 from switchboard.domain.coordination.runtime_profile import (  # noqa: E402
     RUNTIME_BINARIES,
     build_runtime_profile,
@@ -79,6 +87,11 @@ P_LIST_RUNNERS = "/ixp/v1/runner_sessions"
 P_LIST_WORK_SESSIONS = "/ixp/v1/work_sessions"
 P_TALLY_SPEND = "/tally/v1/spend/ingest"
 MESSAGE_ONLY_LANE = "__MESSAGE_ONLY__"
+RUNTIME_PROVIDERS = {
+    "codex": "openai",
+    "claude-code": "anthropic",
+    "cursor": "cursor",
+}
 AGENT_HOST_VERSION = os.environ.get("PM_AGENT_HOST_VERSION", "0.2.0")
 # Advertised when this build can serve browser Watch/Chat (supervisor PTY +
 # outbound relay). Placement keys off this instead of sniffing version strings.
@@ -414,6 +427,7 @@ def default_inventory():
     policy = host_policy_from_env(env_lanes)
     runtime_lanes = env_lanes or ([MESSAGE_ONLY_LANE] if not policy["allow_work"] else [])
     runtime = os.environ.get("PM_RUNTIME", "claude-code")
+    provider = os.environ.get("PM_PROVIDER") or RUNTIME_PROVIDERS.get(runtime, runtime)
     cloud_enabled = runtime == "codex" and bool(os.environ.get("PM_CODEX_CLOUD_ENVIRONMENT_ID"))
     profiles = ["ixp.v1", "txp.dispatch.v0"]
     capabilities = ["docs", "python", "github", "tests"]
@@ -449,6 +463,7 @@ def default_inventory():
         "policy": policy,
         "runtimes": [{
             "runtime": runtime,
+            "provider": provider,
             "launcher": "codex cloud exec" if cloud_enabled else (
                 "codex" if runtime == "codex" else sys.executable),
             "profiles": profiles,
@@ -680,12 +695,17 @@ def eligible_runtime(wake, inventory):
     """Return the host runtime entry that can serve this wake, else None (skip → don't claim)."""
     sel = (wake or {}).get("selector") or {}
     want_rt, want_lane = sel.get("runtime"), sel.get("lane")
+    want_provider = sel.get("provider")
     want_caps = set(_csv(sel.get("capabilities") or []))
     requested_mode = str(((wake or {}).get("policy") or {}).get("mode") or "").strip()
     wants_claim = requested_mode in {"claim_next", "direct_task"} or bool(
         want_lane and requested_mode != "message_only")
     for rt in inventory["runtimes"]:
         if want_rt and rt["runtime"] != want_rt:
+            continue
+        host_provider = rt.get("provider") or RUNTIME_PROVIDERS.get(
+            str(rt.get("runtime") or ""), rt.get("runtime"))
+        if want_provider and host_provider != want_provider:
             continue
         rt_policy = {**(inventory.get("policy") or {}), **(rt.get("policy") or {})}
         rt_lanes = set(rt.get("lanes") or [])
@@ -731,6 +751,8 @@ def wake_mode(wake, inventory=None):
     policy = (wake or {}).get("policy") or {}
     selector = (wake or {}).get("selector") or {}
     explicit = (policy.get("mode") or "").strip()
+    if explicit == "connect":
+        return "connect"
     if explicit == "direct_task":
         return "direct_task"
     if explicit == "cloud_execution" or policy.get("kind") == "cloud_execution":
@@ -810,7 +832,50 @@ def launch_command(wake, inventory, runner_session_id=""):
     mode = wake_mode(wake, inventory)
     if mode == "refused":
         raise ValueError("wake asks for global claim_next but host policy forbids global work")
-    if mode == "direct_task":
+    if mode == "connect":
+        assignment_data = dict((wake.get("policy") or {}).get("assignment") or {})
+        if assignment_data.pop("schema", "") != "switchboard.connect.assignment.v1":
+            raise ValueError("connect assignment schema is invalid")
+        limits = assignment_data.get("limits") or {}
+        assignment_data["limits"] = ResourceLimits(**limits)
+        assignment = Assignment(**assignment_data)
+        if assignment.runtime != runtime:
+            raise ValueError("connect assignment runtime mismatch")
+        runtime_defaults = {
+            "codex": ("codex", "exec --dangerously-bypass-approvals-and-sandbox"),
+            "claude-code": ("claude", "-p"),
+            "cursor": ("cursor-agent", "-p"),
+        }
+        executable_default, args_default = runtime_defaults.get(
+            runtime, (runtime, "--prompt"))
+        executable = str(os.environ.get(
+            f"PM_CONNECT_{runtime_key}_EXECUTABLE", executable_default)).strip()
+        before = tuple(shlex.split(str(os.environ.get(
+            f"PM_CONNECT_{runtime_key}_ARGS", args_default))))
+        config = HostRuntimeConfig(
+            runtime=runtime,
+            provider=assignment.provider,
+            executable=executable,
+            arguments_before_note=before,
+        )
+        now = time.time()
+        spec = build_launch_spec(
+            Ack(
+                lease_id=str(wake.get("wake_id") or assignment.assignment_id),
+                runner_id=runner_session_id or _runner_session_id_for_wake(
+                    wake, inventory.get("host_id") or ""),
+                assignment=assignment,
+                host_id=str(inventory.get("host_id") or ""),
+                issued_at=now,
+                expires_at=now + assignment.limits.max_runtime_seconds,
+                heartbeat_interval_seconds=30,
+                last_heartbeat_at=now,
+            ),
+            config,
+            workspace_path=str(inventory.get("repo_root") or _git_root()),
+        )
+        child = list(spec.argv)
+    elif mode == "direct_task":
         if runtime != "codex" or not wake.get("task_id"):
             raise ValueError("direct task assignment requires a task-bound Codex runtime")
         child = [sys.executable, DIRECT_CODEX_SESSION]
@@ -843,7 +908,7 @@ def launch_command(wake, inventory, runner_session_id=""):
             child.append("--auto-work-session")
         child += (["--work-module", work_mod] if work_mod else ["--dry"])
     cmd = [sys.executable, SUPERVISOR, "start", "--agent-id", agent_id,
-           "--cwd", inventory["repo_root"]]
+           "--cwd", (spec.cwd if mode == "connect" else inventory["repo_root"])]
     if runner_session_id:
         cmd += ["--runner-session-id", runner_session_id]
     if wake.get("wake_id"):
@@ -876,6 +941,19 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
     cmd, mode = launch_command(wake, inventory, runner_session_id=runner_session_id)
     try:
         env = os.environ.copy()
+        if mode == "connect":
+            assignment = dict((wake.get("policy") or {}).get("assignment") or {})
+            env.update({
+                "SWITCHBOARD_CONNECT_ASSIGNMENT_ID": str(
+                    assignment.get("assignment_id") or ""),
+                "SWITCHBOARD_CONNECT_PRINCIPAL_REF": str(
+                    assignment.get("principal_ref") or ""),
+                "SWITCHBOARD_CONNECT_WORK_REF": str(assignment.get("work_ref") or ""),
+                "SWITCHBOARD_CONNECT_WORKSPACE_REF": str(
+                    assignment.get("workspace_ref") or ""),
+                "SWITCHBOARD_CONNECT_LEASE_ID": str(wake.get("wake_id") or ""),
+                "SWITCHBOARD_CONNECT_RUNNER_ID": str(runner_session_id or ""),
+            })
         env.update({str(k): str(v) for k, v in (extra_env or {}).items()})
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=20, env=env)
         if out.returncode != 0 or not (out.stdout or "").strip():
@@ -988,6 +1066,7 @@ def register_runner_session(rec, wake, inventory):
     execution = policy.get("execution_binding") or {}
     assignment = policy.get("assignment") or {}
     lifecycle = policy.get("lifecycle") or {}
+    connect_assignment = assignment.get("schema") == "switchboard.connect.assignment.v1"
     metadata = {
         "wake_id": wake.get("wake_id"),
         "wake_mode": rec.get("wake_mode"),
@@ -1002,10 +1081,19 @@ def register_runner_session(rec, wake, inventory):
             or rec.get("work_session_id")
         ),
         "credential_lease_id": binding.get("credential_lease_id"),
-        "provider": binding.get("provider"),
+        "provider": assignment.get("provider") or binding.get("provider"),
         "account_affinity_id": binding.get("account_affinity_id"),
-        "role": assignment.get("role") or lifecycle.get("role") or "implementation",
-        "lifecycle_role": assignment.get("role") or lifecycle.get("role") or "implementation",
+        **({
+            "connect_assignment": True,
+            "assignment_schema": assignment.get("schema"),
+            "assignment_id": assignment.get("assignment_id"),
+            "principal_ref": assignment.get("principal_ref"),
+            "work_ref": assignment.get("work_ref"),
+            "workspace_ref": assignment.get("workspace_ref"),
+        } if connect_assignment else {
+            "role": assignment.get("role") or lifecycle.get("role") or "implementation",
+            "lifecycle_role": assignment.get("role") or lifecycle.get("role") or "implementation",
+        }),
         **(rec.get("metadata") or {}),
         "source_sha": (execution.get("source_sha") or assignment.get("source_sha")
                        or lifecycle.get("source_sha")),
@@ -1042,6 +1130,8 @@ def register_runner_session(rec, wake, inventory):
     )
     if require_bind:
         body["require_task_bind"] = True
+        return _require("POST", P_REGISTER_RUNNER, body)
+    if connect_assignment:
         return _require("POST", P_REGISTER_RUNNER, body)
     return _try("POST", P_REGISTER_RUNNER, body)
 
@@ -1835,7 +1925,8 @@ def renew_live_direct_runners(inventory):
         metadata = dict(session.get("metadata") or {})
         direct = bool(
             metadata.get("direct_assignment") is True
-            or session.get("wake_mode") == "direct_task"
+            or metadata.get("connect_assignment") is True
+            or session.get("wake_mode") in {"direct_task", "connect"}
         )
         claim_id = str(session.get("claim_id") or "")
         work_session_id = str(metadata.get("work_session_id") or "")
@@ -1941,12 +2032,12 @@ def renew_live_direct_runners(inventory):
             "metadata": {
                 **metadata,
                 "wake_id": wake_id,
-                "wake_mode": ("direct_task" if direct else
-                              session.get("wake_mode") or "claim_next"),
+                "wake_mode": (session.get("wake_mode") or
+                              "direct_task" if direct else "claim_next"),
                 **({
                     "direct_assignment": True,
                     "assignment_schema": "switchboard.direct_cli_assignment.v1",
-                } if direct else {}),
+                } if metadata.get("direct_assignment") is True else {}),
             },
             # Busy hosts may spend longer than one nominal tick finalizing other
             # work. A three-minute lease prevents a healthy direct PTY from
@@ -2761,6 +2852,10 @@ def run_once(inventory):
             and (w.get("policy") or {}).get("require_runner_bind") is True
         )
         runner_session_id = ""
+        if wake_mode(w, inventory) == "connect":
+            # Connect leases one stable runner identity before launch. The same
+            # id is carried by the Ack, supervisor, environment, and registry.
+            runner_session_id = _runner_session_id_for_wake(w, host_id)
         preclaim_registration = None
         if binding or bind_required:
             runner_session_id = _runner_session_id_for_wake(w, host_id)
@@ -2799,18 +2894,24 @@ def run_once(inventory):
                 continue
         execution_binding = ((claimed_wake.get("policy") or {}).get(
             "execution_binding") or {})
-        launch_env = ({
-            "PM_CO_WAKE_ID": str(claimed_wake.get("wake_id") or wake_id or ""),
-            "PM_CO_HOST_ID": str(host_id or ""),
-            "PM_REMOTE_WORK_SESSION_REGISTRATION": "1",
-            "PM_AUTO_WORK_SESSION": "1",
-            "PM_WORK_SESSION_POLICY_PROFILE": "code_strict",
-            "PM_RUNTIME": str((claimed_wake.get("selector") or {}).get(
-                "runtime") or ""),
-            "PM_WORK_SESSION_SOURCE_PATH": str(inventory.get("repo_root") or ""),
-            "PM_AGENT_HOST_ISOLATE_TASK_WORKSPACE": "1",
-            "PM_PERSONAL_AGENT_HOST_EXECUTION": "0",
-        } if claimed_wake.get("task_id") else {})
+        if wake_mode(claimed_wake, inventory) == "connect":
+            # Connect hands the CLI only its six immutable connection refs.
+            # Legacy Work Session/claim/lifecycle bootstrap belongs above this
+            # layer and must not leak into a provider-neutral launch.
+            launch_env = {}
+        else:
+            launch_env = ({
+                "PM_CO_WAKE_ID": str(claimed_wake.get("wake_id") or wake_id or ""),
+                "PM_CO_HOST_ID": str(host_id or ""),
+                "PM_REMOTE_WORK_SESSION_REGISTRATION": "1",
+                "PM_AUTO_WORK_SESSION": "1",
+                "PM_WORK_SESSION_POLICY_PROFILE": "code_strict",
+                "PM_RUNTIME": str((claimed_wake.get("selector") or {}).get(
+                    "runtime") or ""),
+                "PM_WORK_SESSION_SOURCE_PATH": str(inventory.get("repo_root") or ""),
+                "PM_AGENT_HOST_ISOLATE_TASK_WORKSPACE": "1",
+                "PM_PERSONAL_AGENT_HOST_EXECUTION": "0",
+            } if claimed_wake.get("task_id") else {})
         if binding:
             launch_env.update({
                 "PM_CO_ACCOUNT_BINDING_JSON": json.dumps(
@@ -2915,9 +3016,25 @@ def run_once(inventory):
             runner_registration = (
                 register_runner_session(rec, claimed_wake, inventory) if started else None
             )
+            connect_mode = wake_mode(claimed_wake, inventory) == "connect"
+            if started and connect_mode and (
+                    not runner_registration
+                    or runner_registration.get("error")
+                    or runner_registration.get("error_code")):
+                supervisor_action(
+                    "kill", (rec or {}).get("runner_session_id") or runner_session_id,
+                    {"grace_seconds": 2.0},
+                )
+                rec = {
+                    **(rec or {}),
+                    "failure_class": "failed_gate",
+                    "provider_error": "Connect runner registry rejected the launch",
+                }
+                started = False
+                result_reason = "connect_runner_registration_failed"
             # COORD-34: non-BYOA claimed-task boots must publish a successful bind
             # before Watch/Chat may open. Incomplete/failed register fails the wake.
-            if started and (rec or {}).get("claim_id"):
+            elif started and (rec or {}).get("claim_id"):
                 if (not runner_registration
                         or runner_registration.get("error")
                         or runner_registration.get("error_code") == "runner_bind_incomplete"):

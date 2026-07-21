@@ -103,13 +103,15 @@ def _dispatch_dev(targets, applied, project=None):
     resolved = []
     for tg in targets:
         resolved.extend([tg] if (tg and tg != "NEW") else created)
-    import dispatch as dispatch_mod
+    from switchboard.application.commands import task_execution
     out = []
     for tid in dict.fromkeys(resolved):  # dedupe, keep order
         if not store.get_task(tid, project=project):
             continue
-        dr = dispatch_mod.dispatch(tid, actor="Maxwell (email)", project=project)
-        out.append({"task_id": tid, "dispatched": dr.get("dispatched"),
+        dr = task_execution.execute_mapping_result(
+            "start_task", tid, actor="Maxwell (email)", project=project)
+        started = bool(dr.get("started") or dr.get("starting") or dr.get("attached"))
+        out.append({"task_id": tid, "dispatched": started,
                     "wake_id": dr.get("wake_id"), "error": dr.get("error") or dr.get("reason")})
     return out
 

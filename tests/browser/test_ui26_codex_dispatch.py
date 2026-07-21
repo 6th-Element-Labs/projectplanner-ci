@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""UI-26: real browser proof that the task Dev tab can dispatch to the
-operator's own Codex Agent Host, distinct from the existing Claude Code
-cloud dispatch. Boots the real app (dev-open, throwaway DB), signs up,
-creates a task, opens its Dev tab, and drives the new button through real
-DOM events — asserting the POST body actually carries runtime='codex' and
-that the confirm/flash copy is runtime-specific, not a relabeled clone of
-the Claude Code path.
+"""UI-26: real browser proof of provider-neutral Switchboard Connect.
+
+Boots the real app (dev-open, throwaway DB), signs up, creates a task, opens
+its Dev tab, and drives both provider buttons through real DOM events. Both
+must call Start with only the runtime changed and must handle shared dedupe.
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -162,8 +161,9 @@ try:
         codex_btn = page.locator("#edit-dispatch-codex")
         ok(claude_btn.is_visible() and codex_btn.is_visible(),
            "both the Claude Code and Codex dispatch buttons render side by side")
-        ok("Start Codex on my Mac" in codex_btn.inner_text(),
-           "the Codex button names the direct personal-host action")
+        ok("Start Codex" in codex_btn.inner_text()
+           and "my Mac" not in codex_btn.inner_text(),
+           "the Codex button names the provider without fixing placement")
 
         # ---- intercept the dispatch POST to assert the real request body -----
         captured = {}
@@ -175,58 +175,74 @@ try:
             route.fulfill(status=200, content_type="application/json",
                           body='{"dispatched": true, "wake_id": "wake-ui26-test", "work_hosts_online": 0}')
 
-        # COORD-44: the codex button now posts to the unified /start operation;
-        # claude-code keeps the queued dispatch endpoint. Mock both.
-        started = {}
+        # DISPATCH-12: every provider posts to the unified /start operation.
+        started = []
 
         def _capture_start(route):
             req = route.request
+            request_body = json.loads(req.post_data or "{}")
             if req.method == "POST":
-                started["body"] = req.post_data
+                started.append(req.post_data)
+            response = ({"action": "starting", "starting": True,
+                         "wake_id": "wake-ui26-test"}
+                        if request_body.get("runtime") == "claude-code" else
+                        {"action": "started", "started": True,
+                         "wake_id": "wake-ui26-test", "work_hosts_online": 0})
             route.fulfill(status=200, content_type="application/json",
-                          body='{"action": "started", "started": true, '
-                               '"wake_id": "wake-ui26-test", "work_hosts_online": 0}')
+                          body=json.dumps(response))
 
         page.route(f"**/api/tasks/{task_id}/start**", _capture_start)
         page.route(f"**/api/tasks/{task_id}/dispatch**", _capture_dispatch)
-        page.route(f"**/api/tasks/{task_id}/dispatch/latest**", lambda r: r.fulfill(
-            status=200, content_type="application/json", body='{"status": "none"}'))
+        page.route(f"**/api/tasks/{task_id}/execution**", lambda r: r.fulfill(
+            status=200, content_type="application/json",
+            body='{"lifecycle_phase":null,"execution":{}}'))
 
         codex_btn.click()
         page.wait_for_selector("#confirm-modal.show", timeout=5000)
         confirm_text = page.locator("#confirm-modal").inner_text()
-        ok("your enrolled Mac" in confirm_text,
-           f"the Tabler confirm modal for the Codex button names the real target (got: {confirm_text!r})")
-        ok("native Codex CLI" in confirm_text
-           and "assignment config and Switchboard MCP" in confirm_text,
-           "the confirm dialog describes the direct CLI bootstrap contract")
+        ok("Switchboard Connect" in confirm_text
+           and "your enrolled Mac" not in confirm_text,
+           f"the Codex confirmation describes Connect without fixing placement (got: {confirm_text!r})")
+        ok("provider capacity" in confirm_text
+           and "MCP connection" in confirm_text,
+           "the confirm dialog describes the provider-neutral boot contract")
         page.click("#confirm-modal-ok")
         page.wait_for_selector("#confirm-modal", state="hidden", timeout=5000)
         page.wait_for_function(
             "() => document.getElementById('edit-flash-dev')?.textContent.includes('Assigned')")
 
-        body = started.get("body") or ""
-        ok(body and '"project"' in body and captured.get("body") is None,
-           f"the Codex button posts to the unified /start operation, not the queued dispatch endpoint (got: {body!r})")
+        body = started[-1] if started else ""
+        ok(body and '"project"' in body and '"runtime":"codex"' in body.replace(" ", "")
+           and captured.get("body") is None,
+           f"the Codex button posts provider intent to unified Start (got: {body!r})")
 
         flash = page.locator("#edit-flash-dev").inner_text()
         ok("Assigned" in flash and "wake-ui26-test" in flash,
            f"the flash message reflects the direct assignment and its real wake_id (got: {flash!r})")
 
-        # ---- the Claude Code button still sends the original runtime ---------
+        # ---- Claude enters the same Start operation with only runtime changed.
         captured.clear()
         claude_btn.click()
         page.wait_for_selector("#confirm-modal.show", timeout=5000)
         claude_confirm_text = page.locator("#confirm-modal").inner_text()
         page.click("#confirm-modal-ok")
         page.wait_for_selector("#confirm-modal", state="hidden", timeout=5000)
-        page.wait_for_function(
-            "() => document.getElementById('edit-flash-dev')?.textContent.includes('Queued')")
-        body2 = captured.get("body") or ""
+        for _ in range(50):
+            if len(started) > 1:
+                break
+            page.wait_for_timeout(100)
+        body2 = started[-1] if len(started) > 1 else ""
         ok('"runtime":"claude-code"' in body2.replace(" ", ""),
-           f"the pre-existing Claude Code button is unaffected — still sends runtime=claude-code (got: {body2!r})")
-        ok("Anthropic hosts the coding session" in claude_confirm_text,
-           "the Claude Code confirm copy is unchanged")
+           f"Claude uses unified Start with runtime=claude-code (got: {body2!r})")
+        page.wait_for_function(
+            "() => document.getElementById('edit-flash-dev')?.textContent.includes('already starting')")
+        ok("already starting" in page.locator("#edit-flash-dev").inner_text(),
+           "Claude handles the shared in-flight dedupe response without a false failure")
+        ok("Switchboard Connect" in claude_confirm_text
+           and "Anthropic hosts" not in claude_confirm_text,
+           "the Claude confirmation also stays placement-neutral")
+        ok(captured.get("body") is None,
+           "neither provider button calls the legacy dispatch endpoint")
 
 finally:
     server.terminate()

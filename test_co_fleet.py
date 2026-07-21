@@ -298,8 +298,10 @@ ops_tools = Path("src/switchboard/mcp/tools/ops.py")
 if ops_tools.is_file():
     tool_source += "\n" + ops_tools.read_text(encoding="utf-8")
 ok("def dispatch_to_co_fleet(" in tool_source
-   and "dispatch_mod.dispatch_to_co_fleet(" in tool_source,
-   "MCP exposes the elastic fleet dispatcher instead of requiring an internal Python call")
+   and '"start_task"' in tool_source
+   and "runtime=runtime" in tool_source
+   and "dispatch_mod.dispatch_to_co_fleet(" not in tool_source,
+   "the legacy fleet MCP name delegates to the provider-neutral Start command")
 
 
 class RecordingAws:

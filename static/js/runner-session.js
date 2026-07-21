@@ -474,7 +474,7 @@
 
     // COORD-44/SIMPLIFY-10: one Start/Retry path for every surface, through the
     // task-execution command service. The server attaches, dedupes an in-flight
-    // start, supersedes a failed attempt, or launches on the enrolled Mac; the
+    // start, supersedes a failed attempt, or launches through Connect; the
     // browser only polls the authoritative execution projection afterwards.
     async startTaskSession(taskId, opts, retry = false) {
         const id = String(taskId || '').trim();
@@ -482,7 +482,7 @@
         const pending = document.getElementById('runner-pty-start-retry');
         if (pending) pending.disabled = true;
         this._runnerPtyGate(
-            retry ? 'Superseding the last attempt…' : 'Starting a session on your Mac…',
+            retry ? 'Superseding the last attempt…' : 'Starting an agent through Switchboard Connect…',
             'secondary');
         const project = window.PM_PROJECT || 'maxwell';
         const path = retry
@@ -577,18 +577,18 @@
         const button = document.getElementById('runner-pty-resume-review');
         const note = document.getElementById('runner-pty-resume-note');
         if (button) button.disabled = true;
-        if (note) note.textContent = 'Starting one replacement reviewer on your enrolled Mac…';
+        if (note) note.textContent = 'Starting one agent through Switchboard Connect…';
         try {
             const project = window.PM_PROJECT || 'maxwell';
-            const res = await fetch(`/api/tasks/${encodeURIComponent(id)}/resume-review?project=${encodeURIComponent(project)}`, {
+            const res = await fetch(`/api/tasks/${encodeURIComponent(id)}/start`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ project }),
+                body: JSON.stringify({ project, runtime: 'codex' }),
             });
             const result = await res.json();
-            if (!res.ok || !result.resumed) throw new Error(result.reason || result.error || 'replacement runner was not started');
-            if (note) note.textContent = result.continuation_mode === 'resume_conversation'
-                ? 'Resuming the same Codex conversation…'
-                : 'Replacement started with the saved review handoff…';
+            if (!res.ok || !(result.started || result.starting || result.attached)) throw new Error(result.reason || result.error || 'agent was not started');
+            if (note) note.textContent = result.attached
+                ? 'Attached to the existing agent…'
+                : 'Starting one agent through Switchboard Connect…';
             this._runnerPtyIntentTask = null;
             const deadline = Date.now() + 30000;
             while (Date.now() < deadline) {
@@ -600,7 +600,7 @@
                     return this.openRunnerSessionPanel(id, opts || {});
                 }
             }
-            if (note) note.textContent = 'Replacement is queued. This panel will show it when the Mac starts it.';
+            if (note) note.textContent = 'The agent is queued. This panel will show it when provider capacity starts it.';
             return true;
         } catch (e) {
             if (note) note.textContent = `Could not resume review: ${e.message}`;

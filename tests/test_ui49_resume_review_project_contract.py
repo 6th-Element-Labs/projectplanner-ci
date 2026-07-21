@@ -34,14 +34,17 @@ def ok(condition, message):
     failed += int(not condition)
 
 
-def fake_resume(task_id, actor, project, principal_id):
-    return {"resumed": True, "task_id": task_id, "project": project,
-            "wake_id": "wake-ui49"}
+def fake_start(command, task_id, **kwargs):
+    return {"started": True, "command": command, "task_id": task_id,
+            "project": kwargs.get("project"), "wake_id": "wake-ui49"}
 
 
 try:
     client = TestClient(app)
-    with patch("dispatch.resume_review", side_effect=fake_resume) as resume:
+    with patch(
+        "switchboard.application.commands.task_execution.execute_mapping_result",
+        side_effect=fake_start,
+    ) as start:
         cached = client.post(
             "/api/tasks/ARCH-MS-121/resume-review?project=switchboard")
         ok(cached.status_code == 200
@@ -58,7 +61,8 @@ try:
         dual = client.post(
             "/api/tasks/ARCH-MS-121/resume-review?project=switchboard",
             json={"project": "switchboard"})
-        ok(dual.status_code == 200 and resume.call_count == 3,
+        ok(dual.status_code == 200 and start.call_count == 3
+           and all(call.args[0] == "start_task" for call in start.call_args_list),
            "the deployed dual-form request starts exactly one backend operation")
 finally:
     shutil.rmtree(TMP, ignore_errors=True)

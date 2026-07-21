@@ -146,8 +146,10 @@ ok("rp.relayUrl" in RUNNER_SESSION and "rp.relayExpiresAt" in RUNNER_SESSION,
    "browser reconnect reuses the pending capability until its explicit expiry")
 ok("}/start`" in APP and "action === 'attach'" in APP,
    "the task modal's codex Start uses the same /start endpoint and handles attach")
-ok("runtime: rt" in APP and "}/dispatch`" in APP,
-   "the claude-code queued dispatch path is preserved unchanged")
+dispatch_block = APP[APP.index("async dispatchTask"):APP.index("async _openDirectRunnerWhenReady")]
+ok("runtime: rt" in dispatch_block and "}/start`" in dispatch_block
+   and "}/dispatch`" not in dispatch_block,
+   "Claude and Codex share the same provider-neutral Start path")
 ok("_runnerPtyCloseTimer" in RUNNER_SESSION,
    "a pending close animation cannot hide a runner panel that was immediately reopened")
 

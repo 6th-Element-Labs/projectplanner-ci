@@ -32,9 +32,11 @@ def projection(*, role="implementation", active=True, pending=False, head="a" * 
 saved_projection = execution._projection
 saved_supersede = execution._supersede
 saved_cancel = execution.coordination_repo.cancel_wake
+saved_ticket = execution.runner_pty_command.mint_ticket_for_session
 try:
     supersedes = []
     launches = []
+    execution.runner_pty_command.mint_ticket_for_session = lambda **_kwargs: {}
 
     execution._projection = lambda *_a, **_k: projection(role="implementation")
 
@@ -47,11 +49,11 @@ try:
         "SEG-5", project="switchboard", role="reviewer",
         launcher=lambda *_a, **_k: launches.append(_k) or {"action": "started"},
     )
-    ok(result.get("action") == "transitioning"
-       and result.get("role") == "review_merge"
-       and result.get("superseded_execution_id") == "runner-old"
-       and not launches,
-       "In Review role transition stops the implementation session before reviewer start")
+    ok(result.get("action") == "attach"
+       and result.get("execution_id") == "runner-old"
+       and result.get("role") is None
+       and not supersedes and not launches,
+       "a live agent attaches without privileged lifecycle-role replacement")
 
     execution._projection = lambda *_a, **_k: projection(
         role="implementation", active=False, pending=True, head="b" * 40)
@@ -64,15 +66,14 @@ try:
         launcher=lambda *_a, **kwargs: launches.append(kwargs) or {
             "action": "started", "started": True, "wake_id": "wake-new"},
     )
-    ok(cancelled and cancelled[0][0] == "wake-old"
-       and result.get("action") == "started"
-       and launches[-1].get("role") == "remediation"
-       and launches[-1].get("source_sha") == "b" * 40,
-       "a mismatched queued attempt is atomically replaced by role-aware start_task")
+    ok(not cancelled and result.get("action") == "starting"
+       and result.get("wake_id") == "wake-old" and not launches,
+       "an in-flight assignment is deduped without lifecycle-role replacement")
 finally:
     execution._projection = saved_projection
     execution._supersede = saved_supersede
     execution.coordination_repo.cancel_wake = saved_cancel
+    execution.runner_pty_command.mint_ticket_for_session = saved_ticket
 
 
 root = Path(__file__).resolve().parent

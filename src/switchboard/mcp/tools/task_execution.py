@@ -54,14 +54,13 @@ def get_task_execution(task_id: str, project: str = "maxwell") -> str:
 
 
 def start_task(task_id: str, ctx: Context, project: str = "maxwell",
-               role: str = "implementation") -> str:
+               role: str = "implementation", runtime: str = "codex") -> str:
     """Start or resume THE task session — identical to the UI Start button.
     Attaches when a live watchable runner exists, reports 'starting' when a dispatch
-    is already in flight (idempotent), otherwise starts one native Codex session on
-    the caller's enrolled watch-capable personal host. Callers never pick a runner
-    or assemble a wake; failures return the dispatcher's own truthful reason.
-    Personal-host starts require the caller principal to own the enrollment."""
-    return _run("start_task", task_id, ctx, project, role=role)
+    is already in flight (idempotent), otherwise asks Connect for capacity matching
+    ``runtime``. Callers never pick a host or runner and never assemble a wake;
+    failures return the dispatcher's own truthful reason."""
+    return _run("start_task", task_id, ctx, project, role=role, runtime=runtime)
 
 
 def open_session(task_id: str, ctx: Context, project: str = "maxwell",
@@ -96,7 +95,8 @@ def stop_task(task_id: str, ctx: Context, project: str = "maxwell",
 
 
 def retry_task(task_id: str, ctx: Context, project: str = "maxwell",
-               role: str = "implementation", reason: str = "operator retry") -> str:
+               role: str = "implementation", runtime: str = "",
+               reason: str = "operator retry") -> str:
     """Replace the current attempt — supersede, never fork.
 
     A queued start is cancelled synchronously and the replacement launches in the
@@ -104,7 +104,8 @@ def retry_task(task_id: str, ctx: Context, project: str = "maxwell",
     death), so retry stops it and returns action='superseding'; poll
     get_task_execution and retry once it is terminal. Switchboard never runs two
     sessions for one task."""
-    return _run("retry_task", task_id, ctx, project, role=role, reason=reason)
+    return _run("retry_task", task_id, ctx, project, role=role,
+                runtime=runtime, reason=reason)
 
 
 def get_execution_transcript(task_id: str = "", execution_id: str = "",

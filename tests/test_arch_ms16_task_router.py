@@ -71,7 +71,6 @@ try:
         ("POST", "/api/tasks/{task_id}/execution/stop"),
         ("POST", "/api/tasks/{task_id}/execution/retry"),
         ("GET", "/api/tasks/{task_id}/execution/transcript"),
-        ("GET", "/api/tasks/{task_id}/dispatch/latest"),
         ("POST", "/api/tasks/{task_id}/resume-review"),
         ("POST", "/api/tasks/{task_id}/chat"),
     }

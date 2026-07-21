@@ -359,17 +359,19 @@ def _execute_dispatch(store_mod: Any, *, project: str, candidate: Mapping[str, A
         # Explicitly refuse even when misconfigured; COORD-4 keeps claim out of band.
         pass
 
-    import dispatch as dispatch_mod
-    wake = dispatch_mod.dispatch(
-        task_id, actor=actor, project=project, runtime=runtime)
+    from switchboard.application.commands import task_execution
+    wake = task_execution.execute_mapping_result(
+        "start_task", task_id, actor=actor, project=project, runtime=runtime)
+    dispatched = bool(wake.get("started") or wake.get("starting")
+                      or wake.get("attached"))
     result: Dict[str, Any] = {
-        "status": "wake_requested" if wake.get("dispatched") else "dispatch_blocked",
+        "status": "wake_requested" if dispatched else "dispatch_blocked",
         "wake": wake,
         "task_id": task_id,
         "runtime": runtime,
         "lane": lane,
     }
-    if not wake.get("dispatched"):
+    if not dispatched:
         result["failure_class"] = "no_host" if not wake.get("work_hosts_online") else "failed_gate"
         return result
 

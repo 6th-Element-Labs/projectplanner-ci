@@ -15,7 +15,6 @@ from pydantic import BaseModel
 
 import agent
 import auth
-import dispatch
 import store
 from switchboard.api.idempotency import (
     inject_idem_key,
@@ -54,6 +53,7 @@ class StartTaskBody(BaseModel):
 
     project: Optional[str] = None
     role: Optional[str] = None
+    runtime: Optional[str] = None
 
 
 class ExecutionCommandBody(BaseModel):
@@ -65,6 +65,7 @@ class ExecutionCommandBody(BaseModel):
 
     project: Optional[str] = None
     role: Optional[str] = None
+    runtime: Optional[str] = None
     reason: Optional[str] = None
     text: Optional[str] = None
     scopes: Optional[list[str]] = None
@@ -484,14 +485,9 @@ def create_router(*, resolve_project: ProjectResolver,
         async def dispatch_task(request: Request, task_id: str,
                                 body: dict = Body(default={})):
             project = resolve_project((body or {}).get("project"))
-            principal = resolve_principal(
-                request, project, ("write:tasks",), dev_actor="web")
-            result = await asyncio.to_thread(
-                dispatch.dispatch, task_id, auth.actor(principal), project,
-                (body or {}).get("runtime") or "claude-code", principal.get("id") or "")
-            if result.get("error") == "task not found":
-                raise HTTPException(404, "task not found")
-            return result
+            return await run_execution_command(
+                request, "start_task", task_id, project,
+                runtime=(body or {}).get("runtime") or "claude-code")
 
         async def run_execution_command(request: Request, command: str, task_id: str,
                                         project: str, **kwargs):
@@ -526,7 +522,7 @@ def create_router(*, resolve_project: ProjectResolver,
             """
             return await run_execution_command(
                 request, "start_task", task_id, resolve_project(body.project),
-                role=body.role or "implementation")
+                role=body.role or "implementation", runtime=body.runtime or "codex")
 
         @router.get("/api/tasks/{task_id}/execution")
         async def get_task_execution(task_id: str, project: str = Query(...)):
@@ -577,6 +573,7 @@ def create_router(*, resolve_project: ProjectResolver,
             return await run_execution_command(
                 request, "retry_task", task_id, resolve_project(body.project),
                 role=body.role or "implementation",
+                runtime=body.runtime or "",
                 reason=body.reason or "operator retry")
 
         @router.get("/api/tasks/{task_id}/execution/transcript")
@@ -595,16 +592,6 @@ def create_router(*, resolve_project: ProjectResolver,
                     content=result)
             return result
 
-        @router.get("/api/tasks/{task_id}/dispatch/latest")
-        async def task_dispatch_latest(task_id: str,
-                                       project: str = Query(...)):
-            projection = await asyncio.to_thread(
-                task_session_query.execute_for, task_id,
-                project=resolve_project(project))
-            if not projection:
-                raise HTTPException(404, "task not found")
-            return dispatch.latest_from_task_session(projection)
-
         @router.post("/api/tasks/{task_id}/resume-review")
         async def resume_task_review(request: Request, task_id: str,
                                      body: ResumeReviewBody = Body(
@@ -615,19 +602,8 @@ def create_router(*, resolve_project: ProjectResolver,
             # UI-48's current client sends the typed JSON body. Accept both so a
             # deploy cannot strand a stale review runner behind cached JS.
             project = resolve_project(body.project or project_query)
-            principal = resolve_principal(
-                request, project, ("write:tasks",), dev_actor="web")
-            result = await asyncio.to_thread(
-                dispatch.resume_review, task_id, auth.actor(principal), project,
-                principal.get("id") or "")
-            if result.get("error") == "task not found":
-                raise HTTPException(404, result)
-            if result.get("error") in {
-                "task_not_in_review", "review_runner_already_live",
-                "review_runner_bind_incomplete", "stale_review_runner_not_found",
-            }:
-                raise HTTPException(409, result)
-            return result
+            return await run_execution_command(
+                request, "start_task", task_id, project, runtime="codex")
 
         @router.post("/api/tasks/{task_id}/chat")
         async def chat(task_id: str, body: dict = Body(...),

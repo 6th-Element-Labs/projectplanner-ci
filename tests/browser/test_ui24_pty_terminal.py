@@ -857,13 +857,12 @@ try:
             route.fulfill(
                 status=200, content_type="application/json",
                 body=(
-                    '{"resumed":true,"wake_id":"wake-ui48-replacement",'
-                    '"continuation_mode":"replacement_handoff",'
-                    '"workflow_status":"In Review"}'
+                    '{"action":"started","started":true,'
+                    '"wake_id":"wake-ui48-replacement"}'
                 ),
             )
 
-        page.route("**/api/tasks/FAKE-TASK-1/resume-review**", _resume_review)
+        page.route("**/api/tasks/FAKE-TASK-1/start**", _resume_review)
         page.evaluate("() => { TeepPlan._runnerPtyIntentTask = null; }")
         page.evaluate("() => TeepPlan.openRunnerSessionPanel('FAKE-TASK-1', {includeStale: true, taskStatus: 'In Review'})")
         page.wait_for_timeout(300)
@@ -890,8 +889,9 @@ try:
             })
         """)
         ok(len(resume_requests) == 1
-           and resume_requests[0].get("project") == "ui24-browser",
-           "Resume review sends exactly one replacement request for the current project")
+           and resume_requests[0].get("project") == "ui24-browser"
+           and resume_requests[0].get("runtime") == "codex",
+           "Resume review sends exactly one provider-neutral Start request")
         ok("run_ui48_replacement" in replacement["title"]
            and replacement["resumeHidden"],
            "the replacement becomes the active Watch runner without overwriting the stale identity")
@@ -948,11 +948,12 @@ try:
         page.locator('#task-primary-resume-review').click()
         page.wait_for_timeout(2500)
         ok(len(resume_requests) == modal_resume_before + 1
-           and resume_requests[-1].get("project") == "ui24-browser",
-           "the task modal Resume review button emits one project-bound replacement request")
+           and resume_requests[-1].get("project") == "ui24-browser"
+           and resume_requests[-1].get("runtime") == "codex",
+           "the task modal Resume review button emits one project-bound Start request")
         page.evaluate("() => document.getElementById('ui50-task-modal-runner-fixture').remove()")
         page.unroute("**/api/tasks/FAKE-TASK-1/execution?**", _review_execution)
-        page.unroute("**/api/tasks/FAKE-TASK-1/resume-review**", _resume_review)
+        page.unroute("**/api/tasks/FAKE-TASK-1/start**", _resume_review)
         page.unroute("**/ixp/v1/runner_sessions/watch?**", _review_watch)
         page.evaluate("() => TeepPlan._runnerPtyClose()")
 

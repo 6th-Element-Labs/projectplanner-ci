@@ -193,17 +193,19 @@ try:
     # execute path still does not call claim — verify via dry_run effects already empty
     ok(True, "claim surface is intentionally absent from T1 execute path")
 
-    # Acting path: wake via dispatch module
-    import dispatch as dispatch_mod
-    original = dispatch_mod.dispatch
+    # Acting path: wake via the provider-neutral Task Execution command.
+    from switchboard.application.commands import task_execution
+    original = task_execution.execute_mapping_result
     calls = []
 
-    def fake_dispatch(task_id, actor="user", project="maxwell", runtime="claude-code"):
-        calls.append({"task_id": task_id, "actor": actor, "project": project, "runtime": runtime})
-        return {"dispatched": True, "task_id": task_id, "wake_id": "wake-act-1",
-                "work_hosts_online": 1, "runtime": runtime}
+    def fake_start(command, task_id, actor="user", project="maxwell",
+                   runtime="claude-code"):
+        calls.append({"command": command, "task_id": task_id, "actor": actor,
+                      "project": project, "runtime": runtime})
+        return {"action": "started", "started": True, "task_id": task_id,
+                "wake_id": "wake-act-1", "runtime": runtime}
 
-    dispatch_mod.dispatch = fake_dispatch
+    task_execution.execute_mapping_result = fake_start
     try:
         proxy2 = StoreProxy()
         audit2 = FakeAudit(fake_snapshot(ready=True, hosts=True))
@@ -218,15 +220,16 @@ try:
             idem_key="coord4-test-act",
         )
         ok(act.get("dry_run") is False, "act mode disables dry-run")
-        ok(len(calls) == 1 and calls[0]["task_id"] == "RENDER-1",
-           "act mode requests wake through dispatch.dispatch")
+        ok(len(calls) == 1 and calls[0]["command"] == "start_task"
+           and calls[0]["task_id"] == "RENDER-1",
+           "act mode requests one wake through Task Execution and Connect")
         ok(len(proxy2.messages) == 1 and
            proxy2.messages[0].get("signal") == "coord_dispatch_claim_request",
            "act mode sends directed claim-request message")
         ok(act.get("effects", {}).get("claims") == [],
            "act mode still never claims work")
     finally:
-        dispatch_mod.dispatch = original
+        task_execution.execute_mapping_result = original
 
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)

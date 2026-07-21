@@ -1947,7 +1947,7 @@ const TeepPlan = {
                             <span class="fw-semibold" id="task-primary-runner-title">Checking task session</span>
                             <span id="task-primary-runner-badge" class="badge bg-secondary-lt">Checking</span>
                         </div>
-                        <div id="task-primary-runner-state" class="text-secondary small">Checking your enrolled Mac for this task…</div>
+                        <div id="task-primary-runner-state" class="text-secondary small">Checking the current agent for this task…</div>
                         <div id="task-primary-flash" class="small mt-1"></div>
                     </div>
                     <div class="btn-list flex-nowrap">
@@ -1978,7 +1978,7 @@ const TeepPlan = {
         button.disabled = true;
         if (flash) {
             flash.className = 'small mt-1 text-secondary';
-            flash.textContent = 'Starting one replacement reviewer on your enrolled Mac…';
+            flash.textContent = 'Starting one agent through Switchboard Connect…';
         }
         Promise.resolve(resume.call(this, taskId, {
             dockInto: document.getElementById('runner-pty-details-mount') || undefined,
@@ -2119,10 +2119,10 @@ const TeepPlan = {
                 state.textContent = starting
                     ? 'A session is starting. The live terminal opens as soon as the runner binds.'
                     : resumableReview
-                    ? 'The task remains In Review. Start one replacement reviewer; the ended run stays in history.'
+                    ? 'The task remains In Review. Start one agent; the ended run stays in history.'
                     : hasEndedSession
                     ? 'The previous runner ended. Its history is preserved. Retry supersedes it — it never forks a second session.'
-                    : 'The selected Mac will prepare the repository and open the live Codex session here.';
+                    : 'Switchboard Connect will assign available provider capacity and open the live session here.';
                 start.hidden = resumableReview || starting;
                 // Retry supersedes a failed/ended attempt; Start begins the first.
                 setHidden(retry, !hasEndedSession || resumableReview);
@@ -2291,15 +2291,15 @@ const TeepPlan = {
                     </div>
                 </div>
                 <div class="tab-pane fade" id="m-dev" role="tabpanel">
-                    <p class="text-secondary">Start Codex on your enrolled Mac to open a native CLI for this task. The Mac daemon writes one assignment TOML, prepares the task workspace, preloads Switchboard MCP, and streams that same PTY here. Neither path merges or writes to main/master on its own.</p>
+                    <p class="text-secondary">Start an agent through Switchboard Connect. Connect assigns provider capacity and boots the configured CLI; the agent then uses Switchboard MCP to work end to end.</p>
                     ${this.controlTruthHtml(t)}
                     ${this.mergeGatePanelHtml(t)}
                     ${this.monitorControlHtml(t)}
                     ${this.runnerControlHtml(t)}
                     <div id="runner-pty-dev-mount" class="mb-3"></div>
                     <div class="btn-list mb-3">
-                        <button id="edit-dispatch" class="btn btn-primary"><i class="ti ti-robot me-1"></i>Dispatch to Claude Code</button>
-                        <button id="edit-dispatch-codex" class="btn btn-outline-primary"><i class="ti ti-terminal-2 me-1"></i>Start Codex on my Mac</button>
+                        <button id="edit-dispatch" class="btn btn-primary"><i class="ti ti-robot me-1"></i>Start Claude</button>
+                        <button id="edit-dispatch-codex" class="btn btn-outline-primary"><i class="ti ti-terminal-2 me-1"></i>Start Codex</button>
                     </div>
                     <div id="dispatch-panel"></div>
                     <span id="edit-flash-dev" class="small text-secondary"></span>
@@ -2522,47 +2522,42 @@ const TeepPlan = {
         };
         const proj = window.PM_PROJECT || 'maxwell';
         const confirmed = await this._confirm({
-            title: rt === 'codex' ? `Start ${id} on your Mac?` : `Dispatch ${id} to Claude Code?`,
-            body: rt === 'codex'
-                ? 'Start a native Codex CLI on your enrolled Mac. The daemon creates an isolated workspace, loads its assignment config and Switchboard MCP connection, then opens the exact live CLI here.'
-                : 'Anthropic hosts the coding session on its task branch and returns its session and PR links here.',
+            title: `Start ${id} with ${rt === 'codex' ? 'Codex' : 'Claude'}?`,
+            body: 'Switchboard Connect assigns the task to available provider capacity. The agent uses the MCP connection and workspace configuration already installed on its host.',
             icon: rt === 'codex' ? 'ti-terminal-2' : 'ti-robot',
             iconVariant: 'primary',
             confirmLabel: rt === 'codex' ? 'Start task' : 'Dispatch task',
             confirmVariant: 'primary',
         });
         if (!confirmed) return;
-        flash(rt === 'codex' ? 'Sending the task to your Mac…' : 'Queuing a Claude cloud session…');
+        flash(`Queuing a ${rt === 'codex' ? 'Codex' : 'Claude'} assignment…`);
         let data;
         try {
-            // COORD-44: codex starts go through the unified start_task operation
-            // (attach / dedupe-in-flight / start); claude-code keeps the queued
-            // fleet dispatch path.
-            const endpoint = rt === 'codex'
-                ? `api/tasks/${encodeURIComponent(id)}/start`
-                : `api/tasks/${encodeURIComponent(id)}/dispatch`;
-            const res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(rt === 'codex' ? { project: proj } : { project: proj, runtime: rt }) });
+            // Every provider and every surface enters through Task Execution;
+            // Connect translates the opaque assignment on the server.
+            const endpoint = `api/tasks/${encodeURIComponent(id)}/start`;
+            const res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: proj, runtime: rt }) });
             data = await res.json();
         } catch (e) { return flash('Dispatch failed: ' + e.message, 'danger'); }
-        if (rt === 'codex' && (data.action === 'attach' || data.action === 'starting')) {
+        if (data.action === 'attach' || data.action === 'starting') {
             flash(data.action === 'attach'
-                ? 'A live session already exists — attaching.'
-                : 'A session for this task is already starting — attaching when it binds.', 'green');
+                ? 'A live agent already exists — attaching.'
+                : 'An agent for this task is already starting — attaching when it binds.', 'green');
             this._loadDispatch(id);
             this._loadTaskPrimaryRunner(id);
-            this._openDirectRunnerWhenReady(id);
+            if (rt === 'codex') this._openDirectRunnerWhenReady(id);
             return;
         }
         const started = data.dispatched || data.action === 'started';
         if (!started) return flash('Dispatch failed: ' + (data.error || (data.dispatch && data.dispatch.message) || data.reason || data.detail || 'unknown'), 'danger');
         if (!data.work_hosts_online) {
             flash(rt === 'codex'
-                ? `Assigned (${data.assignment_id || data.wake_id}) — your Mac is offline or full, so it will start when the daemon reconnects.`
-                : `Queued (wake ${data.wake_id}) — no authenticated Claude cloud trigger host is online yet.`, 'warning');
+                ? `Assigned (${data.assignment_id || data.wake_id}) — waiting for available Codex capacity.`
+                : `Assigned (${data.assignment_id || data.wake_id}) — waiting for available Claude capacity.`, 'warning');
         } else {
             flash(rt === 'codex'
-                ? `Starting ${id} on ${data.host_id}. The live Codex terminal will open here.`
-                : `Queued (wake ${data.wake_id}) — the trigger host will bind an app-visible Claude session.`, 'green');
+                ? `Starting ${id} with Codex through Switchboard Connect.`
+                : `Starting ${id} with Claude through Switchboard Connect.`, 'green');
         }
         this._loadDispatch(id);   // render the live panel (queued → running → Open PR); it self-refreshes
         this._loadTaskPrimaryRunner(id);
@@ -2575,9 +2570,9 @@ const TeepPlan = {
             let state = null;
             try {
                 const proj = window.PM_PROJECT || 'maxwell';
-                state = await (await fetch(`api/tasks/${encodeURIComponent(taskId)}/dispatch/latest?project=${encodeURIComponent(proj)}`, { cache: 'no-store' })).json();
+                state = await (await fetch(`api/tasks/${encodeURIComponent(taskId)}/execution?project=${encodeURIComponent(proj)}`, { cache: 'no-store' })).json();
             } catch (e) { /* the daemon will be polled again */ }
-            if (state && state.session_id && state.status === 'running') {
+            if (state && state.execution_id && state.running === true) {
                 await this._loadRunnerSessions(taskId);
                 await this._loadTaskPrimaryRunner(taskId);
                 const mount = document.getElementById('runner-pty-details-mount')
@@ -2677,19 +2672,36 @@ const TeepPlan = {
         this._dispatchPollId = id;
         const proj = window.PM_PROJECT || 'maxwell';
         let d;
-        try { d = await (await fetch(`api/tasks/${encodeURIComponent(id)}/dispatch/latest?project=${encodeURIComponent(proj)}`)).json(); } catch (e) { return; }
+        try {
+            const envelope = await (await fetch(`api/tasks/${encodeURIComponent(id)}/execution?project=${encodeURIComponent(proj)}`)).json();
+            const execution = envelope.execution || {};
+            const attempt = execution.active_attempt || {};
+            const runner = execution.active_runner || {};
+            const prHead = execution.pr_head || {};
+            const phase = envelope.lifecycle_phase || execution.lifecycle_phase;
+            d = {
+                status: phase === 'running' ? 'running'
+                    : phase === 'starting' ? (attempt.status === 'claimed' ? 'claiming' : 'queued')
+                    : (phase === 'review' || phase === 'merged') ? 'pr' : 'none',
+                runtime: runner.runtime || attempt.runtime,
+                agent_id: runner.agent_id || attempt.agent_id,
+                session_id: envelope.execution_id || runner.runner_session_id,
+                session_url: (runner.metadata || {}).session_url,
+                pr_url: prHead.pr_url,
+            };
+        } catch (e) { return; }
         const st = d && d.status;
         if (!st || st === 'none') { el.innerHTML = ''; return; }
         const isCodex = d.runtime === 'codex';
         const M = isCodex ? {
-            queued: ['Assigned to Mac', 'yellow'],
-            claiming: ['Starting Codex CLI…', 'azure'],
-            running: ['Codex CLI live', 'green'],
+            queued: ['Waiting for Codex capacity', 'yellow'],
+            claiming: ['Starting Codex…', 'azure'],
+            running: ['Codex live', 'green'],
             pr: ['PR ready', 'green'],
         } : {
-            queued: ['Queued for Claude cloud', 'yellow'],
-            claiming: ['Claimed — provisioning…', 'azure'],
-            running: ['Claude cloud running', 'azure'],
+            queued: ['Waiting for Claude capacity', 'yellow'],
+            claiming: ['Starting Claude…', 'azure'],
+            running: ['Claude live', 'azure'],
             pr: ['PR ready', 'green'],
         };
         const [label, color] = M[st] || [st, 'secondary'];
@@ -2700,16 +2712,16 @@ const TeepPlan = {
         el.innerHTML = `
             <div class="card"><div class="card-body py-2">
                 <div class="d-flex align-items-center gap-2 flex-wrap">
-                    <i class="ti ti-terminal-2 text-azure"></i><strong>${isCodex ? 'Codex on your Mac' : 'Claude cloud dispatch'}</strong>${who}
+                    <i class="ti ti-terminal-2 text-azure"></i><strong>${isCodex ? 'Codex via Connect' : 'Claude via Connect'}</strong>${who}
                     <span class="badge bg-${color}-lt">${this.esc(label)}</span>
                     ${st === 'running' || st === 'claiming' ? '<span class="spinner-border spinner-border-sm text-azure"></span>' : ''}
                     <span class="ms-auto"></span>${session}${pr}
                 </div>
-                ${st === 'queued' ? `<div class="small text-secondary mt-1">${isCodex ? 'The assignment is waiting for your enrolled Mac daemon to accept it.' : 'Queued — waiting for an authenticated trigger host with the vendor_cloud capability.'}</div>` : ''}
-                ${st === 'claiming' ? `<div class="small text-secondary mt-1">${isCodex ? 'The Mac daemon is starting the native CLI and browser PTY.' : 'The cloud host is provisioning a session.'}</div>` : ''}
+                ${st === 'queued' ? '<div class="small text-secondary mt-1">The assignment is waiting for compatible provider capacity.</div>' : ''}
+                ${st === 'claiming' ? '<div class="small text-secondary mt-1">The selected host is starting the configured CLI.</div>' : ''}
                 ${st === 'running' ? (isCodex
-                    ? '<div class="small text-secondary mt-1">The native Codex CLI is working on your Mac. Use Watch above to see and steer the same terminal.</div>'
-                    : '<div class="small text-secondary mt-1">Working in Claude cloud. Open the session to watch or steer it; the PR button appears after provenance lands.</div>') : ''}
+                    ? '<div class="small text-secondary mt-1">Codex is working. Use Watch above to see and steer the same terminal.</div>'
+                    : '<div class="small text-secondary mt-1">Claude is working. Open the session to watch or steer it; the PR button appears after provenance lands.</div>') : ''}
                 ${st === 'pr' ? '<div class="small text-secondary mt-1">Next: open the PR, review the diff, and merge it on GitHub (or comment back here).</div>' : ''}
             </div></div>`;
         if (active) setTimeout(() => { if (this._dispatchPollId === id) this._loadDispatch(id); }, 7000);

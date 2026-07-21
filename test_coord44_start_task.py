@@ -146,8 +146,8 @@ try:
        "the refusal carries the dispatcher's own latest verdict for context")
 
     # ---- 5) every surface references the same operation ---------------------
-    # SIMPLIFY-10 moved every surface onto the task_execution command service;
-    # dispatch.start_task is now the launcher that only the service calls.
+    # DISPATCH-12 moved every surface onto the task_execution command service;
+    # Connect is now the only product launcher behind that service.
     root = os.path.dirname(os.path.abspath(__file__))
     rest = open(os.path.join(root, "src/switchboard/api/routers/tasks.py")).read()
     mcp = open(os.path.join(root, "src/switchboard/mcp/tools/task_execution.py")).read()
@@ -160,8 +160,9 @@ try:
     ok("def start_task" in mcp and '_run("start_task"' in mcp
        and '"start_task"' in mcp,
        "MCP exposes the same start_task operation")
-    ok("dispatch_mod.start_task" in service,
-       "the service is the one caller of the start_task launcher")
+    ok("connect_dispatch.enqueue_task" in service
+       and "import dispatch as dispatch_mod" not in service,
+       "the service is the one caller of the Connect launcher")
     ok('"start_task"' in authz,
        "MCP authorization admits start_task as a write tool")
     coordinator = open(os.path.join(root, "mission_coordinator.py")).read()
