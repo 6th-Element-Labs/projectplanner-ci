@@ -577,11 +577,6 @@ def build_evidence(
                 ),
                 check_live_route_owner(
                     base_url=edge_base_url,
-                    path=f"/api/tasks/{task}/dispatch/latest{project_qs}", method="GET",
-                    token=bearer_token, owner_port=8110, other_port=8122,
-                ),
-                check_live_route_owner(
-                    base_url=edge_base_url,
                     # Chat is POST-only. An empty JSON body reaches the monolith
                     # handler and fails with "message required" before any write;
                     # the thin Tasks app has no chat route and returns its generic 404.

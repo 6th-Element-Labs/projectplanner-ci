@@ -183,6 +183,18 @@ verify = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = verify
 spec.loader.exec_module(verify)
 
+runtime_proof_source = (ROOT / "scripts" / "verify_runtime_deploy.py").read_text(
+    encoding="utf-8"
+)
+build_evidence_source = runtime_proof_source.split("def build_evidence", 1)[1].split(
+    "def main", 1
+)[0]
+ok("/dispatch/latest" not in build_evidence_source,
+   "runtime proof does not require the retired dispatch/latest endpoint")
+for supported_probe in ("/chat", "/review_verdict", "/resume-review"):
+    ok(supported_probe in build_evidence_source,
+       f"runtime proof retains supported monolith ownership probe {supported_probe}")
+
 
 def fingerprint_for(port: int, status: int, digest: str) -> dict[str, object]:
     return {"url": f"http://127.0.0.1:{port}", "method": "GET",
