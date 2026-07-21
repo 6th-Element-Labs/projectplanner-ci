@@ -168,6 +168,24 @@ def _configured_projects(env_name: str, default: str):
     return projects
 
 
+def _reconcile_lifecycle_skip(project_id: str, lifecycle_status: str,
+                              write_block: dict | None = None) -> dict:
+    result = {
+        "project": project_id,
+        "ok": True,
+        "finding_count": 0,
+        "alert_sent": False,
+        "deduped": False,
+        "message_id": None,
+        "skipped": True,
+        "skip_reason": f"project_{lifecycle_status}",
+        "lifecycle_status": lifecycle_status,
+    }
+    if write_block:
+        result["write_block"] = write_block
+    return result
+
+
 def reconcile_alerts():
     """Run reconcile and send deduped actionable drift alerts.
 
@@ -190,12 +208,27 @@ def reconcile_alerts():
         sent = deduped = findings = 0
         results = []
         for project_id in projects:
-            store.init_db(project_id)
-            store.seed_if_empty(project_id)
-            res = store.run_reconcile_alerts(
-                project=project_id, alert_to=alert_to,
-                min_severity=min_severity, dedupe_window_s=dedupe_s,
-                incremental=incremental)
+            lifecycle_status = store.project_lifecycle_status(project_id)
+            if lifecycle_status != "active":
+                result = _reconcile_lifecycle_skip(project_id, lifecycle_status)
+                results.append(result)
+                print(f"  [{project_id}] skipped lifecycle_status={lifecycle_status}")
+                continue
+            try:
+                store.init_db(project_id)
+                store.seed_if_empty(project_id)
+                res = store.run_reconcile_alerts(
+                    project=project_id, alert_to=alert_to,
+                    min_severity=min_severity, dedupe_window_s=dedupe_s,
+                    incremental=incremental)
+            except store.ProjectLifecycleWriteBlocked as exc:
+                lifecycle_status = exc.detail["lifecycle_status"]
+                result = _reconcile_lifecycle_skip(
+                    project_id, lifecycle_status, write_block=exc.detail)
+                results.append(result)
+                print(f"  [{project_id}] skipped lifecycle_status={lifecycle_status} "
+                      "after lifecycle changed during reconcile")
+                continue
             # Keep the scheduled job's aggregate response bounded.  A reconcile report
             # can contain hundreds of richly annotated findings; retaining every full
             # report until all projects finish pushed the 1 GB production VM into its
