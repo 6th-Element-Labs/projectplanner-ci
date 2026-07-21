@@ -645,6 +645,41 @@ def start_task(task_id, actor="user", project=store.DEFAULT_PROJECT,
                 "started": False, "attached": False,
                 "error": "task not found", "task_id": task_id, "project": project}
 
+    # BUG-116: submission and execution have different authority boundaries.  A
+    # direct-session bearer must never be asked to route its own intake record;
+    # the server-owned Start command performs the audited conversion before it
+    # can issue a wake.  This also repairs an already-starting Triage run when an
+    # operator retries Start after an older server launched it prematurely.
+    intake_routing = None
+    requested_role = {
+        "review": "review_merge",
+        "reviewer": "review_merge",
+        "review_merge": "review_merge",
+        "remediation": "remediation",
+        "implementation": "implementation",
+    }.get(str(role or "implementation").strip().lower())
+    if str(task.get("status") or "") == "Triage":
+        if requested_role != "implementation":
+            return {"schema": START_TASK_SCHEMA, "action": "refused",
+                    "started": False, "attached": False,
+                    "error": "triage_requires_implementation_role",
+                    "reason": "Triage BUGs must be routed as implementation work first.",
+                    "task_id": task_id, "project": project, "role": role}
+        if not principal_id:
+            principal_id = str(
+                (store.project_access(project) or {}).get("owner_user_id") or "")
+        intake_routing = store.route_bug_for_implementation(
+            task_id, actor=actor, principal_id=principal_id,
+            trigger="start_task", project=project)
+        if not intake_routing.get("routed") and not intake_routing.get("ready"):
+            return {"schema": START_TASK_SCHEMA, "action": "refused",
+                    "started": False, "attached": False,
+                    "error": intake_routing.get("error") or "bug_intake_not_routable",
+                    "reason": intake_routing.get("reason") or "BUG intake routing failed.",
+                    "task_id": task_id, "project": project,
+                    "intake_routing": intake_routing}
+        task = store.get_task(task_id, project=project) or task
+
     # 1) The TaskSession projection is the sole execution-state authority.
     from switchboard.application.queries import task_session as task_session_query
     task_session = task_session_query.execute_for(task_id, project=project)
@@ -656,6 +691,7 @@ def start_task(task_id, actor="user", project=store.DEFAULT_PROJECT,
             "task_id": task_id, "project": project,
             "runner_session_id": session.get("runner_session_id"),
             "host_id": session.get("host_id"),
+            **({"intake_routing": intake_routing} if intake_routing else {}),
         }
 
     # 2) Idempotency: an in-flight dispatch means the click already worked.
@@ -675,6 +711,7 @@ def start_task(task_id, actor="user", project=store.DEFAULT_PROJECT,
             "runner_session_id": _planned_runner_session_id(
                 pending_wake_id, pending_host_id) or None,
             "message": "A session for this task is already starting.",
+            **({"intake_routing": intake_routing} if intake_routing else {}),
         }
 
     lifecycle_role = {
@@ -736,6 +773,7 @@ def start_task(task_id, actor="user", project=store.DEFAULT_PROJECT,
             "work_hosts_online": result.get("work_hosts_online"),
             "placement": "aws_overflow" if use_aws_overflow else "mac_preferred",
             "role": lifecycle_role,
+            **({"intake_routing": intake_routing} if intake_routing else {}),
         }
 
     # 4) One truthful failure, with the dispatcher's own latest verdict so the
@@ -751,6 +789,7 @@ def start_task(task_id, actor="user", project=store.DEFAULT_PROJECT,
         "aws_canary_qualified": aws_qualified,
         "preferred_host_id": personal_host_id,
         "dispatch": latest_dispatch_outcome(task_id, project=project),
+        **({"intake_routing": intake_routing} if intake_routing else {}),
     }
 
 

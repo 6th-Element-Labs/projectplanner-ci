@@ -98,6 +98,12 @@ Bug intake uses these states:
 capacity requirements pass. Historical `human_gate` records remain readable as
 `retired_nonblocking`; they do not affect scheduling or release.
 
+The server-owned `start_task` command is also a routing boundary. Starting an implementation
+session for a routable `Triage` BUG atomically records `bug.routed_for_implementation`, preserves
+the structured report, and advances the task to `Not Started` before issuing a wake. Duplicate,
+needs-info, rejected, and deferred intake remains non-routable. The dispatched session therefore
+does not need bug-intake conversion authority of its own.
+
 ## Conversion Routing
 
 When a bug is routed for implementation, the converted task must preserve:

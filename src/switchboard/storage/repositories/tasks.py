@@ -74,6 +74,7 @@ __all__ = [
     "add_comment",
     "_update_task_impl",
     "update_task",
+    "route_bug_for_implementation",
     "_create_task_impl",
     "create_task",
     "ensure_task_validation",
@@ -545,6 +546,141 @@ def update_task(task_id: str, fields: Dict[str, Any], actor: str = "user",
     _persist_task_validation(task_id, validation, actor=actor, project=project)
     # Via facade so tests / callers that monkeypatch store.get_task are honored.
     return s.get_task(task_id, project)
+
+
+def route_bug_for_implementation(
+        task_id: str, *, actor: str = "system", principal_id: str = "",
+        trigger: str = "start_task", project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Atomically route one Triage BUG into the ordinary task lifecycle.
+
+    ``submit_bug`` deliberately leaves reports in ``Triage``.  BUG-101 retired the
+    human approval gate, but routing still needs a durable boundary: the original
+    report must remain intact, non-routable dispositions must fail closed, and the
+    status transition plus its audit receipt must commit together.
+    """
+    normalized_id = str(task_id or "").strip().upper()
+    now = time.time()
+    emitted = False
+    with _conn(project) as c:
+        row = c.execute(
+            "SELECT task_id, workstream_id, status, agent_state FROM tasks "
+            "WHERE task_id=?", (normalized_id,),
+        ).fetchone()
+        if not row:
+            return {"routed": False, "error": "task_not_found",
+                    "task_id": normalized_id, "project": project}
+        status = str(row["status"] or "")
+        if status != "Triage":
+            return {
+                "routed": False,
+                "ready": status in READY_TASK_STATUSES,
+                "reason": "not_triage",
+                "status": status,
+                "task_id": normalized_id,
+                "project": project,
+            }
+        workstream_id = str(row["workstream_id"] or "").strip().upper()
+        if workstream_id != "BUG":
+            return {
+                "routed": False,
+                "error": "triage_task_not_bug",
+                "reason": "Only BUG intake records can be routed by start_task.",
+                "status": status,
+                "task_id": normalized_id,
+                "project": project,
+            }
+        state = json.loads(row["agent_state"] or "{}") if row["agent_state"] else {}
+        report = state.get("bug_report")
+        if not isinstance(report, dict):
+            return {
+                "routed": False,
+                "error": "bug_intake_not_routable",
+                "reason": "Triage BUG is missing its structured bug_report.",
+                "intake_status": None,
+                "status": status,
+                "task_id": normalized_id,
+                "project": project,
+            }
+        intake_status = str(report.get("intake_status") or "new").strip().lower()
+        duplicate_of = str(report.get("duplicate_of") or "").strip().upper()
+        non_routable = {"needs_info", "duplicate", "rejected", "deferred"}
+        if duplicate_of or intake_status in non_routable:
+            disposition = "duplicate" if duplicate_of else intake_status
+            return {
+                "routed": False,
+                "error": "bug_intake_not_routable",
+                "reason": f"BUG intake disposition '{disposition}' is not dispatchable.",
+                "intake_status": disposition,
+                "duplicate_of": duplicate_of or None,
+                "status": status,
+                "task_id": normalized_id,
+                "project": project,
+            }
+        rationale = (
+            "start_task requested implementation under the audited BUG intake "
+            "conversion policy (approval_required=false)."
+        )
+        routing = {
+            "schema": "switchboard.bug_intake_routing.v1",
+            "source_bug_task_id": normalized_id,
+            "source_task": report.get("source_task"),
+            "source_agent": report.get("source_agent"),
+            "severity": report.get("severity_hint"),
+            "affected_surface": report.get("affected_surface"),
+            "duplicate_of": duplicate_of or None,
+            "target_workstream": workstream_id,
+            "routed_by": actor,
+            "routed_principal_id": str(principal_id or "").strip() or None,
+            "routed_at": now,
+            "rationale": rationale,
+            "trigger": str(trigger or "start_task"),
+            "previous_status": "Triage",
+            "next_status": "Not Started",
+        }
+        routed_report = dict(report)
+        routed_report["intake_status"] = "routed"
+        routed_report["routing"] = routing
+        routed_state = dict(state)
+        routed_state["bug_report"] = routed_report
+        cur = c.execute(
+            "UPDATE tasks SET status='Not Started', agent_state=?, updated_at=? "
+            "WHERE task_id=? AND status='Triage'",
+            (json.dumps(routed_state, sort_keys=True), now, normalized_id),
+        )
+        if cur.rowcount != 1:
+            current = c.execute(
+                "SELECT status FROM tasks WHERE task_id=?", (normalized_id,)
+            ).fetchone()
+            current_status = str(current["status"] or "") if current else ""
+            return {
+                "routed": False,
+                "ready": current_status in READY_TASK_STATUSES,
+                "reason": "concurrent_transition",
+                "status": current_status,
+                "task_id": normalized_id,
+                "project": project,
+            }
+        c.execute(
+            "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+            "VALUES (?,?,?,?,?)",
+            (normalized_id, actor, "bug.routed_for_implementation",
+             json.dumps(routing, sort_keys=True), now),
+        )
+        emitted = narration_outbox.emit_task_narration_request(
+            c, normalized_id, project=project,
+            cause_kind="bug.routed_for_implementation", actor=actor)
+    if emitted:
+        narration_outbox.request_wake(
+            project, entity_type="task", entity_id=normalized_id)
+    enqueue_narration(normalized_id, status="Not Started",
+                      reason="bug_routed_for_implementation", project=project)
+    return {
+        "routed": True,
+        "task_id": normalized_id,
+        "project": project,
+        "status": "Not Started",
+        "routing": routing,
+    }
 
 def _create_task_impl(data: Dict[str, Any], actor: str = "user",
                       project: str = DEFAULT_PROJECT) -> Optional[str]:
