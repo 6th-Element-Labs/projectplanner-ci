@@ -280,13 +280,14 @@ Dispatch rule:
 Bug intake rule:
 - `submit_bug(...)` is the supported agent-facing path for filing discovered bugs.
 - It requires `write:bug_intake`, not generic `write:tasks`.
-- A complete submission creates one `BUG` task in `Triage` with structured `bug_report` state,
+- A complete submission creates one canonical `BUG` task with structured `bug_report` state,
   source task/agent linkage, evidence payload, severity hint, affected surface, and optional
   failure class / duplicate link.
 - `failure_class`, when present, must be one of the `fail_fix_signal.v1` classes. Unknown classes
   fail closed and return the schema instead of creating a BUG task.
-- Submission itself never creates implementation work, marks work Ready, claims work, or wakes an
-  agent. Audited Autopilot routing is a separate lifecycle step and needs no approval gate.
+- A complete non-duplicate submission immediately routes that same BUG task to `Not Started` and
+  requests its implementation Task Session. This preserves one canonical record while removing the
+  cross-task identity handoff. Declared duplicates remain intake records and do not fork work.
 - REST parity lives at `POST /ixp/v1/bugs/submit`.
 
 Durable ack rule:

@@ -2,9 +2,9 @@
 
 Status: `BUG-1` P0 contract
 
-Switchboard agents are expected to surface bugs as soon as they find them, but the system must
-not turn every discovered bug into unsupervised implementation work. Bug intake is a triage lane,
-not a dispatch bypass.
+Switchboard agents are expected to surface bugs as soon as they find them. A complete canonical
+report enters the normal implementation lifecycle automatically; incomplete and duplicate reports
+remain intake-only records.
 
 Fail-and-fix-early reports use the shared
 [`fail_fix_signal.v1`](FAIL-FIX-SIGNAL-SCHEMA.md) taxonomy so BUG intake, reconcile, monitors,
@@ -16,9 +16,8 @@ A Bug Intake Agent receives agent-discovered bugs, normalizes them into reproduc
 deduplicates them against existing tasks, assigns a severity hint, and prepares approval-ready
 conversion proposals.
 
-It may file and triage `BUG` work automatically. It may not create, prioritize, dispatch, claim,
-or wake implementation work outside the `BUG` lane unless a human operator or explicit
-coordinator policy has approved that conversion.
+It may file, route, and start `BUG` work automatically under the ordinary dependency, capability,
+Work Session, capacity, review, and completion rules. No separate human conversion approval exists.
 
 ## Required Bug Report Fields
 
@@ -45,10 +44,10 @@ reporting agent for the smallest missing piece instead of inventing data.
 Agents file complete bug reports through `submit_bug(...)` over MCP or
 `POST /ixp/v1/bugs/submit` over REST. Both surfaces require the `write:bug_intake` scope.
 
-Successful submission creates one `BUG` task in `Triage` with structured `bug_report` state,
-source task/agent linkage, and the original evidence payload. Submission does not create
-implementation work by itself. Autopilot may subsequently classify and route the BUG through the
-normal audited task lifecycle without a separate approval gate.
+Successful non-duplicate submission creates one canonical `BUG` task with structured `bug_report`
+state, source task/agent linkage, and the original evidence payload. The same audited command marks
+it claimable and requests its implementation Task Session. The reporting worker never has to
+acquire a second task identity. Declared duplicates remain linked intake records and do not launch.
 
 If `failure_class` is supplied, intake stores both `failure_class_detail` and a nested
 `fail_fix_signal` record. If the class is unknown, submission fails closed and returns the schema;

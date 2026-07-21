@@ -43,9 +43,10 @@ def submit_bug(source_task: str, observed_behavior: str, expected_behavior: str,
                duplicate_of: str = "", title: str = "") -> str:
     """Submit an agent-discovered bug through the dedicated BUG intake path.
 
-    Requires write:bug_intake. Creates exactly one BUG triage task with structured
-    bug_report state and source task/agent linkage. It does not create implementation
-    work by itself; audited Autopilot routing is a separate lifecycle step.
+    Requires write:bug_intake. Creates exactly one BUG task with structured report
+    state and source linkage, then routes and starts its ordinary implementation
+    lifecycle without a second identity handoff. Declared duplicates are linked but
+    do not fork another implementation session.
     """
     from switchboard.application.commands.submit_bug import execute_mapping_result
     services = _services()
@@ -63,7 +64,7 @@ def submit_bug(source_task: str, observed_behavior: str, expected_behavior: str,
         "failure_class": failure_class,
         "duplicate_of": duplicate_of,
         "title": title,
-    }, actor=actor_name, project=project)
+    }, actor=actor_name, principal_id=str(principal.get("id") or ""), project=project)
     return services.dumps(result)
 
 

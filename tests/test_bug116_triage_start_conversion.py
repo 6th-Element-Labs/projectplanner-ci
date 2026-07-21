@@ -42,7 +42,13 @@ def submit(*, duplicate_of=""):
         "affected_surface": "dispatch auth",
         "failure_class": "absent_permission",
         "duplicate_of": duplicate_of,
-    }, actor="agent/bug116-reporter", project=P)
+    }, actor="agent/bug116-reporter", project=P,
+       # This proof exercises the explicit Start boundary itself. Production
+       # submit_bug now calls that same boundary automatically, so keep this
+       # fixture in Triage until the test invokes dispatch.start_task below.
+       start_task=lambda *_args, **_kwargs: {
+           "started": False, "action": "fixture_deferred",
+       })
 
 
 try:

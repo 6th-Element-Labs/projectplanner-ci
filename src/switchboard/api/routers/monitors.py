@@ -92,6 +92,7 @@ def create_router(*, resolve_project: ProjectResolver,
         result = execute_mapping_result(
             body,
             actor=auth.actor(principal),
+            principal_id=str(principal.get("id") or ""),
             project=project,
         )
         if result.get("error"):

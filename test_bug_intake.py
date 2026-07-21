@@ -20,6 +20,7 @@ try:
     import store  # noqa: E402
     from app import app  # noqa: E402
     import mcp_server  # noqa: E402
+    from switchboard.application.commands import task_execution  # noqa: E402
 except ModuleNotFoundError as exc:
     print(f"  SKIP  bug intake proof requires optional dependency: {exc.name}")
     shutil.rmtree(_TMP, ignore_errors=True)
@@ -30,6 +31,7 @@ P = "bug2intake"
 BUG_TOKEN = "bug-intake-token"
 TASK_TOKEN = "task-write-token"
 passed = failed = 0
+starts = []
 
 
 class FakeCtx:
@@ -64,6 +66,7 @@ try:
         display_name="codex/bug-reporter",
         token=BUG_TOKEN,
         scopes=["read", "write:bug_intake"],
+        principal_id="principal/bug-intake",
         project=P,
     )
     store.create_principal(
@@ -75,6 +78,27 @@ try:
     )
 
     client = TestClient(app)
+    original_task_execution = task_execution.execute_mapping_result
+
+    def fake_task_execution(command, task_id, **kwargs):
+        routing = store.route_bug_for_implementation(
+            task_id, actor=kwargs.get("actor") or "agent",
+            principal_id=kwargs.get("principal_id") or "",
+            trigger="start_task", project=kwargs.get("project") or P)
+        starts.append({"command": command, "task_id": task_id, **kwargs})
+        return {
+            "schema": "switchboard.task_execution.v1",
+            "command": command,
+            "task_id": task_id,
+            "project": kwargs.get("project"),
+            "started": True,
+            "action": "started",
+            "wake_id": f"wake-{task_id.lower()}",
+            "role": kwargs.get("role"),
+            "intake_routing": routing,
+        }
+
+    task_execution.execute_mapping_result = fake_task_execution
     payload = {
         "project": P,
         "source_task": source["task_id"],
@@ -137,8 +161,9 @@ try:
     report = (bug.get("agent_state") or {}).get("bug_report") or {}
     ok(good.status_code == 200 and body.get("submitted"),
        "REST submit_bug accepts a complete bug report")
-    ok(bug.get("_wsId") == "BUG" and bug.get("status") == "Triage",
-       "submitted bug becomes a BUG task in Triage")
+    ok(bug.get("_wsId") == "BUG" and bug.get("status") == "Not Started"
+       and body.get("routed") is True,
+       "submitted canonical bug becomes claimable implementation work")
     ok(report.get("source_task") == source["task_id"] and
        report.get("source_agent") == "codex/bug-reporter",
        "bug_report preserves source task and authenticated source agent")
@@ -149,13 +174,25 @@ try:
        report.get("fail_fix_signal", {}).get("schema") == "fail_fix_signal.v1" and
        report["fail_fix_signal"]["expected_signal"],
        "bug_report embeds the fail_fix_signal.v1 schema instance")
+    ok(report.get("intake_status") == "routed"
+       and report.get("routing", {}).get("source_bug_task_id") == bug.get("task_id")
+       and report.get("routing", {}).get("trigger") == "start_task"
+       and report.get("routing", {}).get("routed_principal_id") == "principal/bug-intake",
+       "BUG record preserves audited autonomous routing and source linkage")
+    ok(body.get("continuation", {}).get("started") is True
+       and starts == [{
+           "command": "start_task", "task_id": bug.get("task_id"),
+           "project": P, "actor": "codex/bug-reporter",
+           "principal_id": "principal/bug-intake", "role": "implementation",
+       }],
+       "submission requests the new BUG implementation session without a second identity")
     source_after = store.get_task(source["task_id"], project=P)
     ok(any(a["kind"] == "bug.reported_from_task" for a in source_after["activity"]),
        "source task receives an audit link to the submitted bug")
-    no_auto_claim = store.claim_next("codex/bug-worker", lanes=["BUG"], project=P)
-    ok(not no_auto_claim.get("claimed") and
-       no_auto_claim["dispatch_reason"]["skipped"]["status"] >= 1,
-       "submitted Triage bugs are not auto-claimable")
+    auto_claim = store.claim_next("codex/bug-worker", lanes=["BUG"], project=P)
+    ok(auto_claim.get("claimed") is True
+       and auto_claim.get("task", {}).get("task_id") == bug.get("task_id"),
+       "routed BUG work is immediately claimable by the ordinary scheduler")
 
     mcp_result = json.loads(mcp_server.submit_bug(
         source_task=source["task_id"],
@@ -179,7 +216,13 @@ try:
     ok(mcp_report.get("duplicate_of") == bug["task_id"] and
        mcp_report.get("evidence", {}).get("url") == "https://example.test/evidence",
        "MCP submit_bug preserves duplicate link and JSON evidence")
+    ok(mcp_result.get("duplicate") is True
+       and mcp_bug.get("status") == "Triage"
+       and len(starts) == 1,
+       "declared duplicates stay in intake and do not fork implementation work")
 finally:
+    if "original_task_execution" in locals():
+        task_execution.execute_mapping_result = original_task_execution
     shutil.rmtree(_TMP, ignore_errors=True)
 
 print("\n%d passed, %d failed" % (passed, failed))

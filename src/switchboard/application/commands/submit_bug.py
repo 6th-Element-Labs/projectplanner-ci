@@ -30,6 +30,7 @@ CreateTaskFn = Callable[..., Optional[dict[str, Any]]]
 GetTaskFn = Callable[..., Optional[dict[str, Any]]]
 SetAgentStateFn = Callable[..., Any]
 AppendActivityFn = Callable[..., Any]
+StartTaskFn = Callable[..., dict[str, Any]]
 
 __all__ = ["execute", "execute_mapping_result", "submit_bug"]
 
@@ -44,17 +45,30 @@ def execute(
         data: dict[str, Any],
         *,
         actor: str = "agent",
+        principal_id: str = "",
         project: str = DEFAULT_PROJECT,
         create_task: Optional[CreateTaskFn] = None,
         get_task: Optional[GetTaskFn] = None,
         set_agent_state: Optional[SetAgentStateFn] = None,
-        append_activity: Optional[AppendActivityFn] = None) -> dict[str, Any]:
-    """Validate a bug report and create one BUG triage task with activity linkage."""
+        append_activity: Optional[AppendActivityFn] = None,
+        start_task: Optional[StartTaskFn] = None) -> dict[str, Any]:
+    """File, route, and continue one agent-discovered bug autonomously.
+
+    The BUG task remains the canonical report and implementation record.  A complete,
+    non-duplicate report is made claimable and handed to the ordinary Task Session
+    lifecycle in this command, so a task-bound reporter never has to assume a second
+    identity or wait for an operator to call ``start_task``.
+    """
     store = _deps()
     create_task = create_task or store.create_task
     get_task = get_task or store.get_task
     set_agent_state = set_agent_state or store.set_agent_state
     append_activity = append_activity or store.append_activity
+    if start_task is None:
+        from switchboard.application.commands import task_execution
+
+        def start_task(task_id: str, **kwargs: Any) -> dict[str, Any]:
+            return task_execution.execute_mapping_result("start_task", task_id, **kwargs)
 
     payload = dict(data or {})
     missing = [field for field in BUG_REPORT_REQUIRED_FIELDS
@@ -174,31 +188,73 @@ def execute(
                     task_id=task["task_id"], project=project)
     append_activity("bug.reported_from_task", actor, report_event,
                     task_id=source_task, project=project)
+
+    # A declared duplicate is already linked to its canonical BUG and must not
+    # fork a second implementation session.  Canonical reports route immediately.
+    if duplicate_of:
+        report["intake_status"] = "duplicate"
+        report["routing"] = {
+            "schema": "switchboard.bug_autoroute.v1",
+            "status": "duplicate",
+            "canonical_bug_task_id": duplicate_of,
+            "approval_required": False,
+            "routed_at": now,
+            "routed_by": actor,
+        }
+        full_state = set_agent_state(
+            task["task_id"], "bug_report", report, project=project)
+        append_activity("bug.duplicate_linked", actor, report["routing"],
+                        task_id=task["task_id"], project=project)
+        bug = get_task(task["task_id"], project=project)
+        return {"submitted": True, "routed": False, "duplicate": True,
+                "bug": bug, "bug_report": report, "agent_state": full_state,
+                "continuation": {"started": False, "reason": "duplicate"}}
+
+    # BUG-116's Start command owns the audited, atomic Triage -> Not Started
+    # conversion. Reusing it preserves idempotency, principal attribution, and
+    # exactly one routing event instead of duplicating lifecycle policy here.
+    continuation = start_task(
+        task["task_id"], project=project, actor=actor,
+        principal_id=principal_id, role="implementation")
+    append_activity("bug.continuation_requested", actor, {
+        "bug_task_id": task["task_id"],
+        "source_task": source_task,
+        "continuation": continuation,
+    }, task_id=task["task_id"], project=project)
     bug = get_task(task["task_id"], project=project)
-    return {"submitted": True, "bug": bug, "bug_report": report,
-            "agent_state": full_state}
+    routed_report = (bug.get("agent_state") or {}).get("bug_report") or report
+    intake_routing = continuation.get("intake_routing") or {}
+    routed = bool(intake_routing.get("routed") or intake_routing.get("ready"))
+    return {"submitted": True, "routed": routed, "bug": bug,
+            "bug_report": routed_report,
+            "agent_state": bug.get("agent_state") or full_state,
+            "continuation": continuation}
 
 
 def execute_mapping_result(
         data: dict[str, Any],
         *,
         actor: str = "agent",
+        principal_id: str = "",
         project: str = DEFAULT_PROJECT,
         create_task: Optional[CreateTaskFn] = None,
         get_task: Optional[GetTaskFn] = None,
         set_agent_state: Optional[SetAgentStateFn] = None,
-        append_activity: Optional[AppendActivityFn] = None) -> dict[str, Any]:
+        append_activity: Optional[AppendActivityFn] = None,
+        start_task: Optional[StartTaskFn] = None) -> dict[str, Any]:
     """Execute adapter mapping input and return the structured submit_bug result."""
     payload = dict(data or {})
     project = payload.pop("project", None) or project or DEFAULT_PROJECT
     return execute(
         payload,
         actor=actor,
+        principal_id=principal_id,
         project=project,
         create_task=create_task,
         get_task=get_task,
         set_agent_state=set_agent_state,
         append_activity=append_activity,
+        start_task=start_task,
     )
 
 

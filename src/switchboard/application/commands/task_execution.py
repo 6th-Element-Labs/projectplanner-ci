@@ -384,6 +384,7 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
         wake_id=wake_id or None,
         host_id=host_id or None,
         role=lifecycle_role,
+        intake_routing=result.get("intake_routing") or None,
         lifecycle_phase=("running" if result.get("attached")
                          else "starting" if action in {"started", "starting"} else None),
         transport=descriptor.get("transport"),

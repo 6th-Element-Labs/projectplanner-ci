@@ -262,6 +262,11 @@ try:
         return write
 
     guarded_claim = MCPAuthorizationGuard().wrap(claim_task)
+
+    def submit_bug(source_task="", project=P):
+        return {"source_task": source_task, "project": project}
+
+    guarded_submit_bug = MCPAuthorizationGuard().wrap(submit_bug)
     with transport_principal_scope(direct_principal):
         accepted = guarded_claim(task_id=task_id, agent_id=f"codex/{task_id}", project=P)
         accepted_offline_done = MCPAuthorizationGuard().wrap(
@@ -276,6 +281,7 @@ try:
                 "record_publication_evidence", "archive_work_session_workspace",
             )
         }
+        accepted_bug = guarded_submit_bug(source_task=task_id, project=P)
         try:
             guarded_claim(task_id="UI-999", agent_id=f"codex/{task_id}", project=P)
             crossed_task = True
@@ -287,11 +293,18 @@ try:
             crossed_offline_task = True
         except ValueError:
             crossed_offline_task = False
+        try:
+            guarded_submit_bug(source_task="UI-999", project=P)
+            crossed_bug_source = True
+        except ValueError:
+            crossed_bug_source = False
     ok(accepted.get("task_id") == task_id
        and accepted_offline_done.get("task_id") == task_id
        and crossed_task is False
-       and crossed_offline_task is False,
-       "direct CLI can complete its assigned offline workflow but cannot cross tasks")
+       and crossed_offline_task is False
+       and accepted_bug.get("source_task") == task_id
+       and crossed_bug_source is False,
+       "direct CLI can complete and file its assigned workflow but cannot cross tasks")
     ok(set(parity_writes) == {
            "submit_bug", "abandon_claim", "verify_ci",
            "claim_external_effect", "mark_external_effect_issued",

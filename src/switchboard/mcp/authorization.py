@@ -256,6 +256,13 @@ DISCOVERY_TOOLS = frozenset({"list_projects"})
 WORK_SESSION_BOOT_TOOLS = frozenset({
     "prepare_agent_session", "get_working_agreement", "get_project_contract", "get_task",
 })
+DIRECT_SESSION_TASK_ARGUMENTS = {
+    # Most workflow tools use ``task_id``. Bug intake names the same security
+    # boundary ``source_task`` because the new BUG id does not exist yet.
+    "submit_bug": "source_task",
+}
+
+
 def declaration_for(tool_name: str) -> ToolAccessDeclaration:
     if tool_name in DISCOVERY_TOOLS:
         access_class = AccessClass.DISCOVERY
@@ -311,8 +318,11 @@ class MCPAuthorizationGuard:
                 if requested_task and requested_task != bound_task:
                     raise ValueError(
                         "forbidden: Work Session token is bound to another task")
-            if direct_session_principal and "task_id" in bound.arguments:
-                requested_task = str(bound.arguments.get("task_id") or "").strip().upper()
+            direct_task_argument = DIRECT_SESSION_TASK_ARGUMENTS.get(
+                function.__name__, "task_id")
+            if direct_session_principal and direct_task_argument in bound.arguments:
+                requested_task = str(
+                    bound.arguments.get(direct_task_argument) or "").strip().upper()
                 bound_task = str(
                     (principal_hint or {}).get("bound_task_id") or "").strip().upper()
                 if requested_task and requested_task != bound_task:
