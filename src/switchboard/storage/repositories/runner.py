@@ -1503,9 +1503,16 @@ def _native_agent_host_runner_allowed_in(
         and status == "running"
         and not record.get("claim_id")
     )
+    connect_candidate = bool(
+        metadata.get("connect_assignment") is True
+        and metadata.get("assignment_schema") == "switchboard.connect.assignment.v1"
+        and status == "running"
+        and not record.get("claim_id")
+    )
     preclaim_candidate = bool(
         phase == "preclaim" and status == "starting" and not record.get("claim_id"))
-    if (not (direct_candidate or preclaim_candidate) or not wake_id or not host_id):
+    if (not (direct_candidate or connect_candidate or preclaim_candidate)
+            or not wake_id or not host_id):
         return False
     wake = c.execute(
         "SELECT status, claimed_by_host, task_id, selector_json, policy_json, "
@@ -1546,6 +1553,37 @@ def _native_agent_host_runner_allowed_in(
                 and str(assignment.get("host_id") or "") == expected["host_id"]):
             metadata["native_host_execution"] = True
             metadata["direct_assignment"] = True
+            record["metadata"] = metadata
+            return True
+        return False
+    connect = bool(
+        policy.get("mode") == "connect"
+        and metadata.get("connect_assignment") is True
+        and metadata.get("assignment_schema") == "switchboard.connect.assignment.v1"
+        and status == "running"
+        and not record.get("claim_id")
+    )
+    if connect:
+        assignment = policy.get("assignment") or {}
+        expected = {
+            "task_id": str(wake["task_id"] or selector.get("task_id") or ""),
+            "agent_id": str(selector.get("agent_id") or ""),
+            "runtime": str(selector.get("runtime") or ""),
+            "host_id": str(wake["claimed_by_host"] or ""),
+            "assignment_id": str(assignment.get("assignment_id") or ""),
+        }
+        actual = {
+            "task_id": str(record.get("task_id") or ""),
+            "agent_id": str(record.get("agent_id") or ""),
+            "runtime": str(record.get("runtime") or ""),
+            "host_id": host_id,
+            "assignment_id": str(metadata.get("assignment_id") or ""),
+        }
+        work_ref = str(assignment.get("work_ref") or "")
+        if (all(expected.values()) and actual == expected
+                and work_ref.startswith("task:")
+                and work_ref.rsplit(":", 1)[-1] == expected["task_id"]):
+            metadata["native_host_execution"] = True
             record["metadata"] = metadata
             return True
         return False
