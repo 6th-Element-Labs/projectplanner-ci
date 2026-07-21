@@ -2,12 +2,11 @@
  * ============================================================================
  * Vision → PRD → Architecture → Operating rules → Scope breakdown. Approving
  * one unlocks the next; revising an upstream artifact marks dependents stale;
- * build authorization derives from all five.
+ * the completeness projection derives from all five.
  *
  * UI-30: state lives in the kickoff record (GET /api/kickoff; approve/revise
- * POSTs) — durable, attributed, shared across the team. UI-31: when the
- * deployment arms PM_KICKOFF_ENFORCE, claim_next and merge_gate honor it;
- * the verdict card shows the armed/disarmed posture from the API.
+ * POSTs) — durable, attributed, shared across the team. Kickoff approvals are
+ * advisory planning history and never gate claims or merges.
  * Self-contained: wires only inside #tab-scope, no app.js changes.
  */
 (function () {
@@ -138,25 +137,20 @@
         const v = el('scope-verdict'); const vi = el('scope-verdict-icon');
         const vt = el('scope-verdict-title'); const vs = el('scope-verdict-sub');
         v.className = 'scope-verdict' + (authed ? ' ok' : '');
-        const armed = !!state.enforced;
         if (authed) {
             vi.className = 'ti ti-lock-open'; vi.style.color = '#2fb344';
-            vt.textContent = 'Build authorization: granted' + (armed ? '' : ' (advisory)');
-            vs.innerHTML = armed
-                ? 'All 5 gates green, on the record — <code>claim_next</code> and <code>merge_gate</code> honor this record (enforcement armed).'
-                : 'All 5 gates green, on the record. Enforcement is disarmed on this deployment (PM_KICKOFF_ENFORCE).';
+            vt.textContent = 'Kickoff record: complete (advisory)';
+            vs.innerHTML = 'All 5 gates green, on the record. Kickoff approvals are advisory and do not gate Autopilot.';
         } else {
-            vi.className = 'ti ti-shield-lock'; vi.style.color = armed ? '#d63939' : '#f76707';
-            vt.textContent = 'Build authorization: blocked' + (armed ? ' — enforced' : ' (advisory)');
+            vi.className = 'ti ti-notes'; vi.style.color = '#f76707';
+            vt.textContent = 'Kickoff record: incomplete (advisory)';
             vs.innerHTML = remaining + ' gate' + (remaining > 1 ? 's' : '') + ' open — next: <strong>'
-                + (fr ? SHORT[fr] : '') + '</strong>. ' + (armed
-                    ? '<code>claim_next</code> serves no implementation work and <code>merge_gate</code> blocks until the record is complete.'
-                    : 'Recorded on the project; enforcement is disarmed on this deployment.');
+                + (fr ? SHORT[fr] : '') + '</strong>. Recorded on the project; claims and merges remain available.';
         }
         const sg = el('scope-gate-row');
         if (sg) {
             const g = gate('scope');
-            if (g.s === 'ok') sg.innerHTML = '<span class="stx"><span class="sdot" style="background:#2fb344"></span>Scope breakdown approved v' + g.version + ' — Wave 1 would be released.</span>';
+            if (g.s === 'ok') sg.innerHTML = '<span class="stx"><span class="sdot" style="background:#2fb344"></span>Scope breakdown approved v' + g.version + '.</span>';
             else if (fr === 'scope') sg.innerHTML = '<span class="stx"><span class="sdot" style="background:#f76707"></span>Scope breakdown is next — review the task graph in Plan, then</span> <button type="button" class="btn btn-sm btn-primary ms-2" data-approve-scope>Approve breakdown</button>';
             else if (g.s === 'stale') sg.innerHTML = '<span class="stx"><span class="sdot" style="background:#f76707"></span>Scope breakdown is stale — re-approve after the upstream revision.</span> <button type="button" class="btn btn-sm btn-primary ms-2" data-approve-scope>Re-approve</button>';
             else sg.innerHTML = '<span class="stx"><span class="sdot" style="background:#8b95a5"></span>Scope breakdown — the fifth gate; locked until the four artifacts are approved.</span>';

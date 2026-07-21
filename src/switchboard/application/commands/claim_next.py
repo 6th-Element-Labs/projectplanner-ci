@@ -43,17 +43,6 @@ def execute(
     if not command.agent_id:
         raise ClaimNextError("invalid_claim_next", "agent_id is required")
 
-    # UI-31: when enforcement is armed (PM_KICKOFF_ENFORCE) and the kickoff
-    # record is incomplete, no implementation work is served. Same response
-    # shape as "nothing eligible" so every runtime already handles it.
-    gate = (store.kickoff_enforcement(command.project or "maxwell")
-            if hasattr(store, "kickoff_enforcement") else {})
-    if gate.get("enforced") and not gate.get("authorized"):
-        return {"claimed": False, "reason": "kickoff_blocked",
-                "blocking_gate": gate.get("blocking_gate") or "",
-                "detail": gate.get("reason") or "kickoff record incomplete",
-                "retry_after_seconds": 300}
-
     claimer = claim or store.claim_next
     return claimer(
         agent_id=command.agent_id,

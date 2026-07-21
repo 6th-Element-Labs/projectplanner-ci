@@ -1,19 +1,13 @@
-"""UI-30: the kickoff record — server-side Scope gate approvals.
+"""UI-30: the kickoff record — advisory Scope approvals.
 
 Vision -> PRD -> Architecture -> Operating rules -> Scope breakdown. Approving
 a gate requires every upstream gate to be approved (the frontier rule);
 revising an approved gate marks every approved downstream gate stale.
-``build_authorized`` is true only when all five are approved and none stale.
-
-UI-31: claim_next and merge_gate consult :func:`kickoff_enforcement`, which
-fail-opens unless PM_KICKOFF_ENFORCE is set — arming enforcement is a
-deliberate per-deployment act. create_task stays ungated on purpose: the
-record gates execution, not planning (the breakdown itself must be creatable
-while gates are open).
+``build_authorized`` records whether all five are approved and none stale. It
+is planning metadata only: kickoff approvals never gate claiming or merging.
 """
 from __future__ import annotations
 
-import os
 import time
 from typing import Any, Dict, List
 
@@ -106,7 +100,7 @@ def approve_kickoff_gate(gate: str, *, actor: str, note: str = "",
 def revise_kickoff_gate(gate: str, *, actor: str, note: str = "",
                         project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     """The edited gate stays approved (version bumps); approved downstream gates
-    go stale — they must be re-approved before build authorization returns."""
+    go stale so the advisory completeness record remains truthful."""
     gate = (gate or "").strip().lower()
     if gate not in GATES:
         raise KickoffGateError(f"unknown gate: {gate}")
@@ -127,21 +121,14 @@ def revise_kickoff_gate(gate: str, *, actor: str, note: str = "",
 
 
 def kickoff_enforce_enabled() -> bool:
-    """UI-31: enforcement is a deliberate per-deployment act — same disarmed-by-
-    default posture as the COORD-8 daemon (PM_COORDINATOR_AUTOPILOT_ACT)."""
-    return (os.environ.get("PM_KICKOFF_ENFORCE", "0").strip().lower()
-            in ("1", "true", "yes"))
+    """Compatibility projection for clients that still display this field.
+
+    Kickoff approval is permanently advisory. In particular, the retired
+    ``PM_KICKOFF_ENFORCE`` setting must not restore a human completion gate.
+    """
+    return False
 
 
 def kickoff_enforcement(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
-    """The verdict claim_next / merge_gate consult. Fail-open when disarmed."""
-    if not kickoff_enforce_enabled():
-        return {"enforced": False, "authorized": True, "blocking_gate": "", "reason": ""}
-    st = get_kickoff_state(project)
-    if st["build_authorized"]:
-        return {"enforced": True, "authorized": True, "blocking_gate": "", "reason": ""}
-    blocking = st["frontier"] or next(
-        (g["gate"] for g in st["gates"] if g["s"] == "stale"), "")
-    return {"enforced": True, "authorized": False, "blocking_gate": blocking,
-            "reason": ("kickoff record incomplete — approve '%s' on the Scope page "
-                       "before implementation work can be claimed or merged" % blocking)}
+    """Compatibility verdict: the kickoff record is never an execution gate."""
+    return {"enforced": False, "authorized": True, "blocking_gate": "", "reason": ""}

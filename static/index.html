@@ -297,7 +297,7 @@
                                     <h2 class="page-title m-0"><i class="ti ti-file-text me-2"></i>Scope</h2>
                                     <div class="text-secondary small">Vision → PRD → Architecture → Operating rules → Scope breakdown. Approving one unlocks the next.</div>
                                 </div>
-                                <div class="ms-auto text-secondary small"><i class="ti ti-flask me-1"></i>Approvals are recorded on the project (shared, attributed). Enforcement follows PM_KICKOFF_ENFORCE — the verdict card below shows this deployment's posture. <a href="#" id="scope-refresh" class="ms-1">refresh</a></div>
+                                <div class="ms-auto text-secondary small"><i class="ti ti-flask me-1"></i>Approvals are recorded on the project (shared, attributed) as advisory planning history. They do not block Autopilot claims or merges. <a href="#" id="scope-refresh" class="ms-1">refresh</a></div>
                             </div>
                             <div id="scope-flash" class="alert alert-info py-2 px-3 d-none" role="status"></div>
                             <div class="row row-cards">
@@ -333,7 +333,7 @@
                                             <div class="scope-sec" id="scope-sec-rules">
                                                 <div class="tk-eyebrow mb-2">Branching · definition of done · file/lane ownership · test &amp; CI policy</div>
                                                 <p class="mb-2">The working agreement every session inherits: lease boundaries per lane, done-means-merged with green CI, and the standing prohibitions.</p>
-                                                <p class="text-secondary mb-0">Injected into agent context via <code>get_working_agreement</code> once enforcement lands.</p>
+                                                <p class="text-secondary mb-0">Injected into agent context via <code>get_working_agreement</code> as guidance, without blocking execution.</p>
                                                 <div class="scope-foot" data-foot="rules"></div>
                                             </div>
                                         </div>
@@ -346,9 +346,9 @@
                                         <div class="card-footer py-2 small" id="scope-gate-row"></div>
                                     </div>
                                     <div class="scope-verdict" id="scope-verdict">
-                                        <i id="scope-verdict-icon" class="ti ti-shield-lock" style="font-size:1.25rem;color:#f76707"></i>
+                                        <i id="scope-verdict-icon" class="ti ti-notes" style="font-size:1.25rem;color:#f76707"></i>
                                         <div>
-                                            <div class="fw-bold" id="scope-verdict-title">Build authorization: blocked (advisory)</div>
+                                            <div class="fw-bold" id="scope-verdict-title">Kickoff record: incomplete (advisory)</div>
                                             <div class="text-secondary small" id="scope-verdict-sub">Loading…</div>
                                         </div>
                                     </div>

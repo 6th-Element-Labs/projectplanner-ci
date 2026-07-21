@@ -1,4 +1,4 @@
-"""UI-31: PM_KICKOFF_ENFORCE gates claim_next and merge_gate (fail-open off)."""
+"""Kickoff approvals remain advisory and cannot disable Autopilot."""
 import os
 import tempfile
 import uuid
@@ -27,31 +27,27 @@ def _cmd(p):
     return ClaimNextCommand(agent_id="agent-x", project=p)
 
 
-def test_disarmed_is_a_no_op():
-    with patch.dict(os.environ):
-        os.environ.pop("PM_KICKOFF_ENFORCE", None)
-        p = _proj()
-        calls = []
-        out = claim_next_cmd.execute(
-            _cmd(p), actor="t",
-            claim=lambda **kw: calls.append(kw) or {"claimed": True})
-        assert out == {"claimed": True} and len(calls) == 1
-
-
-def test_armed_blocks_claims_while_gates_open():
+def test_retired_setting_cannot_block_claims_while_gates_open():
     with patch.dict(os.environ, {"PM_KICKOFF_ENFORCE": "1"}):
         p = _proj()
         calls = []
         out = claim_next_cmd.execute(
             _cmd(p), actor="t",
             claim=lambda **kw: calls.append(kw) or {"claimed": True})
-        assert out["claimed"] is False
-        assert out["reason"] == "kickoff_blocked"
-        assert out["blocking_gate"] == "vision"
-        assert calls == []          # the claimer is never consulted
+        assert out == {"claimed": True}
+        assert len(calls) == 1
+        state = store.get_kickoff_state(project=p)
+        assert state["build_authorized"] is False
+        assert state["enforced"] is False
+        assert store.kickoff_enforcement(project=p) == {
+            "enforced": False,
+            "authorized": True,
+            "blocking_gate": "",
+            "reason": "",
+        }
 
 
-def test_armed_passes_through_once_authorized():
+def test_complete_kickoff_record_remains_visible_but_advisory():
     with patch.dict(os.environ, {"PM_KICKOFF_ENFORCE": "1"}):
         p = _proj()
         for g in ["vision", "prd", "arch", "rules", "scope"]:
@@ -61,17 +57,15 @@ def test_armed_passes_through_once_authorized():
         assert out == {"claimed": True}
 
 
-def test_armed_blocks_merge_gate_with_a_named_gate():
+def test_retired_setting_cannot_add_a_kickoff_merge_finding():
     with patch.dict(os.environ, {"PM_KICKOFF_ENFORCE": "1"}):
         p = _proj()
         out = store.merge_gate({"task_id": "X-1"}, actor="t", project=p)
-        assert out["ok"] is False and out["status"] == "blocked"
-        f = out["findings"][0]
-        assert f["code"] == "kickoff_blocked"
-        assert f["blocking_gate"] == "vision"
+        codes = {finding["code"] for finding in out["findings"]}
+        assert "kickoff_blocked" not in codes
 
 
-def test_revise_deauthorizes_enforced_projects_too():
+def test_revised_kickoff_record_does_not_block_claims():
     with patch.dict(os.environ, {"PM_KICKOFF_ENFORCE": "1"}):
         p = _proj()
         for g in ["vision", "prd", "arch", "rules", "scope"]:
@@ -79,12 +73,12 @@ def test_revise_deauthorizes_enforced_projects_too():
         store.revise_kickoff_gate("arch", actor="t", project=p)
         out = claim_next_cmd.execute(
             _cmd(p), actor="t", claim=lambda **kw: {"claimed": True})
-        assert out["claimed"] is False and out["blocking_gate"] == "rules"
+        assert out == {"claimed": True}
+        assert store.get_kickoff_state(project=p)["build_authorized"] is False
 
 
 if __name__ == "__main__":
-    test_disarmed_is_a_no_op()
-    test_armed_blocks_claims_while_gates_open()
-    test_armed_passes_through_once_authorized()
-    test_armed_blocks_merge_gate_with_a_named_gate()
-    test_revise_deauthorizes_enforced_projects_too()
+    test_retired_setting_cannot_block_claims_while_gates_open()
+    test_complete_kickoff_record_remains_visible_but_advisory()
+    test_retired_setting_cannot_add_a_kickoff_merge_finding()
+    test_revised_kickoff_record_does_not_block_claims()
