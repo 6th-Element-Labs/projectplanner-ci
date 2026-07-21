@@ -887,8 +887,16 @@ const TeepPlan = {
         const followups = acts.filter((a) => !a.attention && !a.automatic);
         let html = '';
         if (decisions.length) {
-            html += `<div class="card mb-4 border-orange"><div class="card-header bg-orange-lt"><h3 class="card-title"><i class="ti ti-hand-stop me-2"></i>Decisions needed from you</h3></div><div class="list-group list-group-flush">${decisions.map((a) =>
-                `<div class="list-group-item"><div class="fw-medium">${this.esc(a.label || a.action)}</div><div class="text-secondary small">${this.esc(a.reason || '')}${this._actionRef(a)}</div></div>`).join('')}</div></div>`;
+            const exceptional = decisions.filter((a) => a.exception);
+            const ordinary = decisions.filter((a) => !a.exception);
+            if (exceptional.length) {
+                html += `<div class="card mb-4 border-orange"><div class="card-header bg-orange-lt"><div><h3 class="card-title"><i class="ti ti-shield-exclamation me-2"></i>Autopilot exceptions — your authority is required</h3><div class="text-secondary small mt-1">Routine execution remains automatic. These items stopped only at a deliberate safety or authority boundary.</div></div></div><div class="list-group list-group-flush">${exceptional.map((a) =>
+                    `<div class="list-group-item"><div class="d-flex align-items-center gap-2"><span class="badge bg-orange-lt">Exception</span><div class="fw-medium">${this.esc(a.label || a.action)}</div></div><div class="text-secondary small mt-1">${this.esc(a.reason || '')}${this._actionRef(a)}</div></div>`).join('')}</div></div>`;
+            }
+            if (ordinary.length) {
+                html += `<div class="card mb-4"><div class="card-header"><h3 class="card-title"><i class="ti ti-hand-stop me-2"></i>Decisions needed from you</h3></div><div class="list-group list-group-flush">${ordinary.map((a) =>
+                    `<div class="list-group-item"><div class="fw-medium">${this.esc(a.label || a.action)}</div><div class="text-secondary small">${this.esc(a.reason || '')}${this._actionRef(a)}</div></div>`).join('')}</div></div>`;
+            }
         }
         if (followups.length) {
             html += `<div class="card mb-4"><div class="card-header"><h3 class="card-title">Team follow-ups</h3></div><div class="list-group list-group-flush">${followups.map((a) =>
@@ -902,6 +910,20 @@ const TeepPlan = {
             html = `<div class="text-secondary small mb-4"><i class="ti ti-check me-1"></i>No decisions needed from you.</div>` + html;
         }
         return html;
+    },
+    taskAutopilotExceptionHtml(t) {
+        const current = ((t.review_remediation || {}).current) || {};
+        if (!current.human_intervention_required
+                || !['pending', 'escalated', 'wake_failed'].includes(String(current.status || ''))) return '';
+        const count = Number(current.escalate_finding_count || 0);
+        const round = Number(current.round_no || 0);
+        const why = count
+            ? `The reviewer classified ${count} finding${count === 1 ? '' : 's'} as requiring human judgment.`
+            : `Automatic remediation reached its safety boundary after round ${round}.`;
+        return `<div class="alert alert-warning mb-3" role="alert">
+            <div class="d-flex align-items-center gap-2 mb-1"><span class="badge bg-orange-lt">Autopilot exception</span><strong>Your authority is required</strong></div>
+            <div class="small">${this.esc(why)} Routine implementation, testing, review, merge, and reconciliation do not require approval.</div>
+        </div>`;
     },
     // Delivery impact of an unsafe agent workspace: does its task still need to ship? A session on an
     // already-merged (In Review/Done), unknown, or cross-project task is quiet cleanup (no impact);
@@ -1091,6 +1113,7 @@ const TeepPlan = {
             </div>
             <div id="merge-gate-body" class="card-body py-3">
                 <div class="text-secondary small">Re-check evaluates whether this branch can merge under code_strict.</div>
+                <div class="text-secondary small mt-2"><span class="badge bg-orange-lt me-1">Autopilot exception</span>Waiving a security or evidence requirement always requires explicit human authority; ordinary failures return to automatic remediation.</div>
             </div>
         </div>`;
     },
@@ -2222,6 +2245,7 @@ const TeepPlan = {
             </ul>
             <div class="tab-content mt-3">
                 <div class="tab-pane fade show active" id="m-details" role="tabpanel">
+                    ${this.taskAutopilotExceptionHtml(t)}
                     <div class="progress progress-sm mb-3"><div class="progress-bar bg-${sc}" style="width:${pct}%"></div></div>
                     <div class="text-secondary small mb-3 d-flex align-items-center"><span class="status-dot bg-${sc} me-2"></span>${this.esc(displayLabel || '—')}${honest.lifecycle_phase === 'start_failed_retry' ? '' : ` · ${pct}% complete`}</div>
                     ${honestLine}

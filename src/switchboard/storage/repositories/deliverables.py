@@ -2225,7 +2225,8 @@ def _mission_next_actions(deliverable: Dict[str, Any],
         actions.append(_action(
             "approve_breakdown", owner="project_owner", attention=True, delivery_impact="at_risk",
             label="Approve the proposed breakdown",
-            reason="A milestone/task breakdown is waiting for your approval",
+            reason="Autopilot shaped the work, but only you can authorize a new deliverable breakdown",
+            exception=True, exception_kind="deliverable_authority",
             proposal_id=pending_proposal.get("id")))
     for link in linked_tasks:
         detail = link.get("task_detail") or {}
@@ -2248,6 +2249,24 @@ def _mission_next_actions(deliverable: Dict[str, Any],
         status = detail.get("status")
         claims = detail.get("active_claims") or []
         dep = detail.get("dependency_state") or {}
+        remediation = (detail.get("review_remediation") or {}).get("current") or {}
+        if (remediation.get("human_intervention_required")
+                and remediation.get("status") in {"pending", "escalated", "wake_failed"}):
+            round_no = int(remediation.get("round_no") or 0)
+            escalated_findings = int(remediation.get("escalate_finding_count") or 0)
+            reason = (
+                f"Review marked {escalated_findings} finding"
+                f"{'s' if escalated_findings != 1 else ''} for human judgment"
+                if escalated_findings else
+                f"Automatic review remediation stopped after round {round_no}"
+            )
+            actions.append(_action(
+                "resolve_review_exception", owner="project_owner", attention=True,
+                delivery_impact="blocking" if blocks_delivery else "at_risk",
+                label="Resolve an exceptional review finding", reason=reason,
+                exception=True, exception_kind="review_authority",
+                project_id=link.get("project_id"), task_id=detail.get("task_id"),
+                title=detail.get("title"), remediation_id=remediation.get("remediation_id")))
         blocks = _task_blocks_others(detail)
         lane = detail.get("workstream") or detail.get("_wsId")
         if (automatic_eligible and status in READY_TASK_STATUSES

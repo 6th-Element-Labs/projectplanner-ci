@@ -390,7 +390,8 @@
                 id: 'settings-ai-accounts', title: 'AI connections', icon: 'ti-plug-connected',
                 subtitle: 'Personal subscriptions and user-owned API connections for your agent runtimes',
                 actions: `<span class="badge bg-secondary-lt">policy ${this.esc(policy.policy_version || 'unknown')}</span>`,
-                body: `<div class="alert alert-info py-2 px-3 small" role="note"><i class="ti ti-shield-check me-1" aria-hidden="true"></i>This server-authoritative matrix also gates enrollment, scheduling, runtime launch, MCP, and CO-14 proof. Unknown, stale, unapproved, or host-mismatched modes fail closed.</div>
+                body: `<div class="alert alert-warning py-2 px-3 small" role="note"><span class="badge bg-orange-lt me-2">Autopilot exception</span>Provider credential enrollment and authorization to use paid capacity require the account owner. Once authorized, scheduling and execution remain automatic within the recorded budget and policy.</div>
+                    <div class="alert alert-info py-2 px-3 small" role="note"><i class="ti ti-shield-check me-1" aria-hidden="true"></i>This server-authoritative matrix also gates enrollment, scheduling, runtime launch, MCP, and CO-14 proof. Unknown, stale, unapproved, or host-mismatched modes fail closed.</div>
                     <div class="alert alert-secondary py-2 px-3 small" role="note"><i class="ti ti-shield-lock me-1" aria-hidden="true"></i>Enrollment is provider-native and owner-bound. This screen never accepts provider passwords, tokens, cookies, auth capsules, or browser profiles; it displays only redacted host-verified proof.</div>
                     ${fetchErrorBanner}
                     <h4 class="mb-1 mt-2">Personal subscriptions</h4>

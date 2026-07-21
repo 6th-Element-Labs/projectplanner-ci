@@ -1119,8 +1119,9 @@
             const statusBadge = this._missionBadge(p.status, { proposed: 'yellow', deferred: 'secondary', approved: 'green', rejected: 'red' });
             return `<div class="list-group-item"><div class="d-flex flex-wrap align-items-start gap-2">
                 <div class="flex-fill">
-                    <div class="d-flex align-items-center gap-2 mb-1">${statusBadge}<span class="fw-semibold">${this.esc(summary)}</span></div>
+                    <div class="d-flex align-items-center gap-2 mb-1">${statusBadge}<span class="badge bg-orange-lt">Autopilot exception</span><span class="fw-semibold">${this.esc(summary)}</span></div>
                     <div class="text-secondary small">${ms.length} milestone${ms.length === 1 ? '' : 's'} · ${taskCount} task${taskCount === 1 ? '' : 's'} · <span class="text-muted">${this.esc(pid)}</span></div>
+                    <div class="text-secondary small mt-1">Autopilot proposed this shape; your approval is required only because it creates the delivery contract.</div>
                 </div>
                 <div class="btn-list">
                     <button class="btn btn-sm btn-success" type="button" data-dl-action="approve" data-proposal="${this.esc(pid)}"><i class="ti ti-check me-1"></i>Approve</button>
@@ -1132,7 +1133,7 @@
             ? `<div class="list-group list-group-flush">${rows}</div>`
             : '<div class="card-body text-secondary small">No pending breakdown proposals. Use <strong>Record outcome</strong> to draft milestones from a plain-English outcome.</div>';
         return `<div class="card mb-4" id="mission-breakdown-card"><div class="card-header">
-            <h3 class="card-title"><i class="ti ti-list-check me-2"></i>Breakdown &amp; outcomes${pending.length ? ` <span class="badge bg-yellow-lt ms-2">${pending.length} pending</span>` : ''}</h3>
+            <h3 class="card-title"><i class="ti ti-list-check me-2"></i>Breakdown &amp; outcomes${pending.length ? ` <span class="badge bg-orange-lt ms-2">${pending.length} exceptional approval${pending.length === 1 ? '' : 's'}</span>` : ''}</h3>
             <div class="card-actions"><button class="btn btn-sm btn-primary" type="button" data-dl-action="outcome"><i class="ti ti-flag-check me-1"></i>Record outcome</button></div>
         </div>${body}</div>`;
     },
@@ -1212,7 +1213,7 @@
     },
     approveProposal(pid) {
         if (!pid) return;
-        if (!confirm('Approve this breakdown proposal? It will create and link the proposed tasks.')) return;
+        if (!confirm('Autopilot exception: approve this deliverable breakdown? Your approval creates and links the proposed tasks; routine execution then resumes automatically.')) return;
         return this._proposalAction(`api/deliverables/breakdown_proposals/${encodeURIComponent(pid)}/approve`, 'POST');
     },
     rejectProposal(pid) {
