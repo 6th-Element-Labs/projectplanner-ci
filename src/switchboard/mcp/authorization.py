@@ -262,7 +262,7 @@ DIRECT_SESSION_WRITE_TOOLS = frozenset({
     "merge_gate", "pre_tool_check", "preflight_work_session", "reconcile",
     "record_review_verdict", "register_agent", "release_files", "release_resource",
     "request_unblock", "send_agent_message", "set_agent_state", "update_task",
-    "update_work_session",
+    "update_work_session", "verify_offline_completion",
 })
 
 

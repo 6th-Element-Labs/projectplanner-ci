@@ -244,16 +244,31 @@ try:
     def claim_task(task_id="", agent_id="", project=P):
         return {"task_id": task_id, "agent_id": agent_id, "project": project}
 
+    def verify_offline_completion(task_id="", evidence="", project=P):
+        return {"task_id": task_id, "evidence": evidence, "project": project}
+
     guarded_claim = MCPAuthorizationGuard().wrap(claim_task)
     with transport_principal_scope(direct_principal):
         accepted = guarded_claim(task_id=task_id, agent_id=f"codex/{task_id}", project=P)
+        accepted_offline_done = MCPAuthorizationGuard().wrap(
+            verify_offline_completion)(
+                task_id=task_id, evidence="task-bound production proof", project=P)
         try:
             guarded_claim(task_id="UI-999", agent_id=f"codex/{task_id}", project=P)
             crossed_task = True
         except ValueError:
             crossed_task = False
-    ok(accepted.get("task_id") == task_id and crossed_task is False,
-       "direct CLI can run the assigned Switchboard workflow but cannot cross tasks")
+        try:
+            MCPAuthorizationGuard().wrap(verify_offline_completion)(
+                task_id="UI-999", evidence="wrong task", project=P)
+            crossed_offline_task = True
+        except ValueError:
+            crossed_offline_task = False
+    ok(accepted.get("task_id") == task_id
+       and accepted_offline_done.get("task_id") == task_id
+       and crossed_task is False
+       and crossed_offline_task is False,
+       "direct CLI can complete its assigned offline workflow but cannot cross tasks")
     runner_record = {
         "runner_session_id": direct_runner_id,
         "host_id": MAC,
