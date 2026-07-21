@@ -638,11 +638,11 @@
         // lifecycle a linked task actually moves through (not started → ... → done);
         // Blocker is appended last (below) since it's an overlay on any of these states,
         // not a stage of its own.
+        // UI-60 Approach 1: classic durable-status legend (no start-failed fill).
         const legend = [
             ['external', 'External dep', '#f8f9fa', '#adb5bd'],
             ['todo', 'Not started', '#e9ecef', '#6c757d'],
             ['in_progress', 'In progress', '#8fb8fd', '#0b5ed7'],
-            ['start_failed', 'Start failed / Retry', '#ffd8a8', '#f76707'],
             ['in_review', 'In review', '#ffe083', '#e0a800'],
             ['blocked', 'Blocked', '#f5a3a9', '#c82333'],
             ['done_unproven', 'Done (no proof)', '#a6e3d0', '#12b886'],
@@ -654,8 +654,7 @@
             done: 'bg-green-lt',
             done_unproven: 'bg-teal-lt',
             in_progress: 'bg-blue-lt',
-            start_failed: 'bg-orange-lt',
-                in_review: 'bg-yellow-lt',
+            in_review: 'bg-yellow-lt',
             blocked: 'bg-red-lt',
             todo: 'bg-secondary-lt',
             external: 'bg-secondary-lt',
@@ -675,7 +674,6 @@
                 [stats.done_count, 'done'],
                 [stats.done_unproven_count, 'done · no proof'],
                 [stats.in_progress_count, 'in progress'],
-                [stats.start_failed_count, 'start failed'],
                 [stats.in_review_count, 'in review'],
                 [stats.blocked_count, 'blocked'],
                 [stats.todo_count, 'not started'],
@@ -809,7 +807,14 @@
         const active = (s.active_work || []).map((w) => `${w.task_id}:${w.status}:${(w.active_claims || []).length}`).sort();
         const blockers = (s.blockers || []).map((b) => `${b.kind || ''}:${b.task_id || ''}`).sort();
         const scopes = (this.autopilotScopes || []).map((scope) => `${scope.scope_id}:${scope.status}:${scope.updated_at}`).sort();
-        return JSON.stringify([nodeSig, active, blockers, scopes, s.progress || {}, g.stats || {}, (s.deliverable || {}).status, ((this.missionClosure || {}).report || {}).report_id, ((this.missionClosure || {}).report || {}).grade]);
+        // UI-60: re-render when tooltip prose or who's-working changes, even if status didn't.
+        const narration = (s.linked_tasks || []).map((link) => {
+            const d = link.task_detail || {};
+            return `${d.task_id || link.task_id}:${d.narration || ''}:${d.narration_raw || ''}`;
+        }).sort();
+        const agents = (s.active_agents || []).map((a) =>
+            `${a.task_id}:${a.agent_id}:${a.runtime || ''}:${a.stale ? 1 : 0}`).sort();
+        return JSON.stringify([nodeSig, active, blockers, scopes, narration, agents, s.progress || {}, g.stats || {}, (s.deliverable || {}).status, ((this.missionClosure || {}).report || {}).report_id, ((this.missionClosure || {}).report || {}).grade]);
     },
 
     _missionLiveStamp(changed) {

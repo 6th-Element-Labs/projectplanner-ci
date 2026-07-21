@@ -49,14 +49,16 @@ class HonestDisplayProjectionTest(unittest.TestCase):
 
 
 class HonestGraphStateTest(unittest.TestCase):
-    def test_seg5_shape_is_start_failed_not_in_progress(self):
+    def test_map_uses_durable_status_not_honest_display(self):
+        # UI-60 Approach 1: map fill follows durable workflow status only.
+        # Start-failed / Retry stays in modal + tooltip, not the box color.
         detail = {
             "status": "In Progress",
             "lifecycle_phase": "start_failed_retry",
             "honest_display": task_session.display_projection(_seg5_view()),
             "provenance": {},
         }
-        self.assertEqual(mission_graph.node_execution_state(detail), "start_failed")
+        self.assertEqual(mission_graph.node_execution_state(detail), "in_progress")
 
     def test_plain_in_progress_unchanged(self):
         self.assertEqual(

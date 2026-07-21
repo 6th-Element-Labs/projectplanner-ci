@@ -38,26 +38,18 @@ def _mermaid_id(task_id: str) -> str:
 
 def node_execution_state(detail: Dict[str, Any]) -> str:
     """Map task detail to a status color bucket:
-    done | done_unproven | in_progress | in_review | blocked | todo | missing
-    | start_failed.
+    done | done_unproven | in_progress | in_review | blocked | todo | missing.
 
     'done' is a Done task WITH recorded merge provenance (proof); a Done task
     without that proof is 'done_unproven', so the two stay visually distinct
     while both still read as Done.
 
-    SIMPLIFY-3: prefer TaskSession honest_display / lifecycle_phase over raw
-    workflow status so In-Progress corpses paint as start_failed.
+    UI-60: map fill follows durable workflow status only (grey / red / blue /
+    yellow / green). Start-failed / Retry belongs in the task modal and hover
+    tooltip — not an alternate box color.
     """
     if detail.get("error"):
         return "missing"
-    honest = detail.get("honest_display") if isinstance(
-        detail.get("honest_display"), dict) else {}
-    graph_state = str(honest.get("graph_state") or "").strip()
-    if graph_state:
-        return graph_state
-    phase = str(detail.get("lifecycle_phase") or "").strip()
-    if phase == "start_failed_retry":
-        return "start_failed"
     status = (detail.get("status") or "").strip()
     provenance = detail.get("provenance") or {}
     if status == "Done":

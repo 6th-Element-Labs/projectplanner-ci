@@ -39,6 +39,7 @@ from switchboard.domain.deliverables.lifecycle import (
     validate_deliverable_status,
 )
 from switchboard.storage.repositories.tasks import _task_row
+from switchboard.storage.repositories.narration import _narration_state
 from switchboard.domain.board.tasks import READY_TASK_STATUSES
 from switchboard.domain.validation_policy import classify_task
 
@@ -1936,6 +1937,24 @@ def _batch_enrich_mission_links(links: List[Dict[str, Any]]) -> List[Dict[str, A
             rows = c.execute(
                 f"SELECT * FROM tasks WHERE task_id IN ({placeholders})", uniq,
             ).fetchall()
+            # Activity cursor only — enough for narration fingerprint parity with get_task
+            # without pulling full activity payloads into the mission poll.
+            activity_max = {
+                str(r["task_id"]): int(r["mid"] or 0)
+                for r in c.execute(
+                    f"SELECT task_id, COALESCE(MAX(id), 0) AS mid FROM activity "
+                    f"WHERE task_id IN ({placeholders}) GROUP BY task_id",
+                    uniq,
+                ).fetchall()
+            }
+            narrations = {
+                str(r["task_id"]): dict(r)
+                for r in c.execute(
+                    f"SELECT task_id, narration, source_fingerprint, generated_at "
+                    f"FROM task_narrations WHERE task_id IN ({placeholders})",
+                    uniq,
+                ).fetchall()
+            }
             for row in rows:
                 task = _task_row(row)
                 git_state = _store_facade()._load_git_state(c, task["task_id"])
@@ -1943,6 +1962,17 @@ def _batch_enrich_mission_links(links: List[Dict[str, Any]]) -> List[Dict[str, A
                 task["provenance"] = _store_facade()._provenance_summary(git_state)
                 task["human_gate"] = _store_facade()._task_human_gate_state(task)
                 task["dependency_state"] = _store_facade()._dependency_state_in(c, task)
+                mid = activity_max.get(str(task["task_id"]), 0)
+                task["activity"] = [{"id": mid}] if mid else []
+                stored_narr = narrations.get(str(task["task_id"]))
+                if stored_narr:
+                    narration_state = _narration_state(stored_narr, task)
+                    task["narration_state"] = narration_state
+                    if narration_state.get("stale"):
+                        task["narration_raw"] = stored_narr.get("narration")
+                        task["narration"] = None
+                    else:
+                        task["narration"] = stored_narr.get("narration")
                 tasks_by_key[(proj, task["task_id"])] = task
             for tid in uniq:
                 claims = _store_facade()._active_task_claims_in(c, tid)
@@ -1982,10 +2012,6 @@ def _batch_enrich_mission_links(links: List[Dict[str, Any]]) -> List[Dict[str, A
         narration = task.get("narration")
         narration_raw = task.get("narration_raw")
         narration_state = task.get("narration_state") or {}
-        # Prefer CEO prose already on the row if the rich decorator never ran.
-        if not narration and not narration_raw:
-            # Task rows don't always carry narration until full get_task; leave nulls.
-            pass
         enriched["task_detail"] = {
             "task_id": task["task_id"],
             "title": task.get("title"),
@@ -2579,7 +2605,9 @@ def _build_deliverable_dependency_graph(project: str, deliverable: Dict[str, Any
         hit = _project_index(proj).get((task_id or "").strip().upper())
         if not hit:
             return None
-        detail = {
+        # UI-60: map colors come from durable status via node_execution_state —
+        # do not attach honest_display here (start-failed is modal/tooltip only).
+        return {
             "task_id": hit.get("task_id"),
             "title": hit.get("title"),
             "status": hit.get("status"),
@@ -2590,14 +2618,6 @@ def _build_deliverable_dependency_graph(project: str, deliverable: Dict[str, Any
             "agent_state": hit.get("agent_state") or {},
             "git_state": hit.get("git_state") or {},
         }
-        # SIMPLIFY-3: dependency map must not paint In-Progress corpses blue.
-        if str(detail.get("status") or "") == "In Progress":
-            try:
-                from switchboard.application.queries import task_session as task_session_query
-                task_session_query.attach_honest_display(detail, project=proj)
-            except Exception:
-                pass
-        return detail
 
     linked_tasks = []
     for link in (deliverable.get("task_links") or []):
