@@ -4,13 +4,16 @@
 # restart -> Caddy fail-closed -> runtime proof + rollback). Refreshes the
 # /health/version staleness signal on every tick. Triggered by the timer below.
 #
-# WHY THIS UNIT IS NOT SANDBOXED like the batch units (reconcile/narrate/etc.):
-# its entire job is to mutate the running system — `sudo git pull` on the
-# root-owned tree, `systemctl restart` of the web tier, and a Caddy reload. That
-# requires privilege escalation, so NoNewPrivileges / ProtectSystem=strict cannot
-# apply here. It runs as the `ubuntu` login (which holds sudo, matching the
-# documented `bash deploy/redeploy.sh` invocation), and redeploy.sh confines the
-# privileged steps to explicit `sudo` calls with its own rollback guard.
+# WHY THIS UNIT RUNS AS root AND IS NOT SANDBOXED like the batch units
+# (reconcile/narrate/etc.): its entire job is to mutate the running system —
+# `git pull` on the root-owned code tree (HARDEN-55), `systemctl restart` of the
+# web tier, a Caddy reload, AND writing the deploy-state signal into the
+# projectplanner-owned data dir (/var/lib/projectplanner, mode 750). No single
+# non-root account can do all three: `ubuntu` has sudo but cannot write the
+# projectplanner-owned data dir, and `projectplanner` owns the data dir but has
+# no sudo. root can, and the 0644 state file it writes is readable by the
+# projectplanner web app. So NoNewPrivileges / ProtectSystem=strict cannot apply
+# here; redeploy.sh still confines its steps and carries its own rollback guard.
 [Unit]
 Description=ProjectPlanner Switchboard auto-deploy canonical master to prod
 After=network-online.target
@@ -19,8 +22,8 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 Nice=5
-User=ubuntu
-Group=ubuntu
+User=root
+Group=root
 WorkingDirectory=/opt/projectplanner
 EnvironmentFile=/opt/projectplanner/.env
 Environment=PLAN_ROOT=/opt/projectplanner

@@ -277,8 +277,8 @@ svc_directives = [ln.strip() for ln in svc.splitlines()
 ok(not any(d.startswith(("NoNewPrivileges=yes", "ProtectSystem=strict"))
            for d in svc_directives),
    "autodeploy.service sets no escalation-blocking directive (it must escalate to deploy)")
-ok("User=ubuntu" in svc,
-   "autodeploy.service runs as the ubuntu login that holds sudo for redeploy.sh")
+ok(any(d == "User=root" for d in svc_directives),
+   "autodeploy.service runs as root — the only account that can both escalate (redeploy) and write the projectplanner-owned data dir")
 ok("Environment=PM_DEPLOY_STATE_FILE=" in svc,
    "autodeploy.service pins PM_DEPLOY_STATE_FILE so the timer and web app share one signal path (not the root-owned repo fallback)")
 ok("OnUnitActiveSec" in tmr and "[Install]" in tmr and "timers.target" in tmr,
