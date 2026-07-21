@@ -92,10 +92,14 @@ plan.taikunai.com {
         }
     }
     # BUG-70: Tasks sibling BCs stay on monolith (Mode A surface → :8122).
+    # SIMPLIFY-10's task-session command surface is also monolith-owned: the
+    # thin Tasks service deliberately omits /start and /execution[/...] along
+    # with dispatch/chat/review. Keep those paths ahead of the broad Tasks
+    # handle or the Watch/Start controls receive a route-level 404 from :8122.
     # A Caddy path matcher with multiple `*` wildcards did not reliably match nested
     # paths such as /dispatch/latest, which then fell through to the broad Tasks
     # handle. Use one anchored regexp for the complete sibling surface instead.
-    @tasks_sibling path_regexp tasks_sibling ^/api/tasks/[^/]+/(dispatch|chat|resume-review|review_[^/]+)(/.*)?$
+    @tasks_sibling path_regexp tasks_sibling ^/api/tasks/[^/]+/(dispatch|chat|resume-review|start|execution|review_[^/]+)(/.*)?$
     handle @tasks_sibling {
         reverse_proxy 127.0.0.1:8110 {
             transport http {

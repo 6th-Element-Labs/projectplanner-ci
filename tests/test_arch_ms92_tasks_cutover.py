@@ -45,8 +45,8 @@ ok("8122" in live, "live Caddy points Tasks at :8122")
 ok("@tasks_sibling path_regexp tasks_sibling" in live,
    "live Caddy carves dispatch/chat/review siblings with one anchored matcher")
 ok(
-    "dispatch|chat|resume-review|review_" in live,
-    "sibling matcher covers dispatch, chat, resume-review, and review",
+    "dispatch|chat|resume-review|start|execution|review_" in live,
+    "sibling matcher covers dispatch, chat, task execution, and review",
 )
 ok("handle @tasks_sibling" in live, "sibling matcher routes through its own handle")
 ok("/txp/v1/claim_next" in live and "/txp/v1/complete_claim" in live,
@@ -110,6 +110,12 @@ ok(
     or disp.status_code != 404,
     "dispatch miss is handler 404 (mounted) not missing route",
 )
+execution = client.get("/api/tasks/x/execution", params={"project": "ms92-alpha"})
+ok(
+    execution.status_code != 404
+    or "task_not_found" in str(execution.json()),
+    "task execution miss is a command refusal (mounted) not a missing route",
+)
 
 # Cut still serves Mode A
 from switchboard.services.tasks import create_app  # noqa: E402
@@ -122,6 +128,8 @@ ok(cut.get("/api/tasks", params={"project": "ms92-alpha"}).status_code == 200,
    "Tasks cut still lists Mode A")
 ok(cut.post("/api/tasks/x/dispatch", json={"project": "ms92-alpha"}).status_code == 404,
    "Tasks cut still omits dispatch")
+ok(cut.get("/api/tasks/x/execution", params={"project": "ms92-alpha"}).status_code == 404,
+   "Tasks cut still omits task execution")
 
 # --- independence / exit gate Path A ----------------------------------------
 import json  # noqa: E402
