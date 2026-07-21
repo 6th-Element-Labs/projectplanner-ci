@@ -122,8 +122,6 @@ try:
             "wake_id": wake_id,
             "work_session_id": current_ws["work_session_id"],
             "credential_admission_phase": "claim_bound",
-            "execution_connection_id": "execconn-ui40-watch",
-            "source_sha": "a" * 40,
         },
     }, principal_id="principal/ui40-host", actor=host_id, project=P)
     ticket = runner_pty.mint_ticket_for_session(
@@ -151,7 +149,12 @@ try:
        f"wss://plan.example/ixp/v1/runner_sessions/{runner_id}/pty/host?ticket=")
        and str(relay_options.get("browser_url") or "").startswith(
        f"wss://plan.example/ixp/v1/runner_sessions/{runner_id}/pty?ticket="),
-       "server mints distinct host and browser relay capabilities at control claim")
+       "server mints host/browser capabilities for a valid legacy runner that "
+       "omits optional source and execution metadata")
+    ok(relay_options.get("binding", {}).get("execution_connection_id")
+       == "execconn/unspecified"
+       and relay_options.get("binding", {}).get("source_sha") == "unknown",
+       "host relay uses the same safe optional binding defaults as browser mint")
     ok("server_relay" not in (persisted_control.get("options") or {}),
        "server relay capabilities are delivered ephemerally and never persisted")
 

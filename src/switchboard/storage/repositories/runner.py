@@ -2032,20 +2032,26 @@ def _server_relay_options(session: Dict[str, Any], *, user_id: str,
         return {"error": "relay_public_base_unavailable"}
     direct = is_direct_assignment_runner(session)
     direct_ref = f"direct/{session.get('runner_session_id') or 'session'}"
+    bind = runner_bind_tuple(session)
     binding = {
         "tenant_id": str(metadata.get("tenant_id") or "tenant/default"),
         "user_id": str(user_id or "operator"),
         "project_id": str(project or DEFAULT_PROJECT),
-        "task_id": str(session.get("task_id") or ""),
-        "claim_id": str(session.get("claim_id") or (direct_ref if direct else "")),
+        # Use the same canonical COORD-34 extraction as browser ticket minting.
+        # Rebuilding this tuple ad hoc made the host ticket reject valid legacy
+        # rows that the browser ticket accepted (BUG-125).
+        "task_id": bind.get("task_id") or "",
+        "claim_id": bind.get("claim_id") or (direct_ref if direct else ""),
         "work_session_id": str(
-            metadata.get("work_session_id") or (direct_ref if direct else "")),
+            bind.get("work_session_id") or (direct_ref if direct else "")),
         "runner_session_id": str(session.get("runner_session_id") or ""),
-        "host_id": str(session.get("host_id") or ""),
-        "wake_id": str(metadata.get("wake_id") or ""),
+        "host_id": bind.get("host_id") or "",
+        "wake_id": bind.get("wake_id") or "",
         "execution_connection_id": str(
-            metadata.get("execution_connection_id") or (direct_ref if direct else "")),
-        "source_sha": str(metadata.get("source_sha") or (direct_ref if direct else "")),
+            metadata.get("execution_connection_id")
+            or (direct_ref if direct else "execconn/unspecified")),
+        "source_sha": str(
+            metadata.get("source_sha") or (direct_ref if direct else "unknown")),
         "permission_profile": "operator_watch",
     }
     missing = pty_domain.missing_ticket_bind_fields(binding)

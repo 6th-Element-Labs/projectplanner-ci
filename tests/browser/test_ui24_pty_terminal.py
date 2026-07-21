@@ -310,6 +310,34 @@ try:
            "discard scrollback and leak the old ResizeObserver on every drop)")
         ok(reused["line0"] == "UI-24 PLAYWRIGHT OK", "scrollback from before the simulated reconnect is still there")
 
+        # BUG-125: a WebSocket to the relay is not proof that the Agent Host
+        # tunnel exists. Only the host-attached frame may turn the UI live.
+        readiness = page.evaluate("""
+            () => {
+                const rp = TeepPlan._runnerPty;
+                TeepPlan._runnerPtyHandleFrame(rp, TeepPlan._runnerPtyEncodeFrame(
+                    'ready', {connection_state: 'waiting_for_host', host_attached: false, relay_ready: true}));
+                const waiting = {
+                    gate: document.getElementById('runner-pty-gate').textContent,
+                    liveHidden: document.getElementById('runner-pty-live').hidden,
+                };
+                TeepPlan._runnerPtyHandleFrame(rp, TeepPlan._runnerPtyEncodeFrame(
+                    'ready', {connection_state: 'host_attached', host_attached: true, relay_ready: true}));
+                return {
+                    waiting,
+                    readyGate: document.getElementById('runner-pty-gate').textContent,
+                    readyLiveHidden: document.getElementById('runner-pty-live').hidden,
+                    hostAttached: rp.hostAttached,
+                };
+            }
+        """)
+        ok("waiting for Agent Host" in readiness["waiting"]["gate"]
+           and readiness["waiting"]["liveHidden"],
+           "relay-only socket is visibly waiting and cannot claim the agent is live")
+        ok(readiness["hostAttached"] and not readiness["readyLiveHidden"]
+           and "Connected to Agent Host" in readiness["readyGate"],
+           "only the explicit host-attached frame marks the terminal end-to-end connected")
+
         # SIMPLIFY-9: reconnect reuses the one unexpired session capability.
         # Once a refresh is needed it is task-scoped; the browser still sends no
         # runner id and the server resolves the current execution.

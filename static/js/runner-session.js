@@ -824,7 +824,8 @@
         ws.addEventListener('open', () => {
             if (this._runnerPty !== rp) return;
             rp.reconnectAttempts = 0;
-            this._runnerPtyGate('Connected — waiting for output…', 'secondary');
+            rp.hostAttached = false;
+            this._runnerPtyGate('Relay connected — waiting for Agent Host…', 'warning');
             if (reconnecting && rp.term) {
                 // The relay's bounded replay buffer backfills from here, and
                 // since the terminal (unlike before) kept its prior
@@ -832,9 +833,8 @@
                 // screen — mark the seam instead of leaving it unexplained.
                 rp.term.write('\r\n\x1b[2m─── reconnected ───\x1b[0m\r\n');
             }
-            this._runnerPtySendResize();
             const live = document.getElementById('runner-pty-live');
-            if (live) live.hidden = false;
+            if (live) live.hidden = true;
         });
         ws.addEventListener('message', (ev) => {
             if (this._runnerPty !== rp) return;
@@ -867,6 +867,17 @@
             this._runnerPtyGate('', 'secondary');
         } else if (type === 'exit') {
             this._runnerPtyGate(`Session closed: ${this.esc(frame.reason || frame.detail || 'ended')}`, 'secondary');
+        } else if (type === 'ready' && !frame.request_id
+                && Object.prototype.hasOwnProperty.call(frame, 'host_attached')) {
+            rp.hostAttached = frame.host_attached === true;
+            const live = document.getElementById('runner-pty-live');
+            if (live) live.hidden = !rp.hostAttached;
+            if (rp.hostAttached) {
+                this._runnerPtyGate('Connected to Agent Host — waiting for output…', 'secondary');
+                this._runnerPtySendResize();
+            } else {
+                this._runnerPtyGate('Relay connected — waiting for Agent Host…', 'warning');
+            }
         } else if (type === 'ready' && frame.request_id) {
             // Delivery ack for Watch chat (replaces legacy control_ack).
             const pending = rp.pendingChat && rp.pendingChat[frame.request_id];

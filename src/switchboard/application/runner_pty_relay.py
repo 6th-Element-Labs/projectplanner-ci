@@ -505,7 +505,15 @@ class RelayHub:
             session.host_close_fn = close_fn
             session.last_active = time.time()
             buffered = len(session.host_queue)
+            browser_ids = list(session.browsers)
         drained = self._drain_host(session_id)
+        ready = domain.encode_frame("ready", {
+            "connection_state": "host_attached",
+            "host_attached": True,
+            "relay_ready": True,
+        })
+        for client_id in browser_ids:
+            self._enqueue_browser(session_id, client_id, ready)
         return {
             "ok": True,
             "runner_session_id": str(session_id),
@@ -514,6 +522,7 @@ class RelayHub:
         }
 
     def detach_host(self, session_id: str, send_fn: SendFn | None = None) -> None:
+        browser_ids: list[str] = []
         with self._lock:
             session = self._sessions.get(str(session_id))
             if not session:
@@ -522,6 +531,14 @@ class RelayHub:
                 session.host_send = None
                 session.host_ticket_jti = ""
                 session.host_close_fn = None
+                browser_ids = list(session.browsers)
+        waiting = domain.encode_frame("ready", {
+            "connection_state": "waiting_for_host",
+            "host_attached": False,
+            "relay_ready": True,
+        })
+        for client_id in browser_ids:
+            self._enqueue_browser(session_id, client_id, waiting)
 
     def attach_browser(
         self,
@@ -572,6 +589,7 @@ class RelayHub:
             )
             session.browsers[cid] = client
             session.last_active = time.time()
+            host_attached = session.host_send is not None
             # UI-25: prefer a full-frame snapshot of the current screen over the
             # raw byte-replay ring. The snapshot IS the current screen, so it
             # renders instantly even for an idle TUI whose last paint has rolled
@@ -580,6 +598,17 @@ class RelayHub:
             # model is available (pyte missing) or nothing has been drawn yet.
             snapshot = session.screen.snapshot_bytes()
             replay_frames = [] if snapshot else list(session.replay)
+        self._enqueue_browser(
+            session_id,
+            cid,
+            domain.encode_frame("ready", {
+                "connection_state": (
+                    "host_attached" if host_attached else "waiting_for_host"),
+                "host_attached": host_attached,
+                "relay_ready": True,
+            }),
+            is_replay=True,
+        )
         sent_snapshot = False
         if snapshot:
             snapshot_frame = domain.encode_frame("snapshot", {}, data=snapshot)
