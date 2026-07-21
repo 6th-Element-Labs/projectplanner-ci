@@ -47,3 +47,14 @@ Connect therefore has no concepts for tools, tasks, claims, Work Sessions,
 review, evidence, source control, pull requests, completion, or lifecycle roles.
 The `test_dispatch10_connect_kernel.py` architecture ratchet fails if those
 dependencies or wire fields enter `src/switchboard/connect/`.
+
+## Thin host launchers
+
+`build_launch_spec` converts an active Ack into four process-control facts: provider argv,
+a host-resolved working directory, Connect identity environment variables, and hard resource
+limits. Provider command syntax comes from `HostRuntimeConfig`, which is installed on the host.
+
+The launcher does not start a process, resolve `workspace_ref`, create credentials, configure
+Communicate, inspect work, or finalize anything. The host supervisor owns process creation and
+limit enforcement. The launched agent uses the Communicate connection already installed on the
+host. Codex, Claude, and Cursor receive the same identity envelope and minimal assignment note.

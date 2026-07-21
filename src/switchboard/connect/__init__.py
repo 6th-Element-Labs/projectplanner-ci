@@ -16,6 +16,13 @@ from .contract import (
     RuntimeCapability,
 )
 from .kernel import ConnectKernel, ConnectRefused
+from .launcher import (
+    HostRuntimeConfig,
+    LaunchRefused,
+    LaunchSpec,
+    assignment_note,
+    build_launch_spec,
+)
 
 __all__ = [
     "Ack",
@@ -28,4 +35,9 @@ __all__ = [
     "Request",
     "ResourceLimits",
     "RuntimeCapability",
+    "HostRuntimeConfig",
+    "LaunchRefused",
+    "LaunchSpec",
+    "assignment_note",
+    "build_launch_spec",
 ]
