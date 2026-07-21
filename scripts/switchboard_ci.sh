@@ -164,6 +164,10 @@ section "Concurrent agent-path SLO gate"
 CONCURRENT_LOAD_REPORT="${CONCURRENT_LOAD_REPORT:-${TMPDIR:-/tmp}/switchboard-concurrent-load-report.json}" \
   "$PYTHON" scripts/concurrent_load_gate.py
 
+section "Cross-process SQLite contention SLO gate (ARCH-19)"
+CROSS_PROCESS_LOAD_REPORT="${CROSS_PROCESS_LOAD_REPORT:-${TMPDIR:-/tmp}/switchboard-cross-process-load-report.json}" \
+  "$PYTHON" scripts/cross_process_load_gate.py
+
 section "CI hermeticity gate (tests must not read live host state)"
 # A flaky test blocks the whole merge-queue train, not just one PR. Fail before the suite runs
 # if any test_*.py reaches for live /proc, host load, psutil, or real network (BUG-67 class).

@@ -1,0 +1,36 @@
+{
+  "schema": "switchboard.cross_process_load_slo_ratchet.v1",
+  "relates_to": "ARCH-19",
+  "purpose": "ADR-0007 ratchet applied to the cross-process SQLite writer-contention SLO. scripts/cross_process_load_gate.py reads THIS committed file for its enforced ceilings. The gate spawns separate OS processes (default 3: app + MCP server + one timer job is the steady-state concurrent-writer set) against one shared database directory, so it measures the WAL + busy_timeout arbitration BETWEEN per-process single-writer queues — the deployed topology that the in-process gate (perf/concurrent_load_slo.json) deliberately excludes and that ARCH-19 names as the Postgres trigger. The gate fails when a measured statistic reaches its 'ratchet_ms', when any worker process dies, or on ANY client-visible database-lock error that escapes the store retry loop — the lock-error count is the sharp invariant; the latency ratchets are the backstop for the serialized-writes incident class. 'slo_ms' is the hard ceiling the ratchet may never be relaxed to or past (the loader asserts ratchet_ms < slo_ms). Env vars (XPROC_LOAD_GATE_*_MS) may only TIGHTEN a ceiling; they can never loosen it.",
+  "notes": "Seeded from local high-water (7 runs, 3-4 procs x 20 rounds: writes p99 25.1ms, search_tasks p99 25.9ms, board_summary p95 5.8ms, all_calls max 35.0ms, 0 lock errors), NOT yet from a public-CI run. Ratchets are therefore deliberately generous (~8-10x local high-water) so CI runner variance (~2-10x slower than local, per the HARDEN-64 baseline notes) cannot flake the merge queue before a CI high-water exists; the incident class this defends against (cross-process lock storms — busy_timeout waits and store retry backoff at >=100ms granularity) pushes write p99 into the hundreds of ms, past every ratchet here even at its loosest. Follow-up (mirrors HARDEN-62): record multi-run public-CI numbers and tighten each ratchet_ms toward its measured CI high-water + margin. board_summary and all_calls ceilings mirror the in-process baseline, which CI already sustains at higher intra-process concurrency.",
+  "metrics": {
+    "writes": {
+      "stat": "p99",
+      "ratchet_ms": 200.0,
+      "slo_ms": 300.0,
+      "measured_high_water_ms": 25.07,
+      "measured_source": "local 2026-07-21; re-seed from CI"
+    },
+    "search_tasks": {
+      "stat": "p99",
+      "ratchet_ms": 200.0,
+      "slo_ms": 300.0,
+      "measured_high_water_ms": 25.9,
+      "measured_source": "local 2026-07-21; re-seed from CI"
+    },
+    "board_summary": {
+      "stat": "p95",
+      "ratchet_ms": 250.0,
+      "slo_ms": 400.0,
+      "measured_high_water_ms": 5.8,
+      "measured_source": "local 2026-07-21; re-seed from CI"
+    },
+    "all_calls": {
+      "stat": "max",
+      "ratchet_ms": 2500.0,
+      "slo_ms": 5000.0,
+      "measured_high_water_ms": 35.01,
+      "measured_source": "local 2026-07-21; re-seed from CI"
+    }
+  }
+}
