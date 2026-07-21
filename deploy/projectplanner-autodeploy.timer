@@ -1,0 +1,22 @@
+# /etc/systemd/system/projectplanner-autodeploy.timer
+# BUG-114: check for an advanced canonical master every 2 minutes and deploy when
+# behind. The common tick is a cheap `git fetch` + compare; a redeploy fires only
+# when master is actually ahead (every master commit is merge-queue-green, so
+# "ahead" is a safe trigger).
+#
+# To enable (this is a NEW unit; a plain redeploy won't force-start it):
+#   sudo cp projectplanner-autodeploy.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now projectplanner-autodeploy.timer
+[Unit]
+Description=ProjectPlanner Switchboard auto-deploy check (every 2 minutes)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+RandomizedDelaySec=20s
+Persistent=true
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target

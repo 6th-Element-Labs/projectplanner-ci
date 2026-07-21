@@ -1,0 +1,44 @@
+# /etc/systemd/system/projectplanner-autodeploy.service
+# BUG-114: one-shot auto-deploy trigger. Fetches canonical master and, when the
+# running checkout is behind, runs deploy/redeploy.sh (pull -> deps -> units ->
+# restart -> Caddy fail-closed -> runtime proof + rollback). Refreshes the
+# /health/version staleness signal on every tick. Triggered by the timer below.
+#
+# WHY THIS UNIT IS NOT SANDBOXED like the batch units (reconcile/narrate/etc.):
+# its entire job is to mutate the running system — `sudo git pull` on the
+# root-owned tree, `systemctl restart` of the web tier, and a Caddy reload. That
+# requires privilege escalation, so NoNewPrivileges / ProtectSystem=strict cannot
+# apply here. It runs as the `ubuntu` login (which holds sudo, matching the
+# documented `bash deploy/redeploy.sh` invocation), and redeploy.sh confines the
+# privileged steps to explicit `sudo` calls with its own rollback guard.
+[Unit]
+Description=ProjectPlanner Switchboard auto-deploy canonical master to prod
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Nice=5
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/projectplanner
+EnvironmentFile=/opt/projectplanner/.env
+Environment=PLAN_ROOT=/opt/projectplanner
+Environment=PYTHONDONTWRITEBYTECODE=1
+# Pin the staleness state file to the service-writable data dir. This MUST match
+# what the web app resolves so GET /health/version reads the same file the timer
+# writes — set the identical PM_DEPLOY_STATE_FILE in /opt/projectplanner/.env
+# (both services load it via EnvironmentFile). An explicit value here also keeps
+# the timer off the root-owned repo-root fallback it could never write.
+Environment=PM_DEPLOY_STATE_FILE=/var/lib/projectplanner/deploy-state.json
+# The script locks the whole cycle (atomic mkdir), so an overlapping tick or a
+# tick landing on top of a long redeploy exits 0 without a second deploy.
+ExecStart=/usr/bin/env bash /opt/projectplanner/deploy/auto_deploy.sh
+# A failed redeploy has already rolled the edge back inside redeploy.sh; surface
+# the non-zero result to the journal but never let systemd retry-loop a deploy.
+TimeoutStartSec=1200
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -14,6 +14,7 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 import auth
+import deploy_staleness
 import narration_ops
 import store
 
@@ -95,6 +96,18 @@ def create_router(*, resolve_project: ProjectResolver,
     async def health():
         """Liveness probe — must stay cheap so monitors/Caddy never block the event loop."""
         return {"status": "ok", "service": "taikun-pm"}
+
+
+    @router.get("/health/version")
+    async def health_version():
+        """Deployment staleness signal (BUG-114). Publicly routed under Caddy's
+        /health*; exposes only deployment metadata (git SHAs, commits-behind),
+        never project data. Reads the state file the auto-deploy timer maintains —
+        it never shells git on the request path — so a missing signal degrades to
+        ``deploy_signal: "unknown"`` rather than an error. Lets an operator or an
+        off-box monitor see 'prod is N commits behind master' instead of silently
+        serving stale code after a merge."""
+        return deploy_staleness.health_view()
 
 
     @router.get("/health/deep")
