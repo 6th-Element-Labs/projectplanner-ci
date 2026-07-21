@@ -411,7 +411,28 @@ def _work_session_health(session: Dict[str, Any],
 
     if preflight:
         verdict = (preflight.get("verdict") or "").strip().lower()
-        if verdict == "deny" or preflight.get("ok") is False:
+        # BUG-115: a host-local worktree awaiting its Agent Host git attestation is
+        # not a failed gate -- the server deliberately refuses to stat a path that
+        # lives on the remote host. Keep it a visible, non-blocking signal so the
+        # direct-CLI Work Session stays active until the heartbeat attests it.
+        pending_host_attestation = (
+            bool(preflight.get("pending"))
+            or preflight.get("source") == "agent_host_pending"
+        )
+        if pending_host_attestation:
+            findings.append(_session_health_finding(
+                "work_session_preflight_pending",
+                "Host-local worktree is awaiting an Agent Host git attestation; "
+                "the server did not stat the remote path.",
+                "missing_data",
+                severity="medium",
+                blocking=False,
+                repair="Wait for the Agent Host heartbeat to attach its signed repo "
+                       "attestation (BUG-97), then rerun preflight_work_session.",
+                work_session_id=work_session_id,
+                preflight_verdict=verdict or None,
+            ))
+        elif verdict == "deny" or preflight.get("ok") is False:
             findings.append(_session_health_finding(
                 "work_session_preflight_failed",
                 "Recorded repo preflight is not clean.",
@@ -1418,8 +1439,22 @@ def preflight_work_session(work_session_id: str, actor: str = "system",
             expected_base_ref=expected_base_ref,
         )
         if report is None:
+            # BUG-115: a direct-CLI session on an enrolled host creates its Work
+            # Session and preflights it before the Agent Host heartbeat has had a
+            # chance to attach the BUG-97 attestation. While a live host runner
+            # owns this host-local worktree, refuse to stat a path that is
+            # definitionally not on the coordinator's filesystem: return a visible,
+            # non-blocking "awaiting host attestation" pending report so the session
+            # stays active until the heartbeat attests it.
+            report = _host_owned_pending_preflight(
+                session,
+                project=project,
+                expected_branch=expected_branch or session.get("branch") or "",
+                expected_base_ref=expected_base_ref,
+            )
+        if report is None:
             # Preserve the original fail-closed result when no fresh, exact host
-            # attestation is bound to this Work Session.
+            # attestation is bound and no live host runner owns the worktree.
             report = _store_facade().repo_preflight(
                 worktree_path,
                 project=project,
@@ -1554,6 +1589,94 @@ def _remote_host_preflight(session: Dict[str, Any], *, project: str,
         })
         return report
     return None
+
+
+def _host_owned_pending_preflight(session: Dict[str, Any], *, project: str,
+                                  expected_branch: str = "",
+                                  expected_base_ref: str = "") -> Optional[Dict[str, Any]]:
+    """Return a non-blocking pending report when a live host runner owns a
+    host-local worktree that has not produced a BUG-97 attestation yet.
+
+    Direct-CLI sessions (start_task -> direct_codex_session) create their Work
+    Session and preflight it before the Agent Host heartbeat late-binds the
+    ``work_session_id`` and attaches ``host_repo_preflight``. During that window
+    ``_remote_host_preflight`` cannot find a fresh attestation, and the path lives
+    only on the enrolled host. Rather than stat a path the coordinator can never
+    see (a false ``worktree_missing`` deny that leaves the session born blocked),
+    recognise that a live host runner owns the session and surface a visible,
+    auditable pending signal. The heartbeat attestation upgrades it to a real pass
+    on the next ``preflight_work_session`` run; completion/merge still require that
+    pass, so nothing lands unverified.
+    """
+    now = time.time()
+    task_id = str(session.get("task_id") or "").upper()
+    agent_id = str(session.get("agent_id") or "")
+    work_session_id = str(session.get("work_session_id") or "")
+    principal_id = str(session.get("principal_id") or "")
+    if not task_id or not agent_id:
+        return None
+    with _conn(project) as c:
+        rows = c.execute(
+            "SELECT * FROM runner_sessions WHERE task_id=? AND agent_id=? "
+            "AND status IN ('ready','running') ORDER BY heartbeat_at DESC LIMIT 8",
+            (task_id, agent_id),
+        ).fetchall()
+    owning_runner: Optional[Dict[str, Any]] = None
+    for row in rows:
+        runner = dict(row)
+        # A dead/stale runner must never mask a genuinely missing worktree.
+        ttl = max(10, int(runner.get("heartbeat_ttl_s") or 60))
+        if float(runner.get("heartbeat_at") or 0) + ttl <= now:
+            continue
+        metadata = _json_obj(runner.get("metadata_json"), {})
+        runner_session_id = str(runner.get("runner_session_id") or "")
+        owns = (
+            (work_session_id
+             and str(metadata.get("work_session_id") or "") == work_session_id)
+            or (principal_id
+                and principal_id == f"direct-session/{runner_session_id}")
+        )
+        if owns:
+            owning_runner = runner
+            break
+    if owning_runner is None:
+        return None
+    worktree_path = str(session.get("worktree_path") or session.get("clone_path") or "")
+    finding = {
+        "code": "host_preflight_pending",
+        "message": ("Host-local worktree awaits an Agent Host git attestation; the "
+                    "coordinator will not stat a path on the enrolled host."),
+        "failure_class": "missing_data",
+        "severity": "medium",
+        "blocking": False,
+        "details": {
+            "worktree_path": worktree_path,
+            "host_id": str(owning_runner.get("host_id") or ""),
+            "runner_session_id": str(owning_runner.get("runner_session_id") or ""),
+        },
+    }
+    return {
+        "schema": "switchboard.repo_preflight.v1",
+        "source": "agent_host_pending",
+        "pending": True,
+        "project": project,
+        "repo_role": session.get("repo_role") or "canonical",
+        "repo_path": worktree_path,
+        "expected_branch": expected_branch,
+        "expected_base_ref": expected_base_ref,
+        "branch": str(session.get("branch") or ""),
+        "head_sha": str(session.get("head_sha") or ""),
+        "base_sha": str(session.get("base_sha") or ""),
+        "upstream": str(session.get("upstream") or ""),
+        "host_id": str(owning_runner.get("host_id") or ""),
+        "runner_session_id": str(owning_runner.get("runner_session_id") or ""),
+        "dirty": False,
+        "conflict_marker_count": 0,
+        "findings": [finding],
+        "ok": False,
+        "verdict": "warn",
+        "validated_at": now,
+    }
 
 
 def _coerce_work_session_payload(value: Any) -> Tuple[Dict[str, Any], str]:
