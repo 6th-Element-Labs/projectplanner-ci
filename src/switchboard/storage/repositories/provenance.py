@@ -1445,37 +1445,16 @@ def reconcile(project: str = DEFAULT_PROJECT, incremental: bool = False,
                 findings.append({"severity": "medium", "task_id": lease["task_id"],
                                  "code": "stale_resource_lease",
                                  "detail": f"{lease['resource_type']} lease {lease['id']} by {lease['agent_id']} expired without release."})
-        tasks_by_id = {task["task_id"]: task for task in tasks}
         evidence_kwargs = ({
             "task_ids": sorted(checked_task_ids),
             "limit": max(1, min(int(evidence_limit), 5000)),
         } if incremental else {})
-        for report in _store_facade()._evidence_claim_reports(c, **evidence_kwargs):
-            if report.get("status") == "pass":
-                continue
-            task_id = report.get("task_id")
-            task = tasks_by_id.get(task_id) if task_id else None
-            if (task and task.get("status") == "Done"
-                    and _has_done_provenance(git_states.get(task_id, {}))):
-                continue
-            artifacts = ", ".join(report.get("claim", {}).get("artifacts") or [])
-            evidence_values = []
-            declared = report.get("declared_evidence") or {}
-            for key in ("paths", "urls", "refs"):
-                evidence_values.extend(declared.get(key) or [])
-            detail = report.get("detail") or "Claim evidence could not be verified."
-            if artifacts:
-                detail += f" Claimed artifact(s): {artifacts}."
-            if evidence_values:
-                detail += f" Declared evidence: {', '.join(evidence_values)}."
-            findings.append({
-                "severity": report.get("severity") or "medium",
-                "task_id": report.get("task_id"),
-                "code": report.get("code") or "claim_without_evidence",
-                "failure_class": report.get("failure_class") or "missing_data",
-                "detail": detail,
-                "evidence_claim": report,
-            })
+        # Snapshot claim reports now, but emit findings only after merge backfill so a
+        # successful same-pass Done stamp can suppress false claim_evidence_missing for
+        # PR heads the control-plane clone has not fetched (BUG-117).
+        evidence_reports = list(
+            _store_facade()._evidence_claim_reports(c, **evidence_kwargs)
+        )
     external_findings, external_checks, backfilled = _external_reconcile_findings(
         tasks, git_states, agreement.get("canonical_main_sha") or "", project=project,
         run_discovery_backstops=not incremental)
@@ -1484,6 +1463,33 @@ def reconcile(project: str = DEFAULT_PROJECT, incremental: bool = False,
         tasks, git_states, project=project)
     findings.extend(publication_findings)
     external_checks.update(publication_checks)
+    tasks_by_id = {task["task_id"]: task for task in tasks}
+    for report in evidence_reports:
+        if report.get("status") == "pass":
+            continue
+        task_id = report.get("task_id")
+        task = tasks_by_id.get(task_id) if task_id else None
+        if (task and task.get("status") == "Done"
+                and _has_done_provenance(git_states.get(task_id, {}))):
+            continue
+        artifacts = ", ".join(report.get("claim", {}).get("artifacts") or [])
+        evidence_values = []
+        declared = report.get("declared_evidence") or {}
+        for key in ("paths", "urls", "refs"):
+            evidence_values.extend(declared.get(key) or [])
+        detail = report.get("detail") or "Claim evidence could not be verified."
+        if artifacts:
+            detail += f" Claimed artifact(s): {artifacts}."
+        if evidence_values:
+            detail += f" Declared evidence: {', '.join(evidence_values)}."
+        findings.append({
+            "severity": report.get("severity") or "medium",
+            "task_id": report.get("task_id"),
+            "code": report.get("code") or "claim_without_evidence",
+            "failure_class": report.get("failure_class") or "missing_data",
+            "detail": detail,
+            "evidence_claim": report,
+        })
     if not (agreement.get("canonical_main_sha") or _store_facade().get_meta("canonical_main_sha", None, project=project)):
         findings.append({"severity": "medium", "task_id": None,
                          "code": "missing_canonical_main_sha",

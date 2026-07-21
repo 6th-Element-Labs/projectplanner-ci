@@ -168,6 +168,142 @@ try:
         "squash-merged Done task trusts merged_sha instead of missing pre-squash claim head",
     )
 
+    # BUG-117: full reconcile backfills a merged PR to Done in the same pass. Evidence
+    # claim checks must not emit claim_evidence_missing for the unfetched PR head after
+    # that successful merge backfill (control-plane clones often lack task branches).
+    simultaneous = store.create_task(
+        {
+            "workstream_id": "BUG",
+            "title": "simultaneous merge backfill vs claim evidence",
+            "description": "policy_profile:no_repo\nBUG-117 fixture: In Review claim before reconcile backfill.",
+        },
+        actor="test",
+        project=P,
+    )
+    simultaneous_claim = store.claim_task(
+        simultaneous["task_id"],
+        "codex/BUG-117",
+        actor="codex/BUG-117",
+        project=P,
+    )
+    # Synthetic SHA absent from the local object DB (control-plane miss).
+    unreachable_head = "0" * 40
+    simultaneous_pr_url = (
+        "https://github.com/6th-Element-Labs/projectplanner/pull/690"
+    )
+    store.complete_claim(
+        simultaneous_claim["claim_id"],
+        evidence={
+            "branch": "codex/BUG-116-direct-cli-intake",
+            "head_sha": unreachable_head,
+            "pr_url": simultaneous_pr_url,
+        },
+        actor="codex/BUG-117",
+        project=P,
+    )
+    merge_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    store.set_project_github_repo("6th-Element-Labs/projectplanner", project=P)
+    original_fetch = store._fetch_github_prs
+    original_token = store._github_token
+    original_orphan = getattr(store, "_orphan_merge_discovery_findings", None)
+
+    def fake_fetch_prs(pr_keys, token=""):
+        out = {}
+        for repo, pr_number in pr_keys:
+            if int(pr_number) == 690:
+                out[(repo, 690)] = {
+                    "merged_at": "2026-07-20T12:00:00Z",
+                    "merge_commit_sha": merge_sha,
+                    "html_url": simultaneous_pr_url,
+                    "base": {"ref": "master", "repo": {"default_branch": "master"}},
+                    "head": {
+                        "ref": "codex/BUG-116-direct-cli-intake",
+                        "sha": unreachable_head,
+                    },
+                }
+        return out, {"github_prs_fetch": "mocked"}
+
+    store._fetch_github_prs = fake_fetch_prs
+    store._github_token = lambda: "tok"
+    # Keep this fixture focused on the recorded-PR backfill path.
+    store._orphan_merge_discovery_findings = (
+        lambda *a, **k: ([], [], {"orphan_merge_discovery": "skipped_test"})
+    )
+    try:
+        simultaneous_report = store.reconcile(project=P)
+    finally:
+        store._fetch_github_prs = original_fetch
+        store._github_token = original_token
+        if original_orphan is not None:
+            store._orphan_merge_discovery_findings = original_orphan
+    ok(
+        any(
+            item.get("task_id") == simultaneous["task_id"]
+            for item in (simultaneous_report.get("backfilled") or [])
+        ),
+        "full reconcile backfills the merged PR to Done",
+    )
+    ok(
+        finding(simultaneous_report, simultaneous["task_id"], "claim_evidence_missing")
+        is None,
+        "merged-PR backfill does not emit false claim_evidence_missing for unfetched PR head",
+    )
+
+    # Remote-reachable PR head (ls-remote) must pass even when the local clone lacks the object.
+    remote_branch = "codex/BUG-117-remote-reachable"
+    remote_sha = "abcdef0123456789abcdef0123456789abcdef01"
+    real_run_remote = evidence_claims.subprocess.run
+
+    def remote_aware_run(*args, **kwargs):
+        argv = list(args[0]) if args else []
+        joined = " ".join(argv)
+        if "--batch-check=%(objectname) %(objecttype)" in joined:
+            lines = []
+            for expression in (kwargs.get("input") or "").splitlines():
+                ref = expression.replace("^{commit}", "").strip()
+                if ref == remote_sha:
+                    lines.append(f"{ref} missing")
+                elif ref:
+                    lines.append(f"{ref} commit")
+            return subprocess.CompletedProcess(
+                args=argv, returncode=0, stdout="\n".join(lines) + "\n", stderr=""
+            )
+        if "cat-file" in argv and remote_sha in joined:
+            return subprocess.CompletedProcess(args=argv, returncode=1, stdout="", stderr="")
+        if argv[:2] == ["git", "ls-remote"] or (len(argv) >= 2 and argv[0] == "git" and "ls-remote" in argv):
+            return subprocess.CompletedProcess(
+                args=argv,
+                returncode=0,
+                stdout=f"{remote_sha}\trefs/heads/{remote_branch}\n",
+                stderr="",
+            )
+        return real_run_remote(*args, **kwargs)
+
+    evidence_claims.subprocess.run = remote_aware_run
+    try:
+        remote_report = evidence_claims.evaluate_activity(
+            {
+                "task_id": "BUG-117-REMOTE",
+                "actor": "test",
+                "kind": "task.claim.completed",
+                "payload": {
+                    "evidence": {
+                        "branch": remote_branch,
+                        "head_sha": remote_sha,
+                        "pr_url": simultaneous_pr_url,
+                    }
+                },
+                "created_at": 1,
+            },
+            os.path.dirname(os.path.abspath(__file__)),
+        )
+    finally:
+        evidence_claims.subprocess.run = real_run_remote
+    ok(
+        remote_report.get("status") == "pass",
+        "claim head SHA reachable on origin via ls-remote is accepted without local object",
+    )
+
     direct = evidence_claims.evaluate_activity(
         {
             "task_id": "DIRECT-1",

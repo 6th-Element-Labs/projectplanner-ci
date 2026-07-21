@@ -82,6 +82,13 @@ REF_KEYS = {
     "head_sha",
     "merged_sha",
 }
+BRANCH_KEYS = {
+    "branch",
+    "branches",
+    "git_branch",
+    "head_ref",
+    "head_branch",
+}
 
 
 def _flatten_text(value: Any) -> str:
@@ -114,7 +121,7 @@ def _as_list(value: Any) -> List[Any]:
 
 
 def _collect_declared(value: Any) -> Dict[str, List[str]]:
-    declared = {"paths": [], "urls": [], "refs": []}
+    declared = {"paths": [], "urls": [], "refs": [], "branches": []}
 
     def visit(item: Any, key: str = "") -> None:
         if isinstance(item, Mapping):
@@ -134,6 +141,8 @@ def _collect_declared(value: Any) -> Dict[str, List[str]]:
             declared["urls"].extend(values)
         elif key in REF_KEYS:
             declared["refs"].extend(values)
+        elif key in BRANCH_KEYS:
+            declared["branches"].extend(values)
 
     visit(value)
     for bucket in declared:
@@ -199,26 +208,84 @@ def _url_check(value: str) -> Dict[str, Any]:
     return {"type": "url", "value": raw, "status": "missing", "detail": "URL must be HTTP(S)"}
 
 
+def _normalize_branch_ref(branch: str) -> str:
+    raw = (branch or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("refs/heads/"):
+        return raw
+    if raw.startswith("origin/"):
+        return f"refs/heads/{raw[len('origin/'):]}"
+    return f"refs/heads/{raw}"
+
+
+def _remote_branch_sha(repo_root: Path, branch: str) -> str:
+    """Return origin tip SHA for a branch via ls-remote, or '' if unreachable."""
+    ref = _normalize_branch_ref(branch)
+    if not ref:
+        return ""
+    try:
+        proc = subprocess.run(
+            ["git", "ls-remote", "--exit-code", "--heads", "origin", ref],
+            cwd=str(repo_root),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=20,
+        )
+    except Exception:
+        return ""
+    if proc.returncode != 0:
+        return ""
+    first = (proc.stdout.splitlines() or [""])[0].strip()
+    if not first:
+        return ""
+    return first.split()[0].strip().lower()
+
+
 def _ref_check(repo_root: Path, value: str,
-               batched: Mapping[str, Dict[str, Any]] | None = None) -> Dict[str, Any]:
+               batched: Mapping[str, Dict[str, Any]] | None = None,
+               branches: Sequence[str] | None = None) -> Dict[str, Any]:
     raw = (value or "").strip()
     if not raw:
         return {"type": "ref", "value": value, "status": "missing", "detail": "empty ref"}
     if batched is not None and raw in batched:
-        return dict(batched[raw])
-    proc = subprocess.run(
-        ["git", "cat-file", "-e", f"{raw}^{{commit}}"],
-        cwd=str(repo_root),
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    if proc.returncode == 0:
-        return {"type": "ref", "value": raw, "status": "pass", "detail": "git commit is reachable"}
+        result = dict(batched[raw])
+        if result.get("status") == "pass" or not branches:
+            return result
+        # Batched local miss: still allow origin tip equality below.
+    else:
+        proc = subprocess.run(
+            ["git", "cat-file", "-e", f"{raw}^{{commit}}"],
+            cwd=str(repo_root),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if proc.returncode == 0:
+            return {
+                "type": "ref",
+                "value": raw,
+                "status": "pass",
+                "detail": "git commit is reachable",
+            }
+    # Control-plane clones often lack task branches. Accept origin tip equality when the
+    # claim also declared the branch (BUG-117).
+    want = raw.lower()
+    for branch in branches or []:
+        remote_sha = _remote_branch_sha(repo_root, branch)
+        if remote_sha and remote_sha == want:
+            return {
+                "type": "ref",
+                "value": raw,
+                "status": "pass",
+                "detail": f"git commit is reachable on origin ({_normalize_branch_ref(branch)})",
+            }
     return {"type": "ref", "value": raw, "status": "missing", "detail": "git commit/ref not reachable"}
 
 
-def _batch_ref_checks(repo_root: Path, refs: Iterable[str]) -> Dict[str, Dict[str, Any]]:
+def _batch_ref_checks(repo_root: Path, refs: Iterable[str],
+                      branches: Sequence[str] | None = None) -> Dict[str, Dict[str, Any]]:
     unique = list(dict.fromkeys((ref or "").strip() for ref in refs if (ref or "").strip()))
     if not unique:
         return {}
@@ -230,26 +297,66 @@ def _batch_ref_checks(repo_root: Path, refs: Iterable[str]) -> Dict[str, Dict[st
     )
     lines = proc.stdout.splitlines()
     results: Dict[str, Dict[str, Any]] = {}
+    missing: List[str] = []
     for index, raw in enumerate(unique):
         line = lines[index] if index < len(lines) else ""
         reachable = bool(re.fullmatch(r"[0-9a-fA-F]{40,64} commit", line.strip()))
-        results[raw] = {
-            "type": "ref", "value": raw,
-            "status": "pass" if reachable else "missing",
-            "detail": "git commit is reachable" if reachable else "git commit/ref not reachable",
+        if reachable:
+            results[raw] = {
+                "type": "ref", "value": raw,
+                "status": "pass",
+                "detail": "git commit is reachable",
+            }
+        else:
+            missing.append(raw)
+    if missing and branches:
+        remote_by_branch = {
+            branch: _remote_branch_sha(repo_root, branch) for branch in branches if branch
         }
+        for raw in missing:
+            want = raw.lower()
+            matched_branch = next(
+                (branch for branch, sha in remote_by_branch.items() if sha == want),
+                "",
+            )
+            if matched_branch:
+                results[raw] = {
+                    "type": "ref",
+                    "value": raw,
+                    "status": "pass",
+                    "detail": (
+                        "git commit is reachable on origin "
+                        f"({_normalize_branch_ref(matched_branch)})"
+                    ),
+                }
+            else:
+                results[raw] = {
+                    "type": "ref", "value": raw,
+                    "status": "missing",
+                    "detail": "git commit/ref not reachable",
+                }
+    else:
+        for raw in missing:
+            results[raw] = {
+                "type": "ref", "value": raw,
+                "status": "missing",
+                "detail": "git commit/ref not reachable",
+            }
     return results
 
 
 def _evidence_checks(declared: Mapping[str, List[str]], repo_root: Path,
                      batched_refs: Mapping[str, Dict[str, Any]] | None = None) -> List[Dict[str, Any]]:
     checks: List[Dict[str, Any]] = []
+    branches = list(declared.get("branches") or [])
     for value in declared.get("paths") or []:
         checks.append(_path_check(repo_root, value))
     for value in declared.get("urls") or []:
         checks.append(_url_check(value))
     for value in declared.get("refs") or []:
-        checks.append(_ref_check(repo_root, value, batched=batched_refs))
+        checks.append(
+            _ref_check(repo_root, value, batched=batched_refs, branches=branches)
+        )
     return checks
 
 
@@ -268,7 +375,8 @@ def evaluate_activity(activity: Mapping[str, Any], repo_root: str | Path,
     artifacts = _claimed_artifacts(text)
     keywords = _claim_keywords(text)
     declared = _collect_declared(payload)
-    has_declared = any(declared.values())
+    # Branches are reachability hints for refs, not standalone evidence.
+    has_declared = any(declared.get(key) for key in ("paths", "urls", "refs"))
     if not artifacts and not keywords and not has_declared:
         return {}
 
@@ -321,10 +429,13 @@ def evaluate_activities(activities: Iterable[Mapping[str, Any]],
                         repo_root: str | Path) -> List[Dict[str, Any]]:
     materialized = list(activities)
     refs: List[str] = []
+    branches: List[str] = []
     for activity in materialized:
         if _kind_is_claim_relevant(str(activity.get("kind") or "")):
-            refs.extend(_collect_declared(_payload(activity.get("payload"))).get("refs") or [])
-    batched_refs = _batch_ref_checks(Path(repo_root), refs)
+            declared = _collect_declared(_payload(activity.get("payload")))
+            refs.extend(declared.get("refs") or [])
+            branches.extend(declared.get("branches") or [])
+    batched_refs = _batch_ref_checks(Path(repo_root), refs, branches=branches)
     reports = []
     for activity in materialized:
         report = evaluate_activity(activity, repo_root, batched_refs=batched_refs)
