@@ -14,7 +14,7 @@ import urllib.parse
 import uuid
 from typing import Any, Callable, Dict, List, Optional
 
-from constants import DEFAULT_PROJECT
+from constants import DEFAULT_PROJECT, MCP_OPERATOR_SCOPES
 from db.connection import _conn
 from db.core import _json_obj, _text_tail, hash_token
 
@@ -399,7 +399,10 @@ def get_direct_session_principal_by_token_any_project(
                 "kind": "direct_session",
                 "display_name": value["agent_id"],
                 "project": value["project_id"],
-                "scopes": ["read", "write:tasks", "write:ixp"],
+                # A direct CLI is the task-bound transport for the same autonomous
+                # operator used by MCP.  Its exact project/task/agent/host/wake/
+                # runner binding is the restriction; its capabilities are not.
+                "scopes": list(MCP_OPERATOR_SCOPES),
                 "bound_task_id": value["task_id"],
                 "bound_agent_id": value["agent_id"],
                 "bound_host_id": value["host_id"],

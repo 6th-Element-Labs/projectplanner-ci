@@ -256,16 +256,6 @@ DISCOVERY_TOOLS = frozenset({"list_projects"})
 WORK_SESSION_BOOT_TOOLS = frozenset({
     "prepare_agent_session", "get_working_agreement", "get_project_contract", "get_task",
 })
-DIRECT_SESSION_WRITE_TOOLS = frozenset({
-    "ack_message", "add_comment", "check_files", "claim_files", "claim_resource",
-    "claim_task", "complete_claim", "create_work_session", "heartbeat",
-    "merge_gate", "pre_tool_check", "preflight_work_session", "reconcile",
-    "record_review_verdict", "register_agent", "release_files", "release_resource",
-    "request_unblock", "send_agent_message", "set_agent_state", "update_task",
-    "update_work_session", "verify_offline_completion",
-})
-
-
 def declaration_for(tool_name: str) -> ToolAccessDeclaration:
     if tool_name in DISCOVERY_TOOLS:
         access_class = AccessClass.DISCOVERY
@@ -321,11 +311,6 @@ class MCPAuthorizationGuard:
                 if requested_task and requested_task != bound_task:
                     raise ValueError(
                         "forbidden: Work Session token is bound to another task")
-            if (direct_session_principal
-                    and declaration.access_class == AccessClass.WRITE
-                    and function.__name__ not in DIRECT_SESSION_WRITE_TOOLS):
-                raise ValueError(
-                    "forbidden: direct CLI token cannot perform that write")
             if direct_session_principal and "task_id" in bound.arguments:
                 requested_task = str(bound.arguments.get("task_id") or "").strip().upper()
                 bound_task = str(

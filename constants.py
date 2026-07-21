@@ -130,6 +130,10 @@ ROLE_SCOPES = {
     "admin": ["read", "read:credentials", "write:tasks", "write:ixp", "write:system", "write:bug_intake", "write:projects", "write:credentials", "use:credentials", "admin"],
     "owner": ["read", "read:credentials", "write:tasks", "write:ixp", "write:system", "write:bug_intake", "write:projects", "write:credentials", "use:credentials", "admin"],
 }
+# The deployment MCP credential and the task-bound direct CLI credential are two
+# transports for the same autonomous operator. Keep their authority identical;
+# task/project/agent binding is enforced separately from scopes.
+MCP_OPERATOR_SCOPES = tuple(ROLE_SCOPES["owner"])
 VALID_PRINCIPAL_KINDS = {"human", "user", "agent", "host", "system"}
 # Agent Host bearers use a transport-specific write scope so a compromised
 # personal host cannot invoke generic IXP task, wake-request, or fleet-control

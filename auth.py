@@ -12,6 +12,7 @@ import secrets
 from typing import Any, Dict, Iterable, Optional
 
 import store
+from constants import MCP_OPERATOR_SCOPES
 
 
 DEV_OPEN = "dev-open"
@@ -126,7 +127,7 @@ def _env_principal(token: str, project: str) -> Optional[Dict[str, Any]]:
                 # rotation; SEG-3 makes the compatibility grant visible in the
                 # immutable ProjectContext instead of pretending it is project-bound.
                 "project": "*",
-                "scopes": ["read", "write:tasks", "write:ixp", "write:system", "admin"],
+                "scopes": list(MCP_OPERATOR_SCOPES),
                 "environment_operator": True,
             }
     return None
@@ -241,7 +242,7 @@ def authenticate(project: str, token: str,
             "kind": "system",
             "display_name": dev_actor or "dev-open",
             "project": project,
-            "scopes": ["read", "write:tasks", "write:ixp", "write:system", "admin"],
+            "scopes": list(MCP_OPERATOR_SCOPES),
             "dev_open": True,
         }
 

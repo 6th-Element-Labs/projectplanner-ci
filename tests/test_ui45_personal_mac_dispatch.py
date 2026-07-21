@@ -25,6 +25,7 @@ os.environ["PM_RUNNER_PTY_RELAY_SECRET"] = "ui45-direct-relay-secret"
 import dispatch  # noqa: E402
 import auth  # noqa: E402
 import store  # noqa: E402
+from constants import MCP_OPERATOR_SCOPES  # noqa: E402
 from db.connection import _conn  # noqa: E402
 from switchboard.mcp.authorization import (  # noqa: E402
     MCPAuthorizationGuard,
@@ -229,11 +230,18 @@ try:
         direct_wake["wake_id"], MAC, direct_runner_id,
         principal_id="principal/ui45-mac", actor=MAC, project=P)
     direct_principal = auth.principal_for_token_any_project(issued.get("token") or "")
+    os.environ["PM_MCP_TOKEN"] = "ui45-operator-token"
+    operator_principal = auth._env_principal("ui45-operator-token", P)
+    os.environ.pop("PM_MCP_TOKEN", None)
     ok(issued.get("issued") is True
        and (direct_principal or {}).get("kind") == "direct_session"
        and (direct_principal or {}).get("bound_task_id") == task_id
-       and "write:tasks" in set((direct_principal or {}).get("scopes") or []),
-       "the boot exchanges host identity for a short-lived task-bound MCP bearer")
+       and set((direct_principal or {}).get("scopes") or [])
+       == set(MCP_OPERATOR_SCOPES)
+       and set((direct_principal or {}).get("scopes") or [])
+       == set((operator_principal or {}).get("scopes") or [])
+       and "write:bug_intake" in set((direct_principal or {}).get("scopes") or []),
+       "the task-bound CLI bearer receives exactly the MCP operator aura")
     with _conn(P) as c:
         c.execute(
             "UPDATE direct_session_tokens SET expires_at=0 "
@@ -247,12 +255,27 @@ try:
     def verify_offline_completion(task_id="", evidence="", project=P):
         return {"task_id": task_id, "evidence": evidence, "project": project}
 
+    def parity_write(tool_name):
+        def write(project=P):
+            return {"tool": tool_name, "project": project}
+        write.__name__ = tool_name
+        return write
+
     guarded_claim = MCPAuthorizationGuard().wrap(claim_task)
     with transport_principal_scope(direct_principal):
         accepted = guarded_claim(task_id=task_id, agent_id=f"codex/{task_id}", project=P)
         accepted_offline_done = MCPAuthorizationGuard().wrap(
             verify_offline_completion)(
                 task_id=task_id, evidence="task-bound production proof", project=P)
+        parity_writes = {
+            tool_name: MCPAuthorizationGuard().wrap(parity_write(tool_name))(project=P)
+            for tool_name in (
+                "submit_bug", "abandon_claim", "verify_ci",
+                "claim_external_effect", "mark_external_effect_issued",
+                "verify_external_effect", "fail_external_effect",
+                "record_publication_evidence", "archive_work_session_workspace",
+            )
+        }
         try:
             guarded_claim(task_id="UI-999", agent_id=f"codex/{task_id}", project=P)
             crossed_task = True
@@ -269,6 +292,13 @@ try:
        and crossed_task is False
        and crossed_offline_task is False,
        "direct CLI can complete its assigned offline workflow but cannot cross tasks")
+    ok(set(parity_writes) == {
+           "submit_bug", "abandon_claim", "verify_ci",
+           "claim_external_effect", "mark_external_effect_issued",
+           "verify_external_effect", "fail_external_effect",
+           "record_publication_evidence", "archive_work_session_workspace",
+       } and all(row.get("project") == P for row in parity_writes.values()),
+       "direct CLI has no transport-only write deny for bug, CI, effects, publication, or cleanup")
     runner_record = {
         "runner_session_id": direct_runner_id,
         "host_id": MAC,
