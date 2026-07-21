@@ -2420,6 +2420,37 @@ def _finalize_bound_runner(wake, inventory, runner_session_id, rec):
         else:
             reason = "runner_bound"
 
+            # BUG-126: Connect does not pass through the direct-task launch
+            # branch that opens Watch/Chat immediately.  Once the child has
+            # supplied its exact claim + Work Session tuple, registration can
+            # mint the host relay ticket.  Open that bridge before completing
+            # the wake so the first visible Running receipt is already
+            # watchable; the heartbeat path remains an idempotent repair loop.
+            server_relay = dict(
+                (runner_registration or {}).get("server_relay") or {})
+            if server_relay.get("host_url"):
+                try:
+                    _ensure_host_bridge(
+                        runner_session_id=runner_session_id,
+                        host_id=str(inventory.get("host_id") or ""),
+                        binding=dict(server_relay.get("binding") or {}),
+                        public_base="",
+                        host_relay_url=str(server_relay.get("host_url") or ""),
+                        child_pid=int((rec or {}).get("pid") or 0),
+                        log_path=str((rec or {}).get("log_path") or ""),
+                    )
+                except Exception as exc:
+                    # Keep the provider process alive: the heartbeat will retry
+                    # the idempotent bridge.  Preserve the launch-time failure
+                    # on the durable receipt instead of hiding it.
+                    runner_registration["host_relay_error"] = type(exc).__name__
+            else:
+                # A bound Connect process without a host capability remains
+                # alive and retryable, but it is not Watch-ready.  Name that
+                # state on the wake receipt; never silently equate process
+                # liveness with an attached terminal.
+                runner_registration["host_relay_error"] = "missing_host_url"
+
     result = {
         "started": started,
         "runner_session_id": ((rec or {}).get("runner_session_id")
@@ -2442,6 +2473,8 @@ def _finalize_bound_runner(wake, inventory, runner_session_id, rec):
         "runner_registered": bool(
             runner_registration and not runner_registration.get("error")
             and not runner_registration.get("error_code")),
+        "host_relay_error": (
+            (runner_registration or {}).get("host_relay_error") or None),
         "usage_registered": False,
         "binding_pending": False,
     }
