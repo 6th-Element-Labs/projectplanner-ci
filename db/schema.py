@@ -608,6 +608,30 @@ def apply_schema(c):
         CREATE INDEX IF NOT EXISTS ix_spend_agent ON llm_spend(agent_id);
         CREATE UNIQUE INDEX IF NOT EXISTS ux_spend_request
             ON llm_spend(request_id) WHERE request_id IS NOT NULL;
+        CREATE TABLE IF NOT EXISTS spend_envelopes (
+            principal_id      TEXT PRIMARY KEY,
+            daily_limit_micros INTEGER NOT NULL CHECK(daily_limit_micros >= 0),
+            monthly_limit_micros INTEGER NOT NULL CHECK(monthly_limit_micros >= 0),
+            created_at        REAL NOT NULL,
+            updated_at        REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS spend_reservations (
+            reservation_id    TEXT PRIMARY KEY,
+            request_id        TEXT NOT NULL UNIQUE,
+            principal_id      TEXT NOT NULL,
+            reserved_micros   INTEGER NOT NULL CHECK(reserved_micros > 0),
+            actual_micros     INTEGER CHECK(actual_micros >= 0),
+            provider          TEXT,
+            model             TEXT,
+            prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+            completion_tokens INTEGER NOT NULL DEFAULT 0,
+            status            TEXT NOT NULL CHECK(status IN ('reserved','reconciled','released')),
+            reserved_at       REAL NOT NULL,
+            reconciled_at     REAL,
+            metadata_json     TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS ix_spend_reservations_principal_time
+            ON spend_reservations(principal_id, reserved_at);
         CREATE TABLE IF NOT EXISTS outcomes (
             id             TEXT PRIMARY KEY,
             project        TEXT NOT NULL,

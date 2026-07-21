@@ -10,13 +10,15 @@ compatibility shim.
 from __future__ import annotations
 
 import json
+import calendar
 import sqlite3
 import time
 import uuid
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional
 
 from constants import *  # noqa: F401,F403
-from db.connection import _conn
+from db.connection import _conn, _write_through
 from db.core import *  # noqa: F401,F403
 
 
@@ -129,6 +131,143 @@ def report_usage(source: str, confidence: str, task_id: Optional[str] = None,
                    json.dumps({"spend_id": cur.lastrowid, "source": source,
                                "cost_usd": float(cost_usd or 0.0)}, sort_keys=True), now))
     return _spend_row(row)
+
+
+def _usd_micros(value: Any, *, allow_zero: bool = False) -> int:
+    """Convert public USD values to exact integer micro-dollars."""
+    try:
+        amount = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        raise ValueError("cost_usd must be a finite number") from None
+    if not amount.is_finite() or amount < 0 or (amount == 0 and not allow_zero):
+        raise ValueError("cost_usd must be positive" if not allow_zero else "cost_usd must be non-negative")
+    return int((amount * Decimal(1_000_000)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def _reservation_row(row: sqlite3.Row) -> Dict[str, Any]:
+    out = dict(row)
+    out["reserved_cost_usd"] = out["reserved_micros"] / 1_000_000
+    out["actual_cost_usd"] = (out["actual_micros"] / 1_000_000
+                              if out["actual_micros"] is not None else None)
+    out["metadata"] = json.loads(out.pop("metadata_json") or "{}")
+    return out
+
+
+def set_spend_envelope(principal_id: str, daily_limit_usd: Any,
+                       monthly_limit_usd: Any,
+                       project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    if not (principal_id or "").strip():
+        return {"error": "principal_id required", "failure_class": "unbound_identity"}
+    try:
+        daily = _usd_micros(daily_limit_usd, allow_zero=True)
+        monthly = _usd_micros(monthly_limit_usd, allow_zero=True)
+    except ValueError as exc:
+        return {"error": str(exc), "failure_class": "invalid_input"}
+    now = time.time()
+    with _conn(project) as c:
+        c.execute(
+            "INSERT INTO spend_envelopes(principal_id,daily_limit_micros,monthly_limit_micros,created_at,updated_at) "
+            "VALUES (?,?,?,?,?) ON CONFLICT(principal_id) DO UPDATE SET "
+            "daily_limit_micros=excluded.daily_limit_micros,monthly_limit_micros=excluded.monthly_limit_micros,updated_at=excluded.updated_at",
+            (principal_id, daily, monthly, now, now))
+    return {"principal_id": principal_id, "daily_limit_usd": daily / 1_000_000,
+            "monthly_limit_usd": monthly / 1_000_000}
+
+
+def reserve_spend(principal_id: str, request_id: str, worst_case_cost_usd: Any,
+                  metadata: Optional[Dict[str, Any]] = None,
+                  now: Optional[float] = None,
+                  project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Atomically account for worst-case cost before a provider call.
+
+    This is an accounting decision only: callers decide whether a rejected
+    reservation prevents execution.
+    """
+    if not (principal_id or "").strip():
+        return {"error": "principal_id required", "failure_class": "unbound_identity"}
+    if not (request_id or "").strip():
+        return {"error": "request_id required", "failure_class": "missing_data"}
+    try:
+        reserved = _usd_micros(worst_case_cost_usd)
+    except ValueError as exc:
+        return {"error": str(exc), "failure_class": "missing_data"}
+    at = float(now if now is not None else time.time())
+    day_start = at - (at % 86400)
+    month = time.gmtime(at)
+    month_start = calendar.timegm((month.tm_year, month.tm_mon, 1, 0, 0, 0, 0, 0, 0))
+    def reserve_transaction():
+      with _conn(project) as c:
+        old = c.execute("SELECT * FROM spend_reservations WHERE request_id=?", (request_id,)).fetchone()
+        if old:
+            if old["principal_id"] != principal_id or old["reserved_micros"] != reserved:
+                return {"error": "request_id already used with different reservation", "failure_class": "invalid_input"}
+            return _reservation_row(old)
+        envelope = c.execute("SELECT * FROM spend_envelopes WHERE principal_id=?", (principal_id,)).fetchone()
+        if not envelope:
+            return {"error": "spend envelope required", "failure_class": "missing_data"}
+        def used_since(start: float) -> int:
+            row = c.execute(
+                "SELECT COALESCE(SUM(CASE WHEN status='reconciled' THEN actual_micros "
+                "WHEN status='reserved' THEN reserved_micros ELSE 0 END),0) used "
+                "FROM spend_reservations WHERE principal_id=? AND reserved_at>=?",
+                (principal_id, start)).fetchone()
+            return int(row["used"] or 0)
+        daily_used, monthly_used = used_since(day_start), used_since(month_start)
+        if daily_used + reserved > int(envelope["daily_limit_micros"]):
+            return {"error": "daily spend envelope exceeded", "failure_class": "budget_exceeded",
+                    "remaining_usd": max(0, int(envelope["daily_limit_micros"]) - daily_used) / 1_000_000}
+        if monthly_used + reserved > int(envelope["monthly_limit_micros"]):
+            return {"error": "monthly spend envelope exceeded", "failure_class": "budget_exceeded",
+                    "remaining_usd": max(0, int(envelope["monthly_limit_micros"]) - monthly_used) / 1_000_000}
+        reservation_id = "spendres-" + uuid.uuid4().hex[:16]
+        c.execute(
+            "INSERT INTO spend_reservations(reservation_id,request_id,principal_id,reserved_micros,status,reserved_at,metadata_json) "
+            "VALUES (?,?,?,?, 'reserved',?,?)",
+            (reservation_id, request_id, principal_id, reserved, at,
+             json.dumps(metadata or {}, sort_keys=True)))
+        return _reservation_row(c.execute(
+            "SELECT * FROM spend_reservations WHERE reservation_id=?", (reservation_id,)).fetchone())
+    return _write_through(project, reserve_transaction)
+
+
+def reconcile_spend(principal_id: str, request_id: str, actual_cost_usd: Any,
+                    provider: str, model: str, prompt_tokens: int = 0,
+                    completion_tokens: int = 0,
+                    metadata: Optional[Dict[str, Any]] = None,
+                    project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    if not (principal_id or "").strip():
+        return {"error": "principal_id required", "failure_class": "unbound_identity"}
+    if not provider or not model:
+        return {"error": "provider and model required", "failure_class": "missing_data"}
+    try:
+        actual = _usd_micros(actual_cost_usd, allow_zero=True)
+    except ValueError as exc:
+        return {"error": str(exc), "failure_class": "missing_data"}
+    now = time.time()
+    def reconcile_transaction():
+      with _conn(project) as c:
+        row = c.execute("SELECT * FROM spend_reservations WHERE request_id=?", (request_id,)).fetchone()
+        if not row or row["principal_id"] != principal_id:
+            return {"error": "matching reservation required", "failure_class": "missing_data"}
+        if row["status"] == "reconciled":
+            same = (row["actual_micros"] == actual and row["provider"] == provider and
+                    row["model"] == model and row["prompt_tokens"] == int(prompt_tokens) and
+                    row["completion_tokens"] == int(completion_tokens))
+            return _reservation_row(row) if same else {
+                "error": "request_id already reconciled with different actuals",
+                "failure_class": "invalid_input"}
+        if row["status"] != "reserved":
+            return {"error": "reservation is not active", "failure_class": "invalid_input"}
+        merged = json.loads(row["metadata_json"] or "{}")
+        merged.update(metadata or {})
+        c.execute(
+            "UPDATE spend_reservations SET actual_micros=?,provider=?,model=?,prompt_tokens=?,completion_tokens=?,"
+            "status='reconciled',reconciled_at=?,metadata_json=? WHERE reservation_id=?",
+            (actual, provider, model, int(prompt_tokens), int(completion_tokens), now,
+             json.dumps(merged, sort_keys=True), row["reservation_id"]))
+        return _reservation_row(c.execute(
+            "SELECT * FROM spend_reservations WHERE reservation_id=?", (row["reservation_id"],)).fetchone())
+    return _write_through(project, reconcile_transaction)
 
 
 def _spend_row(row: sqlite3.Row) -> Dict[str, Any]:
@@ -498,6 +637,15 @@ class StoreKpisEconomicsRepository:
     def report_usage(self, *args, **kwargs):
         return report_usage(*args, **kwargs)
 
+    def set_spend_envelope(self, *args, **kwargs):
+        return set_spend_envelope(*args, **kwargs)
+
+    def reserve_spend(self, *args, **kwargs):
+        return reserve_spend(*args, **kwargs)
+
+    def reconcile_spend(self, *args, **kwargs):
+        return reconcile_spend(*args, **kwargs)
+
     def record_outcome(self, *args, **kwargs):
         return record_outcome(*args, **kwargs)
 
@@ -534,6 +682,9 @@ __all__ = [
     "StoreKpisEconomicsRepository",
     "default_kpis_economics_repository",
     "report_usage",
+    "set_spend_envelope",
+    "reserve_spend",
+    "reconcile_spend",
     "record_outcome",
     "verify_outcome",
     "reject_outcome",

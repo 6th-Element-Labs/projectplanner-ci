@@ -42,6 +42,34 @@ def create_router(*, resolve_project: ProjectResolver,
             metadata=body.get("metadata") or {}, request_id=body.get("request_id"),
             project=project)
 
+    @router.put("/tally/v1/spend/envelope")
+    async def tally_set_spend_envelope(request: Request, body: dict = Body(...)):
+        project = resolve_body_project(body)
+        principal = resolve_principal(request, project, ("write:ixp",), dev_actor="tally")
+        return store.set_spend_envelope(
+            principal_id=principal["id"], daily_limit_usd=body.get("daily_limit_usd"),
+            monthly_limit_usd=body.get("monthly_limit_usd"), project=project)
+
+    @router.post("/tally/v1/spend/reservations")
+    async def tally_reserve_spend(request: Request, body: dict = Body(...)):
+        project = resolve_body_project(body)
+        principal = resolve_principal(request, project, ("write:ixp",), dev_actor="tally")
+        return store.reserve_spend(
+            principal_id=principal["id"], request_id=body.get("request_id") or "",
+            worst_case_cost_usd=body.get("worst_case_cost_usd"),
+            metadata=body.get("metadata") or {}, project=project)
+
+    @router.post("/tally/v1/spend/reservations/{request_id}/reconcile")
+    async def tally_reconcile_spend(request_id: str, request: Request, body: dict = Body(...)):
+        project = resolve_body_project(body)
+        principal = resolve_principal(request, project, ("write:ixp",), dev_actor="tally")
+        return store.reconcile_spend(
+            principal_id=principal["id"], request_id=request_id,
+            actual_cost_usd=body.get("actual_cost_usd"), provider=body.get("provider") or "",
+            model=body.get("model") or "", prompt_tokens=int(body.get("prompt_tokens") or 0),
+            completion_tokens=int(body.get("completion_tokens") or 0),
+            metadata=body.get("metadata") or {}, project=project)
+
 
     @router.post("/tally/v1/outcomes")
     async def tally_record_outcome(request: Request, body: dict = Body(...)):
