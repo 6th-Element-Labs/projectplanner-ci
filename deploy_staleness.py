@@ -79,9 +79,10 @@ def staleness_payload(running_sha: str, canonical_sha: str, commits_behind: int,
 def write_state(path: str, payload: dict) -> None:
     """Atomically write the state file, world-readable.
 
-    The timer usually runs as root while the web app reads as the service user,
-    so the file must be readable by both. The temp-file+rename keeps a concurrent
-    reader from ever seeing a half-written document.
+    The timer owns its narrow systemd state directory while the web app reads
+    the non-sensitive health metadata, so the file must be readable by both.
+    The temp-file+rename keeps a concurrent reader from ever seeing a
+    half-written document.
     """
     directory = os.path.dirname(os.path.abspath(path)) or "."
     os.makedirs(directory, exist_ok=True)
@@ -194,10 +195,14 @@ def record_deploy(state_path: str, *, deployed_sha: str, ok: bool,
 def default_state_path() -> str:
     """Resolve the state-file path the health endpoint and timer share.
 
-    Priority: explicit ``PM_DEPLOY_STATE_FILE``; else next to the board db
+    Priority: the systemd unit-owned ``PM_DEPLOY_STATE_UNIT_FILE``; then the
+    operator-level ``PM_DEPLOY_STATE_FILE``; else next to the board db
     (``PM_DB_PATH``'s directory) so it lands in the service-owned data dir on
-    prod; else the repo root as a last resort for a bare checkout.
+    non-systemd installs; else the repo root as a last resort for a bare checkout.
     """
+    unit_owned = (os.environ.get("PM_DEPLOY_STATE_UNIT_FILE") or "").strip()
+    if unit_owned:
+        return unit_owned
     explicit = (os.environ.get("PM_DEPLOY_STATE_FILE") or "").strip()
     if explicit:
         return explicit

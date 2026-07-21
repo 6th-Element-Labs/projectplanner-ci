@@ -4,16 +4,13 @@
 # restart -> Caddy fail-closed -> runtime proof + rollback). Refreshes the
 # /health/version staleness signal on every tick. Triggered by the timer below.
 #
-# WHY THIS UNIT RUNS AS root AND IS NOT SANDBOXED like the batch units
-# (reconcile/narrate/etc.): its entire job is to mutate the running system —
-# `git pull` on the root-owned code tree (HARDEN-55), `systemctl restart` of the
-# web tier, a Caddy reload, AND writing the deploy-state signal into the
-# projectplanner-owned data dir (/var/lib/projectplanner, mode 750). No single
-# non-root account can do all three: `ubuntu` has sudo but cannot write the
-# projectplanner-owned data dir, and `projectplanner` owns the data dir but has
-# no sudo. root can, and the 0644 state file it writes is readable by the
-# projectplanner web app. So NoNewPrivileges / ProtectSystem=strict cannot apply
-# here; redeploy.sh still confines its steps and carries its own rollback guard.
+# WHY THIS UNIT IS NOT SANDBOXED like the batch units (reconcile/narrate/etc.):
+# its job is to mutate the running system — privileged git pull, systemctl
+# restarts, and Caddy reload. It therefore runs as the ubuntu deploy login whose
+# sudo policy already permits redeploy.sh. BUG-119 removes the reason for the
+# temporary root workaround from BUG-114/PR #693: state and lock writes now land
+# in narrow systemd-managed directories owned by ubuntu, never in the
+# projectplanner-owned application data tree.
 [Unit]
 Description=ProjectPlanner Switchboard auto-deploy canonical master to prod
 After=network-online.target
@@ -22,18 +19,24 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 Nice=5
-User=root
-Group=root
+User=ubuntu
+Group=ubuntu
 WorkingDirectory=/opt/projectplanner
 EnvironmentFile=/opt/projectplanner/.env
 Environment=PLAN_ROOT=/opt/projectplanner
 Environment=PYTHONDONTWRITEBYTECODE=1
-# Pin the staleness state file to the service-writable data dir. This MUST match
-# what the web app resolves so GET /health/version reads the same file the timer
-# writes — set the identical PM_DEPLOY_STATE_FILE in /opt/projectplanner/.env
-# (both services load it via EnvironmentFile). An explicit value here also keeps
-# the timer off the root-owned repo-root fallback it could never write.
-Environment=PM_DEPLOY_STATE_FILE=/var/lib/projectplanner/deploy-state.json
+# BUG-119: give the timer narrow, systemd-managed state and runtime directories.
+# projectplanner.service reads the same 0644 signal file but cannot write the
+# state directory. Neither path grants ubuntu access to the application DB tree.
+# EnvironmentFile values override Environment values in systemd. Use a dedicated
+# unit-owned variable so BUG-114's old PM_DEPLOY_STATE_FILE in .env cannot redirect
+# this service back into the unwritable application data directory.
+Environment=PM_DEPLOY_STATE_UNIT_FILE=/var/lib/projectplanner-autodeploy/deploy-state.json
+Environment=AUTODEPLOY_LOCK_FILE=/run/projectplanner-autodeploy/auto-deploy.lock
+StateDirectory=projectplanner-autodeploy
+StateDirectoryMode=0755
+RuntimeDirectory=projectplanner-autodeploy
+RuntimeDirectoryMode=0700
 # The script locks the whole cycle (atomic mkdir), so an overlapping tick or a
 # tick landing on top of a long redeploy exits 0 without a second deploy.
 ExecStart=/usr/bin/env bash /opt/projectplanner/deploy/auto_deploy.sh

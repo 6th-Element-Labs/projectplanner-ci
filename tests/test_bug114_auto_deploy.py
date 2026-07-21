@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BUG-114: auto-deploy trigger + visible deploy-staleness signal.
+"""BUG-114/BUG-119: auto-deploy trigger + visible deploy-staleness signal.
 
 Prod used to reach canonical master only when a human remembered to SSH and run
 redeploy.sh, so merged/CI-green/Done work could still be absent from the running
@@ -54,7 +54,7 @@ with tempfile.TemporaryDirectory(prefix="bug114-state-") as tmp:
     ok(deploy_staleness.read_state(state) == p,
        "write_state/read_state round-trips through a not-yet-existing directory")
     ok(oct(os.stat(state).st_mode)[-3:] == "644",
-       "state file is world-readable so the ubuntu web app can read the root timer's write")
+       "state file is readable by the web service while only its directory owner can replace it")
     ok(deploy_staleness.read_state(os.path.join(tmp, "missing.json")) is None,
        "read_state returns None for a missing file (never raises)")
     Path(state).write_text("{ not json", encoding="utf-8")
@@ -99,9 +99,14 @@ with tempfile.TemporaryDirectory(prefix="bug114-hv-") as tmp:
        "health_view reports deploy_signal=current when prod matches canonical master")
 
 # ---- default_state_path resolution --------------------------------------------
-old_env = {k: os.environ.get(k) for k in ("PM_DEPLOY_STATE_FILE", "PM_DB_PATH")}
+old_env = {k: os.environ.get(k) for k in (
+    "PM_DEPLOY_STATE_UNIT_FILE", "PM_DEPLOY_STATE_FILE", "PM_DB_PATH")}
 try:
+    os.environ["PM_DEPLOY_STATE_UNIT_FILE"] = "/unit-owned/deploy.json"
     os.environ["PM_DEPLOY_STATE_FILE"] = "/explicit/deploy.json"
+    ok(deploy_staleness.default_state_path() == "/unit-owned/deploy.json",
+       "default_state_path keeps the unit-owned path authoritative over a stale .env override")
+    del os.environ["PM_DEPLOY_STATE_UNIT_FILE"]
     ok(deploy_staleness.default_state_path() == "/explicit/deploy.json",
        "default_state_path honours an explicit PM_DEPLOY_STATE_FILE")
     del os.environ["PM_DEPLOY_STATE_FILE"]
@@ -229,6 +234,16 @@ with tempfile.TemporaryDirectory(prefix="bug114-deploy-") as raw:
     ok(r.returncode == 0 and not marker.exists() and sig.get("commits_behind") == 0,
        "auto_deploy: up-to-date tick refreshes the signal and does NOT redeploy")
 
+    # BUG-119: a stale PM_DEPLOY_STATE_FILE inherited from .env must not override
+    # the systemd-owned path, because EnvironmentFile wins over Environment.
+    unit_state = base / "unit-owned" / "deploy-state.json"
+    stale_operator_state = base / "stale-operator-state.json"
+    r = run_auto_deploy(
+        prod, stale_operator_state, f"bash {ok_redeploy}",
+        env_extra={"PM_DEPLOY_STATE_UNIT_FILE": str(unit_state)})
+    ok(r.returncode == 0 and unit_state.exists() and not stale_operator_state.exists(),
+       "auto_deploy: the unit-owned state path wins over a stale operator .env path")
+
     # Case 2: origin advances -> deploy fires, signal records success + behind 0.
     advance_origin(seed)
     r = run_auto_deploy(prod, state, f"bash {ok_redeploy}")
@@ -267,6 +282,19 @@ with tempfile.TemporaryDirectory(prefix="bug114-deploy-") as raw:
     finally:
         lock_dir.rmdir()
 
+    # Case 5 (BUG-119): mkdir failure without an extant lock is not contention.
+    # A regular file in the parent position produces deterministic ENOTDIR even
+    # when the test process happens to run as root.
+    blocked_parent = base / "not-a-directory"
+    blocked_parent.write_text("blocked", encoding="utf-8")
+    r = run_auto_deploy(
+        prod, state, f"bash {ok_redeploy}",
+        env_extra={"AUTODEPLOY_LOCK_FILE": str(blocked_parent / "auto-deploy.lock")})
+    ok(r.returncode != 0
+       and "lock acquisition FAILED" in (r.stdout + r.stderr)
+       and "holds the lock" not in (r.stdout + r.stderr),
+       "auto_deploy: an unwritable/invalid lock path exits nonzero instead of masquerading as contention")
+
 
 # ---- systemd unit sanity ------------------------------------------------------
 svc = (ROOT / "deploy" / "projectplanner-autodeploy.service").read_text()
@@ -277,10 +305,19 @@ svc_directives = [ln.strip() for ln in svc.splitlines()
 ok(not any(d.startswith(("NoNewPrivileges=yes", "ProtectSystem=strict"))
            for d in svc_directives),
    "autodeploy.service sets no escalation-blocking directive (it must escalate to deploy)")
-ok(any(d == "User=root" for d in svc_directives),
-   "autodeploy.service runs as root — the only account that can both escalate (redeploy) and write the projectplanner-owned data dir")
-ok("Environment=PM_DEPLOY_STATE_FILE=" in svc,
-   "autodeploy.service pins PM_DEPLOY_STATE_FILE so the timer and web app share one signal path (not the root-owned repo fallback)")
+ok(any(d == "User=ubuntu" for d in svc_directives),
+   "autodeploy.service runs as the ubuntu login that holds sudo for redeploy.sh")
+state_path = "/var/lib/projectplanner-autodeploy/deploy-state.json"
+web_svc = (ROOT / "deploy" / "projectplanner.service").read_text()
+ok(f"Environment=PM_DEPLOY_STATE_UNIT_FILE={state_path}" in svc
+   and f"Environment=PM_DEPLOY_STATE_UNIT_FILE={state_path}" in web_svc,
+   "autodeploy and /health/version share the least-privilege deployment signal path")
+ok("StateDirectory=projectplanner-autodeploy" in svc
+   and "StateDirectoryMode=0755" in svc
+   and "RuntimeDirectory=projectplanner-autodeploy" in svc
+   and "RuntimeDirectoryMode=0700" in svc
+   and "Environment=AUTODEPLOY_LOCK_FILE=/run/projectplanner-autodeploy/" in svc,
+   "autodeploy.service gives state and lock explicit systemd-managed least-privilege directories")
 ok("OnUnitActiveSec" in tmr and "[Install]" in tmr and "timers.target" in tmr,
    "autodeploy.timer fires on an interval and installs into timers.target")
 

@@ -22,7 +22,7 @@
 #   PM_DEPLOY_STATE_FILE      staleness state file (default via deploy_staleness)
 #   AUTODEPLOY_PYTHON         python for deploy_staleness.py (default venv/py3)
 #   AUTODEPLOY_REDEPLOY_CMD   deploy command (default: bash $ROOT/deploy/redeploy.sh)
-#   AUTODEPLOY_LOCK_FILE      flock path (default: <state dir>/auto-deploy.lock)
+#   AUTODEPLOY_LOCK_FILE      lock path (default: <state dir>/auto-deploy.lock)
 #   AUTODEPLOY_CANONICAL_REF  ref to track (default origin/master)
 #   AUTODEPLOY_SKIP_FETCH=1   skip git fetch (tests / already-fetched)
 set -euo pipefail
@@ -33,7 +33,7 @@ PYTHON="${AUTODEPLOY_PYTHON:-$ROOT/.venv/bin/python}"
 if [ ! -x "$PYTHON" ]; then PYTHON=python3; fi
 REDEPLOY_CMD="${AUTODEPLOY_REDEPLOY_CMD:-bash $ROOT/deploy/redeploy.sh}"
 
-STATE_FILE="${PM_DEPLOY_STATE_FILE:-}"
+STATE_FILE="${PM_DEPLOY_STATE_UNIT_FILE:-${PM_DEPLOY_STATE_FILE:-}}"
 if [ -z "$STATE_FILE" ]; then
     # Resolve the module default (honours PM_DB_PATH) without duplicating logic.
     STATE_FILE="$("$PYTHON" - "$ROOT" <<'PY'
@@ -50,6 +50,13 @@ LOCK_FILE="${AUTODEPLOY_LOCK_FILE:-$STATE_DIR/auto-deploy.lock}"
 
 log() { printf '[auto-deploy] %s\n' "$1"; }
 
+ensure_state_dir() {
+    if ! mkdir -p "$STATE_DIR"; then
+        log "state directory setup FAILED: cannot create or access $STATE_DIR" >&2
+        return 73
+    fi
+}
+
 refresh_signal() {
     # Reads local refs only; the privileged fetch runs in run_deploy_cycle first.
     "$PYTHON" "$ROOT/deploy_staleness.py" refresh \
@@ -57,7 +64,7 @@ refresh_signal() {
 }
 
 run_deploy_cycle() {
-    mkdir -p "$STATE_DIR"
+    ensure_state_dir
 
     # 1. Fetch canonical master WITH privilege. HARDEN-55 makes the prod code tree
     #    root-owned, so an unprivileged `git fetch` cannot write .git and would
@@ -111,7 +118,7 @@ run_deploy_cycle() {
 # ages past AUTODEPLOY_LOCK_STALE_SECONDS (default 30m) — long enough that a
 # genuinely in-flight deploy is never interrupted, so a wedged deploy safely
 # pauses further deploys rather than piling on.
-mkdir -p "$STATE_DIR"
+ensure_state_dir
 LOCK_DIR="$LOCK_FILE.d"
 STALE_SECONDS="${AUTODEPLOY_LOCK_STALE_SECONDS:-1800}"
 
@@ -122,13 +129,27 @@ lock_age_seconds() {
     echo $(( now - mtime ))
 }
 
+lock_error() {
+    log "lock acquisition FAILED: cannot create $LOCK_DIR and no lock directory exists (permission or filesystem error)" >&2
+    exit 73
+}
+
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    # mkdir has many failure modes. Only an existing lock directory proves real
+    # contention; EACCES, EROFS, ENOTDIR, and similar failures must stay red.
+    [ -d "$LOCK_DIR" ] || lock_error
     if [ "$(lock_age_seconds)" -ge "$STALE_SECONDS" ]; then
         log "reclaiming a stale auto-deploy lock (older than ${STALE_SECONDS}s)"
-        rmdir "$LOCK_DIR" 2>/dev/null || true
+        if ! rmdir "$LOCK_DIR" 2>/dev/null; then
+            log "stale lock reclaim FAILED: cannot remove $LOCK_DIR" >&2
+            exit 73
+        fi
         if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-            log "another auto-deploy run holds the lock; skipping this tick"
-            exit 0
+            if [ -d "$LOCK_DIR" ]; then
+                log "another auto-deploy run acquired the lock; skipping this tick"
+                exit 0
+            fi
+            lock_error
         fi
     else
         log "another auto-deploy run holds the lock; skipping this tick"

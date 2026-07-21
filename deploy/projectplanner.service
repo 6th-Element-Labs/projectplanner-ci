@@ -32,6 +32,10 @@ Environment=PM_INGEST_HTTP_PRIMARY=service
 Environment=PM_ENFORCE_DELIVERABLE_INTAKE=1
 # Code tree is read-only; don't try to write .pyc back into it.
 Environment=PYTHONDONTWRITEBYTECODE=1
+# BUG-119: read the timer-owned deployment signal from its systemd-managed state
+# directory. The file is non-sensitive/public health metadata; this service can
+# read it but only the autodeploy account can write the parent directory.
+Environment=PM_DEPLOY_STATE_UNIT_FILE=/var/lib/projectplanner-autodeploy/deploy-state.json
 # BUG-29: archive+delete merged PR head branches on webhook (needs token in .env).
 Environment=PM_RETIRE_MERGED_BRANCHES=1
 # CI-12: writable coordination-only clone used to fetch and mirror exact PR heads.
