@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from pathlib import Path
 
 from path_setup import ROOT  # noqa: F401
 
@@ -20,6 +21,7 @@ os.environ.update({
 import auth  # noqa: E402
 import store  # noqa: E402
 from adapters import codex_local_worker  # noqa: E402
+from constants import MCP_OPERATOR_SCOPES  # noqa: E402
 from switchboard.mcp.authorization import (  # noqa: E402
     MCPAuthorizationGuard,
     transport_principal_scope,
@@ -77,8 +79,13 @@ ok(token == "wst-child-only"
    "exact bound Work Session issues the child-only bearer")
 ok(any("mcp_servers.taikun_plan.url" in item for item in overrides)
    and any("bearer_token_env_var" in item for item in overrides)
-   and any("required=true" in item for item in overrides),
-   "one-run Codex configuration preloads required authenticated Switchboard MCP")
+   and any("required=true" in item for item in overrides)
+   and not any("enabled_tools" in item for item in overrides),
+   "one-run Codex configuration connects the complete authenticated MCP surface")
+worker_source = Path(codex_local_worker.__file__).read_text(encoding="utf-8")
+ok('"--dangerously-bypass-approvals-and-sandbox"' in worker_source
+   and '"workspace-write"' not in worker_source,
+   "legacy native worker launches with the same unrestricted envelope as desktop")
 
 store.init_project_registry()
 store.init_db("switchboard")
@@ -103,10 +110,13 @@ issued = store.issue_work_session_mcp_token(
     created["work_session"]["work_session_id"], actor="host/test",
     project="switchboard")
 principal = auth.principal_for_token_any_project(issued["token"])
-ok(principal and principal["scopes"] == ["read"]
+ok(principal and set(principal["scopes"]) == set(MCP_OPERATOR_SCOPES)
+   and principal["project"] == "*"
+   and principal["environment_operator"] is True
+   and principal["assignment_project"] == "switchboard"
    and principal["bound_task_id"] == task["task_id"]
    and issued["expires_at"] > 0,
-   "temporary bearer bounds an unbounded external session and authenticates read-only")
+   "temporary bearer authenticates the child with the full operator contract")
 
 
 def get_task(project="switchboard", task_id=""):
@@ -121,13 +131,16 @@ guard = MCPAuthorizationGuard()
 with transport_principal_scope(principal):
     allowed_boot = guard.wrap(get_task)(
         project="switchboard", task_id=task["task_id"])
-    try:
-        guard.wrap(search_tasks)(project="switchboard")
-        non_boot_denied = False
-    except ValueError as exc:
-        non_boot_denied = "limited to MCP session boot" in str(exc)
-ok(allowed_boot["task_id"] == task["task_id"] and non_boot_denied,
-   "server limits the temporary bearer to exact-task MCP boot tools")
+    allowed_non_boot = guard.wrap(search_tasks)(project="switchboard")
+    allowed_other_task = guard.wrap(get_task)(
+        project="switchboard", task_id="UI-999")
+    allowed_other_project = guard.wrap(get_task)(
+        project="maxwell", task_id="MAX-999")
+ok(allowed_boot["task_id"] == task["task_id"]
+   and allowed_non_boot["project"] == "switchboard"
+   and allowed_other_task["task_id"] == "UI-999"
+   and allowed_other_project["project"] == "maxwell",
+   "server gives the child the same cross-task and cross-project MCP tools")
 store.update_work_session(
     created["work_session"]["work_session_id"], {"status": "expired"},
     actor="test", project="switchboard")

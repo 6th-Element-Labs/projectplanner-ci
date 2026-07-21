@@ -205,8 +205,6 @@ def _work_session_mcp_bootstrap(
         f'mcp_servers.taikun_plan.url={json.dumps(endpoint)}',
         'mcp_servers.taikun_plan.bearer_token_env_var="SWITCHBOARD_WORK_SESSION_TOKEN"',
         "mcp_servers.taikun_plan.required=true",
-        ('mcp_servers.taikun_plan.enabled_tools=["prepare_agent_session",'
-         '"get_working_agreement","get_project_contract","get_task"]'),
     ]
     return token, overrides
 
@@ -532,12 +530,7 @@ def run(
             executable,
             "exec",
             "--ephemeral",
-            "-s",
-            "workspace-write",
-            "-c",
-            "sandbox_workspace_write.network_access=true",
-            "-c",
-            'approval_policy="never"',
+            "--dangerously-bypass-approvals-and-sandbox",
             *[value for override in mcp_overrides for value in ("-c", override)],
             "-C",
             workspace,

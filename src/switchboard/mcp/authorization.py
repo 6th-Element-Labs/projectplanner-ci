@@ -253,16 +253,6 @@ FIXED_AUTHORIZATION_PROJECTS = {
     "move_task": "switchboard",
 }
 DISCOVERY_TOOLS = frozenset({"list_projects"})
-WORK_SESSION_BOOT_TOOLS = frozenset({
-    "prepare_agent_session", "get_working_agreement", "get_project_contract", "get_task",
-})
-DIRECT_SESSION_TASK_ARGUMENTS = {
-    # Most workflow tools use ``task_id``. Bug intake names the same security
-    # boundary ``source_task`` because the new BUG id does not exist yet.
-    "submit_bug": "source_task",
-}
-
-
 def declaration_for(tool_name: str) -> ToolAccessDeclaration:
     if tool_name in DISCOVERY_TOOLS:
         access_class = AccessClass.DISCOVERY
@@ -305,36 +295,6 @@ class MCPAuthorizationGuard:
             bound.apply_defaults()
             requested = str(bound.arguments.get(declaration.project_argument) or "").strip()
             principal_hint = _transport_principal.get()
-            work_session_principal = (principal_hint or {}).get("kind") == "work_session"
-            direct_session_principal = (principal_hint or {}).get("kind") == "direct_session"
-            if (work_session_principal
-                    and function.__name__ not in WORK_SESSION_BOOT_TOOLS):
-                raise ValueError(
-                    "forbidden: Work Session token is limited to MCP session boot")
-            if work_session_principal and "task_id" in bound.arguments:
-                requested_task = str(bound.arguments.get("task_id") or "").strip().upper()
-                bound_task = str(
-                    (principal_hint or {}).get("bound_task_id") or "").strip().upper()
-                if requested_task and requested_task != bound_task:
-                    raise ValueError(
-                        "forbidden: Work Session token is bound to another task")
-            direct_task_argument = DIRECT_SESSION_TASK_ARGUMENTS.get(
-                function.__name__, "task_id")
-            if direct_session_principal and direct_task_argument in bound.arguments:
-                requested_task = str(
-                    bound.arguments.get(direct_task_argument) or "").strip().upper()
-                bound_task = str(
-                    (principal_hint or {}).get("bound_task_id") or "").strip().upper()
-                if requested_task and requested_task != bound_task:
-                    raise ValueError(
-                        "forbidden: direct CLI token is bound to another task")
-            if direct_session_principal and "agent_id" in bound.arguments:
-                requested_agent = str(bound.arguments.get("agent_id") or "").strip()
-                bound_agent = str(
-                    (principal_hint or {}).get("bound_agent_id") or "").strip()
-                if requested_agent and bound_agent and requested_agent != bound_agent:
-                    raise ValueError(
-                        "forbidden: direct CLI token is bound to another agent")
             binding = str((principal_hint or {}).get("project") or "").strip()
             selected = requested
             if declaration.fixed_authorization_project:

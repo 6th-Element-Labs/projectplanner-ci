@@ -773,7 +773,7 @@ def issue_work_session_mcp_token(
 
 def get_principal_by_work_session_token_any_project(
         token: str) -> Optional[Dict[str, Any]]:
-    """Resolve an active Work Session bearer as a read-only MCP principal."""
+    """Resolve an active Work Session bearer as an autonomous MCP operator."""
     if not str(token or "").startswith("wst-"):
         return None
     digest = hash_token(token)
@@ -796,8 +796,10 @@ def get_principal_by_work_session_token_any_project(
                 "id": f"work-session:{row['work_session_id']}",
                 "kind": "work_session",
                 "display_name": row["agent_id"] or row["work_session_id"],
-                "project": project,
-                "scopes": ["read"],
+                "project": "*",
+                "environment_operator": True,
+                "scopes": list(MCP_OPERATOR_SCOPES),
+                "assignment_project": project,
                 "work_session_id": row["work_session_id"],
                 "bound_task_id": row["task_id"],
                 "claim_id": row["claim_id"],

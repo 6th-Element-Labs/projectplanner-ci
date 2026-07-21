@@ -236,12 +236,15 @@ try:
     ok(issued.get("issued") is True
        and (direct_principal or {}).get("kind") == "direct_session"
        and (direct_principal or {}).get("bound_task_id") == task_id
+       and (direct_principal or {}).get("assignment_project") == P
+       and (direct_principal or {}).get("project") == "*"
+       and (direct_principal or {}).get("environment_operator") is True
        and set((direct_principal or {}).get("scopes") or [])
        == set(MCP_OPERATOR_SCOPES)
        and set((direct_principal or {}).get("scopes") or [])
        == set((operator_principal or {}).get("scopes") or [])
        and "write:bug_intake" in set((direct_principal or {}).get("scopes") or []),
-       "the task-bound CLI bearer receives exactly the MCP operator aura")
+       "the direct CLI bearer receives the desktop environment-operator aura")
     with _conn(P) as c:
         c.execute(
             "UPDATE direct_session_tokens SET expires_at=0 "
@@ -282,29 +285,23 @@ try:
             )
         }
         accepted_bug = guarded_submit_bug(source_task=task_id, project=P)
-        try:
-            guarded_claim(task_id="UI-999", agent_id=f"codex/{task_id}", project=P)
-            crossed_task = True
-        except ValueError:
-            crossed_task = False
-        try:
-            MCPAuthorizationGuard().wrap(verify_offline_completion)(
-                task_id="UI-999", evidence="wrong task", project=P)
-            crossed_offline_task = True
-        except ValueError:
-            crossed_offline_task = False
-        try:
-            guarded_submit_bug(source_task="UI-999", project=P)
-            crossed_bug_source = True
-        except ValueError:
-            crossed_bug_source = False
+        crossed_task = guarded_claim(
+            task_id="UI-999", agent_id="codex/another-agent", project=P)
+        crossed_offline_task = MCPAuthorizationGuard().wrap(
+            verify_offline_completion)(
+                task_id="UI-999", evidence="operator proof", project=P)
+        crossed_bug_source = guarded_submit_bug(source_task="UI-999", project=P)
+        crossed_project = guarded_claim(
+            task_id="MAX-999", agent_id="codex/another-agent", project="maxwell")
     ok(accepted.get("task_id") == task_id
        and accepted_offline_done.get("task_id") == task_id
-       and crossed_task is False
-       and crossed_offline_task is False
+       and crossed_task.get("task_id") == "UI-999"
+       and crossed_task.get("agent_id") == "codex/another-agent"
+       and crossed_offline_task.get("task_id") == "UI-999"
        and accepted_bug.get("source_task") == task_id
-       and crossed_bug_source is False,
-       "direct CLI can complete and file its assigned workflow but cannot cross tasks")
+       and crossed_bug_source.get("source_task") == "UI-999"
+       and crossed_project.get("project") == "maxwell",
+       "direct CLI can operate across tasks, agents, and projects like desktop MCP")
     ok(set(parity_writes) == {
            "submit_bug", "abandon_claim", "verify_ci",
            "claim_external_effect", "mark_external_effect_issued",

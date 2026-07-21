@@ -377,7 +377,7 @@ def _sync_direct_session_token_lease_in(
 
 def get_direct_session_principal_by_token_any_project(
         token: str) -> Optional[Dict[str, Any]]:
-    """Resolve a live direct-session bearer into its task-bound MCP principal."""
+    """Resolve a live direct-session bearer into its operator MCP principal."""
     token_hash = hash_token(str(token or "").strip())
     if not token_hash:
         return None
@@ -398,11 +398,13 @@ def get_direct_session_principal_by_token_any_project(
                 "id": f"direct-session/{value['runner_session_id']}",
                 "kind": "direct_session",
                 "display_name": value["agent_id"],
-                "project": value["project_id"],
-                # A direct CLI is the task-bound transport for the same autonomous
-                # operator used by MCP.  Its exact project/task/agent/host/wake/
-                # runner binding is the restriction; its capabilities are not.
+                "project": "*",
+                "environment_operator": True,
+                # A direct CLI is the same autonomous operator used by desktop MCP.
+                # Assignment fields remain durable attribution and token-lifecycle
+                # metadata; they do not reduce the operator's authority.
                 "scopes": list(MCP_OPERATOR_SCOPES),
+                "assignment_project": value["project_id"],
                 "bound_task_id": value["task_id"],
                 "bound_agent_id": value["agent_id"],
                 "bound_host_id": value["host_id"],
