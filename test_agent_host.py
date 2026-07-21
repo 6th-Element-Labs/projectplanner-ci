@@ -49,6 +49,23 @@ ok("PM_HOST_MAX_SESSIONS=1" in service_text,
 ok("PM_RUNNER_DIR=/var/lib/projectplanner/runner" in service_text,
    "systemd Agent Host service keeps runner artifacts outside the git checkout")
 
+with tempfile.TemporaryDirectory(prefix="bug120-agent-host-") as isolated_cwd:
+    isolated_start = subprocess.run(
+        [sys.executable, str(ROOT / "adapters" / "agent_host.py"), "--help"],
+        cwd=isolated_cwd,
+        env={
+            "PATH": os.environ.get("PATH", ""),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        },
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+ok(isolated_start.returncode == 0
+   and "Switchboard Agent Host daemon" in isolated_start.stdout
+   and "ModuleNotFoundError" not in isolated_start.stderr,
+   "Agent Host entrypoint imports from an isolated systemd-like environment")
+
 for key in ("PM_HOST_LANES", "PM_AGENT_HOST_ALLOW_WORK", "PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM"):
     os.environ.pop(key, None)
 os.environ["PM_RUNTIME"] = "codex"

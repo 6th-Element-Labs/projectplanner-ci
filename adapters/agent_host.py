@@ -40,6 +40,8 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 _ROOT = os.path.abspath(os.path.join(_HERE, ".."))
 _SRC = os.path.join(_ROOT, "src")
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 import switchboard_core as sb  # noqa: E402  (reuses _http + agent_id, same contract)
