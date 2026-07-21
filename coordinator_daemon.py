@@ -20,6 +20,7 @@ from typing import Any, Dict, Iterable, Mapping, Optional
 import uuid
 
 import scripts.switchboard_path  # noqa: F401 — make src/switchboard importable
+from switchboard.domain.board.tasks import READY_TASK_STATUSES
 
 
 STATE_SCHEMA = "switchboard.coordinator_daemon_state.v1"
@@ -292,6 +293,36 @@ class CoordinatorDaemon:
         return bool(detail.get("status") == "Done"
                     and (detail.get("provenance") or {}).get("terminal"))
 
+    @staticmethod
+    def _scope_dispatch_links(scope: Dict[str, Any],
+                              mission_status: Dict[str, Any]) -> list[Dict[str, Any]]:
+        """Return links explicitly covered by one operator-started scope.
+
+        Generic mission planning deliberately excludes non-blocking links unless
+        their metadata opts in.  A live deliverable scope is the operator's
+        explicit opt-in for ordinary flow roles, though: clicking ``Start
+        deliverable`` must not arm an inert scope merely because older/default
+        links were stored as ``contributes`` with ``blocks_deliverable=false``.
+        Context roles, skipped milestones, and explicit ``dispatch_eligible=false``
+        remain excluded by their distinct reason codes.
+        """
+        links = list((mission_status.get("dispatch_scope") or {}).get("links") or [])
+        if scope.get("scope_type") == "task":
+            task_id = str(scope.get("task_id") or "").upper()
+            task_project = str(scope.get("task_project") or "")
+            return [
+                row for row in links
+                if str(row.get("task_id") or "").upper() == task_id
+                and (not task_project or str(row.get("project_id") or "") == task_project)
+                and (row.get("automatic_dispatch_eligible")
+                     or row.get("reason") == "nonblocking_without_explicit_opt_in")
+            ]
+        return [
+            row for row in links
+            if row.get("automatic_dispatch_eligible")
+            or row.get("reason") == "nonblocking_without_explicit_opt_in"
+        ]
+
     def _scope_complete(self, scope: Dict[str, Any], mission_status: Dict[str, Any]) -> bool:
         if str((mission_status.get("deliverable") or {}).get("status") or "").lower() \
                 in TERMINAL_DELIVERABLE_STATUSES:
@@ -302,28 +333,29 @@ class CoordinatorDaemon:
                 scope.get("task_project") or ""))
         eligible = {
             (str(row.get("project_id") or ""), str(row.get("task_id") or "").upper())
-            for row in (mission_status.get("dispatch_scope") or {}).get("links") or []
-            if row.get("automatic_dispatch_eligible")
+            for row in self._scope_dispatch_links(scope, mission_status)
         }
         if not eligible:
             return False
         return all(self._terminal_task(self._task_detail(mission_status, task_id, task_project))
                    for task_project, task_id in eligible)
 
+    @staticmethod
+    def _task_ready_for_dispatch(detail: Dict[str, Any]) -> bool:
+        status = detail.get("status")
+        claims = detail.get("active_claims") or []
+        if status in READY_TASK_STATUSES:
+            return bool((detail.get("dependency_state") or {}).get("ready") and not claims)
+        return bool(status == "In Review" or (status == "In Progress" and not claims))
+
     def _scope_candidates(self, scope: Dict[str, Any],
                           mission_status: Dict[str, Any]) -> list[Dict[str, Any]]:
         if scope.get("scope_type") == "task":
             task_id = str(scope.get("task_id") or "").upper()
             task_project = str(scope.get("task_project") or "")
-            dispatch_link = next((
-                row for row in (mission_status.get("dispatch_scope") or {}).get("links") or []
-                if str(row.get("task_id") or "").upper() == task_id
-                and (not task_project or str(row.get("project_id") or "") == task_project)
-            ), None)
-            if dispatch_link is None or (
-                not dispatch_link.get("automatic_dispatch_eligible")
-                and dispatch_link.get("reason") != "nonblocking_without_explicit_opt_in"
-            ):
+            dispatch_link = next(iter(self._scope_dispatch_links(
+                scope, mission_status)), None)
+            if dispatch_link is None:
                 return []
             detail = self._task_detail(
                 mission_status, task_id, task_project)
@@ -333,8 +365,7 @@ class CoordinatorDaemon:
                      "action": "target_task"}]
         eligible = {
             (str(row.get("project_id") or ""), str(row.get("task_id") or "").upper())
-            for row in (mission_status.get("dispatch_scope") or {}).get("links") or []
-            if row.get("automatic_dispatch_eligible")
+            for row in self._scope_dispatch_links(scope, mission_status)
         }
         by_task: Dict[tuple[str, str], Dict[str, Any]] = {}
         for action in mission_status.get("next_actions") or []:
@@ -347,6 +378,25 @@ class CoordinatorDaemon:
             }:
                 continue
             by_task.setdefault(key, dict(action))
+        # ``next_actions`` is the generic planner's view and intentionally omits
+        # non-blocking links.  The operator-started deliverable scope is the
+        # explicit opt-in, so target any covered non-terminal task that the
+        # generic plan did not enumerate and let the exact-task coordinator
+        # perform the normal dependency/claim/policy checks.
+        for task_project, task_id in sorted(eligible):
+            key = (task_project, task_id)
+            if key in by_task:
+                continue
+            detail = self._task_detail(mission_status, task_id, task_project)
+            if (not detail or self._terminal_task(detail)
+                    or not self._task_ready_for_dispatch(detail)):
+                continue
+            by_task[key] = {
+                "action": "target_task",
+                "task_id": task_id,
+                "task_project": task_project,
+                "project_id": task_project,
+            }
         return [by_task[key] for key in sorted(by_task)][:self.config.max_tasks_per_scope_tick]
 
     def _candidate_revision(self, mission_status: Dict[str, Any], candidate: Dict[str, Any]) -> str:

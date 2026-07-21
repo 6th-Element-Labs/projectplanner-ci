@@ -149,6 +149,42 @@ config = daemon_mod.DaemonConfig(
 
 first = daemon_mod.CoordinatorDaemon(
     config, store_mod=store, instance_id="instance-one", clock=clock)
+
+# BUG-122: Start deliverable is itself the explicit dispatch opt-in for ordinary
+# non-blocking flow links.  Context/parked links remain excluded.
+nonblocking_detail = {
+    "task_id": "TASK-NONBLOCKING", "status": "Not Started",
+    "dependency_state": {"ready": True, "satisfied": True},
+    "active_claims": [], "provenance": {},
+}
+nonblocking_status = {
+    "deliverable": {"id": "deliverable-explicit", "status": "approved"},
+    "linked_tasks": [
+        {"task_id": "TASK-NONBLOCKING", "project_id": "switchboard",
+         "task_detail": nonblocking_detail},
+        {"task_id": "TASK-PARKED", "project_id": "switchboard",
+         "task_detail": {**nonblocking_detail, "task_id": "TASK-PARKED"}},
+    ],
+    "dispatch_scope": {"links": [
+        {"task_id": "TASK-NONBLOCKING", "project_id": "switchboard",
+         "automatic_dispatch_eligible": False,
+         "reason": "nonblocking_without_explicit_opt_in"},
+        {"task_id": "TASK-PARKED", "project_id": "switchboard",
+         "automatic_dispatch_eligible": False, "reason": "context_role:parked"},
+    ]},
+    "next_actions": [],
+}
+explicit_scope = {"scope_type": "deliverable", "deliverable_id": "deliverable-explicit"}
+explicit_candidates = first._scope_candidates(explicit_scope, nonblocking_status)
+ok([row["task_id"] for row in explicit_candidates] == ["TASK-NONBLOCKING"],
+   "Start deliverable opts ordinary non-blocking work into exact-task dispatch")
+ok(first._scope_complete(explicit_scope, nonblocking_status) is False,
+   "operator-started non-blocking work remains part of scope completion")
+nonblocking_detail["status"] = "Done"
+nonblocking_detail["provenance"] = {"terminal": True}
+ok(first._scope_complete(explicit_scope, nonblocking_status) is True,
+   "scope completes after explicitly covered non-blocking work reaches terminal provenance")
+
 run1 = first.tick_project("switchboard")
 ok(run1["status"] == "running" and run1["receipts"][0]["deliverable_id"] == "deliverable-a",
    "leader processes one bounded operator-started scope")
