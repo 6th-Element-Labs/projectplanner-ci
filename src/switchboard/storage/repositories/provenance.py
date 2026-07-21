@@ -36,7 +36,10 @@ from switchboard.domain.provenance.semantic import (
     merge_done_gate,
     semantic_completion_gate,
 )
-from switchboard.storage.repositories.tasks import _task_row
+from switchboard.storage.repositories.tasks import (
+    _heal_dependency_blocked_tasks_in,
+    _task_row,
+)
 
 
 def _store_facade():
@@ -406,6 +409,10 @@ def _mark_task_merged_impl(task_id: str, merged_sha: str, pr_number: Optional[in
                    json.dumps({"merged_sha": merged_sha, "pr_number": pr_number,
                                "pr_url": pr_url, "merge_done_gate": done_gate},
                               sort_keys=True), now))
+        if target_status == "Done":
+            _heal_dependency_blocked_tasks_in(
+                c, completed_task_id=task_id, actor="switchboard/dependency-lifecycle",
+                now=now)
     return {"task_id": task_id, "status": target_status, "git_state": git_state,
             "merge_done_gate": done_gate, "merged": True}
 
@@ -470,6 +477,9 @@ def mark_task_default_branch_commit(task_id: str, commit_sha: str,
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (task_id, actor, "git.default_branch_backfilled",
                    json.dumps(evidence, sort_keys=True), now))
+        _heal_dependency_blocked_tasks_in(
+            c, completed_task_id=task_id, actor="switchboard/dependency-lifecycle",
+            now=now)
     return {"task_id": task_id, "status": "Done", "git_state": git_state}
 
 
@@ -560,6 +570,9 @@ def mark_task_offline_done(task_id: str, evidence: Any = None,
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (task_id, actor, "task.offline_verified",
                    json.dumps(offline_payload, sort_keys=True), now))
+        _heal_dependency_blocked_tasks_in(
+            c, completed_task_id=task_id, actor="switchboard/dependency-lifecycle",
+            now=now)
     return {"task_id": task_id, "status": "Done", "git_state": git_state,
             "provenance": _provenance_summary(git_state)}
 

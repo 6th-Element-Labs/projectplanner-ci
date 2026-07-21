@@ -62,6 +62,8 @@ __all__ = [
     "default_task_repository",
     "_task_row",
     "_dependency_state_in",
+    "_heal_dependency_blocked_tasks_in",
+    "heal_dependency_blocked_tasks",
     "_approval_payload",
     "_task_human_gate_state",
     "_task_proof_bucket",
@@ -189,6 +191,112 @@ def _dependency_state_in(c: sqlite3.Connection, task: Dict[str, Any]) -> Dict[st
         ).fetchall()
         by_id = {r["task_id"]: {"title": r["title"], "status": r["status"]} for r in rows}
     return build_dependency_state(task, dependency_rows_from_lookup(deps, by_id))
+
+
+_EXCEPTIONAL_BLOCK_ACTIVITY_KINDS = frozenset({
+    "git.pr_merged_semantic_blocked",
+    "git.default_branch_semantic_blocked",
+    "review.remediation_escalated",
+})
+
+
+def _dependency_block_is_exceptional_in(
+        c: sqlite3.Connection, task_id: str) -> bool:
+    """Keep deliberate/exception blockers out of dependency auto-healing.
+
+    Older dependency-gated tasks only persisted ``status=Blocked`` and their
+    dependency list, so they have no explicit block-cause marker. Known semantic
+    and review escalation writers do emit durable activity, while an operator's
+    status-only edit is also an explicit hold. A status edit that changed the
+    dependency graph at the same time remains dependency-derived.
+    """
+    row = c.execute(
+        "SELECT kind, payload FROM activity WHERE task_id=? "
+        "AND (kind IN (?,?,?) OR (kind IN ('create','edit') "
+        "AND payload LIKE '%\"status\"%')) ORDER BY id DESC LIMIT 1",
+        (task_id, *_EXCEPTIONAL_BLOCK_ACTIVITY_KINDS),
+    ).fetchone()
+    if not row:
+        return False
+    if row["kind"] in _EXCEPTIONAL_BLOCK_ACTIVITY_KINDS:
+        return True
+    payload = _json_payload(row["payload"])
+    if str(payload.get("status") or "").strip().lower() != "blocked":
+        return False
+    cause = str(payload.get("block_cause") or "").strip().lower()
+    if cause:
+        return cause != "dependencies"
+    return "depends_on" not in payload
+
+
+def _heal_dependency_blocked_tasks_in(
+        c: sqlite3.Connection, *, completed_task_id: str = "",
+        task_ids: Any = None, actor: str = "switchboard/dependency-lifecycle",
+        now: Optional[float] = None) -> List[str]:
+    """Move legacy dependency-only Blocked tasks back to Not Started.
+
+    Dependency readiness is derived from the graph. ``Blocked`` remains reserved
+    for exceptional lifecycle failures and explicit operator holds. The optional
+    filters keep completion cascades and mission projections bounded.
+    """
+    timestamp = float(now if now is not None else time.time())
+    completed = (completed_task_id or "").strip()
+    requested_values = [task_ids] if isinstance(task_ids, str) else (task_ids or [])
+    requested = {
+        str(task_id or "").strip() for task_id in requested_values
+        if str(task_id or "").strip()
+    }
+    rows = c.execute(
+        "SELECT * FROM tasks WHERE status='Blocked' ORDER BY sort_order, task_id"
+    ).fetchall()
+    all_rows = c.execute("SELECT * FROM tasks").fetchall()
+    by_id = {task["task_id"]: task for task in [_task_row(row) for row in all_rows]}
+    healed: List[str] = []
+    for row in rows:
+        task = _task_row(row)
+        task_id = task["task_id"]
+        dependencies = task.get("depends_on") or []
+        if requested and task_id not in requested:
+            continue
+        if not dependencies or (completed and completed not in dependencies):
+            continue
+        if not _deps_done(task, by_id):
+            continue
+        if _dependency_block_is_exceptional_in(c, task_id):
+            continue
+        changed = c.execute(
+            "UPDATE tasks SET status='Not Started', assignee=NULL, updated_at=? "
+            "WHERE task_id=? AND status='Blocked'",
+            (timestamp, task_id),
+        )
+        if changed.rowcount != 1:
+            continue
+        payload = {
+            "schema": "switchboard.dependency_status_healed.v1",
+            "previous_status": "Blocked",
+            "status": "Not Started",
+            "depends_on": dependencies,
+            "completed_task_id": completed or None,
+            "reason": "all_dependencies_done",
+        }
+        c.execute(
+            "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+            "VALUES (?,?,?,?,?)",
+            (task_id, actor, "task.dependency_status_healed",
+             json.dumps(payload, sort_keys=True), timestamp),
+        )
+        healed.append(task_id)
+    return healed
+
+
+def heal_dependency_blocked_tasks(
+        project: str = DEFAULT_PROJECT, *, completed_task_id: str = "",
+        task_ids: Any = None, actor: str = "switchboard/dependency-lifecycle") -> List[str]:
+    """Public transaction wrapper for dependency-status reconciliation."""
+    with _conn(project) as c:
+        return _heal_dependency_blocked_tasks_in(
+            c, completed_task_id=completed_task_id, task_ids=task_ids, actor=actor)
+
 
 def _approval_payload(task: Dict[str, Any]) -> Dict[str, Any]:
     state = task.get("agent_state") or {}
@@ -499,8 +607,17 @@ def _update_task_impl(task_id: str, fields: Dict[str, Any], actor: str = "user",
         cur = c.execute(f"UPDATE tasks SET {', '.join(sets)} WHERE task_id=?", vals)
         if cur.rowcount == 0:
             return None
+        activity_changed = dict(changed)
+        if str(changed.get("status") or "").strip().lower() == "blocked":
+            # A caller explicitly setting status=Blocked is an operator/lifecycle
+            # hold. Dependency waiting belongs in dependency_state, not status.
+            activity_changed["block_cause"] = "explicit"
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
-                  (task_id, actor, "edit", json.dumps(changed), time.time()))
+                  (task_id, actor, "edit", json.dumps(activity_changed), time.time()))
+        if str(changed.get("status") or "").strip().lower() == "done":
+            _heal_dependency_blocked_tasks_in(
+                c, completed_task_id=task_id,
+                actor="switchboard/dependency-lifecycle")
         # NARRATE-8: emit the narration intent inside the SAME transaction as the mutation
         # (ADR-0008). Materiality is decided by the source projection hash, so a cosmetic
         # edit bumps no revision and emits nothing. Commit binds mutation + intent atomically.
@@ -704,6 +821,7 @@ def _create_task_impl(data: Dict[str, Any], actor: str = "user",
             mx += 1
             tid = f"{ws}-{mx + 1}"
         order = c.execute("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM tasks").fetchone()[0]
+        normalized_dependencies = _normalize_depends_on(data.get("depends_on"))
         now = time.time()
         c.execute(
             """INSERT INTO tasks (task_id, workstream_id, workstream_name, title, description,
@@ -715,12 +833,32 @@ def _create_task_impl(data: Dict[str, Any], actor: str = "user",
              data.get("owner_person_or_role"), data.get("assignee"), (data.get("phase") or "Build"),
              (data.get("status") or "Not Started"), data.get("effort_days"), data.get("duration_days"),
              data.get("start_date"), data.get("finish_date"), 0,
-             json.dumps(_normalize_depends_on(data.get("depends_on"))),
+             json.dumps(normalized_dependencies),
              data.get("entry_criteria"), data.get("exit_criteria"),
              data.get("deliverable"), (data.get("risk_level") or "Medium"),
              1 if data.get("is_blocking") else 0, order, now, now))
+        dependency_block = False
+        if ((data.get("status") or "Not Started") == "Blocked"
+                and normalized_dependencies):
+            placeholders = ",".join("?" for _ in normalized_dependencies)
+            done = {
+                row["task_id"] for row in c.execute(
+                    f"SELECT task_id FROM tasks WHERE task_id IN ({placeholders}) "
+                    "AND status='Done'",
+                    normalized_dependencies,
+                ).fetchall()
+            }
+            dependency_block = len(done) != len(normalized_dependencies)
+        create_payload = {
+            "title": title,
+            "status": data.get("status") or "Not Started",
+            "depends_on": normalized_dependencies,
+        }
+        if create_payload["status"] == "Blocked":
+            create_payload["block_cause"] = (
+                "dependencies" if dependency_block else "explicit")
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
-                  (tid, actor, "create", json.dumps({"title": title}), now))
+                  (tid, actor, "create", json.dumps(create_payload, sort_keys=True), now))
         # NARRATE-8: a new task is revision 1 — emit its narration intent atomically with
         # the insert (ADR-0008). Rollback of the create drops the outbox row too.
         emitted = narration_outbox.emit_task_narration_request(

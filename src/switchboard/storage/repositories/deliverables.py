@@ -1928,6 +1928,11 @@ def _batch_enrich_mission_links(links: List[Dict[str, Any]]) -> List[Dict[str, A
         uniq = list(dict.fromkeys(tids))
         placeholders = ",".join("?" for _ in uniq)
         with _store_facade()._conn(proj) as c:
+            # The mission cockpit is Autopilot's planning input. Reconcile legacy
+            # dependency-only Blocked rows before projecting next_actions so a task
+            # becomes claimable on the first tick after its final dependency closes.
+            _store_facade()._heal_dependency_blocked_tasks_in(
+                c, task_ids=uniq, actor="switchboard/mission-status")
             rows = c.execute(
                 f"SELECT * FROM tasks WHERE task_id IN ({placeholders})", uniq,
             ).fetchall()
@@ -3263,6 +3268,7 @@ __all__ = [
     "_registry_project_ids",
     "_find_deliverable_links_for_task",
     "_enriched_mission_task_link",
+    "_batch_enrich_mission_links",
     "_mission_blockers",
     "_action",
     "_task_blocks_others",

@@ -30,6 +30,7 @@ from switchboard.domain.validation_policy import (
 )
 from switchboard.storage.repositories.tasks import (
     _deps_done,
+    _heal_dependency_blocked_tasks_in,
     _task_row,
     _task_tally_snapshot,
 )
@@ -225,6 +226,8 @@ def _claim_next_mission_scoped(agent_id: str, lanes: Any = None,
                 skipped["unknown_project"] += 1
                 continue
             with _conn(task_project) as c:
+                _heal_dependency_blocked_tasks_in(
+                    c, task_ids=[task_id], actor="switchboard/claim-next")
                 row = c.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
                 if not row:
                     skipped["missing_task"] += 1
@@ -640,6 +643,8 @@ def _claim_task_impl(task_id: str, agent_id: str,
         hit = _store_facade()._idem_hit(c, "claim_task", idem_key, actor, payload)
         if hit is not None:
             return hit
+        _heal_dependency_blocked_tasks_in(
+            c, task_ids=[task_id], actor="switchboard/claim-task")
         row = c.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
         if not row:
             response = {"claimed": False, "reason": "task_not_found", "task_id": task_id}
@@ -852,6 +857,7 @@ def claim_next(agent_id: str, lanes: Any = None,
         hit = _store_facade()._idem_hit(c, "claim_next", idem_key, actor, payload)
         if hit is not None:
             return hit
+        _heal_dependency_blocked_tasks_in(c, actor="switchboard/claim-next")
         active_claims = {
             r["task_id"] for r in c.execute(
                 "SELECT task_id FROM task_claims WHERE status='active' AND expires_at>?",
