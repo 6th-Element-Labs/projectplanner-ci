@@ -9,12 +9,16 @@ from switchboard.domain import runner_pty as domain
 from switchboard.storage.repositories import runner as runner_repo
 
 
-def _session_binding(session: Mapping[str, Any], project: str) -> dict[str, str]:
+def _session_binding(session: Mapping[str, Any], project: str,
+                     *, host_attached: bool | None = None) -> dict[str, str]:
     bind = runner_repo.runner_bind_tuple(session)
     meta = session.get("metadata") or {}
     if not isinstance(meta, dict):
         meta = {}
-    direct = runner_repo.is_direct_assignment_runner(dict(session))
+    # WATCH-4: a live relay-attached run fills the same placeholder identity fields
+    # as a direct-assignment run, so a Connect run proven live by its attached
+    # tunnel mints a ticket without a scheduler claim/Work Session.
+    direct = runner_repo.is_direct_assignment_runner(dict(session)) or host_attached is True
     direct_ref = f"direct/{session.get('runner_session_id') or 'session'}"
     return domain.merge_binding({
         "tenant_id": str(
@@ -55,6 +59,7 @@ def mint_ticket_for_session(
     ttl_seconds: int = domain.DEFAULT_TICKET_TTL_SECONDS,
     binding_overlay: Mapping[str, Any] | None = None,
     actor: str = "",
+    host_attached: bool | None = None,
 ) -> dict[str, Any]:
     """Load runner session, merge COORD-34 bind fields, mint a capability ticket."""
     project_id = project or DEFAULT_PROJECT
@@ -79,9 +84,10 @@ def mint_ticket_for_session(
             "runner_session_id": sid,
         }
     missing = runner_repo.missing_runner_bind_fields(session)
-    if missing and not runner_repo.is_direct_assignment_runner(session):
+    if (missing and not runner_repo.is_direct_assignment_runner(session)
+            and host_attached is not True):
         return runner_repo.runner_bind_incomplete(missing, task_id=session.get("task_id") or "")
-    binding = _session_binding(session, project_id)
+    binding = _session_binding(session, project_id, host_attached=host_attached)
     if binding_overlay:
         binding = domain.merge_binding(binding, binding_overlay)
     # Ticket mint requires the full ADAPTER-22 bind tuple. Fill safe defaults for

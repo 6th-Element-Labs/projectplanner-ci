@@ -73,6 +73,22 @@ def create_router(*, resolve_project: ProjectResolver,
             task_id=task_id, include_stale=include_stale,
             project=resolve_project(project))
 
+    @router.get("/ixp/v1/runner_sessions/{runner_session_id}/relay_attachment")
+    async def ixp_runner_session_relay_attachment(runner_session_id: str):
+        """WATCH-4: the live host-tunnel attachment state for one runner session.
+
+        Served from this process's RelayHub, the authority for live attachment.
+        ``host_attached`` is ``null`` when this process has never held the session
+        (the caller should keep DB-row inference); ``true``/``false`` when the hub
+        owns it. Cross-process watch resolvers read this to key liveness on the
+        relay rather than on a runner row.
+        """
+        from switchboard.application import runner_pty_relay as relay
+        return {
+            "runner_session_id": runner_session_id,
+            "host_attached": relay.host_attached_for(runner_session_id),
+        }
+
     @router.post("/ixp/v1/register_runner_session")
     async def ixp_register_runner_session(request: Request, body: dict = Body(...)):
         project = resolve_body_project(body)

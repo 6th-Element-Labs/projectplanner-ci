@@ -329,11 +329,13 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
     host_id = str(result.get("host_id") or "").strip()
     descriptor: dict[str, Any] = {}
     if execution_id and result.get("attached"):
+        from switchboard.application import runner_pty_relay as _relay
         descriptor = runner_pty_command.mint_ticket_for_session(
             runner_session_id=execution_id,
             project=project,
             scopes=list(DEFAULT_WATCH_SCOPES),
             actor=principal_id or actor,
+            host_attached=_relay.host_attached_for(execution_id),
         )
     elif execution_id and wake_id and host_id and action in {"started", "starting"}:
         descriptor = runner_pty_command.mint_ticket_for_pending_direct_session(
@@ -385,11 +387,15 @@ def open_session(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "
     host_open = _try_control(
         execution_id, "open", reason=f"open_session {task_id}", options={},
         actor=actor, principal_id=principal_id, project=project)
+    from switchboard.application import runner_pty_relay as _relay
     mint_kwargs: dict[str, Any] = {
         "runner_session_id": execution_id,
         "project": project,
         "scopes": list(scopes or DEFAULT_WATCH_SCOPES),
         "actor": actor,
+        # WATCH-4: a run proven live by its attached relay tunnel mints a ticket
+        # even without a scheduler claim/Work Session.
+        "host_attached": _relay.host_attached_for(execution_id),
     }
     if ttl_seconds:
         mint_kwargs["ttl_seconds"] = int(ttl_seconds)

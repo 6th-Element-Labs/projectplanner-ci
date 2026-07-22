@@ -1100,3 +1100,33 @@ def reset_default_hub_for_tests() -> RelayHub:
     with _DEFAULT_HUB_LOCK:
         _DEFAULT_HUB = RelayHub()
         return _DEFAULT_HUB
+
+
+def host_attached_for(runner_session_id: str,
+                      hub: "RelayHub | None" = None) -> bool | None:
+    """WATCH-4 liveness signal: is a host tunnel attached for this session *here*?
+
+    Tri-state, resolved against the in-process RelayHub -- the only authority for
+    live attachment:
+
+      * ``True``/``False`` when this process's hub owns the relay session (host
+        tunnel present / absent).
+      * ``None`` when this process's hub has never seen the session. This is the
+        safe fallback for any caller that does not hold the tunnel (the MCP
+        process, a second web worker): the watch gate then keeps DB-row inference
+        instead of falsely reporting the run detached.
+
+    Cross-process callers read the owning process's state via the
+    ``/ixp/v1/runner_sessions/{id}/relay_attachment`` endpoint, which returns this
+    same value from the process that terminates the host WebSocket.
+    """
+    sid = str(runner_session_id or "").strip()
+    if not sid:
+        return None
+    try:
+        info = (hub or get_default_hub()).session_info(sid)
+    except Exception:
+        return None
+    if not info:
+        return None
+    return bool(info.get("host_attached"))

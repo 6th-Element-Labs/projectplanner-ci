@@ -28,8 +28,15 @@ def upsert_session_mapping_result(
             or record.get("runner_session_id") or record.get("id") or "")
         session = runner_repo.get_runner_session(session_id, project=project)
         if session:
+            # WATCH-4: a run proven live by its attached relay tunnel renews its
+            # host_url even without a scheduler claim/Work Session, so a Connect
+            # PTY session's tunnel does not go dark at ticket expiry. Resolved
+            # in-process (this heartbeat is served by the relay-owning process);
+            # None off-process keeps the historical direct-assignment behaviour.
+            from switchboard.application import runner_pty_relay as relay
             result["server_relay"] = runner_repo._server_relay_options(
-                session, user_id=principal_id, project=project)
+                session, user_id=principal_id, project=project,
+                host_attached=relay.host_attached_for(session_id))
     return result
 
 
@@ -117,7 +124,14 @@ def resolve_watch(
         }
     session = projection.get("active_runner")
     if session:
-        verdict = runner_repo.assert_runner_watchable(session)
+        # WATCH-4: the live relay attachment state is the primary liveness signal.
+        # Resolved in-process here (this command is served by the web/relay process
+        # that terminates the host tunnel); None on any process without the session
+        # keeps the historical bind-tuple inference.
+        from switchboard.application import runner_pty_relay as relay
+        host_attached = relay.host_attached_for(session.get("runner_session_id"))
+        verdict = runner_repo.assert_runner_watchable(
+            session, host_attached=host_attached)
         return {**verdict, "sessions": [session], "enough_for_panel": True,
                 "task_session": projection}
     outcome = projection.get("last_dispatch_outcome") or {}

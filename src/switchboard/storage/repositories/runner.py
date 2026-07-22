@@ -854,8 +854,48 @@ def is_connect_assignment_runner(record: Dict[str, Any]) -> bool:
     )
 
 
-def assert_runner_watchable(session: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Fail closed: Watch/Chat may open only for a fully bound live runner."""
+#: Identity fields that authorize *which* task/host/wake a Watch/Chat opens.
+#: These stay required even when relay attachment proves liveness (WATCH-4):
+#: attachment answers "is it live", identity answers "is it the right run".
+RUNNER_AUTHZ_FIELDS = ("task_id", "host_id", "wake_id")
+
+
+def _missing_runner_authz_fields(session: Dict[str, Any]) -> List[str]:
+    """Identity-only bind check: task/host/wake, with the host_id shape rule.
+
+    Unlike :func:`missing_runner_bind_fields` this never requires claim_id or
+    work_session_id -- those are scheduler/code-write authority, not the identity
+    a terminal watcher needs.
+    """
+    bind = runner_bind_tuple(session)
+    missing = [name for name in RUNNER_AUTHZ_FIELDS if not bind.get(name)]
+    host_id = bind.get("host_id") or ""
+    if host_id and not (
+            host_id.startswith("host/") and len(host_id) > len("host/")
+    ) and "host_id" not in missing:
+        missing.append("host_id")
+    return missing
+
+
+def assert_runner_watchable(session: Optional[Dict[str, Any]], *,
+                            host_attached: Optional[bool] = None) -> Dict[str, Any]:
+    """Fail closed: Watch/Chat may open only for a live runner.
+
+    ``host_attached`` is the WATCH-4 liveness signal, resolved from the RelayHub's
+    per-session host-tunnel state (``session_info()['host_attached']``). It is a
+    tri-state:
+
+      * ``True``  -- a host tunnel is attached: the run is watchable regardless of
+        its scheduler claim-binding state (Connect runs carry no claim/work_session
+        by design). Identity (task/host/wake) is still required for authorization.
+      * ``False`` -- the relay has no attached tunnel: a row that otherwise looks
+        live is refused ``host_not_attached`` rather than presenting a dead pipe as
+        watchable.
+      * ``None``  -- no attachment signal available (e.g. a caller that cannot query
+        the hub): fall back to the DB-row assignment/bind-tuple inference
+        (``is_connect_assignment_runner`` / ``is_direct_assignment_runner``), so
+        callers that cannot see the relay keep today's behaviour.
+    """
     if not session:
         return runner_bind_incomplete(list(RUNNER_BIND_FIELDS))
     if session.get("stale"):
@@ -884,6 +924,57 @@ def assert_runner_watchable(session: Optional[Dict[str, Any]]) -> Dict[str, Any]
                 "error_code": "runner_stream_not_ready",
                 "message": "Runner is bound but its live PTY relay is not ready",
             }
+    # WATCH-4: when the live relay attachment state is supplied, it is the primary
+    # liveness signal -- it overrides DB-row assignment inference. Bind-tuple checks
+    # drop to identity-only (authorization).
+    if host_attached is not None:
+        authz_missing = _missing_runner_authz_fields(session)
+        if authz_missing:
+            return runner_bind_incomplete(
+                authz_missing,
+                runner_session_id=str(session.get("runner_session_id") or ""),
+                task_id=str(session.get("task_id") or ""),
+            )
+        status = str(session.get("status") or "").strip().lower()
+        if host_attached:
+            if status not in RUNNER_WATCHABLE_STATUSES:
+                return runner_bind_incomplete(
+                    ["live_status"],
+                    runner_session_id=str(session.get("runner_session_id") or ""),
+                    task_id=str(session.get("task_id") or ""),
+                ) | {"message": f"Runner status {status or 'unknown'} is not watchable"}
+            bind = runner_bind_tuple(session)
+            return {
+                "watchable": True,
+                "refused": False,
+                "runner_session_id": session.get("runner_session_id"),
+                "task_id": bind["task_id"],
+                "bind": bind,
+                "session": session,
+                "binding_mode": "relay_attached",
+                "host_attached": True,
+            }
+        # host_attached is False. A row that still claims a live status but has no
+        # attached tunnel is the dark-runner case: name it, do not present it as
+        # watchable -- this is exactly what the BUG-130 assignment-shape recognition
+        # below could NOT catch (a live-looking row with a dead pipe). A not-yet-live
+        # row falls through to assignment inference so a starting run is not
+        # mislabelled as detached.
+        if status in RUNNER_WATCHABLE_STATUSES:
+            return runner_bind_incomplete(
+                [],
+                runner_session_id=str(session.get("runner_session_id") or ""),
+                task_id=str(session.get("task_id") or ""),
+            ) | {
+                "error": "host_not_attached",
+                "error_code": "host_not_attached",
+                "failure_class": "unreachable_agent",
+                "host_attached": False,
+                "message": ("Runner row is live but no host tunnel is attached to "
+                            "the relay; Watch/Chat refused until it reconnects"),
+            }
+    # No relay-attachment signal (e.g. an off-process caller): fall back to BUG-130
+    # DB-row assignment recognition, then the full bind tuple.
     assignment_mode = (
         "direct_assignment" if is_direct_assignment_runner(session)
         else "connect_assignment" if is_connect_assignment_runner(session)
@@ -1010,11 +1101,18 @@ def latest_dispatch_outcome(task_id: str, *,
 
 
 def resolve_runner_watch(task_id: str, *, include_stale: bool = False,
-                         project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+                         project: str = DEFAULT_PROJECT,
+                         attachment: Optional[Callable[[str], Optional[bool]]] = None
+                         ) -> Dict[str, Any]:
     """Pick a Watch/Chat-ready runner for a task, or return a typed refusal.
 
     UI-17 and Mission panel open only through this gate: listing alone is not enough
     when rows exist but the bind tuple is incomplete.
+
+    ``attachment`` (WATCH-4) is an optional resolver mapping a runner_session_id to
+    its live host-tunnel state (True/False/None); when supplied it is the primary
+    liveness signal per session. It defaults to ``None`` so callers that cannot see
+    the relay keep DB-row inference unchanged.
     """
     task_id = (task_id or "").strip()
     if not task_id:
@@ -1033,7 +1131,13 @@ def resolve_runner_watch(task_id: str, *, include_stale: bool = False,
         } | ({"dispatch": dispatch} if dispatch else {})
     refusals: List[Dict[str, Any]] = []
     for session in sessions:
-        verdict = assert_runner_watchable(session)
+        host_attached = None
+        if attachment is not None:
+            try:
+                host_attached = attachment(str(session.get("runner_session_id") or ""))
+            except Exception:
+                host_attached = None
+        verdict = assert_runner_watchable(session, host_attached=host_attached)
         if verdict.get("watchable"):
             return {
                 **verdict,
@@ -2097,13 +2201,19 @@ def list_runner_control_requests(status: str = "", host_id: str = "",
 
 
 def _server_relay_options(session: Dict[str, Any], *, user_id: str,
-                          project: str) -> Dict[str, Any]:
+                          project: str,
+                          host_attached: Optional[bool] = None) -> Dict[str, Any]:
     """Mint the two relay capabilities at the server trust boundary.
 
     A personal Agent Host has its own narrow bearer, not the server's PTY relay
     signing secret.  Tickets therefore cannot be minted on the Mac.  They are
     attached only to the authenticated claim response and are never persisted in
     runner_control_requests.options_json.
+
+    ``host_attached=True`` (WATCH-4) treats a live relay-attached run the same as a
+    direct-assignment run for ticket binding: the claim/work_session/exec/sha
+    fields a Connect run never populates are filled with the direct placeholder so
+    a host_url is issued for a run proven live by its attached tunnel.
     """
     from switchboard.application import runner_pty_relay as relay
     from switchboard.domain import runner_pty as pty_domain
@@ -2112,7 +2222,7 @@ def _server_relay_options(session: Dict[str, Any], *, user_id: str,
     public_base = relay.public_base_from_env()
     if not public_base or relay.is_loopback_url(public_base):
         return {"error": "relay_public_base_unavailable"}
-    direct = is_direct_assignment_runner(session)
+    direct = is_direct_assignment_runner(session) or host_attached is True
     direct_ref = f"direct/{session.get('runner_session_id') or 'session'}"
     bind = runner_bind_tuple(session)
     binding = {
