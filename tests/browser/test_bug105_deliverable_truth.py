@@ -47,7 +47,7 @@ store.create_deliverable({
 
 task_specs = [
     ("Not Started", "Queued work"),
-    ("In Progress", "Active work"),
+    ("Not Started", "Active work"),
     ("In Review", "Review work"),
     ("In Review", "Merged work"),
 ]
@@ -63,6 +63,26 @@ for status, title in task_specs:
         data={"role": "implementation", "blocks_deliverable": True},
         actor="test", project="maxwell",
     )
+
+runner_agent = "codex/BUG-146-browser"
+runner_claim = store.claim_task(task_ids[1], runner_agent, actor="test", project="maxwell")
+runner_upsert = store.upsert_runner_session({
+    "runner_session_id": "runner-bug146-live",
+    "host_id": "host/bug146-browser",
+    "agent_id": runner_agent,
+    "runtime": "codex",
+    "task_id": task_ids[1],
+    "claim_id": runner_claim["claim_id"],
+    "status": "running",
+    "cwd": "/tmp/bug146-browser",
+    "control": {"managed_process": True, "runner_kill": True, "tier": "T3"},
+    "metadata": {
+        "wake_id": "wake-bug146-browser",
+        "work_session_id": "worksession-bug146-browser",
+    },
+    "heartbeat_ttl_s": 1800,
+}, actor="test", project="maxwell")
+assert not runner_upsert.get("error"), runner_upsert
 
 before = store.get_mission_status(project="maxwell", deliverable_id=deliverable_id)
 fingerprint = mission_narrative.brief_source_fingerprint(before)
@@ -138,7 +158,19 @@ try:
             assert ledger.locator(f'tr[data-task-status="{expected_status}"]').count() == 1
         active_row = ledger.locator(f'tr[data-mission-task-row="{task_ids[1]}"]')
         assert "implementation" in active_row.inner_text()
+        assert active_row.get_attribute("data-mission-task-active") == "true"
+        assert "table-primary" in (active_row.get_attribute("class") or "")
+        watch = active_row.get_by_role("button", name="Watch")
+        assert watch.is_visible()
+        runner_attr = watch.get_attribute("data-mission-watch-runner")
+        assert runner_attr == "runner-bug146-live", (runner_attr, status["active_work"])
         assert active_row.locator('[data-autopilot-scope="task"]').count() == 1
+        watch.click()
+        page.locator("#runner-pty-panel").wait_for(state="visible")
+        assert task_ids[1] in page.locator("#runner-pty-title").inner_text()
+        inactive_row = ledger.locator(f'tr[data-mission-task-row="{task_ids[0]}"]')
+        assert inactive_row.get_attribute("data-mission-task-active") is None
+        assert inactive_row.get_by_role("button", name="Watch").count() == 0
         done_row = ledger.locator(f'tr[data-mission-task-row="{task_ids[-1]}"]')
         assert done_row.is_visible()
         assert "Merged code" in done_row.inner_text()

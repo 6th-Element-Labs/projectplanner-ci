@@ -4603,6 +4603,15 @@ const TeepPlan = {
         if (missionPage && !this._missionWired) {
             this._missionWired = true;
             missionPage.addEventListener('click', async (e) => {
+                const watch = e.target.closest('[data-mission-watch-task]');
+                if (watch && missionPage.contains(watch)) {
+                    e.preventDefault();
+                    await this.openRunnerSessionPanel(
+                        watch.getAttribute('data-mission-watch-task'),
+                        { includeStale: true },
+                    );
+                    return;
+                }
                 const autopilot = e.target.closest('[data-autopilot-action]');
                 if (autopilot && missionPage.contains(autopilot)) {
                     e.preventDefault();
