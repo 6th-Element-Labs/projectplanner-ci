@@ -3,9 +3,8 @@
 Keeps In-Review work moving toward a trustworthy green without merging:
 
 * inspect board-recorded PR / scratchpad CI / dependency / session state
-* request authoritative CI when evidence is missing
-* ensure a remediation task session when CI is red
-* ensure a ``review_merge`` task session when CI is green and deps are clear
+* ensure one exact-head ``review_merge`` Connect session for every open PR
+* let that session record red/missing mechanical signals without repairing code
 * reserve human/operator escalation for irreducible product decisions
 
 The lifecycle leader selects dry-run versus acting for the whole tick. This
@@ -197,37 +196,14 @@ def plan_review_actions(snapshot: Mapping[str, Any], *,
             "unsafe_session": task_id in unsafe_tasks,
         }
 
-        if not pr_number:
+        if not pr_number or not head_sha:
             add(task_id, ACTION_INSPECT_EVIDENCE,
-                "In Review has no recorded PR; inspect offline evidence or provenance.",
+                "In Review has no complete PR/head provenance; inspect evidence before dispatch.",
                 base_inputs, escalation_class="missing_data", score=88,
-                skipped=[{"action": ACTION_DISPATCH_REVIEW, "reason": "missing_pr"},
-                         {"action": ACTION_RERUN_CI, "reason": "missing_pr"}])
-            continue
-
-        if ci_state == "pending":
-            add(task_id, ACTION_HOLD_PENDING,
-                "Scratchpad CI is still pending; wait for terminal evidence.",
-                base_inputs, score=55,
-                skipped=[{"action": ACTION_RERUN_CI, "reason": "ci_already_pending"},
-                         {"action": ACTION_DISPATCH_REVIEW, "reason": "ci_not_green"}])
-            continue
-
-        if ci_state == "red":
-            add(task_id, ACTION_REMEDIATE_CI,
-                "Required CI is red; return the exact failure to an agent for repair.",
-                base_inputs, score=96,
-                skipped=[{"action": ACTION_RERUN_CI, "reason": "red_needs_code_repair"},
-                         {"action": ACTION_HOLD_GATE, "reason": "agent_remediation"},
-                         {"action": ACTION_DISPATCH_REVIEW, "reason": "ci_red"}])
-            continue
-
-        if ci_state in {"missing", "unknown"}:
-            add(task_id, ACTION_RERUN_CI,
-                "Required CI is missing; request the first authoritative run.",
-                base_inputs, score=80,
-                skipped=[{"action": ACTION_DISPATCH_REVIEW, "reason": f"ci_{ci_state}"},
-                         {"action": ACTION_HOLD_GATE, "reason": "missing_ci_first_attempt"}])
+                skipped=[{"action": ACTION_DISPATCH_REVIEW,
+                          "reason": "missing_pr_or_head"},
+                         {"action": ACTION_RERUN_CI,
+                          "reason": "missing_pr_or_head"}])
             continue
 
         if task_id in unsafe_tasks:
@@ -237,19 +213,13 @@ def plan_review_actions(snapshot: Mapping[str, Any], *,
                 skipped=[{"action": ACTION_DISPATCH_REVIEW, "reason": "unsafe_session"}])
             continue
 
-        if open_deps:
-            add(task_id, ACTION_HOLD_DEPS,
-                "CI is green, but task dependencies are not all complete.",
-                base_inputs, score=70,
-                skipped=[{"action": ACTION_DISPATCH_REVIEW, "reason": "open_dependencies"}])
-            continue
-
         add(task_id, ACTION_DISPATCH_REVIEW,
-            "Board-recorded CI is green and deps are clear; dispatch review_merge "
-            "(T2 does not merge).",
+            "An open PR has an exact head; dispatch review_merge so the agent can "
+            "record the verdict and merge only if every mechanical gate is green.",
             base_inputs, score=75,
-            skipped=[{"action": ACTION_RERUN_CI, "reason": "ci_already_green"},
-                     {"action": "merge_now", "reason": "coord7_t3_only"}])
+            skipped=[{"action": ACTION_REMEDIATE_CI,
+                      "reason": "red remediation belongs to WATCH-17"},
+                     {"action": "merge_now", "reason": "review session owns safe merge"}])
 
     actions.sort(key=lambda row: (-int(row["score"]), row["task_id"], row["action"]))
     return {
@@ -383,11 +353,12 @@ def _execute_action(action: Mapping[str, Any], *, project: str, actor: str,
                 "Inspect mergeability and review comments. If the exact-head review, "
                 "required CI, dependencies, and merge gate are green, merge through "
                 "the configured queue and reconcile Switchboard. Otherwise record the "
-                "mechanical failure and drive remediation; no human approval is required."
+                "mechanical failure and stop. Do not repair red code in this session; "
+                "the remediation lifecycle owns that work; no human approval is required."
             )
             ensured = task_starter(
                 task_id, project=project, actor=actor, role="review_merge",
-                instruction=prompt)
+                source_sha=head_sha, instruction=prompt)
             result["effects"].append({"kind": "start_task", "payload": ensured})
             refused = ensured.get("action") == "refused" or bool(ensured.get("error"))
             transitioning = ensured.get("action") == "transitioning"

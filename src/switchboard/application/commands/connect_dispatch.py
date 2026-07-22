@@ -35,8 +35,8 @@ def _runtime(value: str) -> tuple[str, str]:
     return selected
 
 
-def _assignment_id(project: str, task_id: str, runtime: str, predecessor: str) -> str:
-    source = f"{project}:{task_id}:{runtime}:{predecessor or 'initial'}"
+def _assignment_id(project: str, task_id: str, runtime: str, generation: str) -> str:
+    source = f"{project}:{task_id}:{runtime}:{generation or 'initial'}"
     return "assignment-" + hashlib.sha256(source.encode()).hexdigest()[:24]
 
 
@@ -94,8 +94,16 @@ def enqueue_task(
     actor: str,
     runtime: str = "codex",
     predecessor_wake_id: str = "",
+    generation_ref: str = "",
 ) -> dict[str, Any]:
-    """Persist one provider-neutral assignment for any Start surface."""
+    """Persist one provider-neutral assignment for any Start surface.
+
+    ``generation_ref`` is an opaque lifecycle generation supplied by Task
+    Execution.  Connect neither parses nor persists its meaning; it only uses
+    the value to make repeated requests for one generation idempotent.  This is
+    what lets an exact-head review dispatch re-arm for a new head without
+    replaying forever after a terminal runner on the old head.
+    """
 
     task_id = str(task.get("task_id") or "").strip().upper()
     if not task_id:
@@ -104,11 +112,12 @@ def enqueue_task(
         runtime_name, provider = _runtime(runtime)
     except ValueError as exc:
         return {"dispatched": False, "error": str(exc), "runtime": runtime}
-    if not predecessor_wake_id:
+    generation_ref = str(generation_ref or "").strip()
+    if not predecessor_wake_id and not generation_ref:
         predecessor_wake_id = _latest_terminal_wake_id(task_id, project)
     lane = str(task.get("_wsId") or task.get("workstream") or "").strip()
-    assignment_id = _assignment_id(
-        project, task_id, runtime_name, str(predecessor_wake_id or ""))
+    generation = generation_ref or str(predecessor_wake_id or "")
+    assignment_id = _assignment_id(project, task_id, runtime_name, generation)
     assignment = Assignment(
         assignment_id=assignment_id,
         principal_ref=f"agent/{runtime_name}/{task_id.lower()}",
@@ -122,7 +131,10 @@ def enqueue_task(
                 os.environ.get("PM_CONNECT_SPEND_LIMIT_MICROUNITS", "0")),
             memory_limit_bytes=int(os.environ.get("PM_CONNECT_MEMORY_LIMIT_BYTES", "0")),
         ),
-        queued_at=_queued_at(task, assignment_id),
+        # A named generation must remain byte-identical even when unrelated
+        # task narration/activity updates the task row between coordinator ticks.
+        queued_at=(_queued_at({}, assignment_id) if generation_ref
+                   else _queued_at(task, assignment_id)),
     )
     selector = {
         "runtime": runtime_name,
@@ -138,7 +150,7 @@ def enqueue_task(
             **asdict(assignment),
         },
     }
-    suffix = str(predecessor_wake_id or "initial")
+    suffix = generation_ref or str(predecessor_wake_id or "initial")
     wake = coordination_repo.request_wake(
         selector=selector,
         reason=f"Connect assignment {task_id}",

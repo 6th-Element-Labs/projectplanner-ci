@@ -151,14 +151,14 @@ def test_plan_actions():
         ok(by_task["R-1"]["action"] == rs.ACTION_DISPATCH_REVIEW,
            "green CI + clear deps dispatches review_merge")
         ok(by_task["R-1"]["merges"] is False, "green path never marks merges=True")
-        ok(by_task["R-2"]["action"] == rs.ACTION_REMEDIATE_CI,
-           "red CI routes to an agent for remediation")
-        ok(by_task["R-3"]["action"] == rs.ACTION_RERUN_CI,
-           "missing CI requests first scratchpad run")
-        ok(by_task["R-4"]["action"] == rs.ACTION_RERUN_CI,
-           "legacy human-gate metadata follows the normal missing-CI path")
-        ok(by_task["R-5"]["action"] == rs.ACTION_REMEDIATE_CI,
-           "persistently red CI remains in autonomous remediation")
+        ok(by_task["R-2"]["action"] == rs.ACTION_DISPATCH_REVIEW,
+           "red CI still gets a verdict session, not an in-place repair")
+        ok(by_task["R-3"]["action"] == rs.ACTION_DISPATCH_REVIEW,
+           "missing CI is recorded by the exact-head verdict session")
+        ok(by_task["R-4"]["action"] == rs.ACTION_DISPATCH_REVIEW,
+           "legacy human-gate metadata does not suppress autonomous review")
+        ok(by_task["R-5"]["action"] == rs.ACTION_DISPATCH_REVIEW,
+           "persistently red CI does not trigger remediation in the reviewer")
         ok("R-6" not in by_task, "non In-Review tasks are ignored")
         ok(plan["summary"]["in_review_count"] == 5, "in_review_count excludes Not Started")
 
@@ -259,24 +259,19 @@ def test_acting_mode_reruns_and_dispatches():
             task_messenger=task_messenger,
         )
         actions = {row["task_id"]: row for row in receipt["executed"]}
-        ok(not any(d["pr"] in {12, 15} for d in dispatches),
-           "red CI never wastes time rerunning unchanged code")
-        ok(any(d["pr"] == 13 for d in dispatches), "missing CI triggers scratchpad dispatcher")
-        ok(actions["R-2"]["result"]["status"] == "remediation_session_ensured",
-           "red CI ensures the task's remediation session")
-        ok(task_messages and task_messages[0]["task_id"] == "R-2"
-           and "exact head h2" in task_messages[0]["text"],
-           "an attached remediation receives the exact-head instruction")
-        ok(actions["R-5"]["result"]["status"] == "remediation_session_ensured",
-           "red CI without a live runner ensures a remediation session")
-        ok(any(row["task_id"] == "R-5" and row["role"] == "remediation"
-               and "exact head h5" in row["instruction"] for row in starts),
-           "remediation uses the one role-aware start_task operation")
+        ok(not dispatches, "review stewardship leaves CI dispatch to its own lifecycle")
+        ok(not task_messages, "review stewardship never injects an in-place repair prompt")
+        ok(actions["R-2"]["result"]["status"] == "review_session_ensured",
+           "red CI ensures a reviewer that records the failure")
+        ok(any(row["task_id"] == "R-5" and row["role"] == "review_merge"
+               and "Do not repair red code" in row["instruction"] for row in starts),
+           "red exact-head review explicitly forbids in-session remediation")
         ok(actions["R-1"]["result"]["status"] == "review_session_ensured",
            "green CI ensures a reviewer session")
         ok(any(row["task_id"] == "R-1" and row["role"] == "review_merge"
+               and row["source_sha"] == "h1"
                and "head_sha: h1" in row["instruction"] for row in starts),
-           "review uses the same role-aware start_task operation")
+           "review binds the role-aware start to the exact PR head")
         ok(receipt["effects"]["merged"] is False, "acting mode still never merges")
 
 

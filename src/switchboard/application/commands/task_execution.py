@@ -408,7 +408,7 @@ def get_task_execution(task_id: Any, *, project: str = DEFAULT_PROJECT) -> dict[
 
 def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "user",
                principal_id: str = "", role: str = "implementation",
-               runtime: str = "codex",
+               runtime: str = "codex", source_sha: str = "",
                instruction: str = "", findings: Optional[list[dict[str, Any]]] = None,
                launcher: Optional[Callable[..., dict[str, Any]]] = None) -> dict[str, Any]:
     """Start or resume THE task session (COORD-44 contract, service-owned).
@@ -449,6 +449,9 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
         result = connect_dispatch.enqueue_task(
             task, project=project, actor=actor, runtime=runtime,
             predecessor_wake_id=predecessor,
+            generation_ref=(f"{role}:{source_sha.lower()}"
+                            if role in {"review_merge", "remediation"}
+                            and source_sha else ""),
         )
     else:
         # Test/adapter seam retained while all product surfaces use Connect.
@@ -502,7 +505,10 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
         execution_id=execution_id or None,
         wake_id=wake_id or None,
         host_id=host_id or None,
-        role=None,
+        # Role describes the newly created generation only. Attaching to an
+        # existing/pending execution must not pretend the caller replaced its
+        # lifecycle authority.
+        role=role if action == "started" else None,
         intake_routing=result.get("intake_routing") or None,
         lifecycle_phase=("running" if result.get("attached")
                          else "starting" if action in {"started", "starting"} else None),
