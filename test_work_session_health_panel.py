@@ -142,8 +142,9 @@ try:
         "_fleetLiveTick",        # independent visible-page refresh
         "_startFleetLive",
         "_stopFleetLive",
-        "_renderFleetDock",      # collapsed pill / expanded list
-        "_dockReason",           # plain-language reason from health findings
+        "_renderFleetDock",      # collapsed pill / expanded two-tab console
+        "_dockRunnerHtml",       # dock v2: runner card (Watch/Logs/On disk/Kill)
+        "_dockPrHtml",           # dock v2: badge-ready open-PR row
         "_fleetTaskTitle",       # task-id -> title lookup
         "workSessionsPanelHtml",  # per-task Work Sessions table (Dev tab)
         "_loadWorkSessions",
@@ -155,9 +156,11 @@ try:
         ok(needle in app_js, f"app.js defines {needle}")
     ok("mode: 'deliverable'" in app_js,
        "dock is deliverable-scoped on the mission page")
-    ok("s.work_session_id" in app_js and "(s.health || {}).status" in app_js and
-       "s.updated_at" in app_js,
-       "fleet signature tracks session identity, lifecycle, health, and updates")
+    ok("s.runner_session_id" in app_js and "x.ci_state" in app_js and
+       "x.mergeable_state" in app_js,
+       "fleet signature tracks runner lifecycle plus PR CI/mergeable state (dock v2)")
+    ok("/ixp/v1/open_prs" in app_js,
+       "dock fetches the cached open-PR board endpoint")
     ok("_pollDueWhileHidden('_fleetHiddenAt')" in app_js,
        "fleet polling stays live in a backgrounded tab (throttled via _pollDueWhileHidden, not paused)")
     ok("cache: 'no-store'" in app_js,

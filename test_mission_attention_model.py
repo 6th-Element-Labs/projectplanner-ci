@@ -144,8 +144,11 @@ def test_empty_deliverable_proposes_breakdown():
 def test_ui_wiring():
     print("\n[8] frontend consumes the model (app.js)")
     js = read_frontend_source(os.path.dirname(os.path.abspath(__file__)))
-    for needle in ("_missionActionsHtml", "_sessionImpact", "Decisions needed from you",
-                   "being handled automatically", "delivery unaffected"):
+    # Fleet-dock needles (_sessionImpact / 'delivery unaffected') retired with the
+    # dock v2 rework (spec 2026-07-23): the dock now surfaces runners + open PRs,
+    # not work-session health prose. Mission-page attention model is unchanged.
+    for needle in ("_missionActionsHtml", "Decisions needed from you",
+                   "being handled automatically"):
         check(needle in js, f"app.js has {needle!r}")
     check("Next best actions" not in js, "the ambiguous 'Next best actions' heading is gone")
 

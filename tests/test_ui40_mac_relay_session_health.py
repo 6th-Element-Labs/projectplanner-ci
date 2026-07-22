@@ -265,9 +265,11 @@ try:
         encoding="utf-8")
     ok("_runnerPtyApiError" in runner_js and "JSON.stringify(value)" in runner_js,
        "Watch/Chat renders structured API errors instead of [object Object]")
-    ok("const latest = new Map()" in app_js
-       and "['active', 'proposed']" in app_js,
-       "fleet dock selects one newest live attempt per task/agent")
+    # Dock v2 (spec 2026-07-23) reads runner_sessions — the server-authoritative
+    # runner pointer (BUG-91) — so the old client-side newest-attempt dedup over
+    # work_sessions is gone by design. Assert the v2 source instead.
+    ok("/ixp/v1/runner_sessions" in app_js and "include_stale=true" in app_js,
+       "fleet dock reads server-authoritative runner sessions (stale included)")
     ok(worker_py.count('"recoverable_post_execution_failure": True') >= 2,
        "personal exact-host failures retain server recovery without rewriting generic launch wakes")
 finally:

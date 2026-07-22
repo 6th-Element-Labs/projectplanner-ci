@@ -63,4 +63,15 @@ def create_router(*, resolve_project: ProjectResolver,
         """REST parity for PERF-7 saturation dashboard (PSI + lock-wait + inbox + SLOs)."""
         return saturation_snapshot(project)
 
+    @router.get("/ixp/v1/open_prs")
+    def ixp_open_prs(project: str = Query(...)):
+        """Open PRs on the canonical repo with badge-ready status for the fleet dock.
+
+        Sync on purpose (threadpool): the cached path is instant and the cold path
+        does network I/O. Degrades to {"prs": [], "unavailable": ...} — never 500s
+        a polling dock.
+        """
+        import open_prs
+        return open_prs.open_prs_payload(resolve_project(project))
+
     return router

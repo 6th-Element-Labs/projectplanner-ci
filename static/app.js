@@ -751,50 +751,49 @@ const TeepPlan = {
         this._startFleetLive();
         this._loadFleetDock(true);
     },
-    _fleetSignature(sessions) {
-        return JSON.stringify((sessions || []).map((s) => [
-            s.work_session_id || '',
-            s.task_id || '',
-            s.status || '',
-            (s.health || {}).status || '',
-            s.updated_at || 0,
-        ]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
+    _fleetSignature(runners, prs) {
+        const r = (runners || []).map((s) => [
+            s.runner_session_id || '', s.status || '', s.stale ? 1 : 0,
+            ((s.last_snapshot || {}).captured_at) || 0,
+        ]).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+        const p = (prs || []).map((x) => [
+            x.number || 0, x.ci_state || '', x.mergeable_state || '',
+            x.queue_position || 0, x.blocked ? 1 : 0, x.updated_at || 0,
+        ]).sort((a, b) => Number(a[0]) - Number(b[0]));
+        return JSON.stringify([r, p]);
     },
     async _loadFleetDock(force) {
         const host = document.getElementById('fleet-dock');
         if (!host || this._fleetLoadBusy) return;
         this._fleetLoadBusy = true;
-        let sessions = [];
+        let runners = [], prPayload = {};
         try {
             const p = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`;
-            const data = await (await fetch(`/ixp/v1/work_sessions?${p}&include_expired=false`, { cache: 'no-store' })).json();
-            sessions = data.work_sessions || [];
+            // Runners: same source as the Fleet page's Live runners table (stale included —
+            // a dead runner is exactly what the dock must surface). PRs: cached server-side
+            // (60s GitHub sweep, open_prs.py), so the 10s dock poll only ever hits the cache.
+            const [rRes, pRes] = await Promise.all([
+                fetch(`/ixp/v1/runner_sessions?${p}&include_stale=true`, { cache: 'no-store' }),
+                fetch(`/ixp/v1/open_prs?${p}`, { cache: 'no-store' }),
+            ]);
+            runners = (await rRes.json()).sessions || [];
+            prPayload = await pRes.json();
         } catch (e) { this._fleetLoadBusy = false; return; }
-        // The dock is a live-agent surface, not Work Session history. Historical
-        // attempts can retain null expires_at (and older failed hosts could leave
-        // status=active), so include_expired=false alone is not enough. Keep only
-        // live lifecycle states and one newest attempt per task+agent; the task's
-        // Work Sessions panel remains the place to inspect complete history.
-        const latest = new Map();
-        sessions.filter((s) => ['active', 'proposed'].includes(String(s.status || '').toLowerCase()))
-            .forEach((s) => {
-                const key = `${String(s.task_id || '').toUpperCase()}\u0000${String(s.agent_id || '')}`;
-                const prior = latest.get(key);
-                if (!prior || Number(s.updated_at || 0) > Number(prior.updated_at || 0)) latest.set(key, s);
-            });
-        sessions = Array.from(latest.values());
+        let prs = prPayload.prs || [];
         const ctx = this._dockCtx || { mode: 'project' };
         if (ctx.mode === 'deliverable' && Array.isArray(ctx.taskIds)) {
             const ids = new Set(ctx.taskIds.map((x) => String(x).toUpperCase()));
-            sessions = sessions.filter((s) => ids.has(String(s.task_id || '').toUpperCase()));
+            runners = runners.filter((s) => ids.has(String(s.task_id || '').toUpperCase()));
+            prs = prs.filter((x) => (x.tasks || []).some((t) => ids.has(String(t.task_id || '').toUpperCase())));
         }
         this._fleetScopeLabel = ctx.mode === 'deliverable' ? 'this deliverable' : '';
-        const sig = this._fleetSignature(sessions);
+        this._dockPrUnavailable = prPayload.unavailable || '';
+        const sig = this._fleetSignature(runners, prs);
         const changed = sig !== this._fleetSig;
         this._fleetLoadBusy = false;
         if (force || changed) {
             this._fleetSig = sig;
-            this._renderFleetDock(sessions);
+            this._renderFleetDock(runners, prs);
         }
     },
     // A backgrounded tab should keep every open deliverable/fleet view live, but poll
@@ -925,17 +924,13 @@ const TeepPlan = {
             <div class="small">${this.esc(why)} Routine implementation, testing, review, merge, and reconciliation do not require approval.</div>
         </div>`;
     },
-    // Delivery impact of an unsafe agent workspace: does its task still need to ship? A session on an
-    // already-merged (In Review/Done), unknown, or cross-project task is quiet cleanup (no impact);
-    // on a live blocking task it escalates. Read from the loaded board tasks — no server round-trip.
-    _sessionImpact(session) {
-        const id = String(session.task_id || '').toUpperCase();
-        const t = (this.tasks || []).find((x) => String(x.task_id || '').toUpperCase() === id);
-        if (!t) return 'none';
-        if (t.status === 'In Review' || t.status === 'Done') return 'none';
-        if (t.is_blocking) return 'blocking';
-        return 'at_risk';
-    },
+    // Fleet dock v2 (spec 2026-07-23): a two-tab operator console. Runners tab is a
+    // narrow port of the Fleet page's Live runners table (same endpoint, same control
+    // actions: Watch / Logs / On disk / Kill — "On disk" is the snapshot action, the
+    // safety check before Kill). Pull requests tab lists every open PR on the canonical
+    // repo with badge-ready status from /ixp/v1/open_prs. Attention rule C: anything
+    // blocking a merge (red CI, conflicts, green-but-stuck) or a stale runner turns the
+    // pill red and auto-opens the dock; an explicit user collapse always wins.
     _fleetTaskTitle(taskId) {
         const id = String(taskId || '').toUpperCase();
         const t = (this.tasks || []).find((x) => String(x.task_id || '').toUpperCase() === id);
@@ -947,91 +942,140 @@ const TeepPlan = {
         }
         return taskId || 'task';
     },
-    _dockReason(health) {
-        const findings = (health && health.findings) || [];
-        const pick = findings.filter((f) => f.blocking)[0] || findings[0] || null;
-        const severity = (health && health.status) === 'unsafe' ? 'danger' : 'warning';
-        return {
-            severity,
-            text: pick ? pick.message : (severity === 'danger' ? "Can't merge yet." : 'Needs a look.'),
-            repair: (pick && pick.repair) || '',
-        };
+    _dockBadge(text, tone, icon) {
+        const i = icon ? `<i class="ti ti-${icon} me-1"></i>` : '';
+        return `<span class="badge bg-${tone}-lt">${i}${this.esc(text)}</span>`;
     },
-    _renderFleetDock(sessions) {
+    _dockRunnerHtml(s) {
+        const actions = s.available_actions || [];
+        const env = s.environment || {};
+        const snap = s.last_snapshot || {};
+        const dead = s.stale || s.status !== 'running';
+        const tone = s.stale ? 'yellow' : (s.status === 'running' ? 'green' : 'secondary');
+        const uptime = env.uptime_seconds == null ? '' : `${Math.round(env.uptime_seconds / 60)}m`;
+        const dirty = String(snap.status_porcelain || '').split('\n').filter(Boolean).length;
+        const attn = [];
+        if (s.stale) attn.push(`Last seen ${this._fleetAge(s.updated_at || snap.captured_at)}`);
+        if (env.failure_reason) attn.push(env.failure_reason);
+        if (dirty) attn.push(`${dirty} uncommitted file${dirty === 1 ? '' : 's'} in its workspace`);
+        const btn = (action, icon, label, cls, disabled) =>
+            `<button class="btn btn-sm ${cls}" data-runner-id="${this.esc(s.runner_session_id)}" data-runner-action="${action}"${disabled ? ' disabled' : ''}><i class="ti ti-${icon} me-1"></i>${label}</button>`;
+        const watch = s.task_id && !dead
+            ? `<button class="btn btn-sm btn-azure" data-runner-watch-task="${this.esc(s.task_id)}"><i class="ti ti-terminal-2 me-1"></i>Watch</button>` : '';
+        return `<div class="p-2 border rounded mb-2">
+            <div class="d-flex align-items-center gap-2">
+                <span class="font-monospace" style="font-size:12px;">${this.esc(s.runner_session_id)}</span>
+                <span class="badge bg-${tone}-lt">${this.esc(s.status || 'unknown')}${s.stale ? ' · stale' : ''}</span>
+                <span class="ms-auto text-secondary small">${this.esc(uptime)}</span>
+            </div>
+            <div class="text-secondary text-truncate" style="font-size:12px;">${this.esc(s.task_id || 'no task')} · ${this.esc(s.runtime || '?')} · ${this.esc(s.host_id || '?')} · ${this.esc(s.agent_id || '')}</div>
+            ${attn.length ? `<div class="text-${dead ? 'danger' : 'secondary'}" style="font-size:12px;">${this.esc(attn.join(' · '))}</div>` : ''}
+            <div class="mt-2 d-flex gap-2 align-items-center">
+                ${watch}
+                ${btn('logs', 'file-text', 'Logs', 'btn-outline-secondary', !actions.includes('logs'))}
+                ${btn('snapshot', 'git-branch', 'On disk', 'btn-outline-secondary', !actions.includes('snapshot'))}
+                <span class="ms-auto"></span>
+                ${btn('kill', 'square', 'Kill', 'btn-outline-danger', !actions.includes('kill'))}
+            </div>
+        </div>`;
+    },
+    _dockPrHtml(x) {
+        const badges = [];
+        if (x.ci_state === 'failure') badges.push(this._dockBadge((x.ci_failing || [])[0] ? `${(x.ci_failing || [])[0]} failed` : 'checks failed', 'red', 'x'));
+        else if (x.ci_state === 'pending') badges.push(this._dockBadge('checks running', 'yellow', 'clock'));
+        else if (x.ci_state === 'success') badges.push(this._dockBadge('checks pass', 'green', 'check'));
+        else badges.push(this._dockBadge('no checks', 'secondary'));
+        if (x.mergeable_state === 'dirty') badges.push(this._dockBadge('conflicts', 'yellow'));
+        else if (x.mergeable_state === 'blocked') badges.push(this._dockBadge('merge blocked', 'secondary'));
+        if (x.queue_position) badges.push(this._dockBadge(`queued #${x.queue_position}`, 'azure'));
+        else if (x.auto_merge) badges.push(this._dockBadge('auto-merge armed', 'azure'));
+        const tasks = (x.tasks || []).length
+            ? (x.tasks || []).map((t) => `${this.esc(t.task_id)}${t.status ? ` (${this.esc(t.status)})` : ''}`).join(', ')
+            : '';
+        const stateTone = x.draft ? 'secondary' : 'green';
+        const stall = x.stalled ? ` · no activity ${this._fleetAge(x.updated_at)}` : '';
+        return `<div class="p-2 border rounded mb-2">
+            <div class="d-flex align-items-center gap-2">
+                <span class="badge bg-${stateTone}-lt"><i class="ti ti-git-pull-request me-1"></i>${x.draft ? 'Draft' : 'Open'}</span>
+                <span class="text-secondary font-monospace" style="font-size:12px;">#${this.esc(String(x.number))}</span>
+                <span class="ms-auto text-secondary small">${this.esc(this._fleetAge(x.updated_at))}</span>
+            </div>
+            <a href="${this.esc(x.url)}" target="_blank" rel="noopener" class="d-block mt-1 text-reset text-truncate" style="font-size:13px;">${this.esc(x.title || `PR #${x.number}`)} <i class="ti ti-external-link text-secondary" style="font-size:12px;"></i></a>
+            <div class="mt-1 d-flex flex-wrap gap-1 align-items-center">
+                ${badges.join('')}
+                <span class="ms-auto font-monospace" style="font-size:11px;"><span class="text-green">+${this.esc(String(x.additions || 0))}</span> <span class="text-red">−${this.esc(String(x.deletions || 0))}</span></span>
+                <span class="badge bg-secondary-lt">${this.esc(String(x.changed_files || 0))} files</span>
+            </div>
+            <div class="text-secondary text-truncate" style="font-size:12px;">${tasks ? tasks : `<span class="badge bg-secondary-lt">no board task</span>`} · ${this.esc(x.author || '')}${this.esc(stall)}</div>
+        </div>`;
+    },
+    _renderFleetDock(runners, prs) {
         const host = document.getElementById('fleet-dock');
         if (!host) return;
-        const working = sessions.length;
-        if (!working) { host.innerHTML = ''; return; }   // keep the corner clean
-        const proj = window.PM_PROJECT || 'maxwell';
-        // ATTENTION MODEL: an unsafe session earns your attention only when its task still needs to
-        // ship. An unsafe/stale session on an already-merged (In Review/Done) or unknown task is
-        // coordinator cleanup with NO delivery impact — it stays a quiet line, never auto-opens the
-        // dock, and never leads with the task title (that framing made stale sessions read like server
-        // incidents). A non-blocking 'warning' folds into "on track" as before.
-        const unsafe = sessions.filter((s) => (s.health || {}).status === 'unsafe');
-        const impactful = unsafe.filter((s) => this._sessionImpact(s) !== 'none');
-        const cleanup = unsafe.filter((s) => this._sessionImpact(s) === 'none');
-        const nAttn = impactful.length;
-        const nCleanup = cleanup.length;
-        const worst = 'danger';
-        // explicit user toggle wins; otherwise auto — open ONLY when something actually threatens delivery
+        runners = runners || []; prs = prs || [];
+        if (!runners.length && !prs.length && !this._dockPrUnavailable) { host.innerHTML = ''; return; }
+        const running = runners.filter((s) => !s.stale && s.status === 'running').length;
+        const deadRunners = runners.filter((s) => s.stale || s.status !== 'running');
+        const blockedPrs = prs.filter((x) => x.blocked);
+        const nAttn = deadRunners.length + blockedPrs.length;
         const collapsed = this._dockCollapsed == null ? (nAttn === 0) : this._dockCollapsed;
         const anchor = 'position:fixed;right:1rem;bottom:1rem;z-index:1031;';
-        const rerender = () => this._renderFleetDock(sessions);
+        const rerender = () => this._renderFleetDock(runners, prs);
         const scope = this._fleetScopeLabel ? ` <span class="text-secondary small">· ${this.esc(this._fleetScopeLabel)}</span>` : '';
         if (collapsed) {
-            const dot = nAttn ? `var(--tblr-${worst})` : 'var(--tblr-success)';
-            const extra = !nAttn && nCleanup ? ` <span class="text-secondary small">· ${nCleanup} cleaning up</span>` : '';
+            const dot = nAttn ? 'var(--tblr-danger)' : 'var(--tblr-success)';
             host.innerHTML = `<button id="fleet-dock-pill" class="btn btn-sm shadow-sm" style="${anchor}border-radius:999px;display:inline-flex;align-items:center;gap:8px;">
                 <span style="width:8px;height:8px;border-radius:50%;background:${dot};"></span>
-                <span class="fw-medium">${nAttn ? this.esc(String(nAttn)) + ' need attention' : 'Fleet clear'}</span>
-                <span class="text-secondary small">· ${working} working</span>${extra}
+                <span class="fw-medium">${nAttn ? this.esc(String(nAttn)) + ' blocked' : 'Fleet clear'}</span>
+                <span class="text-secondary small">· ${running} working · ${prs.length} PR${prs.length === 1 ? '' : 's'}</span>
                 <i class="ti ti-chevron-up"></i></button>`;
             document.getElementById('fleet-dock-pill').addEventListener('click', () => { this._dockCollapsed = false; rerender(); });
             return;
         }
-        const rows = impactful.map((s) => {
-            const r = this._dockReason(s.health);
-            const dot = `var(--tblr-${r.severity})`;
-            // Lead with the DIAGNOSIS; demote the task id to a subtitle (workspace problem, not incident).
-            return `<div class="p-2 border rounded mb-2">
-                <div class="d-flex align-items-start gap-2">
-                    <span style="margin-top:6px;width:8px;height:8px;border-radius:50%;background:${dot};flex:none;"></span>
-                    <div class="flex-fill" style="min-width:0;">
-                        <div class="fw-medium">${this.esc(r.text)}</div>
-                        <div class="text-secondary text-truncate" style="font-size:12px;font-family:var(--tblr-font-monospace);">${this.esc(s.task_id || '')} · ${this.esc(s.agent_id || '')}</div>
-                        ${r.repair ? `<div class="text-secondary mt-1" style="font-size:12px;">${this.esc(r.repair)}</div>` : ''}
-                        <div class="mt-2 d-flex gap-2"><button class="btn btn-sm" data-dock-open="${this.esc(s.task_id)}"><i class="ti ti-arrow-up-right me-1"></i>Open task</button>${s.agent_id ? `<button class="btn btn-sm" data-dock-msg="${this.esc(s.agent_id)}" data-dock-msg-task="${this.esc(s.task_id || '')}"><i class="ti ti-send me-1"></i>Message</button>` : ''}</div>
-                    </div>
-                </div></div>`;
-        }).join('');
-        const clean = working - nAttn - nCleanup;
-        const cleanupLine = nCleanup
-            ? `<div class="text-secondary small px-1 pb-1"><i class="ti ti-recycle me-1"></i>${nCleanup} stale workspace${nCleanup === 1 ? '' : 's'} being cleaned up — delivery unaffected.</div>`
-            : '';
-        const cleanLine = clean > 0
-            ? `<div class="text-secondary small px-1 pb-1"><i class="ti ti-check me-1"></i>${clean} other${clean === 1 ? '' : 's'} clean and on track</div>`
-            : '';
-        const body = nAttn
-            ? `<div class="p-2">${rows}${cleanupLine}${cleanLine}</div>`
-            : `<div class="p-3 text-secondary small"><i class="ti ti-check me-1"></i>All ${working} agents on track.${nCleanup ? ` ${nCleanup} stale workspace${nCleanup === 1 ? '' : 's'} being cleaned up.` : ''}</div>`;
+        if (!this._dockTab) this._dockTab = (blockedPrs.length && !deadRunners.length) ? 'prs' : 'runners';
+        const tab = this._dockTab;
+        const tabBtn = (key, label, count) =>
+            `<button class="btn btn-sm ${tab === key ? '' : 'btn-ghost-secondary'}" data-dock-tab="${key}" style="border-radius:0;border:0;border-bottom:2px solid ${tab === key ? 'var(--tblr-primary)' : 'transparent'};">${label} <span class="text-secondary">${count}</span></button>`;
+        let body;
+        if (tab === 'runners') {
+            body = runners.length
+                ? `<div class="p-2">${runners.map((s) => this._dockRunnerHtml(s)).join('')}</div>`
+                : `<div class="p-3 text-secondary small">No live runners for this project.</div>`;
+        } else if (this._dockPrUnavailable) {
+            const why = this._dockPrUnavailable === 'no_github_token'
+                ? 'The server has no GitHub token configured, so PR status is unavailable.'
+                : (this._dockPrUnavailable === 'no_canonical_repo'
+                    ? 'This project has no canonical GitHub repo configured.'
+                    : 'GitHub is unreachable right now. Status will return on the next refresh.');
+            body = `<div class="p-3 text-secondary small">${this.esc(why)}</div>`;
+        } else {
+            body = prs.length
+                ? `<div class="p-2">${prs.map((x) => this._dockPrHtml(x)).join('')}</div>`
+                : `<div class="p-3 text-secondary small">No open PRs on the canonical repo.</div>`;
+        }
         const attnBadge = nAttn
-            ? `<span class="ms-auto small text-${worst}"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:currentColor" class="me-1"></span>${nAttn} need attention</span>`
+            ? `<span class="ms-auto small text-danger"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:currentColor" class="me-1"></span>${nAttn} blocked</span>`
             : `<span class="ms-auto small text-success"><i class="ti ti-check me-1"></i>all clear</span>`;
-        host.innerHTML = `<div class="card shadow-sm" style="${anchor}width:340px;max-height:70vh;overflow:auto;">
+        host.innerHTML = `<div class="card shadow-sm" style="${anchor}width:380px;max-height:70vh;overflow:auto;">
             <div class="card-header py-2 d-flex align-items-center gap-2">
-                <i class="ti ti-users-group text-secondary"></i>
-                <span class="fw-medium">Agent fleet</span>
-                <span class="text-secondary small">${working} working</span>${scope}
+                <i class="ti ti-server-bolt text-secondary"></i>
+                <span class="fw-medium">Fleet</span>
+                <span class="text-secondary small">${running} working</span>${scope}
                 ${attnBadge}
                 <button id="fleet-dock-refresh" class="btn btn-sm btn-ghost-secondary p-1" title="Refresh"><i class="ti ti-refresh"></i></button>
                 <button id="fleet-dock-min" class="btn btn-sm btn-ghost-secondary p-1" title="Collapse"><i class="ti ti-chevron-down"></i></button>
             </div>
+            <div class="d-flex px-2 border-bottom">
+                ${tabBtn('runners', 'Runners', runners.length)}
+                ${tabBtn('prs', 'Pull requests', prs.length)}
+            </div>
             ${body}</div>`;
-        host.querySelectorAll('[data-dock-open]').forEach((b) =>
-            b.addEventListener('click', () => this.openTask(b.getAttribute('data-dock-open'), proj)));
-        host.querySelectorAll('[data-dock-msg]').forEach((b) =>
-            b.addEventListener('click', () => this.openAgentMessage(b.getAttribute('data-dock-msg'), b.getAttribute('data-dock-msg-task'))));
+        host.querySelectorAll('[data-dock-tab]').forEach((b) =>
+            b.addEventListener('click', () => { this._dockTab = b.getAttribute('data-dock-tab'); rerender(); }));
+        host.querySelectorAll('[data-runner-action]').forEach((b) =>
+            b.addEventListener('click', () => this._fleetRunnerAction(b.getAttribute('data-runner-id'), b.getAttribute('data-runner-action'))));
+        host.querySelectorAll('[data-runner-watch-task]').forEach((b) =>
+            b.addEventListener('click', () => this.openRunnerSessionPanel(b.getAttribute('data-runner-watch-task'))));
         document.getElementById('fleet-dock-min').addEventListener('click', () => { this._dockCollapsed = true; rerender(); });
         document.getElementById('fleet-dock-refresh').addEventListener('click', () => this._loadFleetDock(true));
     },
@@ -1800,6 +1844,7 @@ const TeepPlan = {
             });
         } catch (e) { /* result reflected on reload */ }
         this._loadFleetRunners();
+        this._loadFleetDock(true);   // the dock shares these controls (fleet dock v2)
     },
 
     // Render whichever Plan sub-view is active — called when the Plan hub top tab opens,
