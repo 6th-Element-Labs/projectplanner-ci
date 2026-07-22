@@ -93,13 +93,20 @@ def create_router(*, resolve_project: ProjectResolver,
                 and policy.get("execution_mode") == "direct_personal_cli"
                 and policy.get("require_runner_bind") is False
             )
-            if direct_task:
+            connect = (
+                policy.get("mode") == "connect"
+                and (policy.get("assignment") or {}).get("schema")
+                == "switchboard.connect.assignment.v1"
+            )
+            if direct_task or connect:
                 selector = dict(wake.get("selector") or {})
                 require_direct_task_completion_authority(
                     principal,
                     {
                         "wake_id": wake_id,
-                        "host_id": str(selector.get("host_id") or ""),
+                        "host_id": str(
+                            wake.get("claimed_by_host") if connect
+                            else selector.get("host_id") or ""),
                         "runner_session_id": str(
                             body.get("runner_session_id") or ""),
                         "task_id": str(

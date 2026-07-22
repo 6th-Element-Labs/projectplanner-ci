@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BUG-127: Connect runners use the claimed native host, not a fake credential id."""
+"""BUG-128: a Connect host may complete only its exact claimed native wake."""
 from __future__ import annotations
 
 import json
@@ -12,20 +12,25 @@ from pathlib import Path
 from path_setup import ROOT  # noqa: F401
 
 
-TMP = Path(tempfile.mkdtemp(prefix="bug127-connect-registration-"))
+TMP = Path(tempfile.mkdtemp(prefix="bug128-connect-completion-"))
 os.environ["PM_SWITCHBOARD_DB_PATH"] = str(TMP / "switchboard.db")
 os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = str(TMP / "registry.db")
 os.environ["PM_DYNAMIC_PROJECTS_DIR"] = str(TMP)
-os.environ["PM_AUTH_MODE"] = "dev-open"
+os.environ["PM_AUTH_MODE"] = "required"
 
+from fastapi.testclient import TestClient  # noqa: E402
+
+import auth  # noqa: E402
 import store  # noqa: E402
+from app import app  # noqa: E402
 from db.connection import _conn  # noqa: E402
 from switchboard.application.commands import connect_dispatch  # noqa: E402
 
 
 P = "switchboard"
-HOST = "host/bug127-native"
-PRINCIPAL = "principal/bug127-native"
+HOST = "host/bug128-native"
+PRINCIPAL = "principal/bug128-native"
+TOKEN = "bug128-narrow-host-token"
 passed = failed = 0
 
 
@@ -40,12 +45,13 @@ try:
     store.init_db(P)
     task = store.create_task({
         "workstream_id": "BUG",
-        "title": "BUG-127 Connect native runner registration",
-    }, actor="bug127-test", project=P)
+        "title": "BUG-128 Connect completion",
+    }, actor="bug128-test", project=P)
     task_id = task["task_id"]
-    inventory = {
+    now = time.time()
+    store.register_host({
         "host_id": HOST,
-        "hostname": "bug127-native",
+        "hostname": "bug128-native",
         "agent_host_version": "0.3.885",
         "repo_root": str(ROOT),
         "runtimes": [{
@@ -56,16 +62,13 @@ try:
         "limits": {"max_sessions": 2},
         "capacity": {"active_sessions": 0, "allow_work": True},
         "heartbeat_ttl_s": 60,
-    }
-    store.register_host(
-        inventory, principal_id=PRINCIPAL, actor=HOST, project=P)
-    now = time.time()
+    }, principal_id=PRINCIPAL, actor=HOST, project=P)
     with _conn(P) as connection:
         connection.execute(
             "INSERT INTO principals(id,kind,display_name,project,scopes,token_hash,created_at) "
             "VALUES (?,?,?,?,?,?,?)",
             (PRINCIPAL, "host", HOST, P,
-             json.dumps(["read", "write:agent_host"]), "bug127-token", now),
+             json.dumps(["read", "write:agent_host"]), auth.token_hash(TOKEN), now),
         )
         connection.execute(
             "INSERT INTO agent_host_enrollments("
@@ -73,25 +76,24 @@ try:
             "tenant_allowlist_json,project_allowlist_json,provider_allowlist_json,"
             "bootstrap_hash,bootstrap_expires_at,bootstrap_consumed_at,principal_id,"
             "public_key_fingerprint,identity_generation,package_version,platform,"
-            "hostname,status,created_at,updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            ("hostenroll-bug127", P, HOST, HOST, "user/bug127", "[]",
-             json.dumps([P]), json.dumps(["openai-codex"]), "bug127-bootstrap",
+            "hostname,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("hostenroll-bug128", P, HOST, HOST, "user/bug128", "[]",
+             json.dumps([P]), json.dumps(["openai-codex"]), "bug128-bootstrap",
              now + 3600, now, PRINCIPAL, "sha256:" + "b" * 64, 1,
-             "0.3.885", "macos", "bug127-native", "active", now, now),
+             "0.3.885", "macos", "bug128-native", "active", now, now),
         )
 
     dispatched = connect_dispatch.enqueue_task(
-        task, project=P, actor="bug127-test", runtime="codex")
+        task, project=P, actor="bug128-test", runtime="codex")
     wake = next(row for row in store.list_wake_intents(project=P)
                 if row.get("wake_id") == dispatched.get("wake_id"))
-    run_id = "run_bug127_connect_native"
+    runner_id = "run_bug128_connect_native"
     claimed = store.claim_wake(
-        HOST, wake["wake_id"], runner_session_id=run_id,
+        HOST, wake["wake_id"], runner_session_id=runner_id,
         principal_id=PRINCIPAL, actor=HOST, project=P)
     assignment = (claimed.get("wake") or wake).get("policy", {}).get("assignment", {})
-    record = {
-        "runner_session_id": run_id,
+    registered = store.upsert_runner_session({
+        "runner_session_id": runner_id,
         "host_id": HOST,
         "agent_id": (wake.get("selector") or {}).get("agent_id"),
         "runtime": "codex",
@@ -107,34 +109,31 @@ try:
             "assignment_schema": "switchboard.connect.assignment.v1",
             "assignment_id": assignment.get("assignment_id"),
         },
-    }
-    registered = store.upsert_runner_session(
-        record, principal_id=PRINCIPAL, actor=HOST, project=P)
-    ok(claimed.get("claimed") is True,
-       "Connect wake is atomically claimed by the selected native host")
-    ok(not registered.get("error")
-       and (registered.get("metadata") or {}).get("native_host_execution") is True,
-       "claimed Connect runner registers without an execution_connection_id")
-    completion_authority = store.check_direct_task_completion_authority(
-        {
-            "wake_id": wake["wake_id"], "host_id": HOST,
-            "runner_session_id": run_id, "task_id": task_id,
-            "agent_id": (wake.get("selector") or {}).get("agent_id"),
-        },
-        principal_id=PRINCIPAL, project=P,
-    )
-    ok(completion_authority.get("allowed") is True,
-       "the same narrow host may complete its claimed registered Connect wake")
+    }, principal_id=PRINCIPAL, actor=HOST, project=P)
+    ok((registered.get("metadata") or {}).get("native_host_execution") is True,
+       "Connect runner has server-derived native execution authority")
 
-    forged = store.upsert_runner_session(
-        {**record, "runner_session_id": "run_bug127_forged",
-         "metadata": {**record["metadata"], "assignment_id": "assignment-forged"}},
-        principal_id=PRINCIPAL, actor=HOST, project=P)
-    ok(forged.get("error_code") == "runner_execution_binding_mismatch",
-       "a mismatched Connect assignment still fails closed")
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    forged = client.post("/txp/v1/complete_wake", headers=headers, json={
+        "project": P, "wake_id": wake["wake_id"],
+        "runner_session_id": "run_forged", "agent_id": registered["agent_id"],
+        "result": {"started": True},
+    })
+    ok(forged.status_code == 403,
+       "narrow host cannot complete Connect through an unregistered runner")
+
+    completed = client.post("/txp/v1/complete_wake", headers=headers, json={
+        "project": P, "wake_id": wake["wake_id"],
+        "runner_session_id": runner_id, "agent_id": registered["agent_id"],
+        "result": {"started": True, "reason": "native_codex_execution_completed"},
+    })
+    completed_body = completed.json()
+    ok(completed.status_code == 200 and completed_body.get("status") == "completed",
+       "narrow enrolled host completes its exact claimed Connect wake over HTTP")
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
 
 
-print(f"\nBUG-127 Connect registration: {passed} passed, {failed} failed")
+print(f"\nBUG-128 Connect completion: {passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)

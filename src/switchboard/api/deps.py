@@ -156,7 +156,7 @@ def require_agent_host_bootstrap_authority(
 
 def require_direct_task_completion_authority(
         principal: dict, binding: dict, project: str) -> dict:
-    """Fence a no-claim direct wake to its selected host and live native runner."""
+    """Fence a native wake to its selected/claimed host and live runner."""
     if not is_narrow_agent_host_principal(principal):
         return {"allowed": True, "legacy_or_operator": True}
     host_id = str((binding or {}).get("host_id") or "").strip()
