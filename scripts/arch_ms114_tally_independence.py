@@ -89,7 +89,7 @@ def project_scope_proof(path: Path) -> dict[str, Any]:
             writes += 1
             if "resolve_body_project" in called:
                 write_bound += 1
-    return {"ok": reads == read_bound == 6 and writes == write_bound == 7,
+    return {"ok": reads == read_bound == 6 and writes == write_bound == 10,
             "reads": reads, "read_bound": read_bound,
             "writes": writes, "write_bound": write_bound}
 
@@ -119,7 +119,7 @@ def attribution_safety_proof(source: str) -> dict[str, Any]:
 
 
 def writer_transaction_inventory_complete(writers: list[dict[str, Any]]) -> bool:
-    return len(writers) == 7 and all(
+    return len(writers) == 10 and all(
         row.get("ownership") == "monolith"
         and bool(str(row.get("boundary_ref") or "").strip())
         and bool(str(row.get("transaction") or "").strip())
