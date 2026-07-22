@@ -1003,7 +1003,7 @@
         // real change, and stamp the freshly-rendered "updated" time.
         this._missionSig = this._missionSignature();
         this._missionLiveStamp(true);
-        this.renderFleetDock({ mode: 'deliverable', taskIds: (s.linked_tasks || []).map((l) => l.task_id) });
+        this.renderFleetDock();
         const proofBtn = document.getElementById('mission-proof-toggle');
         if (proofBtn && !proofBtn._bound) {
             proofBtn.addEventListener('click', () => {

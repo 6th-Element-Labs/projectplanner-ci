@@ -154,8 +154,11 @@ try:
         "_initMergeGate",
     ):
         ok(needle in app_js, f"app.js defines {needle}")
-    ok("mode: 'deliverable'" in app_js,
-       "dock is deliverable-scoped on the mission page")
+    # Scoping abolished 2026-07-22 (operator decision): the Fleet page's runner feed is
+    # the single source of truth and every surface (page table, dock, mission) renders
+    # the same project-wide list via _fetchFleetRunners.
+    ok("_fetchFleetRunners" in app_js and "mode: 'deliverable'" not in app_js,
+       "all surfaces share the Fleet page's unscoped runner feed")
     ok("s.runner_session_id" in app_js and "x.ci_state" in app_js and
        "x.mergeable_state" in app_js,
        "fleet signature tracks runner lifecycle plus PR CI/mergeable state (dock v2)")

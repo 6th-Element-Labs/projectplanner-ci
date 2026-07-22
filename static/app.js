@@ -743,11 +743,9 @@ const TeepPlan = {
     // list the moment an agent needs attention (can't merge / dirty worktree). Scope is
     // project-wide on the board, deliverable-scoped on the mission page. Data comes from
     // /ixp/v1/work_sessions plus each session's derived health (SESSION-8 read models).
-    renderFleetDock(ctx) {
-        const nextCtx = ctx || { mode: 'project' };
-        const previousScope = JSON.stringify(this._dockCtx || {});
-        this._dockCtx = nextCtx;
-        if (JSON.stringify(nextCtx) !== previousScope) this._fleetSig = null;
+    renderFleetDock() {
+        // Callers used to pass a scope ctx; scoping is gone — every surface shows the
+        // same project-wide fleet (operator decision 2026-07-22: one source of truth).
         this._startFleetLive();
         this._loadFleetDock(true);
     },
@@ -769,26 +767,18 @@ const TeepPlan = {
         let runners = [], prPayload = {};
         try {
             const p = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`;
-            // Runners: the SAME list as the Fleet page's Live runners table (include_stale=false
-            // to match it exactly — a dock that disagrees with the page reads as a bug). PRs:
-            // cached server-side (60s GitHub sweep, open_prs.py), so the 10s poll hits the cache.
-            const [rRes, pRes] = await Promise.all([
-                fetch(`/ixp/v1/runner_sessions?${p}&include_stale=false`, { cache: 'no-store' }),
+            // Runners come from the SAME feed the Fleet page renders (_fetchFleetRunners)
+            // — one query, one payload, no dock-only filtering, so the dock can never
+            // show a different fleet than the page. PRs are cached server-side (60s
+            // GitHub sweep, open_prs.py), so the 10s poll only ever hits the cache.
+            const [runnerList, pRes] = await Promise.all([
+                this._fetchFleetRunners(force),
                 fetch(`/ixp/v1/open_prs?${p}`, { cache: 'no-store' }),
             ]);
-            runners = (await rRes.json()).sessions || [];
+            runners = runnerList;
             prPayload = await pRes.json();
         } catch (e) { this._fleetLoadBusy = false; return; }
-        let prs = prPayload.prs || [];
-        const ctx = this._dockCtx || { mode: 'project' };
-        if (ctx.mode === 'deliverable' && Array.isArray(ctx.taskIds)) {
-            const ids = new Set(ctx.taskIds.map((x) => String(x).toUpperCase()));
-            runners = runners.filter((s) => ids.has(String(s.task_id || '').toUpperCase()));
-            // PRs deliberately NOT scoped: option B is "every open PR on the canonical
-            // repo", and the orphan/no-board-task rows a scope filter would hide are
-            // exactly the ones only this dock can surface.
-        }
-        this._fleetScopeLabel = ctx.mode === 'deliverable' ? 'this deliverable' : '';
+        const prs = prPayload.prs || [];
         this._dockPrUnavailable = prPayload.unavailable || '';
         const sig = this._fleetSignature(runners, prs);
         const changed = sig !== this._fleetSig;
@@ -1023,7 +1013,6 @@ const TeepPlan = {
         const collapsed = this._dockCollapsed == null ? (nAttn === 0) : this._dockCollapsed;
         const anchor = 'position:fixed;right:1rem;bottom:1rem;z-index:1031;';
         const rerender = () => this._renderFleetDock(runners, prs);
-        const scope = this._fleetScopeLabel ? ` <span class="text-secondary small">· ${this.esc(this._fleetScopeLabel)}</span>` : '';
         if (collapsed) {
             const dot = nAttn ? 'var(--tblr-danger)' : 'var(--tblr-success)';
             host.innerHTML = `<button id="fleet-dock-pill" class="btn btn-sm shadow-sm" style="${anchor}border-radius:999px;display:inline-flex;align-items:center;gap:8px;">
@@ -1062,7 +1051,7 @@ const TeepPlan = {
             <div class="card-header py-2 d-flex align-items-center gap-2">
                 <i class="ti ti-server-bolt text-secondary"></i>
                 <span class="fw-medium">Fleet</span>
-                <span class="text-secondary small">${running} working</span>${scope}
+                <span class="text-secondary small">${running} working</span>
                 ${attnBadge}
                 <button id="fleet-dock-refresh" class="btn btn-sm btn-ghost-secondary p-1" title="Refresh"><i class="ti ti-refresh"></i></button>
                 <button id="fleet-dock-min" class="btn btn-sm btn-ghost-secondary p-1" title="Collapse"><i class="ti ti-chevron-down"></i></button>
@@ -1630,6 +1619,11 @@ const TeepPlan = {
             if (send) send.addEventListener('click', () => this._submitWake());
         }
         this._loadFleet();
+        // The Fleet tab's own Live runners table is always project-wide. Reset the dock to
+        // match — otherwise it keeps whatever scope a prior Mission/deliverable view left it
+        // in (a lingering `?deliverable=` in the URL doesn't mean this tab is scoped) and
+        // silently drops runners the page itself is showing, including their Watch button.
+        this.renderFleetDock();
     },
     _loadFleet() {
         this._loadFleetHosts();
@@ -1767,14 +1761,32 @@ const TeepPlan = {
             <td class="text-end">${cancelable ? `<button class="btn btn-sm btn-ghost-danger" data-cancel-wake="${this.esc(w.wake_id || '')}">Cancel</button>` : ''}</td>
         </tr>`;
     },
+    // ONE source of truth for runners: the Fleet page's query. The page table, the
+    // corner dock, and any deliverable view all read this same feed — never their own
+    // fetch — so no two surfaces can disagree about what's running. Memoized for 3s
+    // (single-flight) so overlapping page+dock ticks cost one request.
+    async _fetchFleetRunners(force) {
+        const now = Date.now();
+        const feed = this._runnerFeed;
+        if (!force && feed && (now - feed.at) < 3000) return feed.sessions;
+        if (this._runnerFeedInflight) return this._runnerFeedInflight;
+        const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&include_stale=false`;
+        this._runnerFeedInflight = (async () => {
+            try {
+                const sessions = (await (await fetch(`/ixp/v1/runner_sessions?${q}`, { cache: 'no-store' })).json()).sessions || [];
+                this._runnerFeed = { sessions, at: Date.now() };
+                return sessions;
+            } finally { this._runnerFeedInflight = null; }
+        })();
+        return this._runnerFeedInflight;
+    },
     async _loadFleetRunners() {
         const body = document.getElementById('fleet-runners-body');
         const count = document.getElementById('fleet-runners-count');
         if (!body) return;
         let sessions;
         try {
-            const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&include_stale=false`;
-            sessions = (await (await fetch(`/ixp/v1/runner_sessions?${q}`)).json()).sessions || [];
+            sessions = await this._fetchFleetRunners(true);
         } catch (e) { body.innerHTML = `<div class="text-danger small">Runners unavailable: ${this.esc(e.message)}</div>`; return; }
         if (count) { count.className = sessions.length ? 'badge bg-azure-lt ms-2' : 'badge bg-secondary-lt ms-2'; count.textContent = `${sessions.length}`; }
         if (!sessions.length) { body.innerHTML = `<div class="text-secondary small">No live runners registered for this project.</div>`; return; }

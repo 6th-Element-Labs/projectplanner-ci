@@ -153,7 +153,7 @@
                     <div>${cards}</div>
                 </div>`;
         }).join('');
-        this.renderFleetDock({ mode: 'project' });
+        this.renderFleetDock();
     },
 
     taskCard(t) {
