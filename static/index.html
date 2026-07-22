@@ -32,6 +32,16 @@
       .epic-head{cursor:pointer}
       .epic-head .epic-chev{transition:transform .15s ease}
       .epic-head[aria-expanded="true"] .epic-chev{transform:rotate(180deg)}
+      /* Fleet section collapse uses btn-ghost-secondary; keep hover transparent (no solid grey). */
+      .epic-head.btn-ghost-secondary{
+        --tblr-btn-hover-bg:transparent;
+        --tblr-btn-hover-border-color:transparent;
+        --tblr-btn-hover-color:inherit;
+        --tblr-btn-active-bg:transparent;
+        --tblr-btn-active-border-color:transparent;
+        --tblr-btn-active-color:inherit;
+        --tblr-btn-active-shadow:none;
+      }
       /* Activity timeline: long updates clamp to a few lines, click row to expand */
       .tk-act-item{cursor:pointer}
       .tk-act-item:hover{background:var(--tblr-bg-surface-secondary,#f6f7f9)}
