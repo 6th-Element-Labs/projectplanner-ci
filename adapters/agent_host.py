@@ -841,10 +841,16 @@ def launch_command(wake, inventory, runner_session_id=""):
         assignment = Assignment(**assignment_data)
         if assignment.runtime != runtime:
             raise ValueError("connect assignment runtime mismatch")
+        # Connect boots the INTERACTIVE CLI session inside the supervised PTY;
+        # Switchboard assigns the task through the normal handshake. One-shot
+        # batch modes (codex exec / claude -p / cursor-agent -p) render as a
+        # scrolling log with no composer, so Watch cannot show a real session
+        # and chat injection has nothing to type into. PM_CONNECT_<RT>_ARGS
+        # still overrides per host.
         runtime_defaults = {
-            "codex": ("codex", "exec --dangerously-bypass-approvals-and-sandbox"),
-            "claude-code": ("claude", "-p"),
-            "cursor": ("cursor-agent", "-p"),
+            "codex": ("codex", "--dangerously-bypass-approvals-and-sandbox"),
+            "claude-code": ("claude", "--dangerously-skip-permissions"),
+            "cursor": ("cursor-agent", "--force"),
         }
         executable_default, args_default = runtime_defaults.get(
             runtime, (runtime, "--prompt"))
