@@ -687,7 +687,8 @@ def _supersede(projection: dict[str, Any], task_id: str, project: str, *,
 
 def retry_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "user",
                principal_id: str = "", role: str = "implementation",
-               runtime: str = "",
+               runtime: str = "", source_sha: str = "", instruction: str = "",
+               findings: Optional[list[dict[str, Any]]] = None,
                reason: str = "operator retry",
                launcher: Optional[Callable[..., dict[str, Any]]] = None) -> dict[str, Any]:
     """Replace the current attempt with a new one.
@@ -725,7 +726,9 @@ def retry_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
         )
     started = start_task(task_id, project=project, actor=actor,
                          principal_id=principal_id, role=role,
-                         runtime=selected_runtime, launcher=launcher)
+                         runtime=selected_runtime, source_sha=source_sha,
+                         instruction=instruction, findings=findings,
+                         launcher=launcher)
     return _envelope(
         "retry_task", task_id, project,
         action=started.get("action") or "started",

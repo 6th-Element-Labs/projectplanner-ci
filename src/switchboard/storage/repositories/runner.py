@@ -2453,6 +2453,13 @@ def complete_runner_control_request(request_id: str, result: Optional[Dict[str, 
             return {"error": "runner_control_host_mismatch",
                     "error_code": "runner_control_host_mismatch",
                     "request_id": request_id}
+        if str(req.get("status") or "") in {
+                "completed", "failed", "cancelled", "refused"}:
+            return {
+                **req,
+                "completed": False,
+                "reason": f"request is already {req.get('status')}",
+            }
         final_status = status or ("failed" if result.get("error") else "completed")
         if final_status not in {"completed", "failed", "cancelled"}:
             final_status = "completed"

@@ -36,19 +36,27 @@ try:
     task_execution.start_task(
         "WATCH-16", project="switchboard", actor="review-steward",
         role="review_merge", source_sha="b" * 40)
+    retried = task_execution.retry_task(
+        "WATCH-16", project="switchboard", actor="review-steward",
+        role="review_merge", source_sha="c" * 40,
+        instruction="Review the replacement exact head.")
 finally:
     connect_dispatch.coordination_repo.request_wake = saved_request
     task_execution._projection = saved_projection
 
 assert first["started"] is True and first["role"] == "review_merge", first
-assert len(captured) == 3
+assert retried["started"] is True, retried
+assert len(captured) == 4
 assert captured[0]["policy"]["mode"] == "connect"
 assert set(captured[0]["policy"]) == {"mode", "assignment"}
 assert captured[0]["idem_key"] == captured[1]["idem_key"]
 assert captured[0]["policy"] == captured[1]["policy"]
 assert captured[2]["idem_key"] != captured[0]["idem_key"]
+assert captured[3]["idem_key"] != captured[2]["idem_key"]
 assert (captured[2]["policy"]["assignment"]["assignment_id"]
         != captured[0]["policy"]["assignment"]["assignment_id"])
+assert (captured[3]["policy"]["assignment"]["assignment_id"]
+        != captured[2]["policy"]["assignment"]["assignment_id"])
 assert all("role" not in row["policy"]["assignment"]
            and "source_sha" not in row["policy"]["assignment"]
            for row in captured)

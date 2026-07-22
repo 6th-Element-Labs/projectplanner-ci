@@ -120,6 +120,24 @@ try:
     ok((refreshed["last_snapshot"] or {}).get("health", {}).get("alive") is True,
        "runner health completion updates session snapshot")
 
+    timed_out = store.request_runner_control(
+        "run-env-managed", "health", actor="review-steward", project=P,
+        options={"client_request_id": "bug141-timeout-proof"})
+    cancelled = store.complete_runner_control_request(
+        timed_out["request_id"], status="cancelled",
+        result={"superseded": True, "reason": "review instruction timed out"},
+        actor="review-steward", project=P)
+    wrong_host = store.complete_runner_control_request(
+        timed_out["request_id"], status="completed", host_id="host/wrong",
+        result={"health": {"status": "running"}}, actor="host/wrong", project=P)
+    late_ack = store.complete_runner_control_request(
+        timed_out["request_id"], status="completed",
+        result={"health": {"status": "running"}}, actor="host/env", project=P)
+    ok(wrong_host["error"] == "runner_control_host_mismatch"
+       and cancelled["status"] == "cancelled" and late_ack["status"] == "cancelled"
+       and late_ack["completed"] is False,
+       "identity fencing survives cancellation and late acknowledgement cannot revive it")
+
     agent_host = _load("agent_host_env_test", ROOT / "adapters" / "agent_host.py")
     inventory = {"host_id": "host/env"}
     calls = []

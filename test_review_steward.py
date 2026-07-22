@@ -231,6 +231,7 @@ def test_acting_mode_reruns_and_dispatches():
         dispatches = []
         starts = []
         task_messages = []
+        control_waits = []
 
         def scratchpad_dispatcher(pr_number, head_sha="", project="switchboard"):
             dispatches.append({"pr": pr_number, "head_sha": head_sha, "project": project})
@@ -245,7 +246,11 @@ def test_acting_mode_reruns_and_dispatches():
 
         def task_messenger(task_id, text, **kwargs):
             task_messages.append({"task_id": task_id, "text": text, **kwargs})
-            return {"queued": True}
+            return {"queued": True, "control_request_id": f"control-{task_id.lower()}"}
+
+        def control_request_waiter(request_id, **kwargs):
+            control_waits.append({"request_id": request_id, **kwargs})
+            return {"request_id": request_id, "status": "completed"}
 
         receipt = rs.steward_project(
             "switchboard",
@@ -257,22 +262,103 @@ def test_acting_mode_reruns_and_dispatches():
             scratchpad_dispatcher=scratchpad_dispatcher,
             task_starter=task_starter,
             task_messenger=task_messenger,
+            control_request_waiter=control_request_waiter,
         )
         actions = {row["task_id"]: row for row in receipt["executed"]}
         ok(not dispatches, "review stewardship leaves CI dispatch to its own lifecycle")
-        ok(not task_messages, "review stewardship never injects an in-place repair prompt")
-        ok(actions["R-2"]["result"]["status"] == "review_session_ensured",
-           "red CI ensures a reviewer that records the failure")
+        ok(len(task_messages) == 1 and task_messages[0]["task_id"] == "R-2",
+           "a live implementation runner receives the review instruction via control")
+        ok(control_waits and control_waits[0]["request_id"] == "control-r-2",
+           "the steward waits for the exact inject control request")
+        ok(actions["R-2"]["result"]["status"] == "instruction_acknowledged",
+           "a completed inject records delivery acknowledgement, not ensured review")
+        ok(actions["R-2"]["result"]["review_completed"] is False
+           and actions["R-2"]["result"]["awaiting_exact_head_verdict"] is True,
+           "instruction acknowledgement still requires the exact-head verdict")
         ok(any(row["task_id"] == "R-5" and row["role"] == "review_merge"
                and "Do not repair red code" in row["instruction"] for row in starts),
            "red exact-head review explicitly forbids in-session remediation")
-        ok(actions["R-1"]["result"]["status"] == "review_session_ensured",
-           "green CI ensures a reviewer session")
+        ok(actions["R-1"]["result"]["status"] == "new_generation_started",
+           "green CI starts a distinct exact-head reviewer generation")
         ok(any(row["task_id"] == "R-1" and row["role"] == "review_merge"
                and row["source_sha"] == "h1"
                and "head_sha: h1" in row["instruction"] for row in starts),
            "review binds the role-aware start to the exact PR head")
         ok(receipt["effects"]["merged"] is False, "acting mode still never merges")
+
+
+def test_attached_review_timeout_supersedes_and_starts_exact_head_generation():
+    action = {
+        "action": rs.ACTION_DISPATCH_REVIEW,
+        "task_id": "BUG-141",
+        "policy_rule": rs.POLICY[rs.ACTION_DISPATCH_REVIEW],
+        "inputs": {
+            "pr_number": 141,
+            "pr_url": "https://example/pr/141",
+            "head_sha": "a" * 40,
+            "ci_state": "green",
+            "ci_run_id": "ci-141",
+        },
+    }
+    superseded = []
+    retries = []
+
+    def starter(task_id, **kwargs):
+        return {"action": "attach", "attached": True, "started": False,
+                "execution_id": "run-implementation"}
+
+    def messenger(task_id, text, **kwargs):
+        return {"queued": True, "delivered": False,
+                "control_request_id": "runnerreq-review-141"}
+
+    def waiter(request_id, **kwargs):
+        return {"request_id": request_id, "status": "timeout"}
+
+    def superseder(request_id, **kwargs):
+        superseded.append({"request_id": request_id, **kwargs})
+        return {"request_id": request_id, "status": "cancelled",
+                "result": {"superseded": True}}
+
+    def retrier(task_id, **kwargs):
+        retries.append({"task_id": task_id, **kwargs})
+        if len(retries) == 1:
+            return {"action": "superseding", "started": False,
+                    "superseded_execution_id": "run-implementation"}
+        return {"action": "started", "started": True,
+                "execution_id": "run-review-141"}
+
+    outcome = rs._execute_action(
+        action, project="switchboard", actor="test", operator_agent="operator",
+        dry_run=False, scratchpad_dispatcher=None, task_starter=starter,
+        task_messenger=messenger, control_request_waiter=waiter,
+        control_request_superseder=superseder, task_retrier=retrier,
+        runner_terminal_waiter=lambda *args, **kwargs: {"terminal": True},
+        review_ack_timeout_s=0, review_restart_timeout_s=0)
+    result = outcome["result"]
+    ok(result["status"] == "new_generation_started",
+       "an unacknowledged attach becomes a fresh review generation")
+    ok(superseded and superseded[0]["request_id"] == "runnerreq-review-141",
+       "the timed-out inject control request is explicitly superseded")
+    ok(len(retries) == 2 and all(row["role"] == "review_merge" for row in retries),
+       "restart remains inside the existing Task Execution lifecycle")
+    ok(retries[-1]["source_sha"] == "a" * 40
+       and "head_sha: " + "a" * 40 in retries[-1]["instruction"],
+       "the replacement generation is bound to the exact review head")
+    ok(result["awaiting_exact_head_verdict"] is True,
+       "starting a replacement still does not claim review completion")
+
+    retries.clear()
+    raced = rs._execute_action(
+        action, project="switchboard", actor="test", operator_agent="operator",
+        dry_run=False, scratchpad_dispatcher=None, task_starter=starter,
+        task_messenger=messenger, control_request_waiter=waiter,
+        control_request_superseder=lambda *args, **kwargs: {
+            "request_id": "runnerreq-review-141", "status": "completed"},
+        task_retrier=retrier,
+        runner_terminal_waiter=lambda *args, **kwargs: {"terminal": True},
+        review_ack_timeout_s=0, review_restart_timeout_s=0)
+    ok(raced["result"]["status"] == "instruction_acknowledged" and not retries,
+       "a host acknowledgement that wins the cancel race avoids a needless restart")
 
 
 def test_fail_closed_unavailable_db():
@@ -293,5 +379,6 @@ if __name__ == "__main__":
     test_plan_actions()
     test_dry_run_records_decisions_without_effects()
     test_acting_mode_reruns_and_dispatches()
+    test_attached_review_timeout_supersedes_and_starts_exact_head_generation()
     test_fail_closed_unavailable_db()
     print("ALL PASS")

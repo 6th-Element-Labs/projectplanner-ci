@@ -26,6 +26,9 @@ TIER = "T2"
 DEFAULT_ACTOR = "switchboard/coordinator-t2"
 DEFAULT_OPERATOR = "switchboard/operator"
 DEFAULT_MAX_CI_RERUNS = 2
+DEFAULT_REVIEW_ACK_TIMEOUT_S = 5.0
+DEFAULT_REVIEW_RESTART_TIMEOUT_S = 10.0
+REVIEW_CONTROL_POLL_S = 0.25
 
 ACTION_RERUN_CI = "rerun_scratchpad_ci"
 ACTION_REMEDIATE_CI = "remediate_failed_ci"
@@ -266,7 +269,13 @@ def _execute_action(action: Mapping[str, Any], *, project: str, actor: str,
                     operator_agent: str, dry_run: bool,
                     scratchpad_dispatcher: Callable[..., Any] | None,
                     task_starter: Callable[..., Any] | None,
-                    task_messenger: Callable[..., Any] | None) -> dict[str, Any]:
+                    task_messenger: Callable[..., Any] | None,
+                    control_request_waiter: Callable[..., Any] | None,
+                    control_request_superseder: Callable[..., Any] | None,
+                    task_retrier: Callable[..., Any] | None,
+                    runner_terminal_waiter: Callable[..., Any] | None,
+                    review_ack_timeout_s: float,
+                    review_restart_timeout_s: float) -> dict[str, Any]:
     chosen = {
         "action": action["action"],
         "task_id": action.get("task_id") or None,
@@ -361,14 +370,101 @@ def _execute_action(action: Mapping[str, Any], *, project: str, actor: str,
                 source_sha=head_sha, instruction=prompt)
             result["effects"].append({"kind": "start_task", "payload": ensured})
             refused = ensured.get("action") == "refused" or bool(ensured.get("error"))
-            transitioning = ensured.get("action") == "transitioning"
-            result["status"] = (
-                "review_session_failed" if refused else
-                "review_session_transitioning" if transitioning else
-                "review_session_ensured"
-            )
             if refused:
+                result["status"] = "review_handoff_failed"
                 result["error"] = ensured.get("error") or ensured.get("reason")
+            elif ensured.get("started"):
+                result["status"] = "new_generation_started"
+                result["head_sha"] = head_sha
+                result["awaiting_exact_head_verdict"] = True
+            elif ensured.get("attached"):
+                if task_messenger is None or control_request_waiter is None:
+                    raise RuntimeError("review_attach_control_lifecycle_required")
+                message = task_messenger(
+                    task_id, prompt, project=project, actor=actor)
+                result["effects"].append({"kind": "send_message", "payload": message})
+                request_id = str(message.get("control_request_id") or "").strip()
+                if not request_id:
+                    raise RuntimeError("review_instruction_control_request_missing")
+                acknowledgement = control_request_waiter(
+                    request_id, project=project, timeout_s=review_ack_timeout_s)
+                result["effects"].append({
+                    "kind": "await_control_request", "payload": acknowledgement})
+                ack_status = str(acknowledgement.get("status") or "").lower()
+                if ack_status == "completed":
+                    result["status"] = "instruction_acknowledged"
+                    result["control_request_id"] = request_id
+                    result["head_sha"] = head_sha
+                    result["awaiting_exact_head_verdict"] = True
+                    result["review_completed"] = False
+                elif ack_status in {"failed", "cancelled", "refused"}:
+                    result["status"] = "review_handoff_failed"
+                    result["error"] = (
+                        acknowledgement.get("error")
+                        or acknowledgement.get("reason")
+                        or f"review instruction {ack_status}"
+                    )
+                else:
+                    if control_request_superseder is None or task_retrier is None:
+                        raise RuntimeError("review_timeout_recovery_required")
+                    superseded = control_request_superseder(
+                        request_id, project=project,
+                        reason="review instruction acknowledgement timed out")
+                    result["effects"].append({
+                        "kind": "supersede_control_request", "payload": superseded})
+                    superseded_status = str(superseded.get("status") or "").lower()
+                    if superseded_status == "completed":
+                        # The host won the timeout/cancel race. Delivery is real;
+                        # do not kill a runner that has already accepted the review.
+                        result["status"] = "instruction_acknowledged"
+                        result["control_request_id"] = request_id
+                        result["head_sha"] = head_sha
+                        result["awaiting_exact_head_verdict"] = True
+                        result["review_completed"] = False
+                    elif superseded_status != "cancelled":
+                        result["status"] = "review_handoff_failed"
+                        result["error"] = (
+                            superseded.get("error") or superseded.get("reason")
+                            or "timed-out review instruction could not be superseded")
+                    else:
+                        replacement = task_retrier(
+                            task_id, project=project, actor=actor, role="review_merge",
+                            source_sha=head_sha, instruction=prompt,
+                            reason="review instruction acknowledgement timed out")
+                        result["effects"].append({
+                            "kind": "retry_task", "payload": replacement})
+                        if (replacement.get("action") == "superseding"
+                                and runner_terminal_waiter is not None):
+                            terminal = runner_terminal_waiter(
+                                task_id, project=project,
+                                timeout_s=review_restart_timeout_s)
+                            result["effects"].append({
+                                "kind": "await_runner_terminal", "payload": terminal})
+                            if terminal.get("terminal"):
+                                replacement = task_retrier(
+                                    task_id, project=project, actor=actor,
+                                    role="review_merge", source_sha=head_sha,
+                                    instruction=prompt,
+                                    reason="start fresh exact-head review generation")
+                                result["effects"].append({
+                                    "kind": "start_fresh_review", "payload": replacement})
+                        if replacement.get("started"):
+                            result["status"] = "new_generation_started"
+                            result["head_sha"] = head_sha
+                            result["awaiting_exact_head_verdict"] = True
+                        else:
+                            result["status"] = "review_handoff_failed"
+                            result["error"] = (
+                                replacement.get("error")
+                                or replacement.get("reason")
+                                or replacement.get("message")
+                                or "fresh exact-head review generation did not start"
+                            )
+            else:
+                result["status"] = "review_handoff_failed"
+                result["error"] = (
+                    ensured.get("reason") or ensured.get("message")
+                    or "review generation was neither started nor attached")
 
         else:
             result["status"] = "observed"
@@ -391,6 +487,12 @@ def steward_project(project: str, *, actor: str = DEFAULT_ACTOR,
                     scratchpad_dispatcher: Callable[..., Any] | None = None,
                     task_starter: Callable[..., Any] | None = None,
                     task_messenger: Callable[..., Any] | None = None,
+                    control_request_waiter: Callable[..., Any] | None = None,
+                    control_request_superseder: Callable[..., Any] | None = None,
+                    task_retrier: Callable[..., Any] | None = None,
+                    runner_terminal_waiter: Callable[..., Any] | None = None,
+                    review_ack_timeout_s: float = DEFAULT_REVIEW_ACK_TIMEOUT_S,
+                    review_restart_timeout_s: float = DEFAULT_REVIEW_RESTART_TIMEOUT_S,
                     **_legacy_hooks: Any) -> dict[str, Any]:
     """Plan and optionally act on one project's In Review queue."""
     observed_at = float(time.time() if now is None else now)
@@ -439,6 +541,58 @@ def steward_project(project: str, *, actor: str = DEFAULT_ACTOR,
         if task_messenger is None and not dry_run:
             from switchboard.application.commands import task_execution
             task_messenger = task_execution.send_message
+        if not dry_run and (control_request_waiter is None
+                            or control_request_superseder is None):
+            import store
+
+            if control_request_waiter is None:
+                def _wait_control(request_id: str, *, project: str,
+                                  timeout_s: float) -> dict[str, Any]:
+                    deadline = time.monotonic() + max(0.0, float(timeout_s))
+                    while True:
+                        rows = store.list_runner_control_requests(project=project)
+                        row = next((item for item in rows
+                                    if item.get("request_id") == request_id), None)
+                        status = str((row or {}).get("status") or "missing").lower()
+                        if status in {"completed", "failed", "cancelled", "refused"}:
+                            return dict(row or {})
+                        if time.monotonic() >= deadline:
+                            return {"request_id": request_id, "status": "timeout"}
+                        time.sleep(REVIEW_CONTROL_POLL_S)
+
+                control_request_waiter = _wait_control
+            if control_request_superseder is None:
+                def _supersede_control(request_id: str, *, project: str,
+                                       reason: str) -> dict[str, Any]:
+                    return store.complete_runner_control_request(
+                        request_id, status="cancelled", actor=actor,
+                        project=project, result={
+                            "reason": reason,
+                            "superseded": True,
+                            "superseded_by": "review_generation_restart",
+                        })
+
+                control_request_superseder = _supersede_control
+        if task_retrier is None and not dry_run:
+            from switchboard.application.commands import task_execution
+            task_retrier = task_execution.retry_task
+        if runner_terminal_waiter is None and not dry_run:
+            from switchboard.application.commands import task_execution
+
+            def _wait_runner_terminal(task_id: str, *, project: str,
+                                      timeout_s: float) -> dict[str, Any]:
+                deadline = time.monotonic() + max(0.0, float(timeout_s))
+                while True:
+                    projection = task_execution.get_task_execution(
+                        task_id, project=project)
+                    if not projection.get("running") and not projection.get("starting"):
+                        return {"terminal": True, "projection": projection}
+                    if time.monotonic() >= deadline:
+                        return {"terminal": False, "projection": projection,
+                                "reason": "runner termination timed out"}
+                    time.sleep(REVIEW_CONTROL_POLL_S)
+
+            runner_terminal_waiter = _wait_runner_terminal
 
     try:
         db_path = db_path_resolver(project)  # type: ignore[misc]
@@ -458,6 +612,12 @@ def steward_project(project: str, *, actor: str = DEFAULT_ACTOR,
             dry_run=dry_run,
             scratchpad_dispatcher=scratchpad_dispatcher,
             task_starter=task_starter, task_messenger=task_messenger,
+            control_request_waiter=control_request_waiter,
+            control_request_superseder=control_request_superseder,
+            task_retrier=task_retrier,
+            runner_terminal_waiter=runner_terminal_waiter,
+            review_ack_timeout_s=review_ack_timeout_s,
+            review_restart_timeout_s=review_restart_timeout_s,
         )
         executed.append({
             "task_id": action.get("task_id"),
@@ -545,8 +705,8 @@ def steward_project(project: str, *, actor: str = DEFAULT_ACTOR,
                 not dry_run and any(
                     row.get("result", {}).get("status") in {
                         "ci_rerun_requested", "remediation_session_ensured",
-                        "remediation_session_transitioning", "review_session_ensured",
-                        "review_session_transitioning",
+                        "remediation_session_transitioning",
+                        "instruction_acknowledged", "new_generation_started",
                     }
                     for row in executed
                 )
