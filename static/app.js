@@ -1037,7 +1037,7 @@ const TeepPlan = {
         if (!this._dockTab) this._dockTab = (blockedPrs.length && !deadRunners.length) ? 'prs' : 'runners';
         const tab = this._dockTab;
         const tabBtn = (key, label, count) =>
-            `<button class="btn btn-sm ${tab === key ? '' : 'btn-ghost-secondary'}" data-dock-tab="${key}" style="border-radius:0;border:0;border-bottom:2px solid ${tab === key ? 'var(--tblr-primary)' : 'transparent'};">${label} <span class="text-secondary">${count}</span></button>`;
+            `<button class="btn btn-sm ${tab === key ? '' : 'btn-ghost-secondary'}" data-dock-tab="${key}" style="border-radius:0;border:0;border-bottom:2px solid ${tab === key ? 'var(--tblr-primary)' : 'transparent'};">${label}<span class="text-secondary ms-1">${count}</span></button>`;
         let body;
         if (tab === 'runners') {
             body = runners.length
