@@ -4629,6 +4629,27 @@ const TeepPlan = {
 
 document.addEventListener('DOMContentLoaded', () => TeepPlan.init());
 
+// Public hooks for the ⌘K palette (and deep links) — keep index.html cmdk thin.
+window.TAIKUN_openTask = (id, project) => TeepPlan.openTask(id, project);
+window.TAIKUN_openDeliverable = (id) => {
+    const deliverableId = String(id || '').trim();
+    if (!deliverableId) return;
+    TeepPlan.selectedDeliverableId = deliverableId;
+    const picker = document.getElementById('mission-deliverable-picker');
+    if (picker) {
+        if (![...picker.options].some((o) => o.value === deliverableId)) {
+            picker.add(new Option(deliverableId, deliverableId, true, true));
+        }
+        picker.value = deliverableId;
+    }
+    if (window.TAIKUN_showTab) window.TAIKUN_showTab('#tab-mission');
+    else {
+        const tab = document.querySelector('#toptab-mission');
+        if (tab && window.bootstrap) window.bootstrap.Tab.getOrCreateInstance(tab).show();
+    }
+    if (typeof TeepPlan.refreshMissionPage === 'function') TeepPlan.refreshMissionPage();
+};
+
 // SIMPLIFY-8: Re-verify button in task external-CI detail (SHA-only ensure).
 window.__sbVerifyCi = async (btn) => {
     if (!btn) return;

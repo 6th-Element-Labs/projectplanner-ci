@@ -154,7 +154,7 @@
                     <div class="ms-auto d-flex align-items-center gap-2 flex-shrink-0">
                         <div class="input-icon d-none d-sm-block" style="width:210px">
                             <span class="input-icon-addon"><i class="ti ti-search"></i></span>
-                            <input id="f-search" type="text" class="form-control form-control-sm" placeholder="Search…  ⌘K" autocomplete="off"/>
+                            <input id="f-search" type="text" class="form-control form-control-sm" placeholder="Search tasks…  ⌘K" autocomplete="off" readonly/>
                         </div>
                         <div class="dropdown">
                             <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="ti ti-filter me-1"></i>Filters<span id="filter-count" class="badge bg-primary ms-1 d-none"></span></button>
@@ -820,7 +820,7 @@
     <!-- ⌘K command palette -->
     <div id="cmdk-backdrop" role="dialog" aria-modal="true" aria-label="Command palette">
         <div class="cmdk-box">
-            <input id="cmdk-input" class="form-control cmdk-input" placeholder="Type a command, filter, or where to go…" autocomplete="off" spellcheck="false"/>
+            <input id="cmdk-input" class="form-control cmdk-input" placeholder="Search tasks, deliverables, or commands…" autocomplete="off" spellcheck="false"/>
             <div id="cmdk-list" class="cmdk-list"></div>
             <div class="cmdk-hint"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>↵</kbd> run</span><span><kbd>esc</kbd> close</span></div>
         </div>
@@ -897,7 +897,7 @@
     <script src="js/settings.js?v=2"></script>
     <script src="js/scope.js?v=1"></script>
     <script src="js/attention.js?v=1"></script>
-    <script src="app.js?v=57"></script>
+    <script src="app.js?v=58"></script>
     <script src="taikun-ui.js?v=9"></script>
     <script src="saturation-panel.js?v=1"></script>
     <script src="narration-ops-panel.js?v=1"></script>
@@ -1005,9 +1005,8 @@
       })();
     </script>
     <script>
-      // ⌘K command palette + active-filter chips. Reads the live DOM (tabs, filter selects,
-      // project/deliverable switchers) and drives the existing controls, so it stays in sync
-      // with whatever app.js renders and needs no coupling to app internals.
+      // ⌘K command palette + active-filter chips. Indexes tasks/deliverables from the
+      // loaded board (TeepPlan) and drives existing tab/filter controls for the rest.
       (function () {
         var backdrop = document.getElementById('cmdk-backdrop');
         var input = document.getElementById('cmdk-input');
@@ -1028,9 +1027,90 @@
           var b = document.getElementById('f-blocking'); if (b && b.checked) { b.checked = false; fire(b); }
           renderChips();
         }
+        function plan() { return (typeof TeepPlan !== 'undefined' && TeepPlan) ? TeepPlan : null; }
+        function openTask(id) {
+          if (window.TAIKUN_openTask) { window.TAIKUN_openTask(id); return; }
+          var p = plan(); if (p && typeof p.openTask === 'function') p.openTask(id);
+        }
+        function openDeliverable(id) {
+          if (window.TAIKUN_openDeliverable) { window.TAIKUN_openDeliverable(id); return; }
+          var ds = document.getElementById('mission-deliverable-picker')
+            || document.getElementById('header-deliverable-switcher');
+          if (ds) { ds.value = id; fire(ds); }
+          jump('#tab-mission');
+        }
+        function matchToks(hay, toks) { return toks.every(function (t) { return hay.indexOf(t) >= 0; }); }
 
-        function commands() {
+        function taskCommands(toks) {
+          var p = plan(); var tasks = (p && p.tasks) || [];
+          if (!tasks.length || !toks.length) return [];
+          var out = [];
+          for (var i = 0; i < tasks.length && out.length < 12; i++) {
+            var t = tasks[i];
+            var id = String(t.task_id || '');
+            var title = String(t.title || '');
+            var hay = (id + ' ' + title + ' ' + (t.status || '') + ' ' + (t._wsName || '') + ' ' + (t._wsId || '') + ' ' + (t.description || '')).toLowerCase();
+            if (!matchToks(hay, toks)) continue;
+            (function (taskId, taskTitle, status) {
+              out.push({
+                group: 'Tasks',
+                icon: 'ti ti-checkbox',
+                label: taskId + ' — ' + taskTitle,
+                meta: status || '',
+                run: function () { openTask(taskId); },
+              });
+            })(id, title, t.status || '');
+          }
+          return out;
+        }
+        function deliverableCommands(toks) {
+          var out = [], seen = {};
+          function add(id, label) {
+            id = String(id || ''); if (!id || seen[id]) return;
+            var hay = (id + ' ' + label).toLowerCase();
+            if (toks.length && !matchToks(hay, toks)) return;
+            seen[id] = true;
+            out.push({
+              group: 'Deliverables',
+              icon: 'ti ti-target-arrow',
+              label: label || id,
+              meta: id,
+              run: function () { openDeliverable(id); },
+            });
+          }
+          var p = plan();
+          ((p && p.deliverables) || []).forEach(function (d) {
+            add(d.id, (d.title || d.id) + ((d.status || '') === 'archived' ? ' · archived' : ''));
+          });
+          var ds = document.getElementById('mission-deliverable-picker')
+            || document.getElementById('header-deliverable-switcher');
+          if (ds) Array.prototype.forEach.call(ds.options, function (o) {
+            if (!o.value) return;
+            add(o.value, o.textContent.trim());
+          });
+          return out.slice(0, 12);
+        }
+
+        function commands(q) {
+          var toks = q ? q.split(/\s+/) : [];
           var cmds = [];
+          // Task + deliverable jumps lead when the operator is typing a query.
+          if (toks.length) {
+            cmds = cmds.concat(taskCommands(toks));
+            cmds = cmds.concat(deliverableCommands(toks));
+            cmds.push({
+              group: 'Filter',
+              icon: 'ti ti-filter',
+              label: 'Filter board for “' + q + '”',
+              run: function () {
+                var el = document.getElementById('f-search');
+                if (el) { el.value = q; fire(el); renderChips(); }
+                jump('#tab-board');
+              },
+            });
+          } else {
+            cmds = cmds.concat(deliverableCommands([]).slice(0, 8));
+          }
           document.querySelectorAll('#main-nav [data-bs-toggle="tab"]').forEach(function (a) {
             cmds.push({ group: 'Jump to', icon: iconOf(a), label: txt(a), run: function () { jump(a.getAttribute('href')); } });
           });
@@ -1055,26 +1135,36 @@
           cmds.push({ group: 'Do', icon: 'ti ti-sparkles', label: 'Ask Taikun', run: function () { jump('#tab-ask'); setTimeout(function () { var i = document.getElementById('ask-input'); if (i) i.focus(); }, 60); } });
           var ps = document.getElementById('project-switcher');
           if (ps) Array.prototype.forEach.call(ps.options, function (o) { if (o.selected) return; cmds.push({ group: 'Switch project', icon: 'ti ti-folders', label: o.textContent.trim(), run: function () { ps.value = o.value; fire(ps); } }); });
-          var ds = document.getElementById('header-deliverable-switcher');
-          if (ds) Array.prototype.forEach.call(ds.options, function (o) { if (!o.value || o.selected) return; cmds.push({ group: 'Open deliverable', icon: 'ti ti-target-arrow', label: o.textContent.trim(), run: function () { ds.value = o.value; fire(ds); jump('#tab-mission'); } }); });
           return cmds;
         }
 
         function render() {
-          var q = (input.value || '').trim().toLowerCase();
-          var toks = q ? q.split(/\s+/) : [];
-          var vis = commands().filter(function (c) { var hay = (c.group + ' ' + c.label).toLowerCase(); return toks.every(function (t) { return hay.indexOf(t) >= 0; }); });
+          var q = (input.value || '').trim();
+          var qLower = q.toLowerCase();
+          var toks = qLower ? qLower.split(/\s+/) : [];
+          var vis = commands(q).filter(function (c) {
+            if (c.group === 'Tasks' || c.group === 'Deliverables') return true;
+            if (c.group === 'Filter' && c.label.indexOf('Filter board for') === 0) return true;
+            var hay = (c.group + ' ' + c.label + ' ' + (c.meta || '')).toLowerCase();
+            return matchToks(hay, toks);
+          });
           items = vis; if (active >= vis.length) active = 0;
           if (!vis.length) { list.innerHTML = '<div class="cmdk-empty">No matches.</div>'; return; }
           var html = '', lastGroup = null;
           vis.forEach(function (c, i) {
             if (c.group !== lastGroup) { html += '<div class="cmdk-group">' + esc(c.group) + '</div>'; lastGroup = c.group; }
-            html += '<div class="cmdk-item' + (i === active ? ' active' : '') + '" data-i="' + i + '"><i class="' + c.icon + '"></i><span>' + esc(c.label) + '</span></div>';
+            html += '<div class="cmdk-item' + (i === active ? ' active' : '') + '" data-i="' + i + '"><i class="' + c.icon + '"></i><span>' + esc(c.label) + '</span>'
+              + (c.meta ? '<span class="cmdk-meta">' + esc(c.meta) + '</span>' : '') + '</div>';
           });
           list.innerHTML = html;
           var el = list.querySelector('.cmdk-item.active'); if (el) el.scrollIntoView({ block: 'nearest' });
         }
-        function openP() { backdrop.classList.add('show'); input.value = ''; active = 0; render(); setTimeout(function () { input.focus(); }, 20); }
+        function openP(prefill) {
+          backdrop.classList.add('show');
+          input.value = prefill == null ? '' : String(prefill);
+          active = 0; render();
+          setTimeout(function () { input.focus(); if (input.value) input.select(); }, 20);
+        }
         function closeP() { backdrop.classList.remove('show'); }
         function runP(i) { var c = items[i]; if (!c) return; closeP(); c.run(); }
 
@@ -1090,7 +1180,20 @@
         list.addEventListener('click', function (e) { var it = e.target.closest('.cmdk-item'); if (it) runP(parseInt(it.getAttribute('data-i'), 10)); });
         list.addEventListener('mousemove', function (e) { var it = e.target.closest('.cmdk-item'); if (it) { var i = parseInt(it.getAttribute('data-i'), 10); if (i !== active) { active = i; render(); } } });
         backdrop.addEventListener('click', function (e) { if (e.target === backdrop) closeP(); });
-        var ob = document.getElementById('cmdk-open'); if (ob) ob.addEventListener('click', openP);
+        var ob = document.getElementById('cmdk-open'); if (ob) ob.addEventListener('click', function () { openP(); });
+        var fsearch = document.getElementById('f-search');
+        if (fsearch) {
+          // Open the palette instead of focusing the readonly board-filter field
+          // (avoids a focus loop when Esc returns focus to #f-search).
+          fsearch.addEventListener('mousedown', function (e) {
+            e.preventDefault();
+            openP(fsearch.readOnly ? '' : fsearch.value);
+          });
+          fsearch.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openP(''); }
+          });
+        }
+        window.TAIKUN_openCmdk = openP;
 
         // ---- Active-filter count badge (the floating chip row is retired; all filters
         //      live in the top Filters dropdown). Hide-done is a default toggle, not a
