@@ -3100,12 +3100,22 @@ def _enrollment_inventory_error(identity: Dict[str, Any],
     except (TypeError, ValueError):
         advertised_max_sessions = -1
         allowed_max_sessions = -2
+    # ``runner_watch`` is not a grantable execution-policy capability.  It is a
+    # host-proven transport fact added by Agent Host after it verifies the local
+    # PTY/relay stack (BUG-91).  Keep every policy capability exact, while
+    # allowing that one proof-only advertisement in addition.
+    runtime_capabilities = set(runtime.get("capabilities") or [])
+    policy_capabilities = set(execution.get("capabilities") or [])
+    capability_match = (
+        runtime_capabilities - {"runner_watch"}
+        == policy_capabilities - {"runner_watch"}
+        and policy_capabilities.issubset(runtime_capabilities | {"runner_watch"})
+    )
     execution_matches = bool(
         len(runtime_rows) == 1
         and runtime.get("runtime") == execution.get("runtime") == "codex"
         and sorted(runtime.get("lanes") or []) == sorted(execution.get("lanes") or [])
-        and sorted(runtime.get("capabilities") or [])
-        == sorted(execution.get("capabilities") or [])
+        and capability_match
         and runtime_policy.get("allow_work") is execution.get("allow_work")
         and runtime_policy.get("allow_global_claim") is False
         and advertised_max_sessions == allowed_max_sessions

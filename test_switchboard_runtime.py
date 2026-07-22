@@ -332,6 +332,19 @@ try:
     ok(widened_registration.get("error_code") == "host_enrollment_policy_mismatch"
        and enrolled_registration.get("host_id") == "host/test",
        "server-issued owner, allowlists, runtime, capabilities, and limits are authoritative")
+    widened_inventory["runtimes"][0]["capabilities"].append("runner_watch")
+    watch_registration = store.register_host(
+        widened_inventory, principal_id=p["id"], actor=auth.actor(p), project=P)
+    ok(watch_registration.get("host_id") == "host/test"
+       and not watch_registration.get("error"),
+       "host-proven runner_watch may supplement the exact policy capabilities")
+    widened_inventory["runtimes"][0]["capabilities"].append("unapproved_capability")
+    extra_registration = store.register_host(
+        widened_inventory, principal_id=p["id"], actor=auth.actor(p), project=P)
+    ok(extra_registration.get("error_code") == "host_enrollment_policy_mismatch",
+       "other host-added capabilities still fail the enrollment policy")
+    widened_inventory["runtimes"][0]["capabilities"] = [
+        "docs", "github", "python", "tests", "runner_watch"]
     widened_heartbeat = store.heartbeat_host(
         "host/test", capacity={"owner": {
             "user_id": p["id"], "tenant_allowlist": ["tenant-widened"],
