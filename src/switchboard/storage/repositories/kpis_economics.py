@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 from constants import *  # noqa: F401,F403
 from db.connection import _conn
 from db.core import *  # noqa: F401,F403
+from switchboard.security import redact_provider_secrets
 
 
 def _store_facade():
@@ -121,7 +122,8 @@ def report_usage(source: str, confidence: str, task_id: Optional[str] = None,
             (request_id, source, confidence, task_id, claim_id, outcome_id, agent_id,
              principal_id or None, runtime or None, call_site or None, provider or None, model or None,
              int(prompt_tokens or 0), int(completion_tokens or 0), total, float(cost_usd or 0.0),
-             latency_ms, status or "ok", json.dumps(metadata or {}, sort_keys=True), now),
+             latency_ms, status or "ok",
+             json.dumps(redact_provider_secrets(metadata or {}), sort_keys=True), now),
         )
         row = c.execute("SELECT * FROM llm_spend WHERE id=?", (cur.lastrowid,)).fetchone()
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
@@ -134,14 +136,14 @@ def report_usage(source: str, confidence: str, task_id: Optional[str] = None,
 def _spend_row(row: sqlite3.Row) -> Dict[str, Any]:
     out = dict(row)
     out["metadata"] = json.loads(out.pop("metadata_json") or "{}")
-    return out
+    return redact_provider_secrets(out)
 
 
 def _outcome_row(row: sqlite3.Row) -> Dict[str, Any]:
     out = dict(row)
     out["evidence"] = json.loads(out.pop("evidence_json") or "{}")
     out["value"] = json.loads(out.pop("value_json") or "{}")
-    return out
+    return redact_provider_secrets(out)
 
 
 def _kpi_row(row: sqlite3.Row) -> Dict[str, Any]:
@@ -161,6 +163,10 @@ def record_outcome(outcome_type: str, title: str,
                    actor: str = "tally",
                    project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     status = (status or "proposed").strip().lower()
+    title = redact_provider_secrets(title)
+    verification = redact_provider_secrets(verification)
+    evidence = redact_provider_secrets(evidence)
+    value = redact_provider_secrets(value)
     if status not in ("proposed", "verified", "rejected", "superseded"):
         return {"error": "invalid outcome status", "status": status}
     if not outcome_type or not title:
@@ -196,7 +202,8 @@ def verify_outcome(outcome_id: str, verifier: str, verification: str = "",
         if not row:
             return {"error": "outcome not found", "outcome_id": outcome_id}
         merged_evidence = json.loads(row["evidence_json"] or "{}")
-        merged_evidence.update(_jsonish(evidence))
+        merged_evidence.update(_jsonish(redact_provider_secrets(evidence)))
+        verification = redact_provider_secrets(verification)
         c.execute(
             "UPDATE outcomes SET status='verified', verifier=?, verification=?, "
             "evidence_json=?, verified_at=? WHERE id=?",
@@ -220,6 +227,7 @@ def reject_outcome(outcome_id: str, verifier: str, reason: str,
         if not row:
             return {"error": "outcome not found", "outcome_id": outcome_id}
         evidence = json.loads(row["evidence_json"] or "{}")
+        reason = redact_provider_secrets(reason)
         evidence["rejection_reason"] = reason
         c.execute(
             "UPDATE outcomes SET status='rejected', verifier=?, verification='rejected', "

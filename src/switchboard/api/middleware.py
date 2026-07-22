@@ -18,12 +18,13 @@ import time
 from typing import Callable
 
 from fastapi import Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 import auth
 import concurrency_limiter
 import store
 from switchboard.api.browser_session import current_browser_user
+from switchboard.security import redact_provider_secrets_bytes
 
 
 SaturationSnapshot = Callable[[str], dict]
@@ -168,6 +169,26 @@ def register_auth_gate(app, *, global_user_scopes: GlobalUserScopes,
                 JSONResponse({"detail": "forbidden: no access to this project"}, status_code=403), started_at)
         request.state.principal = global_principal(user, scopes)
         return _attach_server_timing(await call_next(request), started_at)
+
+    @app.middleware("http")
+    async def _provider_secret_response_boundary(request: Request, call_next):
+        """Never let the gateway-owned provider key cross an HTTP response edge."""
+        response = await call_next(request)
+        content_type = response.headers.get("content-type", "").lower()
+        if not (content_type.startswith("application/json") or
+                content_type.startswith("text/plain")):
+            return response
+        body = b"".join([chunk async for chunk in response.body_iterator])
+        body = redact_provider_secrets_bytes(body)
+        headers = dict(response.headers)
+        headers.pop("content-length", None)
+        return Response(
+            content=body,
+            status_code=response.status_code,
+            headers=headers,
+            media_type=None,
+            background=response.background,
+        )
 
     @app.middleware("http")
     async def _auth_boundary(request: Request, call_next):

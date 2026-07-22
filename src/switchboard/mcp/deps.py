@@ -16,6 +16,7 @@ from typing import Any, Callable, Optional
 import auth
 import store
 from switchboard.mcp import authorization
+from switchboard.security import redact_provider_secrets
 
 _mark_write: Optional[Callable[[], None]] = None
 
@@ -29,7 +30,7 @@ def register_write_observer(observer: Optional[Callable[[], None]]) -> None:
 def _dumps(obj) -> str:
     """json.dumps with sort_keys=True — deterministic serialization for prompt-cache hits.
     Stable key order means identical responses share a cache hit across agent sessions."""
-    return json.dumps(obj, sort_keys=True)
+    return json.dumps(redact_provider_secrets(obj), sort_keys=True)
 
 
 def _require_write(ctx, project: str = "maxwell", scopes=("write:tasks",)):

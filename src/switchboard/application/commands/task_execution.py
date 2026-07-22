@@ -21,6 +21,7 @@ from typing import Any, Callable, Optional
 from constants import DEFAULT_PROJECT
 from switchboard.application.commands import runner_pty as runner_pty_command
 from switchboard.application.queries import task_session as task_session_query
+from switchboard.security import redact_provider_secrets
 from switchboard.storage.repositories import coordination as coordination_repo
 from switchboard.storage.repositories import runner as runner_repo
 
@@ -790,7 +791,7 @@ def get_execution_transcript(task_id: Any = "", *, execution_id: str = "",
         segments = segments[-int(limit):]
 
     status = str(session.get("status") or "")
-    return {
+    return redact_provider_secrets({
         "schema": TRANSCRIPT_SCHEMA,
         "command": "get_execution_transcript",
         "task_id": task_id,
@@ -814,7 +815,7 @@ def get_execution_transcript(task_id: Any = "", *, execution_id: str = "",
             "control results; durable full-session capture lands with the single "
             "session transport (SIMPLIFY-9)."),
         "generated_at": time.time(),
-    }
+    })
 
 
 # --------------------------------------------------------------------------

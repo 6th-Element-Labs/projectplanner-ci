@@ -497,7 +497,8 @@ def run_background_job(project: str, job_name: str, *,
                        actor: str = "background_job") -> Dict[str, Any]:
     """Run or resume a catalog job with per-project step checkpoints."""
     spec = assert_job_boundary(job_name)
-    params = dict(params or {})
+    from switchboard.security import redact_provider_secrets
+    params = redact_provider_secrets(dict(params or {}))
     store.init_db(project)
 
     manifest: Dict[str, Any]

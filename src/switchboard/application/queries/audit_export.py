@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from constants import DEFAULT_PROJECT
 from db.core import _json_payload
 import evidence_claims
+from switchboard.security import redact_provider_secrets
 
 
 __all__ = [
@@ -50,6 +51,7 @@ _AUDIT_REDACT_KEYS = {
 
 
 def _audit_redact(value: Any) -> Any:
+    value = redact_provider_secrets(value)
     if isinstance(value, dict):
         out = {}
         for key, item in value.items():

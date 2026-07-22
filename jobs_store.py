@@ -68,12 +68,13 @@ def run_background_job(
 
     if not (job_name or "").strip():
         return {"error": "job_name required", "project": project}
+    from switchboard.security import redact_provider_secrets
     return background_jobs.run_background_job(
         project,
         job_name.strip(),
         run_id=run_id,
         resume=resume,
-        params=params if isinstance(params, dict) else {},
+        params=redact_provider_secrets(params if isinstance(params, dict) else {}),
         actor=actor,
     )
 
