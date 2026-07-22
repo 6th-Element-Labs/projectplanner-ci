@@ -4,6 +4,48 @@ Adapter packs make the Switchboard lifecycle automatic inside each runtime: hand
 presence, inbox, leases, dispatch, completion evidence, Tally, reconcile, and truthful control
 fidelity.
 
+## Install in one command
+
+Install a self-contained runtime bundle into an existing project (Python 3.10+; no package
+manager required):
+
+```bash
+python3 adapters/marketplace.py install claude-code --target /path/to/project
+python3 adapters/marketplace.py install codex --target /path/to/project
+python3 adapters/marketplace.py install cursor --target /path/to/project
+```
+
+The installer preserves unrelated Claude/Cursor configuration, writes the runtime assets below
+`.switchboard/adapters/`, and creates `.switchboard/adapter.env.example`. Copy that example into
+your secret-aware environment and set a scoped `PM_MCP_TOKEN`; never commit the real token.
+
+Available bundles also include `openai-loop`, `langgraph`, and `agent-host`:
+
+```bash
+python3 adapters/marketplace.py list
+python3 adapters/marketplace.py install langgraph --target .
+```
+
+The `agent-host` selection installs its config/manifest adoption profile only. Production Agent
+Host binaries must come from the server-issued signed enrollment bundle; the marketplace command
+does not bypass host verification or manufacture bootstrap credentials.
+
+Each install writes a machine-readable `.switchboard/<runtime>.json` manifest containing its
+honest control-fidelity profile. Claude Code is T2 when hooks are honored; Cursor and unwrapped
+Codex/raw loops are T1; LangGraph is T2 only when every relevant boundary is wrapped; the local
+Agent Host is T3 because it owns the managed process and runner-kill path.
+
+Verify any pack with the shared isolated conformance fixture:
+
+```bash
+python3 adapters/marketplace.py smoke claude-code
+python3 adapters/marketplace.py smoke codex
+python3 adapters/marketplace.py smoke cursor
+```
+
+The smoke command does not need live credentials and does not mutate a real board. After it
+passes, follow the selected runtime README for session start and any runtime-specific caveats.
+
 ## P0 Conformance
 
 Run the shared P0 smoke against an isolated throwaway board:
