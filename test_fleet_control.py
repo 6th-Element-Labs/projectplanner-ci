@@ -127,6 +127,9 @@ try:
        "applyProject scopes optional branding to #project-header")
     ok('>Fleet</h2>' in index.text and 'id="tab-fleet"' in index.text,
        "Fleet tab keeps its own page-title heading")
+    ok(index.text.index('id="fleet-runners-body"') < index.text.index('id="fleet-hosts-body"')
+       < index.text.index('id="fleet-wakes-body"'),
+       "Fleet puts live runners above hosts and wake intents")
 
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
