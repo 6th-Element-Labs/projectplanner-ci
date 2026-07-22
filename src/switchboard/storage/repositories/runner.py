@@ -345,7 +345,12 @@ def issue_direct_session_mcp_token(
         wake_id: str, host_id: str, runner_session_id: str, *,
         principal_id: str, actor: str = "agent-host",
         project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
-    """Issue one short-lived task agent bearer for an exact direct assignment."""
+    """Issue one short-lived task agent bearer for an exact native assignment.
+
+    Both legacy direct-task and Connect launches run under the enrolled host
+    until this bearer is minted.  Keep the host token narrow, and bind the
+    returned credential to the exact wake, host, runner, task, and agent.
+    """
     now = time.time()
     wake_id = str(wake_id or "").strip()
     host_id = str(host_id or "").strip()
@@ -370,14 +375,28 @@ def issue_direct_session_mcp_token(
         reasons = []
         if str(wake.get("status") or "") not in {"pending", "claimed", "completed"}:
             reasons.append("assignment_not_active")
-        if policy.get("mode") != "direct_task" or policy.get("execution_mode") != "direct_personal_cli":
+        direct = bool(
+            policy.get("mode") == "direct_task"
+            and policy.get("execution_mode") == "direct_personal_cli")
+        connect = bool(
+            policy.get("mode") == "connect"
+            and assignment.get("schema") == "switchboard.connect.assignment.v1")
+        if not (direct or connect):
             reasons.append("assignment_mode_mismatch")
-        if str(selector.get("host_id") or "") != host_id:
+        selected_host = str(
+            wake.get("claimed_by_host") if connect else selector.get("host_id") or "")
+        if selected_host != host_id:
             reasons.append("assignment_host_mismatch")
-        if str(assignment.get("host_id") or "") != host_id:
-            reasons.append("config_host_mismatch")
-        if str(assignment.get("task_id") or "") != str(wake.get("task_id") or ""):
-            reasons.append("config_task_mismatch")
+        if direct:
+            if str(assignment.get("host_id") or "") != host_id:
+                reasons.append("config_host_mismatch")
+            if str(assignment.get("task_id") or "") != str(wake.get("task_id") or ""):
+                reasons.append("config_task_mismatch")
+        else:
+            work_ref = str(assignment.get("work_ref") or "")
+            expected_work_ref = f"task:{project}:{wake.get('task_id') or ''}"
+            if work_ref != expected_work_ref:
+                reasons.append("config_task_mismatch")
         if runner_session_id != expected_runner:
             reasons.append("runner_session_mismatch")
         if not enrollment:

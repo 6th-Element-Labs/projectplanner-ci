@@ -19,8 +19,10 @@ os.environ["PM_DYNAMIC_PROJECTS_DIR"] = str(TMP)
 os.environ["PM_AUTH_MODE"] = "dev-open"
 
 import store  # noqa: E402
+import auth  # noqa: E402
 from db.connection import _conn  # noqa: E402
 from switchboard.application.commands import connect_dispatch  # noqa: E402
+from switchboard.domain.runner_pty import planned_runner_session_id  # noqa: E402
 
 
 P = "switchboard"
@@ -85,11 +87,20 @@ try:
         task, project=P, actor="bug127-test", runtime="codex")
     wake = next(row for row in store.list_wake_intents(project=P)
                 if row.get("wake_id") == dispatched.get("wake_id"))
-    run_id = "run_bug127_connect_native"
+    run_id = planned_runner_session_id(wake["wake_id"], HOST)
     claimed = store.claim_wake(
         HOST, wake["wake_id"], runner_session_id=run_id,
         principal_id=PRINCIPAL, actor=HOST, project=P)
     assignment = (claimed.get("wake") or wake).get("policy", {}).get("assignment", {})
+    issued = store.issue_direct_session_mcp_token(
+        wake["wake_id"], HOST, run_id, principal_id=PRINCIPAL,
+        actor=HOST, project=P)
+    session_principal = auth.principal_for_token_any_project(
+        issued.get("token") or "")
+    ok(issued.get("issued") is True
+       and (session_principal or {}).get("id") == f"direct-session/{run_id}"
+       and (session_principal or {}).get("bound_task_id") == task_id,
+       "claimed Connect wake mints an exact task-scoped session bearer")
     record = {
         "runner_session_id": run_id,
         "host_id": HOST,

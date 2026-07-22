@@ -134,7 +134,7 @@ def create_router(*, resolve_project: ProjectResolver,
     @router.post("/ixp/v1/direct_assignments/mcp_token")
     async def ixp_direct_assignment_mcp_token(
             request: Request, body: DirectAssignmentMCPTokenCommand = Body(...)):
-        """Give an exact direct CLI its short-lived task-scoped MCP bearer."""
+        """Give an exact native CLI its short-lived task-scoped MCP bearer."""
         payload = body.model_dump(by_alias=True)
         project = resolve_body_project(payload)
         principal = resolve_agent_host_principal(

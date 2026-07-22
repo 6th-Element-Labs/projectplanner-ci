@@ -85,6 +85,7 @@ P_CLAIM_RUNNER_CONTROL = "/ixp/v1/claim_runner_control"
 P_COMPLETE_RUNNER_CONTROL = "/ixp/v1/complete_runner_control"
 P_LIST_RUNNERS = "/ixp/v1/runner_sessions"
 P_LIST_WORK_SESSIONS = "/ixp/v1/work_sessions"
+P_DIRECT_SESSION_MCP_TOKEN = "/ixp/v1/direct_assignments/mcp_token"
 P_TALLY_SPEND = "/tally/v1/spend/ingest"
 MESSAGE_ONLY_LANE = "__MESSAGE_ONLY__"
 RUNTIME_PROVIDERS = {
@@ -824,6 +825,20 @@ def _connect_codex_mcp_argv():
     )
 
 
+def _issue_connect_session_mcp_token(wake, inventory, runner_session_id):
+    """Mint the task principal used by a Connect session's MCP client."""
+    result = sb._http("POST", P_DIRECT_SESSION_MCP_TOKEN, {
+        "project": PROJECT,
+        "wake_id": str(wake.get("wake_id") or ""),
+        "host_id": str(inventory.get("host_id") or ""),
+        "runner_session_id": str(runner_session_id or ""),
+    })
+    token = str((result or {}).get("token") or "").strip()
+    if (result or {}).get("issued") is not True or not token.startswith("dst-"):
+        raise RuntimeError("Connect Switchboard MCP authentication was denied")
+    return token
+
+
 def launch_command(wake, inventory, runner_session_id=""):
     """Build the supervisor command for a wake without executing it."""
     sel = wake.get("selector") or {}
@@ -982,11 +997,19 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
                 "SWITCHBOARD_CONNECT_LEASE_ID": str(wake.get("wake_id") or ""),
                 "SWITCHBOARD_CONNECT_RUNNER_ID": str(runner_session_id or ""),
             })
-            connect_token = str(
-                env.get("PM_MCP_TOKEN") or env.get("SWITCHBOARD_TOKEN") or ""
-            ).strip()
-            if connect_token:
-                env["SWITCHBOARD_CONNECT_SESSION_TOKEN"] = connect_token
+            # Never expose the enrolled host bearer to the child.  It only has
+            # host-management authority; the session receives an exact,
+            # short-lived task principal minted after claim_wake.  The session's
+            # pre-configured Switchboard MCP client reads its bearer from
+            # PM_MCP_TOKEN (bearer_token_env_var), so the minted principal MUST
+            # override the inherited host bearer there — otherwise the child
+            # still authenticates as the narrow host and register_agent/claims
+            # stay forbidden (the exact BUG-139 symptom).
+            session_token = _issue_connect_session_mcp_token(
+                wake, inventory, runner_session_id)
+            env["SWITCHBOARD_CONNECT_SESSION_TOKEN"] = session_token
+            env["PM_MCP_TOKEN"] = session_token
+            env.pop("SWITCHBOARD_TOKEN", None)
         env.update({str(k): str(v) for k, v in (extra_env or {}).items()})
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=20, env=env)
         if out.returncode != 0 or not (out.stdout or "").strip():
