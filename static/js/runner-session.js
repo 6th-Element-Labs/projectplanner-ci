@@ -417,15 +417,27 @@
                 resumeButton.onclick = () => this.resumeTaskReview(id, opts);
             }
             const missing = (watch && watch.missing || []).join(', ') || 'bind fields';
-            const detail = watch?.message
+            // WATCH-5: prefer the four-state panel (queued/starting/detached)
+            // over a generic bind-incomplete refusal when a wake is in flight.
+            const panel = (watch && watch.panel && typeof watch.panel === 'object')
+                ? watch.panel : null;
+            const panelState = String(panel?.state || '');
+            const detail = (panel && panel.detail)
+                || watch?.message
                 || `Runner bind incomplete for Watch/Chat (missing: ${missing})`;
             // BUG-91: when the run never started, the dispatcher's reason is the
             // useful thing to show ("capacity exhausted for co-general: cap=4").
             // "Runner session is stale" describes the debris, not the problem.
             const dispatch = watch?.dispatch || null;
-            const label = dispatch?.state || watch?.error_code || watch?.error
+            const label = panel?.label || dispatch?.state || watch?.error_code || watch?.error
                 || 'runner_bind_incomplete';
-            const badgeClass = dispatch?.state === 'needs_attention' ? 'bg-orange-lt' : 'bg-red-lt';
+            const badgeClass = panelState === 'queued' ? 'bg-azure-lt'
+                : panelState === 'starting' ? 'bg-blue-lt'
+                : panelState === 'detached' ? 'bg-yellow-lt'
+                : dispatch?.state === 'needs_attention' ? 'bg-orange-lt' : 'bg-red-lt';
+            const tone = (panelState === 'queued' || panelState === 'starting'
+                || panelState === 'detached'
+                || dispatch?.state === 'needs_attention') ? 'warning' : 'danger';
             let extra = '';
             if (dispatch && Number(dispatch.dispatch_attempt) > 1) {
                 extra += `<div class="mt-1 text-secondary">Dispatch attempt ${this.esc(String(dispatch.dispatch_attempt))}`
@@ -434,7 +446,7 @@
             this._runnerPtyGate(
                 `<span class="badge ${badgeClass} me-1">${this.esc(label)}</span>`
                 + this.esc(detail) + extra,
-                dispatch?.state === 'needs_attention' ? 'warning' : 'danger',
+                tone,
             );
             // COORD-44/SIMPLIFY-10: the refusal names the blocker; this is the
             // one repair action. Start and Retry are distinct service commands —
@@ -553,7 +565,20 @@
                     const state = await (await fetch(
                         `api/tasks/${encodeURIComponent(id)}/execution?${q}`,
                         { cache: 'no-store' })).json();
-                    if (state && state.running === true) {
+                    // WATCH-5: refresh the gate from the honest panel state while
+                    // polling — Queued must not look identical to Live.
+                    const panel = (state && state.panel) || {};
+                    if (panel.state === 'queued' || panel.state === 'starting'
+                            || panel.state === 'detached') {
+                        const badge = panel.state === 'queued' ? 'bg-azure-lt'
+                            : panel.state === 'starting' ? 'bg-blue-lt' : 'bg-yellow-lt';
+                        this._runnerPtyGate(
+                            `<span class="badge ${badge} me-1">${this.esc(panel.label || panel.state)}</span>`
+                            + this.esc(panel.detail || panel.state),
+                            'warning');
+                    }
+                    if (state && (state.running === true || panel.state === 'live'
+                            || panel.state === 'detached')) {
                         return this.openRunnerSessionPanel(id, opts);
                     }
                 } catch (e) { /* transient; keep polling the authoritative projection */ }
@@ -873,10 +898,26 @@
             const live = document.getElementById('runner-pty-live');
             if (live) live.hidden = !rp.hostAttached;
             if (rp.hostAttached) {
-                this._runnerPtyGate('Connected to Agent Host — waiting for output…', 'secondary');
+                const liveBadge = document.getElementById('runner-pty-live');
+                if (liveBadge) {
+                    liveBadge.hidden = false;
+                    liveBadge.innerHTML = '<span class="status-dot status-dot-animated bg-green me-1"></span>Live';
+                }
+                this._runnerPtyGate(
+                    '<span class="badge bg-green-lt me-1">Live</span>Connected to Agent Host — waiting for output…',
+                    'secondary');
                 this._runnerPtySendResize();
             } else {
-                this._runnerPtyGate('Relay connected — waiting for Agent Host…', 'warning');
+                // WATCH-5: explicit host_attached=false is Detached, not a vague wait.
+                const liveBadge = document.getElementById('runner-pty-live');
+                if (liveBadge) {
+                    liveBadge.hidden = false;
+                    liveBadge.className = 'badge bg-yellow-lt mt-2';
+                    liveBadge.innerHTML = '<span class="status-dot status-dot-animated bg-yellow me-1"></span>Detached';
+                }
+                this._runnerPtyGate(
+                    '<span class="badge bg-yellow-lt me-1">Detached</span>Bridge detached — reconnecting to the host tunnel…',
+                    'warning');
             }
         } else if (type === 'ready' && frame.request_id) {
             // Delivery ack for Watch chat (replaces legacy control_ack).

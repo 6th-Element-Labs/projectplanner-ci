@@ -122,6 +122,10 @@ def resolve_watch(
         return runner_repo.runner_bind_incomplete(["task_id"], task_id=task_id) | {
             "message": "task not found", "task_session": None,
         }
+    # WATCH-5: surface the same four-state panel projection the task card uses.
+    from switchboard.application.commands import task_execution as task_execution_cmd
+    panel = task_execution_cmd._panel_projection(
+        projection, project=project or DEFAULT_PROJECT)
     session = projection.get("active_runner")
     if session:
         # WATCH-4: the live relay attachment state is the primary liveness signal.
@@ -133,14 +137,22 @@ def resolve_watch(
         verdict = runner_repo.assert_runner_watchable(
             session, host_attached=host_attached)
         return {**verdict, "sessions": [session], "enough_for_panel": True,
-                "task_session": projection}
+                "task_session": projection, "panel": panel}
     outcome = projection.get("last_dispatch_outcome") or {}
     attempt_runner = ((projection.get("active_attempt") or {}).get("runner"))
+    # Prefer WATCH-5 panel detail over the generic bind-incomplete message when
+    # the wake is still queued/starting — that is the operator-facing truth.
+    message = (
+        panel.get("detail")
+        if panel.get("state") in {"queued", "starting"}
+        else (outcome.get("message") or "No live runner is registered for this task")
+    )
     return runner_repo.runner_bind_incomplete(
         list(runner_repo.RUNNER_BIND_FIELDS), task_id=task_id) | {
-        "message": outcome.get("message") or "No live runner is registered for this task",
+        "message": message,
         "sessions": [attempt_runner] if attempt_runner else [],
         "enough_for_panel": False, "task_session": projection,
+        "panel": panel,
         **({"dispatch": outcome} if outcome else {}),
     }
 

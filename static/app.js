@@ -2076,23 +2076,36 @@ const TeepPlan = {
             const runner = (data.execution && data.execution.active_runner) || {};
             const activeHost = (data.execution && data.execution.active_host) || {};
             const hostId = runner.host_id || activeHost.host_id || 'your enrolled host';
-            if (data.running === true) {
+            // WATCH-5: prefer the server panel.state (queued/starting/live/detached)
+            // over the coarse starting/running booleans so the card never lies.
+            const panel = (data.panel && typeof data.panel === 'object') ? data.panel : {};
+            const panelState = String(panel.state || '');
+            if (data.running === true || panelState === 'live' || panelState === 'detached') {
                 const liveRunnerId = String(data.execution_id || runner.runner_session_id || '');
                 const previousRunnerId = String(root.dataset.runnerSessionId || '');
                 root.dataset.runnerSessionId = liveRunnerId;
                 const blocked = taskStatus === 'Blocked';
-                root.dataset.sessionState = blocked ? 'blocked-live' : 'running';
-                badge.className = 'badge bg-green-lt';
-                badge.innerHTML = '<span class="status-dot status-dot-animated bg-green me-1"></span>Agent live';
-                title.textContent = blocked ? 'Blocked, agent still live' : 'Codex is working';
+                const detached = panelState === 'detached';
+                root.dataset.sessionState = blocked ? 'blocked-live'
+                    : (detached ? 'detached' : 'running');
+                badge.className = `badge bg-${detached ? 'yellow' : 'green'}-lt`;
+                badge.innerHTML = detached
+                    ? '<span class="status-dot status-dot-animated bg-yellow me-1"></span>Detached'
+                    : '<span class="status-dot status-dot-animated bg-green me-1"></span>Live';
+                title.textContent = blocked ? 'Blocked, agent still live'
+                    : (detached ? 'Bridge detached' : 'Codex is working');
+                const panelDetail = String(panel.detail || '').trim();
                 state.innerHTML = blocked
                     ? `This task is blocked, but <span class="font-monospace">${this.esc(liveRunnerId)}</span> is still live on ${this.esc(hostId)}. Tell it how to repair the gate.`
+                    : detached
+                    ? this.esc(panelDetail || `Bridge detached on ${hostId} — reconnecting`)
                     : `<span class="font-monospace">${this.esc(liveRunnerId)}</span> on ${this.esc(hostId)} · connected to Switchboard`;
                 start.hidden = true;
                 setHidden(retry, true);
                 resumeReview.hidden = true;
                 watchHere.hidden = false;
-                watchHere.querySelector('span').textContent = blocked ? 'Talk to agent' : 'Watch live';
+                watchHere.querySelector('span').textContent = blocked ? 'Talk to agent'
+                    : (detached ? 'Reconnect Watch' : 'Watch live');
                 watchHere.querySelector('i').className = `ti ti-${blocked ? 'message-circle' : 'terminal-2'} me-1`;
                 watchSidecar.hidden = false;
                 setHidden(stop, false);
@@ -2105,19 +2118,27 @@ const TeepPlan = {
             } else {
                 root.dataset.runnerSessionId = '';
                 const starting = data.starting === true;
+                const queued = panelState === 'queued';
+                const startingExact = panelState === 'starting' || (starting && !queued);
                 const resumableReview = data.resumable_review === true;
                 const hasEndedSession = data.has_ended_session === true;
-                root.dataset.sessionState = starting ? 'starting'
+                root.dataset.sessionState = queued ? 'queued'
+                    : startingExact ? 'starting'
                     : resumableReview ? 'review-stale' : (hasEndedSession ? 'ended' : 'ready');
-                badge.className = `badge bg-${starting ? 'blue' : resumableReview ? 'yellow' : (hasEndedSession ? 'red' : 'secondary')}-lt`;
-                badge.textContent = starting ? 'Starting…'
+                badge.className = `badge bg-${queued ? 'azure' : startingExact ? 'blue' : resumableReview ? 'yellow' : (hasEndedSession ? 'red' : 'secondary')}-lt`;
+                badge.textContent = queued ? 'Queued'
+                    : startingExact ? 'Starting…'
                     : resumableReview ? 'In Review · runner stopped'
                     : (hasEndedSession ? 'Runner stopped' : 'Ready');
-                title.textContent = starting ? 'Starting a session'
+                title.textContent = queued ? 'Queued for a host'
+                    : startingExact ? 'Starting a session'
                     : resumableReview ? 'Review runner stopped'
                     : (hasEndedSession ? 'Task runner stopped' : 'Ready for an agent');
-                state.textContent = starting
-                    ? 'A session is starting. The live terminal opens as soon as the runner binds.'
+                const panelDetail = String(panel.detail || '').trim();
+                state.textContent = queued
+                    ? (panelDetail || 'Wake is pending — waiting for host capacity.')
+                    : startingExact
+                    ? (panelDetail || 'A session is starting. The live terminal opens as soon as the runner binds.')
                     : resumableReview
                     ? 'The task remains In Review. Start one agent; the ended run stays in history.'
                     : hasEndedSession
