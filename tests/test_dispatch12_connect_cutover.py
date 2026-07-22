@@ -202,8 +202,16 @@ for row in captured:
     }
     command, mode = agent_host.launch_command(
         wake, inventory, runner_session_id="run-host-test")
-    ok(mode == "connect" and "Use the Switchboard connection already configured" in command[-1],
-       f"{runtime} host launch is content-blind and uses installed communication config")
+    note = next((part for part in reversed(command)
+                 if isinstance(part, str) and "via Switchboard" in part), "")
+    ok(mode == "connect" and "Do DISPATCH-12 in project" in note
+       and "via Switchboard" in note
+       and "prepare_agent_session" in note,
+       f"{runtime} host launch uses the via-Switchboard MCP boot note")
+    if runtime == "codex":
+        ok("mcp_servers.taikun_plan.required=true" in command
+           and "SWITCHBOARD_CONNECT_SESSION_TOKEN" in " ".join(command),
+           "codex Connect requires host taikun_plan MCP at launch")
 
 codex_row = captured[0]
 wrong_provider_inventory = {

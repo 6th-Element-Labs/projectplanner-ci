@@ -68,6 +68,10 @@ ok("exec" not in child,
    f"(argv={child[:3]})")
 ok("--dangerously-bypass-approvals-and-sandbox" in child,
    "codex keeps the sandbox/approval bypass for autonomous work")
+ok("mcp_servers.taikun_plan.required=true" in child
+   and any("Do WATCH-10 in project switchboard via Switchboard." in part
+           for part in child if isinstance(part, str)),
+   "codex Connect boots with required MCP and the via-Switchboard note")
 
 claude_cmd, _ = agent_host.launch_command(
     connect_wake("claude-code"), inventory, runner_session_id="run_interactive2")

@@ -46,15 +46,32 @@ class LaunchSpec:
         return dict(self.environment)
 
 
+def _via_switchboard_instruction(work_ref: str) -> str:
+    """Format the same boot sentence Direct/local workers already use.
+
+    ``work_ref`` stays opaque for Connect routing.  When it follows the
+    conventional ``task:{project}:{task_id}`` shape, render the familiar
+    ``Do {task} in project {project} via Switchboard.`` line; otherwise keep
+    the opaque ref in that sentence.
+    """
+
+    parts = str(work_ref or "").split(":")
+    if len(parts) == 3 and parts[0] == "task" and parts[1] and parts[2]:
+        return f"Do {parts[2]} in project {parts[1]} via Switchboard."
+    return f"Do {work_ref} via Switchboard."
+
+
 def assignment_note(ack: Ack) -> str:
     """The complete, intentionally tiny note given to a newly booted agent."""
 
     assignment = ack.assignment
     return (
-        f"You are {assignment.principal_ref}, running assignment "
-        f"{assignment.assignment_id} for {assignment.work_ref}. "
-        "Use the Switchboard connection already configured on this host. "
-        "Work end to end. Exit when finished or genuinely blocked."
+        "Switchboard assigned execution identity: "
+        f"agent_id={assignment.principal_ref}; "
+        f"assignment_id={assignment.assignment_id}. "
+        "Use this exact agent_id for prepare_agent_session, register_agent, "
+        "claims, and Work Sessions. Do not derive, slugify, or replace it.\n"
+        f"{_via_switchboard_instruction(assignment.work_ref)}"
     )
 
 

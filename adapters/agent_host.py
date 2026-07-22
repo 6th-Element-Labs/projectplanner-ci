@@ -807,6 +807,23 @@ def active_codex_cloud_session_count():
     return active
 
 
+def _connect_mcp_endpoint():
+    """Public MCP URL the host already uses for Switchboard Communicate."""
+    base = str(os.environ.get("PM_BASE") or "https://plan.taikunai.com").rstrip("/")
+    return f"{base}/mcp"
+
+
+def _connect_codex_mcp_argv():
+    """Codex -c overrides that require host Communicate for Connect sessions."""
+    endpoint = _connect_mcp_endpoint()
+    return (
+        "-c", f"mcp_servers.taikun_plan.url={json.dumps(endpoint)}",
+        "-c", 'mcp_servers.taikun_plan.bearer_token_env_var='
+              '"SWITCHBOARD_CONNECT_SESSION_TOKEN"',
+        "-c", "mcp_servers.taikun_plan.required=true",
+    )
+
+
 def launch_command(wake, inventory, runner_session_id=""):
     """Build the supervisor command for a wake without executing it."""
     sel = wake.get("selector") or {}
@@ -858,6 +875,11 @@ def launch_command(wake, inventory, runner_session_id=""):
             f"PM_CONNECT_{runtime_key}_EXECUTABLE", executable_default)).strip()
         before = tuple(shlex.split(str(os.environ.get(
             f"PM_CONNECT_{runtime_key}_ARGS", args_default))))
+        # Host-side Communicate attachment (not Connect assignment content):
+        # require the same taikun_plan MCP surface Direct already uses so
+        # "via Switchboard" means MCP tools, not improvised REST/curl.
+        if runtime == "codex":
+            before = before + _connect_codex_mcp_argv()
         config = HostRuntimeConfig(
             runtime=runtime,
             provider=assignment.provider,
@@ -960,6 +982,11 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
                 "SWITCHBOARD_CONNECT_LEASE_ID": str(wake.get("wake_id") or ""),
                 "SWITCHBOARD_CONNECT_RUNNER_ID": str(runner_session_id or ""),
             })
+            connect_token = str(
+                env.get("PM_MCP_TOKEN") or env.get("SWITCHBOARD_TOKEN") or ""
+            ).strip()
+            if connect_token:
+                env["SWITCHBOARD_CONNECT_SESSION_TOKEN"] = connect_token
         env.update({str(k): str(v) for k, v in (extra_env or {}).items()})
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=20, env=env)
         if out.returncode != 0 or not (out.stdout or "").strip():
