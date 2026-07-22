@@ -106,7 +106,7 @@ try:
     healthy = _wait_healthy()
     ok(healthy, "app.py boots and /health responds (required auth, throwaway DB)")
     index_html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
-    ok('js/runner-session.js?v=11' in index_html and 'app.js?v=57' in index_html,
+    ok('js/runner-session.js?v=12' in index_html and 'app.js?v=57' in index_html,
        "the deployed shell invalidates pre-Resume-review runner and modal assets")
     if not healthy:
         raise SystemExit("server did not become healthy — aborting")
@@ -443,6 +443,37 @@ try:
            "reconnecting does not rebuild the Terminal/ResizeObserver (UI-24 review fix: this used to "
            "discard scrollback and leak the old ResizeObserver on every drop)")
         ok(reused["line0"] == "UI-24 PLAYWRIGHT OK", "scrollback from before the simulated reconnect is still there")
+
+        viewport = page.evaluate("""
+            async () => {
+                const rp = TeepPlan._runnerPty;
+                rp.term.write(Array.from({length: 80}, (_, i) => `history-${i}\\r\\n`).join(''));
+                await new Promise((resolve) => setTimeout(resolve, 30));
+                rp.term.scrollToBottom();
+                TeepPlan._runnerPtyWritePreservingViewport(rp, 'live-at-bottom\\r\\n');
+                await new Promise((resolve) => setTimeout(resolve, 30));
+                const followed = rp.term.buffer.active.viewportY === rp.term.buffer.active.baseY;
+                rp.term.scrollToLine(Math.max(0, rp.term.buffer.active.baseY - 8));
+                const before = rp.term.buffer.active.viewportY;
+                TeepPlan._runnerPtyWritePreservingViewport(
+                    rp, '\\x1b[Hreplay repaint\\r\\nnew output\\r\\n');
+                await new Promise((resolve) => setTimeout(resolve, 30));
+                const after = rp.term.buffer.active.viewportY;
+                const affordance = document.getElementById('runner-pty-new-output');
+                const shown = !affordance.hidden;
+                affordance.click();
+                return {
+                    followed, before, after, shown,
+                    clickedBottom: rp.term.buffer.active.viewportY === rp.term.buffer.active.baseY,
+                    hiddenAfterClick: affordance.hidden,
+                };
+            }
+        """)
+        ok(viewport["followed"], "live output stays pinned when the operator is following at the bottom")
+        ok(viewport["before"] == viewport["after"] and viewport["shown"],
+           "replay preserves a scrolled-up reader's line and shows New output below")
+        ok(viewport["clickedBottom"] and viewport["hiddenAfterClick"],
+           "New output below returns to the live tail and dismisses itself")
 
         # BUG-125 + WATCH-5: a WebSocket to the relay is not proof that the
         # Agent Host tunnel exists. host_attached=false is Detached (honest);

@@ -202,6 +202,7 @@
             live: document.getElementById('runner-pty-live'),
             gate: document.getElementById('runner-pty-gate'),
             termMount: document.getElementById('runner-pty-term'),
+            newOutput: document.getElementById('runner-pty-new-output'),
             toggleDock: document.getElementById('runner-pty-toggle-dock'),
             close: document.getElementById('runner-pty-close'),
             chatWrap: document.getElementById('runner-pty-chat'),
@@ -219,6 +220,12 @@
         if (els.close) els.close.addEventListener('click', () => this._runnerPtyClose());
         if (els.scrim) els.scrim.addEventListener('click', () => this._runnerPtyClose());
         if (els.toggleDock) els.toggleDock.addEventListener('click', () => this._runnerPtyToggleDock());
+        if (els.newOutput) els.newOutput.addEventListener('click', () => {
+            const rp = this._runnerPty;
+            if (!rp || !rp.term) return;
+            rp.term.scrollToBottom();
+            els.newOutput.hidden = true;
+        });
         if (els.chatSend) els.chatSend.addEventListener('click', () => this._runnerPtySendChat('freeform'));
         if (els.chatInput) els.chatInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.isComposing) {
@@ -764,6 +771,11 @@
         // that are not UTF-8. Preserve those byte values instead of sending
         // them through TextEncoder.
         term.onBinary((data) => this._runnerPtySendBinary(data));
+        term.onScroll(() => {
+            const active = term.buffer && term.buffer.active;
+            const newOutput = this._runnerPtyEls().newOutput;
+            if (active && newOutput && active.viewportY >= active.baseY) newOutput.hidden = true;
+        });
         rp.term = term;
         rp.fitAddon = fitAddon;
         rp.followOutput = true;
@@ -776,30 +788,29 @@
         });
         rp.resizeObserver.observe(els.termMount);
         // Track whether the operator is following the live tail so snapshot /
-        // reconnect bursts can restore that intent (BUG-135).
+        // reconnect bursts can restore that intent (BUG-135). Compute from the
+        // buffer itself — assigning from _runnerPtyIsFollowing here was circular
+        // (the helper returned the flag), leaving followOutput stuck true and
+        // force-scrolling scrolled-up readers on every write (BUG-134).
         try {
             term.onScroll(() => {
-                rp.followOutput = this._runnerPtyIsFollowing(rp);
+                try {
+                    const buf = rp.term.buffer.active;
+                    rp.followOutput = buf.viewportY >= (buf.baseY - 1);
+                } catch (e) { /* keep the last known intent */ }
             });
         } catch (e) { /* older xterm builds may omit onScroll */ }
     },
 
     _runnerPtyIsFollowing(rp) {
+        // Live buffer position is the truth; the tracked flag only covers the
+        // brief window where the buffer is unreadable (teardown, older xterm).
         if (!rp || !rp.term) return true;
-        if (typeof rp.followOutput === 'boolean') return rp.followOutput;
         try {
             const buf = rp.term.buffer.active;
             return buf.viewportY >= (buf.baseY - 1);
         } catch (e) {
-            return true;
-        }
-    },
-
-    _runnerPtyPreserveViewportAfterWrite(rp, wasFollowing) {
-        if (!rp || !rp.term) return;
-        if (wasFollowing) {
-            try { rp.term.scrollToBottom(); } catch (e) { /* ignore */ }
-            rp.followOutput = true;
+            return typeof rp.followOutput === 'boolean' ? rp.followOutput : true;
         }
     },
 
@@ -893,6 +904,28 @@
         rp.ws.send(this._runnerPtyEncodeFrame('resize', { rows: rp.term.rows, cols: rp.term.cols }));
     },
 
+    _runnerPtyWritePreservingViewport(rp, data) {
+        // BUG-134 + BUG-135 unified: the sticky follow flag (updated by the
+        // BUG-135 onScroll tracker) decides intent during rapid write bursts;
+        // the write CALLBACK restores position only after xterm has parsed the
+        // data, so a repaint can never yank the viewport in between.
+        if (!rp || !rp.term) return;
+        const active = rp.term.buffer && rp.term.buffer.active;
+        const viewportY = active ? active.viewportY : 0;
+        const atBottom = this._runnerPtyIsFollowing(rp);
+        rp.term.write(data, () => {
+            if (this._runnerPty !== rp || !rp.term) return;
+            if (atBottom) {
+                rp.term.scrollToBottom();
+                rp.followOutput = true;
+            } else {
+                rp.term.scrollToLine(viewportY);
+                const newOutput = this._runnerPtyEls().newOutput;
+                if (newOutput) newOutput.hidden = false;
+            }
+        });
+    },
+
     _runnerPtyOpenSocket(rp, relayUrl, reconnecting) {
         let ws;
         try {
@@ -913,7 +946,8 @@
                 // since the terminal (unlike before) kept its prior
                 // scrollback, replay's tail can overlap what's already on
                 // screen — mark the seam instead of leaving it unexplained.
-                rp.term.write('\r\n\x1b[2m─── reconnected ───\x1b[0m\r\n');
+                this._runnerPtyWritePreservingViewport(
+                    rp, '\r\n\x1b[2m─── reconnected ───\x1b[0m\r\n');
             }
             const live = document.getElementById('runner-pty-live');
             if (live) live.hidden = true;
@@ -945,12 +979,11 @@
         const type = frame.type;
         if (type === 'out' || type === 'snapshot') {
             if (!frame.data || !rp.term) return;
-            // BUG-135: snapshot/reconnect bursts used to yank the viewport to
-            // the top of scrollback. Preserve follow-tail; leave a scrolled-up
-            // operator where they were.
-            const following = this._runnerPtyIsFollowing(rp);
-            rp.term.write(frame.data);
-            this._runnerPtyPreserveViewportAfterWrite(rp, following);
+            // BUG-134 + BUG-135: snapshot/reconnect bursts used to yank the
+            // viewport. Follow-tail stays pinned to the bottom; a scrolled-up
+            // reader keeps their exact line and gets the "New output below"
+            // affordance instead of losing their place.
+            this._runnerPtyWritePreservingViewport(rp, frame.data);
             this._runnerPtyGate('', 'secondary');
         } else if (type === 'exit') {
             this._runnerPtyGate(`Session closed: ${this.esc(frame.reason || frame.detail || 'ended')}`, 'secondary');

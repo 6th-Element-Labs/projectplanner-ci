@@ -891,7 +891,7 @@
     <script src="js/plan-chat.js?v=1"></script>
     <script src="js/closure.js?v=1"></script>
     <script src="js/mission.js?v=4"></script>
-    <script src="js/runner-session.js?v=11"></script>
+    <script src="js/runner-session.js?v=12"></script>
     <script src="js/proof-console.js?v=1"></script>
     <script src="js/project-admin.js?v=1"></script>
     <script src="js/settings.js?v=2"></script>
@@ -1184,6 +1184,8 @@
                 <div class="small text-secondary mt-2" id="runner-pty-resume-note">Starts one replacement Codex runner and preserves this ended run as history.</div>
             </div>
             <div id="runner-pty-term" style="flex:1;min-height:16rem;border-radius:.5rem;overflow:hidden"></div>
+            <button type="button" class="btn btn-sm btn-primary align-self-end mt-2"
+                    id="runner-pty-new-output" hidden>New output below&nbsp; ↓</button>
             <div class="mt-2" id="runner-pty-chat">
                 <div class="small text-secondary mb-1">Message the live agent</div>
                 <div class="input-group input-group-sm">
