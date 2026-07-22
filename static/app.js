@@ -757,6 +757,7 @@ const TeepPlan = {
         const p = (prs || []).map((x) => [
             x.number || 0, x.ci_state || '', x.mergeable_state || '',
             x.queue_position || 0, x.blocked ? 1 : 0, x.updated_at || 0,
+            x.draft ? 1 : 0, x.stalled ? 1 : 0, x.auto_merge ? 1 : 0, (x.ci_failing || [])[0] || '',
         ]).sort((a, b) => Number(a[0]) - Number(b[0]));
         return JSON.stringify([r, p]);
     },
@@ -934,9 +935,14 @@ const TeepPlan = {
         }
         return taskId || 'task';
     },
-    _dockBadge(text, tone, icon) {
-        const i = icon ? `<i class="ti ti-${icon} me-1"></i>` : '';
-        return `<span class="badge bg-${tone}-lt">${i}${this.esc(text)}</span>`;
+    // The dock is 380px wide and one label — the failing check name — comes from GitHub, so it can
+    // be arbitrarily long ("Switchboard CI / VM gate (ubuntu-latest, py3.12)"). The chip ellipsises
+    // instead of clipping mid-word, and keeps the full text in its tooltip.
+    _dockBadge(text, tone, icon, title) {
+        const i = icon ? `<i class="ti ti-${icon} me-1" style="flex:none;"></i>` : '';
+        return `<span class="badge bg-${tone}-lt d-inline-flex align-items-center text-truncate"`
+            + ` style="min-width:0;max-width:100%;"${title ? ` title="${this.esc(title)}"` : ''}>`
+            + `${i}<span class="text-truncate">${this.esc(text)}</span></span>`;
     },
     _dockRunnerHtml(s) {
         const actions = s.available_actions || [];
@@ -971,34 +977,57 @@ const TeepPlan = {
             </div>
         </div>`;
     },
+    // A PR is usually several things at once (red CI *and* conflicting *and* draft). Rank every
+    // condition that holds by how much it blocks the merge and return them worst-first, so the card
+    // can show one authoritative chip instead of a badge strip whose contents move around. The
+    // ladder deliberately outranks `draft` with every real problem: a broken build on a draft is
+    // still a broken build, and burying it under "Draft" is what made the old strip unscannable.
+    _prConditions(x) {
+        const out = [];
+        // GitHub check names are often workflow-qualified ("Switchboard CI / VM gate"); the job name
+        // is the part that identifies the failure, and the full name stays in the chip's tooltip.
+        const failing = String((x.ci_failing || [])[0] || '').split(' / ').pop().trim();
+        if (x.ci_state === 'failure') {
+            out.push({ key: 'ci_failed', label: failing ? `${failing} failed` : 'CI failed',
+                       tone: 'red', icon: 'x', title: (x.ci_failing || [])[0] || '' });
+        }
+        if (x.mergeable_state === 'dirty') out.push({ key: 'conflicts', label: 'Conflicts', tone: 'yellow', icon: 'git-merge' });
+        if (x.mergeable_state === 'blocked') out.push({ key: 'merge_blocked', label: 'Merge blocked', tone: 'yellow', icon: 'lock' });
+        if (x.ci_state === 'pending') out.push({ key: 'checks_running', label: 'Checks running', tone: 'yellow', icon: 'loader' });
+        if (x.queue_position) out.push({ key: 'queued', label: `Queued #${x.queue_position}`, tone: 'azure', icon: 'clock' });
+        else if (x.auto_merge) out.push({ key: 'auto_merge', label: 'Auto-merge armed', tone: 'azure', icon: 'clock' });
+        // Stalled ranks above "ready" on purpose: a green PR nobody has touched in days is the
+        // green-but-stuck case the dock already raises its red pill for, so it must be visible on
+        // the card face rather than buried in the footer line it used to live in.
+        if (x.stalled) out.push({ key: 'stalled', label: `Stalled ${this._fleetAge(x.updated_at)}`, tone: 'yellow', icon: 'zzz' });
+        if (x.ci_state === 'success' && x.mergeable_state !== 'dirty' && x.mergeable_state !== 'blocked') {
+            out.push({ key: 'ready', label: 'Ready to merge', tone: 'green', icon: 'check' });
+        }
+        if (x.draft) out.push({ key: 'draft', label: 'Draft', tone: 'secondary', icon: 'pencil' });
+        if (x.ci_state !== 'success' && x.ci_state !== 'failure' && x.ci_state !== 'pending') {
+            out.push({ key: 'no_checks', label: 'No checks', tone: 'secondary', icon: 'minus' });
+        }
+        if (!out.length) out.push({ key: 'open', label: 'Open', tone: 'secondary', icon: 'git-pull-request' });
+        return out;
+    },
     _dockPrHtml(x) {
-        const badges = [];
-        if (x.ci_state === 'failure') badges.push(this._dockBadge((x.ci_failing || [])[0] ? `${(x.ci_failing || [])[0]} failed` : 'checks failed', 'red', 'x'));
-        else if (x.ci_state === 'pending') badges.push(this._dockBadge('checks running', 'yellow', 'clock'));
-        else if (x.ci_state === 'success') badges.push(this._dockBadge('checks pass', 'green', 'check'));
-        else badges.push(this._dockBadge('no checks', 'secondary'));
-        if (x.mergeable_state === 'dirty') badges.push(this._dockBadge('conflicts', 'yellow'));
-        else if (x.mergeable_state === 'blocked') badges.push(this._dockBadge('merge blocked', 'secondary'));
-        if (x.queue_position) badges.push(this._dockBadge(`queued #${x.queue_position}`, 'azure'));
-        else if (x.auto_merge) badges.push(this._dockBadge('auto-merge armed', 'azure'));
+        // Winner takes the fixed top-left slot and tints the card's left edge; the runner-up gets a
+        // single muted outline chip so a second problem is never lost, but can't compete for the eye.
+        const [primary, secondary] = this._prConditions(x);
+        const accent = `var(--tblr-${primary.tone}, var(--tblr-secondary, #626976))`;
         const tasks = (x.tasks || []).length
             ? (x.tasks || []).map((t) => `${this.esc(t.task_id)}${t.status ? ` (${this.esc(t.status)})` : ''}`).join(', ')
             : '';
-        const stateTone = x.draft ? 'secondary' : 'green';
-        const stall = x.stalled ? ` · no activity ${this._fleetAge(x.updated_at)}` : '';
-        return `<div class="p-2 border rounded mb-2">
+        return `<div class="p-2 border rounded mb-2" style="border-left:2px solid ${accent} !important;border-top-left-radius:0;border-bottom-left-radius:0;">
             <div class="d-flex align-items-center gap-2">
-                <span class="badge bg-${stateTone}-lt"><i class="ti ti-git-pull-request me-1"></i>${x.draft ? 'Draft' : 'Open'}</span>
-                <span class="text-secondary font-monospace" style="font-size:12px;">#${this.esc(String(x.number))}</span>
-                <span class="ms-auto text-secondary small">${this.esc(this._fleetAge(x.updated_at))}</span>
+                ${this._dockBadge(primary.label, primary.tone, primary.icon, primary.title)}
+                ${secondary ? `<span class="badge bg-transparent border text-secondary" style="flex:none;">+ ${this.esc(secondary.label)}</span>` : ''}
+                <span class="ms-auto text-secondary font-monospace" style="font-size:12px;flex:none;white-space:nowrap;">#${this.esc(String(x.number))} · ${this.esc(this._fleetAge(x.updated_at))}</span>
             </div>
             <a href="${this.esc(x.url)}" target="_blank" rel="noopener" class="d-block mt-1 text-reset text-truncate" style="font-size:13px;">${this.esc(x.title || `PR #${x.number}`)} <i class="ti ti-external-link text-secondary" style="font-size:12px;"></i></a>
-            <div class="mt-1 d-flex flex-wrap gap-1 align-items-center">
-                ${badges.join('')}
-                <span class="ms-auto font-monospace" style="font-size:11px;"><span class="text-green">+${this.esc(String(x.additions || 0))}</span> <span class="text-red">−${this.esc(String(x.deletions || 0))}</span></span>
-                <span class="badge bg-secondary-lt">${this.esc(String(x.changed_files || 0))} files</span>
+            <div class="mt-1 text-secondary text-truncate font-monospace" style="font-size:11px;">
+                <span class="text-green">+${this.esc(String(x.additions || 0))}</span> <span class="text-red">−${this.esc(String(x.deletions || 0))}</span> · ${this.esc(String(x.changed_files || 0))} files · ${tasks ? tasks : 'no board task'} · ${this.esc(x.author || '')}
             </div>
-            <div class="text-secondary text-truncate" style="font-size:12px;">${tasks ? tasks : `<span class="badge bg-secondary-lt">no board task</span>`} · ${this.esc(x.author || '')}${this.esc(stall)}</div>
         </div>`;
     },
     _renderFleetDock(runners, prs) {
