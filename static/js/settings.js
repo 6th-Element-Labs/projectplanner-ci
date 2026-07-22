@@ -52,6 +52,7 @@
         },
         {
             id: 'ops', group: 'Operations', items: [
+                { id: 'ai-governance', label: 'AI spend controls', icon: 'ti-shield-dollar', scope: 'write:system' },
                 { id: 'fleet', label: 'Fleet & runners', icon: 'ti-server-bolt', scope: 'write:system' },
                 { id: 'capacity', label: 'Capacity & box pressure', icon: 'ti-gauge', scope: 'write:system' },
                 { id: 'narration', label: 'Narration', icon: 'ti-broadcast', scope: 'write:system' },
@@ -215,6 +216,7 @@
                 case 'comms': return this._settingsCommsSection();
                 case 'github': return this._settingsGithubSection();
                 case 'tokens': return this._settingsTokensSection();
+                case 'ai-governance': return this._settingsAiGovernanceSection();
                 case 'fleet': return this._settingsFleetSection();
                 case 'capacity': return this._settingsCapacitySection();
                 case 'narration': return this._settingsNarrationSection();
@@ -1379,6 +1381,98 @@
 
         /* ---- Operations ---------------------------------------------------- */
 
+        async _settingsAiGovernanceSection() {
+            const proj = window.PM_PROJECT || 'maxwell';
+            const data = await this._sfetch(`api/projects/${encodeURIComponent(proj)}/ai-governance`);
+            if (data.error) return this._settingsErrCard('AI spend controls', data.error);
+            this._settingsAiGovernance = data;
+            const stopped = !!data.new_spend_disabled;
+            const principals = data.principals || [];
+            const rows = principals.length ? principals.map((p) => this._settingsAiPrincipalRow(p)).join('')
+                : '<tr><td colspan="7" class="text-secondary text-center py-3">No principals have an AI allowance.</td></tr>';
+            const denials = (data.recent_denials || []).length
+                ? `<div class="list-group list-group-flush">${data.recent_denials.slice(0, 10).map((d) => `<div class="list-group-item px-0 py-2"><div class="d-flex align-items-center"><code>${this.esc(d.principal_id || '—')}</code><span class="badge bg-red-lt ms-2">${this.esc(d.reason || d.code || 'denied')}</span><span class="text-secondary small ms-auto">${this.esc(d.entry_point || '')}</span></div><div class="small text-secondary mt-1">${this.esc(d.message || '')}</div></div>`).join('')}</div>`
+                : '<div class="text-secondary small">No recent denials.</div>';
+            const stopButton = stopped
+                ? '<button class="btn btn-success btn-sm" type="button" data-set-action="ai-governance-enable"><i class="ti ti-player-play me-1"></i>Allow new spend</button>'
+                : '<button class="btn btn-danger btn-sm" type="button" data-set-action="ai-governance-disable"><i class="ti ti-player-stop me-1"></i>Stop new spend</button>';
+            return this._settingsCard({
+                id: 'settings-ai-governance', title: 'AI spend controls', icon: 'ti-shield-dollar',
+                subtitle: 'Server-enforced allowances, execution bounds, and immediate revocation',
+                actions: `<span id="ai-governance-state" class="badge ${stopped ? 'bg-red-lt' : 'bg-green-lt'}">${stopped ? 'new spend stopped' : 'admitting within limits'}</span>${stopButton}`,
+                body: `<div class="alert alert-info py-2 px-3 small" role="note"><i class="ti ti-shield-lock me-1"></i>This screen cannot approve a call or bypass a denial. The pre-call governor remains authoritative for browser, REST, background, and MCP work.</div>
+                    <div class="table-responsive"><table class="table table-vcenter table-sm"><thead><tr><th>Principal</th><th>Access</th><th>Dollar allowance</th><th>Requests</th><th>Execution policy</th><th>Last denial</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+                    <div class="d-flex align-items-center mt-2"><h4 class="mb-0">Recent denials</h4><button type="button" class="btn btn-sm btn-ghost-secondary ms-auto" data-set-action="ai-governance-refresh"><i class="ti ti-refresh me-1"></i>Refresh</button></div>${denials}
+                    <span id="ai-governance-flash" class="small text-secondary" aria-live="polite"></span>`,
+                footer: '<span class="text-secondary small">Usage is provider-actual accounting; reserved cost remains visible until reconciliation.</span>',
+            });
+        },
+
+        _settingsAiPrincipalRow(p) {
+            const policy = p.policy || {};
+            const usage = p.usage || {};
+            const allowance = p.allowance || {};
+            const granted = !!p.use_llm_granted;
+            const pct = (used, limit) => limit ? Math.min(100, Math.round((Number(used || 0) / Number(limit)) * 100)) : 0;
+            const dollars = (v) => `$${Number(v || 0).toFixed(2)}`;
+            const dollarUsed = Number(usage.monthly_cost_usd || 0) + Number(usage.reserved_cost_usd || 0);
+            const dollarLimit = Number(allowance.monthly_usd || 0);
+            const enc = encodeURIComponent(p.principal_id || '');
+            const models = (policy.allowed_models || []).join(', ') || '—';
+            const denial = p.last_denial || {};
+            return `<tr data-ai-principal="${this.esc(p.principal_id || '')}">
+                <td><code>${this.esc(p.display_name || p.principal_id || '—')}</code></td>
+                <td><span class="badge ${granted ? 'bg-green-lt' : 'bg-secondary-lt'}">${granted ? 'use:llm' : 'revoked'}</span></td>
+                <td class="small">${dollars(dollarUsed)} / ${dollars(dollarLimit)}<div class="progress progress-sm mt-1"><div class="progress-bar" style="width:${pct(dollarUsed, dollarLimit)}%"></div></div><span class="text-secondary">${dollars(usage.reserved_cost_usd)} reserved</span></td>
+                <td class="small">${Number(usage.prompts_hour || 0)} / ${Number(allowance.prompts_per_hour || 0)} hour<br>${Number(usage.prompts_day || 0)} / ${Number(allowance.prompts_per_day || 0)} day<br>${Number(usage.active_jobs || 0)} active · ${Number(usage.queued_jobs || 0)} queued</td>
+                <td class="small">prompt ${Number(policy.max_prompt_chars || 0).toLocaleString()} chars<br>${Number(policy.max_completion_tokens || 0).toLocaleString()} output tokens · ${Number(policy.max_agent_iterations || 0)} iterations<br>${this.esc(models)} · ${this.esc(policy.service_tier || '—')}</td>
+                <td class="small">${denial.reason ? `<span class="badge bg-red-lt">${this.esc(denial.reason)}</span><br>${this.esc(denial.message || '')}` : '<span class="text-secondary">—</span>'}</td>
+                <td class="text-end"><div class="btn-list flex-nowrap"><button type="button" class="btn btn-sm btn-outline-primary" data-set-action="ai-governance-edit:${enc}">Edit limits</button><button type="button" class="btn btn-sm ${granted ? 'btn-outline-danger' : 'btn-outline-success'}" data-set-action="ai-governance-${granted ? 'revoke' : 'grant'}:${enc}">${granted ? 'Revoke' : 'Grant'} use:llm</button></div></td></tr>`;
+        },
+
+        async _settingsAiGovernanceToggle(disabled) {
+            if (disabled && !confirm('Stop all new billable AI work? Running provider calls are not cancelled.')) return;
+            this._sFlash('ai-governance-flash', disabled ? 'Stopping new spend…' : 'Enabling bounded spend…');
+            try {
+                const proj = window.PM_PROJECT || 'maxwell';
+                await this._sSend(`api/projects/${encodeURIComponent(proj)}/ai-governance/kill-switch`, 'POST', { new_spend_disabled: disabled, reason: disabled ? 'operator_kill_switch' : 'operator_reenabled' });
+                await this.renderSettings();
+            } catch (e) { this._sFlash('ai-governance-flash', e.message, 'text-danger'); }
+        },
+
+        async _settingsAiGovernanceGrant(principalId, granted) {
+            if (!granted && !confirm(`Revoke use:llm from ${principalId}? New, queued-resume, and retry work will be denied.`)) return;
+            try {
+                const proj = window.PM_PROJECT || 'maxwell';
+                await this._sSend(`api/projects/${encodeURIComponent(proj)}/ai-governance/principals/${encodeURIComponent(principalId)}/${granted ? 'grant' : 'revoke'}`, 'POST', { scope: 'use:llm', reason: granted ? 'operator_granted' : 'operator_revoked' });
+                await this.renderSettings();
+            } catch (e) { this._sFlash('ai-governance-flash', e.message, 'text-danger'); }
+        },
+
+        async _settingsAiGovernanceEdit(principalId) {
+            const current = ((this._settingsAiGovernance || {}).principals || []).find((p) => p.principal_id === principalId);
+            if (!current) return;
+            const a = current.allowance || {}, p = current.policy || {};
+            const monthly = prompt('Monthly allowance (USD)', String(a.monthly_usd || 0)); if (monthly === null) return;
+            const hourly = prompt('Maximum prompts per hour', String(a.prompts_per_hour || 0)); if (hourly === null) return;
+            const daily = prompt('Maximum prompts per day', String(a.prompts_per_day || 0)); if (daily === null) return;
+            const active = prompt('Maximum active AI jobs', String(a.active_jobs || 1)); if (active === null) return;
+            const queued = prompt('Maximum queued AI jobs', String(a.queued_jobs || 2)); if (queued === null) return;
+            const promptChars = prompt('Maximum prompt size (characters)', String(p.max_prompt_chars || 0)); if (promptChars === null) return;
+            const completion = prompt('Maximum completion tokens per call', String(p.max_completion_tokens || 0)); if (completion === null) return;
+            const iterations = prompt('Maximum agent iterations per call', String(p.max_agent_iterations || 0)); if (iterations === null) return;
+            const models = prompt('Allowed models (comma-separated)', (p.allowed_models || []).join(', ')); if (models === null) return;
+            const tier = prompt('Service tier', String(p.service_tier || 'default')); if (tier === null) return;
+            const body = { allowance: { monthly_usd: Number(monthly), prompts_per_hour: Number(hourly), prompts_per_day: Number(daily), active_jobs: Number(active), queued_jobs: Number(queued) }, policy: { max_prompt_chars: Number(promptChars), max_completion_tokens: Number(completion), max_agent_iterations: Number(iterations), allowed_models: models.split(',').map((v) => v.trim()).filter(Boolean), service_tier: tier.trim() } };
+            const integerLimits = [body.allowance.prompts_per_hour, body.allowance.prompts_per_day, body.allowance.active_jobs, body.allowance.queued_jobs, body.policy.max_prompt_chars, body.policy.max_completion_tokens, body.policy.max_agent_iterations];
+            if (!Number.isFinite(body.allowance.monthly_usd) || body.allowance.monthly_usd < 0 || integerLimits.some((v) => !Number.isInteger(v) || v < 1) || !body.policy.allowed_models.length || !body.policy.service_tier) { this._sFlash('ai-governance-flash', 'Enter non-negative allowance and positive integer limits, with at least one model and service tier.', 'text-danger'); return; }
+            try {
+                const proj = window.PM_PROJECT || 'maxwell';
+                await this._sSend(`api/projects/${encodeURIComponent(proj)}/ai-governance/principals/${encodeURIComponent(principalId)}/policy`, 'PUT', body);
+                await this.renderSettings();
+            } catch (e) { this._sFlash('ai-governance-flash', e.message, 'text-danger'); }
+        },
+
         // Fleet, capacity, and narration each already have a live operational surface.
         // Duplicating them here would mean two places to keep correct, so Settings
         // states the current posture and routes to the real one. UI-20 owns
@@ -1657,6 +1751,9 @@
         if (String(action || '').startsWith('api-connections-copy-cmd:')) return this._settingsApiConnectionsCopyCommand(action.slice('api-connections-copy-cmd:'.length));
         if (String(action || '').startsWith('api-connections-revoke:')) return this._settingsApiConnectionsRevoke(action.slice('api-connections-revoke:'.length));
         if (String(action || '').startsWith('api-connections-delete:')) return this._settingsApiConnectionsDelete(action.slice('api-connections-delete:'.length));
+        if (String(action || '').startsWith('ai-governance-edit:')) return this._settingsAiGovernanceEdit(decodeURIComponent(action.slice('ai-governance-edit:'.length)));
+        if (String(action || '').startsWith('ai-governance-grant:')) return this._settingsAiGovernanceGrant(decodeURIComponent(action.slice('ai-governance-grant:'.length)), true);
+        if (String(action || '').startsWith('ai-governance-revoke:')) return this._settingsAiGovernanceGrant(decodeURIComponent(action.slice('ai-governance-revoke:'.length)), false);
         switch (action) {
             case 'repo-edit': { const f = document.getElementById('repo-edit-form'); if (f) f.style.display = f.style.display === 'none' ? '' : 'none'; return; }
             case 'repo-save': return this.saveRepoTopology();
@@ -1665,6 +1762,9 @@
             case 'verify-offline': return this.verifyOffline();
             case 'move-task': return this.moveTask();
             case 'refresh': return this.renderSettings();
+            case 'ai-governance-refresh': return this.renderSettings();
+            case 'ai-governance-disable': return this._settingsAiGovernanceToggle(true);
+            case 'ai-governance-enable': return this._settingsAiGovernanceToggle(false);
             // Access tokens (2/6), Communications (3/6), Members (4/6), and GitHub (5/6) are
             // all folded inline now; no launcher into a legacy modal remains.
             case 'comms-add-domain': return this._settingsCommsAddDomain();
