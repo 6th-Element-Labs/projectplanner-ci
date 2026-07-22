@@ -2828,11 +2828,16 @@ def run_mission_coordinator_tick(project: str = DEFAULT_PROJECT, deliverable_id:
     policy_obj = _store_facade()._parse_jsonish(policy) if policy not in (None, "") else None
     if policy_obj is not None and not isinstance(policy_obj, dict):
         return {"error": "policy must be a JSON object"}
+    # BUG-140: the idem payload hash must contain only restart-stable request
+    # semantics. coordinator_agent_id is a per-instance identity that changes on
+    # every daemon restart; hashing it poisoned all standing ui30 keys into
+    # "idempotency conflict" after a restart (a conflicted tick dispatches
+    # nothing, so the wake generation could never advance the key either). A
+    # restarted daemon replaying its durable key gets the stored receipt.
     payload = {
         "deliverable_id": (deliverable_id or "").strip(),
         "board_id": (board_id or "").strip(),
         "mission_id": (mission_id or "").strip(),
-        "coordinator_agent_id": (coordinator_agent_id or "").strip(),
         "policy": policy_obj or {},
     }
     with _store_facade()._conn(project) as c:
