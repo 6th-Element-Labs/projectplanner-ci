@@ -680,7 +680,8 @@ def route_bug_for_implementation(
     emitted = False
     with _conn(project) as c:
         row = c.execute(
-            "SELECT task_id, workstream_id, status, agent_state FROM tasks "
+            "SELECT task_id, workstream_id, status, agent_state, title, description, "
+            "risk_level FROM tasks "
             "WHERE task_id=?", (normalized_id,),
         ).fetchone()
         if not row:
@@ -706,17 +707,63 @@ def route_bug_for_implementation(
                 "task_id": normalized_id,
                 "project": project,
             }
-        state = json.loads(row["agent_state"] or "{}") if row["agent_state"] else {}
-        report = state.get("bug_report")
-        if not isinstance(report, dict):
+        try:
+            state = json.loads(row["agent_state"] or "{}") if row["agent_state"] else {}
+        except (TypeError, ValueError):
             return {
                 "routed": False,
                 "error": "bug_intake_not_routable",
-                "reason": "Triage BUG is missing its structured bug_report.",
+                "reason": "Triage BUG has malformed agent_state.",
                 "intake_status": None,
                 "status": status,
                 "task_id": normalized_id,
                 "project": project,
+            }
+        report = state.get("bug_report")
+        normalization = None
+        if not isinstance(report, dict):
+            description = str(row["description"] or "").strip()
+            if len(description) < 20:
+                return {
+                    "routed": False,
+                    "error": "bug_intake_not_routable",
+                    "reason": (
+                        "Triage BUG is missing its structured bug_report and has no "
+                        "substantive legacy description."
+                    ),
+                    "intake_status": None,
+                    "status": status,
+                    "task_id": normalized_id,
+                    "project": project,
+                }
+            title = str(row["title"] or normalized_id).strip()
+            normalization = {
+                "schema": "switchboard.legacy_bug_normalization.v1",
+                "synthesized": True,
+                "source": "legacy_task_fields",
+                "source_fields": ["task_id", "title", "description", "risk_level"],
+                "unavailable_fields": ["expected_behavior", "repro_steps"],
+                "boundary": "route_bug_for_implementation",
+                "normalized_at": now,
+                "normalized_by": actor,
+            }
+            report = {
+                "schema": "bug_report.v1",
+                "source_task": normalized_id,
+                "source_agent": None,
+                "observed_behavior": description,
+                "expected_behavior": "",
+                "repro_steps": "",
+                "evidence": {
+                    "legacy_task_id": normalized_id,
+                    "legacy_title": title,
+                    "legacy_description": description,
+                },
+                "severity_hint": str(row["risk_level"] or "medium").strip().lower(),
+                "affected_surface": title,
+                "duplicate_of": None,
+                "intake_status": "new",
+                "provenance": normalization,
             }
         intake_status = str(report.get("intake_status") or "new").strip().lower()
         duplicate_of = str(report.get("duplicate_of") or "").strip().upper()
@@ -754,6 +801,8 @@ def route_bug_for_implementation(
             "previous_status": "Triage",
             "next_status": "Not Started",
         }
+        if normalization:
+            routing["normalization"] = normalization
         routed_report = dict(report)
         routed_report["intake_status"] = "routed"
         routed_report["routing"] = routing

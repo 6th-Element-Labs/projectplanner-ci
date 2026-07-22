@@ -17,6 +17,7 @@ os.environ["PM_DYNAMIC_PROJECTS_DIR"] = TMP
 
 import dispatch  # noqa: E402
 import store  # noqa: E402
+from db.connection import _conn  # noqa: E402
 from switchboard.application.commands import submit_bug  # noqa: E402
 
 P = "qa-bug116"
@@ -139,6 +140,72 @@ try:
        "duplicate BUG intake is refused before any launcher side effect")
     ok(duplicate_after.get("status") == "Triage",
        "a refused duplicate remains visibly in Triage")
+
+    legacy = store.create_task({
+        "workstream_id": "BUG",
+        "title": "Legacy task loses its stored defect context",
+        "description": (
+            "Starting this historical BUG fails because it predates structured intake."
+        ),
+        "status": "Triage",
+        "risk_level": "High",
+    }, actor="legacy-import", project=P)
+    legacy_id = legacy["task_id"]
+    routed_legacy = store.route_bug_for_implementation(
+        legacy_id, actor="operator/bug116", principal_id="user/bug116", project=P)
+    legacy_after = store.get_task(legacy_id, project=P)
+    legacy_report = (legacy_after.get("agent_state") or {}).get("bug_report") or {}
+    legacy_provenance = legacy_report.get("provenance") or {}
+    ok(routed_legacy.get("routed") and legacy_after.get("status") == "Not Started",
+       "Start normalizes and routes a legacy Triage BUG with a substantive description")
+    ok(legacy_report.get("observed_behavior") == legacy_after.get("description")
+       and legacy_report.get("expected_behavior") == ""
+       and legacy_report.get("repro_steps") == ""
+       and legacy_provenance.get("synthesized") is True
+       and legacy_provenance.get("source") == "legacy_task_fields"
+       and legacy_provenance.get("unavailable_fields")
+       == ["expected_behavior", "repro_steps"]
+       and routed_legacy.get("routing", {}).get("normalization") == legacy_provenance,
+       "legacy normalization preserves known text without fabricating unknown fields")
+
+    repeated_legacy = store.route_bug_for_implementation(
+        legacy_id, actor="operator/retry", principal_id="user/bug116", project=P)
+    repeated_legacy_after = store.get_task(legacy_id, project=P)
+    repeated_legacy_events = [
+        event for event in repeated_legacy_after.get("activity") or []
+        if event.get("kind") == "bug.routed_for_implementation"
+    ]
+    ok(not repeated_legacy.get("routed") and repeated_legacy.get("ready")
+       and len(repeated_legacy_events) == 1,
+       "legacy normalization retries are idempotent")
+
+    empty_legacy = store.create_task({
+        "workstream_id": "BUG", "title": "Empty legacy BUG",
+        "description": "", "status": "Triage",
+    }, actor="legacy-import", project=P)
+    refused_empty = store.route_bug_for_implementation(
+        empty_legacy["task_id"], actor="operator/bug116", project=P)
+    ok(not refused_empty.get("routed")
+       and refused_empty.get("error") == "bug_intake_not_routable"
+       and store.get_task(empty_legacy["task_id"], project=P).get("status") == "Triage",
+       "empty legacy Triage BUGs still fail closed")
+
+    malformed_legacy = store.create_task({
+        "workstream_id": "BUG", "title": "Malformed legacy BUG",
+        "description": "This description is substantive but its agent state is corrupt.",
+        "status": "Triage",
+    }, actor="legacy-import", project=P)
+    with _conn(P) as conn:
+        conn.execute(
+            "UPDATE tasks SET agent_state=? WHERE task_id=?",
+            ("{not-json", malformed_legacy["task_id"]),
+        )
+    refused_malformed = store.route_bug_for_implementation(
+        malformed_legacy["task_id"], actor="operator/bug116", project=P)
+    ok(not refused_malformed.get("routed")
+       and refused_malformed.get("error") == "bug_intake_not_routable"
+       and refused_malformed.get("reason") == "Triage BUG has malformed agent_state.",
+       "malformed legacy agent state still fails closed")
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
 
