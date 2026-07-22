@@ -112,16 +112,24 @@ def require_agent_host_identity(principal: dict, host_id: str, project: str) -> 
 
 def require_agent_host_runner_identity(
         principal: dict, runner_session_id: str, host_id: str, project: str) -> None:
-    """Prevent a narrow host bearer from taking over an existing runner id."""
+    """Prevent a narrow host bearer from taking over an existing runner id.
+
+    Ownership is the HOST binding, not the creating principal: server-side paths
+    (Connect late-bind, MCP registration under env-mcp-token) legitimately create
+    runner rows for a host before that host ever heartbeats them. Refusing on a
+    principal mismatch for the host's OWN rows wedged the fleet on 2026-07-22 —
+    the host could neither heartbeat nor terminalize such a row, so its cleanup
+    loop retried forever and claimed wakes starved. require_agent_host_identity
+    has already proven this bearer is enrolled for host_id, so a same-host row
+    is its to manage regardless of which principal stamped it first.
+    """
     if not is_narrow_agent_host_principal(principal):
         return
     existing = store.get_runner_session(
         str(runner_session_id or "").strip(), project=project)
     if not existing:
         return
-    if (str(existing.get("host_id") or "") != str(host_id or "").strip()
-            or str(existing.get("principal_id") or "")
-            != str(principal.get("id") or "")):
+    if str(existing.get("host_id") or "") != str(host_id or "").strip():
         raise HTTPException(403, "host bearer cannot replace another runner identity")
 
 

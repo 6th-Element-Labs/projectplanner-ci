@@ -1858,6 +1858,19 @@ def reap_finished_or_idle_runners(inventory, *, now=None):
         claim_status = str(claim.get("status") or "").lower()
         if claim_status == "active":
             continue
+        # UNVERIFIABLE is not TERMINAL. During Connect late-binding
+        # (credential_admission_phase preclaim/pending) the claim isn't bound
+        # yet, and after a server-side skew a bound claim_id can drain with no
+        # claim row. Killing on either murders a working agent mid-edit (the
+        # 2026-07-22 "runner dies in 2-8 minutes, 20 uncommitted files" wave).
+        # Only an explicitly observed non-active claim may reap.
+        metadata_probe = dict(session.get("metadata") or {})
+        admission_phase = str(
+            metadata_probe.get("credential_admission_phase") or "").lower()
+        if admission_phase in {"preclaim", "pending"}:
+            continue
+        if not claim and str(session.get("claim_id") or ""):
+            continue
         output_at = _runner_last_output_at(session)
         reason = ""
         terminal_status = "stopped"

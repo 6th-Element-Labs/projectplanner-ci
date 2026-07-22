@@ -45,6 +45,15 @@ def run():
             for name, path in logs.items():
                 stamp = now - (10 if name in {"recent", "chatty"} else 2_000)
                 os.utime(path, (stamp, stamp))
+            # BUG-149 guards: a claim the host cannot VERIFY is not a claim that
+            # finished. Late-binding (admission preclaim/pending) and a bound
+            # claim_id whose row didn't drain must both be left alone.
+            late_bind = session(logs["complete"], runner_id="latebind",
+                                claim={"status": "completed",
+                                       "completed_at": now - 500})
+            late_bind["metadata"]["credential_admission_phase"] = "preclaim"
+            skewed = session(logs["idle"], runner_id="skewed")
+            skewed["claim_id"] = "claim-skewed"
             rows = [
                 session(logs["active"], runner_id="active",
                         claim={"status": "active", "updated_at": 1}),
@@ -54,6 +63,8 @@ def run():
                         claim={"status": "completed", "completed_at": now - 500}),
                 session(logs["idle"], runner_id="idle"),
                 session(logs["chatty"], runner_id="chatty"),
+                late_bind,
+                skewed,
             ]
             agent_host._drain_runners = lambda host_id: rows
             agent_host.supervisor_action = lambda action, runner_id, options=None: (
