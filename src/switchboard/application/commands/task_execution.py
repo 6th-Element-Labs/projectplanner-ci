@@ -425,7 +425,28 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
     task_id = _normalize(task_id)
     if not task_id:
         raise TaskExecutionError("invalid_input", "task_id required", project=project)
+    role = str(role or "").strip().lower()
     projection = _projection(task_id, project)
+    task = projection.get("task") or {}
+    intake_routing = None
+    if str(task.get("status") or "") == "Triage":
+        if role != "implementation":
+            raise TaskExecutionError(
+                "start_refused", "Triage BUGs must be routed as implementation work first.",
+                task_id=task_id, project=project,
+                start_error="triage_requires_implementation_role")
+        from switchboard.storage.repositories import tasks as tasks_repo
+        intake_routing = tasks_repo.route_bug_for_implementation(
+            task_id, actor=actor, principal_id=principal_id,
+            trigger="start_task", project=project)
+        if not intake_routing.get("routed") and not intake_routing.get("ready"):
+            raise TaskExecutionError(
+                "start_refused",
+                str(intake_routing.get("reason") or "BUG intake routing failed."),
+                task_id=task_id, project=project,
+                start_error=intake_routing.get("error") or "bug_intake_not_routable",
+                intake_routing=intake_routing)
+        projection = _projection(task_id, project)
     active_runner = projection.get("active_runner") or {}
     pending = _in_flight_wake(projection)
     if active_runner:
@@ -520,7 +541,6 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
         # existing/pending execution must not pretend the caller replaced its
         # lifecycle authority.
         role=role if action == "started" else None,
-        intake_routing=result.get("intake_routing") or None,
         lifecycle_phase=("running" if result.get("attached")
                          else "starting" if action in {"started", "starting"} else None),
         transport=descriptor.get("transport"),
@@ -531,6 +551,7 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
         expires_at=descriptor.get("expires_at"),
         browser_safe=descriptor.get("browser_safe"),
         capacity=result.get("capacity"),
+        intake_routing=intake_routing or result.get("intake_routing") or None,
     )
 
 

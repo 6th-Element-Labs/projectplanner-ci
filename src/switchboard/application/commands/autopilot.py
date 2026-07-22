@@ -15,7 +15,7 @@ wake, or resolves a runner id.
 """
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 from constants import DEFAULT_PROJECT
 from switchboard.storage.repositories import autopilot_scopes as scopes_repo
@@ -129,7 +129,9 @@ def control_autopilot(deliverable_id: Any, *, project: str = DEFAULT_PROJECT,
                       action: str = "start", scope_type: str = "deliverable",
                       task_project: str = "", task_id: str = "",
                       runtime: str = "codex", profile_id: str = "autopilot-default",
-                      actor: str = "user") -> dict[str, Any]:
+                      actor: str = "user",
+                      task_starter: Optional[Callable[..., dict[str, Any]]] = None,
+                      ) -> dict[str, Any]:
     """Start, pause, resume, or stop one durable Autopilot scope.
 
     ``start`` creates (or idempotently readbacks) a scope; the other three move
@@ -146,12 +148,33 @@ def control_autopilot(deliverable_id: Any, *, project: str = DEFAULT_PROJECT,
     if not deliverable_id:
         raise AutopilotError("invalid_input", "deliverable_id required",
                              project=project)
+    runtime = str(runtime or "codex").strip().lower()
     common = {
         "project": project, "profile_id": profile_id,
         "deliverable_id": deliverable_id,
         "scope_type": str(scope_type or "deliverable").strip().lower(),
         "task_project": task_project, "task_id": task_id, "actor": actor,
     }
+    task_start = None
+    if verb == "start" and common["scope_type"] == "task":
+        invalid = scopes_repo.validate_autopilot_target(
+            project=project, deliverable_id=deliverable_id, scope_type="task",
+            task_project=task_project, task_id=task_id, runtime=runtime)
+        if invalid:
+            _raise_store_error(invalid)
+        if task_starter is None:
+            from switchboard.application.commands import task_execution
+            task_starter = task_execution.execute_mapping_result
+        task_start = task_starter(
+            "start_task", task_id, project=task_project or project,
+            actor=actor, runtime=runtime)
+        if task_start.get("refused") or task_start.get("error"):
+            raise AutopilotError(
+                "structural_blocker",
+                str(task_start.get("message") or task_start.get("error")
+                    or "task start refused"),
+                deliverable_id=deliverable_id, task_project=task_project or project,
+                task_id=str(task_id or "").strip().upper(), task_start=task_start)
     if verb == "start":
         result = scopes_repo.start_autopilot_scope(**common, runtime=runtime)
     else:
@@ -162,7 +185,7 @@ def control_autopilot(deliverable_id: Any, *, project: str = DEFAULT_PROJECT,
         "schema": SCHEMA, "command": "control_autopilot", "project": project,
         "action": verb, **_scope_fields(deliverable_id, common["scope_type"],
                                         task_project, task_id),
-        "scope": result,
+        "scope": result, **({"task_start": task_start} if task_start is not None else {}),
     }
 
 

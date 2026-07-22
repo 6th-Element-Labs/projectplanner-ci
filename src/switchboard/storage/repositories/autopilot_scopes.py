@@ -246,6 +246,26 @@ def _validate_target(project: str, deliverable_id: str, scope_type: str,
             "task_project": task_project, "task_id": task_id}
 
 
+def validate_autopilot_target(*, project: str = DEFAULT_PROJECT,
+                              deliverable_id: str, scope_type: str = "deliverable",
+                              task_project: str = "", task_id: str = "",
+                              runtime: str = "codex") -> Optional[Dict[str, Any]]:
+    """Validate a scope target without creating it.
+
+    Task Start uses this public read boundary before dispatch so a structurally
+    invalid link cannot launch work or leave behind an active scope.
+    """
+    runtime = str(runtime or "codex").strip().lower()
+    if runtime not in SUPPORTED_RUNTIMES:
+        return {"error": "unsupported autopilot runtime", "runtime": runtime,
+                "supported_runtimes": sorted(SUPPORTED_RUNTIMES)}
+    kind = str(scope_type or "deliverable").strip().lower()
+    normalized_project = str(task_project or project).strip() if kind == "task" else ""
+    normalized_task = str(task_id or "").strip().upper() if kind == "task" else ""
+    return _validate_target(project, str(deliverable_id or "").strip(), kind,
+                            normalized_project, normalized_task)
+
+
 def start_autopilot_scope(*, project: str = DEFAULT_PROJECT,
                           profile_id: str = "autopilot-default",
                           deliverable_id: str, scope_type: str = "deliverable",
@@ -263,7 +283,9 @@ def start_autopilot_scope(*, project: str = DEFAULT_PROJECT,
     if runtime not in SUPPORTED_RUNTIMES:
         return {"error": "unsupported autopilot runtime", "runtime": runtime,
                 "supported_runtimes": sorted(SUPPORTED_RUNTIMES)}
-    invalid = _validate_target(project, deliverable_id, kind, task_project, task_id)
+    invalid = validate_autopilot_target(
+        project=project, deliverable_id=deliverable_id, scope_type=kind,
+        task_project=task_project, task_id=task_id, runtime=runtime)
     if invalid:
         return invalid
     now = time.time()
@@ -401,7 +423,8 @@ def default_autopilot_scope_repository() -> StoreAutopilotScopeRepository:
 __all__ = [
     "AUTOPILOT_SCOPE_SCHEMA", "LIVE_SCOPE_STATUSES", "SCOPE_TYPES", "SUPPORTED_RUNTIMES",
     "StoreAutopilotScopeRepository", "default_autopilot_scope_repository",
-    "list_autopilot_scopes", "get_autopilot_scope", "start_autopilot_scope",
+    "list_autopilot_scopes", "get_autopilot_scope", "validate_autopilot_target",
+    "start_autopilot_scope",
     "control_autopilot_scope", "update_autopilot_scope",
     "transition_deliverable_scopes_in",
 ]

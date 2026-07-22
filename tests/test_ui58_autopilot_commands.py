@@ -168,10 +168,16 @@ try:
     # ---- 5) task scope: start, control, and not-linked refusal --------------
     task_started = autopilot.control_autopilot(
         "ui58-deliv", project=P, action="start", scope_type="task",
-        task_project=P, task_id="UI-1", runtime="codex", actor="ui58-test")
+        task_project=P, task_id="UI-1", runtime="codex", actor="ui58-test",
+        task_starter=lambda *_args, **_kwargs: {
+            "schema": "switchboard.task_execution.v1", "command": "start_task",
+            "started": True, "action": "started", "wake_id": "wake-ui58",
+        })
     ok((task_started.get("scope") or {}).get("scope_type") == "task"
        and (task_started.get("scope") or {}).get("task_id") == "UI-1",
        "a task scope starts against a linked task")
+    ok((task_started.get("task_start") or {}).get("command") == "start_task",
+       "task Autopilot Start crosses the audited start_task boundary")
     not_linked = autopilot.execute_mapping_result(
         "control_autopilot", "ui58-deliv", project=P, action="start",
         scope_type="task", task_project=P, task_id="UI-999", actor="ui58-test")
