@@ -525,13 +525,22 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
                 "Merge gate requires a recorded clean Work Session preflight.",
                 "missing_data",
                 details={"work_session_id": session.get("work_session_id")}))
-        elif preflight.get("verdict") == "deny" or preflight.get("ok") is False:
-            findings.append(_merge_gate_finding(
-                "work_session_preflight_failed",
-                "Work Session preflight is not clean.",
-                "failed_gate",
-                details={"work_session_id": session.get("work_session_id"),
-                         "preflight": preflight}))
+        else:
+            preflight_verdict = (preflight.get("verdict") or "").strip().lower()
+            blocking_preflight_findings = [
+                finding for finding in (preflight.get("findings") or [])
+                if finding.get("blocking") is not False
+            ]
+            if (
+                    preflight_verdict == "deny"
+                    or bool(blocking_preflight_findings)
+                    or (not preflight_verdict and preflight.get("ok") is False)):
+                findings.append(_merge_gate_finding(
+                    "work_session_preflight_failed",
+                    "Work Session preflight is not clean.",
+                    "failed_gate",
+                    details={"work_session_id": session.get("work_session_id"),
+                             "preflight": preflight}))
     elif require_session:
         findings.append(_merge_gate_finding(
             "work_session_required",

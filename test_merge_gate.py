@@ -249,6 +249,38 @@ try:
        {f["code"] for f in stale["findings"]} & {"stale_head_sha", "stale_branch"},
        "merge_gate blocks stale branch/head evidence")
 
+    warning_task, warning_claim, warning_branch, warning_sha = ready_task(
+        "non-blocking preflight warning passes")
+    warning_session = store.get_work_session(warning_claim["work_session_id"], project=P)
+    warning_hygiene = dict(warning_session.get("hygiene") or {})
+    warning_hygiene["repo_preflight"] = {
+        "schema": "switchboard.repo_preflight.v1",
+        "ok": False,
+        "verdict": "warn",
+        "repo_role": "canonical",
+        "branch": warning_branch,
+        "head_sha": warning_sha,
+        "base_distance": {"ahead": 1, "behind": 0},
+        "findings": [{
+            "code": "missing_upstream",
+            "failure_class": "missing_upstream",
+            "severity": "medium",
+            "blocking": False,
+        }],
+    }
+    store.update_work_session(
+        warning_claim["work_session_id"], {"hygiene": warning_hygiene},
+        actor="test", project=P)
+    warning_gate = store.merge_gate(
+        gate_payload(
+            warning_task, warning_claim, warning_branch, warning_sha),
+        actor="test", project=P,
+    )
+    ok(warning_gate["ok"] is True and not any(
+        f["code"] == "work_session_preflight_failed"
+        for f in warning_gate["findings"]),
+       "merge_gate accepts repo preflight with only non-blocking warnings")
+
     ci_task, ci_claim, ci_branch, ci_sha = ready_task("missing CI blocks")
     missing_ci = store.merge_gate(
         gate_payload(
