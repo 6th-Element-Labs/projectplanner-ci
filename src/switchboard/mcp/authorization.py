@@ -7,8 +7,8 @@ duration of the tool call so command adapters can reuse the same effective
 grants without reopening the principal registry.
 
 Tool access is declared in one fail-closed census below.  Adding an MCP tool
-without classifying it as a read or write, or removing a declared tool without
-updating the census, prevents the MCP composition root from starting.
+without classifying it as read, write, or billable, or removing a declared tool
+without updating the census, prevents the MCP composition root from starting.
 """
 from __future__ import annotations
 
@@ -29,6 +29,7 @@ from switchboard.domain.projects.context import ProjectContext, ProjectGrant
 class AccessClass(str, Enum):
     READ = "read"
     WRITE = "write"
+    BILLABLE = "billable"
     DISCOVERY = "discovery"
 
 
@@ -96,7 +97,8 @@ def authorize_project_context(
     if cache is not None and cache_key in cache:
         return cache[cache_key]
 
-    required = ("read",) if access_class in {AccessClass.READ, AccessClass.DISCOVERY} else ()
+    required = (("use:llm",) if access_class == AccessClass.BILLABLE else
+                ("read",) if access_class in {AccessClass.READ, AccessClass.DISCOVERY} else ())
     authorized = auth.authorize_principal(principal, selected, required)
     scopes = tuple(sorted(str(scope) for scope in (authorized.get("effective_scopes") or [])))
     if access_class == AccessClass.WRITE and not _has_any_write_scope(scopes):
@@ -158,7 +160,7 @@ def filter_authorized_projects(projects: list[dict[str, Any]]) -> list[dict[str,
 # Explicit registration census.  These names are the public MCP surface; no
 # name may silently inherit an access class.
 READ_TOOLS = frozenset({
-    "ask_plan", "board_summary", "check_files", "check_resource",
+    "board_summary", "check_files", "check_resource",
     "control_plane_probe", "doc_search", "get_agent_state",
     "get_background_job_run", "get_decision", "get_deliverable",
     "get_deliverable_breakdown_proposal", "get_deliverable_closure_report",
@@ -204,14 +206,14 @@ WRITE_TOOLS = frozenset({
     "create_task", "create_work_session", "defer_deliverable_breakdown",
     "delete_provider_connection", "dispatch_to_claude_code", "dispatch_to_co_fleet",
     "dispatch_to_codex_cloud", "enroll_provider_connection", "execute_project_purge",
-    "fail_external_effect", "generate_digest", "generate_mission_brief",
-    "get_audit_export", "heartbeat", "heartbeat_host", "ingest_and_triage",
+    "fail_external_effect", "generate_mission_brief",
+    "get_audit_export", "heartbeat", "heartbeat_host",
     "link_outcome_to_kpi", "link_task_to_deliverable", "link_tasks_to_deliverable",
     "list_agent_host_enrollments", "open_session",
     "list_cleanup_candidates", "list_scoped_tokens", "mark_external_effect_issued",
-    "merge_gate", "move_task", "narrate_now", "notify", "plan_project_consolidation",
+    "merge_gate", "move_task", "notify", "plan_project_consolidation",
     "poll_external_ci_mirror_run", "pre_tool_check", "preflight_work_session",
-    "propose_deliverable_breakdown", "reactivate_narration", "reconcile",
+    "reactivate_narration", "reconcile",
     "reconcile_alerts",
     "record_coordinator_decision", "record_decision", "record_outcome",
     "record_project_cleanup_review", "record_publication_evidence",
@@ -242,7 +244,12 @@ WRITE_TOOLS = frozenset({
     "verify_provider_connection",
 })
 
-if READ_TOOLS & WRITE_TOOLS:
+LLM_TOOLS = frozenset({
+    "ask_plan", "generate_digest", "ingest_and_triage", "narrate_now",
+    "propose_deliverable_breakdown",
+})
+
+if READ_TOOLS & WRITE_TOOLS or READ_TOOLS & LLM_TOOLS or WRITE_TOOLS & LLM_TOOLS:
     raise RuntimeError("MCP authorization census contains conflicting access declarations")
 
 SPECIAL_PROJECT_ARGUMENTS = {
@@ -257,6 +264,8 @@ DISCOVERY_TOOLS = frozenset({"list_projects"})
 def declaration_for(tool_name: str) -> ToolAccessDeclaration:
     if tool_name in DISCOVERY_TOOLS:
         access_class = AccessClass.DISCOVERY
+    elif tool_name in LLM_TOOLS:
+        access_class = AccessClass.BILLABLE
     elif tool_name in READ_TOOLS:
         access_class = AccessClass.READ
     elif tool_name in WRITE_TOOLS:
@@ -339,7 +348,7 @@ class MCPAuthorizationGuard:
         return authorized
 
     def assert_complete(self) -> None:
-        declared = READ_TOOLS | WRITE_TOOLS
+        declared = READ_TOOLS | WRITE_TOOLS | LLM_TOOLS
         missing = sorted(declared - self._registered)
         extra = sorted(self._registered - declared)
         if missing or extra:

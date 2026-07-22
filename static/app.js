@@ -2379,7 +2379,10 @@ const TeepPlan = {
         document.getElementById('edit-save').addEventListener('click', () => this.saveTask(t.task_id));
         document.getElementById('edit-dispatch').addEventListener('click', () => this.dispatchTask(t.task_id, 'claude-code'));
         document.getElementById('edit-dispatch-codex').addEventListener('click', () => this.dispatchTask(t.task_id, 'codex'));
-        document.getElementById('chat-send').addEventListener('click', () => this.sendChat(t.task_id));
+        const chatSend = document.getElementById('chat-send');
+        chatSend.disabled = !this.canUseLlm;
+        if (!this.canUseLlm) chatSend.title = 'Your role does not include use:llm';
+        chatSend.addEventListener('click', () => this.sendChat(t.task_id));
         document.getElementById('chat-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') this.sendChat(t.task_id); });
         window.bootstrap.Modal.getOrCreateInstance(document.getElementById('task-modal')).show();
     },
@@ -2952,6 +2955,11 @@ const TeepPlan = {
     async sendChat(id) {
         const input = document.getElementById('chat-input');
         const log = document.getElementById('chat-log');
+        if (!this.canUseLlm) {
+            if (log) log.insertAdjacentHTML('beforeend', this._bubble(
+                'error', 'Your role does not include <code>use:llm</code>.'));
+            return;
+        }
         const msg = (input.value || '').trim();
         if (!msg) return;
         input.value = '';
@@ -4252,6 +4260,12 @@ const TeepPlan = {
         const scopes = (this.principal && this.principal.effective_scopes) || [];
         this.isAdmin = scopes.includes('admin') || scopes.includes('write:system');
         this.canWriteProjects = this.isAdmin || scopes.includes('write:projects');
+        this.canUseLlm = this.isAdmin || scopes.includes('use:llm');
+        document.documentElement.dataset.llmAccess = this.canUseLlm ? 'allowed' : 'denied';
+        document.querySelectorAll('#ask-send, #ask-build-plan, #chat-send').forEach((button) => {
+            button.disabled = !this.canUseLlm;
+            if (!this.canUseLlm) button.title = 'Your role does not include use:llm';
+        });
         // UI-18: Settings itself stays visible to every signed-in user. Personal
         // sections are always usable and project/system sections render a named lock,
         // so there is nothing left to hide at the tab level.

@@ -177,9 +177,14 @@ try:
        "global principal can discover its grants without knowing an anchor")
 
     source_names, source_arguments = declared_tool_names()
-    census_names = set(authorization.READ_TOOLS | authorization.WRITE_TOOLS)
+    census_names = set(
+        authorization.READ_TOOLS | authorization.WRITE_TOOLS | authorization.LLM_TOOLS)
     ok(source_names == census_names,
        "tool census covers every and only registered MCP tool")
+    ok("ask_plan" in authorization.LLM_TOOLS
+       and authorization.declaration_for("ask_plan").access_class
+       == authorization.AccessClass.BILLABLE,
+       "ask_plan is billable rather than a free read")
     missing_project_args = []
     for name in sorted(source_names):
         declaration = authorization.declaration_for(name)

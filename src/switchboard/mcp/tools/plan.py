@@ -11,7 +11,7 @@ from typing import Any, Callable
 import project_contract as project_contract_service
 import rag
 import store
-from switchboard.mcp import authorization as mcp_authorization
+from switchboard.mcp.authorization import require_current_access
 from switchboard.storage.repositories import ai_admission
 
 
@@ -56,8 +56,7 @@ def ask_plan(question: str, project: str = "maxwell") -> str:
     selected = project_contract_service.resolve_project_input(project) or store.DEFAULT_PROJECT
     if not store.has_project(selected):
         return services.dumps({"error": "unknown_project", "project": project})
-    context = mcp_authorization.current_project_context()
-    principal = context.as_principal() if context is not None else {}
+    principal = require_current_access(selected, ("use:llm",))
     authorization = ai_admission.authorization_snapshot(principal)
     try:
         decision = ai_admission.admit(
@@ -68,7 +67,8 @@ def ask_plan(question: str, project: str = "maxwell") -> str:
             params={"question": question, "history": [], "record_chat": False,
                     "ai_admission_id": decision.admission_id,
                     "ai_authorization": authorization},
-            actor="mcp/ask_plan", start_worker=decision.status == ai_admission.ACTIVE)
+            actor=str(principal.get("id") or "mcp/ask_plan"),
+            start_worker=decision.status == ai_admission.ACTIVE)
         ai_admission.bind_run(selected, decision.admission_id, run["run_id"])
     except ai_admission.AdmissionDenied as exc:
         return services.dumps({"error": "ai_admission_denied",

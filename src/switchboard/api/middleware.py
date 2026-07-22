@@ -67,6 +67,29 @@ def _write_required_scopes(path: str) -> tuple:
     return ("write:tasks",)
 
 
+def _llm_required_scopes(path: str, method: str) -> tuple:
+    """Return the dedicated billable-capability scope for LLM entry points.
+
+    Keep this decision at the authenticated principal boundary: neither a broad
+    read nor a task-write grant is evidence that the caller may spend model
+    capacity. Polling a pending plan run is included because it can resume the
+    background execution.
+    """
+    if path == "/api/chat" and method == "POST":
+        return ("use:llm",)
+    if path.startswith("/api/chat/runs/") and method in {"GET", "POST"}:
+        return ("use:llm",)
+    if re.fullmatch(r"/api/tasks/[^/]+/chat", path) and method == "POST":
+        return ("use:llm",)
+    if path in {"/api/intake", "/api/intake/upload", "/api/digest"} and method == "POST":
+        return ("use:llm",)
+    if path == "/api/narration/narrate-now" and method == "POST":
+        return ("use:llm",)
+    if re.fullmatch(r"/api/deliverables/[^/]+/breakdown_proposals", path) and method == "POST":
+        return ("use:llm",)
+    return ()
+
+
 def _request_project(request: Request, path: str) -> str:
     """Resolve project for the auth gate — fail closed on omission (SEG-4).
 
@@ -139,7 +162,8 @@ def register_auth_gate(app, *, global_user_scopes: GlobalUserScopes,
             if not store.has_project(project):
                 return _attach_server_timing(
                     JSONResponse({"detail": f"unknown project: {project}"}, status_code=400), started_at)
-            required = ("read",) if is_read else _write_required_scopes(path)
+            required = _llm_required_scopes(path, method) or (
+                ("read",) if is_read else _write_required_scopes(path))
             try:
                 request.state.principal = auth.authenticate_request(request, project, required, dev_actor="agent")
             except PermissionError as e:
@@ -163,7 +187,8 @@ def register_auth_gate(app, *, global_user_scopes: GlobalUserScopes,
             return _attach_server_timing(
                 JSONResponse({"detail": f"unknown project: {project}"}, status_code=400), started_at)
         scopes = global_user_scopes(user, project)
-        required = ("read",) if is_read else _write_required_scopes(path)
+        required = _llm_required_scopes(path, method) or (
+            ("read",) if is_read else _write_required_scopes(path))
         if "admin" not in scopes and not set(required).issubset(set(scopes)):
             return _attach_server_timing(
                 JSONResponse({"detail": "forbidden: no access to this project"}, status_code=403), started_at)

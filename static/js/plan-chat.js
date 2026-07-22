@@ -129,6 +129,11 @@
     async sendAsk(messageOverride, thinkingText) {
         const input = document.getElementById('ask-input');
         const log = document.getElementById('ask-log');
+        if (!this.canUseLlm) {
+            if (log) log.insertAdjacentHTML('beforeend', this._bubble(
+                'error', 'Your role does not include <code>use:llm</code>.'));
+            return;
+        }
         const msg = ((messageOverride || input.value) || '').trim();
         if (!msg) return;
         if (!messageOverride) input.value = '';

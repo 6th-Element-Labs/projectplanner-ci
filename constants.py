@@ -126,9 +126,9 @@ ROLE_SCOPES = {
     "commenter": ["read", "write:comments"],
     # write:projects lets contributors create their own projects (private by default; ACCESS-14).
     "contributor": ["read", "write:tasks", "write:ixp", "write:bug_intake", "write:projects"],
-    "operator": ["read", "read:credentials", "write:tasks", "write:ixp", "write:bug_intake", "write:projects", "write:credentials", "use:credentials"],
-    "admin": ["read", "read:credentials", "write:tasks", "write:ixp", "write:system", "write:bug_intake", "write:projects", "write:credentials", "use:credentials", "admin"],
-    "owner": ["read", "read:credentials", "write:tasks", "write:ixp", "write:system", "write:bug_intake", "write:projects", "write:credentials", "use:credentials", "admin"],
+    "operator": ["read", "read:credentials", "write:tasks", "write:ixp", "write:bug_intake", "write:projects", "write:credentials", "use:credentials", "use:llm"],
+    "admin": ["read", "read:credentials", "write:tasks", "write:ixp", "write:system", "write:bug_intake", "write:projects", "write:credentials", "use:credentials", "use:llm", "admin"],
+    "owner": ["read", "read:credentials", "write:tasks", "write:ixp", "write:system", "write:bug_intake", "write:projects", "write:credentials", "use:credentials", "use:llm", "admin"],
 }
 # The deployment MCP credential and the task-bound direct CLI credential are two
 # transports for the same autonomous operator. Keep their authority identical;

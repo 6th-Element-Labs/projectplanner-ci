@@ -15,6 +15,7 @@ from mcp.server.fastmcp import Context
 import auth
 import project_contract as project_contract_service
 import store
+from switchboard.mcp.authorization import require_current_access
 
 
 @dataclass(frozen=True)
@@ -40,7 +41,8 @@ def run_background_job(ctx: Context, job_name: str, project: str = "maxwell",
     """Run or resume a checkpointed background job (replay, audit export, receipts, reconcile)."""
     services = _services()
     project = project_contract_service.resolve_project_input(project)
-    principal = services.require_write(ctx, project, ("write:ixp",))
+    required = ("use:llm",) if job_name == "plan_agent_run" else ("write:ixp",)
+    principal = services.require_write(ctx, project, required)
     try:
         params = json.loads(params_json or "{}")
     except json.JSONDecodeError as exc:
@@ -67,6 +69,8 @@ def get_background_job_run(ctx: Context, run_id: str, project: str = "maxwell") 
     project = project_contract_service.resolve_project_input(project)
     manifest = store.get_background_job_run(project=project, run_id=run_id)
     if manifest.get("status") in ("pending", "running"):
+        if manifest.get("job_name") == "plan_agent_run":
+            require_current_access(project, ("use:llm",))
         store.ensure_background_job_running(
             project=project, run_id=run_id, actor="mcp/background_job/resume")
     return services.dumps(manifest)

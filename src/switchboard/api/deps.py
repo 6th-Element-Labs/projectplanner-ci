@@ -24,7 +24,7 @@ from switchboard.api.routers.auth import store as auth_store
 
 ADMIN_SCOPES = [
     "read", "read:credentials", "write:tasks", "write:ixp", "write:system",
-    "write:bug_intake", "write:credentials", "use:credentials", "admin",
+    "write:bug_intake", "write:credentials", "use:credentials", "use:llm", "admin",
 ]
 
 
