@@ -87,6 +87,95 @@ def _latest_terminal_wake_id(task_id: str, project: str) -> str:
     return ""
 
 
+def capacity_readback(
+    wake: dict[str, Any], *, project: str, runtime: str = "", lane: str = "",
+) -> dict[str, Any]:
+    """Join one pending wake to the online hosts that could claim it.
+
+    This is deliberately a read model: wake intents and host heartbeats remain
+    the sources of truth.  Start callers therefore learn whether they are
+    queued without introducing a second capacity state that could go stale.
+    """
+    selector = wake.get("selector") if isinstance(wake.get("selector"), dict) else {}
+    runtime = str(runtime or selector.get("runtime") or "").strip()
+    lane = str(lane or selector.get("lane") or "").strip()
+    try:
+        hosts = coordination_repo.list_agent_hosts(
+            runtime=runtime, lane=lane, project=project) or []
+        pending = coordination_repo.list_wake_intents(
+            status="pending", runtime=runtime, project=project) or []
+    except Exception as exc:
+        return {
+            "schema": "switchboard.connect.capacity_readback.v1",
+            "wake_id": str(wake.get("wake_id") or "") or None,
+            "wake_status": str(wake.get("status") or "") or None,
+            "queue_position": None,
+            "pending_ahead": None,
+            "matching_online_hosts": [],
+            "matching_online_host_count": 0,
+            "readback_error": {
+                "reason": "capacity_readback_unavailable",
+                "detail": str(exc),
+            },
+        }
+    matching_hosts: list[dict[str, Any]] = []
+    for host in hosts:
+        if (not isinstance(host, dict) or host.get("stale") or host.get("error")
+                or str(host.get("status") or "online").lower() != "online"):
+            continue
+        capacity = host.get("capacity") if isinstance(host.get("capacity"), dict) else {}
+        limits = host.get("limits") if isinstance(host.get("limits"), dict) else {}
+        try:
+            active = int(capacity.get("active_sessions") or 0)
+        except (TypeError, ValueError):
+            active = 0
+        raw_max = limits.get("max_sessions")
+        try:
+            maximum = int(raw_max) if raw_max is not None else None
+        except (TypeError, ValueError):
+            maximum = None
+        raw_available = host.get("available_sessions")
+        try:
+            available = int(raw_available) if raw_available is not None else (
+                max(0, maximum - active) if maximum is not None else None)
+        except (TypeError, ValueError):
+            available = None
+        matching_hosts.append({
+            "host_id": str(host.get("host_id") or ""),
+            "display_name": str(host.get("display_name") or "") or None,
+            "active_sessions": active,
+            "max_sessions": maximum,
+            "available_sessions": available,
+        })
+
+    wake_id = str(wake.get("wake_id") or "")
+    pending = [
+        row for row in pending
+        if isinstance(row, dict) and not row.get("error")
+        and (not lane or str((row.get("selector") or {}).get("lane") or "") == lane)
+    ]
+    queue_position = next(
+        (index for index, row in enumerate(pending, start=1)
+         if str(row.get("wake_id") or "") == wake_id), None)
+    ahead = max(0, queue_position - 1) if queue_position is not None else None
+    result: dict[str, Any] = {
+        "schema": "switchboard.connect.capacity_readback.v1",
+        "wake_id": wake_id or None,
+        "wake_status": str(wake.get("status") or "") or None,
+        "queue_position": queue_position,
+        "pending_ahead": ahead,
+        "matching_online_hosts": matching_hosts,
+        "matching_online_host_count": len(matching_hosts),
+    }
+    if not matching_hosts:
+        result["no_capacity"] = {
+            "reason": "no_matching_online_hosts",
+            "runtime": runtime or None,
+            "lane": lane or None,
+        }
+    return result
+
+
 def enqueue_task(
     task: dict[str, Any],
     *,
@@ -180,6 +269,8 @@ def enqueue_task(
             "task_id": task_id,
             "project": project,
         }
+    capacity = capacity_readback(
+        wake, project=project, runtime=runtime_name, lane=lane)
     return {
         "dispatched": True,
         "task_id": task_id,
@@ -190,4 +281,5 @@ def enqueue_task(
         "runtime": runtime_name,
         "provider": provider,
         "execution_mode": CONNECT_WAKE_MODE,
+        "capacity": capacity,
     }

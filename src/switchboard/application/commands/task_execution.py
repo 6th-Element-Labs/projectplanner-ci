@@ -220,14 +220,17 @@ def _session_is_terminal(session: dict[str, Any]) -> bool:
         str(session.get("status") or "").lower() in runner_repo.RUNNER_TERMINAL_STATUSES)
 
 
-def _queue_capacity_hint(project: str, *, preferred_host_id: str = "") -> dict[str, Any]:
+def _queue_capacity_hint(project: str, *, attempt: dict[str, Any],
+                         preferred_host_id: str = "") -> dict[str, Any]:
     """Best-effort "behind N on <host>" from online host capacity.
 
     WATCH-5: when a Connect wake is still pending, the panel must distinguish
     capacity wait from a live session. Prefer an explicitly named host; otherwise
     the most-saturated online host (zero available sessions, highest active).
     """
-    hosts = coordination_repo.list_agent_hosts(project=project) or []
+    from switchboard.application.commands import connect_dispatch
+    readback = connect_dispatch.capacity_readback(attempt, project=project)
+    hosts = readback.get("matching_online_hosts") or []
     preferred = str(preferred_host_id or "").strip()
     candidates = []
     for host in hosts:
@@ -238,9 +241,8 @@ def _queue_capacity_hint(project: str, *, preferred_host_id: str = "") -> dict[s
             continue
         if preferred and host_id != preferred:
             continue
-        capacity = host.get("capacity") if isinstance(host.get("capacity"), dict) else {}
         try:
-            active = int(capacity.get("active_sessions") or 0)
+            active = int(host.get("active_sessions") or 0)
         except (TypeError, ValueError):
             active = 0
         available = host.get("available_sessions")
@@ -255,7 +257,7 @@ def _queue_capacity_hint(project: str, *, preferred_host_id: str = "") -> dict[s
             "saturated": available_i == 0,
         })
     if not candidates:
-        return {}
+        return {"capacity": readback}
     # Prefer saturated hosts, then highest active count.
     candidates.sort(key=lambda row: (
         0 if row.get("saturated") else 1,
@@ -265,11 +267,13 @@ def _queue_capacity_hint(project: str, *, preferred_host_id: str = "") -> dict[s
     behind = int(best.get("behind_active_runs") or 0)
     host_id = str(best.get("host_id") or "")
     if behind <= 0 and not best.get("saturated"):
-        return {"host_id": host_id, "behind_active_runs": behind}
+        return {"host_id": host_id, "behind_active_runs": behind,
+                "capacity": readback}
     return {
         "host_id": host_id,
         "behind_active_runs": behind,
         "detail": f"Queued behind {behind} active runs on {host_id}",
+        "capacity": readback,
     }
 
 
@@ -334,7 +338,8 @@ def _panel_projection(projection: dict[str, Any], *, project: str) -> dict[str, 
         }
 
     if wake_status == "pending" or _in_flight_wake(projection) is not None:
-        hint = _queue_capacity_hint(project, preferred_host_id=host_id)
+        hint = _queue_capacity_hint(project, attempt=attempt,
+                                    preferred_host_id=host_id)
         behind = hint.get("behind_active_runs")
         hint_host = str(hint.get("host_id") or host_id or "")
         detail = str(hint.get("detail") or "").strip()
@@ -351,6 +356,7 @@ def _panel_projection(projection: dict[str, Any], *, project: str) -> dict[str, 
             "host_attached": None,
             "wake_status": wake_status or "pending",
             "behind_active_runs": behind,
+            "capacity": hint.get("capacity"),
         }
 
     return {
@@ -431,6 +437,7 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
             "host_id": active_runner.get("host_id"),
         }
     elif pending:
+        from switchboard.application.commands import connect_dispatch
         result = {
             "action": "starting",
             "started": False,
@@ -439,6 +446,10 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
             "runner_session_id": pending.get("runner_session_id"),
             "wake_id": pending.get("wake_id"),
             "host_id": pending.get("host_id"),
+            "capacity": connect_dispatch.capacity_readback(
+                pending, project=project, runtime=runtime,
+                lane=str((projection.get("task") or {}).get("_wsId")
+                         or (projection.get("task") or {}).get("workstream") or "")),
         }
     elif launcher is None:
         from switchboard.application.commands import connect_dispatch
@@ -519,6 +530,7 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
         scopes=descriptor.get("scopes"),
         expires_at=descriptor.get("expires_at"),
         browser_safe=descriptor.get("browser_safe"),
+        capacity=result.get("capacity"),
     )
 
 

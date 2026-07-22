@@ -590,9 +590,22 @@
                 }
                 return true;
             }
-            this._runnerPtyGate(
-                `Starting on ${this.esc(String(data.host_id || 'your Mac'))} — the live terminal opens as soon as the runner binds.`,
-                'secondary');
+            const capacity = (data.capacity && typeof data.capacity === 'object')
+                ? data.capacity : {};
+            const hosts = Array.isArray(capacity.matching_online_hosts)
+                ? capacity.matching_online_hosts : [];
+            const saturated = hosts.find((host) => Number(host.available_sessions) === 0)
+                || hosts[0];
+            const ahead = Number(capacity.pending_ahead);
+            const noCapacity = capacity.no_capacity && capacity.no_capacity.reason;
+            const initialDetail = noCapacity
+                ? `Queued — ${String(noCapacity).replaceAll('_', ' ')}`
+                : saturated
+                    ? `Queued behind ${Number(saturated.active_sessions || 0)} runs on ${String(saturated.host_id || 'host')}`
+                    : Number.isFinite(ahead) && ahead > 0
+                        ? `Queued behind ${ahead} pending ${ahead === 1 ? 'run' : 'runs'}`
+                        : `Starting on ${String(data.host_id || 'your Mac')} — the live terminal opens as soon as the runner binds.`;
+            this._runnerPtyGate(this.esc(initialDetail), noCapacity || saturated ? 'warning' : 'secondary');
             const deadline = Date.now() + 90000;
             while (Date.now() < deadline) {
                 await new Promise((resolve) => setTimeout(resolve, 3000));
