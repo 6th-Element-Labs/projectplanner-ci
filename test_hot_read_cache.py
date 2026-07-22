@@ -124,7 +124,16 @@ try:
     # === 2) NON-SERIALIZING over a real ASGI transport ==========================
     # Make the signals build deliberately slow; a threadpooled handler must let the
     # loop keep serving /health, and two slow reads must overlap (not serialize).
-    SLOW = 0.5
+    #
+    # BUG-136: the shared public CI sandbox is 2-10x slower than local, and pure
+    # scheduler/GC noise reached ~260ms there — over the old 250ms /health bound
+    # (SLOW=0.5 * 0.5), failing two unrelated PRs in one night. The bounds below
+    # only need to discriminate stalled from concurrent: a stalled /health costs
+    # >= SLOW (it waits out a full injected build) and a serialized pair of slow
+    # reads costs >= 2*SLOW (injected sleeps cannot compress). SLOW=1.0 keeps
+    # both bounds a full engine-gap away from observed noise while every failure
+    # mode still overshoots them decisively. Override for slower boxes via env.
+    SLOW = max(0.2, float(os.environ.get("PM_TEST_SLOW_READ_S", "1.0") or 1.0))
     restore_slow, _ = None, None
     _real_compute = signals._compute_plan_signals
 
@@ -161,10 +170,14 @@ try:
            "both slow /api/signals return 200")
         ok(all(h[0].status_code == 200 for h in healths), "concurrent /health calls return 200")
         max_health = max(h[1] for h in healths)
+        # Stalled /health would wait out a full injected build (>= SLOW); half of
+        # SLOW separates that decisively while leaving SLOW*0.5 of noise headroom.
         ok(max_health < SLOW * 0.5,
            f"/health not stalled behind the slow read ({max_health*1000:.0f}ms << {SLOW*1000:.0f}ms build)")
-        ok(wall < SLOW * 1.8,
-           f"two slow reads overlapped in the threadpool (wall {wall*1000:.0f}ms < {SLOW*1.8*1000:.0f}ms serial bound)")
+        # Serialized slow reads cost >= 2*SLOW; overlapped ~= SLOW + noise. 1.7x
+        # sits between them with SLOW*0.7 of noise headroom on contended boxes.
+        ok(wall < SLOW * 1.7,
+           f"two slow reads overlapped in the threadpool (wall {wall*1000:.0f}ms < {SLOW*1.7*1000:.0f}ms serial bound)")
     finally:
         signals._compute_plan_signals = _real_compute
 
