@@ -339,7 +339,7 @@ try:
     ok(not registered.get("error")
        and (registered.get("metadata") or {}).get("native_host_execution") is True
        and watch.get("watchable") is True
-       and watch.get("binding_mode") == "direct_assignment",
+       and watch.get("binding_mode") == "native_assignment",
        "the live direct runner is browser-watchable without a task claim or Work Session")
     ticket = runner_pty.mint_ticket_for_session(
         runner_session_id=direct_runner_id, project=P,

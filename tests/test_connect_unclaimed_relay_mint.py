@@ -4,7 +4,7 @@
 Connect (the content-blind DHCP plane) launches a host PTY before any task claim
 or Work Session exists -- that is the whole point of the model. assert_runner_watchable
 already accepts such a runner (is_connect_assignment_runner), but _server_relay_options
-only granted the pre-bind placeholder identity to is_direct_assignment_runner, so every
+only granted the pre-bind placeholder identity to the old direct-only predicate, so every
 Connect run was told "watchable" and then refused a ticket -- dark for its entire life.
 This pins that an unclaimed native Connect runner mints a host_url, exactly like the
 unclaimed native *direct* runner already does.
