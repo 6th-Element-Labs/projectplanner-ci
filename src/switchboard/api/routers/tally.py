@@ -5,9 +5,10 @@ boundaries. Persistence stays on the store façade / kpis_economics repository.
 """
 from __future__ import annotations
 
-from typing import Callable
+from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
+from pydantic import BaseModel, ConfigDict, Field
 
 import auth
 import store
@@ -16,6 +17,41 @@ import store
 ProjectResolver = Callable[[str], str]
 PrincipalResolver = Callable[..., dict]
 BodyProjectResolver = Callable[[dict], str]
+
+
+class SpendEnvelopeBody(BaseModel):
+    """Typed spend-envelope write (keeps ARCH-MS-84 untyped-body ceiling flat)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    project: Optional[str] = None
+    daily_limit_usd: Any = None
+    monthly_limit_usd: Any = None
+
+
+class SpendReservationBody(BaseModel):
+    """Typed worst-case reservation request."""
+
+    model_config = ConfigDict(extra="allow")
+
+    project: Optional[str] = None
+    request_id: Optional[str] = None
+    worst_case_cost_usd: Any = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SpendReconcileBody(BaseModel):
+    """Typed provider-actual reconciliation request."""
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    project: Optional[str] = None
+    actual_cost_usd: Any = None
+    provider: Optional[str] = None
+    llm_model: Optional[str] = Field(default=None, alias="model")
+    prompt_tokens: Any = 0
+    completion_tokens: Any = 0
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 def create_router(*, resolve_project: ProjectResolver,
@@ -41,6 +77,37 @@ def create_router(*, resolve_project: ProjectResolver,
             latency_ms=body.get("latency_ms"), status=body.get("status") or "ok",
             metadata=body.get("metadata") or {}, request_id=body.get("request_id"),
             project=project)
+
+    @router.put("/tally/v1/spend/envelope")
+    async def tally_set_spend_envelope(request: Request, body: SpendEnvelopeBody):
+        payload = body.model_dump()
+        project = resolve_body_project(payload)
+        principal = resolve_principal(request, project, ("write:ixp",), dev_actor="tally")
+        return store.set_spend_envelope(
+            principal_id=principal["id"], daily_limit_usd=body.daily_limit_usd,
+            monthly_limit_usd=body.monthly_limit_usd, project=project)
+
+    @router.post("/tally/v1/spend/reservations")
+    async def tally_reserve_spend(request: Request, body: SpendReservationBody):
+        payload = body.model_dump()
+        project = resolve_body_project(payload)
+        principal = resolve_principal(request, project, ("write:ixp",), dev_actor="tally")
+        return store.reserve_spend(
+            principal_id=principal["id"], request_id=body.request_id or "",
+            worst_case_cost_usd=body.worst_case_cost_usd,
+            metadata=body.metadata or {}, project=project)
+
+    @router.post("/tally/v1/spend/reservations/{request_id}/reconcile")
+    async def tally_reconcile_spend(request_id: str, request: Request, body: SpendReconcileBody):
+        payload = body.model_dump(by_alias=True)
+        project = resolve_body_project(payload)
+        principal = resolve_principal(request, project, ("write:ixp",), dev_actor="tally")
+        return store.reconcile_spend(
+            principal_id=principal["id"], request_id=request_id,
+            actual_cost_usd=body.actual_cost_usd, provider=body.provider or "",
+            model=body.llm_model or "", prompt_tokens=int(body.prompt_tokens or 0),
+            completion_tokens=int(body.completion_tokens or 0),
+            metadata=body.metadata or {}, project=project)
 
 
     @router.post("/tally/v1/outcomes")

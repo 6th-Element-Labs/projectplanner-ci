@@ -22,6 +22,9 @@
   ],
   "writer_inventory": [
     {"method":"POST","path":"/tally/v1/spend/ingest","handler":"tally_spend_ingest","calls":["store.report_usage"],"ownership":"monolith","boundary_ref":"kpis_economics.report_usage","transaction":"one project connection resolves optional outcome, applies request-id idempotency, inserts spend and tally.usage_reported activity"},
+    {"method":"PUT","path":"/tally/v1/spend/envelope","handler":"tally_set_spend_envelope","calls":["store.set_spend_envelope"],"ownership":"monolith","boundary_ref":"kpis_economics.set_spend_envelope","transaction":"one project connection upserts the principal spend envelope limits"},
+    {"method":"POST","path":"/tally/v1/spend/reservations","handler":"tally_reserve_spend","calls":["store.reserve_spend"],"ownership":"monolith","boundary_ref":"kpis_economics.reserve_spend","transaction":"one project connection atomically reserves worst-case micros against the principal envelope with request-id idempotency"},
+    {"method":"POST","path":"/tally/v1/spend/reservations/{request_id}/reconcile","handler":"tally_reconcile_spend","calls":["store.reconcile_spend"],"ownership":"monolith","boundary_ref":"kpis_economics.reconcile_spend","transaction":"one project connection reconciles a reserved request-id to provider-actual micros/tokens idempotently"},
     {"method":"POST","path":"/tally/v1/outcomes","handler":"tally_record_outcome","calls":["auth.actor","store.record_outcome"],"ownership":"monolith","boundary_ref":"kpis_economics.record_outcome","transaction":"one project connection inserts outcome and tally.outcome_recorded activity"},
     {"method":"POST","path":"/tally/v1/outcomes/{outcome_id}/verify","handler":"tally_verify_outcome","calls":["auth.actor","store.verify_outcome"],"ownership":"monolith","boundary_ref":"kpis_economics.verify_outcome","transaction":"one project connection reads outcome, merges evidence, updates verification, and inserts activity"},
     {"method":"POST","path":"/tally/v1/outcomes/{outcome_id}/reject","handler":"tally_reject_outcome","calls":["auth.actor","store.reject_outcome"],"ownership":"monolith","boundary_ref":"kpis_economics.reject_outcome","transaction":"one project connection reads outcome, records rejection evidence/status, and inserts activity"},
@@ -32,7 +35,7 @@
   "writer_policy": {
     "day_one_service_writer_count": 0,
     "all_inventory_entries_stay_on_monolith": true,
-    "reader_rule": "the proposed service may expose committed read models only; all seven writers remain on the monolith",
+    "reader_rule": "the proposed service may expose committed read models only; all ten writers remain on the monolith",
     "unsafe_attribution_rule": "a read process is not authorized while writers can persist conflicting task, claim, outcome, or KPI attribution"
   },
   "project_scope": {
@@ -82,10 +85,10 @@
     "passed": false
   },
   "gates": {
-    "G1_route_repository_writer_inventory":{"passed":true,"reason":"All thirteen Tally routes are classified as six day-one reads and seven monolith-owned writers with concrete repository and transaction boundaries."},
+    "G1_route_repository_writer_inventory":{"passed":true,"reason":"All sixteen Tally routes are classified as six day-one reads and ten monolith-owned writers with concrete repository and transaction boundaries."},
     "G2_attribution_integrity":{"passed":false,"reason":"Spend/outcome writers do not fail closed on conflicting task/outcome/claim parents, so existing read joins cannot yet be treated as an invariant-safe standalone ledger."},
     "G3_project_scope":{"passed":true,"reason":"Every route resolves an explicit project and storage remains isolated by project database."},
-    "G4_writer_transaction_boundaries":{"passed":true,"reason":"All seven writers and their audit effects have named monolith transaction boundaries and remain outside day-one service scope."},
+    "G4_writer_transaction_boundaries":{"passed":true,"reason":"All ten writers and their audit effects have named monolith transaction boundaries and remain outside day-one service scope."},
     "G5_sqlite_contention":{"passed":true,"reason":"Executable WAL probe requires zero lock errors, zero attribution snapshot mismatches, and quick_check=ok."},
     "G6_resource_budget":{"passed":false,"reason":"A 128 MiB Tally process would leave 470921216 bytes available, 65949696 bytes below the required 512 MiB resident reserve."}
   },

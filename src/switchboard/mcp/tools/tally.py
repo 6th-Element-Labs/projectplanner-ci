@@ -59,6 +59,45 @@ def report_usage(ctx: Context, source: str = "agent_report", confidence: str = "
         metadata=metadata, request_id=request_id or None, project=project))
 
 
+def set_spend_envelope(ctx: Context, daily_limit_usd: float,
+                       monthly_limit_usd: float, project: str = "maxwell") -> str:
+    """Set the authenticated principal's daily and monthly accounting envelope."""
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:ixp",))
+    return services.dumps(store.set_spend_envelope(
+        principal["id"], daily_limit_usd, monthly_limit_usd, project=project))
+
+
+def reserve_spend(ctx: Context, request_id: str, worst_case_cost_usd: float,
+                  metadata_json: str = "{}", project: str = "maxwell") -> str:
+    """Atomically reserve conservative cost before a provider call."""
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:ixp",))
+    try:
+        metadata = json.loads(metadata_json or "{}")
+    except Exception:
+        return services.dumps({"error": "metadata_json must be a JSON object string"})
+    return services.dumps(store.reserve_spend(
+        principal["id"], request_id, worst_case_cost_usd,
+        metadata=metadata, project=project))
+
+
+def reconcile_spend(ctx: Context, request_id: str, actual_cost_usd: float,
+                    provider: str, model: str, prompt_tokens: int = 0,
+                    completion_tokens: int = 0, metadata_json: str = "{}",
+                    project: str = "maxwell") -> str:
+    """Reconcile a reservation with provider/model/token actuals."""
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:ixp",))
+    try:
+        metadata = json.loads(metadata_json or "{}")
+    except Exception:
+        return services.dumps({"error": "metadata_json must be a JSON object string"})
+    return services.dumps(store.reconcile_spend(
+        principal["id"], request_id, actual_cost_usd, provider, model,
+        prompt_tokens, completion_tokens, metadata=metadata, project=project))
+
+
 
 def record_outcome(ctx: Context, outcome_type: str, title: str,
                    task_id: str = "", claim_id: str = "", epic_id: str = "",
@@ -179,7 +218,7 @@ def get_deliverable_tally(deliverable_id: str, project: str = "maxwell") -> str:
 
 
 
-TALLY_TOOL_NAMES = ('report_usage', 'record_outcome', 'verify_outcome', 'reject_outcome', 'create_kpi', 'update_kpi_value', 'link_outcome_to_kpi', 'get_task_tally', 'get_kpi_tally', 'get_deliverable_tally')
+TALLY_TOOL_NAMES = ('report_usage', 'set_spend_envelope', 'reserve_spend', 'reconcile_spend', 'record_outcome', 'verify_outcome', 'reject_outcome', 'create_kpi', 'update_kpi_value', 'link_outcome_to_kpi', 'get_task_tally', 'get_kpi_tally', 'get_deliverable_tally')
 
 
 def register_tally_tools(mcp: Any, services: TallyToolServices) -> dict[str, Callable[..., str]]:

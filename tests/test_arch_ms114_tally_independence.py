@@ -35,10 +35,10 @@ ok(report.get("production_cutover_authorized") is False, "production cutover is 
 ok(report.get("failed_gates") == ["G2_attribution_integrity", "G6_resource_budget"],
    "only attribution integrity and live resource budget block independence")
 checks = report.get("checks") or {}
-ok(checks.get("router_inventory_complete") is True, "all thirteen Tally routes are inventoried")
+ok(checks.get("router_inventory_complete") is True, "all sixteen Tally routes are inventoried")
 ok(checks.get("day_one_surface_exact") is True, "exact six-route day-one read surface is locked")
 ok(checks.get("repository_calls_exact") is True, "declared repository calls match the live router AST")
-ok(checks.get("writer_transactions_complete") is True, "all seven writer transactions are explicit")
+ok(checks.get("writer_transactions_complete") is True, "all ten writer transactions are explicit")
 ok(checks.get("project_scope_structural") is True, "all reads and writes bind an explicit project")
 ok(checks.get("attribution_gate_matches_source") is True, "unsafe parent attribution is detected from source")
 ok(checks.get("attribution_findings_visible") is True, "both attribution blockers are machine-readable")
