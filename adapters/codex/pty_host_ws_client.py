@@ -15,6 +15,7 @@ import asyncio
 import errno
 import fcntl
 import os
+import random
 import select
 import struct
 import termios
@@ -36,6 +37,8 @@ except ModuleNotFoundError:
 
 OnCloseFn = Callable[[str], None]
 OnFrameFn = Callable[[bytes], None]
+RefreshUrlFn = Callable[[int, str], str]
+ReconnectLogFn = Callable[[int, str, str], None]
 
 
 class HostTunnelConnection:
@@ -48,12 +51,16 @@ class HostTunnelConnection:
         on_frame: Optional[OnFrameFn] = None,
         coalesce_ms: float = domain.DEFAULT_WRITE_COALESCE_MS,
         require_initial: bool = True,
+        refresh_url: Optional[RefreshUrlFn] = None,
+        reconnect_log: Optional[ReconnectLogFn] = None,
     ):
         self.url = str(url or "")
         self.on_frame = on_frame
         self.on_connect: Optional[Callable[[], None]] = None
         self.coalesce_ms = max(8.0, min(16.0, float(coalesce_ms)))
         self.require_initial = bool(require_initial)
+        self.refresh_url = refresh_url
+        self.reconnect_log = reconnect_log
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._ws = None
         self._thread: Optional[threading.Thread] = None
@@ -92,7 +99,22 @@ class HostTunnelConnection:
     async def _main(self) -> None:
         # Symmetric reconnect: keep dialing until stop() — hub session stays open.
         backoff = 0.5
+        reconnect_attempt = 0
+        reconnect_reason = ""
         while not self._stopped.is_set() and not self._gave_up.is_set():
+            if reconnect_reason:
+                reconnect_attempt += 1
+                if self.refresh_url is not None:
+                    try:
+                        loop = asyncio.get_running_loop()
+                        fresh_url = await loop.run_in_executor(
+                            None, self.refresh_url, reconnect_attempt, reconnect_reason)
+                        if fresh_url:
+                            self.update_url(fresh_url)
+                    except Exception as exc:  # noqa: BLE001
+                        if self.reconnect_log is not None:
+                            self.reconnect_log(
+                                reconnect_attempt, "refresh_failed", type(exc).__name__)
             try:
                 with self._url_lock:
                     target_url = self.url
@@ -106,6 +128,8 @@ class HostTunnelConnection:
                     self._connect_error = None
                     self._ready.set()
                     backoff = 0.5
+                    if reconnect_attempt and self.reconnect_log is not None:
+                        self.reconnect_log(reconnect_attempt, "connected", "")
                     if self.on_connect is not None:
                         loop = asyncio.get_running_loop()
                         await loop.run_in_executor(None, self.on_connect)
@@ -116,6 +140,7 @@ class HostTunnelConnection:
                         if self.on_frame is not None:
                             loop = asyncio.get_running_loop()
                             await loop.run_in_executor(None, self.on_frame, bytes(raw))
+                    raise ConnectionError("host_tunnel_socket_closed")
             except Exception as exc:  # noqa: BLE001
                 self._connect_error = exc
                 self._ws = None
@@ -128,7 +153,11 @@ class HostTunnelConnection:
                         return
                 if self._stopped.is_set() or self._gave_up.is_set():
                     return
-                await asyncio.sleep(backoff)
+                if reconnect_attempt and self.reconnect_log is not None:
+                    self.reconnect_log(
+                        reconnect_attempt, "connect_failed", type(exc).__name__)
+                reconnect_reason = type(exc).__name__
+                await asyncio.sleep(backoff * random.uniform(0.8, 1.2))
                 backoff = min(backoff * 2, 8.0)
             finally:
                 self._ws = None
@@ -441,6 +470,8 @@ def open_host_bridge(
     coalesce_ms: float = domain.DEFAULT_WRITE_COALESCE_MS,
     dial: bool | None = None,
     target_label: str = "",
+    refresh_url: Optional[RefreshUrlFn] = None,
+    reconnect_log: Optional[ReconnectLogFn] = None,
 ) -> HostBridgeSession:
     """Open the host side of the session transport.
 
@@ -459,7 +490,12 @@ def open_host_bridge(
         return HostBridgeSession(runner_session_id, conn, None, handoff=True)
 
     conn = HostTunnelConnection(
-        relay_ws_url, coalesce_ms=coalesce_ms, require_initial=False)
+        relay_ws_url,
+        coalesce_ms=coalesce_ms,
+        require_initial=False,
+        refresh_url=refresh_url,
+        reconnect_log=reconnect_log,
+    )
     conn.start()
     executor = None
     if master_fd is not None:

@@ -424,6 +424,27 @@ def _fresh_server_relay(server_relay, runner_session_id, host_id):
     return mint_host_tunnel_url(runner_session_id, host_id) or relay
 
 
+def _consume_host_relay_refresh_request(runner_session_id, host_id):
+    """Use the enrolled-host credential for a companion-requested refresh."""
+    try:
+        from codex import supervisor as _sup
+        request_path = _sup._session_dir(
+            str(runner_session_id or "")) / "host_relay.refresh"
+        if not request_path.exists():
+            return {}
+        relay = mint_host_tunnel_url(runner_session_id, host_id)
+        if relay.get("host_url"):
+            request_path.unlink(missing_ok=True)
+        return relay
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"[agent_host] host relay refresh failed "
+            f"runner_session_id={runner_session_id} error={type(exc).__name__}",
+            flush=True,
+        )
+        return {}
+
+
 def _require(method, path, body=None):
     """Fail-closed REST used for COORD-34 claim-bound runner registration."""
     try:
@@ -2237,7 +2258,9 @@ def renew_live_direct_runners(inventory):
         if host_preflight:
             body["metadata"]["host_repo_preflight"] = host_preflight
         result = _try("POST", P_HEARTBEAT_RUNNER, body)
-        server_relay = _fresh_server_relay((
+        requested_relay = _consume_host_relay_refresh_request(
+            session.get("runner_session_id"), host_id)
+        server_relay = requested_relay or _fresh_server_relay((
             (result or {}).get("server_relay")
             if isinstance(result, dict) else None
         ), session.get("runner_session_id"), host_id)

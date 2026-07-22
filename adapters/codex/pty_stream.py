@@ -668,6 +668,25 @@ def _relay_url_path(runner_session_id: str, ready_path: str = "") -> Path:
     return _session_dir(runner_session_id) / "host_relay.url"
 
 
+def _request_fresh_relay_url(
+        runner_session_id: str, host_id: str, url_path: Path, current_url: str) -> str:
+    """Ask the credential-owning Agent Host to pull a WATCH-7 ticket."""
+    request_path = url_path.with_name("host_relay.refresh")
+    request_path.write_text(json.dumps({
+        "runner_session_id": str(runner_session_id or ""),
+        "host_id": str(host_id or ""),
+        "requested_at": time.time(),
+    }), encoding="utf-8")
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline:
+        if url_path.exists():
+            fresh_url = url_path.read_text(encoding="utf-8").strip()
+            if fresh_url and fresh_url != current_url:
+                return fresh_url
+        time.sleep(0.25)
+    raise TimeoutError("relay_refresh_url_timeout")
+
+
 def _start_host_ws_executor(
     *,
     master_fd: int,
@@ -677,6 +696,8 @@ def _start_host_ws_executor(
     child_pid: int = 0,
     initial_snapshot: bytes = b"",
     target_label: str = "",
+    refresh_url: Any = None,
+    reconnect_log: Any = None,
 ) -> Any:
     """Dial Switchboard and pump master_fd (file logging stays in the executor)."""
     try:
@@ -691,6 +712,8 @@ def _start_host_ws_executor(
         target_label=target_label,
         log_path=log_path,
         dial=True,
+        refresh_url=refresh_url,
+        reconnect_log=reconnect_log,
     )
     if initial_snapshot:
         from switchboard.domain import runner_pty as pty_domain
@@ -781,6 +804,18 @@ def serve(
     relay_url = str(relay_ws_url or os.environ.get("PM_RUNNER_HOST_RELAY_URL") or "").strip()
     url_path = _relay_url_path(runner_session_id, ready_path)
 
+    def _refresh_relay_url(attempt: int, reason: str) -> str:
+        nonlocal relay_url
+        relay_url = _request_fresh_relay_url(
+            runner_session_id, host_id, url_path, relay_url)
+        return relay_url
+
+    def _log_reconnect(attempt: int, outcome: str, detail: str) -> None:
+        suffix = f" detail={detail}" if detail else ""
+        sys.stderr.write(
+            f"host_ws_reconnect attempt={attempt} outcome={outcome}{suffix}\n")
+        sys.stderr.flush()
+
     def _maybe_attach_host_ws() -> None:
         nonlocal relay_url
         published_url = ""
@@ -807,6 +842,8 @@ def serve(
                 child_pid=int(child_pid or 0),
                 initial_snapshot=fanout.snapshot(),
                 target_label=target_label,
+                refresh_url=_refresh_relay_url,
+                reconnect_log=_log_reconnect,
             )
         except Exception as exc:  # noqa: BLE001
             sys.stderr.write(f"host_ws_attach_failed:{type(exc).__name__}:{exc}\n")
