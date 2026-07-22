@@ -310,8 +310,9 @@ try:
            "discard scrollback and leak the old ResizeObserver on every drop)")
         ok(reused["line0"] == "UI-24 PLAYWRIGHT OK", "scrollback from before the simulated reconnect is still there")
 
-        # BUG-125: a WebSocket to the relay is not proof that the Agent Host
-        # tunnel exists. Only the host-attached frame may turn the UI live.
+        # BUG-125 + WATCH-5: a WebSocket to the relay is not proof that the
+        # Agent Host tunnel exists. host_attached=false is Detached (honest);
+        # only host_attached=true may claim Live.
         readiness = page.evaluate("""
             () => {
                 const rp = TeepPlan._runnerPty;
@@ -319,6 +320,7 @@ try:
                     'ready', {connection_state: 'waiting_for_host', host_attached: false, relay_ready: true}));
                 const waiting = {
                     gate: document.getElementById('runner-pty-gate').textContent,
+                    liveText: document.getElementById('runner-pty-live').textContent,
                     liveHidden: document.getElementById('runner-pty-live').hidden,
                 };
                 TeepPlan._runnerPtyHandleFrame(rp, TeepPlan._runnerPtyEncodeFrame(
@@ -326,17 +328,22 @@ try:
                 return {
                     waiting,
                     readyGate: document.getElementById('runner-pty-gate').textContent,
+                    readyLiveText: document.getElementById('runner-pty-live').textContent,
                     readyLiveHidden: document.getElementById('runner-pty-live').hidden,
                     hostAttached: rp.hostAttached,
                 };
             }
         """)
-        ok("waiting for Agent Host" in readiness["waiting"]["gate"]
-           and readiness["waiting"]["liveHidden"],
-           "relay-only socket is visibly waiting and cannot claim the agent is live")
+        ok(("Detached" in readiness["waiting"]["gate"]
+            or "Bridge detached" in readiness["waiting"]["gate"])
+           and "Detached" in readiness["waiting"]["liveText"]
+           and not readiness["waiting"]["liveHidden"],
+           "relay-only socket is Detached and cannot claim the agent is live")
         ok(readiness["hostAttached"] and not readiness["readyLiveHidden"]
-           and "Connected to Agent Host" in readiness["readyGate"],
-           "only the explicit host-attached frame marks the terminal end-to-end connected")
+           and "Live" in readiness["readyLiveText"]
+           and ("Connected to Agent Host" in readiness["readyGate"]
+                or "Live" in readiness["readyGate"]),
+           "only the explicit host-attached frame marks the terminal Live")
 
         # SIMPLIFY-9: reconnect reuses the one unexpired session capability.
         # Once a refresh is needed it is task-scoped; the browser still sends no

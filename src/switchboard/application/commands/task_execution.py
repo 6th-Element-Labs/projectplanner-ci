@@ -219,6 +219,150 @@ def _session_is_terminal(session: dict[str, Any]) -> bool:
         str(session.get("status") or "").lower() in runner_repo.RUNNER_TERMINAL_STATUSES)
 
 
+def _queue_capacity_hint(project: str, *, preferred_host_id: str = "") -> dict[str, Any]:
+    """Best-effort "behind N on <host>" from online host capacity.
+
+    WATCH-5: when a Connect wake is still pending, the panel must distinguish
+    capacity wait from a live session. Prefer an explicitly named host; otherwise
+    the most-saturated online host (zero available sessions, highest active).
+    """
+    hosts = coordination_repo.list_agent_hosts(project=project) or []
+    preferred = str(preferred_host_id or "").strip()
+    candidates = []
+    for host in hosts:
+        if not isinstance(host, dict) or host.get("stale"):
+            continue
+        host_id = str(host.get("host_id") or "").strip()
+        if not host_id:
+            continue
+        if preferred and host_id != preferred:
+            continue
+        capacity = host.get("capacity") if isinstance(host.get("capacity"), dict) else {}
+        try:
+            active = int(capacity.get("active_sessions") or 0)
+        except (TypeError, ValueError):
+            active = 0
+        available = host.get("available_sessions")
+        try:
+            available_i = int(available) if available is not None else None
+        except (TypeError, ValueError):
+            available_i = None
+        candidates.append({
+            "host_id": host_id,
+            "behind_active_runs": active,
+            "available_sessions": available_i,
+            "saturated": available_i == 0,
+        })
+    if not candidates:
+        return {}
+    # Prefer saturated hosts, then highest active count.
+    candidates.sort(key=lambda row: (
+        0 if row.get("saturated") else 1,
+        -int(row.get("behind_active_runs") or 0),
+    ))
+    best = candidates[0]
+    behind = int(best.get("behind_active_runs") or 0)
+    host_id = str(best.get("host_id") or "")
+    if behind <= 0 and not best.get("saturated"):
+        return {"host_id": host_id, "behind_active_runs": behind}
+    return {
+        "host_id": host_id,
+        "behind_active_runs": behind,
+        "detail": f"Queued behind {behind} active runs on {host_id}",
+    }
+
+
+def _panel_projection(projection: dict[str, Any], *, project: str) -> dict[str, Any]:
+    """WATCH-5: four honest operator states for the task/Watch panel."""
+    active_runner = projection.get("active_runner") or {}
+    attempt = projection.get("active_attempt") or {}
+    wake_status = str(attempt.get("status") or "").strip().lower()
+    host_id = str(
+        active_runner.get("host_id")
+        or attempt.get("host_id")
+        or ""
+    ).strip()
+
+    if active_runner:
+        runner_id = str(active_runner.get("runner_session_id") or "")
+        try:
+            from switchboard.application import runner_pty_relay as relay
+            host_attached = relay.host_attached_for(runner_id)
+        except Exception:
+            host_attached = None
+        if host_attached is False:
+            # Explicit False from the relay: Detached (WATCH-4 host_not_attached).
+            return {
+                "state": "detached",
+                "label": "Detached",
+                "detail": (
+                    "Bridge detached — reconnecting to the host tunnel"
+                    + (f" on {host_id}" if host_id else "")
+                ),
+                "host_id": host_id or None,
+                "host_attached": False,
+                "wake_status": wake_status or None,
+                "behind_active_runs": None,
+            }
+        # True, or None when this process cannot see the relay: treat as Live.
+        # Detached requires an explicit host_attached=false signal.
+        return {
+            "state": "live",
+            "label": "Live",
+            "detail": f"Runner live on {host_id or 'host'}"
+                      + (" — relay attached" if host_attached is True else ""),
+            "host_id": host_id or None,
+            "host_attached": host_attached,
+            "wake_status": wake_status or None,
+            "behind_active_runs": None,
+        }
+
+    if wake_status == "claimed":
+        return {
+            "state": "starting",
+            "label": "Starting",
+            "detail": (
+                f"Host {host_id} claimed the wake — registering the runner"
+                if host_id else
+                "Wake claimed — registering the runner"
+            ),
+            "host_id": host_id or None,
+            "host_attached": None,
+            "wake_status": "claimed",
+            "behind_active_runs": None,
+        }
+
+    if wake_status == "pending" or _in_flight_wake(projection) is not None:
+        hint = _queue_capacity_hint(project, preferred_host_id=host_id)
+        behind = hint.get("behind_active_runs")
+        hint_host = str(hint.get("host_id") or host_id or "")
+        detail = str(hint.get("detail") or "").strip()
+        if not detail:
+            detail = (
+                f"Queued — waiting for a host to claim"
+                + (f" ({hint_host})" if hint_host else "")
+            )
+        return {
+            "state": "queued",
+            "label": "Queued",
+            "detail": detail,
+            "host_id": hint_host or None,
+            "host_attached": None,
+            "wake_status": wake_status or "pending",
+            "behind_active_runs": behind,
+        }
+
+    return {
+        "state": "idle",
+        "label": "Ready",
+        "detail": "No Connect wake is in flight",
+        "host_id": None,
+        "host_attached": None,
+        "wake_status": None,
+        "behind_active_runs": None,
+    }
+
+
 def get_task_execution(task_id: Any, *, project: str = DEFAULT_PROJECT) -> dict[str, Any]:
     """Return the one authoritative answer to "what is running" for a task."""
     task_id = _normalize(task_id)
@@ -236,12 +380,14 @@ def get_task_execution(task_id: Any, *, project: str = DEFAULT_PROJECT) -> dict[
     resumable_review = (
         task_status == "In Review" and not live and not in_flight
         and any(_session_is_terminal(s) for s in sessions))
+    panel = _panel_projection(projection, project=project)
     return _envelope(
         "get_task_execution", task_id, project,
         execution_id=execution_id or None,
         lifecycle_phase=projection.get("lifecycle_phase"),
         running=live,
         starting=in_flight,
+        panel=panel,
         has_ended_session=has_ended_session,
         resumable_review=resumable_review,
         execution=projection,
