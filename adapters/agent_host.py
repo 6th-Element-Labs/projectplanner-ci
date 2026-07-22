@@ -1874,6 +1874,120 @@ _TERMINAL_RUNNER_STATES = frozenset({
 })
 
 
+def _positive_seconds(env_name, default):
+    try:
+        return max(0.0, float(os.environ.get(env_name, str(default)) or default))
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _runner_last_output_at(session):
+    """Return durable local PTY activity without reading or exposing its log."""
+    metadata = dict(session.get("metadata") or {})
+    log_path = str(session.get("log_path") or metadata.get("log_path") or "").strip()
+    if log_path:
+        try:
+            return float(os.stat(log_path).st_mtime)
+        except OSError:
+            pass
+    return _runner_timestamp(session.get("started_at"))
+
+
+def _runner_timestamp(value):
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def reap_finished_or_idle_runners(inventory, *, now=None):
+    """End local sessions whose claim finished or which are truly idle.
+
+    An active claim is an absolute safety rail. Completed claims receive a short
+    quiet grace so the CLI can print its final response; unclaimed/terminal-claim
+    sessions receive the longer idle backstop. The central claim row and the
+    local PTY log mtime are deliberately evaluated together.
+    """
+    now = time.time() if now is None else float(now)
+    grace_s = _positive_seconds("PM_AGENT_HOST_REAP_GRACE_SECONDS", 120)
+    idle_s = _positive_seconds("PM_AGENT_HOST_IDLE_TIMEOUT_SECONDS", 30 * 60)
+    host_id = str((inventory or {}).get("host_id") or "")
+    outcomes = []
+    for session in _drain_runners(host_id):
+        runner_id = str(session.get("runner_session_id") or "")
+        task_id = str(session.get("task_id") or "")
+        status = str(session.get("status") or "").lower()
+        if (not runner_id or not task_id or session.get("alive") is not True
+                or status != "running"):
+            continue
+        claim = session.get("claim") if isinstance(session.get("claim"), dict) else {}
+        claim_status = str(claim.get("status") or "").lower()
+        if claim_status == "active":
+            continue
+        output_at = _runner_last_output_at(session)
+        reason = ""
+        terminal_status = "stopped"
+        threshold_s = idle_s
+        activity_at = max(output_at, _runner_timestamp(session.get("started_at")))
+        if claim_status == "completed":
+            reason = "claim_completed"
+            terminal_status = "completed"
+            threshold_s = grace_s
+            activity_at = max(activity_at, _runner_timestamp(claim.get("completed_at")))
+        else:
+            for key in ("completed_at", "claimed_at", "created_at", "updated_at"):
+                activity_at = max(activity_at, _runner_timestamp(claim.get(key)))
+            if now - activity_at >= idle_s:
+                reason = "idle_timeout"
+        if not reason or now - activity_at < threshold_s:
+            continue
+        killed = supervisor_action("kill", runner_id, {
+            "reason": reason,
+            "task_id": task_id,
+        })
+        kill_ok = bool(killed and not killed.get("error")
+                       and killed.get("alive") is not True)
+        if not kill_ok:
+            outcomes.append({"runner_session_id": runner_id, "task_id": task_id,
+                             "reason": reason, "reaped": False,
+                             "error": (killed or {}).get("error")})
+            continue
+        _drop_host_bridge(runner_id)
+        metadata = dict(session.get("metadata") or {})
+        terminal = _try("POST", P_HEARTBEAT_RUNNER, {
+            "project": PROJECT,
+            "runner_session_id": runner_id,
+            "host_id": host_id,
+            "task_id": task_id,
+            "claim_id": session.get("claim_id") or "",
+            "agent_id": session.get("agent_id") or f"codex/{task_id}",
+            "status": terminal_status,
+            "metadata": {**metadata, "terminalized_by": "session_reaper",
+                         "reaped_reason": reason, "reaped_at": now,
+                         "last_output_at": output_at},
+        })
+        terminal_ok = bool(terminal and not terminal.get("error"))
+        wake_id = str(metadata.get("wake_id") or session.get("wake_id") or "")
+        wake_completed = False
+        if wake_id and terminal_ok:
+            completion = _try("POST", P_COMPLETE_WAKE, {
+                "project": PROJECT,
+                "wake_id": wake_id,
+                "runner_session_id": runner_id,
+                "agent_id": session.get("agent_id") or f"codex/{task_id}",
+                "result": {"started": True, "reaped": True, "reason": reason,
+                           "runner_session_id": runner_id, "task_id": task_id,
+                           "host_id": host_id},
+            })
+            wake_completed = bool(completion and not completion.get("error")
+                                  and not completion.get("error_code"))
+        outcomes.append({"runner_session_id": runner_id, "task_id": task_id,
+                         "reason": reason, "reaped": terminal_ok,
+                         "wake_completed": wake_completed,
+                         "error": None if terminal_ok else (terminal or {}).get("error")})
+    return outcomes
+
+
 def converge_terminal_task_runners(inventory, heartbeat):
     """Kill and acknowledge processes whose tasks are already terminal.
 
@@ -2701,6 +2815,9 @@ def run_once(inventory):
             "project": PROJECT, "host_id": host_id,
             "active_sessions": capacity["active_sessions"], "capacity": capacity,
         }) or heartbeat
+    reaped_runners = reap_finished_or_idle_runners(inventory)
+    if reaped_runners:
+        capacity = heartbeat_capacity(inventory)
     runner_heartbeats = renew_live_direct_runners(inventory)
     local_auth = capacity.get("local_auth")
     if isinstance(local_auth, dict) and local_auth.get("available") is not True:
@@ -2712,6 +2829,7 @@ def run_once(inventory):
             "runner_controls": [],
             "runner_heartbeats": runner_heartbeats,
             "terminal_runner_cleanup": terminal_runner_cleanup,
+            "reaped_runners": reaped_runners,
             "auth_available": False,
         }
     recovery = None
@@ -2743,6 +2861,7 @@ def run_once(inventory):
             "refused": [],
             "runner_controls": [],
             "terminal_runner_cleanup": terminal_runner_cleanup,
+            "reaped_runners": reaped_runners,
             "postprocessing_recovery": recovery,
         }
     controls = handle_runner_controls(inventory)
@@ -3164,6 +3283,7 @@ def run_once(inventory):
             "runner_controls": controls,
             "runner_heartbeats": runner_heartbeats,
             "terminal_runner_cleanup": terminal_runner_cleanup,
+            "reaped_runners": reaped_runners,
             "postprocessing_recovery": recovery}
 
 
