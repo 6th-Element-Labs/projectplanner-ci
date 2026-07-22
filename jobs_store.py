@@ -26,6 +26,7 @@ def enqueue_background_job(
     job_name: str = "",
     params: Any = None,
     actor: str = "background_job",
+    start_worker: bool = True,
 ) -> Dict[str, Any]:
     """Persist and start a background job without holding the caller open."""
     import background_jobs
@@ -37,6 +38,7 @@ def enqueue_background_job(
         job_name.strip(),
         params=params if isinstance(params, dict) else {},
         actor=actor,
+        start_worker=start_worker,
     )
 
 

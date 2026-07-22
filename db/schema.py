@@ -608,6 +608,19 @@ def apply_schema(c):
         CREATE INDEX IF NOT EXISTS ix_spend_agent ON llm_spend(agent_id);
         CREATE UNIQUE INDEX IF NOT EXISTS ux_spend_request
             ON llm_spend(request_id) WHERE request_id IS NOT NULL;
+        CREATE TABLE IF NOT EXISTS ai_admission_events (
+            admission_id TEXT PRIMARY KEY,
+            principal_id TEXT NOT NULL,
+            project TEXT NOT NULL,
+            surface TEXT NOT NULL,
+            run_id TEXT,
+            status TEXT NOT NULL CHECK(status IN ('active','queued','completed','failed','cancelled','denied')),
+            reason_code TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS ix_ai_admission_principal_status
+            ON ai_admission_events(principal_id, status);
         CREATE TABLE IF NOT EXISTS spend_envelopes (
             principal_id      TEXT PRIMARY KEY,
             daily_limit_micros INTEGER NOT NULL CHECK(daily_limit_micros >= 0),

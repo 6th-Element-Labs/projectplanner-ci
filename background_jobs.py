@@ -523,6 +523,21 @@ def run_background_job(project: str, job_name: str, *,
     if manifest.get("job_name") != job_name:
         raise JobBoundaryError("run_id job_name mismatch")
 
+    admission_id = str((manifest.get("params") or {}).get("ai_admission_id") or "")
+    if admission_id:
+        from switchboard.storage.repositories import ai_admission
+        decision = ai_admission.authorize_execution(
+            project=project, admission_id=admission_id,
+            authorization=(manifest.get("params") or {}).get("ai_authorization") or {})
+        if not decision.allowed:
+            if decision.status == ai_admission.QUEUED:
+                return manifest
+            manifest["status"] = "failed"
+            manifest["error"] = decision.reason_code
+            with store._conn(project) as connection:
+                _persist_run(connection, manifest)
+            return manifest
+
     manifest["status"] = "running"
     manifest["runtime"] = _runtime_mode()
     manifest["dbos_eligible"] = spec.dbos_eligible
@@ -569,6 +584,8 @@ def run_background_job(project: str, job_name: str, *,
                 now,
             ),
         )
+    if admission_id:
+        ai_admission.finish(project, admission_id, manifest["status"])
     return manifest
 
 
@@ -608,6 +625,20 @@ def ensure_background_job_running(project: str, run_id: str,
     manifest = load_run(project, run_id)
     if manifest.get("error") or manifest.get("status") in TERMINAL_RUN_STATUSES:
         return manifest
+    admission_id = str((manifest.get("params") or {}).get("ai_admission_id") or "")
+    if admission_id:
+        from switchboard.storage.repositories import ai_admission
+        decision = ai_admission.authorize_execution(
+            project=project, admission_id=admission_id,
+            authorization=(manifest.get("params") or {}).get("ai_authorization") or {})
+        if not decision.allowed:
+            if decision.status == ai_admission.QUEUED:
+                return manifest
+            manifest["status"] = "failed"
+            manifest["error"] = decision.reason_code
+            with store._conn(project) as connection:
+                _persist_run(connection, manifest)
+            return manifest
     _start_worker(
         project,
         manifest["job_name"],

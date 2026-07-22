@@ -13,6 +13,7 @@ from switchboard.api.project_scope import (
     create_ask_taikun_context,
 )
 from switchboard.storage.repositories import plan_chat as plan_chat_repo
+from switchboard.storage.repositories import ai_admission
 
 
 ProjectResolver = Callable[[str], str]
@@ -50,13 +51,18 @@ def create_router(*, resolve_project: ProjectResolver) -> APIRouter:
         session = body.get("session") or "plan"
         ctx = create_ask_taikun_context(request, project=project, session=session)
         selected = resolve_project(ctx.project_id)
+        principal = getattr(request.state, "principal", None) or {}
         history = [
             {"role": item["role"], "content": item["content"]}
             for item in plan_chat_repo.recent_chat(session, 16, project=selected)
             if item.get("content")
         ]
-        plan_chat_repo.add_chat(session, "user", message, project=selected)
         try:
+            authorization = ai_admission.authorization_snapshot(principal)
+            decision = ai_admission.admit(
+                project=selected, surface="browser_chat", authorization=authorization,
+                question=message)
+            plan_chat_repo.add_chat(session, "user", message, project=selected)
             run = store.enqueue_background_job(
                 project=selected,
                 job_name="plan_agent_run",
@@ -65,9 +71,19 @@ def create_router(*, resolve_project: ProjectResolver) -> APIRouter:
                     "history": history,
                     "session": session,
                     "record_chat": True,
+                    "ai_admission_id": decision.admission_id,
+                    "ai_authorization": authorization,
                 },
                 actor="api/ask_plan",
+                start_worker=decision.status == ai_admission.ACTIVE,
             )
+            ai_admission.bind_run(selected, decision.admission_id, run["run_id"])
+        except ai_admission.AdmissionDenied as exc:
+            status = 429 if exc.decision.reason_code in {
+                "queue_capacity", "hourly_prompt_limit", "daily_prompt_limit",
+                "prompt_too_large",
+            } else 403
+            raise HTTPException(status, {"reason_code": exc.decision.reason_code}) from exc
         except Exception as exc:
             plan_chat_repo.add_chat(
                 session, "assistant", f"(agent queue error: {exc})", project=selected

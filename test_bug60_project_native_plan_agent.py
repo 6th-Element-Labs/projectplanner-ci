@@ -13,6 +13,7 @@ os.environ["PM_DB_PATH"] = os.path.join(_TMP, "maxwell.db")
 os.environ["PM_SWITCHBOARD_DB_PATH"] = os.path.join(_TMP, "switchboard.db")
 os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = os.path.join(_TMP, "registry.db")
 os.environ["PM_DYNAMIC_PROJECTS_DIR"] = _TMP
+os.environ["PM_AUTH_MODE"] = "dev-open"
 
 import agent  # noqa: E402
 import background_jobs  # noqa: E402
