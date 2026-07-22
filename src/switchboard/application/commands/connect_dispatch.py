@@ -60,6 +60,33 @@ def _queued_at(task: dict[str, Any], assignment_id: str) -> float:
     return float(1_700_000_000 + (offset % 100_000_000))
 
 
+#: Wake states that end a dispatch generation; a new Start must chain past them.
+_TERMINAL_WAKE_STATUSES = frozenset({"completed", "failed", "cancelled"})
+
+
+def _latest_terminal_wake_id(task_id: str, project: str) -> str:
+    """The newest wake for this task when it is terminal, else "".
+
+    BUG-133: callers resolve their predecessor from ``last_dispatch_outcome``,
+    which only surfaces *failed* dispatches. A wake that COMPLETED (the runner
+    started, ran, and exited) leaves no predecessor there, so a resume replayed
+    the ``initial`` idempotency key -- and any ordinary task edit since the
+    first start had changed the payload hash, turning the replay into a raw
+    "idempotency conflict" instead of a replacement runner. Chaining past any
+    terminal newest wake mints a fresh generation for every restart.
+    """
+    try:
+        rows = coordination_repo.list_wake_intents(
+            task_id=task_id, project=project, newest_first=True, limit=1)
+    except Exception:
+        # Best-effort read: an environment without a wake store simply has no
+        # predecessor to chain past; behave exactly as before this lookup existed.
+        return ""
+    if rows and str(rows[0].get("status") or "") in _TERMINAL_WAKE_STATUSES:
+        return str(rows[0].get("wake_id") or "")
+    return ""
+
+
 def enqueue_task(
     task: dict[str, Any],
     *,
@@ -77,6 +104,8 @@ def enqueue_task(
         runtime_name, provider = _runtime(runtime)
     except ValueError as exc:
         return {"dispatched": False, "error": str(exc), "runtime": runtime}
+    if not predecessor_wake_id:
+        predecessor_wake_id = _latest_terminal_wake_id(task_id, project)
     lane = str(task.get("_wsId") or task.get("workstream") or "").strip()
     assignment_id = _assignment_id(
         project, task_id, runtime_name, str(predecessor_wake_id or ""))
@@ -120,6 +149,18 @@ def enqueue_task(
         project=project,
         idem_key=f"connect-start:v1:{project}:{task_id}:{runtime_name}:{suffix}",
     )
+    if str(wake.get("error") or "") == "idempotency conflict":
+        # Another start owns this generation with a different request body (a
+        # race, or a non-terminal predecessor). Name the condition instead of
+        # leaking the storage layer's conflict string to the operator panel.
+        return {
+            "dispatched": False,
+            "error": "dispatch_generation_conflict",
+            "reason": ("another start already owns this dispatch generation; "
+                       "wait for it to finish or retry"),
+            "task_id": task_id,
+            "project": project,
+        }
     if wake.get("error") or not wake.get("wake_id"):
         return {
             "dispatched": False,
