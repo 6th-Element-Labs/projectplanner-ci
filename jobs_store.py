@@ -28,7 +28,12 @@ def enqueue_background_job(
     actor: str = "background_job",
     start_worker: bool = True,
 ) -> Dict[str, Any]:
-    """Persist and start a background job without holding the caller open."""
+    """Persist and start a background job without holding the caller open.
+
+    ``start_worker=False`` persists the pending run without launching the worker
+    -- ENFORCE-12 queues AI runs behind the admission governor and starts them on
+    admission promotion instead.
+    """
     import background_jobs
 
     if not (job_name or "").strip():

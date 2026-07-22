@@ -1091,6 +1091,21 @@ def apply_schema(c):
             ON background_job_runs(job_name, updated_at);
         CREATE INDEX IF NOT EXISTS ix_background_job_runs_project
             ON background_job_runs(project, updated_at);
+        CREATE TABLE IF NOT EXISTS ai_admission_events (
+            admission_id    TEXT PRIMARY KEY,
+            principal_id    TEXT NOT NULL,
+            project         TEXT NOT NULL,
+            surface         TEXT NOT NULL,
+            run_id          TEXT NOT NULL DEFAULT '',
+            status          TEXT NOT NULL,
+            reason_code     TEXT NOT NULL,
+            created_at      REAL NOT NULL,
+            updated_at      REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS ix_ai_admission_principal_status
+            ON ai_admission_events(principal_id, status, created_at);
+        CREATE INDEX IF NOT EXISTS ix_ai_admission_principal_created
+            ON ai_admission_events(principal_id, created_at);
         -- PERF-1: durable webhook inbox (accept-and-ack, never drop). The GitHub
         -- webhook handler appends the raw event here in O(1) and returns 2xx; a
         -- separate drain worker applies provenance idempotently off the request
