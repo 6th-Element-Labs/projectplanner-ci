@@ -32,10 +32,9 @@ the Deliverables UI; pause/resume/stop is durable per scope.
   message; silent scope loss is forbidden.
 - Project and lane allowlists fail closed. Paused lanes are removed between
   deliverable effects; a project pause stops the whole project loop.
-- Generic deliverable drain only selects blocking flow links, or nonblocking
-  links explicitly marked `metadata.dispatch_eligible=true`. Foundation,
-  historical, moved, skipped, parked, and `dispatch_eligible=false` links remain
-  visible but are never generic automatic candidates.
+- Generic deliverable drain selects flow-role links. Foundation, historical,
+  moved, skipped, and parked links remain visible but are never generic
+  automatic candidates.
 
 ## Configuration
 

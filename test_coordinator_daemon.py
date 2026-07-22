@@ -150,8 +150,7 @@ config = daemon_mod.DaemonConfig(
 first = daemon_mod.CoordinatorDaemon(
     config, store_mod=store, instance_id="instance-one", clock=clock)
 
-# BUG-122: Start deliverable is itself the explicit dispatch opt-in for ordinary
-# non-blocking flow links.  Context/parked links remain excluded.
+# BUG-143: flow-role links are structurally eligible; context links remain excluded.
 nonblocking_detail = {
     "task_id": "TASK-NONBLOCKING", "status": "Not Started",
     "dependency_state": {"ready": True, "satisfied": True},
@@ -167,8 +166,8 @@ nonblocking_status = {
     ],
     "dispatch_scope": {"links": [
         {"task_id": "TASK-NONBLOCKING", "project_id": "switchboard",
-         "automatic_dispatch_eligible": False,
-         "reason": "nonblocking_without_explicit_opt_in"},
+         "automatic_dispatch_eligible": True,
+         "reason": "automatic_flow"},
         {"task_id": "TASK-PARKED", "project_id": "switchboard",
          "automatic_dispatch_eligible": False, "reason": "context_role:parked"},
     ]},

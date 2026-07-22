@@ -97,8 +97,8 @@ def _explicit_target_actions(mission_status: Dict[str, Any],
                              policy: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Opt one named nonblocking flow task/milestone into a tick.
 
-    Generic deliverable drain never reaches these links. Context roles and an
-    explicit ``dispatch_eligible=false`` remain fail-closed even when targeted.
+    Generic deliverable drain never reaches these links. Context roles and
+    skipped milestones remain fail-closed even when targeted.
     """
     target_task = policy.get("target_task_id") or ""
     target_project = policy.get("target_project_id") or ""
@@ -120,10 +120,8 @@ def _explicit_target_actions(mission_status: Dict[str, Any],
         if target_milestone and milestone_id != target_milestone:
             continue
         role = str(link.get("role") or "").strip().lower()
-        metadata = link.get("metadata") or {}
         if (milestone_statuses.get(milestone_id) == "skipped"
-                or role in _NON_FLOW_LINK_ROLES
-                or metadata.get("dispatch_eligible") is False):
+                or role in _NON_FLOW_LINK_ROLES):
             continue
         detail = link.get("task_detail") or {}
         if detail.get("error"):

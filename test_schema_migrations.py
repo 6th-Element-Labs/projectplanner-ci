@@ -173,5 +173,54 @@ check("intermediate Agent Host enrollment gains a durable server execution polic
       "execution_policy_json" in cols(c7, "agent_host_enrollments")
       and "0061_agent_host_enrollments_execution_policy_json" in ledger(c7))
 
+# 10. BUG-143: an existing database may contain the retired link-level dispatch flag.
+# Seed the legacy rows directly, then replay only the cleanup migration. This proves the
+# migration repairs persisted data rather than merely testing the new write normalizer.
+c8 = mem()
+apply_schema(c8)
+c8.executemany(
+    """INSERT INTO deliverable_task_links
+       (id, deliverable_id, project_id, task_id, role, blocks_deliverable,
+        proof_required_json, metadata_json, created_at, updated_at)
+       VALUES (?, 'legacy-deliverable', 'switchboard', ?, 'contributes', 1,
+               '{}', ?, 1, 1)""",
+    [
+        ("legacy-valid", "LEGACY-1", '{"dispatch_eligible":false,"owner":"ops"}'),
+        ("legacy-malformed", "LEGACY-2", 'not-json dispatch_eligible'),
+    ],
+)
+c8.execute(
+    """INSERT INTO deliverables
+       (id, title, status, acceptance_criteria_json, policy_constraints_json,
+        proof_requirements_json, kpi_links_json, metadata_json, created_at, updated_at)
+       VALUES ('legacy-deliverable', 'Legacy deliverable', 'approved', '[]', '{}',
+               '{}', '[]', '{"dispatch_eligible":false,"owner":"ops"}', 1, 1)"""
+)
+c8.execute(
+    "DELETE FROM schema_migrations WHERE name IN "
+    "('0072_remove_deliverable_link_dispatch_eligible', "
+    " '0073_remove_deliverable_dispatch_eligible')"
+)
+run_additive_migrations(c8)
+legacy_metadata = {
+    row["task_id"]: row["metadata_json"]
+    for row in c8.execute(
+        "SELECT task_id, metadata_json FROM deliverable_task_links ORDER BY task_id"
+    ).fetchall()
+}
+check("retired dispatch flag is removed from a valid pre-existing metadata row",
+      legacy_metadata["LEGACY-1"] == '{"owner":"ops"}')
+check("malformed legacy metadata containing the retired flag is repaired safely",
+      legacy_metadata["LEGACY-2"] == '{}')
+check("retired dispatch cleanup migration is ledgered after repair",
+      "0072_remove_deliverable_link_dispatch_eligible" in ledger(c8))
+legacy_deliverable_metadata = c8.execute(
+    "SELECT metadata_json FROM deliverables WHERE id='legacy-deliverable'"
+).fetchone()[0]
+check("retired dispatch flag is removed from pre-existing deliverable metadata",
+      legacy_deliverable_metadata == '{"owner":"ops"}')
+check("deliverable metadata cleanup migration is ledgered after repair",
+      "0073_remove_deliverable_dispatch_eligible" in ledger(c8))
+
 print(f"\n{passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)

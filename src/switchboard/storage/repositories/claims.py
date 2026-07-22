@@ -219,7 +219,6 @@ def _claim_next_mission_scoped(agent_id: str, lanes: Any = None,
                     "role": link.get("role"),
                     "milestone_id": link.get("milestone_id"),
                     "milestone_status": milestone_status or None,
-                    "dispatch_eligible": (link.get("metadata") or {}).get("dispatch_eligible"),
                 }
                 continue
             if not _store_facade().has_project(task_project):

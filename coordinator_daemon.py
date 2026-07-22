@@ -303,8 +303,8 @@ class CoordinatorDaemon:
         explicit opt-in for ordinary flow roles, though: clicking ``Start
         deliverable`` must not arm an inert scope merely because older/default
         links were stored as ``contributes`` with ``blocks_deliverable=false``.
-        Context roles, skipped milestones, and explicit ``dispatch_eligible=false``
-        remain excluded by their distinct reason codes.
+        Context roles and skipped milestones remain excluded by their distinct
+        reason codes.
         """
         links = list((mission_status.get("dispatch_scope") or {}).get("links") or [])
         if scope.get("scope_type") == "task":
@@ -314,13 +314,11 @@ class CoordinatorDaemon:
                 row for row in links
                 if str(row.get("task_id") or "").upper() == task_id
                 and (not task_project or str(row.get("project_id") or "") == task_project)
-                and (row.get("automatic_dispatch_eligible")
-                     or row.get("reason") == "nonblocking_without_explicit_opt_in")
+                and row.get("automatic_dispatch_eligible")
             ]
         return [
             row for row in links
             if row.get("automatic_dispatch_eligible")
-            or row.get("reason") == "nonblocking_without_explicit_opt_in"
         ]
 
     def _scope_complete(self, scope: Dict[str, Any], mission_status: Dict[str, Any]) -> bool:

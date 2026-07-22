@@ -81,12 +81,21 @@ try:
         if action.get("action") in {"claim_task", "resume_or_claim"}
     ]
     scope = {row["task_id"]: row for row in status["dispatch_scope"]["links"]}
-    ok(automatic == ["FLOW-4"],
-       "Autopilot exposes only the active flow link as an automatic action")
+    ok(automatic == ["FLOW-2", "FLOW-4"],
+       "Autopilot exposes active flow links regardless of legacy metadata")
     ok(scope["FLOW-1"]["reason"] == "context_role:parked"
-       and scope["FLOW-2"]["reason"] == "dispatch_eligible_false"
+       and scope["FLOW-2"]["reason"] == "automatic_flow"
        and scope["FLOW-3"]["reason"] == "milestone_skipped",
-       "mission dispatch scope explains all three fail-closed exclusions")
+       "mission dispatch scope derives eligibility from structural state")
+    linked = {row["task_id"]: row for row in status["linked_tasks"]}
+    ok("dispatch_eligible" not in linked["FLOW-1"]["metadata"]
+       and "dispatch_eligible" not in linked["FLOW-2"]["metadata"],
+       "legacy dispatch flags are stripped from stored link projections")
+    with store._conn("qa-bug112-home") as c:
+        raw_metadata = [row[0] for row in c.execute(
+            "SELECT metadata_json FROM deliverable_task_links ORDER BY task_id").fetchall()]
+    ok(all("dispatch_eligible" not in value for value in raw_metadata),
+       "legacy dispatch flags are stripped before link metadata is stored")
     explicit_skipped = mission_coordinator.coordinator_tick_plan(
         status, policy={"target_task_id": "FLOW-3"})
     ok(explicit_skipped.get("status") == "idle",
@@ -102,17 +111,22 @@ try:
         status)
     ok(not parked_candidates and not skipped_candidates,
        "task-scoped Autopilot cannot bypass parked or skipped link policy")
+    parked_start = store.start_autopilot_scope(
+        project="qa-bug112-home", deliverable_id="bug112-deliverable",
+        scope_type="task", task_project="qa-bug112-tasks", task_id="FLOW-1")
+    ok(parked_start.get("blocker", {}).get("reason") == "context_role:parked",
+       "explicit Start returns the structural blocker without creating a scope")
 
     claimed = store.claim_next(
         "agent/bug112", deliverable_id="bug112-deliverable",
         project="qa-bug112-home")
     reason = claimed.get("dispatch_reason") or {}
-    ok(claimed.get("claimed") and claimed["task"]["task_id"] == "FLOW-4",
-       "deliverable-scoped claim_next selects only the active flow task")
-    ok(reason.get("candidate_count") == 1
-       and reason.get("skipped", {}).get("link_policy") == 2
+    ok(claimed.get("claimed") and claimed["task"]["task_id"] == "FLOW-2",
+       "legacy false cannot veto an eligible active flow task")
+    ok(reason.get("candidate_count") == 2
+       and reason.get("skipped", {}).get("link_policy") == 1
        and reason.get("skipped", {}).get("skipped_milestone") == 1,
-       "claim_next reports parked, explicit-false, and skipped-milestone exclusions")
+       "claim_next reports only structural link and milestone exclusions")
     findings = reason.get("link_policy_findings") or {}
     ok(findings["qa-bug112-tasks:FLOW-1"]["reason"] == "context_role:parked"
        and findings["qa-bug112-tasks:FLOW-3"]["reason"] == "milestone_skipped",
@@ -121,8 +135,8 @@ try:
     second = store.claim_next(
         "agent/bug112-repeat", deliverable_id="bug112-deliverable",
         project="qa-bug112-home")
-    ok(not second.get("claimed") and second.get("reason") == "no_unblocked_work",
-       "repeated claim_next never falls through to parked or skipped scope")
+    ok(second.get("claimed") and second["task"]["task_id"] == "FLOW-4",
+       "repeated claim_next selects the remaining eligible flow task")
     ok(store.get_task("FLOW-1", project="qa-bug112-tasks")["status"] == "Not Started"
        and store.get_task("FLOW-3", project="qa-bug112-tasks")["status"] == "Not Started",
        "excluded tasks remain untouched")
@@ -130,8 +144,7 @@ try:
     store.link_task_to_deliverable(
         "bug112-deliverable", "qa-bug112-tasks", "FLOW-1",
         milestone_id=active_id,
-        data={"role": "contributes", "blocks_deliverable": False,
-              "metadata": {"dispatch_eligible": True}},
+        data={"role": "contributes", "blocks_deliverable": False},
         actor="operator/reactivate", project="qa-bug112-home")
     reactivated = store.claim_next(
         "agent/bug112-reactivated", deliverable_id="bug112-deliverable",

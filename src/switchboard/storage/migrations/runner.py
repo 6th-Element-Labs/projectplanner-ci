@@ -316,6 +316,15 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
     ("0071_ix_wake_intents_recent",
      "CREATE INDEX IF NOT EXISTS ix_wake_intents_recent "
      "ON wake_intents(requested_at DESC, wake_id DESC)"),
+    # BUG-143 — dispatch eligibility is derived from structural link/task state.
+    ("0072_remove_deliverable_link_dispatch_eligible",
+     "UPDATE deliverable_task_links SET metadata_json = "
+     "json_remove(CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END, "
+     "'$.dispatch_eligible') WHERE metadata_json LIKE '%dispatch_eligible%'"),
+    ("0073_remove_deliverable_dispatch_eligible",
+     "UPDATE deliverables SET metadata_json = "
+     "json_remove(CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END, "
+     "'$.dispatch_eligible') WHERE metadata_json LIKE '%dispatch_eligible%'"),
 ]
 
 

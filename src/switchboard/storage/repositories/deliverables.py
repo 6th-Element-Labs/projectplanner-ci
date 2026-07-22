@@ -50,6 +50,13 @@ def _store_facade():
     return store
 
 
+def _dispatch_neutral_metadata(value: Any) -> Dict[str, Any]:
+    """Return metadata with the retired dispatch-policy key removed."""
+    metadata = json.loads(_store_facade()._json_object_field(value))
+    metadata.pop("dispatch_eligible", None)
+    return metadata
+
+
 def _deliverable_row(row: sqlite3.Row) -> Dict[str, Any]:
     d = dict(row)
     for key in (
@@ -61,6 +68,7 @@ def _deliverable_row(row: sqlite3.Row) -> Dict[str, Any]:
     ):
         out_key = key[:-5] if key.endswith("_json") else key
         d[out_key] = _store_facade()._json_payload(d.pop(key, ""))
+    d["metadata"] = _dispatch_neutral_metadata(d.get("metadata"))
     d["mission_id"] = d.get("board_id") or None
     return d
 
@@ -85,8 +93,17 @@ def _deliverable_link_row(row: sqlite3.Row) -> Dict[str, Any]:
     d["mission_id"] = d.get("board_id") or None
     d["blocks_deliverable"] = bool(d.get("blocks_deliverable"))
     d["proof_required"] = _store_facade()._json_payload(d.pop("proof_required_json", ""))
-    d["metadata"] = _store_facade()._json_payload(d.pop("metadata_json", ""))
+    d["metadata"] = _link_metadata(d.pop("metadata_json", ""))
     return d
+
+
+def _link_metadata(value: Any) -> Dict[str, Any]:
+    """Normalize link metadata while retiring the legacy dispatch policy flag."""
+    return _dispatch_neutral_metadata(value)
+
+
+def _link_metadata_json(value: Any) -> str:
+    return json.dumps(_link_metadata(value), sort_keys=True)
 
 
 def _project_board_exists_in(c: sqlite3.Connection, board_id: str) -> bool:
@@ -296,6 +313,7 @@ def _create_deliverable_impl(data: Dict[str, Any], actor: str = "user",
             c, deliverable_id, status, data.get("metadata", data.get("metadata_json")))
         if policy_error:
             return policy_error
+        incoming_metadata = _dispatch_neutral_metadata(incoming_metadata)
         # DELIVERABLES-13: validate the intake contract only when entering in_progress.
         if status == "in_progress" and _enforce_deliverable_intake():
             if (prior["status"] if prior else None) != "in_progress":
@@ -404,6 +422,7 @@ def update_deliverable(deliverable_id: str, updates: Dict[str, Any],
             c, deliverable_id, requested_status, metadata_value)
         if policy_error:
             return policy_error
+        safe_metadata = _dispatch_neutral_metadata(safe_metadata)
         if replacement_deliverable_id:
             safe_metadata = dict(safe_metadata)
             safe_metadata["replacement_deliverable_id"] = replacement_deliverable_id
@@ -604,7 +623,7 @@ def _link_task_to_deliverable_impl(
                 link_id, deliverable_id, board_id, mid, task_project, task_id, role,
                 1 if payload.get("blocks_deliverable") else 0,
                 _store_facade()._json_object_field(payload.get("proof_required")),
-                _store_facade()._json_object_field(payload.get("metadata", payload.get("metadata_json"))),
+                _link_metadata_json(payload.get("metadata", payload.get("metadata_json"))),
                 now, now,
             ),
         )
@@ -792,7 +811,7 @@ def _link_tasks_to_deliverable_impl(
                  1 if item.get("blocks_deliverable") else 0,
                  _store_facade()._json_object_field(item.get("proof_required",
                                              item.get("proof_required_json"))),
-                 _store_facade()._json_object_field(item.get("metadata", item.get("metadata_json"))),
+                 _link_metadata_json(item.get("metadata", item.get("metadata_json"))),
                  now, now),
             )
             activity_payload = {
@@ -2180,13 +2199,8 @@ def _link_automatic_dispatch_reason(
     if str(milestone_status or "").strip().lower() == "skipped":
         return "milestone_skipped"
     role = str(link.get("role") or "").strip().lower()
-    metadata = link.get("metadata") or {}
     if role in _NON_FLOW_LINK_ROLES:
         return f"context_role:{role}"
-    if metadata.get("dispatch_eligible") is False:
-        return "dispatch_eligible_false"
-    if not link.get("blocks_deliverable") and metadata.get("dispatch_eligible") is not True:
-        return "nonblocking_without_explicit_opt_in"
     return "automatic_flow"
 
 
@@ -2195,9 +2209,8 @@ def _link_automatic_dispatch_eligible(
 ) -> bool:
     """Fail-closed generic deliverable dispatch scope (COORD-8).
 
-    Blocking flow work is eligible by default. Nonblocking work requires the
-    explicit per-link ``metadata.dispatch_eligible=true`` opt-in. Context roles
-    and explicit false values are never generic automatic candidates.
+    Flow work is eligible regardless of whether it gates deliverable completion.
+    Context roles and skipped milestones remain structural exclusions.
     """
     return _link_automatic_dispatch_reason(link, milestone_status) == "automatic_flow"
 

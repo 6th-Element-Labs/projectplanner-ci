@@ -32,11 +32,8 @@ def check(cond, msg):
 
 
 def _link(task_id, detail, project="switchboard", blocks=False):
-    # Attention-model fixtures are explicit automatic candidates. COORD-8 now
-    # excludes nonblocking links unless the link policy opts them in.
     return {"project_id": project, "task_id": task_id,
             "blocks_deliverable": bool(blocks),
-            "metadata": {"dispatch_eligible": True},
             "role": "contributes",
             "task_detail": {**detail, "task_id": task_id}}
 

@@ -99,12 +99,22 @@ try:
             ],
             "policy_constraints": {"runtime_language": "c++", "renderer": "webgpu"},
             "proof_requirements": {"merge_provenance": True, "fixture_parity": True},
+            "metadata": {"dispatch_eligible": False, "owner": "ops"},
         },
         actor="test",
         project="qa-deliv-home",
     )
     ok(deliverable["id"] == "helm-cpp-webgpu-renderer",
        "deliverable record is created in owning project")
+    ok(deliverable["metadata"] == {"owner": "ops"},
+       "retired dispatch policy is stripped from deliverable projections")
+    with store._conn("qa-deliv-home") as c:
+        stored_deliverable_metadata = c.execute(
+            "SELECT metadata_json FROM deliverables WHERE id=?",
+            (deliverable["id"],),
+        ).fetchone()[0]
+    ok("dispatch_eligible" not in stored_deliverable_metadata,
+       "retired dispatch policy is never stored on deliverables")
     ok(deliverable["board_id"] == mission["id"] and
        deliverable["board"]["title"] == mission["title"],
        "deliverable carries first-class board/mission context")

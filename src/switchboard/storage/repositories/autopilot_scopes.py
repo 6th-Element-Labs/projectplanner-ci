@@ -223,9 +223,24 @@ def _validate_target(project: str, deliverable_id: str, scope_type: str,
         return {"error": "unknown deliverable", "deliverable_id": deliverable_id}
     if scope_type == "deliverable":
         return None
+    milestone_statuses = {
+        str(row.get("id") or ""): str(row.get("status") or "").strip().lower()
+        for row in (deliverable.get("milestones") or [])
+    }
     for link in deliverable.get("task_links") or []:
         if (str(link.get("task_id") or "").upper() == task_id
                 and str(link.get("project_id") or project) == task_project):
+            reason = deliverables_repository._link_automatic_dispatch_reason(
+                link, milestone_statuses.get(str(link.get("milestone_id") or ""), ""))
+            if reason != "automatic_flow":
+                return {
+                    "error": "task link is structurally ineligible for dispatch",
+                    "deliverable_id": deliverable_id,
+                    "task_project": task_project,
+                    "task_id": task_id,
+                    "blocker": {"reason": reason, "role": link.get("role"),
+                                "milestone_id": link.get("milestone_id")},
+                }
             return None
     return {"error": "task is not linked to deliverable", "deliverable_id": deliverable_id,
             "task_project": task_project, "task_id": task_id}

@@ -70,8 +70,8 @@ try:
         actor="test", project="qa-coord-home",
     )
 
-    # COORD-8 mixed scope: only ready blocking flow work is selected by generic
-    # deliverable drain. Parked/context and nonblocking work stay visible.
+    # BUG-143 mixed scope: ready flow work is selected structurally. Parked
+    # context stays visible and dependencies still block dispatch.
     store.create_task(
         {"workstream_id": "VENDOR", "title": "Vendor gate", "status": "Blocked"},
         actor="test", project="qa-coord-target",
@@ -83,8 +83,7 @@ try:
         store.create_task(payload, actor="test", project="qa-coord-target")
     store.link_task_to_deliverable(
         "coord-mission", "qa-coord-target", "RENDER-3", milestone_id=milestone_id,
-        data={"role": "parked", "blocks_deliverable": False,
-              "metadata": {"dispatch_eligible": True}},
+        data={"role": "parked", "blocks_deliverable": False},
         actor="test", project="qa-coord-home")
     store.link_task_to_deliverable(
         "coord-mission", "qa-coord-target", "RENDER-4", milestone_id=milestone_id,
@@ -98,12 +97,12 @@ try:
     status = store.get_mission_status(project="qa-coord-home", deliverable_id="coord-mission")
     generic_claims = [a.get("task_id") for a in status.get("next_actions") or []
                       if a.get("action") in {"claim_task", "resume_or_claim"}]
-    ok(generic_claims == ["RENDER-1"],
-       "mixed deliverable selects only ready blocking flow work")
+    ok(generic_claims == ["RENDER-1", "RENDER-4"],
+       "mixed deliverable selects ready flow work regardless of delivery blocking")
     scope_rows = {row.get("task_id"): row for row in status["dispatch_scope"]["links"]}
     ok(scope_rows["RENDER-3"]["reason"] == "context_role:parked"
-       and scope_rows["RENDER-4"]["reason"] == "nonblocking_without_explicit_opt_in",
-       "parked and unopted nonblocking links remain visible with exclusion reasons")
+       and scope_rows["RENDER-4"]["reason"] == "automatic_flow",
+       "parked context is excluded while nonblocking flow remains eligible")
     ok(not any(b.get("task_id") in {"RENDER-3", "RENDER-4"}
                for b in status.get("blockers") or []),
        "parked and nonblocking context links do not become delivery blockers")

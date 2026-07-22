@@ -33,12 +33,14 @@ ERROR_STATUS: dict[str, int] = {
     "invalid_input": 400,
     "deliverable_not_found": 404,
     "task_not_linked": 409,
+    "structural_blocker": 409,
     "no_active_scope": 409,
 }
 ERROR_FAILURE_CLASS: dict[str, str] = {
     "invalid_input": "invalid_input",
     "deliverable_not_found": "missing_data",
     "task_not_linked": "invalid_input",
+    "structural_blocker": "failed_gate",
     "no_active_scope": "missing_data",
 }
 
@@ -49,6 +51,7 @@ _STORE_ERROR_CODES: tuple[tuple[str, str], ...] = (
     ("unknown replacement deliverable", "deliverable_not_found"),
     ("not linked to deliverable", "task_not_linked"),
     ("does not preserve task scope links", "task_not_linked"),
+    ("structurally ineligible", "structural_blocker"),
     ("live autopilot scope not found", "no_active_scope"),
 )
 
