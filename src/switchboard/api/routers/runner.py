@@ -42,6 +42,17 @@ class RunnerInjectBody(BaseModel):
     options: dict[str, Any] = Field(default_factory=dict)
 
 
+class MintHostTunnelUrlBody(BaseModel):
+    """Typed WATCH-7 host tunnel renewal request."""
+
+    model_config = ConfigDict(extra="allow")
+
+    project: Optional[str] = None
+    runner_session_id: Optional[str] = None
+    id: Optional[str] = None
+    host_id: Optional[str] = None
+
+
 def create_router(*, resolve_project: ProjectResolver,
                   resolve_principal: PrincipalResolver,
                   resolve_body_project: BodyProjectResolver) -> APIRouter:
@@ -126,6 +137,34 @@ def create_router(*, resolve_project: ProjectResolver,
             {**record, "project": project},
             principal_id=principal["id"], actor=auth.actor(principal))
         if is_narrow_agent_host_principal(principal) and result.get("error"):
+            raise HTTPException(403, result)
+        return result
+
+    @router.post("/ixp/v1/mint_host_tunnel_url")
+    async def ixp_mint_host_tunnel_url(
+            request: Request, body: MintHostTunnelUrlBody):
+        """Return a fresh host-tunnel URL to the bearer that owns the runner."""
+        payload = body.model_dump(exclude_none=True)
+        project = resolve_body_project(payload)
+        host_id = str(payload.get("host_id") or "")
+        runner_session_id = str(
+            payload.get("runner_session_id") or payload.get("id") or "")
+        principal = resolve_agent_host_principal(
+            resolve_principal, request, project, dev_actor=host_id or "runner")
+        require_agent_host_identity(principal, host_id, project)
+        require_agent_host_runner_identity(
+            principal, runner_session_id, host_id, project)
+        result = runner_control_command.mint_host_tunnel_url_mapping_result(
+            {
+                "project": project,
+                "runner_session_id": runner_session_id,
+            },
+            principal_id=principal["id"], actor=auth.actor(principal),
+        )
+        if result.get("error"):
+            raise HTTPException(404, result)
+        if (is_narrow_agent_host_principal(principal)
+                and result.get("server_relay", {}).get("error")):
             raise HTTPException(403, result)
         return result
 

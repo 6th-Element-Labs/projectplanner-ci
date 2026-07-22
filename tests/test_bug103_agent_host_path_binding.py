@@ -147,7 +147,9 @@ finally:
     agent_host._drain_work_sessions = saved["sessions"]
     agent_host._host_repo_preflight = saved["preflight"]
 
-heartbeat = posted[-1] if posted else {}
+heartbeat = next((body for body in posted
+                  if body.get("runner_session_id") == "run_bug103"
+                  and body.get("status") == "running"), {})
 ok(heartbeat.get("claim_id") == "taskclaim-bug103",
    "normal host heartbeat publishes the late claim binding")
 ok((heartbeat.get("metadata") or {}).get("work_session_id")

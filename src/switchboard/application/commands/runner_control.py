@@ -44,6 +44,22 @@ def upsert_session_mapping_result(
     return result
 
 
+def mint_host_tunnel_url_mapping_result(
+        data: dict[str, Any], *, actor: str, principal_id: str = "") -> dict[str, Any]:
+    """Mint a fresh, response-only host relay capability for one session."""
+    project = data.get("project") or DEFAULT_PROJECT
+    session_id = str(data.get("runner_session_id") or data.get("id") or "").strip()
+    session = runner_repo.get_runner_session(session_id, project=project)
+    if not session:
+        return {"error": "runner_session_not_found", "runner_session_id": session_id}
+    server_relay = runner_repo._server_relay_options(
+        session, user_id=principal_id, project=project)
+    if server_relay.get("error"):
+        runner_repo.record_server_relay_failure(
+            session, server_relay, actor=actor, project=project)
+    return {"runner_session_id": session_id, "server_relay": server_relay}
+
+
 def request_mapping_result(
         data: dict[str, Any], *, actor: str, principal_id: str = "") -> dict[str, Any]:
     """Request a host-side runner control action (snapshot/kill/restart/…)."""

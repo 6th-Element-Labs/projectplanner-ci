@@ -57,9 +57,10 @@ try:
     agent_host._try = lambda method, path, body=None: (
         posted.append(dict(body or {})) or {"ok": True})
     renewed = agent_host.renew_live_direct_runners({"host_id": "host/bug131"})
+    heartbeat = next(body for body in posted if body.get("status") == "running")
     ok(renewed[0]["renewed"] is True
-       and posted[-1]["claim_id"] == "taskclaim-bug131"
-       and posted[-1]["metadata"]["work_session_id"] == "worksession-bug131",
+       and heartbeat["claim_id"] == "taskclaim-bug131"
+       and heartbeat["metadata"]["work_session_id"] == "worksession-bug131",
        "Connect runner late-binds an active claim and Work Session")
 
     calls = []
@@ -71,9 +72,10 @@ try:
 
     agent_host._drain_work_sessions = drain_sessions
     agent_host.renew_live_direct_runners({"host_id": "host/bug131"})
+    heartbeat = next(body for body in posted if body.get("status") == "running")
     ok({"task_id": TASK_ID, "status": "completed"} in calls
-       and posted[-1]["claim_id"] == "taskclaim-bug131"
-       and posted[-1]["metadata"]["work_session_id"] == "worksession-bug131",
+       and heartbeat["claim_id"] == "taskclaim-bug131"
+       and heartbeat["metadata"]["work_session_id"] == "worksession-bug131",
        "Connect runner closes the just-completed Work Session race")
 finally:
     agent_host._drain_runners = saved["runners"]

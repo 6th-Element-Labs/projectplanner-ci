@@ -80,6 +80,7 @@ P_CLAIM_WAKE = "/txp/v1/claim_wake"
 P_COMPLETE_WAKE = "/txp/v1/complete_wake"
 P_REGISTER_RUNNER = "/ixp/v1/register_runner_session"
 P_HEARTBEAT_RUNNER = "/ixp/v1/heartbeat_runner_session"
+P_MINT_HOST_TUNNEL_URL = "/ixp/v1/mint_host_tunnel_url"
 P_LIST_RUNNER_CONTROLS = "/ixp/v1/runner_controls"
 P_CLAIM_RUNNER_CONTROL = "/ixp/v1/claim_runner_control"
 P_COMPLETE_RUNNER_CONTROL = "/ixp/v1/complete_runner_control"
@@ -403,6 +404,24 @@ def _try(method, path, body=None):
     except Exception as e:
         print(f"[agent_host] {method} {path} unavailable ({type(e).__name__}); skipping", flush=True)
         return None
+
+
+def mint_host_tunnel_url(runner_session_id, host_id):
+    """Ask Switchboard for a fresh relay URL without exposing its signing key."""
+    result = _try("POST", P_MINT_HOST_TUNNEL_URL, {
+        "project": PROJECT,
+        "runner_session_id": str(runner_session_id or ""),
+        "host_id": str(host_id or ""),
+    }) or {}
+    return dict(result.get("server_relay") or {})
+
+
+def _fresh_server_relay(server_relay, runner_session_id, host_id):
+    """Use an attached capability, pulling one when the bridge has none."""
+    relay = dict(server_relay or {})
+    if relay.get("host_url"):
+        return relay
+    return mint_host_tunnel_url(runner_session_id, host_id) or relay
 
 
 def _require(method, path, body=None):
@@ -1522,7 +1541,8 @@ def supervisor_action(action, runner_session_id, options=None):
                     "permission_profile": str(
                         options.get("permission_profile") or "operator_watch"),
                 }
-                server_relay = options.get("server_relay") or {}
+                server_relay = _fresh_server_relay(
+                    options.get("server_relay"), runner_session_id, host_id)
                 host_relay_url = str(server_relay.get("host_url") or "")
                 browser_relay_url = str(server_relay.get("browser_url") or "")
                 if isinstance(server_relay.get("binding"), dict):
@@ -2217,10 +2237,10 @@ def renew_live_direct_runners(inventory):
         if host_preflight:
             body["metadata"]["host_repo_preflight"] = host_preflight
         result = _try("POST", P_HEARTBEAT_RUNNER, body)
-        server_relay = (
+        server_relay = _fresh_server_relay((
             (result or {}).get("server_relay")
             if isinstance(result, dict) else None
-        ) or {}
+        ), session.get("runner_session_id"), host_id)
         if server_relay.get("host_url"):
             try:
                 _ensure_host_bridge(
@@ -2600,8 +2620,9 @@ def _finalize_bound_runner(wake, inventory, runner_session_id, rec):
             # mint the host relay ticket.  Open that bridge before completing
             # the wake so the first visible Running receipt is already
             # watchable; the heartbeat path remains an idempotent repair loop.
-            server_relay = dict(
-                (runner_registration or {}).get("server_relay") or {})
+            server_relay = _fresh_server_relay(
+                (runner_registration or {}).get("server_relay"),
+                runner_session_id, str(inventory.get("host_id") or ""))
             if server_relay.get("host_url"):
                 try:
                     _ensure_host_bridge(
@@ -2966,10 +2987,10 @@ def run_once(inventory):
                     "auth_lane": "enrolled_agent_host_token",
                 }
                 runner_registration = register_runner_session(rec, w, inventory)
-                server_relay = (
+                server_relay = _fresh_server_relay((
                     (runner_registration or {}).get("server_relay")
                     if isinstance(runner_registration, dict) else None
-                ) or {}
+                ), runner_session_id, host_id)
                 if server_relay.get("host_url"):
                     try:
                         _ensure_host_bridge(
