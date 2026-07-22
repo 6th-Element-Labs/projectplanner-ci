@@ -247,6 +247,9 @@ renewal = next(row for row in heartbeat_calls
 ok(renewed == [{
        "runner_session_id": "run-direct-bug86", "task_id": task_id,
        "renewed": True, "error": None,
+       "relay_url_minted": False,
+       "server_relay_error": None,
+       "server_relay_missing": [],
    }]
    and renewal[0:2] == ("POST", agent_host.P_HEARTBEAT_RUNNER)
    and renewal[2]["metadata"]["wake_id"] == wake["wake_id"]

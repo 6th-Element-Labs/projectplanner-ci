@@ -34,6 +34,9 @@ RUNNER_FAILURE_TERMINAL_STATUSES = frozenset(
 RUNNER_BIND_ERROR = "runner_bind_incomplete"
 RUNNER_INJECT_ERROR = "wrong_session"
 DIRECT_SESSION_TOKEN_TTL_S = 4 * 60 * 60
+SERVER_RELAY_FAILURE_SCHEMA = "switchboard.server_relay_failure.v1"
+SERVER_RELAY_FAILURE_KIND = "runner.server_relay_unavailable"
+SERVER_RELAY_FAILURE_DEDUPE_S = 300
 
 __all__ = [
     "RUNNER_BIND_FIELDS",
@@ -62,12 +65,68 @@ __all__ = [
     "terminalize_wake_runners_in",
     "resolve_task_active_runner",
     "resolve_runner_watch",
+    "record_server_relay_failure",
     "_clear_active_runner_pointer_in",
     "request_runner_control",
     "list_runner_control_requests",
     "claim_runner_control_request",
     "complete_runner_control_request",
 ]
+
+
+def _server_relay_failure_event(session: Dict[str, Any],
+                                failure: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the non-secret audit payload for a failed relay-ticket mint."""
+    return {
+        "schema": SERVER_RELAY_FAILURE_SCHEMA,
+        "runner_session_id": str(session.get("runner_session_id") or ""),
+        "task_id": str(session.get("task_id") or ""),
+        "host_id": str(session.get("host_id") or ""),
+        "error": str(failure.get("error") or "server_relay_unavailable"),
+        "missing": sorted({
+            str(field) for field in (failure.get("missing") or []) if str(field)
+        }),
+        "failure_class": "hidden_fallback",
+    }
+
+
+def _record_server_relay_failure_in(c: sqlite3.Connection,
+                                    session: Dict[str, Any],
+                                    failure: Dict[str, Any], *, actor: str,
+                                    now: Optional[float] = None) -> Dict[str, Any]:
+    """Persist a bounded activity signal without flooding every heartbeat."""
+    now = time.time() if now is None else float(now)
+    event = _server_relay_failure_event(session, failure)
+    recent = c.execute(
+        "SELECT payload FROM activity WHERE kind=? AND task_id IS ? AND created_at>=? "
+        "ORDER BY id DESC LIMIT 25",
+        (SERVER_RELAY_FAILURE_KIND, event.get("task_id") or None,
+         now - SERVER_RELAY_FAILURE_DEDUPE_S),
+    ).fetchall()
+    signature = (
+        event.get("runner_session_id"), event.get("error"),
+        tuple(event.get("missing") or []),
+    )
+    for row in recent:
+        prior = _json_obj(row["payload"], {})
+        if (prior.get("runner_session_id"), prior.get("error"),
+                tuple(prior.get("missing") or [])) == signature:
+            return {**event, "recorded": False, "reason": "dedupe_window"}
+    c.execute(
+        "INSERT INTO activity(task_id,actor,kind,payload,created_at) VALUES (?,?,?,?,?)",
+        (event.get("task_id") or None, actor, SERVER_RELAY_FAILURE_KIND,
+         json.dumps(event, sort_keys=True), now),
+    )
+    return {**event, "recorded": True}
+
+
+def record_server_relay_failure(session: Dict[str, Any], failure: Dict[str, Any],
+                                *, actor: str = "system",
+                                project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Record a structured server-side signal when no relay URL was minted."""
+    with _conn(project) as c:
+        return _record_server_relay_failure_in(
+            c, session, failure, actor=actor)
 
 
 def terminal_task_cleanup_for_host_in(
@@ -2221,7 +2280,10 @@ def _server_relay_options(session: Dict[str, Any], *, user_id: str,
     metadata = dict(session.get("metadata") or {})
     public_base = relay.public_base_from_env()
     if not public_base or relay.is_loopback_url(public_base):
-        return {"error": "relay_public_base_unavailable"}
+        return {
+            "error": "relay_public_base_unavailable",
+            "missing": ["relay_public_base"],
+        }
     direct = is_direct_assignment_runner(session) or host_attached is True
     direct_ref = f"direct/{session.get('runner_session_id') or 'session'}"
     bind = runner_bind_tuple(session)
@@ -2308,14 +2370,18 @@ def claim_runner_control_request(host_id: str, request_id: str,
             session = (_runner_session_row(
                 session_row, now=now, include_claim=True, c=c)
                 if session_row else {})
+            server_relay = _server_relay_options(
+                session,
+                user_id=str(claimed_request.get("principal_id") or ""),
+                project=project,
+            )
             claimed_request["options"] = {
                 **(claimed_request.get("options") or {}),
-                "server_relay": _server_relay_options(
-                    session,
-                    user_id=str(claimed_request.get("principal_id") or ""),
-                    project=project,
-                ),
+                "server_relay": server_relay,
             }
+            if server_relay.get("error"):
+                _record_server_relay_failure_in(
+                    c, session, server_relay, actor=actor, now=now)
     return {"claimed": True, "request": claimed_request}
 
 

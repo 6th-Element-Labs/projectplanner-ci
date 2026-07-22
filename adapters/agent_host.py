@@ -2074,6 +2074,11 @@ def renew_live_direct_runners(inventory):
             "task_id": task_id,
             "renewed": bool(result and not result.get("error")),
             "error": (result or {}).get("error") if isinstance(result, dict) else None,
+            "relay_url_minted": bool(server_relay.get("host_url")),
+            **({
+                "server_relay_error": server_relay.get("error"),
+                "server_relay_missing": list(server_relay.get("missing") or []),
+            } if not server_relay.get("host_url") else {}),
         })
     return renewed
 

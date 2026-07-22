@@ -34,9 +34,13 @@ def upsert_session_mapping_result(
             # in-process (this heartbeat is served by the relay-owning process);
             # None off-process keeps the historical direct-assignment behaviour.
             from switchboard.application import runner_pty_relay as relay
-            result["server_relay"] = runner_repo._server_relay_options(
+            server_relay = runner_repo._server_relay_options(
                 session, user_id=principal_id, project=project,
                 host_attached=relay.host_attached_for(session_id))
+            result["server_relay"] = server_relay
+            if server_relay.get("error"):
+                runner_repo.record_server_relay_failure(
+                    session, server_relay, actor=actor, project=project)
     return result
 
 
