@@ -268,8 +268,8 @@ try:
     # Dock v2 (spec 2026-07-23) reads runner_sessions — the server-authoritative
     # runner pointer (BUG-91) — so the old client-side newest-attempt dedup over
     # work_sessions is gone by design. Assert the v2 source instead.
-    ok("/ixp/v1/runner_sessions" in app_js and "include_stale=true" in app_js,
-       "fleet dock reads server-authoritative runner sessions (stale included)")
+    ok("/ixp/v1/runner_sessions" in app_js and "include_stale=false" in app_js,
+       "fleet dock reads the same live runner list as the Fleet page")
     ok(worker_py.count('"recoverable_post_execution_failure": True') >= 2,
        "personal exact-host failures retain server recovery without rewriting generic launch wakes")
 finally:

@@ -769,11 +769,11 @@ const TeepPlan = {
         let runners = [], prPayload = {};
         try {
             const p = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`;
-            // Runners: same source as the Fleet page's Live runners table (stale included —
-            // a dead runner is exactly what the dock must surface). PRs: cached server-side
-            // (60s GitHub sweep, open_prs.py), so the 10s dock poll only ever hits the cache.
+            // Runners: the SAME list as the Fleet page's Live runners table (include_stale=false
+            // to match it exactly — a dock that disagrees with the page reads as a bug). PRs:
+            // cached server-side (60s GitHub sweep, open_prs.py), so the 10s poll hits the cache.
             const [rRes, pRes] = await Promise.all([
-                fetch(`/ixp/v1/runner_sessions?${p}&include_stale=true`, { cache: 'no-store' }),
+                fetch(`/ixp/v1/runner_sessions?${p}&include_stale=false`, { cache: 'no-store' }),
                 fetch(`/ixp/v1/open_prs?${p}`, { cache: 'no-store' }),
             ]);
             runners = (await rRes.json()).sessions || [];
@@ -784,7 +784,9 @@ const TeepPlan = {
         if (ctx.mode === 'deliverable' && Array.isArray(ctx.taskIds)) {
             const ids = new Set(ctx.taskIds.map((x) => String(x).toUpperCase()));
             runners = runners.filter((s) => ids.has(String(s.task_id || '').toUpperCase()));
-            prs = prs.filter((x) => (x.tasks || []).some((t) => ids.has(String(t.task_id || '').toUpperCase())));
+            // PRs deliberately NOT scoped: option B is "every open PR on the canonical
+            // repo", and the orphan/no-board-task rows a scope filter would hide are
+            // exactly the ones only this dock can surface.
         }
         this._fleetScopeLabel = ctx.mode === 'deliverable' ? 'this deliverable' : '';
         this._dockPrUnavailable = prPayload.unavailable || '';
