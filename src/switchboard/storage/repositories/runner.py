@@ -1979,6 +1979,12 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
             c, record, principal_id, actor, now)
         if renewed is not None:
             return renewed
+    previous_row = c.execute(
+        "SELECT status, metadata_json FROM runner_sessions WHERE runner_session_id=?",
+        (runner_session_id,),
+    ).fetchone()
+    previous_metadata = _json_obj(previous_row["metadata_json"], {}) \
+        if previous_row else {}
     record = _merge_existing_runner_record(c, record)
     host_id = (record.get("host_id") or "").strip()
     control = _normalize_runner_control(record.get("control") or {}, host_id)
@@ -2083,6 +2089,21 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
                                "status": record.get("status") or "running",
                                "stale": False,
                            })}, sort_keys=True), now))
+    if (metadata.get("terminalized_by") == "session_reaper"
+            and previous_metadata.get("terminalized_by") != "session_reaper"):
+        c.execute(
+            "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+            "VALUES (?,?,?,?,?)",
+            (record.get("task_id") or None, actor, "runner.reaped",
+             json.dumps({
+                 "runner_session_id": runner_session_id,
+                 "host_id": host_id or None,
+                 "claim_id": record.get("claim_id") or None,
+                 "reason": metadata.get("reaped_reason") or "unknown",
+                 "last_output_at": metadata.get("last_output_at"),
+                 "reaped_at": metadata.get("reaped_at") or now,
+             }, sort_keys=True), now),
+        )
     row = c.execute("SELECT * FROM runner_sessions WHERE runner_session_id=?",
                     (runner_session_id,)).fetchone()
     session = _runner_session_row(row, now=now, include_claim=True, c=c)
