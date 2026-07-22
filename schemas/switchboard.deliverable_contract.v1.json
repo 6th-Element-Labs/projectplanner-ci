@@ -1,0 +1,151 @@
+{
+  "$id": "switchboard.deliverable_contract.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "profile": {
+            "const": "lite"
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "why_it_matters"
+              ]
+            },
+            {
+              "required": [
+                "milestones"
+              ]
+            },
+            {
+              "required": [
+                "risks"
+              ]
+            },
+            {
+              "required": [
+                "stakeholders"
+              ]
+            },
+            {
+              "required": [
+                "policy_constraints"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "profile": {
+            "const": "full"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "milestones",
+          "proof_requirements"
+        ]
+      }
+    }
+  ],
+  "description": "Sole normative authority for a deliverable; briefs are derived.",
+  "properties": {
+    "acceptance_criteria": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "constraints": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "contract_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "metadata": {
+      "type": "object"
+    },
+    "milestones": {
+      "items": {
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "outcome": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "owner": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "policy_constraints": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "profile": {
+      "enum": [
+        "lite",
+        "full"
+      ]
+    },
+    "proof_requirements": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "risks": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "schema": {
+      "const": "switchboard.deliverable_contract.v1"
+    },
+    "stakeholders": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "title": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "why_it_matters": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "contract_id",
+    "profile",
+    "title",
+    "outcome",
+    "acceptance_criteria",
+    "owner"
+  ],
+  "title": "Deliverable Contract",
+  "type": "object"
+}

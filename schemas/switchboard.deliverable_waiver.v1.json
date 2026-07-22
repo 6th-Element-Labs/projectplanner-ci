@@ -1,0 +1,45 @@
+{
+  "$id": "switchboard.deliverable_waiver.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "approved_at": {
+      "type": "number"
+    },
+    "approved_by": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "criterion": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "expires_at": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "reason": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "schema": {
+      "const": "switchboard.deliverable_waiver.v1"
+    },
+    "waiver_id": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "waiver_id",
+    "criterion",
+    "reason",
+    "approved_by",
+    "approved_at"
+  ],
+  "title": "Deliverable Acceptance Waiver",
+  "type": "object"
+}

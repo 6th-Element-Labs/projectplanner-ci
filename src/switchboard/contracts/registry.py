@@ -18,6 +18,19 @@ def register(model: type[BaseModel]) -> None:
     _SCHEMAS[schema_id] = payload
 
 
+def register_raw(schema_id: str, payload: dict[str, Any]) -> None:
+    """Record a hand-authored JSON Schema document under ``schema_id``.
+
+    Used for normative document contracts that are validated outside Pydantic
+    (e.g. Deliverable Contract hashing/lifecycle in ``deliverable_contracts``).
+    """
+    if not schema_id:
+        return
+    schema = dict(payload)
+    schema["$id"] = schema_id
+    _SCHEMAS[schema_id] = schema
+
+
 def get_schema(schema_id: str) -> dict[str, Any] | None:
     return _SCHEMAS.get(schema_id)
 

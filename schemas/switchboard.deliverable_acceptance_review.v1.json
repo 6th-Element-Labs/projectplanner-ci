@@ -1,0 +1,52 @@
+{
+  "$id": "switchboard.deliverable_acceptance_review.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "contract_hash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "evidence": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "outcome": {
+      "enum": [
+        "accept",
+        "request_changes",
+        "defer",
+        "no_go"
+      ]
+    },
+    "reviewed_at": {
+      "type": "number"
+    },
+    "reviewed_by": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "revision": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "schema": {
+      "const": "switchboard.deliverable_acceptance_review.v1"
+    }
+  },
+  "required": [
+    "schema",
+    "revision",
+    "contract_hash",
+    "evidence",
+    "outcome",
+    "reviewed_by",
+    "reviewed_at"
+  ],
+  "title": "Deliverable Acceptance Review",
+  "type": "object"
+}

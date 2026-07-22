@@ -1,0 +1,297 @@
+{
+  "$defs": {
+    "acceptance_review": {
+      "additionalProperties": false,
+      "properties": {
+        "contract_hash": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "outcome": {
+          "enum": [
+            "accept",
+            "request_changes",
+            "defer",
+            "no_go"
+          ]
+        },
+        "reviewed_at": {
+          "type": "number"
+        },
+        "reviewed_by": {
+          "type": "string"
+        },
+        "revision": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "revision",
+        "contract_hash",
+        "evidence",
+        "outcome",
+        "reviewed_by",
+        "reviewed_at"
+      ],
+      "type": "object"
+    },
+    "decision": {
+      "additionalProperties": false,
+      "properties": {
+        "decided_at": {
+          "type": "number"
+        },
+        "decided_by": {
+          "type": "string"
+        },
+        "expected_hash": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "expected_revision": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "outcome": {
+          "enum": [
+            "approve_contract",
+            "request_changes",
+            "defer",
+            "no_go",
+            "accept"
+          ]
+        }
+      },
+      "required": [
+        "outcome",
+        "expected_revision",
+        "expected_hash",
+        "decided_by",
+        "decided_at"
+      ],
+      "type": "object"
+    },
+    "feedback": {
+      "additionalProperties": false,
+      "properties": {
+        "author": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "number"
+        },
+        "feedback_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "feedback_id",
+        "author",
+        "body",
+        "created_at"
+      ],
+      "type": "object"
+    },
+    "participant": {
+      "additionalProperties": false,
+      "properties": {
+        "principal": {
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "owner",
+            "reviewer",
+            "approver",
+            "observer"
+          ]
+        }
+      },
+      "required": [
+        "principal",
+        "role"
+      ],
+      "type": "object"
+    },
+    "redline": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {},
+        "author": {
+          "type": "string"
+        },
+        "before": {},
+        "path": {
+          "type": "string"
+        },
+        "redline_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "redline_id",
+        "path",
+        "before",
+        "after",
+        "author"
+      ],
+      "type": "object"
+    },
+    "waiver": {
+      "additionalProperties": false,
+      "properties": {
+        "approved_at": {
+          "type": "number"
+        },
+        "approved_by": {
+          "type": "string"
+        },
+        "criterion": {
+          "type": "string"
+        },
+        "expires_at": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "waiver_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "waiver_id",
+        "criterion",
+        "reason",
+        "approved_by",
+        "approved_at"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "switchboard.deliverable_review_room.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Transport-neutral review aggregate for participants, feedback, redlines, waivers, decisions, and Acceptance Review.",
+  "properties": {
+    "acceptance_review": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/acceptance_review"
+        }
+      ]
+    },
+    "acceptance_state": {
+      "enum": [
+        "not_ready",
+        "ready",
+        "accepted",
+        "changes_requested",
+        "deferred",
+        "no_go"
+      ]
+    },
+    "contract_hash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "contract_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "contract_revision": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "contract_state": {
+      "enum": [
+        "draft",
+        "proposed",
+        "approved",
+        "changes_requested",
+        "deferred",
+        "no_go"
+      ]
+    },
+    "decisions": {
+      "items": {
+        "$ref": "#/$defs/decision"
+      },
+      "type": "array"
+    },
+    "delivery_state": {
+      "enum": [
+        "not_started",
+        "in_progress",
+        "in_review",
+        "done",
+        "blocked"
+      ]
+    },
+    "feedback": {
+      "items": {
+        "$ref": "#/$defs/feedback"
+      },
+      "type": "array"
+    },
+    "participants": {
+      "items": {
+        "$ref": "#/$defs/participant"
+      },
+      "type": "array"
+    },
+    "redlines": {
+      "items": {
+        "$ref": "#/$defs/redline"
+      },
+      "type": "array"
+    },
+    "room_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "schema": {
+      "const": "switchboard.deliverable_review_room.v1"
+    },
+    "waivers": {
+      "items": {
+        "$ref": "#/$defs/waiver"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema",
+    "room_id",
+    "contract_id",
+    "contract_revision",
+    "contract_hash",
+    "contract_state",
+    "delivery_state",
+    "acceptance_state",
+    "participants",
+    "feedback",
+    "redlines",
+    "decisions",
+    "waivers"
+  ],
+  "title": "Deliverable Review Room",
+  "type": "object"
+}

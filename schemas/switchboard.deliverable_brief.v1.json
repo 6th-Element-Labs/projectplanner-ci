@@ -1,0 +1,47 @@
+{
+  "$id": "switchboard.deliverable_brief.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Non-normative projection of one exact contract revision.",
+  "properties": {
+    "acceptance_criteria": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "outcome": {
+      "type": "string"
+    },
+    "schema": {
+      "const": "switchboard.deliverable_brief.v1"
+    },
+    "source_hash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "source_revision": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "title": {
+      "type": "string"
+    },
+    "why_it_matters": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "source_revision",
+    "source_hash",
+    "title",
+    "outcome",
+    "acceptance_criteria"
+  ],
+  "title": "Derived Deliverable Brief",
+  "type": "object"
+}

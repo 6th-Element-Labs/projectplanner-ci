@@ -1,0 +1,29 @@
+{
+  "$id": "switchboard.deliverable_review_participant.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "principal": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "role": {
+      "enum": [
+        "owner",
+        "reviewer",
+        "approver",
+        "observer"
+      ]
+    },
+    "schema": {
+      "const": "switchboard.deliverable_review_participant.v1"
+    }
+  },
+  "required": [
+    "schema",
+    "principal",
+    "role"
+  ],
+  "title": "Review Room Participant",
+  "type": "object"
+}

@@ -1,0 +1,43 @@
+{
+  "$id": "switchboard.deliverable_contract_revision.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "contract": {
+      "$ref": "switchboard.deliverable_contract.v1"
+    },
+    "contract_hash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "contract_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "published_at": {
+      "type": "number"
+    },
+    "published_by": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "revision": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "schema": {
+      "const": "switchboard.deliverable_contract_revision.v1"
+    }
+  },
+  "required": [
+    "schema",
+    "contract_id",
+    "revision",
+    "contract_hash",
+    "contract",
+    "published_by",
+    "published_at"
+  ],
+  "title": "Immutable Deliverable Contract Revision",
+  "type": "object"
+}

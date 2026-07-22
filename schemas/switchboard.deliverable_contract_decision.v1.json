@@ -1,0 +1,49 @@
+{
+  "$id": "switchboard.deliverable_contract_decision.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "contract_hash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "contract_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "decided_at": {
+      "type": "number"
+    },
+    "decided_by": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "outcome": {
+      "enum": [
+        "approve_contract",
+        "request_changes",
+        "defer",
+        "no_go",
+        "accept"
+      ]
+    },
+    "revision": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "schema": {
+      "const": "switchboard.deliverable_contract_decision.v1"
+    }
+  },
+  "required": [
+    "schema",
+    "contract_id",
+    "outcome",
+    "revision",
+    "contract_hash",
+    "decided_by",
+    "decided_at"
+  ],
+  "title": "Exact-revision Deliverable Decision",
+  "type": "object"
+}

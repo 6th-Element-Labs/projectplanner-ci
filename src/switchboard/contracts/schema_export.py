@@ -11,7 +11,16 @@ from pathlib import Path
 from typing import Any
 
 # Import contract packages so ``register()`` side effects populate the registry.
-from . import agents, claims, messaging, projects, reviews, tasks, wakes  # noqa: F401
+from . import (  # noqa: F401
+    agents,
+    claims,
+    deliverables,
+    messaging,
+    projects,
+    reviews,
+    tasks,
+    wakes,
+)
 from .registry import list_schemas
 
 MANIFEST_SCHEMA = "switchboard.schema_manifest.v1"

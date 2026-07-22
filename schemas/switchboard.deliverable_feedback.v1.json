@@ -1,0 +1,33 @@
+{
+  "$id": "switchboard.deliverable_feedback.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "author": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "body": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "number"
+    },
+    "feedback_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "schema": {
+      "const": "switchboard.deliverable_feedback.v1"
+    }
+  },
+  "required": [
+    "schema",
+    "feedback_id",
+    "author",
+    "body",
+    "created_at"
+  ],
+  "title": "Deliverable Feedback",
+  "type": "object"
+}

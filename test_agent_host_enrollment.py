@@ -95,13 +95,23 @@ subprocess.run(
 LOCAL_SOURCE_REPO = TMP / "local-source-checkout"
 subprocess.run(
     ["git", "clone", "-q", str(_LOCAL_ORIGIN_BARE), str(LOCAL_SOURCE_REPO)], check=True)
-os.environ.update({
-    # Keep the real canonical URL in installed identity/config assertions while
-    # making every clone/fetch in this test process network- and credential-free.
-    "GIT_CONFIG_COUNT": "1",
-    "GIT_CONFIG_KEY_0": f"url.{_LOCAL_ORIGIN_BARE.as_uri()}.insteadOf",
-    "GIT_CONFIG_VALUE_0": "https://github.com/6th-Element-Labs/projectplanner.git",
-})
+# Rewrite whatever origin URL this checkout actually advertises. Hosted CI
+# checkouts often omit the `.git` suffix (or stamp a tokenized HTTPS URL), so a
+# hard-coded insteadOf for .../projectplanner.git misses and the identity
+# fixtures that intentionally use ROOT fall back to a live GitHub clone.
+_ROOT_ORIGIN = subprocess.run(
+    ["git", "-C", str(ROOT), "remote", "get-url", "origin"],
+    capture_output=True, text=True, check=True,
+).stdout.strip()
+_CANONICAL_ORIGIN = "https://github.com/6th-Element-Labs/projectplanner.git"
+_INSTEAD_OF_TARGETS = []
+for _candidate in (_ROOT_ORIGIN, _CANONICAL_ORIGIN, _CANONICAL_ORIGIN.removesuffix(".git")):
+    if _candidate and _candidate not in _INSTEAD_OF_TARGETS:
+        _INSTEAD_OF_TARGETS.append(_candidate)
+os.environ["GIT_CONFIG_COUNT"] = str(len(_INSTEAD_OF_TARGETS))
+for _idx, _target in enumerate(_INSTEAD_OF_TARGETS):
+    os.environ[f"GIT_CONFIG_KEY_{_idx}"] = f"url.{_LOCAL_ORIGIN_BARE.as_uri()}.insteadOf"
+    os.environ[f"GIT_CONFIG_VALUE_{_idx}"] = _target
 
 
 def ok(condition, message):

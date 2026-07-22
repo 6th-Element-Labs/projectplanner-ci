@@ -1,5 +1,5 @@
 {
-  "count": 48,
+  "count": 58,
   "schema": "switchboard.schema_manifest.v1",
   "schemas": [
     {
@@ -49,6 +49,46 @@
     {
       "$id": "switchboard.claim.complete_claim_command.v1",
       "path": "switchboard.claim.complete_claim_command.v1.json"
+    },
+    {
+      "$id": "switchboard.deliverable_acceptance_review.v1",
+      "path": "switchboard.deliverable_acceptance_review.v1.json"
+    },
+    {
+      "$id": "switchboard.deliverable_brief.v1",
+      "path": "switchboard.deliverable_brief.v1.json"
+    },
+    {
+      "$id": "switchboard.deliverable_contract.v1",
+      "path": "switchboard.deliverable_contract.v1.json"
+    },
+    {
+      "$id": "switchboard.deliverable_contract_decision.v1",
+      "path": "switchboard.deliverable_contract_decision.v1.json"
+    },
+    {
+      "$id": "switchboard.deliverable_contract_revision.v1",
+      "path": "switchboard.deliverable_contract_revision.v1.json"
+    },
+    {
+      "$id": "switchboard.deliverable_feedback.v1",
+      "path": "switchboard.deliverable_feedback.v1.json"
+    },
+    {
+      "$id": "switchboard.deliverable_redline.v1",
+      "path": "switchboard.deliverable_redline.v1.json"
+    },
+    {
+      "$id": "switchboard.deliverable_review_participant.v1",
+      "path": "switchboard.deliverable_review_participant.v1.json"
+    },
+    {
+      "$id": "switchboard.deliverable_review_room.v1",
+      "path": "switchboard.deliverable_review_room.v1.json"
+    },
+    {
+      "$id": "switchboard.deliverable_waiver.v1",
+      "path": "switchboard.deliverable_waiver.v1.json"
     },
     {
       "$id": "switchboard.messaging.ack_message_command.v1",
