@@ -831,6 +831,29 @@ def is_direct_assignment_runner(record: Dict[str, Any]) -> bool:
     )
 
 
+def is_connect_assignment_runner(record: Dict[str, Any]) -> bool:
+    """True for a host-bound PTY launched by the content-blind Connect plane.
+
+    Connect intentionally starts before task claims and Work Sessions exist.  Its
+    durable identity is therefore task + host + wake + assignment, while the live
+    relay proves transport readiness.  Requiring claim/work-session fields here
+    makes a successfully attached Connect process invisible until an unrelated
+    lifecycle catches up (BUG-130).
+    """
+    metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+    if not metadata and record.get("metadata_json"):
+        metadata = _json_obj(record.get("metadata_json"), {})
+    bind = runner_bind_tuple(record)
+    return bool(
+        metadata.get("connect_assignment") is True
+        and metadata.get("native_host_execution") is True
+        and metadata.get("assignment_schema") == "switchboard.connect.assignment.v1"
+        and bind.get("task_id")
+        and bind.get("host_id", "").startswith("host/")
+        and bind.get("wake_id")
+    )
+
+
 def assert_runner_watchable(session: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Fail closed: Watch/Chat may open only for a fully bound live runner."""
     if not session:
@@ -861,14 +884,19 @@ def assert_runner_watchable(session: Optional[Dict[str, Any]]) -> Dict[str, Any]
                 "error_code": "runner_stream_not_ready",
                 "message": "Runner is bound but its live PTY relay is not ready",
             }
-    if is_direct_assignment_runner(session):
+    assignment_mode = (
+        "direct_assignment" if is_direct_assignment_runner(session)
+        else "connect_assignment" if is_connect_assignment_runner(session)
+        else ""
+    )
+    if assignment_mode:
         status = str(session.get("status") or "").strip().lower()
         if status not in RUNNER_WATCHABLE_STATUSES:
             return runner_bind_incomplete(
                 ["live_status"],
                 runner_session_id=str(session.get("runner_session_id") or ""),
                 task_id=str(session.get("task_id") or ""),
-            ) | {"message": f"Direct Codex session status {status or 'unknown'} is not watchable"}
+            ) | {"message": f"Assignment runner status {status or 'unknown'} is not watchable"}
         return {
             "watchable": True,
             "refused": False,
@@ -876,7 +904,7 @@ def assert_runner_watchable(session: Optional[Dict[str, Any]]) -> Dict[str, Any]
             "task_id": str(session.get("task_id") or ""),
             "bind": runner_bind_tuple(session),
             "session": session,
-            "binding_mode": "direct_assignment",
+            "binding_mode": assignment_mode,
         }
     missing = missing_runner_bind_fields(session)
     if missing:
@@ -2232,6 +2260,46 @@ def complete_runner_control_request(request_id: str, result: Optional[Dict[str, 
             _clear_active_runner_pointer_in(
                 c, str(session.get("task_id") or ""),
                 str(session.get("runner_session_id") or ""), now)
+        if (req.get("action") == "kill" and final_status == "completed"
+                and str(session_status or "").lower() not in RUNNER_WATCHABLE_STATUSES):
+            # The launch wake records dispatch, not process lifetime.  Once its
+            # process is deliberately killed it must no longer remain a reusable
+            # successful generation: start_task derives the next idempotency key
+            # from this failed predecessor.  Otherwise Connect returns the old
+            # completed wake as "started" without asking a host to spawn anything.
+            metadata = session.get("metadata") if isinstance(
+                session.get("metadata"), dict) else {}
+            wake_id = str(metadata.get("wake_id") or "").strip()
+            if wake_id:
+                wake_row = c.execute(
+                    "SELECT status, runner_session_id, result_json FROM wake_intents "
+                    "WHERE wake_id=?", (wake_id,),
+                ).fetchone()
+                if (wake_row and str(wake_row["status"] or "") == "completed"
+                        and str(wake_row["runner_session_id"] or "")
+                        == str(session.get("runner_session_id") or "")):
+                    wake_result = _json_obj(wake_row["result_json"], {})
+                    wake_result.update({
+                        "started": False,
+                        "failure_class": "runner_killed",
+                        "reason": str(req.get("reason") or "runner killed"),
+                        "failed_at": now,
+                        "runner_session_id": session.get("runner_session_id"),
+                    })
+                    c.execute(
+                        "UPDATE wake_intents SET status='failed', completed_at=?, "
+                        "result_json=? WHERE wake_id=? AND status='completed'",
+                        (now, json.dumps(wake_result, sort_keys=True), wake_id),
+                    )
+                    c.execute(
+                        "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                        "VALUES (?,?,?,?,?)",
+                        (session.get("task_id") or None, actor, "wake.failed",
+                         json.dumps({"wake_id": wake_id,
+                                     "runner_session_id": session.get("runner_session_id"),
+                                     "failure_class": "runner_killed",
+                                     "reason": wake_result["reason"]}, sort_keys=True), now),
+                    )
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (session.get("task_id") or None, actor, f"runner.{req['action']}_{final_status}",
                    json.dumps({"request_id": request_id,
