@@ -106,7 +106,7 @@ try:
     healthy = _wait_healthy()
     ok(healthy, "app.py boots and /health responds (required auth, throwaway DB)")
     index_html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
-    ok('js/runner-session.js?v=10' in index_html and 'app.js?v=56' in index_html,
+    ok('js/runner-session.js?v=11' in index_html and 'app.js?v=57' in index_html,
        "the deployed shell invalidates pre-Resume-review runner and modal assets")
     if not healthy:
         raise SystemExit("server did not become healthy — aborting")
@@ -241,6 +241,140 @@ try:
         ok(replacement["opened"] == ["COORD-42"],
            "an already-open Watch panel is rebound to the replacement runner")
         ok(replacement["polling"], "the open task modal polls for runner replacement")
+
+        # ---- BUG-135: 5s poll must not rebuild a healthy Watch terminal ----
+        bug135 = page.evaluate("""
+            async () => {
+                const modal = document.getElementById('task-modal');
+                modal.classList.add('show');
+                modal.dataset.taskId = 'BUG-135';
+                const root = document.createElement('div');
+                root.id = 'task-primary-runner';
+                root.dataset.taskId = 'BUG-135';
+                root.dataset.taskStatus = 'In Progress';
+                root.dataset.runnerSessionId = 'run_stable';
+                root.innerHTML = `
+                    <span id="task-primary-runner-title"></span>
+                    <span id="task-primary-runner-badge"></span>
+                    <span id="task-primary-runner-state"></span>
+                    <button id="task-primary-start"><span>Start</span></button>
+                    <button id="task-primary-retry"><span>Retry</span></button>
+                    <button id="task-primary-resume-review"><span>Resume</span></button>
+                    <button id="task-primary-watch-here"><i></i><span>Watch</span></button>
+                    <button id="task-primary-watch-sidecar"><span>Sidecar</span></button>
+                    <button id="task-primary-stop"><span>Stop</span></button>`;
+                document.body.appendChild(root);
+                const panel = document.createElement('div');
+                panel.id = 'runner-pty-panel';
+                panel.hidden = false;
+                document.body.appendChild(panel);
+                // A live terminal already watching this task — poll flaps must
+                // not call openRunnerSessionPanel / rebuild xterm.
+                TeepPlan._runnerPty = {
+                    taskId: 'BUG-135',
+                    runnerSessionId: 'run_stable',
+                    term: { dispose() {}, write() {}, scrollToBottom() {},
+                            buffer: { active: { viewportY: 40, baseY: 40 } },
+                            onScroll() {} },
+                    followOutput: true,
+                    ws: { readyState: 1 },
+                };
+                window.__bug135Opened = [];
+                const originalOpen = TeepPlan.openRunnerSessionPanel;
+                const originalFetch = window.fetch;
+                let tick = 0;
+                TeepPlan.openRunnerSessionPanel = async (taskId) => {
+                    window.__bug135Opened.push(taskId); return true;
+                };
+                window.fetch = async (url, options) => {
+                    if (String(url).includes('/execution?')) {
+                        tick += 1;
+                        // Alternate detached/live and poison execution_id so a
+                        // naive previous!==live compare would reopen forever.
+                        const detached = tick % 2 === 0;
+                        return new Response(JSON.stringify({
+                            schema: 'switchboard.task_execution.v1', running: true,
+                            starting: false, has_ended_session: false,
+                            resumable_review: false, lifecycle_phase: 'running',
+                            execution_id: detached ? 'attempt_flap_' + tick : 'run_stable',
+                            panel: {
+                                state: detached ? 'detached' : 'live',
+                                label: detached ? 'Detached' : 'Live',
+                                detail: detached ? 'Bridge detached — reconnecting' : 'live',
+                            },
+                            execution: {active_runner: {runner_session_id: 'run_stable',
+                                   host_id: 'host/mac', status: 'running'},
+                                   active_host: {host_id: 'host/mac'}},
+                        }), {status: 200, headers: {'Content-Type': 'application/json'}});
+                    }
+                    return originalFetch(url, options);
+                };
+                await TeepPlan._loadTaskPrimaryRunner('BUG-135'); // live
+                await TeepPlan._loadTaskPrimaryRunner('BUG-135'); // detached (debounced)
+                const badgeWhileDetached = document.getElementById('task-primary-runner-badge').textContent;
+                await TeepPlan._loadTaskPrimaryRunner('BUG-135'); // live again
+                const result = {
+                    runner: root.dataset.runnerSessionId,
+                    opened: [...window.__bug135Opened],
+                    badgeWhileDetached,
+                    ptyStillStable: TeepPlan._runnerPty
+                        && TeepPlan._runnerPty.runnerSessionId === 'run_stable'
+                        && !!TeepPlan._runnerPty.term,
+                };
+                TeepPlan.openRunnerSessionPanel = originalOpen;
+                window.fetch = originalFetch;
+                TeepPlan._runnerPty = null;
+                root.remove(); panel.remove(); modal.classList.remove('show');
+                return result;
+            }
+        """)
+        ok(bug135["runner"] == "run_stable" and bug135["ptyStillStable"],
+           f"BUG-135 keeps the stable runner id across detached/live flaps ({bug135})")
+        ok(bug135["opened"] == [],
+           "BUG-135 does not re-open Watch from the primary-runner poll while healthy")
+        ok("Detached" not in bug135["badgeWhileDetached"],
+           "BUG-135 soft-debounces Detached so a sub-2.5s flap stays Live on the card")
+
+        # ---- BUG-135: snapshot/out writes preserve follow-tail viewport ----
+        page.evaluate("() => TeepPlan._ensureXterm()")
+        viewport = page.evaluate("""
+            () => {
+                TeepPlan._runnerPty = { taskId: 'BUG-135', runnerSessionId: 'run_viewport',
+                                         mode: 'sidecar', reconnectAttempts: 0 };
+                TeepPlan._runnerPtyShowShell(null);
+                TeepPlan._runnerPtyMountTerminal(TeepPlan._runnerPty);
+                const rp = TeepPlan._runnerPty;
+                // Fill enough scrollback that top != bottom.
+                let boot = '';
+                for (let i = 0; i < 80; i++) boot += `boot-line-${i}\\r\\n`;
+                rp.term.write(boot);
+                rp.term.scrollToBottom();
+                rp.followOutput = true;
+                const atBottomBefore = rp.term.buffer.active.viewportY
+                    >= (rp.term.buffer.active.baseY - 1);
+                const snap = 'snapshot-tail-marker\\r\\n';
+                const bytes = new TextEncoder().encode(snap);
+                TeepPlan._runnerPtyHandleFrame(rp, TeepPlan._runnerPtyEncodeFrame('snapshot', {}, bytes));
+                // write() may finish async via callback — yield one turn.
+                return new Promise((resolve) => {
+                    setTimeout(() => {
+                        const buf = rp.term.buffer.active;
+                        resolve({
+                            atBottomBefore,
+                            atBottomAfter: buf.viewportY >= (buf.baseY - 1),
+                            followOutput: rp.followOutput === true,
+                            hasMarker: buf.getLine(buf.baseY + buf.cursorY)
+                                ? true
+                                : Array.from({length: buf.length}, (_, i) => buf.getLine(i))
+                                    .some((line) => line && line.translateToString(true).includes('snapshot-tail-marker')),
+                        });
+                    }, 50);
+                });
+            }
+        """)
+        ok(viewport["atBottomBefore"] and viewport["atBottomAfter"] and viewport["followOutput"],
+           f"BUG-135 keeps a following viewport pinned after snapshot writes ({viewport})")
+        page.evaluate("() => TeepPlan._runnerPtyClose()")
 
         console_errors = []
         page.on("console", lambda m: console_errors.append(m.text) if m.type == "error" else None)

@@ -393,6 +393,35 @@
             // runner. An ended/stale session is real runner history, so reopen
             // its truthful gate instead of treating it as "no runner".
             if (opts.fallbackIfNotWatchable && !remembered && !sessions.length) return false;
+            // BUG-135: a transient host_not_attached / detached flap must not
+            // tear down a healthy terminal for this task. Keep the xterm and
+            // surface the honest Detached gate on the existing panel.
+            const refusedSid = String(
+                watch?.runner_session_id
+                || (sessions[0] && sessions[0].runner_session_id)
+                || '');
+            const panelHint = (watch && watch.panel && typeof watch.panel === 'object')
+                ? watch.panel : null;
+            const detachedRefusal = String(watch?.error_code || '') === 'host_not_attached'
+                || String(panelHint?.state || '') === 'detached';
+            if (detachedRefusal && this._runnerPty && this._runnerPty.term
+                    && String(this._runnerPty.taskId || '') === id
+                    && (!refusedSid || String(this._runnerPty.runnerSessionId || '') === refusedSid)) {
+                this._runnerPtyShowShell(opts.dockInto);
+                const liveBadge = document.getElementById('runner-pty-live');
+                if (liveBadge) {
+                    liveBadge.hidden = false;
+                    liveBadge.className = 'badge bg-yellow-lt mt-2';
+                    liveBadge.innerHTML = '<span class="status-dot status-dot-animated bg-yellow me-1"></span>Detached';
+                }
+                const detail = (panelHint && panelHint.detail)
+                    || watch?.message
+                    || 'Bridge detached — reconnecting to the host tunnel…';
+                this._runnerPtyGate(
+                    `<span class="badge bg-yellow-lt me-1">Detached</span>${this.esc(detail)}`,
+                    'warning');
+                return true;
+            }
             const els = this._runnerPtyShowShell(opts.dockInto);
             // BUG-91: the server orders sessions newest-first and its refusal
             // names the row it judged. Take that answer verbatim. Never revive a
@@ -724,6 +753,7 @@
             convertEol: true, cursorBlink: true, fontSize: 13,
             fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
             theme: { background: '#0d0f13', foreground: '#c9ced6' },
+            scrollback: 5000,
         });
         const fitAddon = new window.FitAddon.FitAddon();
         term.loadAddon(fitAddon);
@@ -736,6 +766,7 @@
         term.onBinary((data) => this._runnerPtySendBinary(data));
         rp.term = term;
         rp.fitAddon = fitAddon;
+        rp.followOutput = true;
         rp.resizeObserver = new ResizeObserver(() => {
             if (rp.resizeTimer) clearTimeout(rp.resizeTimer);
             rp.resizeTimer = setTimeout(() => {
@@ -744,6 +775,32 @@
             }, 50);
         });
         rp.resizeObserver.observe(els.termMount);
+        // Track whether the operator is following the live tail so snapshot /
+        // reconnect bursts can restore that intent (BUG-135).
+        try {
+            term.onScroll(() => {
+                rp.followOutput = this._runnerPtyIsFollowing(rp);
+            });
+        } catch (e) { /* older xterm builds may omit onScroll */ }
+    },
+
+    _runnerPtyIsFollowing(rp) {
+        if (!rp || !rp.term) return true;
+        if (typeof rp.followOutput === 'boolean') return rp.followOutput;
+        try {
+            const buf = rp.term.buffer.active;
+            return buf.viewportY >= (buf.baseY - 1);
+        } catch (e) {
+            return true;
+        }
+    },
+
+    _runnerPtyPreserveViewportAfterWrite(rp, wasFollowing) {
+        if (!rp || !rp.term) return;
+        if (wasFollowing) {
+            try { rp.term.scrollToBottom(); } catch (e) { /* ignore */ }
+            rp.followOutput = true;
+        }
     },
 
     _runnerPtyTypeIds: {
@@ -888,7 +945,12 @@
         const type = frame.type;
         if (type === 'out' || type === 'snapshot') {
             if (!frame.data || !rp.term) return;
+            // BUG-135: snapshot/reconnect bursts used to yank the viewport to
+            // the top of scrollback. Preserve follow-tail; leave a scrolled-up
+            // operator where they were.
+            const following = this._runnerPtyIsFollowing(rp);
             rp.term.write(frame.data);
+            this._runnerPtyPreserveViewportAfterWrite(rp, following);
             this._runnerPtyGate('', 'secondary');
         } else if (type === 'exit') {
             this._runnerPtyGate(`Session closed: ${this.esc(frame.reason || frame.detail || 'ended')}`, 'secondary');

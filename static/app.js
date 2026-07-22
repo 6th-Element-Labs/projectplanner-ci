@@ -2081,11 +2081,27 @@ const TeepPlan = {
             const panel = (data.panel && typeof data.panel === 'object') ? data.panel : {};
             const panelState = String(panel.state || '');
             if (data.running === true || panelState === 'live' || panelState === 'detached') {
-                const liveRunnerId = String(data.execution_id || runner.runner_session_id || '');
+                // BUG-135: prefer the durable runner_session_id. execution_id can
+                // briefly disagree during attempt/projection flaps and must not be
+                // treated as a new session that rebuilds Watch.
+                const liveRunnerId = String(runner.runner_session_id || data.execution_id || '');
                 const previousRunnerId = String(root.dataset.runnerSessionId || '');
-                root.dataset.runnerSessionId = liveRunnerId;
+                if (liveRunnerId) root.dataset.runnerSessionId = liveRunnerId;
                 const blocked = taskStatus === 'Blocked';
-                const detached = panelState === 'detached';
+                const detachedNow = panelState === 'detached';
+                // Soft-debounce Detached: brief host-tunnel reconnect gaps (~seconds)
+                // used to flash the card every poll cycle (BUG-135).
+                if (detachedNow) {
+                    if (!root.dataset.taskPrimaryDetachedSince) {
+                        root.dataset.taskPrimaryDetachedSince = String(Date.now());
+                    }
+                } else {
+                    delete root.dataset.taskPrimaryDetachedSince;
+                }
+                const detachedForMs = detachedNow
+                    ? (Date.now() - Number(root.dataset.taskPrimaryDetachedSince || Date.now()))
+                    : 0;
+                const detached = detachedNow && detachedForMs >= 2500;
                 root.dataset.sessionState = blocked ? 'blocked-live'
                     : (detached ? 'detached' : 'running');
                 badge.className = `badge bg-${detached ? 'yellow' : 'green'}-lt`;
@@ -2109,14 +2125,66 @@ const TeepPlan = {
                 watchHere.querySelector('i').className = `ti ti-${blocked ? 'message-circle' : 'terminal-2'} me-1`;
                 watchSidecar.hidden = false;
                 setHidden(stop, false);
-                if (previousRunnerId && previousRunnerId !== liveRunnerId
-                        && document.getElementById('runner-pty-panel')) {
-                    const mount = document.getElementById('runner-pty-details-mount')
-                        || document.getElementById('runner-pty-dev-mount');
-                    await this.openRunnerSessionPanel(taskId, { dockInto: mount || undefined });
+                // BUG-135: never rebuild a healthy connected terminal from the 5s
+                // poll. Re-open only when the open Watch session is actually on a
+                // superseded runner id (or the panel shell has no live term yet).
+                const pty = this._runnerPty;
+                const ptyTask = String((pty && pty.taskId) || '');
+                const ptySid = String((pty && pty.runnerSessionId) || '');
+                // Presence of the Watch shell (even if currently hidden) means the
+                // operator already opened the surface — COORD-42 / BUG-135 both
+                // key off that, not the ephemeral .hidden flag.
+                const panelOpen = !!document.getElementById('runner-pty-panel');
+                const watchingThisTask = !!(pty && pty.term
+                    && ptyTask === String(taskId || ''));
+                const alreadyOnLiveRunner = watchingThisTask
+                    && (!liveRunnerId || ptySid === liveRunnerId);
+                if (alreadyOnLiveRunner) {
+                    delete root.dataset.pendingRunnerReplaceId;
+                    delete root.dataset.pendingRunnerReplaceCount;
+                } else if (previousRunnerId && liveRunnerId
+                        && previousRunnerId !== liveRunnerId && panelOpen) {
+                    const confirmedReplace = watchingThisTask && ptySid === previousRunnerId
+                        && ptySid !== liveRunnerId;
+                    const shellOnly = !watchingThisTask;
+                    if (confirmedReplace || shellOnly) {
+                        delete root.dataset.pendingRunnerReplaceId;
+                        delete root.dataset.pendingRunnerReplaceCount;
+                        const mount = document.getElementById('runner-pty-details-mount')
+                            || document.getElementById('runner-pty-dev-mount');
+                        await this.openRunnerSessionPanel(taskId, { dockInto: mount || undefined });
+                    } else {
+                        const pendingId = String(root.dataset.pendingRunnerReplaceId || '');
+                        const pendingCount = Number(root.dataset.pendingRunnerReplaceCount || 0);
+                        if (pendingId === liveRunnerId && pendingCount >= 1) {
+                            delete root.dataset.pendingRunnerReplaceId;
+                            delete root.dataset.pendingRunnerReplaceCount;
+                            const mount = document.getElementById('runner-pty-details-mount')
+                                || document.getElementById('runner-pty-dev-mount');
+                            await this.openRunnerSessionPanel(taskId, { dockInto: mount || undefined });
+                        } else {
+                            root.dataset.pendingRunnerReplaceId = liveRunnerId;
+                            root.dataset.pendingRunnerReplaceCount = String(
+                                pendingId === liveRunnerId ? pendingCount + 1 : 1);
+                        }
+                    }
+                } else {
+                    delete root.dataset.pendingRunnerReplaceId;
+                    delete root.dataset.pendingRunnerReplaceCount;
                 }
             } else {
-                root.dataset.runnerSessionId = '';
+                const pty = this._runnerPty;
+                const panelEl = document.getElementById('runner-pty-panel');
+                const keepId = pty && String(pty.taskId || '') === String(taskId || '')
+                    && panelEl && !panelEl.hidden
+                    && String(pty.runnerSessionId || '');
+                // BUG-135: do not blank the remembered runner id while Watch is
+                // still open for this task — a transient idle flap would otherwise
+                // look like a "new" runner on the next live poll.
+                root.dataset.runnerSessionId = keepId || '';
+                delete root.dataset.taskPrimaryDetachedSince;
+                delete root.dataset.pendingRunnerReplaceId;
+                delete root.dataset.pendingRunnerReplaceCount;
                 const starting = data.starting === true;
                 const queued = panelState === 'queued';
                 const startingExact = panelState === 'starting' || (starting && !queued);
