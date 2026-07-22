@@ -130,6 +130,13 @@ try:
     ok(index.text.index('id="fleet-runners-body"') < index.text.index('id="fleet-hosts-body"')
        < index.text.index('id="fleet-wakes-body"'),
        "Fleet puts live runners above hosts and wake intents")
+    ok("Runner capacity" in index.text and "Launch queue" in index.text,
+       "Fleet uses operator-facing capacity and launch labels")
+    for body_id in ("fleet-runners-body", "fleet-hosts-body", "fleet-wakes-body"):
+        ok(f'data-bs-target="#{body_id}"' in index.text
+           and f'aria-controls="{body_id}"' in index.text
+           and f'id="{body_id}" class="card-body collapse show"' in index.text,
+           f"Fleet exposes an expanded Tabler collapse control for {body_id}")
 
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
