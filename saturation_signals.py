@@ -10,6 +10,7 @@ import os
 import time
 from typing import Any, Callable, Dict, List, Optional
 
+import bridge_attachment_monitor
 import concurrency_limiter
 import load_shed
 import psi_pressure
@@ -368,6 +369,7 @@ def compute_saturation_signals(
         webhook_inbox_pending=int((inbox_depth or {}).get("pending") or 0),
     )
     concurrency = concurrency_limiter.snapshot()
+    bridge_monitor = bridge_attachment_monitor.snapshot(project)
     alerts = build_alerts(
         psi=psi,
         mcp_obs=mcp_obs,
@@ -376,6 +378,21 @@ def compute_saturation_signals(
         load_shed_state=shed,
     )
     alerts.extend(_concurrency_alerts(concurrency))
+    if bridge_monitor.get("active"):
+        task_ids = bridge_monitor.get("task_ids") or []
+        alerts.append({
+            "at": round(time.time(), 3),
+            "severity": "critical",
+            "kind": "runner_bridge_unattached",
+            "message": (
+                "running runner sessions have no attached relay bridge: "
+                + (", ".join(task_ids) if task_ids else "unknown tasks")
+            ),
+            "value": int(bridge_monitor.get("count") or 0),
+            "task_ids": task_ids,
+            "runner_session_ids": bridge_monitor.get("runner_session_ids") or [],
+            "window_s": bridge_monitor.get("window_s"),
+        })
     severity_rank = {"critical": 3, "warning": 2, "info": 1}
     top_severity = "healthy"
     if alerts:
@@ -402,6 +419,7 @@ def compute_saturation_signals(
         "slos": slo,
         "load_shed": shed,
         "concurrency_limiter": concurrency,
+        "runner_bridge_monitor": bridge_monitor,
         "alerts": alerts,
         "alert_count": len(alerts),
     }
