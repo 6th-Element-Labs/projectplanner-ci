@@ -449,6 +449,20 @@ interrupt-tier rules.
 - Every launch, claim, failure, kill, and session exit writes activity/audit.
 - Host-side secrets must never be copied into Switchboard activity payloads.
 
+### Runner-row ownership and safe reaping
+
+Runner-session ownership follows the identity-proven `host_id` binding, not the principal that
+created the row. A narrow host bearer may heartbeat or terminalize any runner row bound to its
+own host, including rows legitimately pre-created by server-side Connect late-binding or MCP
+registration under `env-mcp-token`. It may not take over a row bound to another host; cross-host
+mutation remains a `403`. This boundary is covered by
+`tests/test_bug149_host_owns_serverside_runner_rows.py`.
+
+The WATCH-15 session reaper also fails closed when claim state cannot be verified. It treats
+sessions in credential-admission `preclaim` or `pending` phases as non-terminal, and likewise
+spares a session whose bound `claim_id` does not drain with a claim row. Absence of verifiable
+claim state is never evidence that work finished. See `tests/test_watch15_session_reaper.py`.
+
 ## 13. Observability
 
 Minimum activity kinds:
