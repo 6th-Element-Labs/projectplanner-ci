@@ -70,6 +70,10 @@ ok("useradd" in alp and "groupadd" in alp, "apply-least-privilege creates the se
 ok("nologin" in alp, "service account has no login shell")
 ok("chown -R root:root" in alp, "apply-least-privilege makes the code tree root-owned")
 ok("chmod -R go-w" in alp, "apply-least-privilege makes the code tree non-writable to the runtime")
+ok("PM_REPO_PATH" in alp and "PM_WORKSPACE_ROOT" in alp,
+   "apply-least-privilege points managed sessions at the service-owned clone")
+ok("removing CODE_ROOT write drop-in" in alp,
+   "apply-least-privilege strips accidental /opt ReadWritePaths drop-ins")
 
 # Provisioning + redeploy wire the helper in and drop the old ubuntu chown.
 provision = read("deploy/PROVISION.md")
