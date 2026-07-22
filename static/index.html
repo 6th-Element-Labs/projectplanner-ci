@@ -1092,7 +1092,7 @@
         }
 
         function commands(q) {
-          var toks = q ? q.split(/\s+/) : [];
+          var toks = q ? q.toLowerCase().split(/\s+/).filter(Boolean) : [];
           var cmds = [];
           // Task + deliverable jumps lead when the operator is typing a query.
           if (toks.length) {
