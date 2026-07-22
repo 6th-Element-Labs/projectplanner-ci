@@ -1913,7 +1913,8 @@ def renew_live_direct_runners(inventory):
     renewed = []
     sessions = _drain_runners(host_id)
     needs_late_binding = any(
-        (row.get("metadata") or {}).get("direct_assignment") is True
+        ((row.get("metadata") or {}).get("direct_assignment") is True
+         or (row.get("metadata") or {}).get("connect_assignment") is True)
         and not row.get("claim_id")
         and not (row.get("metadata") or {}).get("work_session_id")
         and row.get("alive") is True
@@ -1932,7 +1933,8 @@ def renew_live_direct_runners(inventory):
         work_session_id = str(metadata.get("work_session_id") or "")
         late_binding = _direct_work_session_binding(session, work_sessions)
         if (not late_binding and needs_late_binding
-                and metadata.get("direct_assignment") is True
+                and (metadata.get("direct_assignment") is True
+                     or metadata.get("connect_assignment") is True)
                 and not session.get("claim_id")
                 and not metadata.get("work_session_id")):
             # A short task can create and complete its managed Work Session
@@ -2096,7 +2098,8 @@ def _direct_work_session_binding(session, work_sessions, *, allowed_statuses=Non
     metadata = dict(session.get("metadata") or {})
     runner_session_id = str(session.get("runner_session_id") or "").strip()
     if (not runner_session_id
-            or metadata.get("direct_assignment") is not True
+            or not (metadata.get("direct_assignment") is True
+                    or metadata.get("connect_assignment") is True)
             or session.get("claim_id")
             or metadata.get("work_session_id")):
         return None
