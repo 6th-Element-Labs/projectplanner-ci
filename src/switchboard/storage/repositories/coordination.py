@@ -1899,10 +1899,6 @@ def complete_wake(wake_id: str, runner_session_id: str = "",
                         and str(runner.get("runtime") or "") == "codex"):
                     if metadata.get("pty") is not True:
                         transport_missing.append("pty")
-                    if not str(metadata.get("stream_bind") or "").strip():
-                        transport_missing.append("stream_bind")
-                    if str(metadata.get("stream_port") or "").strip() in {"", "0"}:
-                        transport_missing.append("stream_port")
                 exact = bool(
                     runner
                     and str(runner.get("task_id") or "") == expected_task

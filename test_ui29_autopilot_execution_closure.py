@@ -267,7 +267,7 @@ no_stream = store.complete_wake(
     result={"started": True, "claim_id": claimed["claim_id"]},
     actor=host_id, project="switchboard")
 ok(no_stream.get("error_code") == "runner_stream_not_ready"
-   and set(no_stream.get("missing") or []) == {"pty", "stream_bind", "stream_port"},
+   and set(no_stream.get("missing") or []) == {"pty"},
    "native Autopilot wake cannot complete before its browser PTY is ready")
 store.upsert_runner_session({
     "runner_session_id": runner_id, "host_id": host_id,
@@ -276,7 +276,7 @@ store.upsert_runner_session({
     "metadata": {"credential_admission_phase": "claim_bound",
                  "wake_id": requested["wake_id"],
                  "work_session_id": work_session_id,
-                 "pty": True, "stream_bind": "127.0.0.1", "stream_port": 64129},
+                 "pty": True},
     "require_task_bind": True, "heartbeat_ttl_s": 3600,
 }, actor=agent_id, project="switchboard")
 accepted = store.complete_wake(

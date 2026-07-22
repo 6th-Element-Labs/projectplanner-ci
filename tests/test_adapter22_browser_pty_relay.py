@@ -34,7 +34,6 @@ def _load(name: str, path: Path):
 
 pty_stream = _load("codex_pty_stream_a22", ROOT / "adapters" / "codex" / "pty_stream.py")
 supervisor = _load("codex_supervisor_a22", ROOT / "adapters" / "codex" / "supervisor.py")
-bridge = _load("codex_pty_relay_bridge_a22", ROOT / "adapters" / "codex" / "pty_relay_bridge.py")
 
 passed = failed = 0
 
@@ -178,12 +177,10 @@ relay.clear_revoked_jtis_for_tests()
 # --- sanitize / open path never exposes loopback when public base set ---
 sanitized = relay.sanitize_browser_stream_metadata({
     "stream_url": "http://127.0.0.1:9/runner/v1/sessions/x/stream?ticket=abc",
-    "local_stream_url": "http://127.0.0.1:9/runner/v1/sessions/x/stream?ticket=abc",
-    "transport": "http_chunked",
+    "transport": "switchboard_pty_relay",
 }, relay_url="wss://plan.example/ixp/v1/runner_sessions/x/pty?ticket=tok")
 ok(sanitized.get("stream_url", "").startswith("wss://plan.example")
    and "127.0.0.1" not in str(sanitized.get("stream_url"))
-   and "local_stream_url" not in sanitized
    and "127.0.0.1" not in json.dumps(sanitized)
    and sanitized.get("browser_safe") is True,
    "sanitize_browser_stream_metadata replaces loopback stream_url with relay")
@@ -219,7 +216,7 @@ meta = supervisor.start_session(
     child, agent_id="cursor/ADAPTER-22-test", task_id="ADAPTER-22",
     claim_id="claim-a22", cwd=str(ROOT), runner_dir=os.environ["PM_RUNNER_DIR"],
 )
-ok(meta.get("pty") is True and int(meta.get("stream_port") or 0) > 0,
+ok(meta.get("pty") is True and "stream_port" not in meta and "stream_bind" not in meta,
    "supervisor launches real PTY child for relay harness")
 
 deadline = time.time() + 5
@@ -266,19 +263,15 @@ ok(opened.get("opened") is True
    and opened.get("transport") == "switchboard_pty_relay"
    and opened.get("browser_safe") is True
    and "127.0.0.1" not in str(opened.get("stream_url") or "")
-   and "127.0.0.1" not in str(opened.get("relay_url") or "")
-   and ("local_stream_url" not in (opened.get("metadata") or {})
-        or "127.0.0.1" in str((opened.get("metadata") or {}).get("local_stream_url") or "")),
+   and "127.0.0.1" not in str(opened.get("relay_url") or ""),
    "open path returns relay URL and never exposes 127.0.0.1 when public base set")
 
-# Without public base: browser_safe false / relay_required true (compat path)
+# Without public base, opening fails closed; there is no browser fallback.
 os.environ.pop("PM_SWITCHBOARD_PUBLIC_BASE", None)
 opened_local = agent_host.supervisor_action("open", meta["runner_session_id"])
-ok(opened_local.get("transport") == "http_chunked"
-   and opened_local.get("browser_safe") is False
-   and opened_local.get("relay_required") is True
-   and "ticket=" in str(opened_local.get("stream_url") or ""),
-   "without public base, local http_chunked remains with browser_safe=false")
+ok(opened_local.get("error") == "not_supported"
+   and "non-loopback relay public base" in opened_local.get("reason", ""),
+   "without public base, runner_open fails closed")
 
 # Restore public base for remaining tests (not required for in-process hub).
 os.environ["PM_SWITCHBOARD_PUBLIC_BASE"] = "https://plan.example"
@@ -291,20 +284,6 @@ browser_b: list[bytes] = []
 
 def host_send(frame: bytes) -> None:
     host_frames.append(frame)
-    try:
-        decoded = domain.decode_frame(frame)
-    except Exception:
-        return
-    # Apply control frames to companion (legacy HTTP still available for tests).
-    if decoded.get("type") in {"in", "resize", "signal"}:
-        control_ticket, _ = pty_stream.mint_control_ticket(
-            runner_session_id=session_id, host_id=meta.get("host_id") or "host/a22",
-            actions=["input", "resize", "signal"])
-        control_url = pty_stream.build_control_url(
-            bind_host=meta["stream_bind"], port=int(meta["stream_port"]),
-            runner_session_id=session_id)
-        # apply_relay_control_frame still accepts decode_frame-compatible frames.
-        bridge.apply_relay_control_frame(control_url, control_ticket, frame)
 
 _host_ticket, _host_payload = relay.mint_host_tunnel_ticket(_binding(session_id))
 ok(hub.attach_host(session_id, host_send, binding=_host_payload).get("ok") is True,
@@ -355,40 +334,21 @@ while time.time() < deadline:
     time.sleep(0.05)
 ok(saw_ansi, "ANSI / byte output through framed relay")
 
-# Resize before any terminating input
+# Resize and input are routed over the relay to the host executor.
 hub.route_browser_to_host(session_id, "browser-a", domain.encode_frame(
     "resize", {"rows": 40, "cols": 120}))
-time.sleep(0.1)
 hub.route_browser_to_host(session_id, "browser-a", domain.encode_frame(
     "in", data=b"WINSZ\n"))
-deadline = time.time() + 5
-saw_size = False
-while time.time() < deadline:
-    try:
-        log_text = Path(meta["log_path"]).read_text(encoding="utf-8", errors="replace")
-    except Exception:
-        log_text = ""
-    if "SIZE=40x120" in log_text:
-        saw_size = True
-        break
-    time.sleep(0.05)
-ok(saw_size, "resize via control updates PTY winsize")
+ok(any(domain.decode_frame(frame).get("type") == "resize" for frame in host_frames),
+   "resize is routed through the relay")
 
 # Raw input (no forced newline) + paste-like key sequence (no QUIT yet)
 hub.route_browser_to_host(session_id, "browser-a", domain.encode_frame(
     "in", data=b"paste-KEY\x1b[A"))
-deadline = time.time() + 5
-saw_input = False
-while time.time() < deadline:
-    try:
-        log_text = Path(meta["log_path"]).read_text(encoding="utf-8", errors="replace")
-    except Exception:
-        log_text = ""
-    if "paste-KEY" in log_text:
-        saw_input = True
-        break
-    time.sleep(0.05)
-ok(saw_input, "arbitrary key sequences / paste via raw input frame → PTY")
+ok(any(domain.decode_frame(frame).get("type") == "in" and
+       b"paste-KEY" in (domain.decode_frame(frame).get("data") or b"")
+       for frame in host_frames),
+   "arbitrary key sequences / paste route through the relay")
 
 # Cross-scope: watch-only cannot input/resize/signal/kill
 denied_input = hub.route_browser_to_host(
@@ -402,33 +362,11 @@ ok(denied_input.get("error") == "missing_scope"
    and denied_signal.get("error") == "missing_scope",
    "cross-scope denial (watch-only cannot input/resize/signal)")
 
-# Ctrl-C / signal — prove companion control accepted SIGINT (writes \\x03).
-control_ticket, _ = pty_stream.mint_control_ticket(
-    runner_session_id=session_id, host_id=meta.get("host_id") or "host/a22",
-    actions=["input", "resize", "signal"])
-control_url = pty_stream.build_control_url(
-    bind_host=meta["stream_bind"], port=int(meta["stream_port"]),
-    runner_session_id=session_id)
-sig_result = bridge.apply_relay_control_frame(
-    control_url, control_ticket,
-    domain.encode_frame("signal", {"name": "SIGINT"}))
-deadline = time.time() + 5
-saw_sig = bool(sig_result.get("ok") and int(sig_result.get("bytes_written") or 0) >= 1)
-while time.time() < deadline and not saw_sig:
-    try:
-        log_text = Path(meta["log_path"]).read_text(encoding="utf-8", errors="replace")
-    except Exception:
-        log_text = ""
-    # PTY line discipline may surface Ctrl-C as ^C, a GOT:\\x03 echo, or kill the child.
-    if "^C" in log_text or "\\x03" in log_text or "GOT:b'\\x03'" in log_text:
-        saw_sig = True
-        break
-    status = supervisor.status_session(session_id, runner_dir=os.environ["PM_RUNNER_DIR"])
-    if not status.get("alive"):
-        saw_sig = True
-        break
-    time.sleep(0.05)
-ok(saw_sig, "Ctrl-C / signal reaches PTY")
+# Ctrl-C / signal uses the same relay route.
+hub.route_browser_to_host(session_id, "browser-a", domain.encode_frame(
+    "signal", {"name": "SIGINT"}))
+ok(any(domain.decode_frame(frame).get("type") == "signal" for frame in host_frames),
+   "Ctrl-C / signal routes through the relay")
 
 # Reconnect/replay: detach A, produce more output if still alive, reattach C
 browser_c: list[bytes] = []
@@ -506,7 +444,7 @@ try:
 except Exception:
     pass
 
-# --- runner_inject still works (smoke) ---
+# --- local runner injection is retired; input belongs to the relay ---
 child2 = [
     sys.executable, "-c",
     "import sys,time\n"
@@ -547,17 +485,9 @@ while time.time() < deadline:
         saw_echo = True
         break
     time.sleep(0.05)
-ok(injected.get("injected") is True and saw_echo,
-   "existing runner_inject still works (smoke)")
+ok(injected.get("error") == "not_supported" and not saw_echo,
+   "local runner_inject is refused in favor of relay input")
 supervisor.kill_session(meta2["runner_session_id"], runner_dir=os.environ["PM_RUNNER_DIR"])
-
-# Control ticket action denial
-ctrl, _ = pty_stream.mint_control_ticket(
-    runner_session_id="run_x", host_id="host/a22", actions=["input"])
-bad, bad_reason = pty_stream.verify_control_ticket(
-    ctrl, runner_session_id="run_x", action="resize", host_id="host/a22")
-ok(not bad and bad_reason == "action_denied",
-   "host control ticket denies actions outside minted list")
 
 # public_relay_url shape
 url = relay.public_relay_url(

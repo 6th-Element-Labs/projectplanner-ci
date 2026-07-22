@@ -111,7 +111,6 @@ def host_serves_runner_watch():
     """
     try:
         from switchboard.application import runner_pty_relay  # noqa: F401
-        from codex.pty_stream import build_control_url  # noqa: F401
         from codex.pty_host_ws_client import open_host_bridge  # noqa: F401
     except Exception:
         try:
@@ -120,7 +119,6 @@ def host_serves_runner_watch():
                 if candidate not in sys.path:
                     sys.path.insert(0, candidate)
             from switchboard.application import runner_pty_relay  # noqa: F401,F811
-            from codex.pty_stream import build_control_url  # noqa: F401,F811
             from codex.pty_host_ws_client import open_host_bridge  # noqa: F401,F811
         except Exception:
             return False
@@ -131,8 +129,8 @@ _BOUND_FINALIZERS = {}
 _BOUND_FINALIZER_RESULTS = []
 
 _RUNNER_TRANSPORT_METADATA_FIELDS = {
-    "pty", "stream_bind", "stream_port", "stream_url", "relay_url",
-    "local_stream_url", "transport", "browser_safe", "relay_required",
+    "pty", "stream_url", "relay_url", "transport", "browser_safe",
+    "relay_required",
 }
 
 
@@ -1169,8 +1167,6 @@ def register_runner_session(rec, wake, inventory):
         "log_path": rec.get("log_path"),
         "command": rec.get("command"),
         "pty": bool(rec.get("pty")),
-        "stream_bind": rec.get("stream_bind"),
-        "stream_port": rec.get("stream_port"),
         "work_session_id": (
             (rec.get("metadata") or {}).get("work_session_id")
             or binding.get("work_session_id")
@@ -1451,11 +1447,6 @@ def supervisor_action(action, runner_session_id, options=None):
                "--grace-seconds", str(options.get("grace_seconds") or 5.0),
                "--signal", options.get("signal") or "TERM"]
     elif action == "open":
-        try:
-            from codex.pty_stream import build_stream_url, mint_ticket
-        except ModuleNotFoundError:
-            sys.path.insert(0, _HERE)
-            from codex.pty_stream import build_stream_url, mint_ticket
         status_cmd = [sys.executable, SUPERVISOR, "status", runner_session_id]
         try:
             out = subprocess.run(status_cmd, capture_output=True, text=True, timeout=15)
@@ -1465,53 +1456,27 @@ def supervisor_action(action, runner_session_id, options=None):
         except Exception as e:
             return {"error": type(e).__name__, "message": str(e)}
         control = meta.get("control") or {}
-        streamer_pid = int(meta.get("streamer_pid") or 0)
-        stream_port = int(meta.get("stream_port") or 0)
-        stream_bind = str(meta.get("stream_bind") or "127.0.0.1")
-        streamer_alive = bool(streamer_pid and _pid_alive(streamer_pid))
-        port_listening = _tcp_port_open(stream_bind, stream_port) if stream_port else False
         public_base = str(
             os.environ.get("PM_RUNNER_PTY_RELAY_PUBLIC_BASE")
             or os.environ.get("PM_SWITCHBOARD_PUBLIC_BASE")
             or ""
         ).rstrip("/")
-        # SIMPLIFY-9: starting IS opening. With a non-loopback public base, return
-        # session_id + ticket immediately; Watch is another attach. Localhost
-        # streamer is not required on the browser path.
+        # SIMPLIFY-9/WATCH-11: starting IS opening. Watch attaches only through
+        # the Switchboard relay; the retired host-local HTTP transport is not a
+        # readiness or fallback path.
         pty_alive = bool(meta.get("pty") and control.get("runner_open") and meta.get("alive"))
-        legacy_streamer_ok = bool(stream_port and streamer_alive and port_listening)
-        if not pty_alive and not legacy_streamer_ok:
+        if not pty_alive:
             return {
                 "error": "not_supported",
                 "reason": "runner_open requires a live PTY-backed local session",
             }
         host_id = str(meta.get("host_id") or os.environ.get("PM_HOST_ID") or "")
-        ticket, expires_at = mint_ticket(
-            runner_session_id=runner_session_id,
-            host_id=host_id,
-            ttl_seconds=int(options.get("ttl_seconds") or 900),
-        )
-        local_stream_url = ""
-        if legacy_streamer_ok:
-            local_stream_url = build_stream_url(
-                bind_host=stream_bind,
-                port=stream_port,
-                runner_session_id=runner_session_id,
-                ticket=ticket,
-                public_base="",
-            )
-        # Prefer Switchboard relay when a non-loopback public base is configured
-        # so browsers never receive a host-local 127.0.0.1 URL (ADAPTER-22).
-        use_relay = False
         relay_url = ""
-        transport = "http_chunked" if local_stream_url else "switchboard_pty_relay"
-        browser_safe = False
-        relay_required = True
-        stream_url = local_stream_url
+        ticket = None
+        expires_at = 0.0
 
         def _open_fail_closed(error, reason):
-            # BUG-76: non-loopback public base requires relay. Never fall
-            # back to local http_chunked / 127.0.0.1 stream_url.
+            # The relay is the only browser transport; relay failures fail closed.
             return {
                 "error": error,
                 "reason": reason,
@@ -1534,7 +1499,12 @@ def supervisor_action(action, runner_session_id, options=None):
                     sys.path.insert(0, os.path.join(_root, "src"))
                 from switchboard.application import runner_pty_relay as pty_relay
                 from switchboard.domain import runner_pty as pty_domain
-            if not pty_relay.is_loopback_url(public_base):
+            if pty_relay.is_loopback_url(public_base):
+                return {
+                    "error": "not_supported",
+                    "reason": "runner_open requires a non-loopback relay public base",
+                }
+            else:
                 binding = {
                     "tenant_id": str(options.get("tenant_id") or meta.get("tenant_id") or "tenant/default"),
                     "user_id": str(options.get("user_id") or meta.get("user_id") or "operator"),
@@ -1585,11 +1555,7 @@ def supervisor_action(action, runner_session_id, options=None):
                             public_base, runner_session_id, relay_ticket)
                         expires_at = float(relay_payload.get("exp") or expires_at)
                         ticket = relay_ticket
-                    use_relay = True
                     transport = pty_domain.TRANSPORT_SWITCHBOARD_PTY_RELAY
-                    browser_safe = True
-                    relay_required = False
-                    stream_url = relay_url
                 except Exception as mint_exc:
                     return _open_fail_closed(
                         "relay_mint_failed", str(mint_exc) or type(mint_exc).__name__)
@@ -1608,22 +1574,20 @@ def supervisor_action(action, runner_session_id, options=None):
                 except Exception as bridge_exc:
                     return _open_fail_closed(
                         "host_bridge_failed", str(bridge_exc) or type(bridge_exc).__name__)
-        elif not legacy_streamer_ok:
+        else:
             return {
                 "error": "not_supported",
-                "reason": "runner_open requires relay public base or a live local streamer",
+                "reason": "runner_open requires a non-loopback relay public base",
             }
         metadata = {
             "pty": True,
-            "stream_url": stream_url,
+            "stream_url": relay_url,
             "stream_ticket_exp": expires_at,
             "transport": transport,
-            "browser_safe": browser_safe,
-            "relay_required": relay_required,
+            "browser_safe": True,
+            "relay_required": False,
         }
-        if local_stream_url:
-            metadata["local_stream_url"] = local_stream_url
-        if use_relay and relay_url:
+        if relay_url:
             metadata["relay_url"] = relay_url
             try:
                 from switchboard.application.runner_pty_relay import (
@@ -1634,114 +1598,25 @@ def supervisor_action(action, runner_session_id, options=None):
             if sanitize_browser_stream_metadata is not None:
                 metadata = sanitize_browser_stream_metadata(
                     metadata, relay_url=relay_url)
-                if local_stream_url:
-                    metadata["local_stream_url"] = local_stream_url
         return {
             "opened": True,
             "runner_session_id": runner_session_id,
             "transport": transport,
-            "stream_url": stream_url,
+            "stream_url": relay_url,
             "relay_url": relay_url or None,
             "ticket": ticket,
             "expires_at": expires_at,
-            "browser_safe": browser_safe,
-            "relay_required": relay_required,
+            "browser_safe": True,
+            "relay_required": False,
             "capabilities": {"stream": "supported", "open": "supported"},
             "metadata": metadata,
         }
     elif action == "inject":
-        try:
-            from codex.pty_stream import (
-                build_inject_url,
-                mint_inject_ticket,
-            )
-        except ModuleNotFoundError:
-            sys.path.insert(0, _HERE)
-            from codex.pty_stream import (
-                build_inject_url,
-                mint_inject_ticket,
-            )
-        status_cmd = [sys.executable, SUPERVISOR, "status", runner_session_id]
-        try:
-            out = subprocess.run(status_cmd, capture_output=True, text=True, timeout=15)
-            if out.returncode != 0:
-                return {"error": "supervisor_failed", "stderr": (out.stderr or "")[-4000:]}
-            meta = json.loads(out.stdout or "{}")
-        except Exception as e:
-            return {"error": type(e).__name__, "message": str(e)}
-        caller_task = str(options.get("task_id") or "").strip()
-        session_task = str(meta.get("task_id") or "").strip()
-        if not caller_task or not session_task or caller_task != session_task:
-            return {
-                "error": "wrong_session",
-                "reason": "task_mismatch",
-                "runner_session_id": runner_session_id,
-                "expected_task_id": session_task or None,
-                "provided_task_id": caller_task or None,
-            }
-        text = options.get("text")
-        if text is None:
-            text = options.get("message")
-        if not isinstance(text, str) or not text:
-            return {"error": "invalid_input", "reason": "text_required"}
-        kind = str(options.get("kind") or "freeform").strip().lower() or "freeform"
-        control = meta.get("control") or {}
-        streamer_pid = int(meta.get("streamer_pid") or 0)
-        stream_port = int(meta.get("stream_port") or 0)
-        stream_bind = str(meta.get("stream_bind") or "127.0.0.1")
-        streamer_alive = bool(streamer_pid and _pid_alive(streamer_pid))
-        port_listening = _tcp_port_open(stream_bind, stream_port) if stream_port else False
-        if not (meta.get("pty") and control.get("runner_inject") and stream_port
-                and meta.get("alive") and streamer_alive and port_listening):
-            return {
-                "error": "not_supported",
-                "reason": "runner_inject requires a live PTY-backed local session with an active streamer",
-            }
-        host_id = str(meta.get("host_id") or os.environ.get("PM_HOST_ID") or "")
-        ticket, expires_at = mint_inject_ticket(
-            runner_session_id=runner_session_id,
-            task_id=caller_task,
-            host_id=host_id,
-            ttl_seconds=int(options.get("ttl_seconds") or 120),
-        )
-        inject_url = build_inject_url(
-            bind_host=stream_bind,
-            port=stream_port,
-            runner_session_id=runner_session_id,
-            public_base=str(os.environ.get("PM_RUNNER_STREAM_PUBLIC_BASE") or ""),
-        )
-        payload = {
-            "ticket": ticket,
-            "task_id": caller_task,
-            "text": text,
-            "kind": kind,
-            "nl": bool(options.get("nl", options.get("newline", True))),
-        }
-        try:
-            req = urllib.request.Request(
-                inject_url,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                body = json.loads(resp.read().decode("utf-8") or "{}")
-        except Exception as e:
-            return {"error": type(e).__name__, "message": str(e), "inject_url": inject_url}
-        if not body.get("injected"):
-            return {
-                "error": body.get("error") or "inject_failed",
-                "reason": body.get("reason") or "companion_refused",
-                "result": body,
-            }
         return {
-            "injected": True,
+            "error": "not_supported",
+            "reason": "runner input is delivered through the Switchboard PTY relay",
             "runner_session_id": runner_session_id,
-            "task_id": caller_task,
-            "kind": kind,
-            "bytes_written": body.get("bytes_written"),
-            "expires_at": expires_at,
-            "capabilities": {"inject": "supported"},
+            "capabilities": {"inject": "denied", "relay_input": "supported"},
         }
     else:
         return {"error": f"unsupported runner action {action}"}
@@ -1815,10 +1690,6 @@ def handle_runner_controls(inventory):
                 },
                 relay_url=str(result.get("relay_url") or open_meta.get("relay_url") or ""),
             )
-            # Never register host-private loopback URLs on the control plane.
-            browser_meta.pop("local_stream_url", None)
-            # BUG-76: do not reintroduce loopback via result.stream_url fallback
-            # after sanitize strips it from browser_meta.
             safe_stream_url = browser_meta.get("stream_url")
             snapshot = {
                 "captured_at": time.time(),
@@ -1915,14 +1786,13 @@ def _drain_runners(host_id, recover_stale_local=True):
                 # Central identity/claim state is authoritative, but only the
                 # local supervisor can report the live PTY transport.  Repair
                 # an older preclaim placeholder on every daemon tick.
-                for key in ("pty", "stream_bind", "stream_port", "streamer_pid",
-                            "log_path", "pid", "alive"):
+                for key in ("pty", "streamer_pid", "log_path", "pid", "alive"):
                     if local_row.get(key) not in (None, ""):
                         combined[key] = local_row.get(key)
                 combined["metadata"] = {
                     **dict(row.get("metadata") or {}),
                     **{key: local_row.get(key) for key in
-                       ("pty", "stream_bind", "stream_port")
+                       ("pty",)
                        if local_row.get(key) not in (None, "")},
                 }
                 combined["control"] = {
@@ -2570,15 +2440,11 @@ def _enrich_bound_runner_record(rec, session):
 
 
 def _missing_local_runner_transport(rec):
-    """Return the missing supervisor-owned fields for a watchable local PTY."""
+    """Return the missing supervisor-owned fields for a watchable relay PTY."""
     rec = dict(rec or {})
     missing = []
     if rec.get("pty") is not True:
         missing.append("pty")
-    if not str(rec.get("stream_bind") or "").strip():
-        missing.append("stream_bind")
-    if str(rec.get("stream_port") or "").strip() in {"", "0"}:
-        missing.append("stream_port")
     return missing
 
 

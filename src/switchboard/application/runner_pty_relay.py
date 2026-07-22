@@ -329,8 +329,6 @@ def sanitize_browser_stream_metadata(
                 out[key] = relay
             else:
                 out.pop(key, None)
-    # local_stream_url is host-private only — never publish to browsers/control plane.
-    out.pop("local_stream_url", None)
     # Never leave a loopback in any remaining URL-ish field values.
     for key, value in list(out.items()):
         if isinstance(value, str) and is_loopback_url(value):

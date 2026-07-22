@@ -120,7 +120,7 @@ def create_router(
         if result.get("error"):
             raise HTTPException(400, result)
         # Hard guarantee: never return loopback URLs.
-        for key in ("stream_url", "relay_url", "local_stream_url"):
+        for key in ("stream_url", "relay_url"):
             value = str(result.get(key) or "")
             if value and relay.is_loopback_url(value):
                 result.pop(key, None)

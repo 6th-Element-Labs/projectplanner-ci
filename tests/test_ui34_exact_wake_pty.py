@@ -176,36 +176,10 @@ try:
     time.sleep(0.2)
     fast_status = supervisor.status_session(
         "run_ui34_fast", runner_dir=str(fast_root))
-    ok(receipt.get("stream_port") and fast_status.get("status") == "exited"
+    ok(receipt.get("pty") is True and "stream_port" not in receipt
+       and fast_status.get("status") == "exited"
        and Path(fast_status["log_path"]).read_text().strip() == "ui34 fast child",
        "PTY is ready before an immediate child exit and preserves its output")
-
-    failure_root = TMP / "failed-runner"
-    marker = TMP / "child-started"
-    old_bind = os.environ.get("PM_RUNNER_STREAM_BIND")
-    real_await = supervisor._await_stream_ready
-    os.environ["PM_RUNNER_STREAM_BIND"] = "invalid.invalid.invalid"
-    supervisor._await_stream_ready = (
-        lambda path, timeout_s=5.0: real_await(path, timeout_s=0.8))
-    try:
-        try:
-            supervisor.start_session(
-                [sys.executable, "-c", f"open({str(marker)!r}, 'w').write('bad')"],
-                agent_id="codex/ui34-failed", task_id=task_id,
-                runner_dir=str(failure_root), runner_session_id="run_ui34_failed")
-            failed_launch = False
-        except RuntimeError as exc:
-            failed_launch = "pty_stream companion failed" in str(exc)
-    finally:
-        supervisor._await_stream_ready = real_await
-        if old_bind is None:
-            os.environ.pop("PM_RUNNER_STREAM_BIND", None)
-        else:
-            os.environ["PM_RUNNER_STREAM_BIND"] = old_bind
-    error_path = failure_root / "run_ui34_failed" / "pty_stream.stderr.log"
-    ok(failed_launch and error_path.exists() and error_path.stat().st_size > 0
-       and not marker.exists(),
-       "companion failure is retained with typed stderr and child never starts")
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
 

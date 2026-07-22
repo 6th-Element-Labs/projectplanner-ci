@@ -244,8 +244,8 @@ Bound Agent Host runners expose Watch/Chat through an authenticated Switchboard-
 full-duplex PTY relay (`transport=switchboard_pty_relay`). The browser connects to
 `/ixp/v1/runner_sessions/{id}/pty` with a short-lived capability ticket; it never receives a
 host-local `127.0.0.1` stream URL and never requires a publicly exposed Agent Host port.
-Host-local CO-12/CO-13 HTTP chunked stream + inject remain for host-internal use
-(`metadata.local_stream_url`, `browser_safe=false` when no public relay base is configured).
+Without a non-loopback public relay base, Watch/Chat refuses to open rather than selecting
+a host-local compatibility transport.
 
 ## 10. Delivery plan
 

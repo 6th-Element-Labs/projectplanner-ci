@@ -193,7 +193,8 @@ try:
         runner_dir=str(runner_dir), runner_session_id="run_fast_exit")
     time.sleep(0.2)
     status = supervisor.status_session("run_fast_exit", runner_dir=str(runner_dir))
-    ok(receipt.get("stream_port") and status.get("status") == "exited"
+    ok(receipt.get("pty") is True and "stream_port" not in receipt
+       and status.get("status") == "exited"
        and Path(status["log_path"]).read_text().strip() == "fast exit evidence",
        "fast child exit preserves a truthful supervisor receipt and PTY log")
 

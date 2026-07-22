@@ -41,6 +41,10 @@ env.update({
     "PM_SWITCHBOARD_DB_PATH": str(TMP / "switchboard.db"),
     "PM_PROJECT_REGISTRY_DB_PATH": str(TMP / "registry.db"),
     "PM_DYNAMIC_PROJECTS_DIR": str(TMP / "projects"),
+    # Hermetic multi-project setup is single-process and does not need the
+    # production writer threads; disabling them avoids cross-database queue
+    # workers racing temporary project creation.
+    "PM_SQLITE_SINGLE_WRITER": "0",
     "PM_AUTH_MODE": "required", "PM_JWT_SECRET": "ms126-browser-secret",
     "SWITCHBOARD_AUTH_READY_PROJECT": PROJECT,
     "SWITCHBOARD_TASKS_READY_PROJECT": PROJECT,
@@ -62,7 +66,6 @@ from switchboard.api.routers.auth import store as auth_store  # noqa: E402
 store.init_project_registry()
 for project_id, label in ((PROJECT, "MS126 Browser"), (OTHER, "MS126 Other")):
     store.create_project(label, project_id=project_id, actor="test")
-    store.init_db(project_id)
 store.create_task({
     "workstream_id": "ARCH-MS", "title": "Boundary journey task",
     "description": "Backend fixture only", "ui_impact": "no",

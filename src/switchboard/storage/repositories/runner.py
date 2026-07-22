@@ -1002,10 +1002,6 @@ def assert_runner_watchable(session: Optional[Dict[str, Any]], *,
         transport_missing = []
         if metadata.get("pty") is not True:
             transport_missing.append("pty")
-        if not str(metadata.get("stream_bind") or "").strip():
-            transport_missing.append("stream_bind")
-        if str(metadata.get("stream_port") or "").strip() in {"", "0"}:
-            transport_missing.append("stream_port")
         if transport_missing:
             return runner_bind_incomplete(
                 transport_missing,

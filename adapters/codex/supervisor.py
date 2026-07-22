@@ -226,8 +226,6 @@ def start_session(command, agent_id, task_id="", claim_id="", cwd=None, runner_d
     if use_pty is None:
         use_pty = _truthy(os.environ.get("PM_RUNNER_USE_PTY", "1"))
     streamer_pid = None
-    stream_bind = None
-    stream_port = None
     ready_path = root / "stream_ready.json"
     host_id = str(env.get("PM_HOST_ID") or env.get("PM_CO_HOST_ID") or "")
     if use_pty:
@@ -251,8 +249,6 @@ def start_session(command, agent_id, task_id="", claim_id="", cwd=None, runner_d
                     "--log-path", str(log_path),
                     "--host-id", host_id,
                     "--task-id", str(task_id or ""),
-                    "--bind-host", os.environ.get("PM_RUNNER_STREAM_BIND", "127.0.0.1"),
-                    "--port", str(int(os.environ.get("PM_RUNNER_STREAM_PORT", "0") or 0)),
                     "--ready-path", str(ready_path),
                     "--child-command-json", json.dumps(list(command)),
                     "--child-cwd", str(Path(cwd or os.getcwd()).resolve()),
@@ -270,10 +266,8 @@ def start_session(command, agent_id, task_id="", claim_id="", cwd=None, runner_d
             stream_log = None
             streamer_pid = streamer.pid
             ready = _await_stream_ready(ready_path)
-            stream_bind = ready.get("bind_host") or os.environ.get("PM_RUNNER_STREAM_BIND", "127.0.0.1")
-            stream_port = ready.get("port")
             child_pid = int(ready.get("child_pid") or 0)
-            if not stream_port or not child_pid:
+            if not child_pid:
                 companion_error = _tail(stream_error_path).strip()
                 companion_status = streamer.poll()
                 detail = companion_error or (
@@ -319,7 +313,6 @@ def start_session(command, agent_id, task_id="", claim_id="", cwd=None, runner_d
             "runner_kill": True,
             "managed_process": True,
             "runner_open": True,
-            "runner_inject": True,
             "runner_logs": True,
         }
     else:
@@ -350,8 +343,6 @@ def start_session(command, agent_id, task_id="", claim_id="", cwd=None, runner_d
         "control": control,
         "pty": bool(use_pty),
         "streamer_pid": streamer_pid,
-        "stream_bind": stream_bind,
-        "stream_port": stream_port,
         "host_id": host_id,
         "wake_id": str(wake_id or ""),
         "wake_mode": str(wake_mode or ""),

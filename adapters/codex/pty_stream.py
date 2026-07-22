@@ -6,8 +6,7 @@ session directory (or ``--relay-ws-url`` is set), the companion dials ONE
 outbound binary WebSocket to Switchboard and pumps PTY I/O there — no
 localhost HTTP hop on the browser Watch path.
 
-Legacy authenticated HTTP ``/stream``+``/control``+``/inject`` remain available
-for local CO-12 tooling and tests; the browser path must not depend on them.
+The Switchboard relay is the only supported browser transport.
 """
 from __future__ import annotations
 
@@ -256,22 +255,6 @@ def format_inject_payload(
     if newline and payload and not payload.endswith("\n"):
         payload += "\n"
     return payload.encode("utf-8", errors="replace")
-
-
-def build_stream_url(
-    *,
-    bind_host: str,
-    port: int,
-    runner_session_id: str,
-    ticket: str,
-    public_base: str = "",
-) -> str:
-    base = (public_base or "").rstrip("/")
-    if not base:
-        host = bind_host if bind_host not in {"0.0.0.0", "::"} else "127.0.0.1"
-        base = f"http://{host}:{int(port)}"
-    query = urllib.parse.urlencode({"ticket": ticket})
-    return f"{base}/runner/v1/sessions/{urllib.parse.quote(runner_session_id)}/stream?{query}"
 
 
 def build_inject_url(
