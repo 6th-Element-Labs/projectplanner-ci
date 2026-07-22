@@ -423,14 +423,19 @@ class CoordinatorDaemon:
         replays the old coordinator result forever.  Terminal exact wakes are the
         durable retry boundary; active wakes deliberately do not advance it so crash
         replay still deduplicates an in-flight launch.
+
+        BUG-138: Connect dispatch wakes carry NO deliverable_id in their selector
+        (agent/lane/provider/runtime/task only), so filtering on it counted nothing
+        and live scopes replayed ``wake-generation-0`` into "idempotency conflict"
+        on every tick.  Count terminal wakes for the exact task whether or not the
+        selector names this deliverable; exclude only wakes explicitly bound to a
+        DIFFERENT deliverable.
         """
         list_wakes = getattr(self.store, "list_wake_intents", None)
         if not callable(list_wakes):
             return 0
         try:
-            rows = list_wakes(
-                project=project, task_id=task_id,
-                deliverable_id=deliverable_id)
+            rows = list_wakes(project=project, task_id=task_id)
         except Exception:
             return 0
         if not isinstance(rows, list):
@@ -440,7 +445,7 @@ class CoordinatorDaemon:
             1 for row in rows
             if str(row.get("task_id") or "") == task_id
             and str((row.get("selector") or {}).get("deliverable_id") or "")
-            == deliverable_id
+            in ("", deliverable_id)
             and str(row.get("status") or "") in terminal
         )
 

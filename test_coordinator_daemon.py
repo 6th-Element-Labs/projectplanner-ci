@@ -240,6 +240,31 @@ ok("wake-generation-1" in retry_key
    and len(store.effects) == retry_effects_before + 1,
    "terminal wake advances the durable retry generation without a task-state change")
 
+# BUG-138: production Connect wakes carry NO deliverable_id in their selector
+# (selector = agent/lane/provider/runtime/task only). Filtering the generation
+# count on selector.deliverable_id therefore counted nothing, and live Autopilot
+# scopes replayed wake-generation-0 into "idempotency conflict" on every tick.
+# A terminal Connect wake must advance the generation; a wake explicitly bound
+# to a DIFFERENT deliverable still must not.
+store.wakes.append({
+    "wake_id": "wake-connect-terminal", "task_id": "TASK-B", "status": "completed",
+    "selector": {"agent_id": "agent/codex/task-b", "lane": "CO",
+                 "provider": "openai", "runtime": "codex", "task_id": "TASK-B"},
+})
+store.wakes.append({
+    "wake_id": "wake-other-deliverable", "task_id": "TASK-B", "status": "failed",
+    "selector": {"deliverable_id": "some-other-deliverable"},
+})
+store.set_meta(daemon_mod._state_key("test"), state1, project="switchboard")
+clock.value += 31
+connect_retry_run = daemon_mod.CoordinatorDaemon(
+    config, store_mod=store, instance_id="instance-connect-retry", clock=clock,
+).tick_project("switchboard")
+connect_retry_key = connect_retry_run["receipts"][0]["task_receipts"][0]["idem_key"]
+ok("wake-generation-2" in connect_retry_key,
+   "a terminal Connect wake WITHOUT selector.deliverable_id advances the generation, "
+   "and a wake bound to another deliverable does not")
+
 policy_variant = daemon_mod.DaemonConfig(
     profile_id="test", projects=("switchboard",), allowed_lanes=("CO",),
     act=True, max_deliverables_per_tick=1, heartbeat_seconds=10,
