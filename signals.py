@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import bridge_attachment_monitor
 import store
 
 from switchboard.services.coord.signals import compute_plan_signals as _compute_from_port
@@ -26,12 +27,15 @@ _DATA = _StoreSignalData()
 
 def compute_plan_signals(due_soon_days: int = 7, project: str = "maxwell") -> dict:
     """Cached plan-health projection shared with the Coord process boundary."""
-    return store.ttl_read_cache(
+    result = dict(store.ttl_read_cache(
         "plan_signals",
         f"{project}\x00{due_soon_days}",
         store.project_task_stamp(project),
         lambda: _compute_plan_signals(due_soon_days=due_soon_days, project=project),
-    )
+    ))
+    result["watchability_slo"] = bridge_attachment_monitor.snapshot(project).get(
+        "watchability_slo")
+    return result
 
 
 def _compute_plan_signals(due_soon_days: int = 7, project: str = "maxwell") -> dict:

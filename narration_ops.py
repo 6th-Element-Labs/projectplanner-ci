@@ -123,12 +123,16 @@ def narration_health(project: str, *, now: Optional[float] = None,
         "expired_leases_present": queue["expired_leases"] > 0,
         "failure_rate_high": receipts["failure_rate"] >= FAILURE_RATE_ALERT and attempts >= 5,
     }
+    import bridge_attachment_monitor
+
+    watchability_slo = bridge_attachment_monitor.snapshot(project, now=now).get("watchability_slo")
     return {
         "project": project, "generated_at": now,
         "queue": queue,
         "freshness": {"oldest_pending_age_seconds": round(oldest_age, 2)},
         "receipts": receipts, "cost": cost,
         "alerts": alerts, "alerting": any(alerts.values()),
+        "watchability_slo": watchability_slo,
     }
 
 

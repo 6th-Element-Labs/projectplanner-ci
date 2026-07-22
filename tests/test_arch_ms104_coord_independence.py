@@ -155,6 +155,8 @@ try:
        "production board query executes through package repositories")
     ok(production.signals("alpha").get("counts", {}).get("ready") == 0,
        "production signals query executes through task/meta repositories")
+    ok(production.signals("alpha").get("watchability_slo", {}).get("status") == "unavailable",
+       "synthetic Coord projects preserve an explicit unavailable watchability signal")
     ok(production.delta("alpha", since_cursor=9, lane="ARCH-MS").get("cursor") == 9,
        "production delta query executes through activity repository")
     rollup = production.coordination("alpha", limit=17)

@@ -1,0 +1,6 @@
+{
+  "schema": "switchboard.runner_watchability_slo_ratchet.v1",
+  "task": "WATCH-14",
+  "target": 0.99,
+  "purpose": "Committed minimum fraction of eligible native PTY running-minutes with an attached relay bridge. Changes may raise this target; lowering it below 0.99 is rejected by the loader. PM_RUNNER_WATCHABILITY_TARGET may tighten the target for an environment but cannot loosen the committed value."
+}

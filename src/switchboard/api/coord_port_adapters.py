@@ -28,6 +28,23 @@ import read_cache
 class RepositoryCoordQueries:
     """Read-only Coord projection implemented against package repositories."""
 
+    @staticmethod
+    def _watchability_slo(project: str) -> dict[str, Any]:
+        import bridge_attachment_monitor
+
+        try:
+            return dict(bridge_attachment_monitor.snapshot(project).get(
+                "watchability_slo") or {})
+        except ValueError as exc:
+            # Standalone Coord contract tests use synthetic repository projects.
+            # Preserve that independence without presenting missing runner data as green.
+            return {
+                "schema": "switchboard.runner_watchability_slo.v1",
+                "status": "unavailable",
+                "failure_class": "missing_data",
+                "message": str(exc),
+            }
+
     def board(self, project: str, *, cards: bool = False) -> dict[str, Any]:
         stamp = tasks_repo.project_task_stamp(project)
         cache_key = f"{project}\x00cards" if cards else project
@@ -77,12 +94,14 @@ class RepositoryCoordQueries:
 
     def signals(self, project: str) -> dict[str, Any]:
         stamp = tasks_repo.project_task_stamp(project)
-        return dict(read_cache.ttl_read_cache(
+        result = dict(read_cache.ttl_read_cache(
             "coord_plan_signals",
             project,
             stamp,
             lambda: compute_plan_signals(self, project=project),
         ))
+        result["watchability_slo"] = self._watchability_slo(project)
+        return result
 
     def delta(self, project: str, *, since_cursor: int = 0,
               lane: str = "") -> dict[str, Any]:

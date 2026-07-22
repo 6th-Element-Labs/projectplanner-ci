@@ -1,18 +1,24 @@
 """Trailing-window alarm for live runner rows without a relay host bridge (WATCH-6)."""
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
+from pathlib import Path
 from typing import Callable, Iterable, Optional
 
 
 DEFAULT_UNATTACHED_WINDOW_S = 300.0
+DEFAULT_WATCHABILITY_TARGET = 0.99
+DEFAULT_STARTUP_GRACE_S = 300.0
 _WATCHABLE_STATUSES = {"ready", "running"}
 _LOCK = threading.RLock()
 _first_unattached: dict[str, dict[str, float]] = {}
 _active_sessions: dict[str, set[str]] = {}
 _task_by_session: dict[str, dict[str, str]] = {}
+_slo_state: dict[str, dict] = {}
+_slo_target: dict[str, float] = {}
 
 
 def _window_seconds() -> float:
@@ -23,6 +29,139 @@ def _window_seconds() -> float:
         )))
     except (TypeError, ValueError):
         return DEFAULT_UNATTACHED_WINDOW_S
+
+
+def _startup_grace_seconds() -> float:
+    try:
+        return max(0.0, float(os.environ.get(
+            "PM_RUNNER_WATCHABILITY_STARTUP_GRACE_S",
+            str(DEFAULT_STARTUP_GRACE_S),
+        )))
+    except (TypeError, ValueError):
+        return DEFAULT_STARTUP_GRACE_S
+
+
+def _watchability_target(project: str) -> float:
+    """Return the committed target; environment and runtime may only tighten it."""
+    committed = DEFAULT_WATCHABILITY_TARGET
+    try:
+        payload = json.loads((Path(__file__).parent / "perf" / "watchability_slo.json").read_text(
+            encoding="utf-8"))
+        committed = float(payload.get("target", DEFAULT_WATCHABILITY_TARGET))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        committed = DEFAULT_WATCHABILITY_TARGET
+    committed = min(1.0, max(DEFAULT_WATCHABILITY_TARGET, committed))
+    try:
+        configured = float(os.environ.get(
+            "PM_RUNNER_WATCHABILITY_TARGET", str(committed)))
+    except (TypeError, ValueError):
+        configured = committed
+    configured = min(1.0, max(committed, configured))
+    target = max(_slo_target.get(project, committed), configured)
+    _slo_target[project] = target
+    return target
+
+
+def _metadata(row: dict) -> dict:
+    value = row.get("metadata")
+    return value if isinstance(value, dict) else {}
+
+
+def _expected_watchable(row: dict) -> bool:
+    """Scope the denominator to live native PTY runs with a bridge contract."""
+    metadata = _metadata(row)
+    control = row.get("control") if isinstance(row.get("control"), dict) else {}
+    status = str(row.get("status") or "").strip().lower()
+    return bool(
+        status in _WATCHABLE_STATUSES
+        and metadata.get("native_host_execution") is True
+        and metadata.get("pty") is True
+        and control.get("runner_open") is not False
+        and not metadata.get("terminal_cleanup_requested_at")
+    )
+
+
+def _sample_watchability(
+    project: str,
+    rows: list[dict],
+    resolve_attachment: Callable[[str], Optional[bool]],
+    ts: float,
+) -> dict:
+    """Accumulate sampled eligible seconds, globally and per host."""
+    state = _slo_state.setdefault(project, {
+        "sessions": {}, "eligible_s": 0.0, "attached_s": 0.0,
+        "hosts": {}, "started_at": ts,
+    })
+    grace_s = _startup_grace_seconds()
+    seen: set[str] = set()
+    for row in rows:
+        sid = str(row.get("runner_session_id") or "").strip()
+        if not sid:
+            continue
+        seen.add(sid)
+        session = state["sessions"].setdefault(sid, {
+            "first_seen": ts, "last_seen": ts, "attached": None,
+            "ever_attached": False, "eligible": False,
+            "host_id": str(row.get("host_id") or "unknown"),
+        })
+        eligible_from = float(session["last_seen"])
+        if not session["ever_attached"]:
+            eligible_from = max(eligible_from, float(session["first_seen"]) + grace_s)
+        eligible_s = max(0.0, ts - eligible_from) if session["eligible"] else 0.0
+        if eligible_s:
+            host = state["hosts"].setdefault(
+                session["host_id"], {"eligible_s": 0.0, "attached_s": 0.0})
+            state["eligible_s"] += eligible_s
+            host["eligible_s"] += eligible_s
+            if session["attached"] is True:
+                state["attached_s"] += eligible_s
+                host["attached_s"] += eligible_s
+        attached = None
+        currently_eligible = _expected_watchable(row)
+        if currently_eligible:
+            try:
+                attached = resolve_attachment(sid)
+            except Exception:
+                attached = None
+        session.update({
+            "last_seen": ts,
+            "attached": attached,
+            "ever_attached": bool(session["ever_attached"] or attached is True),
+            "eligible": currently_eligible,
+            "host_id": str(row.get("host_id") or "unknown"),
+        })
+
+    # Disappeared/terminal rows do not accrue teardown time and are forgotten.
+    for sid in list(state["sessions"]):
+        if sid not in seen:
+            state["sessions"].pop(sid, None)
+
+    target = _watchability_target(project)
+    eligible_s = float(state["eligible_s"])
+    attached_s = float(state["attached_s"])
+
+    def view(values: dict) -> dict:
+        denominator = float(values["eligible_s"])
+        numerator = float(values["attached_s"])
+        ratio = numerator / denominator if denominator else None
+        return {
+            "watchability": round(ratio, 6) if ratio is not None else None,
+            "attached_minutes": round(numerator / 60.0, 3),
+            "eligible_running_minutes": round(denominator / 60.0, 3),
+            "meeting_target": ratio >= target if ratio is not None else None,
+        }
+
+    return {
+        "schema": "switchboard.runner_watchability_slo.v1",
+        "target": target,
+        "target_policy": "tighten_only",
+        "startup_grace_s": grace_s,
+        "measurement_started_at": round(float(state["started_at"]), 3),
+        **view({"eligible_s": eligible_s, "attached_s": attached_s}),
+        "by_host": {
+            host_id: view(values) for host_id, values in sorted(state["hosts"].items())
+        },
+    }
 
 
 def _default_sessions(project: str) -> Iterable[dict]:
@@ -90,6 +229,8 @@ def snapshot(
     emit = event_sink or _emit_narration_event
 
     rows = list(list_sessions(project) or [])
+    with _LOCK:
+        watchability_slo = _sample_watchability(project, rows, resolve_attachment, ts)
     current: dict[str, dict] = {}
     observed_tasks: dict[str, str] = {}
     for row in rows:
@@ -160,6 +301,7 @@ def snapshot(
         "task_ids": task_ids,
         "runner_session_ids": sorted(active),
         "unattached_for_s": durations,
+        "watchability_slo": watchability_slo,
     }
 
 
@@ -168,3 +310,5 @@ def reset_for_tests() -> None:
         _first_unattached.clear()
         _active_sessions.clear()
         _task_by_session.clear()
+        _slo_state.clear()
+        _slo_target.clear()
