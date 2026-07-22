@@ -55,6 +55,7 @@ __all__ = [
     "is_preclaim_runner",
     "requires_full_runner_bind",
     "is_direct_assignment_runner",
+    "is_native_prebind_runner",
     "issue_direct_session_mcp_token",
     "get_direct_session_principal_by_token_any_project",
     "check_agent_host_bootstrap_authority",
@@ -910,6 +911,24 @@ def is_connect_assignment_runner(record: Dict[str, Any]) -> bool:
         and bind.get("task_id")
         and bind.get("host_id", "").startswith("host/")
         and bind.get("wake_id")
+    )
+
+
+def is_native_prebind_runner(record: Dict[str, Any], *,
+                             host_attached: Optional[bool] = None) -> bool:
+    """A native host run (direct OR Connect) trusted to Watch before a claim exists.
+
+    Both direct-CLI and Connect runs launch a host-verified PTY on a task+host+wake
+    identity *before* a claim/Work Session exists, so Watch/Chat may open with
+    placeholder bind fields. A live relay attachment (``host_attached``) proves the
+    same liveness for any other shape. This is the single predicate every relay
+    mint + ticket + binding path shares -- previously each checked only the direct
+    schema, leaving Connect runs watchable-but-ticket-refused (dark for life).
+    """
+    return bool(
+        is_direct_assignment_runner(record)
+        or is_connect_assignment_runner(record)
+        or host_attached is True
     )
 
 
@@ -2284,7 +2303,7 @@ def _server_relay_options(session: Dict[str, Any], *, user_id: str,
             "error": "relay_public_base_unavailable",
             "missing": ["relay_public_base"],
         }
-    direct = is_direct_assignment_runner(session) or host_attached is True
+    native_prebind = is_native_prebind_runner(session, host_attached=host_attached)
     direct_ref = f"direct/{session.get('runner_session_id') or 'session'}"
     bind = runner_bind_tuple(session)
     binding = {
@@ -2295,17 +2314,17 @@ def _server_relay_options(session: Dict[str, Any], *, user_id: str,
         # Rebuilding this tuple ad hoc made the host ticket reject valid legacy
         # rows that the browser ticket accepted (BUG-125).
         "task_id": bind.get("task_id") or "",
-        "claim_id": bind.get("claim_id") or (direct_ref if direct else ""),
+        "claim_id": bind.get("claim_id") or (direct_ref if native_prebind else ""),
         "work_session_id": str(
-            bind.get("work_session_id") or (direct_ref if direct else "")),
+            bind.get("work_session_id") or (direct_ref if native_prebind else "")),
         "runner_session_id": str(session.get("runner_session_id") or ""),
         "host_id": bind.get("host_id") or "",
         "wake_id": bind.get("wake_id") or "",
         "execution_connection_id": str(
             metadata.get("execution_connection_id")
-            or (direct_ref if direct else "execconn/unspecified")),
+            or (direct_ref if native_prebind else "execconn/unspecified")),
         "source_sha": str(
-            metadata.get("source_sha") or (direct_ref if direct else "unknown")),
+            metadata.get("source_sha") or (direct_ref if native_prebind else "unknown")),
         "permission_profile": "operator_watch",
     }
     missing = pty_domain.missing_ticket_bind_fields(binding)

@@ -71,7 +71,10 @@ ok(bool(binding.get("source_sha")),
    "the absent source_sha is filled, not left empty")
 
 # Boundary: an UNBOUND Connect runner (no claim, no Work Session) still fails
-# closed -- Watch requires a bound identity. This documents the intended edge.
+# still mints -- Connect launches its PTY before a claim/Work Session exists (the
+# DHCP model), so an unclaimed native Connect run is watchable on its task+host+wake
+# identity with placeholder bind fields. (Superseded the old "fails closed" edge:
+# that pinning left every Connect run dark for its whole life.)
 unbound_connect = {
     "runner_session_id": "run_watch1_unbound",
     "task_id": "WATCH-1",
@@ -88,9 +91,17 @@ unbound_connect = {
 }
 unbound = runner_repo._server_relay_options(
     unbound_connect, user_id="user-watch1", project="switchboard")
-ok(unbound.get("error") == runner_repo.RUNNER_BIND_ERROR
-   and "claim_id" in (unbound.get("missing") or []),
-   "an unbound Connect runner still fails closed on the missing claim_id")
+ok(not unbound.get("error") and bool(unbound.get("host_url")),
+   "an unclaimed native Connect runner mints a host_url (Watch works pre-claim)")
+
+# A row with NO native/connect identity at all still fails closed -- the trust
+# anchor is native_host_execution + connect_assignment, not "any unbound row".
+stranger = runner_repo._server_relay_options(
+    {"runner_session_id": "run_stranger", "task_id": "WATCH-1", "claim_id": "",
+     "host_id": "host/x", "status": "running", "metadata": {}},
+    user_id="user-watch1", project="switchboard")
+ok(stranger.get("error") == runner_repo.RUNNER_BIND_ERROR,
+   "a non-native unbound row still fails closed (trust anchor preserved)")
 
 print(f"\nWATCH-1 Connect relay mint: {passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)

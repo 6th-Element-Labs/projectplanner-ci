@@ -15,10 +15,11 @@ def _session_binding(session: Mapping[str, Any], project: str,
     meta = session.get("metadata") or {}
     if not isinstance(meta, dict):
         meta = {}
-    # WATCH-4: a live relay-attached run fills the same placeholder identity fields
-    # as a direct-assignment run, so a Connect run proven live by its attached
-    # tunnel mints a ticket without a scheduler claim/Work Session.
-    direct = runner_repo.is_direct_assignment_runner(dict(session)) or host_attached is True
+    # A native host run (direct or Connect), or any run proven live by an attached
+    # relay tunnel, fills the placeholder identity fields so it mints a ticket
+    # without a scheduler claim/Work Session -- the shared is_native_prebind_runner
+    # predicate keeps this gate identical to the relay mint and the ticket gate.
+    direct = runner_repo.is_native_prebind_runner(dict(session), host_attached=host_attached)
     direct_ref = f"direct/{session.get('runner_session_id') or 'session'}"
     return domain.merge_binding({
         "tenant_id": str(
@@ -84,8 +85,8 @@ def mint_ticket_for_session(
             "runner_session_id": sid,
         }
     missing = runner_repo.missing_runner_bind_fields(session)
-    if (missing and not runner_repo.is_direct_assignment_runner(session)
-            and host_attached is not True):
+    if missing and not runner_repo.is_native_prebind_runner(
+            session, host_attached=host_attached):
         return runner_repo.runner_bind_incomplete(missing, task_id=session.get("task_id") or "")
     binding = _session_binding(session, project_id, host_attached=host_attached)
     if binding_overlay:
