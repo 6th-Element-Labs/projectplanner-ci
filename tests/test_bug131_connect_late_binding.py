@@ -29,6 +29,8 @@ def runner():
         "metadata": {
             "wake_id": "wake-bug131", "connect_assignment": True,
             "assignment_schema": "switchboard.connect.assignment.v1",
+            "native_host_execution": True,
+            "credential_admission_phase": "preclaim",
         },
     }
 

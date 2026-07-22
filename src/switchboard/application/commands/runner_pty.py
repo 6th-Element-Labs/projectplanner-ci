@@ -16,11 +16,14 @@ def _session_binding(session: Mapping[str, Any], project: str,
     if not isinstance(meta, dict):
         meta = {}
     # A native host run (direct or Connect), or any run proven live by an attached
-    # relay tunnel, fills the placeholder identity fields so it mints a ticket
-    # without a scheduler claim/Work Session -- the shared is_native_prebind_runner
-    # predicate keeps this gate identical to the relay mint and the ticket gate.
-    direct = runner_repo.is_native_prebind_runner(dict(session), host_attached=host_attached)
-    direct_ref = f"direct/{session.get('runner_session_id') or 'session'}"
+    # relay tunnel, fills the placeholder identity fields so it mints a ticket.
+    # This is transport classification only; scheduler binding never changes it.
+    native_transport = bool(
+        runner_repo.is_native_assignment_runner(dict(session))
+        or host_attached is True)
+    # Preserve the serialized placeholder used by existing tickets. The value is
+    # compatibility data only; it is never consulted to classify transport.
+    placeholder_ref = f"direct/{session.get('runner_session_id') or 'session'}"
     return domain.merge_binding({
         "tenant_id": str(
             session.get("tenant_id")
@@ -30,20 +33,21 @@ def _session_binding(session: Mapping[str, Any], project: str,
         "user_id": str(session.get("user_id") or meta.get("user_id") or ""),
         "project_id": str(session.get("project_id") or project or DEFAULT_PROJECT),
         "task_id": bind.get("task_id") or "",
-        "claim_id": bind.get("claim_id") or (direct_ref if direct else ""),
-        "work_session_id": bind.get("work_session_id") or (direct_ref if direct else ""),
+        "claim_id": bind.get("claim_id") or (placeholder_ref if native_transport else ""),
+        "work_session_id": bind.get("work_session_id") or (
+            placeholder_ref if native_transport else ""),
         "runner_session_id": str(session.get("runner_session_id") or ""),
         "host_id": bind.get("host_id") or "",
         "wake_id": bind.get("wake_id") or "",
         "execution_connection_id": str(
             session.get("execution_connection_id")
             or meta.get("execution_connection_id")
-            or (direct_ref if direct else "")
+            or (placeholder_ref if native_transport else "")
             or ""
         ),
         "source_sha": str(
             session.get("source_sha") or meta.get("source_sha")
-            or (direct_ref if direct else "")),
+            or (placeholder_ref if native_transport else "")),
         "permission_profile": str(
             session.get("permission_profile")
             or meta.get("permission_profile")
@@ -85,8 +89,9 @@ def mint_ticket_for_session(
             "runner_session_id": sid,
         }
     missing = runner_repo.missing_runner_bind_fields(session)
-    if missing and not runner_repo.is_native_prebind_runner(
-            session, host_attached=host_attached):
+    if missing and not (
+            runner_repo.is_native_assignment_runner(session)
+            or host_attached is True):
         return runner_repo.runner_bind_incomplete(missing, task_id=session.get("task_id") or "")
     binding = _session_binding(session, project_id, host_attached=host_attached)
     if binding_overlay:

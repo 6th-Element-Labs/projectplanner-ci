@@ -67,7 +67,7 @@ try:
 
     watch = store.resolve_runner_watch(task_id, include_stale=True, project=P)
     assert watch["watchable"] is True, watch
-    assert watch["binding_mode"] == "connect_assignment", watch
+    assert watch["binding_mode"] == "native_assignment", watch
 
     kill = store.request_runner_control(
         runner_id, "kill", reason="operator killed Connect run",

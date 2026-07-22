@@ -2060,10 +2060,8 @@ def renew_live_direct_runners(inventory):
     renewed = []
     sessions = _drain_runners(host_id)
     needs_late_binding = any(
-        ((row.get("metadata") or {}).get("direct_assignment") is True
-         or (row.get("metadata") or {}).get("connect_assignment") is True)
-        and not row.get("claim_id")
-        and not (row.get("metadata") or {}).get("work_session_id")
+        str((row.get("metadata") or {}).get("credential_admission_phase") or "").lower()
+        in {"preclaim", "pending"}
         and row.get("alive") is True
         and str(row.get("status") or "").lower() == "running"
         for row in sessions
@@ -2071,17 +2069,15 @@ def renew_live_direct_runners(inventory):
     work_sessions = _drain_work_sessions() if needs_late_binding else []
     for session in sessions:
         metadata = dict(session.get("metadata") or {})
-        direct = bool(
-            metadata.get("direct_assignment") is True
-            or metadata.get("connect_assignment") is True
-            or session.get("wake_mode") in {"direct_task", "connect"}
-        )
+        native_transport = metadata.get("native_host_execution") is True
+        admission_preclaim = str(
+            metadata.get("credential_admission_phase") or "").lower() in {
+                "preclaim", "pending"}
         claim_id = str(session.get("claim_id") or "")
         work_session_id = str(metadata.get("work_session_id") or "")
         late_binding = _direct_work_session_binding(session, work_sessions)
         if (not late_binding and needs_late_binding
-                and (metadata.get("direct_assignment") is True
-                     or metadata.get("connect_assignment") is True)
+                and admission_preclaim
                 and not session.get("claim_id")
                 and not metadata.get("work_session_id")):
             # A short task can create and complete its managed Work Session
@@ -2158,7 +2154,7 @@ def renew_live_direct_runners(inventory):
                 "wake_repaired": wake_repaired,
             })
             continue
-        if (not (direct or claim_bound) or session.get("alive") is not True
+        if (not native_transport or session.get("alive") is not True
                 or str(session.get("status") or "").lower() != "running"):
             continue
         if not wake_id or not task_id:
@@ -2182,7 +2178,7 @@ def renew_live_direct_runners(inventory):
                 **metadata,
                 "wake_id": wake_id,
                 "wake_mode": (session.get("wake_mode") or
-                              "direct_task" if direct else "claim_next"),
+                              "claim_next"),
                 **({
                     "direct_assignment": True,
                     "assignment_schema": "switchboard.direct_cli_assignment.v1",

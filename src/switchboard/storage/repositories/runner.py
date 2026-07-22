@@ -52,10 +52,9 @@ __all__ = [
     "runner_bind_tuple",
     "missing_runner_bind_fields",
     "runner_bind_incomplete",
-    "is_preclaim_runner",
+    "is_credential_preclaim_runner",
     "requires_full_runner_bind",
-    "is_direct_assignment_runner",
-    "is_native_prebind_runner",
+    "is_native_assignment_runner",
     "issue_direct_session_mcp_token",
     "get_direct_session_principal_by_token_any_project",
     "check_agent_host_bootstrap_authority",
@@ -849,12 +848,16 @@ def runner_bind_incomplete(missing: List[str], *,
     }
 
 
-def is_preclaim_runner(record: Dict[str, Any]) -> bool:
+def is_credential_preclaim_runner(record: Dict[str, Any]) -> bool:
+    """Return whether credential admission has explicitly not reached a claim.
+
+    This is an admission-state predicate, not a transport or liveness predicate.
+    In particular, the presence of a claim must never change what kind of PTY a
+    runner is or whether its relay can be renewed.
+    """
     metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
     phase = str(metadata.get("credential_admission_phase") or "").strip().lower()
-    status = str(record.get("status") or "").strip().lower()
-    return phase in {"preclaim", "preclaim_failed"} or (
-        status == "starting" and phase != "claim_bound")
+    return phase in {"preclaim", "preclaim_failed", "pending"}
 
 
 def requires_full_runner_bind(record: Dict[str, Any]) -> bool:
@@ -873,21 +876,31 @@ def requires_full_runner_bind(record: Dict[str, Any]) -> bool:
     return phase == "claim_bound"
 
 
-def is_direct_assignment_runner(record: Dict[str, Any]) -> bool:
-    """True for the exact host/task PTY started without scheduler lifecycle state."""
+def is_native_assignment_runner(record: Dict[str, Any]) -> bool:
+    """Classify an explicitly identified native host assignment.
+
+    Transport identity comes only from immutable assignment metadata.  Claim and
+    Work Session fields are deliberately absent from this predicate: attaching
+    scheduler state to a running process must not revoke its PTY capabilities.
+    """
     metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
     if not metadata and record.get("metadata_json"):
         metadata = _json_obj(record.get("metadata_json"), {})
     bind = runner_bind_tuple(record)
-    return bool(
+    direct = (
         metadata.get("direct_assignment") is True
-        and metadata.get("native_host_execution") is True
         and metadata.get("assignment_schema") == "switchboard.direct_cli_assignment.v1"
+    )
+    connect = (
+        metadata.get("connect_assignment") is True
+        and metadata.get("assignment_schema") == "switchboard.connect.assignment.v1"
+    )
+    return bool(
+        (direct or connect)
+        and metadata.get("native_host_execution") is True
         and bind.get("task_id")
         and bind.get("host_id", "").startswith("host/")
         and bind.get("wake_id")
-        and not bind.get("claim_id")
-        and not bind.get("work_session_id")
     )
 
 
@@ -911,24 +924,6 @@ def is_connect_assignment_runner(record: Dict[str, Any]) -> bool:
         and bind.get("task_id")
         and bind.get("host_id", "").startswith("host/")
         and bind.get("wake_id")
-    )
-
-
-def is_native_prebind_runner(record: Dict[str, Any], *,
-                             host_attached: Optional[bool] = None) -> bool:
-    """A native host run (direct OR Connect) trusted to Watch before a claim exists.
-
-    Both direct-CLI and Connect runs launch a host-verified PTY on a task+host+wake
-    identity *before* a claim/Work Session exists, so Watch/Chat may open with
-    placeholder bind fields. A live relay attachment (``host_attached``) proves the
-    same liveness for any other shape. This is the single predicate every relay
-    mint + ticket + binding path shares -- previously each checked only the direct
-    schema, leaving Connect runs watchable-but-ticket-refused (dark for life).
-    """
-    return bool(
-        is_direct_assignment_runner(record)
-        or is_connect_assignment_runner(record)
-        or host_attached is True
     )
 
 
@@ -971,7 +966,7 @@ def assert_runner_watchable(session: Optional[Dict[str, Any]], *,
         watchable.
       * ``None``  -- no attachment signal available (e.g. a caller that cannot query
         the hub): fall back to the DB-row assignment/bind-tuple inference
-        (``is_connect_assignment_runner`` / ``is_direct_assignment_runner``), so
+        (explicit native assignment metadata), so
         callers that cannot see the relay keep today's behaviour.
     """
     if not session:
@@ -1053,12 +1048,7 @@ def assert_runner_watchable(session: Optional[Dict[str, Any]], *,
             }
     # No relay-attachment signal (e.g. an off-process caller): fall back to BUG-130
     # DB-row assignment recognition, then the full bind tuple.
-    assignment_mode = (
-        "direct_assignment" if is_direct_assignment_runner(session)
-        else "connect_assignment" if is_connect_assignment_runner(session)
-        else ""
-    )
-    if assignment_mode:
+    if is_native_assignment_runner(session):
         status = str(session.get("status") or "").strip().lower()
         if status not in RUNNER_WATCHABLE_STATUSES:
             return runner_bind_incomplete(
@@ -1073,7 +1063,7 @@ def assert_runner_watchable(session: Optional[Dict[str, Any]], *,
             "task_id": str(session.get("task_id") or ""),
             "bind": runner_bind_tuple(session),
             "session": session,
-            "binding_mode": assignment_mode,
+            "binding_mode": "native_assignment",
         }
     missing = missing_runner_bind_fields(session)
     if missing:
@@ -2309,9 +2299,9 @@ def _server_relay_options(session: Dict[str, Any], *, user_id: str,
     attached only to the authenticated claim response and are never persisted in
     runner_control_requests.options_json.
 
-    ``host_attached=True`` (WATCH-4) treats a live relay-attached run the same as a
-    direct-assignment run for ticket binding: the claim/work_session/exec/sha
-    fields a Connect run never populates are filled with the direct placeholder so
+    ``host_attached=True`` (WATCH-4) treats a live relay-attached run as native
+    transport for ticket binding: claim/work_session/exec/sha fields absent during
+    admission are filled with a transport placeholder so
     a host_url is issued for a run proven live by its attached tunnel.
     """
     from switchboard.application import runner_pty_relay as relay
@@ -2324,8 +2314,11 @@ def _server_relay_options(session: Dict[str, Any], *, user_id: str,
             "error": "relay_public_base_unavailable",
             "missing": ["relay_public_base"],
         }
-    native_prebind = is_native_prebind_runner(session, host_attached=host_attached)
-    direct_ref = f"direct/{session.get('runner_session_id') or 'session'}"
+    native_transport = bool(
+        is_native_assignment_runner(session) or host_attached is True)
+    # Keep the historical placeholder value stable; its prefix is serialized in
+    # already-issued tickets but no longer participates in classification.
+    placeholder_ref = f"direct/{session.get('runner_session_id') or 'session'}"
     bind = runner_bind_tuple(session)
     binding = {
         "tenant_id": str(metadata.get("tenant_id") or "tenant/default"),
@@ -2335,17 +2328,17 @@ def _server_relay_options(session: Dict[str, Any], *, user_id: str,
         # Rebuilding this tuple ad hoc made the host ticket reject valid legacy
         # rows that the browser ticket accepted (BUG-125).
         "task_id": bind.get("task_id") or "",
-        "claim_id": bind.get("claim_id") or (direct_ref if native_prebind else ""),
+        "claim_id": bind.get("claim_id") or (placeholder_ref if native_transport else ""),
         "work_session_id": str(
-            bind.get("work_session_id") or (direct_ref if native_prebind else "")),
+            bind.get("work_session_id") or (placeholder_ref if native_transport else "")),
         "runner_session_id": str(session.get("runner_session_id") or ""),
         "host_id": bind.get("host_id") or "",
         "wake_id": bind.get("wake_id") or "",
         "execution_connection_id": str(
             metadata.get("execution_connection_id")
-            or (direct_ref if native_prebind else "execconn/unspecified")),
+            or (placeholder_ref if native_transport else "execconn/unspecified")),
         "source_sha": str(
-            metadata.get("source_sha") or (direct_ref if native_prebind else "unknown")),
+            metadata.get("source_sha") or (placeholder_ref if native_transport else "unknown")),
         "permission_profile": "operator_watch",
     }
     missing = pty_domain.missing_ticket_bind_fields(binding)

@@ -75,6 +75,8 @@ runner = {
     "claim_id": None,
     "metadata": {
         "direct_assignment": True,
+        "native_host_execution": True,
+        "credential_admission_phase": "preclaim",
         "wake_id": "wake-bug103",
         "assignment_schema": "switchboard.direct_cli_assignment.v1",
     },

@@ -94,8 +94,8 @@ ok(detached.get("error_code") == "host_not_attached",
 unknown = runner_repo.assert_runner_watchable(connect_pty_session())
 ok(unknown.get("watchable") is True,
    "with no attachment signal an unbound Connect run stays watchable via its assignment shape (BUG-130 #729)")
-ok(unknown.get("binding_mode") == "connect_assignment",
-   "the no-signal watchable verdict is the DB-row connect_assignment mode, not relay_attached")
+ok(unknown.get("binding_mode") == "native_assignment",
+   "the no-signal watchable verdict uses the unified native transport mode, not relay_attached")
 
 # 4) A fully claim-bound run stays watchable with no signal (regression guard: the
 #    new liveness path must not disturb the existing bound-runner contract).
