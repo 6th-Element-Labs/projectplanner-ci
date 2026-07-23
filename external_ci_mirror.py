@@ -82,6 +82,18 @@ def _mirror_url(mirror_repo: str, mirror_remote_url: str = "") -> str:
     return f"https://github.com/{mirror_repo}.git"
 
 
+def _remote_branch_sha(remote_url: str, branch_ref: str, cwd: str,
+                       runner: Optional[CommandRunner] = None) -> str:
+    readback = _check(
+        ["git", "ls-remote", "--heads", remote_url, branch_ref],
+        cwd, "mirror_sync_failed", "mirror ref readback", runner)
+    lines = [
+        line.split(None, 1) for line in (readback.stdout or "").splitlines()
+        if line.strip()
+    ]
+    return lines[0][0].strip() if lines else ""
+
+
 def _workflow_inputs_args(inputs: Dict[str, Any]) -> List[str]:
     args: List[str] = []
     for key in sorted((inputs or {}).keys()):
@@ -220,6 +232,13 @@ def request_external_ci_mirror_run(request: Dict[str, Any], source_path: str,
     run = store.create_external_ci_run(request or {}, actor=actor, project=project)
     if run.get("error"):
         return run
+    if run.get("idempotent"):
+        # Another caller already owns this exact source repo + SHA dispatch.
+        # Returning the durable run is the successful handoff; executing it
+        # again would create a second push-triggered workflow.
+        run["coalesced"] = True
+        run["ok"] = run.get("status") not in {"failure", "cancelled", "error"}
+        return run
     if run.get("status") in store.EXTERNAL_CI_TERMINAL_STATUSES:
         run["resumed_terminal"] = True
         return run
@@ -284,9 +303,40 @@ def _execute_run(run: Dict[str, Any], source_path: str, actor: str,
                       source_path, "mirror_sync_failed", "source SHA validation", runner)
     resolved_sha = (resolved.stdout or "").strip() or source_sha
 
-    push_ref = f"{resolved_sha}:refs/heads/{mirror_branch}"
-    push = _check(["git", "push", mirror_remote_url, push_ref],
-                  source_path, "mirror_sync_failed", "mirror push", runner)
+    remote_ref = f"refs/heads/{mirror_branch}"
+    remote_sha = _remote_branch_sha(
+        mirror_remote_url, remote_ref, source_path, runner)
+    if remote_sha and remote_sha != resolved_sha:
+        raise ExternalCiError(
+            "mirror_sync_failed",
+            f"{remote_ref} already resolves to {remote_sha}, expected {resolved_sha}",
+            {
+                "mirror_repo": mirror_repo,
+                "mirror_branch": mirror_branch,
+                "remote_sha": remote_sha,
+                "expected_sha": resolved_sha,
+            },
+        )
+    reused_ref = remote_sha == resolved_sha
+    if reused_ref:
+        push = subprocess.CompletedProcess(
+            ["git", "push", mirror_remote_url], 0, "", "existing exact ref reused")
+    else:
+        push_ref = f"{resolved_sha}:{remote_ref}"
+        try:
+            push = _check(["git", "push", mirror_remote_url, push_ref],
+                          source_path, "mirror_sync_failed", "mirror push", runner)
+        except ExternalCiError:
+            # Close the ls-remote/push race: another caller may have created
+            # the deterministic ref after our first readback.
+            raced_sha = _remote_branch_sha(
+                mirror_remote_url, remote_ref, source_path, runner)
+            if raced_sha != resolved_sha:
+                raise
+            reused_ref = True
+            push = subprocess.CompletedProcess(
+                ["git", "push", mirror_remote_url], 0, "",
+                "concurrent exact ref reused")
     mirrored = store.update_external_ci_run(
         run["run_id"],
         {
@@ -299,6 +349,7 @@ def _execute_run(run: Dict[str, Any], source_path: str, actor: str,
                 "ci_repo": mirror_repo,
                 "mirror_remote_url": mirror_remote_url,
                 "mirror_branch": mirror_branch,
+                "mirror_ref_reused": reused_ref,
                 "status_context": run.get("status_context"),
                 "mirror_push_stdout": (push.stdout or "").strip(),
                 "mirror_push_stderr": (push.stderr or "").strip(),
