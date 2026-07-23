@@ -166,6 +166,7 @@ def test_ensure_pr_hint_cannot_replace_explicit_sha():
             project="switchboard",
             pr_number=412,
             repo="6th-Element-Labs/projectplanner",
+            source_path="/tmp/ci-source",
             source_fetch_ref="refs/heads/gh-readonly-queue/master/pr-412-merge",
         )
     ok(result["head_sha"] == sha, "explicit merge-group SHA remains authoritative")
@@ -182,6 +183,7 @@ def test_ensure_pr_hint_cannot_replace_explicit_sha():
             project="switchboard",
             pr_number=412,
             repo="6th-Element-Labs/projectplanner",
+            source_path="/tmp/ci-source",
         )
     ok(dispatch.call_args.args[:2] == (sha, sha),
        "PR hint without a fetch ref still fetches the authoritative SHA")
