@@ -2622,6 +2622,10 @@ def _server_relay_options(session: Dict[str, Any], *, user_id: str,
     missing = pty_domain.missing_ticket_bind_fields(binding)
     if missing:
         return {"error": RUNNER_BIND_ERROR, "missing": missing}
+    # SIMPLIFY-18 follow-up: a placeholder satisfies the ticket bind shape, but it
+    # is not a claim or Work Session. Report exactly which fields are fiction so
+    # no operator surface or audit can read this ticket as proof of ownership.
+    substituted = execution_liveness.synthetic_bind_fields(binding)
     ttl = 900
     host_ticket, host_payload = relay.mint_host_tunnel_ticket(binding, ttl_seconds=ttl)
     browser_ticket, browser_payload = relay.mint_capability_ticket(
@@ -2638,6 +2642,8 @@ def _server_relay_options(session: Dict[str, Any], *, user_id: str,
             float(browser_payload.get("exp") or 0),
         ),
         "binding": binding,
+        "synthetic_bind": bool(substituted),
+        "synthetic_bind_fields": substituted,
     }
 
 
