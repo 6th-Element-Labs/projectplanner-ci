@@ -1,7 +1,9 @@
 """Universal attention ingress for operators and Agent Hosts.
 
 The legacy ``GET /api/attention`` unions stores that hold human-blocking work
-into one normalized, ranked feed:
+into one normalized, ranked feed.  The feed is a projection only: every item
+keeps a stable pointer to its authoritative source and all decisions continue
+to route to that source's write API.
 
   * ``agent_messages``  — unacked required messages (an agent is parked on you)
   * ``inbox``           — pending triaged inbound (plan@taikunai.com, uploads)
@@ -39,6 +41,12 @@ PrincipalResolver = Callable[..., dict]
 BodyProjectResolver = Callable[[dict], str]
 PendingAcksFn = Callable[..., List[Dict[str, Any]]]
 ListInboxFn = Callable[..., List[Dict[str, Any]]]
+ListDeliverablesFn = Callable[..., List[Dict[str, Any]]]
+GetMissionStatusFn = Callable[..., Dict[str, Any]]
+ListDecisionsFn = Callable[..., List[Dict[str, Any]]]
+
+ATTENTION_PROJECTION_SCHEMA = "switchboard.attention_projection.v1"
+_IMPACT_RANK = {"blocking": 0, "at_risk": 1, "none": 2}
 
 
 class AttentionRequestBody(BaseModel):
@@ -97,7 +105,8 @@ def _age_s(ts: Any) -> int:
 def _agent_item(msg: Dict[str, Any]) -> Dict[str, Any]:
     """An unacked required agent message — someone's session is parked on you."""
     return {
-        "attention_id": f"msg:{msg.get('id')}",
+        "attention_id": f"message:{msg.get('id')}",
+        "source_id": f"message:{msg.get('id')}",
         "source": "agent",
         "kind": "agent_message",
         "task_id": msg.get("task_id") or "",
@@ -107,6 +116,13 @@ def _agent_item(msg: Dict[str, Any]) -> Dict[str, Any]:
         "to": msg.get("to_agent") or "",
         "age_s": _age_s(msg.get("sent_at")),
         "deadline": msg.get("ack_deadline"),
+        "delivery_impact": "blocking",
+        "unfinished_downstream": int(msg.get("unfinished_downstream") or 0),
+        "links": {
+            "task": f"#task/{msg.get('task_id')}" if msg.get("task_id") else None,
+            "provider": None, "host": msg.get("host_id"),
+            "session": msg.get("runner_session_id") or msg.get("work_session_id"),
+        },
         "payload": {"message_id": msg.get("id"),
                     "requires_ack": bool(msg.get("requires_ack")),
                     "monitor": (msg.get("monitor") or {}).get("status") if isinstance(msg.get("monitor"), dict) else None},
@@ -124,6 +140,7 @@ def _inbox_item(it: Dict[str, Any]) -> Dict[str, Any]:
     touched = [str(p.get("task_id") or "") for p in proposals if p.get("task_id")]
     return {
         "attention_id": f"inbox:{it.get('id')}",
+        "source_id": f"inbox:{it.get('id')}",
         "source": "inbox",
         "kind": (it.get("source") or "email"),
         "task_id": touched[0] if touched else "",
@@ -132,6 +149,10 @@ def _inbox_item(it: Dict[str, Any]) -> Dict[str, Any]:
         "from": it.get("sender") or "",
         "age_s": _age_s(it.get("received_at")),
         "deadline": None,
+        "delivery_impact": "at_risk" if touched else "none",
+        "unfinished_downstream": len(set(touched)),
+        "links": {"task": f"#task/{touched[0]}" if touched else None,
+                  "provider": None, "host": None, "session": None},
         "payload": {"inbox_id": it.get("id"),
                     "proposals": len(proposals), "new_tasks": len(new_tasks),
                     "touches": touched[:6],
@@ -141,13 +162,104 @@ def _inbox_item(it: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _provider_item(item: Dict[str, Any]) -> Dict[str, Any]:
+    request_id = str(item.get("request_id") or "")
+    task_id = str(item.get("task_id") or "")
+    context = item.get("context") or {}
+    return {
+        "attention_id": f"provider:{request_id}", "source_id": f"provider:{request_id}",
+        "source": "provider", "kind": "provider_request", "task_id": task_id,
+        "title": str(item.get("prompt") or "")[:120],
+        "summary": str(item.get("prompt") or ""), "from": item.get("provider") or "",
+        "to": "", "age_s": _age_s(item.get("created_at")),
+        "deadline": item.get("expires_at"), "delivery_impact": "blocking",
+        "unfinished_downstream": int(context.get("unfinished_downstream") or 0),
+        "payload": {
+            "request_id": request_id, "version": item.get("version"),
+            "choices": item.get("choices"), "recommended_default": item.get("recommended_default"),
+            "evidence": context.get("evidence"), "blast_radius": context.get("blast_radius"),
+        },
+        "links": {
+            "mission": context.get("mission_id") or context.get("deliverable_id"),
+            "task": f"#task/{task_id}" if task_id else None,
+            "provider": item.get("provider"), "host": item.get("host_id"),
+            "session": item.get("runner_session_id") or item.get("work_session_id"),
+        },
+        "decide": {"method": "POST",
+                   "path": f"/api/attention/requests/{request_id}/decide"},
+    }
+
+
+def _mission_item(status: Dict[str, Any], action: Dict[str, Any], index: int) -> Dict[str, Any]:
+    deliverable_id = str(status.get("deliverable_id") or "")
+    action_key = str(action.get("action") or index)
+    task_id = str(action.get("task_id") or "")
+    source_id = f"mission:{deliverable_id}:{action_key}:{task_id or index}"
+    return {
+        "attention_id": source_id, "source_id": source_id, "source": "mission",
+        "kind": "deliverable_action", "task_id": task_id,
+        "title": action.get("label") or action_key,
+        "summary": action.get("reason") or "", "from": "mission", "to": "",
+        "age_s": _age_s(action.get("created_at") or status.get("narrative_updated_at")),
+        "deadline": action.get("deadline"),
+        "delivery_impact": action.get("delivery_impact") or "none",
+        "unfinished_downstream": int(action.get("unfinished_downstream") or
+                                     action.get("blocking_task_count") or 0),
+        "payload": {"action": action_key, "owner_type": action.get("owner_type"),
+                    "evidence": action.get("evidence"),
+                    "blast_radius": action.get("blast_radius")},
+        "links": {"mission": status.get("mission_id") or status.get("board_id"),
+                  "deliverable": deliverable_id,
+                  "task": f"#task/{task_id}" if task_id else None,
+                  "provider": action.get("provider"), "host": action.get("host_id"),
+                  "session": action.get("runner_session_id") or action.get("work_session_id")},
+        "decide": action.get("decide"),
+    }
+
+
+def _decision_item(item: Dict[str, Any]) -> Dict[str, Any]:
+    decision_id = str(item.get("decision_id") or item.get("decision_key") or item.get("id"))
+    task_id = str(item.get("task_id") or "")
+    return {
+        "attention_id": f"decision:{decision_id}", "source_id": f"decision:{decision_id}",
+        "source": "decision", "kind": "plan_decision", "task_id": task_id,
+        "title": item.get("title") or "Open plan decision",
+        "summary": item.get("rationale") or item.get("context") or "", "from": "plan", "to": "",
+        "age_s": _age_s(item.get("created_at")), "deadline": item.get("deadline"),
+        "delivery_impact": item.get("delivery_impact") or "at_risk",
+        "unfinished_downstream": int(item.get("unfinished_downstream") or 0),
+        "payload": {"decision_id": decision_id, "status": item.get("status"),
+                    "chosen_action": item.get("chosen_action"),
+                    "evidence": item.get("evidence"), "blast_radius": item.get("blast_radius")},
+        "links": {"mission": item.get("mission_id"),
+                  "deliverable": item.get("deliverable_id"),
+                  "task": f"#task/{task_id}" if task_id else None,
+                  "provider": None, "host": None, "session": None},
+        "decide": item.get("decide"),
+    }
+
+
 def _rank(item: Dict[str, Any]) -> tuple:
-    """Heuristic until mission_graph blast radius lands: agents first (a lease is
-    parked), deadline-bearing items next, then breadth of proposed change, then age."""
-    src_w = 0 if item["source"] == "agent" else 1
-    dl = 0 if item.get("deadline") else 1
-    breadth = -(item.get("payload", {}).get("proposals") or 0)
-    return (src_w, dl, breadth, -item.get("age_s", 0))
+    """Delivery impact, unfinished downstream work, deadline, then oldest first."""
+    deadline = item.get("deadline")
+    try:
+        deadline_key = float(deadline) if deadline is not None else float("inf")
+    except (TypeError, ValueError):
+        deadline_key = float("inf")
+    return (_IMPACT_RANK.get(str(item.get("delivery_impact")), 2),
+            -int(item.get("unfinished_downstream") or 0),
+            deadline_key, -int(item.get("age_s") or 0),
+            str(item.get("source_id") or item.get("attention_id") or ""))
+
+
+def _dedupe(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Collapse repeated reads of one source record without merging source stores."""
+    projected: Dict[str, Dict[str, Any]] = {}
+    for item in items:
+        source_id = str(item.get("source_id") or item.get("attention_id") or "")
+        if source_id and source_id not in projected:
+            projected[source_id] = item
+    return list(projected.values())
 
 
 def _context(project: str, principal: dict, *, source: str) -> ProjectContext:
@@ -181,6 +293,9 @@ def create_router(*, resolve_project: ProjectResolver,
                   resolve_body_project: BodyProjectResolver,
                   list_pending_acks: PendingAcksFn,
                   list_inbox: ListInboxFn,
+                  list_deliverables: Optional[ListDeliverablesFn] = None,
+                  get_mission_status: Optional[GetMissionStatusFn] = None,
+                  list_decisions: Optional[ListDecisionsFn] = None,
                   service: AttentionService = default_attention_service) -> APIRouter:
     """Mount legacy feed plus durable operator and Agent Host attention contracts."""
     router = APIRouter()
@@ -197,11 +312,29 @@ def create_router(*, resolve_project: ProjectResolver,
             items.append(_agent_item(msg))
         for it in list_inbox("pending", project=proj):
             items.append(_inbox_item(it))
+        provider_queue = service.list_operator_queue(
+            _context(proj, principal, source="query"), limit=500)
+        items.extend(_provider_item(it) for it in provider_queue.get("items", []))
+        if list_deliverables and get_mission_status:
+            for deliverable in list_deliverables(
+                    project=proj, include_task_snapshots=False):
+                status = get_mission_status(
+                    project=proj, deliverable_id=str(deliverable.get("id") or ""))
+                for index, action in enumerate(status.get("next_actions") or []):
+                    if action.get("attention"):
+                        items.append(_mission_item(status, action, index))
+        if list_decisions:
+            for decision in list_decisions(project=proj, status="proposed", limit=500):
+                items.append(_decision_item(decision))
 
+        items = _dedupe(items)
         items.sort(key=_rank)
-        return {"project": proj, "count": len(items), "items": items,
-                "sources": {"agent": sum(1 for i in items if i["source"] == "agent"),
-                            "inbox": sum(1 for i in items if i["source"] == "inbox")}}
+        sources = {
+            source: sum(1 for item in items if item["source"] == source)
+            for source in ("provider", "agent", "inbox", "mission", "decision")
+        }
+        return {"schema": ATTENTION_PROJECTION_SCHEMA, "project": proj,
+                "count": len(items), "items": items, "sources": sources}
 
     @router.get("/api/attention/requests")
     async def list_attention_requests(
