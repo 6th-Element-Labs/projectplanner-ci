@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+from path_setup import ROOT
+
 from adapters.claude_question_adapter import (
     ClaudeQuestionAdapter, ClaudeQuestionError, hook_settings, pinned_version,
 )
