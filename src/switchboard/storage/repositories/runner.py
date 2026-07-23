@@ -380,7 +380,8 @@ def issue_direct_session_mcp_token(
             and policy.get("execution_mode") == "direct_personal_cli")
         connect = bool(
             policy.get("mode") == "connect"
-            and assignment.get("schema") == "switchboard.connect.assignment.v1")
+            and assignment.get("schema")
+            == "switchboard.connect.assignment.v1")
         if not (direct or connect):
             reasons.append("assignment_mode_mismatch")
         selected_host = str(
@@ -912,7 +913,8 @@ def is_native_assignment_runner(record: Dict[str, Any]) -> bool:
     )
     connect = (
         metadata.get("connect_assignment") is True
-        and metadata.get("assignment_schema") == "switchboard.connect.assignment.v1"
+        and metadata.get("assignment_schema")
+        == "switchboard.connect.assignment.v1"
     )
     return bool(
         (direct or connect)
@@ -939,7 +941,8 @@ def is_connect_assignment_runner(record: Dict[str, Any]) -> bool:
     return bool(
         metadata.get("connect_assignment") is True
         and metadata.get("native_host_execution") is True
-        and metadata.get("assignment_schema") == "switchboard.connect.assignment.v1"
+        and metadata.get("assignment_schema")
+        == "switchboard.connect.assignment.v1"
         and bind.get("task_id")
         and bind.get("host_id", "").startswith("host/")
         and bind.get("wake_id")
@@ -1736,7 +1739,8 @@ def _native_agent_host_runner_allowed_in(
     )
     connect_candidate = bool(
         metadata.get("connect_assignment") is True
-        and metadata.get("assignment_schema") == "switchboard.connect.assignment.v1"
+        and metadata.get("assignment_schema")
+        == "switchboard.connect.assignment.v1"
         and status == "running"
         and not record.get("claim_id")
     )
@@ -1790,7 +1794,8 @@ def _native_agent_host_runner_allowed_in(
     connect = bool(
         policy.get("mode") == "connect"
         and metadata.get("connect_assignment") is True
-        and metadata.get("assignment_schema") == "switchboard.connect.assignment.v1"
+        and metadata.get("assignment_schema")
+        == "switchboard.connect.assignment.v1"
         and status == "running"
         and not record.get("claim_id")
     )
@@ -1929,7 +1934,8 @@ def _renew_exact_preclaim_runner_in(
 
 
 def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
-                              principal_id: str, actor: str, now: float) -> Dict[str, Any]:
+                              principal_id: str, actor: str, now: float,
+                              project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     runner_session_id = (record.get("runner_session_id") or record.get("id") or "").strip()
     if not runner_session_id:
         return {"error": "runner_session_id required"}
@@ -1993,18 +1999,38 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
     lease_surrender = previous_metadata.get("lease_surrender") or {}
     incoming_metadata = record.get("metadata") \
         if isinstance(record.get("metadata"), dict) else {}
-    terminalizing_expired_lease = (
-        incoming_metadata.get("terminalized_by") == "runner_lease_expiry")
-    if lease_surrender and not terminalizing_expired_lease:
+    terminalizing_fenced_generation = (
+        incoming_metadata.get("terminalized_by") in {
+            "runner_lease_expiry", "host_supervisor"})
+    completion_handoff = previous_metadata.get("completion_handoff") or {}
+    if lease_surrender and terminalizing_fenced_generation and completion_handoff:
+        mismatched = []
+        for field, expected in (
+                ("execution_generation", completion_handoff.get("generation")),
+                ("lease_epoch", completion_handoff.get("lease_epoch")),
+                ("execution_role", completion_handoff.get("role"))):
+            supplied = incoming_metadata.get(field)
+            if supplied not in (None, "") and str(supplied) != str(expected):
+                mismatched.append(field)
+        if mismatched:
+            return {
+                "error": "terminal acknowledgement identity mismatch",
+                "error_code": "terminal_ack_identity_mismatch",
+                "failure_class": "unbound_identity",
+                "runner_session_id": runner_session_id,
+                "mismatched_fields": mismatched,
+            }
+    if lease_surrender and not terminalizing_fenced_generation:
         # complete_claim fenced this exact runner generation.  Returning the
         # stored row makes retries harmless and prevents a delayed host
         # heartbeat from renewing or resurrecting it.
-        fenced_row = c.execute(
-            "SELECT * FROM runner_sessions WHERE runner_session_id=?",
-            (runner_session_id,),
-        ).fetchone()
-        return _runner_session_row(
-            fenced_row, now=now, include_claim=True, c=c)
+        return {
+            "error": "execution generation is fenced",
+            "error_code": "runner_generation_fenced",
+            "failure_class": "unbound_identity",
+            "runner_session_id": runner_session_id,
+            "lease_epoch": lease_surrender.get("lease_epoch"),
+        }
     record = _merge_existing_runner_record(c, record)
     host_id = (record.get("host_id") or "").strip()
     control = _normalize_runner_control(record.get("control") or {}, host_id)
@@ -2066,18 +2092,49 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
             now,
         ),
     )
+    runner_status = str(record.get("status") or "").strip().lower()
+    execution_lease_id = str(metadata.get("execution_id") or "")
+    if execution_lease_id and runner_status not in RUNNER_TERMINAL_STATUSES:
+        c.execute(
+            "UPDATE resource_leases SET lease_state='active',claimed_at=? WHERE id=? "
+            "AND resource_type='execution' AND wake_id=? AND task_id=? "
+            "AND execution_generation=? AND fence_epoch=? AND released_at IS NULL",
+            (now, execution_lease_id, str(metadata.get("wake_id") or ""),
+             str(record.get("task_id") or ""),
+             int(metadata.get("execution_generation") or 0),
+             int(metadata.get("lease_epoch") or 0)))
     # A terminal failure is also the end of its exact Work Session attempt.  The
     # child normally expires the session after abandoning its claim, but hard kills
     # and host loss cannot execute that cleanup.  Closing it here makes the central
     # runner heartbeat the durable fallback and prevents failed attempts remaining
     # "active" forever. Successful runners stay active until checkpoint/claim
     # completion owns their stronger lifecycle transition.
-    runner_status = str(record.get("status") or "").strip().lower()
     _sync_direct_session_token_lease_in(
         c, record, metadata, runner_session_id, now)
+    # Expected completion handoff owns the claim and Work Session until the
+    # exact enrolled host acknowledgement canonically finalizes both.
+    completion_resume = None
+    if runner_status in RUNNER_TERMINAL_STATUSES:
+        from .claims import terminal_ack_claim_completion_in
+        completion_resume = terminal_ack_claim_completion_in(
+            c, runner_session_id, actor, principal_id, narrow_host, now,
+            project=project)
+    # A supervised execution ends when its process does.  The lease is acquired at
+    # dispatch and promoted to 'active' above; this is its only other half.  Without
+    # it a lease outlives its own runner for the whole TTL, and the next start
+    # coalesces onto a dead generation instead of forking a fresh one (BUG-133).
+    # Released only after the terminal acknowledgement above, which still needs the
+    # 'stopping' state that complete_claim set.
+    lease_wake_id = str(metadata.get("wake_id") or "").strip()
+    if runner_status in RUNNER_TERMINAL_STATUSES and lease_wake_id:
+        c.execute(
+            "UPDATE resource_leases SET released_at=?,lease_state='stopped',"
+            "fence_epoch=COALESCE(fence_epoch,0)+1 "
+            "WHERE resource_type='execution' AND wake_id=? AND released_at IS NULL",
+            (now, lease_wake_id))
     work_session_id = str(metadata.get("work_session_id") or "").strip()
     lease_expired = metadata.get("terminalized_by") == "runner_lease_expiry"
-    if (work_session_id
+    if (not completion_resume and work_session_id
             and (lease_expired
                  or str(metadata.get("auth_lane") or "") == "codex_host_local")
             and runner_status in RUNNER_FAILURE_TERMINAL_STATUSES):
@@ -2099,8 +2156,14 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
                              "work_session_id": work_session_id,
                              "runner_status": runner_status}, sort_keys=True), now),
             )
-    _release_terminal_runner_ownership_in(
-        c, record, metadata, runner_session_id, actor, now)
+    if not completion_resume:
+        _release_terminal_runner_ownership_in(
+            c, record, metadata, runner_session_id, actor, now)
+    if runner_status in RUNNER_TERMINAL_STATUSES:
+        c.execute(
+            "UPDATE resource_leases SET released_at=COALESCE(released_at,?),"
+            "lease_state='terminal' WHERE id=? AND resource_type='execution'",
+            (now, str(metadata.get("execution_id") or "")))
     _renew_personal_claim_from_runner_in(c, record, principal_id, now)
     c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
               (record.get("task_id") or None, actor, "runner.session_registered",
@@ -2132,6 +2195,8 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
     row = c.execute("SELECT * FROM runner_sessions WHERE runner_session_id=?",
                     (runner_session_id,)).fetchone()
     session = _runner_session_row(row, now=now, include_claim=True, c=c)
+    if completion_resume and completion_resume.get("completion"):
+        session["_completion_resume"] = completion_resume
     if (not missing_runner_bind_fields(record)
             and not session.get("stale")
             and str(session.get("status") or "").lower() in RUNNER_WATCHABLE_STATUSES):
@@ -2148,7 +2213,15 @@ def upsert_runner_session(record: Dict[str, Any], principal_id: str = "",
                           project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     now = time.time()
     with _conn(project) as c:
-        return _upsert_runner_session_in(c, record, principal_id, actor, now)
+        result = _upsert_runner_session_in(
+            c, record, principal_id, actor, now, project=project)
+    resume = result.pop("_completion_resume", None) if isinstance(result, dict) else None
+    if resume:
+        from .claims import _finalize_complete_claim_response
+        result["completion"] = _finalize_complete_claim_response(
+            resume["completion"], resume.get("evidence") or {},
+            project, "", actor)
+    return result
 
 
 def list_runner_sessions(host_id: str = "", runtime: str = "", task_id: str = "",

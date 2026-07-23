@@ -184,6 +184,7 @@ def enqueue_task(
     runtime: str = "codex",
     predecessor_wake_id: str = "",
     generation_ref: str = "",
+    role: str = "implementation",
 ) -> dict[str, Any]:
     """Persist one provider-neutral assignment for any Start surface.
 
@@ -232,11 +233,29 @@ def enqueue_task(
         "agent_id": assignment.principal_ref,
         "task_id": task_id,
     }
+    lifecycle_enforced = str(
+        os.environ.get("PM_EXECUTION_LIFECYCLE_V1", "")).strip().lower() in {
+            "1", "true", "yes", "on"}
+    if lifecycle_enforced:
+        # SIMPLIFY-20 owns activation. Once activated, placement must select a
+        # host that advertises both lifecycle parsing and lease enforcement.
+        selector["capabilities"] = [
+            "execution_lease_v2", "runner_lease_enforcement"]
     policy = {
         "mode": CONNECT_WAKE_MODE,
         "assignment": {
             "schema": "switchboard.connect.assignment.v1",
             **asdict(assignment),
+        },
+        # Assignment v1 is an adapter compatibility boundary. Server-owned
+        # execution identity travels beside it so older hosts can continue to
+        # decode the Assignment byte-for-byte.
+        "lifecycle": {
+            "schema": "switchboard.execution_lifecycle.v1",
+            "role": str(role or "implementation"),
+            "head_sha": str((task.get("git_state") or {}).get("head_sha") or ""),
+            "ttl_seconds": int(
+                os.environ.get("PM_CONNECT_MAX_RUNTIME_SECONDS", "7200")),
         },
     }
     suffix = generation_ref or str(predecessor_wake_id or "initial")

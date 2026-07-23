@@ -16,6 +16,7 @@ import re
 import sqlite3
 import time
 import uuid
+from contextlib import nullcontext
 from typing import Any, Dict, List, Optional, Tuple
 
 import evidence_claims
@@ -467,6 +468,75 @@ def _attach_work_session_claim_in(c: sqlite3.Connection, verdict: Dict[str, Any]
                                "claim_id": claim_id,
                                "updated_fields": ["claim_id", "status"]},
                               sort_keys=True), now))
+    # A direct-session principal is server-authenticated token identity. Bind
+    # its exact runner generation to both durable owners now; never infer a
+    # runner later by task, claim, agent label, or host principal equality.
+    runner_id = ""
+    if str(principal_id or "").startswith("direct-session/"):
+        runner_id = str(principal_id).split("/", 1)[1]
+    if runner_id:
+        token = c.execute(
+            "SELECT * FROM direct_session_tokens WHERE runner_session_id=? "
+            "AND task_id=? AND agent_id=? AND revoked_at IS NULL AND expires_at>? "
+            "ORDER BY issued_at DESC LIMIT 1",
+            (runner_id, task_id, agent_id, now),
+        ).fetchone()
+        runner = c.execute(
+            "SELECT * FROM runner_sessions WHERE runner_session_id=? AND task_id=? "
+            "AND agent_id=? AND status IN ('starting','ready','running')",
+            (runner_id, task_id, agent_id),
+        ).fetchone()
+        metadata = json.loads(runner["metadata_json"] or "{}") if runner else {}
+        generation = int(metadata.get("execution_generation") or 0)
+        role = str(metadata.get("execution_role") or "").strip().lower()
+        epoch = int(metadata.get("lease_epoch") or 0)
+        execution_lease_id = str(metadata.get("execution_id") or "")
+        managed = any((execution_lease_id, generation, role, epoch))
+        execution_lease = c.execute(
+            "SELECT * FROM resource_leases WHERE id=? "
+            "AND resource_type='execution' AND released_at IS NULL",
+            (execution_lease_id,)).fetchone() if execution_lease_id else None
+        binding_valid = bool(
+            token and runner and execution_lease
+            and generation > 0 and role and epoch > 0
+            and execution_lease["task_id"] == task_id
+            and str(execution_lease["execution_role"] or "").lower() == role
+            and int(execution_lease["execution_generation"] or 0) == generation
+            and int(execution_lease["fence_epoch"] or 0) == epoch
+            and str(execution_lease["wake_id"] or "")
+            == str(metadata.get("wake_id") or ""))
+        if managed and not binding_valid:
+            c.execute(
+                "UPDATE task_claims SET status='revoked',completed_at=?,"
+                "abandon_reason='managed_execution_binding_invalid' WHERE id=?",
+                (now, claim_id))
+            c.execute(
+                "UPDATE resource_leases SET released_at=? WHERE resource_type='task' "
+                "AND task_id=? AND agent_id=? AND released_at IS NULL",
+                (now, task_id, agent_id))
+            c.execute(
+                "UPDATE work_sessions SET claim_id=NULL,updated_at=?,updated_by=? "
+                "WHERE work_session_id=?", (now, actor, session["work_session_id"]))
+            c.execute(
+                "UPDATE tasks SET status='Not Started',assignee=NULL,updated_at=? "
+                "WHERE task_id=? AND status='In Progress'", (now, task_id))
+            return {
+                "error": "managed execution binding is incomplete or ambiguous",
+                "reason": "managed_execution_binding_invalid",
+                "failure_class": "unbound_identity",
+                "work_session_id": session.get("work_session_id"),
+            }
+        if binding_valid:
+            c.execute(
+                "UPDATE task_claims SET runner_session_id=?,execution_generation=?,"
+                "execution_role=?,lease_epoch=? WHERE id=?",
+                (runner_id, generation, role, epoch, claim_id),
+            )
+            c.execute(
+                "UPDATE work_sessions SET runner_session_id=?,execution_generation=?,"
+                "execution_role=?,lease_epoch=? WHERE work_session_id=?",
+                (runner_id, generation, role, epoch, session["work_session_id"]),
+            )
     return {"work_session_id": session.get("work_session_id"),
             "status": "bound",
             "source": verdict.get("source"),
@@ -1018,7 +1088,9 @@ def _complete_claim_impl(claim_id: str, evidence: str = "", final_status: str = 
                          project: str = DEFAULT_PROJECT,
                          mission_project: str = "",
                          finalize: bool = True,
-                         push_check: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                         push_check: Optional[Dict[str, Any]] = None,
+                         _connection: Optional[sqlite3.Connection] = None,
+                         _terminal_ack: bool = False) -> Dict[str, Any]:
     now = time.time()
     evidence_obj = _store_facade()._parse_evidence(evidence)
     requested_status = (final_status or evidence_obj.get("final_status") or evidence_obj.get("status") or "").strip()
@@ -1039,11 +1111,14 @@ def _complete_claim_impl(claim_id: str, evidence: str = "", final_status: str = 
     merged_at = evidence_obj.get("merged_at")
     if merged_at is None and evidence_obj.get("merged_sha"):
         merged_at = now
-    with _conn(project) as c:
+    connection_scope = (
+        _conn(project) if _connection is None else nullcontext(_connection))
+    with connection_scope as c:
         row = c.execute("SELECT * FROM task_claims WHERE id=?", (claim_id,)).fetchone()
         if not row:
             return {"error": "claim not found", "claim_id": claim_id}
-        if row["status"] != "active":
+        allowed_status = "active"
+        if row["status"] != allowed_status:
             return {"error": "claim is not active", "claim_id": claim_id,
                     "status": row["status"]}
         task_row = c.execute("SELECT * FROM tasks WHERE task_id=?", (row["task_id"],)).fetchone()
@@ -1095,6 +1170,11 @@ def _complete_claim_impl(claim_id: str, evidence: str = "", final_status: str = 
                       (row["task_id"], actor, "task.complete_blocked_semantic",
                        json.dumps({"evidence": evidence_obj, **response}, sort_keys=True), now))
             return response
+        if not _terminal_ack:
+            handoff = _stage_managed_completion_stop_in(
+                c, row, work_session_gate, evidence_obj, requested_status, actor, now)
+            if handoff is not None:
+                return handoff
         c.execute("UPDATE task_claims SET status='completed', completed_at=? WHERE id=?",
                   (now, claim_id))
         c.execute("UPDATE resource_leases SET released_at=? WHERE resource_type='task' "
@@ -1231,6 +1311,204 @@ def _complete_claim_impl(claim_id: str, evidence: str = "", final_status: str = 
         return response
     return _finalize_complete_claim_response(
         response, evidence_obj, project, mission_project, actor)
+
+
+def _stage_managed_completion_stop_in(
+        c: sqlite3.Connection, claim: sqlite3.Row, work_session_gate: Dict[str, Any],
+        evidence: Dict[str, Any], requested_status: str, actor: str,
+        now: float) -> Optional[Dict[str, Any]]:
+    """Fence one durably-bound Connect implementation; ignore unmanaged claims."""
+    runner_id = str(claim["runner_session_id"] or "")
+    generation = int(claim["execution_generation"] or 0)
+    role = str(claim["execution_role"] or "").strip().lower()
+    epoch = int(claim["lease_epoch"] or 0)
+    if not any((runner_id, generation, role, epoch)):
+        return None  # Backward-compatible unmanaged/legacy completion.
+    if not (runner_id and generation > 0 and role == "implementation" and epoch > 0):
+        return {"completed": False, "reason": "implementation_execution_binding_invalid",
+                "failure_class": "unbound_identity", "claim_id": claim["id"],
+                "task_id": claim["task_id"]}
+    runner = c.execute(
+        "SELECT * FROM runner_sessions WHERE runner_session_id=?", (runner_id,),
+    ).fetchone()
+    metadata = json.loads(runner["metadata_json"] or "{}") if runner else {}
+    acknowledged = (metadata.get("completion_handoff") or {}).get("acknowledged_at")
+    if acknowledged:
+        return None
+    pending = metadata.get("completion_handoff") or {}
+    if (pending.get("claim_id") == claim["id"]
+            and pending.get("execution_id") == runner_id):
+        return {"completed": False, "stopping": True, "pending_host_ack": True,
+                "lifecycle_phase": "stopping", "claim_id": claim["id"],
+                "task_id": claim["task_id"], "execution_id": runner_id,
+                "status": "In Progress", "idempotent": True}
+    if not runner or str(runner["status"] or "").lower() not in {
+            "starting", "ready", "running"}:
+        return {"completed": False, "reason": "implementation_execution_not_active",
+                "failure_class": "unbound_identity", "claim_id": claim["id"],
+                "task_id": claim["task_id"], "execution_id": runner_id}
+    if (int(metadata.get("execution_generation") or 0) != generation
+            or str(metadata.get("execution_role") or "").lower() != role
+            or int(metadata.get("lease_epoch") or 0) != epoch):
+        return {"completed": False, "reason": "implementation_execution_binding_mismatch",
+                "failure_class": "unbound_identity", "claim_id": claim["id"],
+                "task_id": claim["task_id"], "execution_id": runner_id}
+    execution_lease_id = str(metadata.get("execution_id") or "")
+    execution_lease = c.execute(
+        "SELECT * FROM resource_leases WHERE id=? AND resource_type='execution' "
+        "AND released_at IS NULL", (execution_lease_id,)).fetchone()
+    if (not execution_lease
+            or execution_lease["task_id"] != claim["task_id"]
+            or str(execution_lease["execution_role"] or "").lower() != role
+            or int(execution_lease["execution_generation"] or 0) != generation
+            or int(execution_lease["fence_epoch"] or 0) != epoch):
+        return {"completed": False, "reason": "canonical_execution_lease_mismatch",
+                "failure_class": "unbound_identity", "claim_id": claim["id"],
+                "task_id": claim["task_id"], "execution_id": runner_id}
+    try:
+        pr_number = int(evidence.get("pr_number") or 0)
+    except (TypeError, ValueError):
+        pr_number = 0
+    if pr_number <= 0:
+        match = re.search(r"/pull/(\d+)(?:/|$)", str(evidence.get("pr_url") or ""))
+        pr_number = int(match.group(1)) if match else 0
+    head_sha = str(evidence.get("head_sha") or "").strip().lower()
+    if pr_number <= 0 or len(head_sha) < 7:
+        return {"completed": False, "reason": "completion_identity_incomplete",
+                "failure_class": "missing_data", "claim_id": claim["id"],
+                "task_id": claim["task_id"]}
+    work_session = work_session_gate.get("work_session") or {}
+    ws_id = str(work_session.get("work_session_id") or "")
+    next_epoch = epoch + 1
+    metadata["completion_handoff"] = {
+        "schema": "switchboard.completion_handoff.v1", "claim_id": claim["id"],
+        "task_id": claim["task_id"], "execution_id": runner_id,
+        "generation": generation, "lease_epoch": next_epoch,
+        "host_id": runner["host_id"], "host_principal_id": runner["principal_id"],
+        "work_session_id": ws_id or None, "role": role,
+        "requested_at": now, "evidence": evidence,
+        "requested_status": requested_status or None,
+    }
+    metadata["lease_surrender"] = {
+        "schema": "switchboard.runner_lease_surrender.v1", "claim_id": claim["id"],
+        "work_session_id": ws_id or None, "surrendered_at": now,
+        "reason": "completion_requested", "generation": generation,
+        "lease_epoch": next_epoch,
+    }
+    metadata["lease_epoch"] = next_epoch
+    ttl_s = max(10, int(runner["heartbeat_ttl_s"] or 60))
+    c.execute("UPDATE runner_sessions SET heartbeat_at=?,metadata_json=?,updated_at=? "
+              "WHERE runner_session_id=?",
+              (now - ttl_s, json.dumps(metadata, sort_keys=True), now, runner_id))
+    c.execute("UPDATE task_claims SET lease_epoch=? WHERE id=?",
+              (next_epoch, claim["id"]))
+    if ws_id:
+        c.execute("UPDATE work_sessions SET lease_epoch=?,updated_at=? WHERE work_session_id=?",
+                  (next_epoch, now, ws_id))
+    c.execute("UPDATE direct_session_tokens SET revoked_at=? WHERE runner_session_id=? "
+              "AND revoked_at IS NULL", (now, runner_id))
+    c.execute(
+        "UPDATE resource_leases SET lease_state='stopping',fence_epoch=?,"
+        "claimed_at=? WHERE id=? AND released_at IS NULL",
+        (next_epoch, now - int(execution_lease["ttl_seconds"] or 60),
+         execution_lease_id))
+    transition_id = "completion-" + uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"{claim['task_id']}:{pr_number}:{head_sha}:{generation}:review_handoff",
+    ).hex[:20]
+    c.execute(
+        "INSERT OR IGNORE INTO task_execution_completion_phases("
+        "transition_id,task_id,pr_number,head_sha,runner_generation,phase,outcome,"
+        "evidence_json,failure_json,actor,transitioned_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (transition_id, claim["task_id"], pr_number, head_sha, generation,
+         "review_handoff", "pending", json.dumps({
+             "completion_evidence": evidence, "execution_id": runner_id,
+             "lease_epoch": next_epoch,
+         }, sort_keys=True), "{}", actor, now),
+    )
+    c.execute("INSERT INTO activity(task_id,actor,kind,payload,created_at) VALUES (?,?,?,?,?)",
+              (claim["task_id"], actor, "task.claim.stopping",
+               json.dumps({"claim_id": claim["id"], "execution_id": runner_id,
+                           "generation": generation, "lease_epoch": next_epoch},
+                          sort_keys=True), now))
+    return {"completed": False, "stopping": True, "pending_host_ack": True,
+            "lifecycle_phase": "stopping", "claim_id": claim["id"],
+            "task_id": claim["task_id"], "execution_id": runner_id,
+            "status": "In Progress"}
+
+
+def terminal_ack_claim_completion_in(c: sqlite3.Connection, runner_session_id: str,
+                                     actor: str, principal_id: str,
+                                     narrow_host: bool, now: float,
+                                     project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+    """Authorize exact host death and run canonical completion atomically."""
+    runner = c.execute("SELECT * FROM runner_sessions WHERE runner_session_id=?",
+                       (runner_session_id,)).fetchone()
+    if not runner or str(runner["status"] or "").lower() not in {
+            "completed", "stopped", "failed", "expired", "killed", "exited"}:
+        return None
+    metadata = json.loads(runner["metadata_json"] or "{}")
+    handoff = metadata.get("completion_handoff") or {}
+    if str(handoff.get("execution_id") or "") != runner_session_id:
+        return None
+    if (not narrow_host
+            or str(metadata.get("terminalized_by") or "") not in {
+                "runner_lease_expiry", "host_supervisor"}
+            or str(handoff.get("host_id") or "") != str(runner["host_id"] or "")
+            or str(handoff.get("host_principal_id") or "") != principal_id
+            or int(handoff.get("generation") or 0)
+            != int(metadata.get("execution_generation") or 0)
+            or int(handoff.get("lease_epoch") or 0)
+            != int(metadata.get("lease_epoch") or 0)):
+        return None
+    execution_lease = c.execute(
+        "SELECT * FROM resource_leases WHERE id=? AND resource_type='execution'",
+        (str(metadata.get("execution_id") or ""),)).fetchone()
+    if (not execution_lease
+            or str(execution_lease["lease_state"] or "") != "stopping"
+            or int(execution_lease["execution_generation"] or 0)
+            != int(handoff.get("generation") or 0)
+            or int(execution_lease["fence_epoch"] or 0)
+            != int(handoff.get("lease_epoch") or 0)):
+        return None
+    claim_id = str(handoff.get("claim_id") or "")
+    claim = c.execute("SELECT * FROM task_claims WHERE id=?", (claim_id,)).fetchone()
+    if not claim:
+        return None
+    if claim["status"] == "completed":
+        return {"completed": True, "idempotent": True, "claim_id": claim_id}
+    if claim["status"] != "active" or claim["task_id"] != handoff.get("task_id"):
+        return None
+    metadata["completion_handoff"] = {**handoff, "acknowledged_at": now,
+                                      "acknowledged_by": actor}
+    c.execute("UPDATE runner_sessions SET metadata_json=?, updated_at=? "
+              "WHERE runner_session_id=?",
+              (json.dumps(metadata, sort_keys=True), now, runner_session_id))
+    c.execute(
+        "UPDATE task_execution_completion_phases SET outcome='succeeded',"
+        "evidence_json=?,actor=?,transitioned_at=? WHERE task_id=? "
+        "AND runner_generation=? AND phase='review_handoff' AND outcome='pending'",
+        (json.dumps({
+            "completion_evidence": handoff.get("evidence") or {},
+            "execution_id": runner_session_id,
+            "lease_epoch": handoff.get("lease_epoch"),
+            "terminal_ack": {"host_id": runner["host_id"], "acknowledged_at": now},
+        }, sort_keys=True), actor, now, claim["task_id"],
+         int(handoff.get("generation") or 0)),
+    )
+    evidence = (
+        handoff.get("evidence")
+        if isinstance(handoff.get("evidence"), dict) else {})
+    completion = _complete_claim_impl(
+        claim_id, evidence=evidence,
+        final_status=str(handoff.get("requested_status") or ""),
+        actor=actor, project=project, finalize=False, _connection=c,
+        _terminal_ack=True)
+    if not completion.get("completed"):
+        raise RuntimeError(
+            "terminal acknowledgement could not finalize canonical completion")
+    return {"completed": True, "idempotent": False, "claim_id": claim_id,
+            "evidence": evidence, "completion": completion}
 
 
 def _surrender_claim_runner_leases_in(

@@ -491,6 +491,7 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
             generation_ref=(f"{role}:{source_sha.lower()}"
                             if role in {"review_merge", "remediation"}
                             and source_sha else ""),
+            role=role,
         )
     else:
         # Test/adapter seam retained while all product surfaces use Connect.

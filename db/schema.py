@@ -325,7 +325,13 @@ def apply_schema(c):
             names         TEXT NOT NULL,
             claimed_at    REAL NOT NULL,
             ttl_seconds   INTEGER NOT NULL DEFAULT 1800,
-            released_at   REAL
+            released_at   REAL,
+            execution_role TEXT,
+            execution_generation INTEGER,
+            fence_epoch INTEGER,
+            lease_state TEXT,
+            head_sha TEXT,
+            wake_id TEXT
         );
         CREATE INDEX IF NOT EXISTS ix_resource_leases_agent ON resource_leases(agent_id);
         CREATE INDEX IF NOT EXISTS ix_resource_leases_type ON resource_leases(resource_type, released_at);
@@ -340,6 +346,10 @@ def apply_schema(c):
             completed_at   REAL,
             abandon_reason TEXT,
             idem_key       TEXT
+            ,runner_session_id TEXT
+            ,execution_generation INTEGER
+            ,execution_role TEXT
+            ,lease_epoch INTEGER
         );
         CREATE INDEX IF NOT EXISTS ix_task_claims_active
             ON task_claims(task_id, status, expires_at);
@@ -1033,6 +1043,10 @@ def apply_schema(c):
             updated_at           REAL NOT NULL,
             expires_at           REAL,
             completed_at         REAL
+            ,runner_session_id TEXT
+            ,execution_generation INTEGER
+            ,execution_role TEXT
+            ,lease_epoch INTEGER
         );
         CREATE INDEX IF NOT EXISTS ix_work_sessions_task
             ON work_sessions(task_id, status, updated_at);

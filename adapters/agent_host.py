@@ -36,6 +36,7 @@ import time
 import urllib.parse
 import urllib.request
 import urllib.error
+from pathlib import Path
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
@@ -470,6 +471,8 @@ def default_inventory():
     cloud_enabled = runtime == "codex" and bool(os.environ.get("PM_CODEX_CLOUD_ENVIRONMENT_ID"))
     profiles = ["ixp.v1", "txp.dispatch.v0"]
     capabilities = ["docs", "python", "github", "tests"]
+    if _truthy(os.environ.get("PM_RUNNER_LEASE_ENFORCEMENT")):
+        capabilities.extend(["execution_lease_v2", "runner_lease_enforcement"])
     # Fleet workers advertise a host-owned capability profile.  The wake payload may
     # select from this inventory, but it cannot add capabilities to the host.  Keeping
     # this in configuration lets co-general/co-build use the same immutable AMI while
@@ -904,7 +907,8 @@ def launch_command(wake, inventory, runner_session_id=""):
         raise ValueError("wake asks for global claim_next but host policy forbids global work")
     if mode == "connect":
         assignment_data = dict((wake.get("policy") or {}).get("assignment") or {})
-        if assignment_data.pop("schema", "") != "switchboard.connect.assignment.v1":
+        assignment_schema = assignment_data.pop("schema", "")
+        if assignment_schema != "switchboard.connect.assignment.v1":
             raise ValueError("connect assignment schema is invalid")
         limits = assignment_data.get("limits") or {}
         assignment_data["limits"] = ResourceLimits(**limits)
@@ -1160,7 +1164,8 @@ def register_runner_session(rec, wake, inventory):
     execution = policy.get("execution_binding") or {}
     assignment = policy.get("assignment") or {}
     lifecycle = policy.get("lifecycle") or {}
-    connect_assignment = assignment.get("schema") == "switchboard.connect.assignment.v1"
+    connect_assignment = (
+        assignment.get("schema") == "switchboard.connect.assignment.v1")
     metadata = {
         "wake_id": wake.get("wake_id"),
         "wake_mode": rec.get("wake_mode"),
@@ -1182,6 +1187,11 @@ def register_runner_session(rec, wake, inventory):
             "principal_ref": assignment.get("principal_ref"),
             "work_ref": assignment.get("work_ref"),
             "workspace_ref": assignment.get("workspace_ref"),
+            "execution_id": lifecycle.get("execution_id"),
+            "execution_generation": lifecycle.get("generation"),
+            "execution_role": lifecycle.get("role"),
+            "execution_head_sha": lifecycle.get("head_sha"),
+            "lease_epoch": lifecycle.get("fence_epoch"),
         } if connect_assignment else {
             "role": assignment.get("role") or lifecycle.get("role") or "implementation",
             "lifecycle_role": assignment.get("role") or lifecycle.get("role") or "implementation",
@@ -1898,14 +1908,14 @@ def reap_finished_or_idle_runners(inventory, *, now=None):
 def expire_runner_leases(inventory, *, now=None):
     """Enforce the single process-stop clock: the renewable runner lease.
 
-    Deployments begin in observe-only mode. Set PM_RUNNER_LEASE_ENFORCEMENT=1
-    after the 24-hour observation window to allow expired leases to stop their
-    supervised process. No task/claim/ack/idle state participates.
+    Enforcement remains an explicit deployment capability. S20 owns the
+    observation/default-on rollout; BUG-155 only consumes an advertised,
+    already-enabled lease authority.
     """
     now = time.time() if now is None else float(now)
     enforce = _truthy(os.environ.get("PM_RUNNER_LEASE_ENFORCEMENT"))
     host_id = str((inventory or {}).get("host_id") or "")
-    outcomes = []
+    outcomes = _drain_pending_stop_receipts(host_id)
     for session in _drain_runners(host_id):
         if session.get("alive") is not True or not session.get("stale"):
             continue
@@ -1922,7 +1932,7 @@ def expire_runner_leases(inventory, *, now=None):
         if ok:
             _drop_host_bridge(runner_id)
             metadata = dict(session.get("metadata") or {})
-            terminal = _try("POST", P_HEARTBEAT_RUNNER, {
+            receipt = {
                 "project": PROJECT, "runner_session_id": runner_id,
                 "host_id": host_id, "task_id": task_id,
                 "claim_id": session.get("claim_id") or "",
@@ -1931,12 +1941,72 @@ def expire_runner_leases(inventory, *, now=None):
                 "metadata": {**metadata, "terminalized_by": "runner_lease_expiry",
                              "lease_expired_at": now,
                              "failure_reason": "runner heartbeat lease expired"},
-            })
+            }
+            # The process death and central acknowledgement are separate durable
+            # steps.  Persist first so a network loss or daemon restart cannot
+            # strand a successfully killed execution in Stopping forever.
+            _persist_pending_stop_receipt(receipt)
+            terminal = _try("POST", P_HEARTBEAT_RUNNER, receipt)
+            if terminal and not terminal.get("error"):
+                _delete_pending_stop_receipt(runner_id)
             outcome["expired"] = bool(terminal and not terminal.get("error"))
         else:
             outcome["expired"] = False
             outcome["error"] = (stopped or {}).get("error")
         outcomes.append(outcome)
+    return outcomes
+
+
+def _pending_stop_receipt_dir():
+    root = Path(os.environ.get("PM_RUNNER_DIR", ".switchboard/runner")).resolve()
+    path = root / "_pending_stops"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _pending_stop_receipt_path(runner_session_id):
+    safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(runner_session_id or ""))
+    return _pending_stop_receipt_dir() / f"{safe_id}.json"
+
+
+def _persist_pending_stop_receipt(receipt):
+    path = _pending_stop_receipt_path(receipt.get("runner_session_id"))
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(receipt, sort_keys=True), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _delete_pending_stop_receipt(runner_session_id):
+    try:
+        _pending_stop_receipt_path(runner_session_id).unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _drain_pending_stop_receipts(host_id):
+    """Retry exact terminal acknowledgements even after local process removal."""
+    outcomes = []
+    for path in sorted(_pending_stop_receipt_dir().glob("*.json")):
+        try:
+            receipt = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if str(receipt.get("host_id") or "") != str(host_id or ""):
+            continue
+        terminal = _try("POST", P_HEARTBEAT_RUNNER, receipt)
+        ok = bool(terminal and not terminal.get("error"))
+        if ok:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+        outcomes.append({
+            "runner_session_id": receipt.get("runner_session_id"),
+            "task_id": receipt.get("task_id"),
+            "reason": "pending_terminal_ack_retry",
+            "expired": ok,
+            "error": None if ok else (terminal or {}).get("error"),
+        })
     return outcomes
 
 
@@ -2062,7 +2132,7 @@ def renew_live_direct_runners(inventory):
                 metadata.get("failure_reason")
                 or "supervisor reported the process exited"
             ).strip()
-            terminal = _try("POST", P_HEARTBEAT_RUNNER, {
+            receipt = {
                 "project": PROJECT,
                 "runner_session_id": session.get("runner_session_id"),
                 "host_id": host_id,
@@ -2071,7 +2141,11 @@ def renew_live_direct_runners(inventory):
                 "metadata": {**metadata,
                              "failure_reason": reason,
                              "terminalized_by": "host_supervisor"},
-            })
+            }
+            _persist_pending_stop_receipt(receipt)
+            terminal = _try("POST", P_HEARTBEAT_RUNNER, receipt)
+            if terminal and not terminal.get("error"):
+                _delete_pending_stop_receipt(session.get("runner_session_id"))
             wake_repaired = False
             # SIMPLIFY-3 / BUG-102: same tick — if a wake is bound, force
             # complete_wake(started=false) so claimed limbo cannot outlive the
