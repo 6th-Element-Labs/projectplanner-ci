@@ -749,7 +749,7 @@ const TeepPlan = {
         this._startFleetLive();
         this._loadFleetDock(true);
     },
-    _fleetSignature(runners, prs) {
+    _fleetSignature(runners, prs, deployments) {
         const r = (runners || []).map((s) => [
             s.runner_session_id || '', s.status || '', s.stale ? 1 : 0,
             ((s.last_snapshot || {}).captured_at) || 0,
@@ -759,34 +759,41 @@ const TeepPlan = {
             x.queue_position || 0, x.blocked ? 1 : 0, x.updated_at || 0,
             x.draft ? 1 : 0, x.stalled ? 1 : 0, x.auto_merge ? 1 : 0, (x.ci_failing || [])[0] || '',
         ]).sort((a, b) => Number(a[0]) - Number(b[0]));
-        return JSON.stringify([r, p]);
+        const d = ((deployments || {}).deployments || []).map((x) => [
+            x.number || 0, x.status || '', x.merge_sha || '',
+            x.deploy_task_id || '', x.deploy_task_status || '',
+        ]).sort((a, b) => Number(a[0]) - Number(b[0]));
+        return JSON.stringify([r, p, d, Number((deployments || {}).undeployed_count || 0)]);
     },
     async _loadFleetDock(force) {
         const host = document.getElementById('fleet-dock');
         if (!host || this._fleetLoadBusy) return;
         this._fleetLoadBusy = true;
-        let runners = [], prPayload = {};
+        let runners = [], prPayload = {}, deploymentPayload = {};
         try {
             const p = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`;
             // Runners come from the SAME feed the Fleet page renders (_fetchFleetRunners)
             // — one query, one payload, no dock-only filtering, so the dock can never
             // show a different fleet than the page. PRs are cached server-side (60s
             // GitHub sweep, open_prs.py), so the 10s poll only ever hits the cache.
-            const [runnerList, pRes] = await Promise.all([
+            const [runnerList, pRes, dRes] = await Promise.all([
                 this._fetchFleetRunners(force),
                 fetch(`/ixp/v1/open_prs?${p}`, { cache: 'no-store' }),
+                fetch(`/ixp/v1/deployments?${p}`, { cache: 'no-store' }),
             ]);
             runners = runnerList;
             prPayload = await pRes.json();
+            deploymentPayload = await dRes.json();
         } catch (e) { this._fleetLoadBusy = false; return; }
         const prs = prPayload.prs || [];
         this._dockPrUnavailable = prPayload.unavailable || '';
-        const sig = this._fleetSignature(runners, prs);
+        this._dockDeploymentUnavailable = deploymentPayload.unavailable || '';
+        const sig = this._fleetSignature(runners, prs, deploymentPayload);
         const changed = sig !== this._fleetSig;
         this._fleetLoadBusy = false;
         if (force || changed) {
             this._fleetSig = sig;
-            this._renderFleetDock(runners, prs);
+            this._renderFleetDock(runners, prs, deploymentPayload);
         }
     },
     // A backgrounded tab should keep every open deliverable/fleet view live, but poll
@@ -1028,24 +1035,86 @@ const TeepPlan = {
             </div>
         </div>`;
     },
-    _renderFleetDock(runners, prs) {
+    _dockDeploymentHtml(x) {
+        const state = String(x.status || 'undeployed');
+        const labels = {
+            undeployed: ['Un-deployed', 'red', 'cloud-off'],
+            failed: ['Deploy failed', 'red', 'alert-triangle'],
+            queued: ['Queued', 'azure', 'clock'],
+            deploying: ['Deploying', 'yellow', 'loader'],
+            deployed: ['Deployed', 'green', 'check'],
+        };
+        const [label, tone, icon] = labels[state] || labels.undeployed;
+        const task = x.deploy_task_id
+            ? ` · ${this.esc(x.deploy_task_id)}${x.deploy_task_status ? ` (${this.esc(x.deploy_task_status)})` : ''}`
+            : '';
+        const pending = state === 'queued' || state === 'deploying';
+        const deploy = x.deployed ? '' : `<button type="button" class="btn btn-sm ${pending ? 'btn-outline-secondary' : 'btn-primary'} ms-auto"
+            data-deploy-pr="${this.esc(String(x.number))}" data-deploy-title="${this.esc(x.title || '')}"${pending ? ' disabled' : ''}>
+            <i class="ti ti-${pending ? 'clock' : 'rocket'} me-1"></i>${pending ? label : 'Deploy'}</button>`;
+        return `<div class="p-2 border rounded mb-2" style="border-left:2px solid var(--tblr-${tone}) !important;border-top-left-radius:0;border-bottom-left-radius:0;">
+            <div class="d-flex align-items-center gap-2">
+                ${this._dockBadge(label, tone, icon)}
+                <span class="ms-auto text-secondary font-monospace" style="font-size:12px;white-space:nowrap;">#${this.esc(String(x.number))} · merged ${this.esc(this._fleetAge(x.merged_at))}</span>
+            </div>
+            <a href="${this.esc(x.url)}" target="_blank" rel="noopener" class="d-block mt-1 text-reset text-truncate" style="font-size:13px;">${this.esc(x.title || `PR #${x.number}`)} <i class="ti ti-external-link text-secondary" style="font-size:12px;"></i></a>
+            <div class="mt-2 d-flex align-items-center gap-2">
+                <span class="text-secondary font-monospace text-truncate" style="font-size:11px;">merge ${this.esc(String(x.merge_sha || '').slice(0, 7))}${task}</span>
+                ${deploy}
+            </div>
+        </div>`;
+    },
+    async _requestDeployment(prNumber, title) {
+        const queued = document.querySelector(`[data-deploy-pr="${CSS.escape(String(prNumber))}"]`);
+        if (!window.confirm(`Deploy current canonical master to production?\n\nRequested from PR #${prNumber}: ${title || ''}\n\nAn authorized agent will run the fail-closed deployment and production verification.`)) return;
+        if (queued) {
+            queued.disabled = true;
+            queued.innerHTML = '<i class="ti ti-loader me-1"></i>Queuing…';
+        }
+        try {
+            const res = await fetch('/api/deployments/request', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    project: window.PM_PROJECT || 'maxwell',
+                    pr_number: Number(prNumber),
+                }),
+            });
+            const body = await res.json();
+            if (!res.ok) throw new Error(body.detail?.message || body.detail || body.message || `HTTP ${res.status}`);
+            await this._loadFleetDock(true);
+        } catch (error) {
+            window.alert(`Could not queue deployment: ${error.message || error}`);
+            if (queued) {
+                queued.disabled = false;
+                queued.innerHTML = '<i class="ti ti-rocket me-1"></i>Deploy';
+            }
+        }
+    },
+    _renderFleetDock(runners, prs, deploymentPayload) {
         const host = document.getElementById('fleet-dock');
         if (!host) return;
         runners = runners || []; prs = prs || [];
-        if (!runners.length && !prs.length && !this._dockPrUnavailable) { host.innerHTML = ''; return; }
+        deploymentPayload = deploymentPayload || {};
+        const deployments = deploymentPayload.deployments || [];
+        const undeployed = Number(deploymentPayload.undeployed_count || 0);
+        if (!runners.length && !prs.length && !deployments.length
+                && !this._dockPrUnavailable && !this._dockDeploymentUnavailable) {
+            host.innerHTML = ''; return;
+        }
         const running = runners.filter((s) => !s.stale && s.status === 'running').length;
         const deadRunners = runners.filter((s) => s.stale || s.status !== 'running');
         const blockedPrs = prs.filter((x) => x.blocked);
         const nAttn = deadRunners.length + blockedPrs.length;
         const collapsed = this._dockCollapsed == null ? (nAttn === 0) : this._dockCollapsed;
         const anchor = 'position:fixed;right:1rem;bottom:1rem;z-index:1031;';
-        const rerender = () => this._renderFleetDock(runners, prs);
+        const rerender = () => this._renderFleetDock(runners, prs, deploymentPayload);
         if (collapsed) {
             const dot = nAttn ? 'var(--tblr-danger)' : 'var(--tblr-success)';
             host.innerHTML = `<button id="fleet-dock-pill" class="btn btn-sm shadow-sm" style="${anchor}border-radius:999px;display:inline-flex;align-items:center;gap:8px;">
                 <span style="width:8px;height:8px;border-radius:50%;background:${dot};"></span>
                 <span class="fw-medium">${nAttn ? this.esc(String(nAttn)) + ' blocked' : 'Fleet clear'}</span>
-                <span class="text-secondary small">· ${running} working · ${prs.length} PR${prs.length === 1 ? '' : 's'}</span>
+                <span class="text-secondary small">· ${running} working · ${prs.length} PR${prs.length === 1 ? '' : 's'}${undeployed ? ` · ${undeployed} un-deployed` : ''}</span>
                 <i class="ti ti-chevron-up"></i></button>`;
             document.getElementById('fleet-dock-pill').addEventListener('click', () => { this._dockCollapsed = false; rerender(); });
             return;
@@ -1059,17 +1128,23 @@ const TeepPlan = {
             body = runners.length
                 ? `<div class="p-2">${runners.map((s) => this._dockRunnerHtml(s)).join('')}</div>`
                 : `<div class="p-3 text-secondary small">No live runners for this project.</div>`;
-        } else if (this._dockPrUnavailable) {
+        } else if (tab === 'prs' && this._dockPrUnavailable) {
             const why = this._dockPrUnavailable === 'no_github_token'
                 ? 'The server has no GitHub token configured, so PR status is unavailable.'
                 : (this._dockPrUnavailable === 'no_canonical_repo'
                     ? 'This project has no canonical GitHub repo configured.'
                     : 'GitHub is unreachable right now. Status will return on the next refresh.');
             body = `<div class="p-3 text-secondary small">${this.esc(why)}</div>`;
-        } else {
+        } else if (tab === 'prs') {
             body = prs.length
                 ? `<div class="p-2">${prs.map((x) => this._dockPrHtml(x)).join('')}</div>`
                 : `<div class="p-3 text-secondary small">No open PRs on the canonical repo.</div>`;
+        } else if (this._dockDeploymentUnavailable) {
+            body = `<div class="p-3 text-secondary small">Deployment status is unavailable: ${this.esc(this._dockDeploymentUnavailable)}</div>`;
+        } else {
+            body = deployments.length
+                ? `<div class="p-2">${deployments.map((x) => this._dockDeploymentHtml(x)).join('')}</div>`
+                : `<div class="p-3 text-secondary small">No recently merged PRs.</div>`;
         }
         const attnBadge = nAttn
             ? `<span class="ms-auto small text-danger"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:currentColor" class="me-1"></span>${nAttn} blocked</span>`
@@ -1086,6 +1161,7 @@ const TeepPlan = {
             <div class="d-flex px-2 border-bottom">
                 ${tabBtn('runners', 'Runners', runners.length)}
                 ${tabBtn('prs', 'Pull requests', prs.length)}
+                ${tabBtn('deployments', 'Deployments', undeployed)}
             </div>
             ${body}</div>`;
         host.querySelectorAll('[data-dock-tab]').forEach((b) =>
@@ -1095,6 +1171,9 @@ const TeepPlan = {
                 b.getAttribute('data-runner-task'), b.getAttribute('data-runner-action'))));
         host.querySelectorAll('[data-runner-watch-task]').forEach((b) =>
             b.addEventListener('click', () => this.openRunnerSessionPanel(b.getAttribute('data-runner-watch-task'))));
+        host.querySelectorAll('[data-deploy-pr]').forEach((b) =>
+            b.addEventListener('click', () => this._requestDeployment(
+                b.getAttribute('data-deploy-pr'), b.getAttribute('data-deploy-title'))));
         document.getElementById('fleet-dock-min').addEventListener('click', () => { this._dockCollapsed = true; rerender(); });
         document.getElementById('fleet-dock-refresh').addEventListener('click', () => this._loadFleetDock(true));
     },
