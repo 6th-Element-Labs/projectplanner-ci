@@ -146,7 +146,11 @@ def register_auth_gate(app, *, global_user_scopes: GlobalUserScopes,
         is_read = method in {"GET", "HEAD"}
         is_write = method in {"POST", "PATCH", "DELETE"}
         protocol = path.startswith(("/ixp/", "/txp/", "/tally/"))
-        gated = (is_read and _protected_read_path(path) and not protocol) or (is_write and not protocol)
+        # BUG-156: protocol GETs carry their project in the query string just like
+        # operator /api reads, so they belong behind the same global read gate.
+        # Protocol writes remain handler-authenticated because their project may
+        # live only in the JSON body.
+        gated = (is_read and _protected_read_path(path)) or (is_write and not protocol)
         if not gated:
             return _attach_server_timing(await call_next(request), started_at)
 
