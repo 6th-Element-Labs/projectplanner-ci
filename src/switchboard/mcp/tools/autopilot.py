@@ -46,7 +46,7 @@ def get_autopilot(deliverable_id: str, project: str = "maxwell",
         "get_autopilot", deliverable_id, project=project, profile_id=profile_id))
 
 
-def control_autopilot(ctx: Context, deliverable_id: str = "", project: str = "maxwell",
+def control_autopilot(deliverable_id: str = "", ctx: Context = None, project: str = "maxwell",
                       action: str = "start", scope_type: str = "deliverable",
                       task_project: str = "", task_id: str = "",
                       runtime: str = "codex",
