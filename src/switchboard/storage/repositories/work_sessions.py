@@ -419,6 +419,13 @@ def _work_session_health(session: Dict[str, Any],
             bool(preflight.get("pending"))
             or preflight.get("source") == "agent_host_pending"
         )
+        # BUG-159: same principle, wider case. When the workspace simply is not on
+        # the coordinator's filesystem, the recorded report is an explicit unknown
+        # rather than a failed gate, so it must not mark the session unsafe.
+        unverifiable_from_coordinator = (
+            bool(preflight.get("unverifiable"))
+            or preflight.get("source") == "coordinator_unverifiable"
+        )
         if pending_host_attestation:
             findings.append(_session_health_finding(
                 "work_session_preflight_pending",
@@ -429,6 +436,20 @@ def _work_session_health(session: Dict[str, Any],
                 blocking=False,
                 repair="Wait for the Agent Host heartbeat to attach its signed repo "
                        "attestation (BUG-97), then rerun preflight_work_session.",
+                work_session_id=work_session_id,
+                preflight_verdict=verdict or None,
+            ))
+        elif unverifiable_from_coordinator:
+            findings.append(_session_health_finding(
+                "work_session_preflight_unverifiable",
+                "Workspace is not on the coordinator's filesystem, so its git state "
+                "is unknown here; this is not proof of a missing worktree.",
+                "missing_data",
+                severity="medium",
+                blocking=False,
+                repair="Let the owning Agent Host attach its signed repo attestation "
+                       "(BUG-97) and rerun preflight_work_session, or record observed "
+                       "host-local git evidence in completion evidence.",
                 work_session_id=work_session_id,
                 preflight_verdict=verdict or None,
             ))
@@ -1454,9 +1475,23 @@ def preflight_work_session(work_session_id: str, actor: str = "system",
                 expected_branch=expected_branch or session.get("branch") or "",
                 expected_base_ref=expected_base_ref,
             )
+        if report is None and not _coordinator_owns_workspace(worktree_path, project=project):
+            # BUG-159: os.path.isdir() returning False here proves nothing about a
+            # workspace that lives on another machine -- only that the coordinator
+            # cannot see it. Claiming worktree_missing would assert an unobservable
+            # fact and flip a healthy session to unsafe. Report the honest state
+            # instead: unverifiable from here, non-blocking. Completion and merge
+            # still demand a real host attestation or observed evidence, so this
+            # widens truthfulness without widening what can land unverified.
+            report = _unverifiable_remote_preflight(
+                session,
+                project=project,
+                expected_branch=expected_branch or session.get("branch") or "",
+                expected_base_ref=expected_base_ref,
+            )
         if report is None:
-            # Preserve the original fail-closed result when no fresh, exact host
-            # attestation is bound and no live host runner owns the worktree.
+            # Coordinator-owned (managed) workspaces are genuinely stat-able here,
+            # so a missing path is real and must still fail closed.
             report = _store_facade().repo_preflight(
                 worktree_path,
                 project=project,
@@ -1678,6 +1713,76 @@ def _host_owned_pending_preflight(session: Dict[str, Any], *, project: str,
         "ok": False,
         "verdict": "warn",
         "validated_at": now,
+    }
+
+
+def _coordinator_owns_workspace(worktree_path: str, *, project: str) -> bool:
+    """True when this workspace is one the coordinator itself hosts.
+
+    Managed workspaces are created by the coordinator under ``workspace_root``,
+    so it can stat them and a missing path there is real. Anything else lives on
+    an enrolled host or an operator machine, where the coordinator's filesystem
+    says nothing at all about whether the worktree exists.
+    """
+    path = str(worktree_path or "").strip()
+    if not path:
+        return False
+    root = _managed_workspace_root(project, {})
+    if not root:
+        return False
+    path_abs = os.path.abspath(os.path.expanduser(path))
+    root_abs = os.path.abspath(os.path.expanduser(root))
+    try:
+        return os.path.commonpath([root_abs, path_abs]) == root_abs
+    except ValueError:
+        return False
+
+
+def _unverifiable_remote_preflight(session: Dict[str, Any], *, project: str,
+                                   expected_branch: str = "",
+                                   expected_base_ref: str = "") -> Dict[str, Any]:
+    """Non-blocking report for a workspace the coordinator cannot observe.
+
+    BUG-159. This is deliberately *not* a pass: nothing has been verified. It is
+    the honest middle state between "verified clean" and the false claim that a
+    remote worktree is missing. The session stays usable, the gap stays visible,
+    and the code_strict completion/merge gates still require a real attestation
+    or observed evidence before anything lands.
+    """
+    worktree_path = str(session.get("worktree_path") or session.get("clone_path") or "")
+    finding = {
+        "code": "work_session_preflight_unverifiable",
+        "message": ("Workspace is not on the coordinator's filesystem, so its git "
+                    "state cannot be verified from here. This is an unknown, not a "
+                    "missing worktree."),
+        "failure_class": "missing_data",
+        "severity": "medium",
+        "blocking": False,
+        "repair": ("Let the owning Agent Host attach its signed repo attestation "
+                   "(BUG-97) and rerun preflight_work_session, or record observed "
+                   "host-local git evidence in completion evidence."),
+        "details": {"worktree_path": worktree_path,
+                    "coordinator_can_stat": False},
+    }
+    return {
+        "schema": "switchboard.repo_preflight.v1",
+        "source": "coordinator_unverifiable",
+        "unverifiable": True,
+        "project": project,
+        "repo_role": session.get("repo_role") or "canonical",
+        "repo_path": worktree_path,
+        "expected_branch": expected_branch,
+        "expected_base_ref": expected_base_ref,
+        "branch": str(session.get("branch") or ""),
+        "head_sha": str(session.get("head_sha") or ""),
+        "base_sha": str(session.get("base_sha") or ""),
+        "upstream": str(session.get("upstream") or ""),
+        "dirty": False,
+        "conflict_marker_count": 0,
+        "findings": [finding],
+        "ok": False,
+        "verdict": "warn",
+        "validated_at": time.time(),
     }
 
 
