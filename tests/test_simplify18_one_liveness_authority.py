@@ -159,6 +159,33 @@ ok(live.heartbeat_is_fenced(
 ok(live.heartbeat_is_fenced(
        {"metadata": {"lease_epoch": 7}}, claimed_epoch=7) is False,
    "the current fence epoch may renew")
+ok(live.heartbeat_is_fenced(
+       {"metadata": {"lease_epoch": 7}}, claimed_epoch="forged") is True,
+   "a malformed fence epoch fails closed")
+
+# The production runner write boundary, not merely the pure helper, enforces the
+# exact epoch before heartbeat_at or any other canonical state can be mutated.
+before_fenced_heartbeat = store.get_runner_session(
+    "run-s18-live", project=P)["heartbeat_at"]
+stale_renewal = store.upsert_runner_session({
+    "runner_session_id": "run-s18-live",
+    "status": "running",
+    "metadata": {"lease_epoch": 6},
+}, actor="simplify18-test", project=P)
+ok(stale_renewal.get("error_code") == "runner_generation_fenced",
+   "authoritative runner upsert rejects an old fence epoch")
+after_fenced_heartbeat = store.get_runner_session(
+    "run-s18-live", project=P)["heartbeat_at"]
+ok(after_fenced_heartbeat == before_fenced_heartbeat,
+   "rejected old-epoch heartbeat cannot renew the canonical row")
+current_renewal = store.upsert_runner_session({
+    "runner_session_id": "run-s18-live",
+    "status": "running",
+    "metadata": {"lease_epoch": 7},
+}, actor="simplify18-test", project=P)
+ok(current_renewal.get("error_code") is None
+   and current_renewal["heartbeat_at"] >= before_fenced_heartbeat,
+   "authoritative runner upsert accepts the exact current fence epoch")
 ok(all(identity.get(field) is not None for field in (
        "execution_id", "generation", "role", "fence_epoch", "expires_at")),
    "Fleet execution identity exposes generation, role, fence, and expiry")

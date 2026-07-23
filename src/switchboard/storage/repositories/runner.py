@@ -2009,6 +2009,25 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
     terminalizing_fenced_generation = (
         incoming_metadata.get("terminalized_by") in {
             "runner_lease_expiry", "host_supervisor"})
+    # SIMPLIFY-18 / ADR-0008 C2-C3: runner_sessions is the authoritative
+    # heartbeat boundary. Once a managed generation has a server-owned fence,
+    # every nonterminal renewal must present that exact epoch. Checking only a
+    # helper or the later lease-surrender handoff leaves a window where an old
+    # process can renew the canonical row after its generation was fenced.
+    if (previous_row and previous_metadata.get("execution_id")
+            and not terminalizing_fenced_generation
+            and execution_liveness.heartbeat_is_fenced(
+                {"metadata": previous_metadata},
+                claimed_epoch=incoming_metadata.get("lease_epoch"))):
+        return {
+            "error": "execution generation is fenced",
+            "error_code": "runner_generation_fenced",
+            "failure_class": "unbound_identity",
+            "runner_session_id": runner_session_id,
+            "claimed_lease_epoch": incoming_metadata.get("lease_epoch"),
+            "current_lease_epoch": execution_liveness.fence_epoch_of(
+                {"metadata": previous_metadata}),
+        }
     completion_handoff = previous_metadata.get("completion_handoff") or {}
     if lease_surrender and terminalizing_fenced_generation and completion_handoff:
         mismatched = []

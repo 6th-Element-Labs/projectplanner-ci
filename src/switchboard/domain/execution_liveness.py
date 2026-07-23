@@ -127,19 +127,21 @@ def fence_epoch_of(row: Mapping[str, Any]) -> int:
 
 
 def heartbeat_is_fenced(row: Mapping[str, Any], *, claimed_epoch: Any) -> bool:
-    """True when a heartbeat carries a stale fence epoch and must be refused.
+    """True when a heartbeat does not carry the exact current fence epoch.
 
     A superseded generation may still have a live process briefly. Its renewals
     must not resurrect the lease, or completion could never be terminal
-    (ADR-0008 C2/C3).
+    (ADR-0008 C2/C3). Future and malformed epochs also fail closed: the fence is
+    server-owned, so a host may renew only the exact epoch it was assigned.
     """
+    current = fence_epoch_of(row)
     if claimed_epoch in (None, ""):
-        return False
+        return current > 0
     try:
         claimed = int(claimed_epoch)
     except (TypeError, ValueError):
         return True
-    return claimed < fence_epoch_of(row)
+    return claimed != current
 
 
 def _int_or_none(value: Any) -> Optional[int]:
