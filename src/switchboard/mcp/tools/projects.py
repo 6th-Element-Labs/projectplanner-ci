@@ -373,6 +373,45 @@ def set_project_repo_topology(ctx: Context, project: str = "maxwell",
     return services.dumps(result)
 
 
+def get_project_execution_policy(ctx: Context, project: str = "maxwell") -> str:
+    """Read the project execution policy every runner must satisfy.
+
+    Returns ``switchboard.project_execution_policy.v1``: allowed runtimes, workspace
+    repo role and isolation, host classes, trust zones, burst policy, provider
+    selectors, SCM connection reference, Autopilot enablement, lifecycle/versioning,
+    and a typed ``readiness`` gate that fails closed when policy is missing or invalid.
+    """
+    services = _services()
+    services.require_read(ctx, project, ("read",))
+    if not store.has_project(project):
+        return services.dumps({"error": f"unknown project: {project}", "project": project})
+    return services.dumps(store.get_project_execution_policy(project=project))
+
+
+def set_project_execution_policy(ctx: Context, project: str = "maxwell",
+                                 policy_json: str = "") -> str:
+    """Merge an execution-policy update for one project (write:system on that project).
+
+    ``policy_json`` is a partial ``switchboard.project_execution_policy.v1`` body;
+    nested objects merge and lists replace. References and policy only — branch,
+    env, and secret fields are rejected, and an invalid merged result persists nothing.
+    """
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:system",))
+    if not store.has_project(project):
+        return services.dumps({"error": f"unknown project: {project}", "project": project})
+    try:
+        updates = json.loads(policy_json or "{}")
+    except json.JSONDecodeError as exc:
+        return services.dumps({"error": f"policy_json must be valid JSON: {exc}",
+                               "project": project})
+    if not isinstance(updates, dict):
+        return services.dumps({"error": "policy_json must be a JSON object",
+                               "project": project})
+    return services.dumps(store.set_project_execution_policy(
+        project=project, updates=updates, actor=services.principal_actor(principal)))
+
+
 def create_project_board(title: str, ctx: Context, project: str = "maxwell",
                          board_id: str = "", mission_id: str = "",
                          kind: str = "mission", status: str = "active",
@@ -429,6 +468,7 @@ PROJECT_TOOL_NAMES = (
     "create_project_purge_intent", "verify_project_purge_intent",
     "execute_project_purge", "record_project_cleanup_review",
     "create_project", "set_project_github_repo", "set_project_repo_topology",
+    "get_project_execution_policy", "set_project_execution_policy",
     "create_project_board", "get_project_board", "list_project_boards",
 )
 

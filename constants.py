@@ -49,6 +49,26 @@ BUILTIN_GITHUB_REPOS = {
 }
 DEFAULT_PUBLIC_CI_REPO = (os.environ.get("PM_PUBLIC_CI_REPO") or "").strip()
 REPO_TOPOLOGY_SCHEMA = "switchboard.project_repo_topology.v1"
+# ACCESS-27: the project-level execution authority every runner reads before it
+# places, materializes, or authorizes work. References and policy only — never
+# per-project branches, env files, or credential material.
+PROJECT_EXECUTION_POLICY_SCHEMA = "switchboard.project_execution_policy.v1"
+PROJECT_EXECUTION_RUNTIMES = frozenset({
+    "claude_code", "codex", "cursor", "langgraph", "generic_cli",
+})
+PROJECT_EXECUTION_WORKSPACE_ROLES = frozenset({
+    "canonical", "public_ci", "public", "release",
+})
+PROJECT_EXECUTION_ISOLATION_MODES = frozenset({
+    "worktree", "clone", "container", "ephemeral_vm",
+})
+PROJECT_EXECUTION_HOST_CLASSES = frozenset({
+    "personal", "shared", "ephemeral",
+})
+PROJECT_EXECUTION_TRUST_ZONES = frozenset({
+    "personal", "org_shared", "cloud_ephemeral",
+})
+PROJECT_EXECUTION_POLICY_STATUSES = frozenset({"draft", "active", "retired"})
 CLAIM_GATE_MODES = frozenset({"off", "warn", "enforce"})
 DEFAULT_CLAIM_GATE_MODE = "warn"
 BUILTIN_REPO_TOPOLOGIES = {
