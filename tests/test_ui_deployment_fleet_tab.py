@@ -1,15 +1,11 @@
 """Fleet dock deployment tab and guarded agent-dispatch request."""
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from path_setup import ROOT
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
 
 import deployment_status  # noqa: E402
 from switchboard.api.routers import board  # noqa: E402
