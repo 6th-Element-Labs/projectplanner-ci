@@ -1643,6 +1643,7 @@ def supervisor_action(action, runner_session_id, options=None):
                         host_relay_url=host_relay_url,
                         log_path=str(meta.get("log_path") or ""),
                         child_pid=int(meta.get("pid") or 0),
+                        expires_at=server_relay.get("expires_at") or expires_at,
                     )
                 except Exception as bridge_exc:
                     return _open_fail_closed(
