@@ -34,6 +34,7 @@ from switchboard.domain.coordination.runtime_profile import evaluate_runtime_pro
 from switchboard.domain.coordination.terminal import TERMINAL_WAKE_STATUSES
 from switchboard.domain.ixp.protocol import (
     PROTOCOL_ENVELOPE,
+    ack_deadline_expectation,
     check_protocol_compatibility,
     normalize_send_ack_deadline,
     protocol_envelope,
@@ -2436,8 +2437,12 @@ def send_agent_message(from_agent: str, to_agent: str, message: str,
                 "expected_signal": _store_facade().FAIL_FIX_FAILURE_CLASSES[failure_class]["expected_signal"],
             }
         if requires_ack:
+            expectation = ack_deadline_expectation(
+                (deadline - now) if deadline is not None else None,
+                poll_cadence_seconds=delivery.get("ttl_s"))
+            response["ack_expectation"] = expectation
             monitor = _create_ack_monitor(c, msg_id, from_agent, to_agent, task_id,
-                                          deadline, now, on_ack_timeout=on_ack_timeout)
+                                          deadline, now, expectation=expectation)
             response["monitor_id"] = monitor["id"]
             response["monitor"] = monitor
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
@@ -2492,9 +2497,12 @@ def _monitor_row(r: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
 
 def _create_ack_monitor(c: sqlite3.Connection, message_id: int, from_agent: str,
                         to_agent: str, task_id: Optional[str], deadline: Optional[float],
-                        now: float, on_ack_timeout: str = "notify_sender") -> Dict[str, Any]:
+                        now: float, on_ack_timeout: str = "notify_sender",
+                        expectation: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     monitor_id = f"mon-{uuid.uuid4().hex[:16]}"
     condition = {"type": "message_ack", "message_id": message_id}
+    if expectation:
+        condition["ack_expectation"] = expectation
     # Ack deadlines are delivery expectations, never lifecycle authority.
     # The application contract rejects legacy control actions; this defensive
     # normalization also keeps direct repository callers transport-only.
@@ -2544,7 +2552,7 @@ def ack_message(message_id: int, response: str = "",
             return {"error": "message not found", "id": message_id}
         r = c.execute("SELECT * FROM agent_messages WHERE id=?", (message_id,)).fetchone()
         mon = _load_monitor_for_message(c, message_id)
-        if mon and mon.get("status") in ("pending", "fired"):
+        if mon and mon.get("status") == "pending":
             c.execute(
                 "UPDATE coordination_monitors SET status='resolved', resolved_at=?, "
                 "updated_at=?, last_checked_at=?, result_json=? WHERE id=?",
@@ -2556,6 +2564,23 @@ def ack_message(message_id: int, response: str = "",
                       (r["task_id"], "switchboard/monitor", "monitor.resolved",
                        json.dumps({"monitor_id": mon["id"], "message_id": message_id,
                                    "reason": "acked"}, sort_keys=True), now))
+        elif mon and mon.get("status") == "fired":
+            # M2: a late ack after timeout is audit-only. The message records
+            # acked_at (delivery truth), but the fired monitor stays terminal
+            # and the ack cannot resume or drive any current work.
+            result = dict(mon.get("result") or {})
+            result.update({"late_ack_at": now, "late_ack_by": actor,
+                           "late_ack_response": response or None,
+                           "late_ack_effect": "audit_only"})
+            c.execute(
+                "UPDATE coordination_monitors SET updated_at=?, last_checked_at=?, "
+                "result_json=? WHERE id=?",
+                (now, now, json.dumps(result, sort_keys=True), mon["id"]),
+            )
+            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                      (r["task_id"], "switchboard/monitor", "message.late_ack",
+                       json.dumps({"monitor_id": mon["id"], "message_id": message_id,
+                                   "audit_only": True}, sort_keys=True), now))
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (r["task_id"], actor, "message.acked",
                    json.dumps({"message_id": message_id, "response": response}, sort_keys=True), now))
@@ -2755,15 +2780,16 @@ def sweep_coordination_monitors(project: str = DEFAULT_PROJECT,
                 continue
             deadline = mon.get("deadline")
             if deadline is not None and deadline <= now:
-                action = (mon.get("on_timeout") or {}).get("action") or "notify_sender"
+                # M2: firing is terminal. A fired monitor never re-fires, never
+                # waits on resolution, and a later ack is audit-only.
                 result = {"reason": "ack_timeout", "deadline": deadline, "fired_at": now,
-                          "on_timeout": action,
+                          "on_timeout": "notify_sender", "terminal": True,
                           "failure_class": "unreachable_agent",
                           "expected_signal": _store_facade().FAIL_FIX_FAILURE_CLASSES["unreachable_agent"]["expected_signal"]}
                 c.execute(
-                    "UPDATE coordination_monitors SET status='fired', fired_at=?, "
+                    "UPDATE coordination_monitors SET status='fired', fired_at=?, resolved_at=?, "
                     "last_checked_at=?, updated_at=?, result_json=? WHERE id=?",
-                    (now, now, now, json.dumps(result, sort_keys=True), mon["id"]),
+                    (now, now, now, now, json.dumps(result, sort_keys=True), mon["id"]),
                 )
                 payload = {"monitor_id": mon["id"], "message_id": msg["id"],
                            "from_agent": msg["from_agent"], "to_agent": msg["to_agent"],

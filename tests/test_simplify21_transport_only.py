@@ -61,7 +61,16 @@ message = store.send_agent_message(
     task_id=task["task_id"], requires_ack=True, ack_timeout_seconds=2,
     project=project,
 )
+expectation = message.get("ack_expectation") or {}
+assert expectation.get("status") == "below_delivery_floor", expectation
+assert expectation.get("execution_effect") == "none", expectation
+assert expectation.get("floor_seconds", 0) >= 300.0, expectation
 store.sweep_coordination_monitors(project=project, now=message["sent_at"] + 3)
+# Duplicate timeout handling and restart are idempotent: a second sweep at a
+# later clock re-fires nothing and creates no second notice.
+resweep = store.sweep_coordination_monitors(project=project,
+                                            now=message["sent_at"] + 300)
+assert resweep["fired"] == 0, resweep
 
 with _conn(project) as connection:
     after = {

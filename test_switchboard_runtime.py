@@ -968,12 +968,30 @@ try:
     pending = store.list_pending_acks("codex/TEST#1", project=P)
     ok(any(m["id"] == timed["id"] and m["monitor"]["status"] == "pending" for m in pending),
        "list_pending_acks exposes outstanding ack monitors")
+    ok(timed.get("ack_expectation", {}).get("status") == "below_delivery_floor",
+       "sub-cadence ack deadlines are flagged against the delivery floor at send time")
     swept = store.sweep_coordination_monitors(project=P)
     ok(swept["fired"] == 1, "sweep_coordination_monitors fires timed-out ack monitor")
     timed_status = store.get_message_status(timed["id"], project=P)
-    ok(timed_status["monitor"]["status"] == "fired", "timed-out monitor stays fired until resolved")
+    ok(timed_status["monitor"]["status"] == "fired" and
+       timed_status["monitor"]["result"].get("terminal") is True and
+       timed_status["monitor"].get("resolved_at") is not None,
+       "timed-out monitors are terminal at fire time, never immortal")
     ok(timed_status["monitor"]["result"]["failure_class"] == "unreachable_agent",
        "timed-out monitors preserve failure class in result")
+    reswept = store.sweep_coordination_monitors(project=P)
+    ok(not any(e.get("message_id") == timed["id"] for e in reswept["events"]),
+       "duplicate sweeps never re-fire a terminal monitor")
+    late_ack = store.ack_message(timed["id"], response="late", actor="claude/TEST#2", project=P)
+    ok(late_ack["acked_at"] is not None, "a late ack still records delivery truth on the message")
+    late_status = store.get_message_status(timed["id"], project=P)
+    ok(late_status["monitor"]["status"] == "fired" and
+       late_status["monitor"]["result"].get("late_ack_effect") == "audit_only",
+       "a late ack is audit-only and cannot un-fire the terminal monitor")
+    late_task = store.get_task(message_task["task_id"], project=P)
+    ok(any(a["kind"] == "message.late_ack" and a["payload"].get("audit_only")
+           for a in late_task["activity"]),
+       "late acks write an explicit audit-only activity")
     timeout_notice = store.list_agent_messages(project=P, agent="codex/TEST#1")
     ok(any(m.get("signal") == "ack_timeout" and not m.get("requires_ack")
            for m in timeout_notice),

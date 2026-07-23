@@ -485,6 +485,14 @@
         }
     },
 
+    _agoShort(seconds) {
+        const s = Math.max(0, Math.floor(Number(seconds) || 0));
+        if (s < 60) return `${s}s`;
+        if (s < 3600) return `${Math.floor(s / 60)}m`;
+        if (s < 86400) return `${Math.floor(s / 3600)}h`;
+        return `${Math.floor(s / 86400)}d`;
+    },
+
     _missionBadge(status, map, fallback) {
         const key = String(status || '').toLowerCase().replace(/\s+/g, '_');
         const color = map[key] || fallback || 'secondary';

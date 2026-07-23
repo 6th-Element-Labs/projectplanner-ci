@@ -143,18 +143,24 @@ def sweep_monitors():
     This is deliberately a Switchboard job, not a Codex-thread reminder: monitor state lives
     in SQLite, and this job only advances that durable state.
     """
-    total_checked = total_fired = total_resolved = 0
+    total_checked = total_fired = total_resolved = total_wakes_failed = 0
     for project_id in store.project_ids():
         store.init_db(project_id)
         res = store.sweep_coordination_monitors(project=project_id)
+        # ADR-0008: wake expiry is capacity-plane janitor bookkeeping. It runs
+        # here as a sibling step; the communication monitor sweep itself has no
+        # wake or lifecycle authority.
+        wake_res = store.sweep_wake_intents(project=project_id)
         print(f"  [{project_id}] checked={res['checked']} fired={res['fired']} "
-              f"resolved={res['resolved']}")
+              f"resolved={res['resolved']} wakes_failed={wake_res.get('failed', 0)}")
         total_checked += res["checked"]
         total_fired += res["fired"]
         total_resolved += res["resolved"]
+        total_wakes_failed += wake_res.get("failed", 0)
     print(f"sweep_monitors: checked={total_checked} fired={total_fired} "
-          f"resolved={total_resolved}")
-    return {"checked": total_checked, "fired": total_fired, "resolved": total_resolved}
+          f"resolved={total_resolved} wakes_failed={total_wakes_failed}")
+    return {"checked": total_checked, "fired": total_fired,
+            "resolved": total_resolved, "wakes_failed": total_wakes_failed}
 
 
 def _configured_projects(env_name: str, default: str):
