@@ -1999,12 +1999,13 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
         # complete_claim fenced this exact runner generation.  Returning the
         # stored row makes retries harmless and prevents a delayed host
         # heartbeat from renewing or resurrecting it.
-        fenced_row = c.execute(
-            "SELECT * FROM runner_sessions WHERE runner_session_id=?",
-            (runner_session_id,),
-        ).fetchone()
-        return _runner_session_row(
-            fenced_row, now=now, include_claim=True, c=c)
+        return {
+            "error": "execution generation is fenced",
+            "error_code": "runner_generation_fenced",
+            "failure_class": "unbound_identity",
+            "runner_session_id": runner_session_id,
+            "lease_epoch": lease_surrender.get("lease_epoch"),
+        }
     record = _merge_existing_runner_record(c, record)
     host_id = (record.get("host_id") or "").strip()
     control = _normalize_runner_control(record.get("control") or {}, host_id)

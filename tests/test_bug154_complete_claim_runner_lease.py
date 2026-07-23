@@ -12,12 +12,12 @@ from path_setup import ROOT  # noqa: F401
 
 tmp = Path(tempfile.mkdtemp(prefix="bug154-"))
 os.environ["PM_SWITCHBOARD_DB_PATH"] = str(tmp / "switchboard.db")
-os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = str(
-    Path("/tmp") / f"bug154-registry-{tmp.name}.db")
+os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = str(tmp / "registry.db")
 projects_dir = tmp / "projects"
 projects_dir.mkdir()
 os.environ["PM_DYNAMIC_PROJECTS_DIR"] = str(projects_dir)
 os.environ["PM_AUTH_MODE"] = "dev-open"
+os.environ["PM_RUNNER_DIR"] = str(tmp / "runner-state")
 
 import store  # noqa: E402
 from adapters import agent_host  # noqa: E402
@@ -52,6 +52,7 @@ def make_claim(title: str):
     }, actor="bug154-test", project=P)["work_session"]
     claim = store.claim_task(
         task["task_id"], f"agent/{task['task_id']}",
+        principal_id=f"direct-session/run-{task['task_id'].lower()}",
         work_session_id=work_session["work_session_id"],
         require_work_session=True, session_policy_profile="code_strict",
         actor="bug154-test", project=P)
@@ -68,24 +69,31 @@ other_task = store.create_task({
 
 
 def register(runner_id: str, task_id: str, claim_id: str, *,
-             work_session_id: str | None = None):
+             role: str = "implementation", generation: int = 1):
     return store.upsert_runner_session({
         "runner_session_id": runner_id, "host_id": "host/bug154",
         "agent_id": f"agent/{task_id}", "runtime": "codex",
         "task_id": task_id, "claim_id": claim_id, "status": "running",
         "heartbeat_ttl_s": 60,
         "metadata": {"wake_id": f"wake-{runner_id}",
-                     "work_session_id": work_session_id or f"ws-{claim_id}"},
-    }, actor="host/bug154", project=P)
+                     "connect_assignment": True,
+                     "assignment_schema": "switchboard.connect.assignment.v1",
+                     "execution_id": f"exec-{runner_id}",
+                     "execution_generation": generation,
+                     "execution_role": role,
+                     "execution_head_sha": HEAD,
+                     "lease_epoch": 1},
+    }, principal_id=f"direct-session/run-{task_id.lower()}",
+       actor="host/bug154", project=P)
 
 
 bound_work_session = work_session["work_session_id"]
-# Production Connect shape: the supervised generation exists before its late
-# claim-binding heartbeat, but its Work Session identity is already durable.
-bound = register("run-bug154-bound", task["task_id"], "",
-                 work_session_id=bound_work_session)
-review = register("run-bug154-review", task["task_id"], "",
-                  work_session_id="ws-review-generation")
+# Production Connect shape: the supervised generation starts with null claim
+# and Work Session metadata.  Its authenticated direct-session heartbeat then
+# binds the exact claim; completion never infers identity from the task.
+bound = register("run-bug154-bound", task["task_id"], "")
+bound = register("run-bug154-bound", task["task_id"], claim["claim_id"])
+review = register("run-bug154-review", task["task_id"], "", role="review", generation=2)
 other = register("run-bug154-other", other_task["task_id"], "claim-unrelated")
 assert not bound.get("stale") and not review.get("stale") and not other.get("stale")
 
@@ -121,8 +129,7 @@ assert "lease_surrender" not in unrelated["metadata"]
 # A late host heartbeat must neither renew nor resurrect the fenced generation.
 prior_heartbeat = surrendered["heartbeat_at"]
 late = register("run-bug154-bound", task["task_id"], claim["claim_id"])
-assert late["stale"] is True
-assert late["heartbeat_at"] == prior_heartbeat
+assert late["error_code"] == "runner_generation_fenced"
 
 # The existing Agent Host expiry clock stops the supervised process, publishes
 # its terminal heartbeat, and leaves the later review generation alive.
@@ -192,10 +199,32 @@ terminal = store.upsert_runner_session({
     "task_id": task["task_id"], "claim_id": claim["claim_id"],
     "status": "expired", "metadata": {
         "wake_id": "wake-run-bug154-bound",
-        "work_session_id": f"ws-{claim['claim_id']}",
         "terminalized_by": "runner_lease_expiry",
     },
-}, actor="host/bug154", project=P)
+}, principal_id=f"direct-session/run-{task['task_id'].lower()}",
+   actor="host/bug154", project=P)
 assert terminal["status"] == "expired"
+
+# A successful physical kill followed by a failed POST remains durable across
+# daemon restart and is retried even though the supervisor no longer lists the
+# process locally.
+pending = {
+    "project": P, "runner_session_id": "run-restart-proof",
+    "host_id": "host/bug154", "task_id": task["task_id"],
+    "status": "expired", "metadata": {"terminalized_by": "runner_lease_expiry"},
+}
+agent_host._persist_pending_stop_receipt(pending)
+old_try = agent_host._try
+try:
+    agent_host._try = lambda *_args, **_kwargs: {"error": "network_down"}
+    failed_retry = agent_host._drain_pending_stop_receipts("host/bug154")
+    assert failed_retry[0]["expired"] is False
+    assert agent_host._pending_stop_receipt_path("run-restart-proof").exists()
+    agent_host._try = lambda *_args, **_kwargs: {"ok": True}
+    recovered = agent_host._drain_pending_stop_receipts("host/bug154")
+    assert recovered[0]["expired"] is True
+    assert not agent_host._pending_stop_receipt_path("run-restart-proof").exists()
+finally:
+    agent_host._try = old_try
 
 print("BUG-154 runner lease surrender tests passed")

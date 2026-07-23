@@ -1104,15 +1104,21 @@ def _complete_claim_impl(claim_id: str, evidence: str = "", final_status: str = 
         work_session_id = str(gated_work_session.get("work_session_id") or "")
         candidates = c.execute(
             "SELECT * FROM runner_sessions WHERE status IN ('starting','ready','running') "
-            "AND (claim_id=? OR (?!='' AND json_extract(metadata_json,'$.work_session_id')=?))",
-            (claim_id, work_session_id, work_session_id),
+            "AND claim_id=?",
+            (claim_id,),
         ).fetchall()
         exact = []
         for candidate in candidates:
             metadata = json.loads(candidate["metadata_json"] or "{}")
-            role = str(metadata.get("role") or metadata.get("lifecycle_role")
-                       or "implementation").strip().lower()
-            if role == "implementation":
+            role = str(metadata.get("execution_role") or "").strip().lower()
+            generation = int(metadata.get("execution_generation") or 0)
+            lease_epoch = int(metadata.get("lease_epoch") or 0)
+            execution_identity = str(metadata.get("execution_id") or "")
+            exact_principal = str(candidate["principal_id"] or "")
+            claim_principal = str(row["principal_id"] or "")
+            if (role == "implementation" and generation > 0 and lease_epoch > 0
+                    and execution_identity and exact_principal
+                    and exact_principal == claim_principal):
                 exact.append((candidate, metadata))
         if len(exact) != 1:
             response = {
@@ -1132,11 +1138,18 @@ def _complete_claim_impl(claim_id: str, evidence: str = "", final_status: str = 
             return response
         runner, runner_metadata = exact[0]
         execution_id = str(runner["runner_session_id"])
+        generation = int(runner_metadata["execution_generation"])
+        lease_epoch = int(runner_metadata["lease_epoch"])
         runner_metadata["completion_handoff"] = {
             "schema": "switchboard.completion_handoff.v1",
             "claim_id": claim_id,
             "task_id": row["task_id"],
             "execution_id": execution_id,
+            "durable_execution_id": runner_metadata["execution_id"],
+            "generation": generation,
+            "lease_epoch": lease_epoch + 1,
+            "host_id": runner["host_id"],
+            "host_principal_id": runner["principal_id"],
             "work_session_id": work_session_id or None,
             "role": "implementation",
             "requested_at": now,
@@ -1149,7 +1162,10 @@ def _complete_claim_impl(claim_id: str, evidence: str = "", final_status: str = 
             "work_session_id": work_session_id or None,
             "surrendered_at": now,
             "reason": "completion_requested",
+            "generation": generation,
+            "lease_epoch": lease_epoch + 1,
         }
+        runner_metadata["lease_epoch"] = lease_epoch + 1
         ttl_s = max(10, int(runner["heartbeat_ttl_s"] or 60))
         c.execute("UPDATE runner_sessions SET heartbeat_at=?, metadata_json=?, updated_at=? "
                   "WHERE runner_session_id=?",
@@ -1157,6 +1173,8 @@ def _complete_claim_impl(claim_id: str, evidence: str = "", final_status: str = 
                    execution_id))
         c.execute("UPDATE task_claims SET status='stopping' WHERE id=? AND status='active'",
                   (claim_id,))
+        c.execute("UPDATE direct_session_tokens SET revoked_at=? WHERE runner_session_id=? "
+                  "AND revoked_at IS NULL", (now, execution_id))
         c.execute(
             "INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
             (row["task_id"], actor, "task.claim.stopping",
@@ -1316,6 +1334,13 @@ def terminal_ack_claim_completion_in(c: sqlite3.Connection, runner_session_id: s
     metadata = json.loads(runner["metadata_json"] or "{}")
     handoff = metadata.get("completion_handoff") or {}
     if str(handoff.get("execution_id") or "") != runner_session_id:
+        return None
+    if (str(metadata.get("terminalized_by") or "") != "runner_lease_expiry"
+            or str(handoff.get("host_id") or "") != str(runner["host_id"] or "")
+            or int(handoff.get("generation") or 0)
+            != int(metadata.get("execution_generation") or 0)
+            or int(handoff.get("lease_epoch") or 0)
+            != int(metadata.get("lease_epoch") or 0)):
         return None
     claim_id = str(handoff.get("claim_id") or "")
     claim = c.execute("SELECT * FROM task_claims WHERE id=?", (claim_id,)).fetchone()

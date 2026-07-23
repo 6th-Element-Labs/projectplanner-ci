@@ -237,6 +237,14 @@ def enqueue_task(
         "assignment": {
             "schema": "switchboard.connect.assignment.v1",
             **asdict(assignment),
+            # Lifecycle identity is allocated before the wake is visible.  It
+            # remains stable across host selection and is distinct from the
+            # host-local runner_session_id that is bound after claim_wake.
+            "execution_id": assignment.assignment_id,
+            "generation": max(1, int(assignment.queued_at * 1_000_000)),
+            "role": "implementation",
+            "head_sha": str((task.get("git_state") or {}).get("head_sha") or ""),
+            "fence_epoch": 1,
         },
     }
     suffix = generation_ref or str(predecessor_wake_id or "initial")
