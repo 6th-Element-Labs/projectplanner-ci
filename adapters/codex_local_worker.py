@@ -25,6 +25,10 @@ try:
     import switchboard_core as sb
 except ModuleNotFoundError:  # package import in tests and library callers
     from adapters import switchboard_core as sb
+try:
+    from codex_app_server import CodexAppServer, pinned_command
+except ModuleNotFoundError:
+    from adapters.codex_app_server import CodexAppServer, pinned_command
 
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -529,31 +533,38 @@ def run(
         if personal_bound:
             child_token, mcp_overrides = _work_session_mcp_bootstrap(http, values)
             environment["SWITCHBOARD_WORK_SESSION_TOKEN"] = child_token
-        command = [
-            executable,
-            "exec",
-            "--ephemeral",
-            "--dangerously-bypass-approvals-and-sandbox",
-            *[value for override in mcp_overrides for value in ("-c", override)],
-            "-C",
-            workspace,
-            *[value for directory in git_dirs for value in ("--add-dir", directory)],
-            _prompt(
-                task,
-                source_sha=values["source_sha"],
-                wake_id=values["wake_id"],
-                execution_connection_id=values["execution_connection_id"],
-            ),
-        ]
+        command = (
+            pinned_command(executable, mcp_overrides)
+            if runner is None else [
+                executable, "app-server", "--stdio",
+                *[value for override in mcp_overrides for value in ("-c", override)],
+            ]
+        )
         heartbeat_thread = threading.Thread(
             target=heartbeat_loop,
             name=f"switchboard-heartbeat-{values['runner_session_id']}",
             daemon=True,
         )
         heartbeat_thread.start()
+        app_server_receipts: list[dict[str, Any]] = []
         if runner is None:
-            completed = _run_streaming_command(
-                command, cwd=workspace, env=environment, timeout=None)
+            app_server = CodexAppServer(
+                command, cwd=workspace, env=environment, http=http,
+                binding={
+                    "project": os.environ.get("PM_PROJECT", "switchboard"),
+                    **_recovery_binding(values),
+                },
+                journal_path=str(
+                    Path(os.environ["PM_AGENT_HOST_RUNNER_DIR"])
+                    / values["runner_session_id"] / "codex-app-server.json"),
+            )
+            completed = app_server.run(_prompt(
+                task,
+                source_sha=values["source_sha"],
+                wake_id=values["wake_id"],
+                execution_connection_id=values["execution_connection_id"],
+            ))
+            app_server_receipts = app_server.receipts
         else:
             # Test and embedding hook. Production deliberately takes the
             # streaming path above; injected runners retain the previous
@@ -614,6 +625,8 @@ def run(
                 "source_sha": values["source_sha"],
                 "completed_head_sha": head_sha,
                 "native_cli": True,
+                "app_server": True,
+                "app_server_receipts": app_server_receipts,
                 "auth_mode": "chatgpt_personal",
                 "provider_credential_exported": False,
                 "host_coordination_credential_exported": False,
