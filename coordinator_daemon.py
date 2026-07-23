@@ -17,7 +17,7 @@ from typing import Any, Dict, Iterable, Mapping, Optional
 import uuid
 
 import scripts.switchboard_path  # noqa: F401 — make src/switchboard importable
-from switchboard.domain.board.tasks import READY_TASK_STATUSES
+from switchboard.domain.completion import routing as completion_routing
 
 
 STATE_SCHEMA = "switchboard.coordinator_daemon_state.v1"
@@ -351,12 +351,12 @@ class CoordinatorDaemon:
                    for task_project, task_id in eligible)
 
     @staticmethod
-    def _task_ready_for_dispatch(detail: Dict[str, Any]) -> bool:
-        status = detail.get("status")
-        claims = detail.get("active_claims") or []
-        if status in READY_TASK_STATUSES:
-            return bool((detail.get("dependency_state") or {}).get("ready") and not claims)
-        return bool(status == "In Review" or (status == "In Progress" and not claims))
+    def _task_ready_for_dispatch(detail: Dict[str, Any],
+                                 route: str | None = None) -> bool:
+        # Selection is route-aware, not status-only: Blocked(route=remediation)
+        # must stay dispatchable while Blocked(route=human) must not. See
+        # switchboard.domain.completion.routing for the shared contract.
+        return completion_routing.task_ready_for_dispatch(detail, route=route)
 
     def _scope_candidates(self, scope: Dict[str, Any],
                           mission_status: Dict[str, Any]) -> list[Dict[str, Any]]:
@@ -398,14 +398,20 @@ class CoordinatorDaemon:
             if key in by_task:
                 continue
             detail = self._task_detail(mission_status, task_id, task_project)
-            if (not detail or self._terminal_task(detail)
-                    or not self._task_ready_for_dispatch(detail)):
+            if not detail or self._terminal_task(detail):
+                continue
+            # The mission projection rarely carries the completion run, so a
+            # Blocked candidate resolves its route from the durable authority.
+            route = completion_routing.resolve_completion_route(
+                detail, store=self.store, project=task_project)
+            if not self._task_ready_for_dispatch(detail, route):
                 continue
             by_task[key] = {
                 "action": "target_task",
                 "task_id": task_id,
                 "task_project": task_project,
                 "project_id": task_project,
+                "completion_route": route or None,
             }
         return [by_task[key] for key in sorted(by_task)][:self.config.max_tasks_per_scope_tick]
 
