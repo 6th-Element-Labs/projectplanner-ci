@@ -4,13 +4,10 @@ from __future__ import annotations
 
 import os
 import inspect
-import sys
 import tempfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "src"))
+from path_setup import ROOT
 
 tmp = tempfile.mkdtemp(prefix="simplify21-")
 os.environ["PM_DB_PATH"] = str(Path(tmp) / "maxwell.db")
