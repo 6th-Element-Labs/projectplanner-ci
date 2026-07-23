@@ -754,6 +754,11 @@ def _claim_task_impl(task_id: str, agent_id: str,
             _store_facade()._idem_store(c, "claim_task", idem_key, actor, payload, response)
             return response
         dispatch_reason["work_session"] = work_session_binding
+        from switchboard.storage.repositories.runner import upsert_advisory_execution_in
+        upsert_advisory_execution_in(
+            c, task_id=task_id, agent_id=agent_id, claim_id=claim_id,
+            work_session_id=work_session_binding.get("work_session_id") or "",
+            actor=actor, now=now)
         payload_event = {"claim_id": claim_id, "lease_id": lease_id,
                          "task_id": task_id, "agent_id": agent_id,
                          "dispatch_reason": dispatch_reason}
@@ -857,12 +862,8 @@ def claim_next(agent_id: str, lanes: Any = None,
         if hit is not None:
             return hit
         _heal_dependency_blocked_tasks_in(c, actor="switchboard/claim-next")
-        active_claims = {
-            r["task_id"] for r in c.execute(
-                "SELECT task_id FROM task_claims WHERE status='active' AND expires_at>?",
-                (now,),
-            ).fetchall()
-        }
+        from switchboard.application.queries.execution_presence import active_task_ids_in
+        active_claims = active_task_ids_in(c, now)
         rows = c.execute("SELECT * FROM tasks ORDER BY sort_order, task_id").fetchall()
         tasks = [_task_row(r) for r in rows]
         by_id = {t["task_id"]: t for t in tasks}

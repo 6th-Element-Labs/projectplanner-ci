@@ -447,6 +447,8 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
                 start_error=intake_routing.get("error") or "bug_intake_not_routable",
                 intake_routing=intake_routing)
         projection = _projection(task_id, project)
+    from switchboard.application.queries.execution_presence import get_execution_presence
+    presence = get_execution_presence(task_id, project=project)
     active_runner = projection.get("active_runner") or {}
     pending = _in_flight_wake(projection)
     if active_runner:
@@ -471,6 +473,14 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
                 pending, project=project, runtime=runtime,
                 lane=str((projection.get("task") or {}).get("_wsId")
                          or (projection.get("task") or {}).get("workstream") or "")),
+        }
+    elif presence.get("leased"):
+        advisory = next((row for row in presence.get("runner_sessions") or []
+                         if (row.get("metadata") or {}).get("execution_tier") == "advisory"), {})
+        result = {
+            "action": "already_leased", "started": False, "attached": False,
+            "runner_session_id": advisory.get("runner_session_id"),
+            "reason": "execution_presence", "presence": presence,
         }
     elif launcher is None:
         from switchboard.application.commands import connect_dispatch
@@ -552,6 +562,7 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
         browser_safe=descriptor.get("browser_safe"),
         capacity=result.get("capacity"),
         intake_routing=intake_routing or result.get("intake_routing") or None,
+        presence=result.get("presence"),
     )
 
 

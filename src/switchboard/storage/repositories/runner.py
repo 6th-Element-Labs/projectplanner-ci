@@ -46,6 +46,7 @@ __all__ = [
     "_runner_session_row",
     "_upsert_runner_session_in",
     "upsert_runner_session",
+    "upsert_advisory_execution_in",
     "list_runner_sessions",
     "get_runner_session",
     "terminal_task_cleanup_for_host_in",
@@ -72,6 +73,35 @@ __all__ = [
     "claim_runner_control_request",
     "complete_runner_control_request",
 ]
+
+
+def upsert_advisory_execution_in(c: sqlite3.Connection, *, task_id: str,
+                                 agent_id: str, runtime: str = "",
+                                 claim_id: str = "", work_session_id: str = "",
+                                 actor: str = "system", now: Optional[float] = None
+                                 ) -> Dict[str, Any]:
+    """Publish non-managed desktop/cloud work in the common runner registry."""
+    now = time.time() if now is None else now
+    # One advisory execution per agent/task. A later claim or Work Session
+    # enriches the same row instead of creating parallel pseudo-processes.
+    stable = hashlib.sha256(f"{task_id}:{agent_id}".encode()).hexdigest()[:16]
+    return _upsert_runner_session_in(c, {
+        "runner_session_id": f"advisory-{stable}",
+        "agent_id": agent_id,
+        "runtime": runtime or "desktop-mcp",
+        "task_id": task_id,
+        "claim_id": claim_id or None,
+        "status": "running",
+        "alive": True,
+        "heartbeat_at": now,
+        "heartbeat_ttl_s": 4 * 60 * 60,
+        "control": {"tier": "advisory", "managed_process": False,
+                    "runner_kill": False},
+        "metadata": {"execution_tier": "advisory", "non_killable": True,
+                     "work_session_id": work_session_id or None,
+                     "presence_source": "desktop_or_cloud_session"},
+        "require_task_bind": False,
+    }, "", actor, now)
 
 
 def _server_relay_failure_event(session: Dict[str, Any],

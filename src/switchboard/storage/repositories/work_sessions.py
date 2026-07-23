@@ -709,6 +709,12 @@ def _insert_work_session_in(c: sqlite3.Connection, data: Dict[str, Any],
     c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
               (data.get("task_id") or None, actor, "work_session.created",
                json.dumps(event, sort_keys=True), now))
+    if data.get("task_id"):
+        from switchboard.storage.repositories.runner import upsert_advisory_execution_in
+        upsert_advisory_execution_in(
+            c, task_id=data["task_id"], agent_id=data.get("agent_id") or "",
+            runtime=data.get("runtime") or "desktop-mcp",
+            work_session_id=work_session_id, actor=actor, now=now)
     row = c.execute("SELECT * FROM work_sessions WHERE work_session_id=?",
                     (work_session_id,)).fetchone()
     return {"created": True, "work_session": _work_session_row(row)}
