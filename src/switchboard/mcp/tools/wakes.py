@@ -1,9 +1,4 @@
-"""Wake-focused MCP tools.
-
-Transport adapter for request_wake / claim_wake / complete_wake. Authentication
-and MCP serialization remain edge concerns; the shared application commands used
-by REST own transport-neutral validation.
-"""
+"""Agent Host wake protocol and read-only wake inventory MCP tools."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -15,7 +10,6 @@ import auth
 import store
 from switchboard.application.commands import claim_wake as claim_wake_command
 from switchboard.application.commands import complete_wake as complete_wake_command
-from switchboard.application.commands import request_wake as request_wake_command
 
 
 @dataclass(frozen=True)
@@ -33,31 +27,6 @@ def _services() -> WakeToolServices:
     if _SERVICES is None:
         raise RuntimeError("wake MCP tools must be registered before use")
     return _SERVICES
-
-
-def request_wake(selector_json: str, reason: str, ctx: Context,
-                 source: str = "", policy_json: str = "{}", task_id: str = "",
-                 idem_key: str = "", project: str = "maxwell") -> str:
-    """Create a durable wake intent for an absent runtime/session.
-
-    selector_json includes runtime/agent_id/lane/capabilities. Example:
-    {"runtime":"claude-code","agent_id":"claude-code","lane":"ADAPTER"}.
-    """
-    services = _services()
-    principal = services.require_write(ctx, project, ("write:ixp",))
-    return services.dumps(request_wake_command.execute_mapping_result(
-        {
-            "selector_json": selector_json,
-            "reason": reason,
-            "source": source or auth.actor(principal),
-            "policy_json": policy_json,
-            "task_id": task_id,
-            "idem_key": idem_key,
-            "project": project,
-        },
-        actor=auth.actor(principal),
-        principal_id=principal["id"],
-    ))
 
 
 def claim_wake(host_id: str, wake_id: str, ctx: Context,
@@ -123,17 +92,7 @@ def list_wake_intents(project: str = "maxwell", status: str = "", host_id: str =
 
 
 
-def cancel_wake(wake_id: str, ctx: Context, reason: str = "cancelled",
-                project: str = "maxwell") -> str:
-    """Cancel a pending or claimed wake intent."""
-    services = _services()
-    principal = services.require_write(ctx, project, ("write:ixp",))
-    return services.dumps(store.cancel_wake(wake_id, reason=reason,
-                                   actor=auth.actor(principal), project=project))
-
-
-
-WAKE_TOOL_NAMES = ("request_wake", "claim_wake", "complete_wake", 'list_wake_intents', 'cancel_wake')
+WAKE_TOOL_NAMES = ("claim_wake", "complete_wake", "list_wake_intents")
 
 
 def register_wake_tools(mcp: Any, services: WakeToolServices) -> dict[str, Callable[..., str]]:

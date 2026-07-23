@@ -373,7 +373,6 @@ allowed = {{
     "PM_AGENT_WORK_MODULE_CODEX", "PM_AGENT_WORK_MODULE_CLAUDE_CODE",
     "PM_AGENT_WORK_MODULE_CURSOR",
     "PM_VERIFY_COMPLETION_PUSH", "PM_WORK_SESSION_TEST_CMD", "AWS_REGION",
-    "PM_RUNNER_LEASE_ENFORCEMENT",
     "GH_TOKEN", "GITHUB_TOKEN", "GH_HOST",
     # BUG-91: without this the worker cannot auto-provision a Work Session, so a
     # code_strict task is never claimed -- no claim_id, no work_session_id, and
@@ -405,7 +404,6 @@ PM_RUNTIME={values['runtime']}
 PM_HOST_LANES={values['lane']}
 PM_HOST_CAPABILITIES={values['caps']}
 PM_HOST_MAX_SESSIONS={values['sessions']}
-PM_RUNNER_LEASE_ENFORCEMENT=1
 PM_HOST_CLASS=ephemeral
 PM_HOST_COST_CLASS=ephemeral_variable
 PM_HOST_PROJECTS={shlex.quote(str(wake.get('project') or 'switchboard'))}

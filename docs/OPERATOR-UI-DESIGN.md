@@ -53,9 +53,10 @@
 
 ## UI-8 · Fleet control — *new top-level “Fleet” tab* · **depends on UI-3**
 
-- **Hosts table:** id, heartbeat age, capacity slots → `list_agent_hosts`, `host_status`; **Wake agent ▾** → `request_wake`.
-- **Wake-intents queue:** queued/delivered with Cancel → `list_wake_intents`, `cancel_wake`.
-- **Runners table:** uptime/health + Logs / Snapshot / **Kill (human-gated, typed confirm)** → `request_runner_logs/_snapshot/_kill`, `request_runner_health`.
+- **Hosts table:** id, heartbeat age, capacity slots → `list_agent_hosts`, `host_status`.
+- **Wake-intents queue:** read-only queued/delivered projection → `list_wake_intents`.
+- **Runners table:** read-only physical registry plus task-scoped Watch and Stop.
+  Start, open, message, retry, and stop all use Task Execution.
 
 ## UI-4 · Settings → API keys
 

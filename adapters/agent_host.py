@@ -143,18 +143,6 @@ def _csv(value):
     return [x.strip() for x in str(value or "").replace("\n", ",").split(",") if x.strip()]
 
 
-def runner_lease_enforcement_enabled():
-    """Return the fleet default, with one audited emergency rollback switch.
-
-    SIMPLIFY-20 promotes the proven BUG-155 lease path to the normal execution
-    authority.  An operator may temporarily set PM_RUNNER_LEASE_ENFORCEMENT=0
-    through the SIMPLIFY-16 observation window; SIMPLIFY-11 owns deleting that
-    final rollback branch.
-    """
-    value = str(os.environ.get("PM_RUNNER_LEASE_ENFORCEMENT", "1")).strip().lower()
-    return value not in {"0", "false", "no", "off"}
-
-
 def _truthy(value):
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -485,8 +473,7 @@ def default_inventory():
     cloud_enabled = runtime == "codex" and bool(os.environ.get("PM_CODEX_CLOUD_ENVIRONMENT_ID"))
     profiles = ["ixp.v1", "txp.dispatch.v0"]
     capabilities = ["docs", "python", "github", "tests"]
-    if runner_lease_enforcement_enabled():
-        capabilities.extend(RUNNER_LEASE_CAPABILITIES)
+    capabilities.extend(RUNNER_LEASE_CAPABILITIES)
     # Fleet workers advertise a host-owned capability profile.  The wake payload may
     # select from this inventory, but it cannot add capabilities to the host.  Keeping
     # this in configuration lets co-general/co-build use the same immutable AMI while
@@ -640,8 +627,7 @@ def apply_authoritative_execution_policy(inventory, response):
     # SIMPLIFY-20 / BUG-161: these are host-proven execution facts, not
     # operator-grantable permissions. An older enrolled policy must not strip
     # them after startup and make an enforcement-capable host ineligible.
-    if runner_lease_enforcement_enabled():
-        capabilities.extend(RUNNER_LEASE_CAPABILITIES)
+    capabilities.extend(RUNNER_LEASE_CAPABILITIES)
     if host_serves_runner_watch():
         capabilities.append(RUNNER_WATCH_CAPABILITY)
     runtime.update({
@@ -1862,76 +1848,9 @@ def _runner_timestamp(value):
         return 0.0
 
 
-def reap_finished_or_idle_runners(inventory, *, now=None):
-    """End local sessions whose claim finished or which are truly idle.
-
-    An active claim is an absolute safety rail. Completed claims receive a short
-    quiet grace so the CLI can print its final response; unclaimed/terminal-claim
-    sessions receive the longer idle backstop. The central claim row and the
-    local PTY log mtime are deliberately evaluated together.
-    """
-    now = time.time() if now is None else float(now)
-    grace_s = _positive_seconds("PM_AGENT_HOST_REAP_GRACE_SECONDS", 120)
-    idle_s = _positive_seconds("PM_AGENT_HOST_IDLE_TIMEOUT_SECONDS", 30 * 60)
-    host_id = str((inventory or {}).get("host_id") or "")
-    outcomes = []
-    for session in _drain_runners(host_id):
-        runner_id = str(session.get("runner_session_id") or "")
-        task_id = str(session.get("task_id") or "")
-        status = str(session.get("status") or "").lower()
-        if (not runner_id or not task_id or session.get("alive") is not True
-                or status != "running"):
-            continue
-        claim = session.get("claim") if isinstance(session.get("claim"), dict) else {}
-        claim_status = str(claim.get("status") or "").lower()
-        if claim_status == "active":
-            continue
-        # UNVERIFIABLE is not TERMINAL. During Connect late-binding
-        # (credential_admission_phase preclaim/pending) the claim isn't bound
-        # yet, and after a server-side skew a bound claim_id can drain with no
-        # claim row. Killing on either murders a working agent mid-edit (the
-        # 2026-07-22 "runner dies in 2-8 minutes, 20 uncommitted files" wave).
-        # Only an explicitly observed non-active claim may reap.
-        metadata_probe = dict(session.get("metadata") or {})
-        admission_phase = str(
-            metadata_probe.get("credential_admission_phase") or "").lower()
-        if admission_phase in {"preclaim", "pending"}:
-            continue
-        if not claim and str(session.get("claim_id") or ""):
-            continue
-        output_at = _runner_last_output_at(session)
-        reason = ""
-        terminal_status = "stopped"
-        threshold_s = idle_s
-        activity_at = max(output_at, _runner_timestamp(session.get("started_at")))
-        if claim_status == "completed":
-            reason = "claim_completed"
-            terminal_status = "completed"
-            threshold_s = grace_s
-            activity_at = max(activity_at, _runner_timestamp(claim.get("completed_at")))
-        else:
-            for key in ("completed_at", "claimed_at", "created_at", "updated_at"):
-                activity_at = max(activity_at, _runner_timestamp(claim.get(key)))
-            if now - activity_at >= idle_s:
-                reason = "idle_timeout"
-        if not reason or now - activity_at < threshold_s:
-            continue
-        outcomes.append({"runner_session_id": runner_id, "task_id": task_id,
-                         "reason": reason, "reaped": False,
-                         "observe_only": True,
-                         "error": "lease expiry is the only kill authority"})
-    return outcomes
-
-
 def expire_runner_leases(inventory, *, now=None):
-    """Enforce the single process-stop clock: the renewable runner lease.
-
-    Enforcement remains an explicit deployment capability. S20 owns the
-    observation/default-on rollout; BUG-155 only consumes an advertised,
-    already-enabled lease authority.
-    """
+    """Enforce the single process-stop clock: the renewable runner lease."""
     now = time.time() if now is None else float(now)
-    enforce = runner_lease_enforcement_enabled()
     host_id = str((inventory or {}).get("host_id") or "")
     outcomes = _drain_pending_stop_receipts(host_id)
     for session in _drain_runners(host_id):
@@ -1940,10 +1859,7 @@ def expire_runner_leases(inventory, *, now=None):
         runner_id = str(session.get("runner_session_id") or "")
         task_id = str(session.get("task_id") or "")
         outcome = {"runner_session_id": runner_id, "task_id": task_id,
-                   "reason": "runner_lease_expired", "would_expire": not enforce}
-        if not enforce:
-            outcomes.append(outcome)
-            continue
+                   "reason": "runner_lease_expired"}
         stopped = supervisor_action("kill", runner_id, {
             "reason": "runner heartbeat lease expired", "task_id": task_id})
         ok = bool(stopped and not stopped.get("error") and stopped.get("alive") is not True)

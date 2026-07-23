@@ -21,12 +21,12 @@ two-line card: id + status badge + uptime on top; `TASK · runtime · host · ag
 below; buttons **Watch / Logs / On disk / Kill**.
 
 - **Watch** → existing `openRunnerSessionPanel(task_id)` (only when running + task bound).
-- **Logs** → existing `request_runner_logs` action.
+- **Logs** → execution transcript read for the selected task.
 - **On disk** → the existing `snapshot` control action, relabelled. It reports branch,
   head SHA, `git status --porcelain`, and log tail from the runner's worktree
   (adapters/codex/supervisor.py `_snapshot`). Rendered as "N uncommitted files" on the
   card — the safety check before Kill. No "Health" button (dropped as noise).
-- **Kill** → existing `request_runner_kill` with typed-id confirmation.
+- **Stop** → task-scoped Task Execution stop with typed task-id confirmation.
 
 Old session-health rows are removed. A stale runner shows one plain-English line
 ("No heartbeat since HH:MM · N uncommitted files") instead of preflight jargon.

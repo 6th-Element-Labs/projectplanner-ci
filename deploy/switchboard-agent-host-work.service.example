@@ -25,7 +25,6 @@ Environment=PM_HOST_SUPPORTS_CREDENTIAL_LEASES=1
 Environment=PM_HOST_SESSION_POLICIES=code_strict
 Environment=PM_REPO_ROOT=/path/to/projectplanner
 Environment=PM_RUNNER_DIR=/var/lib/projectplanner/runner
-Environment=PM_RUNNER_LEASE_ENFORCEMENT=1
 Environment=PM_PROVIDER_RUNTIME_ROOT=/var/lib/switchboard-provider-runtimes
 Environment=PM_AGENT_HOST_CLAIM_IDLE_SECONDS=6
 # Leave PM_AGENT_WORK_MODULE unset for a dry-run proof: claim_next is called, any

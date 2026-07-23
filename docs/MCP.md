@@ -90,9 +90,10 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
 - `archive_task(task_id, project, reason?)`
 - `register_agent(...)`, `heartbeat(...)`, `list_active_agents(...)`
 - `register_host(...)`, `heartbeat_host(...)`, `list_agent_hosts(...)`, `host_status(...)`
-- `register_runner_session(...)`, `list_runner_sessions(...)`, `request_runner_snapshot(...)`,
-  `request_runner_kill(...)`, `list_runner_control_requests(...)`, `claim_runner_control(...)`,
-  `complete_runner_control(...)`
+- `register_runner_session(...)`, `list_runner_sessions(...)`,
+  `list_runner_control_requests(...)`, `claim_runner_control(...)`,
+  `complete_runner_control(...)`. Operator start, open, message, stop, and retry
+  use the task-execution tools; callers never select a runner id.
 - `create_work_session(...)`, `get_work_session(...)`, `list_work_sessions(...)`,
   `update_work_session(...)` — bind code work to project, repo role, branch, worktree/clone path,
   hygiene state, leases, and lifecycle before later claim/complete/merge gates enforce it.
@@ -126,8 +127,8 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
 - `list_pending_acks(project, agent_id?)`, `list_monitors(project, status?, kind?)`,
   `sweep_monitors(project)`, `resolve_monitor(...)`, `cancel_monitor(...)`
 - `reconcile_alerts(project, alert_to?, min_severity?)`
-- `request_wake(...)`, `list_wake_intents(...)`, `claim_wake(...)`, `complete_wake(...)`,
-  `cancel_wake(...)`
+- `list_wake_intents(...)`, `claim_wake(...)`, `complete_wake(...)`. Wake
+  creation and cancellation are internal to Task Execution and Connect.
 - `claim_next(...)`, `complete_claim(...)`, `abandon_claim(...)`, `revoke_claim(...)`
 - `report_usage(...)`, `record_outcome(...)`, `verify_outcome(...)`, `reject_outcome(...)`
 - `create_kpi(...)`, `update_kpi_value(...)`, `link_outcome_to_kpi(...)`
@@ -297,18 +298,17 @@ Durable ack rule:
 - `list_pending_acks` and `get_message_status` expose monitor state; `sweep_monitors` resolves
   acked messages and fires timed-out monitors. The production host should run
   `jobs.py sweep_monitors` through `projectplanner-monitors.timer`.
-- By default, a fired ack monitor only notifies the sender. Callers may opt into
-  `on_ack_timeout="wake_target"` or `on_ack_timeout="wake_or_operator_alert"` to create a
-  durable wake intent for an eligible Agent Host. Host registration and wake intent semantics
-  are specified in [`docs/AGENT-HOST-SPEC.md`](AGENT-HOST-SPEC.md).
+- A fired acknowledgement monitor notifies the sender. Communication timeout
+  never starts work or mutates execution lifecycle.
 - Ack timeouts are typed as `unreachable_agent`, and visible delivery fallback comments carry the
   same failure class so QA and operators do not mistake mailbox storage for delivery.
 
 Agent Host wake rule:
 - `register_host` advertises always-on host inventory, runtimes, lanes, capabilities, capacity,
   and TTL.
-- `request_wake` creates a durable wake intent; `claim_wake` atomically assigns it to one
-  eligible host; `complete_wake` records start/failure evidence.
+- Task Execution creates a durable wake intent internally; `claim_wake`
+  atomically assigns it to one eligible host; `complete_wake` records
+  start/failure evidence.
 - `list_wake_intents` distinguishes `pending`, `claimed`, `completed`, `failed`, and
   `cancelled` wakes. A host daemon should poll pending wakes and launch/reuse a supervised
   runtime.

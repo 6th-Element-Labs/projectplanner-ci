@@ -108,10 +108,10 @@ ok(tick.get("status") == "session_ensured"
    and started.get("project") == "switchboard"
    and started.get("role") == "implementation",
    "Autopilot ensures the exact task through start_task")
-source = Path("dispatch.py").read_text()
-ok("DOGFOOD-20" in source and "mac_preferred" in source
-   and "aws_overflow" in source and "PM_AUTOPILOT_COFLEET" not in source,
-   "start_task prefers Mac and gates AWS overflow on DOGFOOD-20")
+source = Path("src/switchboard/application/commands/task_execution.py").read_text()
+ok("def start_task(" in source and "connect_dispatch.enqueue_task" in source
+   and "dispatch.dispatch" not in source,
+   "Autopilot reaches the single Task Execution start authority")
 
 config = coordinator_daemon.DaemonConfig.from_env({
     "PM_COORDINATOR_AUTOPILOT_PROJECTS": "switchboard",

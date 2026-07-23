@@ -238,10 +238,8 @@ old_drain = agent_host._drain_runners
 old_action = agent_host.supervisor_action
 old_try = agent_host._try
 old_drop = agent_host._drop_host_bridge
-old_enforcement = os.environ.get("PM_RUNNER_LEASE_ENFORCEMENT")
 host_calls = []
 try:
-    os.environ["PM_RUNNER_LEASE_ENFORCEMENT"] = "1"
     def drain(_host_id):
         rows = store.list_runner_sessions(task_id=task["task_id"],
                                           include_stale=True, project=P)
@@ -271,14 +269,10 @@ finally:
     agent_host.supervisor_action = old_action
     agent_host._try = old_try
     agent_host._drop_host_bridge = old_drop
-    if old_enforcement is None:
-        os.environ.pop("PM_RUNNER_LEASE_ENFORCEMENT", None)
-    else:
-        os.environ["PM_RUNNER_LEASE_ENFORCEMENT"] = old_enforcement
 
 assert enforced == [{
     "runner_session_id": "run-bug154-bound", "task_id": task["task_id"],
-    "reason": "runner_lease_expired", "would_expire": False, "expired": True,
+    "reason": "runner_lease_expired", "expired": True,
 }]
 assert ("kill", "run-bug154-bound") == host_calls[0][:2]
 assert not any(call[:2] == ("kill", "run-bug154-review") for call in host_calls)

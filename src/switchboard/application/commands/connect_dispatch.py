@@ -238,17 +238,8 @@ def enqueue_task(
         "agent_id": assignment.principal_ref,
         "task_id": task_id,
     }
-    # SIMPLIFY-20 makes the BUG-155 execution lease the default authority.
-    # PM_RUNNER_LEASE_ENFORCEMENT=0 is the one temporary, audited rollback
-    # switch retained through SIMPLIFY-16; there is no second lifecycle flag.
-    lifecycle_enforced = str(
-        os.environ.get("PM_RUNNER_LEASE_ENFORCEMENT", "1")).strip().lower() not in {
-            "0", "false", "no", "off"}
-    if lifecycle_enforced:
-        # SIMPLIFY-20 owns activation. Once activated, placement must select a
-        # host that advertises both lifecycle parsing and lease enforcement.
-        selector["capabilities"] = [
-            "execution_lease_v2", "runner_lease_enforcement"]
+    selector["capabilities"] = [
+        "execution_lease_v2", "runner_lease_enforcement"]
     policy = {
         "mode": CONNECT_WAKE_MODE,
         "assignment": {

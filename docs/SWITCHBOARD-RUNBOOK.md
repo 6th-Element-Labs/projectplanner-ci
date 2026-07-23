@@ -451,10 +451,9 @@ and `open`; unsupported actions are recorded as refused control requests with
 curl -s "$PM_BASE/ixp/v1/runner_sessions?project=switchboard&task_id=HARDEN-24&include_stale=true" \
   -H "Authorization: Bearer $PM_MCP_TOKEN"
 
-curl -s "$PM_BASE/ixp/v1/request_runner_health" \
+curl -s "$PM_BASE/api/tasks/HARDEN-24/execution?project=switchboard" \
   -H "Authorization: Bearer $PM_MCP_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"project":"switchboard","runner_session_id":"run_...","reason":"operator triage"}'
+  -H "Accept: application/json"
 ```
 
 ### 3.1 Run the P0 message-only host on the Plan VM

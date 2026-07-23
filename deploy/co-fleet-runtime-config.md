@@ -21,7 +21,6 @@ parameter that nothing in the repo described, so nothing could catch it.
 | `PM_AGENT_WORK_MODULE_CURSOR` | for cursor pools | |
 | `PM_AGENT_WORK_MODULE` | fallback | used when no runtime-specific key is set |
 | `PM_AUTO_WORK_SESSION` | **yes** for `code_strict` lanes | without it a code_strict task is never claimed |
-| `PM_RUNNER_LEASE_ENFORCEMENT` | optional rollback only | defaults to `1`; `0` is the audited SIMPLIFY-16 rollback |
 | `PM_BASE`, `PM_PROJECT` | yes | |
 | `PM_VERIFY_COMPLETION_PUSH` | recommended | see the push-verify memo |
 | `PM_WORK_SESSION_TEST_CMD` | optional | |
@@ -44,7 +43,6 @@ fallbacks): `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKE
   "PM_MCP_TOKEN": "<secret>",
   "PM_AGENT_WORK_MODULE_CODEX": "adapters.codex_local_worker:run",
   "PM_AUTO_WORK_SESSION": "1",
-  "PM_RUNNER_LEASE_ENFORCEMENT": "1",
   "PM_VERIFY_COMPLETION_PUSH": "1",
   "AWS_REGION": "us-east-1"
 }

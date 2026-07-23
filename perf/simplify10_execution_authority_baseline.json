@@ -7,7 +7,6 @@
     "commands": "src/switchboard/application/commands/task_execution.py",
     "connect_dispatch": "src/switchboard/application/commands/connect_dispatch.py",
     "projection": "src/switchboard/application/queries/task_session.py",
-    "legacy_launcher": "dispatch.py",
     "persistence": [
       "src/switchboard/storage/repositories/runner.py",
       "src/switchboard/storage/repositories/coordination.py",
@@ -27,7 +26,6 @@
       "src/switchboard/api/routers/claims.py",
       "src/switchboard/application/commands/runner_control.py",
       "src/switchboard/application/commands/runner_pty.py",
-      "src/switchboard/application/commands/request_wake.py",
       "src/switchboard/mcp/tools/runner.py",
       "src/switchboard/mcp/tools/wakes.py"
     ]
@@ -35,11 +33,9 @@
   "scopes": {
     "wake_assembly_outside_service": {
       "description": "Non-service production files that build a wake intent themselves, or hand store.request_wake to something else as a callable.",
-      "measured": 1,
-      "ceiling": 1,
-      "known": {
-        "deliverable_closure/__init__.py": "closure-verifier message_only wake; owner SIMPLIFY-2"
-      }
+      "measured": 0,
+      "ceiling": 0,
+      "known": {}
     },
     "legacy_launcher_calls_outside_service": {
       "description": "Non-service production files that reach the launcher (dispatch.dispatch / start_task / resume_review / dispatch_to_co_fleet / latest_from_task_session) directly instead of through a task-execution command. These bypass the attach/dedupe guard, so each one can still fork a second session.",
@@ -65,13 +61,9 @@
     },
     "browser_execution_facts": {
       "description": "static/**.js sites that use execution identity the server owns: assembling a wake payload, or sending a self-chosen runner_session_id to a control/PTY/watch endpoint.",
-      "measured": 16,
-      "ceiling": 16,
-      "known": {
-        "static/app.js": "Fleet tab wake modal + fleet runner control table; owner SIMPLIFY-11 (the task-modal primary card now reads GET /api/tasks/{id}/execution \u2014 UI-58)",
-        "static/js/runner-session.js": "fleet-generic runner control table, the Watch-panel gate read, and the control-delivery poll; owner UI-57 / UI-58 follow-on",
-        "static/js/proof-console.js": "Proof Console picks its own task and runner; owner UI-58 follow-on"
-      }
+      "measured": 0,
+      "ceiling": 0,
+      "known": {}
     },
     "task_execution_surface": {
       "description": "HARD ZERO. The task REST router and the task/task-execution MCP tool modules must never assemble a wake, select a host, author an assignment, or resolve a runner id: every execution fact comes from the service.",
