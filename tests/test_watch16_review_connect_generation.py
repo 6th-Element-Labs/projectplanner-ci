@@ -57,7 +57,7 @@ assert (captured[2]["policy"]["assignment"]["assignment_id"]
         != captured[0]["policy"]["assignment"]["assignment_id"])
 assert (captured[3]["policy"]["assignment"]["assignment_id"]
         != captured[2]["policy"]["assignment"]["assignment_id"])
-assert all("role" not in row["policy"]["assignment"]
+assert all(row["policy"]["assignment"]["role"] == "review_merge"
            and "source_sha" not in row["policy"]["assignment"]
            for row in captured)
 

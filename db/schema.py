@@ -340,6 +340,10 @@ def apply_schema(c):
             completed_at   REAL,
             abandon_reason TEXT,
             idem_key       TEXT
+            ,runner_session_id TEXT
+            ,execution_generation INTEGER
+            ,execution_role TEXT
+            ,lease_epoch INTEGER
         );
         CREATE INDEX IF NOT EXISTS ix_task_claims_active
             ON task_claims(task_id, status, expires_at);
@@ -1033,6 +1037,10 @@ def apply_schema(c):
             updated_at           REAL NOT NULL,
             expires_at           REAL,
             completed_at         REAL
+            ,runner_session_id TEXT
+            ,execution_generation INTEGER
+            ,execution_role TEXT
+            ,lease_epoch INTEGER
         );
         CREATE INDEX IF NOT EXISTS ix_work_sessions_task
             ON work_sessions(task_id, status, updated_at);

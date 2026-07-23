@@ -64,11 +64,12 @@ for row in captured:
        "durable wake policy contains only Connect mode and assignment")
     ok(set(assignment) == {
         "schema", "assignment_id", "principal_ref", "work_ref", "runtime",
-        "provider", "workspace_ref", "limits", "queued_at",
-    }, "assignment carries only the immutable Connect contract")
+        "provider", "workspace_ref", "limits", "queued_at", "execution_id",
+        "generation", "role", "head_sha", "fence_epoch",
+    }, "assignment carries the immutable execution-lease v2 contract")
     forbidden = {
         "mcp", "token", "credential", "claim", "work_session", "review",
-        "evidence", "role", "instruction", "prompt", "git", "pull_request",
+        "evidence", "instruction", "prompt", "pull_request",
         "done", "lifecycle", "completion",
     }
     words = {str(key).lower() for key in assignment}
@@ -185,6 +186,8 @@ ok('if wake_mode(claimed_wake, inventory) == "connect":' in host_source
    and "launch_env = {}" in host_source,
    "Connect launch bypasses legacy claim and Work Session bootstrap environment")
 
+os.environ["PM_RUNNER_LEASE_ENFORCEMENT"] = "1"
+saved_work_module = os.environ.pop("PM_AGENT_WORK_MODULE", None)
 for row in captured:
     runtime = row["selector"]["runtime"]
     wake = {
@@ -196,7 +199,8 @@ for row in captured:
         "policy": {"allow_work": True},
         "runtimes": [{
             "runtime": runtime, "provider": row["selector"]["provider"],
-            "lanes": ["DISPATCH"], "capabilities": [],
+            "lanes": ["DISPATCH"], "capabilities": [
+                "execution_lease_v2", "runner_lease_enforcement"],
             "policy": {"allow_work": True, "lane_mode": "all_project_lanes"},
         }],
     }
@@ -212,6 +216,9 @@ for row in captured:
         ok("mcp_servers.taikun_plan.required=true" in command
            and "SWITCHBOARD_CONNECT_SESSION_TOKEN" in " ".join(command),
            "codex Connect requires host taikun_plan MCP at launch")
+os.environ.pop("PM_RUNNER_LEASE_ENFORCEMENT", None)
+if saved_work_module is not None:
+    os.environ["PM_AGENT_WORK_MODULE"] = saved_work_module
 
 codex_row = captured[0]
 wrong_provider_inventory = {

@@ -184,6 +184,7 @@ def enqueue_task(
     runtime: str = "codex",
     predecessor_wake_id: str = "",
     generation_ref: str = "",
+    role: str = "implementation",
 ) -> dict[str, Any]:
     """Persist one provider-neutral assignment for any Start surface.
 
@@ -231,18 +232,21 @@ def enqueue_task(
         "lane": lane,
         "agent_id": assignment.principal_ref,
         "task_id": task_id,
+        # Execution-lease aware assignments must never land on an older host
+        # which only understands the v1 opaque Assignment contract.
+        "capabilities": ["execution_lease_v2", "runner_lease_enforcement"],
     }
     policy = {
         "mode": CONNECT_WAKE_MODE,
         "assignment": {
-            "schema": "switchboard.connect.assignment.v1",
+            "schema": "switchboard.connect.assignment.v2",
             **asdict(assignment),
             # Lifecycle identity is allocated before the wake is visible.  It
             # remains stable across host selection and is distinct from the
             # host-local runner_session_id that is bound after claim_wake.
             "execution_id": assignment.assignment_id,
             "generation": max(1, int(assignment.queued_at * 1_000_000)),
-            "role": "implementation",
+            "role": str(role or "implementation"),
             "head_sha": str((task.get("git_state") or {}).get("head_sha") or ""),
             "fence_epoch": 1,
         },

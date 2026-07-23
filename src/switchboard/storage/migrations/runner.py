@@ -136,6 +136,22 @@ ADDITIVE_COLUMN_MIGRATIONS: List[Tuple[str, str, str, str]] = [
     # BUG-89 — terminal wake history remains auditable but leaves hot Fleet/MCP reads.
     ("0066_wake_intents_archived_at", "wake_intents", "archived_at",
      "ALTER TABLE wake_intents ADD COLUMN archived_at REAL"),
+    ("0076_task_claims_runner_session_id", "task_claims", "runner_session_id",
+     "ALTER TABLE task_claims ADD COLUMN runner_session_id TEXT"),
+    ("0077_task_claims_execution_generation", "task_claims", "execution_generation",
+     "ALTER TABLE task_claims ADD COLUMN execution_generation INTEGER"),
+    ("0078_task_claims_execution_role", "task_claims", "execution_role",
+     "ALTER TABLE task_claims ADD COLUMN execution_role TEXT"),
+    ("0079_task_claims_lease_epoch", "task_claims", "lease_epoch",
+     "ALTER TABLE task_claims ADD COLUMN lease_epoch INTEGER"),
+    ("0080_work_sessions_runner_session_id", "work_sessions", "runner_session_id",
+     "ALTER TABLE work_sessions ADD COLUMN runner_session_id TEXT"),
+    ("0081_work_sessions_execution_generation", "work_sessions", "execution_generation",
+     "ALTER TABLE work_sessions ADD COLUMN execution_generation INTEGER"),
+    ("0082_work_sessions_execution_role", "work_sessions", "execution_role",
+     "ALTER TABLE work_sessions ADD COLUMN execution_role TEXT"),
+    ("0083_work_sessions_lease_epoch", "work_sessions", "lease_epoch",
+     "ALTER TABLE work_sessions ADD COLUMN lease_epoch INTEGER"),
 ]
 
 # Idempotent DDL migrations (``CREATE ... IF NOT EXISTS``) applied after the column set,

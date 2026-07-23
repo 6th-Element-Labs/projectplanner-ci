@@ -471,7 +471,7 @@ def default_inventory():
     cloud_enabled = runtime == "codex" and bool(os.environ.get("PM_CODEX_CLOUD_ENVIRONMENT_ID"))
     profiles = ["ixp.v1", "txp.dispatch.v0"]
     capabilities = ["docs", "python", "github", "tests"]
-    if _truthy(os.environ.get("PM_RUNNER_LEASE_ENFORCEMENT", "1")):
+    if _truthy(os.environ.get("PM_RUNNER_LEASE_ENFORCEMENT")):
         capabilities.extend(["execution_lease_v2", "runner_lease_enforcement"])
     # Fleet workers advertise a host-owned capability profile.  The wake payload may
     # select from this inventory, but it cannot add capabilities to the host.  Keeping
@@ -907,11 +907,18 @@ def launch_command(wake, inventory, runner_session_id=""):
         raise ValueError("wake asks for global claim_next but host policy forbids global work")
     if mode == "connect":
         assignment_data = dict((wake.get("policy") or {}).get("assignment") or {})
-        if assignment_data.pop("schema", "") != "switchboard.connect.assignment.v1":
+        assignment_schema = assignment_data.pop("schema", "")
+        if assignment_schema not in {
+                "switchboard.connect.assignment.v1",
+                "switchboard.connect.assignment.v2"}:
             raise ValueError("connect assignment schema is invalid")
-        for lifecycle_field in (
-                "execution_id", "generation", "role", "head_sha", "fence_epoch"):
-            assignment_data.pop(lifecycle_field, None)
+        lifecycle = {}
+        if assignment_schema == "switchboard.connect.assignment.v2":
+            if not _truthy(os.environ.get("PM_RUNNER_LEASE_ENFORCEMENT")):
+                raise ValueError("connect assignment v2 requires runner lease enforcement")
+            for lifecycle_field in (
+                    "execution_id", "generation", "role", "head_sha", "fence_epoch"):
+                lifecycle[lifecycle_field] = assignment_data.pop(lifecycle_field, None)
         limits = assignment_data.get("limits") or {}
         assignment_data["limits"] = ResourceLimits(**limits)
         assignment = Assignment(**assignment_data)
@@ -1166,7 +1173,8 @@ def register_runner_session(rec, wake, inventory):
     execution = policy.get("execution_binding") or {}
     assignment = policy.get("assignment") or {}
     lifecycle = policy.get("lifecycle") or {}
-    connect_assignment = assignment.get("schema") == "switchboard.connect.assignment.v1"
+    connect_assignment = assignment.get("schema") in {
+        "switchboard.connect.assignment.v1", "switchboard.connect.assignment.v2"}
     metadata = {
         "wake_id": wake.get("wake_id"),
         "wake_mode": rec.get("wake_mode"),
@@ -1909,13 +1917,12 @@ def reap_finished_or_idle_runners(inventory, *, now=None):
 def expire_runner_leases(inventory, *, now=None):
     """Enforce the single process-stop clock: the renewable runner lease.
 
-    Enforcement is the safe default: an expired, centrally fenced lease must
-    stop its exact supervised process.  Operators may explicitly set
-    PM_RUNNER_LEASE_ENFORCEMENT=0 for a visible diagnostic-only deployment.
-    No task/claim/ack/idle state participates.
+    Enforcement remains an explicit deployment capability. S20 owns the
+    observation/default-on rollout; BUG-155 only consumes an advertised,
+    already-enabled lease authority.
     """
     now = time.time() if now is None else float(now)
-    enforce = _truthy(os.environ.get("PM_RUNNER_LEASE_ENFORCEMENT", "1"))
+    enforce = _truthy(os.environ.get("PM_RUNNER_LEASE_ENFORCEMENT"))
     host_id = str((inventory or {}).get("host_id") or "")
     outcomes = _drain_pending_stop_receipts(host_id)
     for session in _drain_runners(host_id):
@@ -2134,7 +2141,7 @@ def renew_live_direct_runners(inventory):
                 metadata.get("failure_reason")
                 or "supervisor reported the process exited"
             ).strip()
-            terminal = _try("POST", P_HEARTBEAT_RUNNER, {
+            receipt = {
                 "project": PROJECT,
                 "runner_session_id": session.get("runner_session_id"),
                 "host_id": host_id,
@@ -2143,7 +2150,11 @@ def renew_live_direct_runners(inventory):
                 "metadata": {**metadata,
                              "failure_reason": reason,
                              "terminalized_by": "host_supervisor"},
-            })
+            }
+            _persist_pending_stop_receipt(receipt)
+            terminal = _try("POST", P_HEARTBEAT_RUNNER, receipt)
+            if terminal and not terminal.get("error"):
+                _delete_pending_stop_receipt(session.get("runner_session_id"))
             wake_repaired = False
             # SIMPLIFY-3 / BUG-102: same tick — if a wake is bound, force
             # complete_wake(started=false) so claimed limbo cannot outlive the
