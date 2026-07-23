@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -81,6 +82,41 @@ def _text(payload: Mapping[str, Any]) -> str:
     )).lower()
 
 
+# Prose tokens are matched on word boundaries. Plain substring matching made
+# "route" fire on the word "router" in a task description, which classified a
+# four-markdown-file ADR as UI-impacting and demanded Playwright evidence for it.
+_TOKEN_PATTERNS: dict[str, re.Pattern[str]] = {}
+
+
+def _token_pattern(token: str) -> re.Pattern[str]:
+    pattern = _TOKEN_PATTERNS.get(token)
+    if pattern is None:
+        pattern = re.compile(rf"\b{re.escape(token.strip())}\b")
+        _TOKEN_PATTERNS[token] = pattern
+    return pattern
+
+
+# Reasons backed by the actual diff, as opposed to words in a task description.
+_FILE_EVIDENCE_PREFIXES = ("ui_path:", "ui_consumed_api_manifest:")
+
+
+def _has_file_evidence(reasons: Iterable[str]) -> bool:
+    return any(str(reason).startswith(_FILE_EVIDENCE_PREFIXES) for reason in reasons)
+
+
+def ui_validation_enforced(project: str) -> bool:
+    """Whether this project owns the Playwright runner the gate demands.
+
+    The runner command (``scripts/run_ui_playwright.py``) and the UI path
+    prefixes are Switchboard's own. Requiring that receipt from a task in
+    another repository asks for evidence that cannot exist there.
+    """
+    declared = project_validation_policy(project).get("ui_validation_enforced")
+    if declared is None:
+        return project == "switchboard"
+    return bool(declared)
+
+
 def _normalized_files(changed_files: Iterable[Any] | None) -> list[str]:
     return sorted({str(item or "").strip().lower().lstrip("./")
                    for item in (changed_files or []) if str(item or "").strip()})
@@ -97,7 +133,7 @@ def infer_ui_impact(payload: Mapping[str, Any],
                 or path.endswith((".html", ".css", ".js", ".tsx", ".jsx"))):
             reasons.append(f"ui_path:{path}")
     for token in _UI_TEXT_TOKENS:
-        if token in text:
+        if _token_pattern(token).search(text):
             reasons.append(f"ui_signal:{token.strip()}")
     endpoints = ui_consumed_endpoint_manifest().get("endpoints") or []
     if files and any(path.startswith("src/switchboard/api/") for path in files):
@@ -111,9 +147,14 @@ def _looks_like_code(payload: Mapping[str, Any]) -> bool:
 
 
 def validation_requirement(ui_impact: str, reasons: Iterable[str] = (),
-                           payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
+                           payload: Mapping[str, Any] | None = None,
+                           project: str = "switchboard") -> dict[str, Any]:
     if ui_impact != "yes":
         return {"required": False}
+    if not ui_validation_enforced(project):
+        return {"required": False, "project": project,
+                "reason": "ui_validation_not_enforced_for_project",
+                "reasons": sorted(set(str(item) for item in reasons))}
     text = f" {_text(payload or {})} "
     live_edge = any(token in text for token in _LIVE_EDGE_TOKENS)
     return {
@@ -152,6 +193,13 @@ def classify_task(payload: Mapping[str, Any], *, project: str,
         impact = "no"
         source = "deterministic_intake"
         reasons.append("intake_requires_classification_on_implementation_conversion")
+    elif inferred["ui"] and explicit == "no" and not _has_file_evidence(reasons):
+        # Words in a task description are not evidence of a UI change. Only the
+        # diff can overrule an explicit "no"; otherwise a declaration is
+        # unfalsifiable and the author has no way to be believed.
+        impact = "no"
+        source = "explicit"
+        reasons.append("prose_signal_ignored_without_file_evidence")
     elif inferred["ui"]:
         impact = "yes"
         if explicit == "no":
@@ -178,7 +226,8 @@ def classify_task(payload: Mapping[str, Any], *, project: str,
         reasons.append("classification_enforced_at_scoping_boundary"
                        if source == "legacy_repository_default"
                        else "no_code_or_ui_signal")
-    requirement = validation_requirement(impact, reasons, {**current, **dict(payload)})
+    requirement = validation_requirement(impact, reasons, {**current, **dict(payload)},
+                                         project=project)
     return {
         "ok": True, "schema": VALIDATION_POLICY_SCHEMA, "project": project,
         "ui_impact": impact, "classification_source": source,

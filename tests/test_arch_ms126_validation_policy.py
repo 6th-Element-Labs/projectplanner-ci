@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from switchboard.domain.validation_policy import (
+    infer_ui_impact,
     UI_CONTEXT,
     classify_task,
     project_validation_policy,
@@ -56,6 +57,43 @@ upgraded = classify_task(
 )
 ok(upgraded["ui_impact"] == "yes" and upgraded["classification_source"] == "upgraded_from_false_no",
    "false no is automatically upgraded from the changed path")
+
+# BUG-1: a word in a task description is not evidence of a UI change. CORE-1 on
+# the atlas board ("router/tool/migration/worker/health registration hooks",
+# four markdown files) was classified UI-impacting because "route" matched
+# inside "router", and an explicit ui_impact=no could not overrule it.
+prose_only = classify_task(
+    {"task_id": "CORE-1", "ui_impact": "no",
+     "title": "Define the core capability contract and package architecture ADR",
+     "description": "router/tool/migration/worker/health registration hooks"},
+    project="atlas",
+)
+ok(prose_only["ui_impact"] == "no",
+   "a docs task whose description says 'router' is not UI-impacting")
+
+# A description that does carry a real UI word, with no UI file behind it.
+prose_token_only = classify_task(
+    {"task_id": "CORE-9", "ui_impact": "no", "title": "Document the deploy profile",
+     "description": "deploy notes only"},
+    project="switchboard", changed_files=["docs/profiles.md"],
+)
+ok(prose_token_only["ui_impact"] == "no"
+   and "prose_signal_ignored_without_file_evidence" in prose_token_only["reasons"],
+   "prose alone cannot overrule an explicit ui_impact=no")
+
+ok(not infer_ui_impact({"title": "router registration hooks"})["ui"],
+   "'router' no longer trips the 'route' token")
+ok(infer_ui_impact({"title": "fix caddy routing"})["ui"],
+   "genuine routing work is still detected")
+
+off_project = classify_task(
+    {"title": "Browser session cookie work", "ui_impact": "yes"}, project="atlas")
+ok(off_project["ui_validation"].get("required") is False,
+   "Playwright evidence is not demanded from projects without the runner")
+on_project = classify_task(
+    {"title": "Browser session cookie work", "ui_impact": "yes"}, project="switchboard")
+ok(on_project["ui_validation"]["required"] is True,
+   "Switchboard UI work is still gated on exact-head Playwright evidence")
 
 task = {
     "task_id": "ARCH-MS-X", "title": "Browser authentication change",
