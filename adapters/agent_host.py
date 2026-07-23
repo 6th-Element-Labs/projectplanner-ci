@@ -637,6 +637,11 @@ def apply_authoritative_execution_policy(inventory, response):
     # placement the moment PM_COORD_REQUIRE_RUNNER_WATCH is enforced).
     capabilities = [item for item in (policy.get("capabilities") or [])
                     if str(item).strip().lower() != RUNNER_WATCH_CAPABILITY]
+    # SIMPLIFY-20 / BUG-161: these are host-proven execution facts, not
+    # operator-grantable permissions. An older enrolled policy must not strip
+    # them after startup and make an enforcement-capable host ineligible.
+    if runner_lease_enforcement_enabled():
+        capabilities.extend(RUNNER_LEASE_CAPABILITIES)
     if host_serves_runner_watch():
         capabilities.append(RUNNER_WATCH_CAPABILITY)
     runtime.update({
