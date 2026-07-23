@@ -12,8 +12,11 @@ from path_setup import ROOT  # noqa: F401
 
 tmp = Path(tempfile.mkdtemp(prefix="bug154-"))
 os.environ["PM_SWITCHBOARD_DB_PATH"] = str(tmp / "switchboard.db")
-os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = str(tmp / "registry.db")
-os.environ["PM_DYNAMIC_PROJECTS_DIR"] = str(tmp)
+os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = str(
+    Path("/tmp") / f"bug154-registry-{tmp.name}.db")
+projects_dir = tmp / "projects"
+projects_dir.mkdir()
+os.environ["PM_DYNAMIC_PROJECTS_DIR"] = str(projects_dir)
 os.environ["PM_AUTH_MODE"] = "dev-open"
 
 import store  # noqa: E402
@@ -58,7 +61,10 @@ def make_claim(title: str):
 
 store.init_db(P)
 task, claim, work_session = make_claim("surrender exact runner generation")
-other_task, other_claim, _other_work_session = make_claim("preserve another generation")
+other_task = store.create_task({
+    "workstream_id": "BUG", "title": "preserve another generation",
+    "status": "Not Started", "ui_impact": "no",
+}, actor="bug154-test", project=P)
 
 
 def register(runner_id: str, task_id: str, claim_id: str, *,
@@ -80,7 +86,7 @@ bound = register("run-bug154-bound", task["task_id"], "",
                  work_session_id=bound_work_session)
 review = register("run-bug154-review", task["task_id"], "",
                   work_session_id="ws-review-generation")
-other = register("run-bug154-other", other_task["task_id"], other_claim["claim_id"])
+other = register("run-bug154-other", other_task["task_id"], "claim-unrelated")
 assert not bound.get("stale") and not review.get("stale") and not other.get("stale")
 
 completed = store.complete_claim(
@@ -98,7 +104,11 @@ completed = store.complete_claim(
         "git_diff_check": "clean",
     },
     actor="bug154-test", project=P)
-assert completed["completed"] is True
+assert completed["completed"] is False
+assert completed["stopping"] is True
+assert completed["pending_host_ack"] is True
+assert completed["execution_id"] == "run-bug154-bound"
+assert store.get_task(task["task_id"], project=P)["status"] == "In Progress"
 
 surrendered = store.get_runner_session("run-bug154-bound", project=P)
 unrelated = store.get_runner_session("run-bug154-other", project=P)
@@ -165,6 +175,7 @@ assert enforced == [{
 assert ("kill", "run-bug154-bound") == host_calls[0][:2]
 assert not any(call[:2] == ("kill", "run-bug154-review") for call in host_calls)
 assert store.get_runner_session("run-bug154-bound", project=P)["status"] == "expired"
+assert store.get_task(task["task_id"], project=P)["status"] == "In Review"
 assert store.get_runner_session("run-bug154-other", project=P)["status"] == "running"
 fleet_live_ids = {
     row["runner_session_id"] for row in store.list_runner_sessions(

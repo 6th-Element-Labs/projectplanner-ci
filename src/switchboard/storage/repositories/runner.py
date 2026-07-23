@@ -2099,6 +2099,12 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
                              "work_session_id": work_session_id,
                              "runner_status": runner_status}, sort_keys=True), now),
             )
+    # A completion request is not a completed claim until the owning Agent Host
+    # reports this exact supervised generation terminal.  The helper is
+    # idempotent, so a retried terminal heartbeat cannot double-complete it.
+    if runner_status in RUNNER_TERMINAL_STATUSES:
+        from .claims import terminal_ack_claim_completion_in
+        terminal_ack_claim_completion_in(c, runner_session_id, actor, now)
     _release_terminal_runner_ownership_in(
         c, record, metadata, runner_session_id, actor, now)
     _renew_personal_claim_from_runner_in(c, record, principal_id, now)

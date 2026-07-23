@@ -1898,12 +1898,13 @@ def reap_finished_or_idle_runners(inventory, *, now=None):
 def expire_runner_leases(inventory, *, now=None):
     """Enforce the single process-stop clock: the renewable runner lease.
 
-    Deployments begin in observe-only mode. Set PM_RUNNER_LEASE_ENFORCEMENT=1
-    after the 24-hour observation window to allow expired leases to stop their
-    supervised process. No task/claim/ack/idle state participates.
+    Enforcement is the safe default: an expired, centrally fenced lease must
+    stop its exact supervised process.  Operators may explicitly set
+    PM_RUNNER_LEASE_ENFORCEMENT=0 for a visible diagnostic-only deployment.
+    No task/claim/ack/idle state participates.
     """
     now = time.time() if now is None else float(now)
-    enforce = _truthy(os.environ.get("PM_RUNNER_LEASE_ENFORCEMENT"))
+    enforce = _truthy(os.environ.get("PM_RUNNER_LEASE_ENFORCEMENT", "1"))
     host_id = str((inventory or {}).get("host_id") or "")
     outcomes = []
     for session in _drain_runners(host_id):
