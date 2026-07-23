@@ -279,8 +279,7 @@ def check_direct_task_completion_authority(
     assignment = policy.get("assignment") or {}
     connect = bool(
         wake and policy.get("mode") == "connect"
-        and assignment.get("schema") in {
-            "switchboard.connect.assignment.v1", "switchboard.connect.assignment.v2"})
+        and assignment.get("schema") == "switchboard.connect.assignment.v1")
     if wake and not (direct or connect):
         reasons.append("wake_not_direct_personal_cli")
     expected_wake = {
@@ -319,8 +318,8 @@ def check_direct_task_completion_authority(
         assignment_matches = (
             metadata.get("direct_assignment") is True if direct else
             metadata.get("connect_assignment") is True
-            and metadata.get("assignment_schema") in {
-                "switchboard.connect.assignment.v1", "switchboard.connect.assignment.v2"}
+            and metadata.get("assignment_schema")
+            == "switchboard.connect.assignment.v1"
             and str(metadata.get("assignment_id") or "")
             == str(assignment.get("assignment_id") or "")
         )
@@ -381,9 +380,8 @@ def issue_direct_session_mcp_token(
             and policy.get("execution_mode") == "direct_personal_cli")
         connect = bool(
             policy.get("mode") == "connect"
-            and assignment.get("schema") in {
-                "switchboard.connect.assignment.v1",
-                "switchboard.connect.assignment.v2"})
+            and assignment.get("schema")
+            == "switchboard.connect.assignment.v1")
         if not (direct or connect):
             reasons.append("assignment_mode_mismatch")
         selected_host = str(
@@ -915,8 +913,8 @@ def is_native_assignment_runner(record: Dict[str, Any]) -> bool:
     )
     connect = (
         metadata.get("connect_assignment") is True
-        and metadata.get("assignment_schema") in {
-            "switchboard.connect.assignment.v1", "switchboard.connect.assignment.v2"}
+        and metadata.get("assignment_schema")
+        == "switchboard.connect.assignment.v1"
     )
     return bool(
         (direct or connect)
@@ -943,8 +941,8 @@ def is_connect_assignment_runner(record: Dict[str, Any]) -> bool:
     return bool(
         metadata.get("connect_assignment") is True
         and metadata.get("native_host_execution") is True
-        and metadata.get("assignment_schema") in {
-            "switchboard.connect.assignment.v1", "switchboard.connect.assignment.v2"}
+        and metadata.get("assignment_schema")
+        == "switchboard.connect.assignment.v1"
         and bind.get("task_id")
         and bind.get("host_id", "").startswith("host/")
         and bind.get("wake_id")
@@ -1741,8 +1739,8 @@ def _native_agent_host_runner_allowed_in(
     )
     connect_candidate = bool(
         metadata.get("connect_assignment") is True
-        and metadata.get("assignment_schema") in {
-            "switchboard.connect.assignment.v1", "switchboard.connect.assignment.v2"}
+        and metadata.get("assignment_schema")
+        == "switchboard.connect.assignment.v1"
         and status == "running"
         and not record.get("claim_id")
     )
@@ -1796,8 +1794,8 @@ def _native_agent_host_runner_allowed_in(
     connect = bool(
         policy.get("mode") == "connect"
         and metadata.get("connect_assignment") is True
-        and metadata.get("assignment_schema") in {
-            "switchboard.connect.assignment.v1", "switchboard.connect.assignment.v2"}
+        and metadata.get("assignment_schema")
+        == "switchboard.connect.assignment.v1"
         and status == "running"
         and not record.get("claim_id")
     )
@@ -1936,7 +1934,8 @@ def _renew_exact_preclaim_runner_in(
 
 
 def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
-                              principal_id: str, actor: str, now: float) -> Dict[str, Any]:
+                              principal_id: str, actor: str, now: float,
+                              project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     runner_session_id = (record.get("runner_session_id") or record.get("id") or "").strip()
     if not runner_session_id:
         return {"error": "runner_session_id required"}
@@ -2003,6 +2002,24 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
     terminalizing_fenced_generation = (
         incoming_metadata.get("terminalized_by") in {
             "runner_lease_expiry", "host_supervisor"})
+    completion_handoff = previous_metadata.get("completion_handoff") or {}
+    if lease_surrender and terminalizing_fenced_generation and completion_handoff:
+        mismatched = []
+        for field, expected in (
+                ("execution_generation", completion_handoff.get("generation")),
+                ("lease_epoch", completion_handoff.get("lease_epoch")),
+                ("execution_role", completion_handoff.get("role"))):
+            supplied = incoming_metadata.get(field)
+            if supplied not in (None, "") and str(supplied) != str(expected):
+                mismatched.append(field)
+        if mismatched:
+            return {
+                "error": "terminal acknowledgement identity mismatch",
+                "error_code": "terminal_ack_identity_mismatch",
+                "failure_class": "unbound_identity",
+                "runner_session_id": runner_session_id,
+                "mismatched_fields": mismatched,
+            }
     if lease_surrender and not terminalizing_fenced_generation:
         # complete_claim fenced this exact runner generation.  Returning the
         # stored row makes retries harmless and prevents a delayed host
@@ -2084,9 +2101,17 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
     runner_status = str(record.get("status") or "").strip().lower()
     _sync_direct_session_token_lease_in(
         c, record, metadata, runner_session_id, now)
+    # Expected completion handoff owns the claim and Work Session until the
+    # exact enrolled host acknowledgement canonically finalizes both.
+    completion_resume = None
+    if runner_status in RUNNER_TERMINAL_STATUSES:
+        from .claims import terminal_ack_claim_completion_in
+        completion_resume = terminal_ack_claim_completion_in(
+            c, runner_session_id, actor, principal_id, narrow_host, now,
+            project=project)
     work_session_id = str(metadata.get("work_session_id") or "").strip()
     lease_expired = metadata.get("terminalized_by") == "runner_lease_expiry"
-    if (work_session_id
+    if (not completion_resume and work_session_id
             and (lease_expired
                  or str(metadata.get("auth_lane") or "") == "codex_host_local")
             and runner_status in RUNNER_FAILURE_TERMINAL_STATUSES):
@@ -2108,14 +2133,6 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
                              "work_session_id": work_session_id,
                              "runner_status": runner_status}, sort_keys=True), now),
             )
-    # A completion request is not a completed claim until the owning Agent Host
-    # reports this exact supervised generation terminal.  The helper is
-    # idempotent, so a retried terminal heartbeat cannot double-complete it.
-    completion_resume = None
-    if runner_status in RUNNER_TERMINAL_STATUSES:
-        from .claims import terminal_ack_claim_completion_in
-        completion_resume = terminal_ack_claim_completion_in(
-            c, runner_session_id, actor, principal_id, narrow_host, now)
     if not completion_resume:
         _release_terminal_runner_ownership_in(
             c, record, metadata, runner_session_id, actor, now)
@@ -2150,7 +2167,7 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
     row = c.execute("SELECT * FROM runner_sessions WHERE runner_session_id=?",
                     (runner_session_id,)).fetchone()
     session = _runner_session_row(row, now=now, include_claim=True, c=c)
-    if completion_resume and not completion_resume.get("completed"):
+    if completion_resume and completion_resume.get("completion"):
         session["_completion_resume"] = completion_resume
     if (not missing_runner_bind_fields(record)
             and not session.get("stale")
@@ -2168,14 +2185,14 @@ def upsert_runner_session(record: Dict[str, Any], principal_id: str = "",
                           project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     now = time.time()
     with _conn(project) as c:
-        result = _upsert_runner_session_in(c, record, principal_id, actor, now)
+        result = _upsert_runner_session_in(
+            c, record, principal_id, actor, now, project=project)
     resume = result.pop("_completion_resume", None) if isinstance(result, dict) else None
     if resume:
-        from .claims import complete_claim
-        result["completion"] = complete_claim(
-            resume["claim_id"], evidence=resume.get("evidence") or {},
-            final_status=resume.get("requested_status") or "", actor=actor,
-            project=project)
+        from .claims import _finalize_complete_claim_response
+        result["completion"] = _finalize_complete_claim_response(
+            resume["completion"], resume.get("evidence") or {},
+            project, "", actor)
     return result
 
 

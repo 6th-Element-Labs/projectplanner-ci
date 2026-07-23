@@ -16,6 +16,7 @@ import re
 import sqlite3
 import time
 import uuid
+from contextlib import nullcontext
 from typing import Any, Dict, List, Optional, Tuple
 
 import evidence_claims
@@ -1051,7 +1052,9 @@ def _complete_claim_impl(claim_id: str, evidence: str = "", final_status: str = 
                          project: str = DEFAULT_PROJECT,
                          mission_project: str = "",
                          finalize: bool = True,
-                         push_check: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                         push_check: Optional[Dict[str, Any]] = None,
+                         _connection: Optional[sqlite3.Connection] = None,
+                         _terminal_ack: bool = False) -> Dict[str, Any]:
     now = time.time()
     evidence_obj = _store_facade()._parse_evidence(evidence)
     requested_status = (final_status or evidence_obj.get("final_status") or evidence_obj.get("status") or "").strip()
@@ -1072,11 +1075,14 @@ def _complete_claim_impl(claim_id: str, evidence: str = "", final_status: str = 
     merged_at = evidence_obj.get("merged_at")
     if merged_at is None and evidence_obj.get("merged_sha"):
         merged_at = now
-    with _conn(project) as c:
+    connection_scope = (
+        _conn(project) if _connection is None else nullcontext(_connection))
+    with connection_scope as c:
         row = c.execute("SELECT * FROM task_claims WHERE id=?", (claim_id,)).fetchone()
         if not row:
             return {"error": "claim not found", "claim_id": claim_id}
-        if row["status"] != "active":
+        allowed_status = "active"
+        if row["status"] != allowed_status:
             return {"error": "claim is not active", "claim_id": claim_id,
                     "status": row["status"]}
         task_row = c.execute("SELECT * FROM tasks WHERE task_id=?", (row["task_id"],)).fetchone()
@@ -1128,10 +1134,11 @@ def _complete_claim_impl(claim_id: str, evidence: str = "", final_status: str = 
                       (row["task_id"], actor, "task.complete_blocked_semantic",
                        json.dumps({"evidence": evidence_obj, **response}, sort_keys=True), now))
             return response
-        handoff = _stage_managed_completion_stop_in(
-            c, row, work_session_gate, evidence_obj, requested_status, actor, now)
-        if handoff is not None:
-            return handoff
+        if not _terminal_ack:
+            handoff = _stage_managed_completion_stop_in(
+                c, row, work_session_gate, evidence_obj, requested_status, actor, now)
+            if handoff is not None:
+                return handoff
         c.execute("UPDATE task_claims SET status='completed', completed_at=? WHERE id=?",
                   (now, claim_id))
         c.execute("UPDATE resource_leases SET released_at=? WHERE resource_type='task' "
@@ -1292,6 +1299,13 @@ def _stage_managed_completion_stop_in(
     acknowledged = (metadata.get("completion_handoff") or {}).get("acknowledged_at")
     if acknowledged:
         return None
+    pending = metadata.get("completion_handoff") or {}
+    if (pending.get("claim_id") == claim["id"]
+            and pending.get("execution_id") == runner_id):
+        return {"completed": False, "stopping": True, "pending_host_ack": True,
+                "lifecycle_phase": "stopping", "claim_id": claim["id"],
+                "task_id": claim["task_id"], "execution_id": runner_id,
+                "status": "In Progress", "idempotent": True}
     if not runner or str(runner["status"] or "").lower() not in {
             "starting", "ready", "running"}:
         return {"completed": False, "reason": "implementation_execution_not_active",
@@ -1303,6 +1317,18 @@ def _stage_managed_completion_stop_in(
         return {"completed": False, "reason": "implementation_execution_binding_mismatch",
                 "failure_class": "unbound_identity", "claim_id": claim["id"],
                 "task_id": claim["task_id"], "execution_id": runner_id}
+    try:
+        pr_number = int(evidence.get("pr_number") or 0)
+    except (TypeError, ValueError):
+        pr_number = 0
+    if pr_number <= 0:
+        match = re.search(r"/pull/(\d+)(?:/|$)", str(evidence.get("pr_url") or ""))
+        pr_number = int(match.group(1)) if match else 0
+    head_sha = str(evidence.get("head_sha") or "").strip().lower()
+    if pr_number <= 0 or len(head_sha) < 7:
+        return {"completed": False, "reason": "completion_identity_incomplete",
+                "failure_class": "missing_data", "claim_id": claim["id"],
+                "task_id": claim["task_id"]}
     work_session = work_session_gate.get("work_session") or {}
     ws_id = str(work_session.get("work_session_id") or "")
     next_epoch = epoch + 1
@@ -1326,13 +1352,27 @@ def _stage_managed_completion_stop_in(
     c.execute("UPDATE runner_sessions SET heartbeat_at=?,metadata_json=?,updated_at=? "
               "WHERE runner_session_id=?",
               (now - ttl_s, json.dumps(metadata, sort_keys=True), now, runner_id))
-    c.execute("UPDATE task_claims SET status='stopping',lease_epoch=? WHERE id=?",
+    c.execute("UPDATE task_claims SET lease_epoch=? WHERE id=?",
               (next_epoch, claim["id"]))
     if ws_id:
         c.execute("UPDATE work_sessions SET lease_epoch=?,updated_at=? WHERE work_session_id=?",
                   (next_epoch, now, ws_id))
     c.execute("UPDATE direct_session_tokens SET revoked_at=? WHERE runner_session_id=? "
               "AND revoked_at IS NULL", (now, runner_id))
+    transition_id = "completion-" + uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"{claim['task_id']}:{pr_number}:{head_sha}:{generation}:review_handoff",
+    ).hex[:20]
+    c.execute(
+        "INSERT OR IGNORE INTO task_execution_completion_phases("
+        "transition_id,task_id,pr_number,head_sha,runner_generation,phase,outcome,"
+        "evidence_json,failure_json,actor,transitioned_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (transition_id, claim["task_id"], pr_number, head_sha, generation,
+         "review_handoff", "pending", json.dumps({
+             "completion_evidence": evidence, "execution_id": runner_id,
+             "lease_epoch": next_epoch,
+         }, sort_keys=True), "{}", actor, now),
+    )
     c.execute("INSERT INTO activity(task_id,actor,kind,payload,created_at) VALUES (?,?,?,?,?)",
               (claim["task_id"], actor, "task.claim.stopping",
                json.dumps({"claim_id": claim["id"], "execution_id": runner_id,
@@ -1346,8 +1386,9 @@ def _stage_managed_completion_stop_in(
 
 def terminal_ack_claim_completion_in(c: sqlite3.Connection, runner_session_id: str,
                                      actor: str, principal_id: str,
-                                     narrow_host: bool, now: float) -> Optional[Dict[str, Any]]:
-    """Authorize an exact host terminal ack and re-arm canonical completion."""
+                                     narrow_host: bool, now: float,
+                                     project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+    """Authorize exact host death and run canonical completion atomically."""
     runner = c.execute("SELECT * FROM runner_sessions WHERE runner_session_id=?",
                        (runner_session_id,)).fetchone()
     if not runner or str(runner["status"] or "").lower() not in {
@@ -1373,21 +1414,38 @@ def terminal_ack_claim_completion_in(c: sqlite3.Connection, runner_session_id: s
         return None
     if claim["status"] == "completed":
         return {"completed": True, "idempotent": True, "claim_id": claim_id}
-    if claim["status"] != "stopping" or claim["task_id"] != handoff.get("task_id"):
+    if claim["status"] != "active" or claim["task_id"] != handoff.get("task_id"):
         return None
     metadata["completion_handoff"] = {**handoff, "acknowledged_at": now,
                                       "acknowledged_by": actor}
     c.execute("UPDATE runner_sessions SET metadata_json=?, updated_at=? "
               "WHERE runner_session_id=?",
               (json.dumps(metadata, sort_keys=True), now, runner_session_id))
-    # The terminal heartbeat only acknowledges physical death. Re-arm the
-    # claim so complete_claim's one canonical path performs every phase,
-    # notification, evidence, Work Session, resource and rollup side effect.
-    c.execute("UPDATE task_claims SET status='active' WHERE id=? AND status='stopping'",
-              (claim_id,))
-    return {"claim_id": claim_id,
-            "evidence": handoff.get("evidence") if isinstance(handoff.get("evidence"), dict) else {},
-            "requested_status": str(handoff.get("requested_status") or "")}
+    c.execute(
+        "UPDATE task_execution_completion_phases SET outcome='succeeded',"
+        "evidence_json=?,actor=?,transitioned_at=? WHERE task_id=? "
+        "AND runner_generation=? AND phase='review_handoff' AND outcome='pending'",
+        (json.dumps({
+            "completion_evidence": handoff.get("evidence") or {},
+            "execution_id": runner_session_id,
+            "lease_epoch": handoff.get("lease_epoch"),
+            "terminal_ack": {"host_id": runner["host_id"], "acknowledged_at": now},
+        }, sort_keys=True), actor, now, claim["task_id"],
+         int(handoff.get("generation") or 0)),
+    )
+    evidence = (
+        handoff.get("evidence")
+        if isinstance(handoff.get("evidence"), dict) else {})
+    completion = _complete_claim_impl(
+        claim_id, evidence=evidence,
+        final_status=str(handoff.get("requested_status") or ""),
+        actor=actor, project=project, finalize=False, _connection=c,
+        _terminal_ack=True)
+    if not completion.get("completed"):
+        raise RuntimeError(
+            "terminal acknowledgement could not finalize canonical completion")
+    return {"completed": True, "idempotent": False, "claim_id": claim_id,
+            "evidence": evidence, "completion": completion}
 
 
 def _surrender_claim_runner_leases_in(

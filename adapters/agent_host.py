@@ -908,17 +908,8 @@ def launch_command(wake, inventory, runner_session_id=""):
     if mode == "connect":
         assignment_data = dict((wake.get("policy") or {}).get("assignment") or {})
         assignment_schema = assignment_data.pop("schema", "")
-        if assignment_schema not in {
-                "switchboard.connect.assignment.v1",
-                "switchboard.connect.assignment.v2"}:
+        if assignment_schema != "switchboard.connect.assignment.v1":
             raise ValueError("connect assignment schema is invalid")
-        lifecycle = {}
-        if assignment_schema == "switchboard.connect.assignment.v2":
-            if not _truthy(os.environ.get("PM_RUNNER_LEASE_ENFORCEMENT")):
-                raise ValueError("connect assignment v2 requires runner lease enforcement")
-            for lifecycle_field in (
-                    "execution_id", "generation", "role", "head_sha", "fence_epoch"):
-                lifecycle[lifecycle_field] = assignment_data.pop(lifecycle_field, None)
         limits = assignment_data.get("limits") or {}
         assignment_data["limits"] = ResourceLimits(**limits)
         assignment = Assignment(**assignment_data)
@@ -1173,8 +1164,8 @@ def register_runner_session(rec, wake, inventory):
     execution = policy.get("execution_binding") or {}
     assignment = policy.get("assignment") or {}
     lifecycle = policy.get("lifecycle") or {}
-    connect_assignment = assignment.get("schema") in {
-        "switchboard.connect.assignment.v1", "switchboard.connect.assignment.v2"}
+    connect_assignment = (
+        assignment.get("schema") == "switchboard.connect.assignment.v1")
     metadata = {
         "wake_id": wake.get("wake_id"),
         "wake_mode": rec.get("wake_mode"),
@@ -1196,11 +1187,11 @@ def register_runner_session(rec, wake, inventory):
             "principal_ref": assignment.get("principal_ref"),
             "work_ref": assignment.get("work_ref"),
             "workspace_ref": assignment.get("workspace_ref"),
-            "execution_id": assignment.get("execution_id"),
-            "execution_generation": assignment.get("generation"),
-            "execution_role": assignment.get("role"),
-            "execution_head_sha": assignment.get("head_sha"),
-            "lease_epoch": assignment.get("fence_epoch"),
+            "execution_id": lifecycle.get("execution_id"),
+            "execution_generation": lifecycle.get("generation"),
+            "execution_role": lifecycle.get("role"),
+            "execution_head_sha": lifecycle.get("head_sha"),
+            "lease_epoch": lifecycle.get("fence_epoch"),
         } if connect_assignment else {
             "role": assignment.get("role") or lifecycle.get("role") or "implementation",
             "lifecycle_role": assignment.get("role") or lifecycle.get("role") or "implementation",

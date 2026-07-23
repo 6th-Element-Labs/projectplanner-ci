@@ -226,26 +226,36 @@ def enqueue_task(
         queued_at=(_queued_at({}, assignment_id) if generation_ref
                    else _queued_at(task, assignment_id)),
     )
+    execution_generation = coordination_repo.allocate_execution_generation(
+        task_id, assignment_id, project=project)
     selector = {
         "runtime": runtime_name,
         "provider": provider,
         "lane": lane,
         "agent_id": assignment.principal_ref,
         "task_id": task_id,
-        # Execution-lease aware assignments must never land on an older host
-        # which only understands the v1 opaque Assignment contract.
-        "capabilities": ["execution_lease_v2", "runner_lease_enforcement"],
     }
+    lifecycle_enforced = str(
+        os.environ.get("PM_EXECUTION_LIFECYCLE_V1", "")).strip().lower() in {
+            "1", "true", "yes", "on"}
+    if lifecycle_enforced:
+        # SIMPLIFY-20 owns activation. Once activated, placement must select a
+        # host that advertises both lifecycle parsing and lease enforcement.
+        selector["capabilities"] = [
+            "execution_lease_v2", "runner_lease_enforcement"]
     policy = {
         "mode": CONNECT_WAKE_MODE,
         "assignment": {
-            "schema": "switchboard.connect.assignment.v2",
+            "schema": "switchboard.connect.assignment.v1",
             **asdict(assignment),
-            # Lifecycle identity is allocated before the wake is visible.  It
-            # remains stable across host selection and is distinct from the
-            # host-local runner_session_id that is bound after claim_wake.
+        },
+        # Assignment v1 is an adapter compatibility boundary. Server-owned
+        # execution identity travels beside it so older hosts can continue to
+        # decode the Assignment byte-for-byte.
+        "lifecycle": {
+            "schema": "switchboard.execution_lifecycle.v1",
             "execution_id": assignment.assignment_id,
-            "generation": max(1, int(assignment.queued_at * 1_000_000)),
+            "generation": execution_generation,
             "role": str(role or "implementation"),
             "head_sha": str((task.get("git_state") or {}).get("head_sha") or ""),
             "fence_epoch": 1,

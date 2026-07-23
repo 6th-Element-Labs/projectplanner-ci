@@ -60,13 +60,18 @@ captured.pop()
 for row in captured:
     policy = row["policy"]
     assignment = policy.get("assignment") or {}
-    ok(set(policy) == {"mode", "assignment"} and policy["mode"] == "connect",
-       "durable wake policy contains only Connect mode and assignment")
+    lifecycle = policy.get("lifecycle") or {}
+    ok(set(policy) == {"mode", "assignment", "lifecycle"}
+       and policy["mode"] == "connect",
+       "durable wake policy keeps lifecycle identity beside Assignment v1")
     ok(set(assignment) == {
         "schema", "assignment_id", "principal_ref", "work_ref", "runtime",
-        "provider", "workspace_ref", "limits", "queued_at", "execution_id",
-        "generation", "role", "head_sha", "fence_epoch",
-    }, "assignment carries the immutable execution-lease v2 contract")
+        "provider", "workspace_ref", "limits", "queued_at",
+    } and assignment["schema"] == "switchboard.connect.assignment.v1",
+       "Assignment v1 remains byte-compatible")
+    ok(set(lifecycle) == {
+        "schema", "execution_id", "generation", "role", "head_sha", "fence_epoch",
+    }, "sibling lifecycle policy carries server-owned execution identity")
     forbidden = {
         "mcp", "token", "credential", "claim", "work_session", "review",
         "evidence", "instruction", "prompt", "pull_request",

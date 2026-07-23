@@ -74,7 +74,7 @@ def register(runner_id: str, task_id: str, claim_id: str, *,
                   (f"wake-{runner_id}", "connect", "test", json.dumps({
                       "task_id": task_id, "agent_id": f"agent/{task_id}",
                       "runtime": "codex"}), json.dumps({"mode": "connect", "assignment": {
-                          "schema": "switchboard.connect.assignment.v2",
+                          "schema": "switchboard.connect.assignment.v1",
                           "assignment_id": f"assign-{task_id.lower()}",
                           "work_ref": f"task:{P}:{task_id}"}}), "claimed", time.time(),
                    time.time(), HOST, task_id, "{}"))
@@ -85,7 +85,7 @@ def register(runner_id: str, task_id: str, claim_id: str, *,
         "heartbeat_ttl_s": 60,
         "metadata": {"wake_id": f"wake-{runner_id}",
                      "connect_assignment": True,
-                     "assignment_schema": "switchboard.connect.assignment.v2",
+                     "assignment_schema": "switchboard.connect.assignment.v1",
                      "assignment_id": f"assign-{task_id.lower()}",
                      "execution_id": f"exec-{runner_id}",
                      "execution_generation": generation,
@@ -113,7 +113,7 @@ with store._conn(P) as c:
               ("wake-run-bug154-bound", "connect", "test", json.dumps({
                   "task_id": task["task_id"], "agent_id": f"agent/{task['task_id']}",
                   "runtime": "codex"}), json.dumps({"mode": "connect", "assignment": {
-                      "schema": "switchboard.connect.assignment.v2",
+                      "schema": "switchboard.connect.assignment.v1",
                       "assignment_id": f"assign-{task['task_id'].lower()}",
                       "work_ref": f"task:{P}:{task['task_id']}"}}), "claimed", now, now,
                HOST, task["task_id"], "{}"))
@@ -156,8 +156,8 @@ completed = store.complete_claim(
         "git_diff_check": "clean",
     },
     actor="bug154-test", project=P)
-assert completed["completed"] is False
-assert completed["stopping"] is True
+assert completed["completed"] is False, completed
+assert completed.get("stopping") is True, completed
 assert completed["pending_host_ack"] is True
 assert completed["execution_id"] == "run-bug154-bound"
 assert store.get_task(task["task_id"], project=P)["status"] == "In Progress"
@@ -174,6 +174,24 @@ assert "lease_surrender" not in unrelated["metadata"]
 prior_heartbeat = surrendered["heartbeat_at"]
 late = register("run-bug154-bound", task["task_id"], claim["claim_id"])
 assert late["error_code"] == "runner_generation_fenced"
+
+# A terminal receipt for the wrong fenced epoch cannot release ownership or
+# expose review before the exact supervised generation is dead.
+wrong_epoch = store.upsert_runner_session({
+    "runner_session_id": "run-bug154-bound", "host_id": HOST,
+    "task_id": task["task_id"], "claim_id": claim["claim_id"],
+    "status": "expired", "metadata": {
+        "terminalized_by": "runner_lease_expiry",
+        "execution_generation": 1, "execution_role": "implementation",
+        "lease_epoch": 99,
+    },
+}, principal_id=HOST_PRINCIPAL, actor=HOST, project=P)
+assert wrong_epoch["error_code"] == "terminal_ack_identity_mismatch"
+assert store.get_task(task["task_id"], project=P)["status"] == "In Progress"
+with store._conn(P) as c:
+    still_owned = c.execute(
+        "SELECT status FROM task_claims WHERE id=?", (claim["claim_id"],)).fetchone()
+assert still_owned["status"] == "active"
 
 # The existing Agent Host expiry clock stops the supervised process, publishes
 # its terminal heartbeat, and leaves the later review generation alive.

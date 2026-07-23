@@ -347,6 +347,13 @@ def apply_schema(c):
         );
         CREATE INDEX IF NOT EXISTS ix_task_claims_active
             ON task_claims(task_id, status, expires_at);
+        CREATE TABLE IF NOT EXISTS task_execution_generations (
+            assignment_id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            generation INTEGER NOT NULL,
+            allocated_at REAL NOT NULL,
+            UNIQUE(task_id, generation)
+        );
         CREATE TABLE IF NOT EXISTS task_git_state (
             task_id            TEXT PRIMARY KEY,
             branch             TEXT,

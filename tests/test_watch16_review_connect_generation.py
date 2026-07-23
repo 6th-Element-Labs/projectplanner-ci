@@ -48,7 +48,7 @@ assert first["started"] is True and first["role"] == "review_merge", first
 assert retried["started"] is True, retried
 assert len(captured) == 4
 assert captured[0]["policy"]["mode"] == "connect"
-assert set(captured[0]["policy"]) == {"mode", "assignment"}
+assert set(captured[0]["policy"]) == {"mode", "assignment", "lifecycle"}
 assert captured[0]["idem_key"] == captured[1]["idem_key"]
 assert captured[0]["policy"] == captured[1]["policy"]
 assert captured[2]["idem_key"] != captured[0]["idem_key"]
@@ -57,7 +57,7 @@ assert (captured[2]["policy"]["assignment"]["assignment_id"]
         != captured[0]["policy"]["assignment"]["assignment_id"])
 assert (captured[3]["policy"]["assignment"]["assignment_id"]
         != captured[2]["policy"]["assignment"]["assignment_id"])
-assert all(row["policy"]["assignment"]["role"] == "review_merge"
+assert all(row["policy"]["lifecycle"]["role"] == "review_merge"
            and "source_sha" not in row["policy"]["assignment"]
            for row in captured)
 

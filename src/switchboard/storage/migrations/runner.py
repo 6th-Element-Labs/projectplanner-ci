@@ -357,6 +357,11 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
      "CREATE INDEX IF NOT EXISTS ix_task_execution_completion_identity "
      "ON task_execution_completion_phases("
      "task_id, pr_number, head_sha, runner_generation, transitioned_at DESC)"),
+    ("0084_task_execution_generations",
+     "CREATE TABLE IF NOT EXISTS task_execution_generations ("
+     "assignment_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, "
+     "generation INTEGER NOT NULL, allocated_at REAL NOT NULL, "
+     "UNIQUE(task_id, generation))"),
 ]
 
 

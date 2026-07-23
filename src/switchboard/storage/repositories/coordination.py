@@ -38,6 +38,36 @@ from switchboard.domain.ixp.protocol import (
     normalize_send_ack_deadline,
     protocol_envelope,
 )
+
+
+def allocate_execution_generation(task_id: str, assignment_id: str, *,
+                                  project: str = DEFAULT_PROJECT) -> int:
+    """Allocate one idempotent, per-task monotonic execution generation."""
+    task_id = str(task_id or "").strip().upper()
+    assignment_id = str(assignment_id or "").strip()
+    if not task_id or not assignment_id:
+        raise ValueError("task_id and assignment_id are required")
+    with _conn(project) as c:
+        c.execute(
+            "CREATE TABLE IF NOT EXISTS task_execution_generations ("
+            "assignment_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, "
+            "generation INTEGER NOT NULL, allocated_at REAL NOT NULL, "
+            "UNIQUE(task_id, generation))")
+        existing = c.execute(
+            "SELECT generation FROM task_execution_generations "
+            "WHERE assignment_id=?", (assignment_id,)).fetchone()
+        if existing:
+            return int(existing["generation"])
+        row = c.execute(
+            "SELECT COALESCE(MAX(generation),0)+1 AS next_generation "
+            "FROM task_execution_generations WHERE task_id=?",
+            (task_id,)).fetchone()
+        generation = int(row["next_generation"])
+        c.execute(
+            "INSERT INTO task_execution_generations("
+            "assignment_id,task_id,generation,allocated_at) VALUES (?,?,?,?)",
+            (assignment_id, task_id, generation, time.time()))
+        return generation
 from switchboard.domain.provider_credentials import CredentialPrincipal
 from switchboard.storage.repositories.provider_capacity import (
     PROVIDER_CAPACITY_DECISION_SCHEMA,
