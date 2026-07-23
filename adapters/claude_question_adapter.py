@@ -199,6 +199,21 @@ class ClaudeQuestionAdapter:
             self._save()
             return _hook_output("defer")
 
+        if entry.get("state") == "answer_delivered":
+            # The hook reply can be lost after the decision was durably claimed
+            # (process crash, reconnect, or transport failure).  Never try to
+            # claim the one-shot decision again: replay the journaled provider
+            # input for the same native session/tool identity.
+            updated_input = entry.get("updated_input")
+            if not isinstance(updated_input, dict):
+                return _hook_output(
+                    "deny", reason="Claude delivered-answer journal is incomplete")
+            return _hook_output("allow", updated_input=dict(updated_input))
+
+        if entry.get("state") == "resolved":
+            return _hook_output(
+                "deny", reason="Claude question was already resolved")
+
         claimed = self.http("POST", "/ixp/v1/attention/decisions/claim", {
             "project": self.binding["project"],
             "host_id": self.binding["host_id"],
@@ -322,6 +337,13 @@ def _environment_binding() -> dict[str, str]:
 def main() -> int:
     """Command-hook entrypoint. It emits only Claude's structured hook reply."""
     try:
+        executable = str(
+            os.environ.get("PM_CLAUDE_EXECUTABLE") or "claude").strip()
+        if not executable:
+            raise ClaudeQuestionError("PM_CLAUDE_EXECUTABLE is empty")
+        # This check deliberately lives in the command-hook entrypoint.  A
+        # caller cannot reach capture, claim, or replay on an unprobed runtime.
+        pinned_command(executable)
         try:
             from switchboard_core import _http
         except ModuleNotFoundError:
