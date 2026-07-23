@@ -172,6 +172,7 @@ def create_router(*, resolve_project: ProjectResolver,
             gh_command = (
                 f"gh api -X POST repos/{repo}/hooks -f name=web -F active=true "
                 f"-f 'events[]=push' -f 'events[]=pull_request' "
+                f"-f 'events[]=check_run' -f 'events[]=check_suite' -f 'events[]=status' "
                 f"-f 'config[url]={payload_url}' -f config[content_type]=json "
                 f"-f 'config[secret]=$PM_GITHUB_WEBHOOK_SECRET'"
             )
@@ -187,7 +188,7 @@ def create_router(*, resolve_project: ProjectResolver,
                 "content_type": "application/json",
                 "secret_env": "PM_GITHUB_WEBHOOK_SECRET",
                 "secret_configured": webhook_secret_configured(),
-                "events": ["push", "pull_request"],
+                "events": ["push", "pull_request", "check_run", "check_suite", "status"],
                 "gh_command": gh_command,
             },
             "verification": {**deliveries, "status": status, "repo_reachable": reachable},

@@ -33,6 +33,7 @@ import time
 from typing import Any, Dict, Mapping, Optional, Set, Union
 
 import github_sync
+import organic_github_ci
 import store
 
 SCHEMA = "switchboard.webhook_inbox_depth.v1"
@@ -150,6 +151,8 @@ def _apply_row(row: Mapping[str, Any], project: str) -> Dict[str, Any]:
         return github_sync.handle_pr(payload, project)
     if event == "merge_group":
         return github_sync.handle_merge_group(payload, project)
+    if event in {"check_run", "check_suite", "status"}:
+        return organic_github_ci.handle_webhook(event, payload, project)
     return {"action": "ignored", "event": event}
 
 

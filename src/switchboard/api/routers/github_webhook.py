@@ -49,7 +49,7 @@ def create_router(*, resolve_project: ProjectResolver) -> APIRouter:
 
     @router.post("/api/github/webhook")
     async def github_webhook(request: Request, project: str = ""):
-        """Receive GitHub push/pull_request events (PERF-1: accept-and-ack, never drop).
+        """Receive GitHub lifecycle and check events (PERF-1: accept-and-ack, never drop).
 
         The request path does ONE durable thing — append the raw event to the webhook
         inbox and return 2xx in O(1). No synchronous provenance fan-out, so it cannot

@@ -431,6 +431,7 @@ def _sha_matches(candidate: str, target: str) -> bool:
 def _external_ci_summary(rows: List[Dict[str, Any]], source_sha: str = "",
                          project: str = DEFAULT_PROJECT,
                          contract: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    rows = [r for r in rows if not (r.get("result") or {}).get("invalidated_by_head_sha")]
     if source_sha:
         rows = [r for r in rows if _sha_matches(r.get("source_sha") or "", source_sha)]
     success = [r for r in rows if r.get("status") == "success" and r.get("conclusion") == "success"]

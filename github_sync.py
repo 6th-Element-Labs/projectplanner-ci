@@ -11,6 +11,7 @@ from typing import Any, Dict, List
 
 import ci_scratchpad_dispatch
 import ci_verify_dispatch
+import organic_github_ci
 import store
 import task_id_parser
 from switchboard.application.commands import verify_ci as verify_ci_command
@@ -374,6 +375,7 @@ def handle_pr(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
                 skipped.append({"task_id": task_id, "reason": res["error"]})
             else:
                 touched.append(task_id)
+                organic_github_ci.invalidate_prior_head(task_id, head_sha, project)
         # Event-driven CI: pull-model dispatch and/or on-box gate marker (no 5-min wait).
         ci = _maybe_trigger_ci(repo, pr_num, head_sha, project)
         return {"action": "pr_review_recorded", "repo": repo, "pr": pr_num,

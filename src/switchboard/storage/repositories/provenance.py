@@ -1092,6 +1092,7 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
             for t in pr_tasks
         })
     if pr_repos:
+        import organic_github_ci
         checks["github_pr_repos"] = pr_repos
         # Prefer one GraphQL round-trip for all mutable PRs; fall back to bounded
         # REST reads for unauthenticated runs, partial GraphQL results, or tests.
@@ -1116,6 +1117,11 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
                                  "code": "pr_state_unavailable",
                                  "detail": f"Could not fetch recorded PR state from GitHub repo {pr_repo}."})
                 continue
+            live_head_sha = ((pr.get("head") or {}).get("sha") or state.get("head_sha") or "")
+            if live_head_sha and task.get("status") == "In Review":
+                poll = organic_github_ci.poll_pr_checks(
+                    project, pr_repo, task["task_id"], live_head_sha, token=token)
+                checks.setdefault("github_check_polls", []).append(poll)
             merged = bool(pr.get("merged_at"))
             if not role_info.get("canonical"):
                 findings.append({
