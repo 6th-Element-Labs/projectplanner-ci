@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+from path_setup import ROOT, SRC  # noqa: F401
+
 from switchboard.domain.completion import (
     COMPLETION_DECISION_SCHEMA,
     COMPLETION_SNAPSHOT_SCHEMA,
