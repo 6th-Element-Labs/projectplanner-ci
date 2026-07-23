@@ -13,21 +13,18 @@ the single vocabulary, and proves the deleted proxies stay deleted.
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import sys
 import tempfile
 import time
 
-ROOT = Path(__file__).resolve().parents[1]
+from path_setup import ROOT, SRC
+
 TMP = tempfile.mkdtemp(prefix="simplify18-")
 os.environ["PM_DB_PATH"] = os.path.join(TMP, "maxwell.db")
 os.environ["PM_HELM_DB_PATH"] = os.path.join(TMP, "helm.db")
 os.environ["PM_SWITCHBOARD_DB_PATH"] = os.path.join(TMP, "switchboard.db")
 os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = os.path.join(TMP, "registry.db")
 os.environ["PM_DYNAMIC_PROJECTS_DIR"] = TMP
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "src"))
-
 passed = failed = 0
 
 
