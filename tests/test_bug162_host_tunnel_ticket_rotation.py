@@ -149,5 +149,19 @@ agent_host._drop_host_bridge("run_bug162")
 ok("run_bug162" not in agent_host._HOST_RELAY_APPLIED,
    "drop clears the applied-ticket ledger so a restart can attach cleanly")
 
+# Attach without expires_at must still suppress mid-lifetime rotation (assume ttl).
+url_d = "wss://plan.example/pty/host?ticket=ddd&host_id=host%2Fbug162"
+url_e = "wss://plan.example/pty/host?ticket=eee&host_id=host%2Fbug162"
+session4 = agent_host._ensure_host_bridge(**base_kwargs, host_relay_url=url_d)
+ok(session4.relay_ws_url == url_d, "attach without expires_at still opens")
+applied = agent_host._HOST_RELAY_APPLIED.get("run_bug162") or {}
+ok(float(applied.get("expires_at") or 0) > time.time() + 600,
+   "missing expires_at records an assumed mid-lifetime expiry, not zero")
+session5 = agent_host._ensure_host_bridge(
+    **base_kwargs, host_relay_url=url_e, expires_at=time.time() + 900)
+ok(session5 is session4 and session4.url_updates == [],
+   "attach-without-expires_at does not flap on the next heartbeat mint")
+agent_host._drop_host_bridge("run_bug162")
+
 print(f"\nBUG-162 host tunnel ticket rotation: {passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

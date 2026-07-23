@@ -1406,6 +1406,12 @@ def _record_applied_host_relay(runner_session_id, relay_ws_url, expires_at) -> N
         exp = float(expires_at or 0)
     except (TypeError, ValueError):
         exp = 0.0
+    # Server host tickets default to ttl=900. When a caller attaches without an
+    # expires_at, assume a full lifetime so we do not immediately re-enter the
+    # rotate path on every heartbeat (needs_rotation(0) is True by design for
+    # *missing* ledger rows, not for a successfully applied URL).
+    if exp <= 0:
+        exp = time.time() + 900.0
     _HOST_RELAY_APPLIED[sid] = {"url": str(relay_ws_url), "expires_at": exp}
 
 
