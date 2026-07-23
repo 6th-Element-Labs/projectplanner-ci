@@ -45,6 +45,7 @@ def build_deployments(
         now: Optional[float] = None,
         list_fn: Optional[Callable[[str, str], Any]] = None,
         commits_fn: Optional[Callable[[str, str, str], Any]] = None,
+        canonical_fn: Optional[Callable[[str, str, str], Any]] = None,
         health_fn: Optional[Callable[[], Mapping[str, Any]]] = None,
 ) -> Dict[str, Any]:
     now = time.time() if now is None else float(now)
@@ -57,6 +58,7 @@ def build_deployments(
         "repo": repo,
         "generated_at": now,
         "production": health,
+        "canonical_sha": "",
         "deployments": [],
         "undeployed_count": 0,
     }
@@ -75,9 +77,13 @@ def build_deployments(
         "&direction=desc&per_page=30", t))
     commits_fn = commits_fn or (lambda r, sha, t: open_prs._github_request(
         f"https://api.github.com/repos/{r}/commits?sha={sha}&per_page=100", t))
+    canonical_ref = str(health.get("canonical_ref") or "origin/master").split("/")[-1]
+    canonical_fn = canonical_fn or (lambda r, ref, t: open_prs._github_request(
+        f"https://api.github.com/repos/{r}/commits/{ref}", t))
     try:
         pulls = list_fn(repo, token) or []
         commits = commits_fn(repo, running_sha, token) or []
+        canonical = canonical_fn(repo, canonical_ref, token) or {}
     except Exception as exc:
         return {**base, "unavailable": f"github_error: {exc}"}
 
@@ -87,7 +93,9 @@ def build_deployments(
     }
     deployed_shas.add(running_sha)
     queued = _deployment_tasks(project)
-    canonical_sha = str(health.get("canonical_sha") or "").lower()
+    canonical_sha = str(canonical.get("sha") or "").lower()
+    if len(canonical_sha) != 40:
+        return {**base, "unavailable": "canonical_sha_unknown"}
     rows: List[Dict[str, Any]] = []
     for pr in pulls:
         if not isinstance(pr, Mapping) or not pr.get("merged_at"):
@@ -124,6 +132,7 @@ def build_deployments(
     rows.sort(key=lambda row: row["merged_at"], reverse=True)
     return {
         **base,
+        "canonical_sha": canonical_sha,
         "deployments": rows,
         "undeployed_count": sum(1 for row in rows if not row["deployed"]),
     }

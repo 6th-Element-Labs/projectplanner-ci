@@ -117,9 +117,7 @@ def create_router(*, resolve_project: ProjectResolver,
                 raise HTTPException(404, "Merged pull request not found")
             if row.get("deployed"):
                 return {"status": "deployed", "deployment": row}
-            target_sha = str(
-                (snapshot.get("production") or {}).get("canonical_sha") or ""
-            ).lower()
+            target_sha = str(snapshot.get("canonical_sha") or "").lower()
             if not re.fullmatch(r"[0-9a-f]{40}", target_sha):
                 raise HTTPException(409, "Canonical deployment SHA is unavailable")
 

@@ -42,7 +42,7 @@ def test_deployment_read_model_counts_only_unconfirmed_rows(monkeypatch):
         now=100,
         health_fn=lambda: {
             "running_sha": RUNNING,
-            "canonical_sha": MERGED,
+            "canonical_sha": OLD,
             "deploy_signal": "stale",
             "last_deploy_ok": True,
         },
@@ -51,8 +51,10 @@ def test_deployment_read_model_counts_only_unconfirmed_rows(monkeypatch):
             _pull(1, OLD, "2026-07-23T01:00:00Z"),
         ],
         commits_fn=lambda _repo, _sha, _token: [{"sha": RUNNING}, {"sha": OLD}],
+        canonical_fn=lambda _repo, _ref, _token: {"sha": MERGED},
     )
     assert payload["undeployed_count"] == 1
+    assert payload["canonical_sha"] == MERGED
     assert [row["status"] for row in payload["deployments"]] == [
         "undeployed", "deployed"]
 
@@ -79,6 +81,7 @@ def test_one_sha_pinned_deploy_task_marks_all_pending_rows_queued(monkeypatch):
             _pull(2, "d" * 40, "2026-07-24T01:00:00Z"),
         ],
         commits_fn=lambda _repo, _sha, _token: [{"sha": RUNNING}],
+        canonical_fn=lambda _repo, _ref, _token: {"sha": MERGED},
     )
     assert payload["undeployed_count"] == 2
     assert {row["status"] for row in payload["deployments"]} == {"queued"}
@@ -88,7 +91,8 @@ def test_one_sha_pinned_deploy_task_marks_all_pending_rows_queued(monkeypatch):
 def test_deploy_request_requires_system_authority_and_dispatches_agent(monkeypatch):
     snapshot = {
         "repo": "org/repo",
-        "production": {"canonical_sha": MERGED},
+        "canonical_sha": MERGED,
+        "production": {"running_sha": RUNNING},
         "deployments": [{
             "number": 7, "deployed": False, "merge_sha": MERGED,
         }],
