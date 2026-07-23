@@ -59,18 +59,16 @@
     },
     "runner_resolution_outside_service": {
       "description": "Non-service production files that decide which runner is current (resolve_runner_watch / resolve_task_active_runner / latest_dispatch_outcome) instead of reading the SIMPLIFY-1 projection.",
-      "measured": 1,
-      "ceiling": 1,
-      "known": {
-        "src/switchboard/storage/repositories/deliverables.py": "mission_status resolves the active runner per linked task — a second resolver beside the projection; owner SIMPLIFY-2"
-      }
+      "measured": 0,
+      "ceiling": 0,
+      "known": {}
     },
     "browser_execution_facts": {
       "description": "static/**.js sites that use execution identity the server owns: assembling a wake payload, or sending a self-chosen runner_session_id to a control/PTY/watch endpoint.",
       "measured": 16,
       "ceiling": 16,
       "known": {
-        "static/app.js": "Fleet tab wake modal + fleet runner control table; owner SIMPLIFY-11 (the task-modal primary card now reads GET /api/tasks/{id}/execution — UI-58)",
+        "static/app.js": "Fleet tab wake modal + fleet runner control table; owner SIMPLIFY-11 (the task-modal primary card now reads GET /api/tasks/{id}/execution \u2014 UI-58)",
         "static/js/runner-session.js": "fleet-generic runner control table, the Watch-panel gate read, and the control-delivery poll; owner UI-57 / UI-58 follow-on",
         "static/js/proof-console.js": "Proof Console picks its own task and runner; owner UI-58 follow-on"
       }

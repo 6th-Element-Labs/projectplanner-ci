@@ -42,6 +42,7 @@ from switchboard.storage.repositories.tasks import _task_row
 from switchboard.storage.repositories.narration import _narration_state
 from switchboard.domain.board.tasks import READY_TASK_STATUSES
 from switchboard.domain.validation_policy import classify_task
+from switchboard.domain import execution_liveness
 
 
 def _store_facade():
@@ -2046,12 +2047,12 @@ def _batch_enrich_mission_links(links: List[Dict[str, Any]]) -> List[Dict[str, A
             "human_gate": task.get("human_gate"),
             "session_health": task.get("session_health"),
             "agent_state": task.get("agent_state") or {},
-            "active_runner": _store_facade().resolve_task_active_runner(
-                task["task_id"],
-                agent_state=task.get("agent_state") or {},
-                sessions=runners_by_key.get((proj, tid)) or [],
-                project=proj,
-            ),
+            # SIMPLIFY-18: the mission read model no longer runs a second
+            # runner resolver. The rows above are already this task's execution
+            # registry, so the one canonical predicate selects the live
+            # generation -- no agent_state pointer, no re-query, no divergence.
+            "active_runner": _live_execution_for(
+                runners_by_key.get((proj, tid)) or [], now=runner_now),
             "active_claims": claims_by_key.get((proj, tid)) or [],
             "narration": narration,
             "narration_raw": narration_raw,
@@ -2394,6 +2395,31 @@ def get_mission_status(project: str = DEFAULT_PROJECT, deliverable_id: str = "",
         lambda: _store_facade()._build_mission_status(
             project, deliverable_id=deliverable_id,
             board_id=board_id, mission_id=mission_id))
+
+
+def _live_execution_for(sessions: List[Dict[str, Any]],
+                        *, now: float) -> Dict[str, Any]:
+    """The live execution among already-loaded rows.
+
+    SIMPLIFY-18: liveness is decided only by the canonical predicate, applied to
+    the runner_sessions rows the caller already holds. Rows arrive newest
+    heartbeat first, so the first live one is the current generation.
+
+    The envelope keeps its shape for existing readers, but ``source`` is now
+    always ``runner_sessions``: the ``agent_state`` pointer was a second,
+    denormalized store of "which runner is current" and no longer decides
+    anything (ADR-0008 C1).
+    """
+    for session in sessions:
+        if execution_liveness.is_live(session, now=now):
+            return {
+                "active": True,
+                "source": "runner_sessions",
+                "session": session,
+                "execution": execution_liveness.execution_identity(session),
+            }
+    return {"active": False, "source": "runner_sessions", "session": None,
+            "execution": None}
 
 
 def _build_mission_status(project: str = DEFAULT_PROJECT, deliverable_id: str = "",
