@@ -1,8 +1,7 @@
 /* UI-29: the Needs-you queue — one list of everything awaiting a human.
  * ============================================================================
- * Reads GET /api/attention (union of unacked agent messages + pending inbox,
- * ranked). Deciding routes to the endpoints that already own each store:
- * agent messages -> /api/agent_messages/ack; inbox -> /confirm | /dismiss.
+ * Reads GET /api/attention, a read-only projection over provider requests,
+ * messages, inbound triage, mission actions, and open plan decisions.
  * Self-contained: wires only inside #tab-needs; no app.js changes. The list/
  * detail layout reuses ActionEngine's approval-gate shape (agent-approval.js)
  * in the house status language (dots + words, Tabler type ladder).
@@ -17,6 +16,9 @@
     const SRC = {
         agent: ['#c0392b', 'ti-robot', 'Agent'],
         inbox: ['#4299e1', 'ti-mail', 'Inbound'],
+        provider: ['#ae3ec9', 'ti-plug', 'Provider'],
+        mission: ['#f76707', 'ti-target-arrow', 'Mission'],
+        decision: ['#f59f00', 'ti-help-circle', 'Decision'],
     };
 
     function esc(s) {
@@ -108,6 +110,7 @@
     function renderDetail(detail, it) {
         const sc = SRC[it.source] || ['#8b95a5', 'ti-point', ''];
         const isAgent = it.source === 'agent';
+        const isInbox = it.source === 'inbox';
         detail.innerHTML = `
             <div class="d-flex align-items-start gap-2 mb-2">
                 <div class="flex-fill">
@@ -127,13 +130,16 @@
                 <div class="d-flex gap-2 mb-2">
                     <input class="form-control" id="needs-reply" placeholder="Answer — recorded as the ack response; the sender's monitor resolves"/>
                     <button type="button" class="btn btn-primary" id="needs-ack"><i class="ti ti-send me-1"></i>Answer &amp; ack</button>
-                </div>` : `
+                </div>` : isInbox ? `
                 <div class="tk-eyebrow mb-2">Decide</div>
                 <div class="btn-list mb-2">
                     <button type="button" class="btn btn-primary" id="needs-confirm"><i class="ti ti-checks me-1"></i>Confirm — apply proposals</button>
                     <button type="button" class="btn btn-outline-secondary" id="needs-open"><i class="ti ti-list-details me-1"></i>Review in Action Queue</button>
                     <button type="button" class="btn btn-ghost-danger" id="needs-dismiss">Dismiss</button>
-                </div>`}
+                </div>` : `
+                <div class="tk-eyebrow mb-2">Authoritative source</div>
+                <div class="card card-sm mb-2"><div class="card-body p-2">${datagrid(it.links)}</div></div>
+                <div class="text-secondary small">Resolve this item through its owning provider, mission, or plan-decision workflow.</div>`}
             <div id="needs-flash" class="small text-secondary"></div>
             <div class="text-secondary small mt-3 pt-2 border-top">Decisions route to the store that owns the item — this queue adds no new write path.</div>`;
 
@@ -155,7 +161,7 @@
             };
             el('needs-ack').addEventListener('click', send);
             el('needs-reply').addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
-        } else {
+        } else if (isInbox) {
             el('needs-confirm').addEventListener('click', async () => {
                 flash('Applying…');
                 try {

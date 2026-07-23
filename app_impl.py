@@ -251,6 +251,9 @@ app.include_router(_create_attention_router(
     resolve_body_project=_body_project,
     list_pending_acks=store.list_pending_acks,
     list_inbox=store.list_inbox,
+    list_deliverables=store.list_deliverables,
+    get_mission_status=store.get_mission_status,
+    list_decisions=store.list_decisions,
 ))
 app.include_router(_create_kickoff_router(
     resolve_project=_proj,
