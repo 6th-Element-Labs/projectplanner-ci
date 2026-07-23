@@ -26,6 +26,7 @@ import narration_outbox
 from constants import *  # noqa: F401,F403
 from db.connection import _conn
 from read_cache import _READ_CACHE, ttl_read_cache  # noqa: F401
+from switchboard.domain.completion import routing as _completion_routing
 from switchboard.domain.deliverables.lifecycle import (
     BREAKDOWN_PROPOSAL_STATUSES,
     DELIVERABLE_ID_RE,
@@ -2013,6 +2014,26 @@ def _batch_enrich_mission_links(links: List[Dict[str, Any]]) -> List[Dict[str, A
                     runner_row, now=runner_now, include_claim=False, c=c)
                 runners_by_key.setdefault((proj, runner.get("task_id")), []).append(runner)
 
+    # COORD-46: the completion route decides whether a Blocked task is still a
+    # dispatch candidate. Carrying it in the mission read model keeps one
+    # classifier feeding both coordinator routing and operator projections,
+    # and one batched query keeps this polled path off an N+1.
+    runs_by_key: Dict[tuple, Dict[str, Any]] = {}
+    try:
+        from switchboard.storage.repositories import completion_runs as _runs
+        by_project: Dict[str, List[str]] = {}
+        for link in links:
+            proj = (link.get("project_id") or "").strip()
+            tid = (link.get("task_id") or "").strip()
+            if proj and tid:
+                by_project.setdefault(proj, []).append(tid)
+        for proj, ids in by_project.items():
+            for task_id, run in _runs.list_active_completion_runs(
+                    ids, project=proj).items():
+                runs_by_key[(proj, task_id)] = run
+    except Exception:  # noqa: BLE001 - the read model degrades, never fails
+        runs_by_key = {}
+
     out: List[Dict[str, Any]] = []
     for link in links:
         enriched = dict(link)
@@ -2057,6 +2078,8 @@ def _batch_enrich_mission_links(links: List[Dict[str, Any]]) -> List[Dict[str, A
             "narration": narration,
             "narration_raw": narration_raw,
             "narration_stale": narration_state.get("stale") if isinstance(narration_state, dict) else None,
+            "completion_run": runs_by_key.get(
+                (proj, str(task["task_id"]).strip().upper())) or None,
         }
         out.append(enriched)
     return out
@@ -2314,7 +2337,26 @@ def _mission_next_actions(deliverable: Dict[str, Any],
                 title=detail.get("title"), remediation_id=remediation.get("remediation_id")))
         blocks = _task_blocks_others(detail)
         lane = detail.get("workstream") or detail.get("_wsId")
-        if (automatic_eligible and status in READY_TASK_STATUSES
+        completion_route = _completion_routing.completion_route(detail)
+        if automatic_eligible and status in _completion_routing.ROUTE_KEYED_STATUSES:
+            # COORD-46: Blocked projects both the automatic remediation route
+            # and sticky human blockers. Only the automatic ones are dispatch
+            # candidates; without this the projection change silently stops
+            # remediation from ever being planned.
+            if _completion_routing.task_ready_for_dispatch(
+                    detail, route=completion_route):
+                git_state = detail.get("git_state") or {}
+                actions.append(_action(
+                    "resume_or_claim", owner="agent", automatic=True,
+                    delivery_impact="blocking" if blocks_delivery or blocks else "at_risk",
+                    label=f"Agent will drive the {completion_route} route",
+                    reason=f"Automatic completion route: {completion_route}",
+                    project_id=link.get("project_id"), task_id=detail.get("task_id"),
+                    title=detail.get("title"), lane=lane,
+                    milestone_id=link.get("milestone_id"),
+                    completion_route=completion_route,
+                    head_sha=git_state.get("head_sha")))
+        elif (automatic_eligible and status in READY_TASK_STATUSES
                 and dep.get("ready") and not claims):
             actions.append(_action(
                 "claim_task", owner="agent", automatic=True,
