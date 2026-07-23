@@ -287,7 +287,7 @@ def test_acting_mode_reruns_and_dispatches():
         ok(receipt["effects"]["merged"] is False, "acting mode still never merges")
 
 
-def test_attached_review_timeout_supersedes_and_starts_exact_head_generation():
+def test_attached_review_timeout_supersedes_instruction_and_leaves_runner_alive():
     action = {
         "action": rs.ACTION_DISPATCH_REVIEW,
         "task_id": "BUG-141",
@@ -301,7 +301,6 @@ def test_attached_review_timeout_supersedes_and_starts_exact_head_generation():
         },
     }
     superseded = []
-    retries = []
 
     def starter(task_id, **kwargs):
         return {"action": "attach", "attached": True, "started": False,
@@ -320,12 +319,7 @@ def test_attached_review_timeout_supersedes_and_starts_exact_head_generation():
                 "result": {"superseded": True}}
 
     def retrier(task_id, **kwargs):
-        retries.append({"task_id": task_id, **kwargs})
-        if len(retries) == 1:
-            return {"action": "superseding", "started": False,
-                    "superseded_execution_id": "run-implementation"}
-        return {"action": "started", "started": True,
-                "execution_id": "run-review-141"}
+        raise AssertionError("ack timeout must not retry or kill the live runner")
 
     outcome = rs._execute_action(
         action, project="switchboard", actor="test", operator_agent="operator",
@@ -340,12 +334,17 @@ def test_attached_review_timeout_supersedes_and_starts_exact_head_generation():
        "an unacknowledged attach retries once and then fails loudly")
     ok(superseded and superseded[0]["request_id"] == "runnerreq-review-141",
        "the timed-out inject control request is explicitly superseded")
-    ok(not retries, "ack timeout never replaces or kills the live runner")
     ok(any(effect["kind"] == "retry_review_instruction"
            for effect in result["effects"]),
        "the same-runner instruction is retried exactly once")
+    ok(result["head_sha"] == "a" * 40,
+       "the failed handoff preserves the exact review head")
+    ok("runner left alive" in result["error"],
+       "the failure records that runner liveness was not changed")
+    kinds = [effect["kind"] for effect in result["effects"]]
+    ok("retry_task" not in kinds and "await_runner_terminal" not in kinds,
+       "the acknowledgement timeout cannot reach a runner kill or retry path")
 
-    retries.clear()
     raced = rs._execute_action(
         action, project="switchboard", actor="test", operator_agent="operator",
         dry_run=False, scratchpad_dispatcher=None, task_starter=starter,
@@ -355,8 +354,13 @@ def test_attached_review_timeout_supersedes_and_starts_exact_head_generation():
         task_retrier=retrier,
         runner_terminal_waiter=lambda *args, **kwargs: {"terminal": True},
         review_ack_timeout_s=0, review_restart_timeout_s=0)
-    ok(raced["result"]["status"] == "instruction_acknowledged" and not retries,
+    ok(raced["result"]["status"] == "instruction_acknowledged",
        "a host acknowledgement that wins the cancel race avoids a needless restart")
+
+
+def test_review_ack_timeout_default_covers_host_poll_and_tui_boot():
+    ok(rs.DEFAULT_REVIEW_ACK_TIMEOUT_S == 180.0,
+       "review acknowledgement deadline is the fleet-safe 180 seconds")
 
 
 def test_fail_closed_unavailable_db():
@@ -377,6 +381,7 @@ if __name__ == "__main__":
     test_plan_actions()
     test_dry_run_records_decisions_without_effects()
     test_acting_mode_reruns_and_dispatches()
-    test_attached_review_timeout_supersedes_and_starts_exact_head_generation()
+    test_attached_review_timeout_supersedes_instruction_and_leaves_runner_alive()
+    test_review_ack_timeout_default_covers_host_poll_and_tui_boot()
     test_fail_closed_unavailable_db()
     print("ALL PASS")

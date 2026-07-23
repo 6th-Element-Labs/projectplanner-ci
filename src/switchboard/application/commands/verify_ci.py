@@ -178,14 +178,9 @@ def _ensure_dispatch(
     import ci_scratchpad_dispatch as csd
 
     path = (source_path or csd.source_checkout_path()).strip()
-    if pr_number:
-        return csd.try_dispatch_scratchpad(
-            int(pr_number),
-            head_sha=sha,
-            repo=repo,
-            project=project,
-            source_path=path,
-        )
+    # ``verify_ci`` is an exact-SHA API.  A PR number is useful as a fetch-ref
+    # hint, but must never turn the request into a PR-head lookup: merge-group
+    # commits are deliberately different from the current PR head.
     fetch_ref = (source_fetch_ref or sha).strip()
     label = f"verify-{(task_id or sha)[:24]}".replace("/", "-")
     try:

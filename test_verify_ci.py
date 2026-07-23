@@ -156,6 +156,38 @@ def test_ensure_is_sha_only_and_hides_dispatch():
             ok("mirror_branch" not in result, "public surface hides mirror_branch")
 
 
+def test_ensure_pr_hint_cannot_replace_explicit_sha():
+    sha = _sha("merge-group")
+    with mock.patch("ci_scratchpad_dispatch.dispatch_scratchpad_ref",
+                    return_value={"dispatched": True, "head_sha": sha}) as dispatch, \
+            mock.patch("ci_scratchpad_dispatch.try_dispatch_scratchpad") as pr_dispatch:
+        result = verify_ci._ensure_dispatch(
+            sha,
+            project="switchboard",
+            pr_number=412,
+            repo="6th-Element-Labs/projectplanner",
+            source_fetch_ref="refs/heads/gh-readonly-queue/master/pr-412-merge",
+        )
+    ok(result["head_sha"] == sha, "explicit merge-group SHA remains authoritative")
+    ok(dispatch.call_args.args[:2] == (
+        sha, "refs/heads/gh-readonly-queue/master/pr-412-merge"),
+       "exact SHA and fetch ref use the ref dispatcher even with a PR hint")
+    ok(not pr_dispatch.called, "PR-head resolution is not used for exact-SHA ensure")
+
+    with mock.patch("ci_scratchpad_dispatch.dispatch_scratchpad_ref",
+                    return_value={"dispatched": True, "head_sha": sha}) as dispatch, \
+            mock.patch("ci_scratchpad_dispatch.try_dispatch_scratchpad") as pr_dispatch:
+        verify_ci._ensure_dispatch(
+            sha,
+            project="switchboard",
+            pr_number=412,
+            repo="6th-Element-Labs/projectplanner",
+        )
+    ok(dispatch.call_args.args[:2] == (sha, sha),
+       "PR hint without a fetch ref still fetches the authoritative SHA")
+    ok(not pr_dispatch.called, "PR hint never re-resolves an exact-SHA request")
+
+
 def test_mapping_entry():
     with tempfile.TemporaryDirectory() as tmp:
         project = _home(tmp)
@@ -172,6 +204,7 @@ if __name__ == "__main__":
     test_status_and_stall_taxonomy()
     test_callback_stall_when_gh_context_missing()
     test_ensure_is_sha_only_and_hides_dispatch()
+    test_ensure_pr_hint_cannot_replace_explicit_sha()
     test_mapping_entry()
     print(f"\nverify_ci: {passed} passed, {failed} failed")
     raise SystemExit(1 if failed else 0)

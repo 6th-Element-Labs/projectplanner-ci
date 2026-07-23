@@ -26,7 +26,7 @@ TIER = "T2"
 DEFAULT_ACTOR = "switchboard/coordinator-t2"
 DEFAULT_OPERATOR = "switchboard/operator"
 DEFAULT_MAX_CI_RERUNS = 2
-DEFAULT_REVIEW_ACK_TIMEOUT_S = 5.0
+DEFAULT_REVIEW_ACK_TIMEOUT_S = 180.0
 DEFAULT_REVIEW_RESTART_TIMEOUT_S = 10.0
 REVIEW_CONTROL_POLL_S = 0.25
 
@@ -405,7 +405,7 @@ def _execute_action(action: Mapping[str, Any], *, project: str, actor: str,
                         or f"review instruction {ack_status}"
                     )
                 else:
-                    if control_request_superseder is None or task_retrier is None:
+                    if control_request_superseder is None:
                         raise RuntimeError("review_timeout_recovery_required")
                     superseded = control_request_superseder(
                         request_id, project=project,
@@ -421,11 +421,6 @@ def _execute_action(action: Mapping[str, Any], *, project: str, actor: str,
                         result["head_sha"] = head_sha
                         result["awaiting_exact_head_verdict"] = True
                         result["review_completed"] = False
-                    elif superseded_status != "cancelled":
-                        result["status"] = "review_handoff_failed"
-                        result["error"] = (
-                            superseded.get("error") or superseded.get("reason")
-                            or "timed-out review instruction could not be superseded")
                     else:
                         # Ack deadlines are delivery observations, never process
                         # ownership. Retry the instruction once on the same live
@@ -450,7 +445,10 @@ def _execute_action(action: Mapping[str, Any], *, project: str, actor: str,
                             result["review_completed"] = False
                         else:
                             result["status"] = "review_handoff_failed"
-                            result["error"] = "review instruction acknowledgement timed out after one retry"
+                            result["head_sha"] = head_sha
+                            result["error"] = (
+                                "review instruction acknowledgement timed out after one retry; "
+                                "runner left alive")
                             result["failure_reason"] = "ack_timeout_after_retry"
             else:
                 result["status"] = "review_handoff_failed"
@@ -561,31 +559,10 @@ def steward_project(project: str, *, actor: str = DEFAULT_ACTOR,
                         project=project, result={
                             "reason": reason,
                             "superseded": True,
-                            "superseded_by": "review_generation_restart",
+                            "superseded_by": "review_ack_timeout",
                         })
 
                 control_request_superseder = _supersede_control
-        if task_retrier is None and not dry_run:
-            from switchboard.application.commands import task_execution
-            task_retrier = task_execution.retry_task
-        if runner_terminal_waiter is None and not dry_run:
-            from switchboard.application.commands import task_execution
-
-            def _wait_runner_terminal(task_id: str, *, project: str,
-                                      timeout_s: float) -> dict[str, Any]:
-                deadline = time.monotonic() + max(0.0, float(timeout_s))
-                while True:
-                    projection = task_execution.get_task_execution(
-                        task_id, project=project)
-                    if not projection.get("running") and not projection.get("starting"):
-                        return {"terminal": True, "projection": projection}
-                    if time.monotonic() >= deadline:
-                        return {"terminal": False, "projection": projection,
-                                "reason": "runner termination timed out"}
-                    time.sleep(REVIEW_CONTROL_POLL_S)
-
-            runner_terminal_waiter = _wait_runner_terminal
-
     try:
         db_path = db_path_resolver(project)  # type: ignore[misc]
         snapshot = audit.collect_snapshot(db_path, project, now=observed_at)
