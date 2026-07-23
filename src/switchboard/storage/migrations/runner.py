@@ -325,6 +325,22 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
      "UPDATE deliverables SET metadata_json = "
      "json_remove(CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END, "
      "'$.dispatch_eligible') WHERE metadata_json LIKE '%dispatch_eligible%'"),
+    # SIMPLIFY-14 — Task Execution owns completion as an append-only transition
+    # log.  This is deliberately not a completion-run/state-machine table: each
+    # row is evidence for one phase of the existing task execution identity.
+    ("0074_task_execution_completion_phases",
+     "CREATE TABLE IF NOT EXISTS task_execution_completion_phases ("
+     "transition_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, "
+     "pr_number INTEGER NOT NULL, head_sha TEXT NOT NULL, "
+     "runner_generation INTEGER NOT NULL, phase TEXT NOT NULL, "
+     "outcome TEXT NOT NULL, evidence_json TEXT NOT NULL DEFAULT '{}', "
+     "failure_json TEXT NOT NULL DEFAULT '{}', actor TEXT NOT NULL, "
+     "transitioned_at REAL NOT NULL, "
+     "UNIQUE(task_id, pr_number, head_sha, runner_generation, phase))"),
+    ("0075_ix_task_execution_completion_identity",
+     "CREATE INDEX IF NOT EXISTS ix_task_execution_completion_identity "
+     "ON task_execution_completion_phases("
+     "task_id, pr_number, head_sha, runner_generation, transitioned_at DESC)"),
 ]
 
 

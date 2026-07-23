@@ -12,6 +12,7 @@ from switchboard.storage.repositories import coordination as coordination_repo
 from switchboard.storage.repositories import deliverables as deliverables_repo
 from switchboard.storage.repositories import runner as runner_repo
 from switchboard.storage.repositories import tasks as tasks_repo
+from switchboard.storage.repositories import task_completion as completion_repo
 
 
 SCHEMA = "switchboard.task_session.v1"
@@ -165,6 +166,7 @@ def _attempt(wake: Optional[dict[str, Any]], sessions: list[dict[str, Any]]) -> 
     runner = matching[0] if matching else None
     policy = wake.get("policy") if isinstance(wake.get("policy"), dict) else {}
     assignment = policy.get("assignment") if isinstance(policy.get("assignment"), dict) else {}
+    lifecycle = policy.get("lifecycle") if isinstance(policy.get("lifecycle"), dict) else {}
     selector = wake.get("selector") if isinstance(wake.get("selector"), dict) else {}
     return {
         "wake_id": wake_id,
@@ -180,6 +182,8 @@ def _attempt(wake: Optional[dict[str, Any]], sessions: list[dict[str, Any]]) -> 
         "agent_id": (runner or {}).get("agent_id") or selector.get("agent_id"),
         "runtime": (runner or {}).get("runtime") or selector.get("runtime"),
         "execution_mode": policy.get("mode"),
+        "generation": (assignment.get("generation") or lifecycle.get("generation")
+                       or policy.get("generation")),
         "result": wake.get("result") or {},
     }
 
@@ -245,16 +249,36 @@ def execute_for(task_id: str, *, project: str,
         active_runner.get("metadata"), dict) else {}
     host_id = ((active_runner or {}).get("host_id")
                or (attempt or {}).get("host_id") or None)
+    completion = None
+    pr_number = git.get("pr_number")
+    head_sha = str(git.get("head_sha") or "")
+    generation = int((attempt or {}).get("generation") or 0)
+    if pr_number and head_sha and generation > 0:
+        completion = completion_repo.get_completion(
+            task_id, pr_number=int(pr_number), head_sha=head_sha,
+            runner_generation=generation, project=project)
+    lifecycle_phase = _phase(task, attempt, active_runner, outcome)
+    if completion and not active_runner:
+        completion_phase = str(completion.get("phase") or "")
+        completion_outcome = str(completion.get("outcome") or "")
+        if completion_outcome == "failed":
+            lifecycle_phase = "blocked"
+        elif completion_phase == "completed":
+            lifecycle_phase = "merged"
+        else:
+            lifecycle_phase = "review"
     return {
         "schema": SCHEMA,
         "project": project,
         "task": task,
         "deliverable": _deliverable(task_id, project),
-        "lifecycle_phase": _phase(task, attempt, active_runner, outcome),
+        "lifecycle_phase": lifecycle_phase,
         "active_attempt": attempt,
         "active_host": {"host_id": host_id} if host_id else None,
         "active_runner": active_runner,
         "last_dispatch_outcome": outcome or None,
+        "completion": completion,
+        "completion_phase": (completion or {}).get("phase"),
         "pr_head": ({"branch": git.get("branch"), "head_sha": git.get("head_sha"),
                      "pr_url": git.get("pr_url"), "pr_number": git.get("pr_number")}
                     if any(git.get(k) for k in ("branch", "head_sha", "pr_url", "pr_number"))
