@@ -9,8 +9,9 @@ from path_setup import ROOT
 
 from adapters.claude_question_adapter import (
     ClaudeQuestionAdapter, ClaudeQuestionError, hook_settings, pinned_command,
-    pinned_version,
+    pinned_version, resume_question,
 )
+from adapters import claude_question_adapter as question_adapter
 
 
 BINDING = {
@@ -196,6 +197,36 @@ def test_pinned_command_accepts_exact_runtime(tmp_path):
     fake_claude.write_text("#!/bin/sh\nprintf '2.1.202 (Claude Code)\\n'\n")
     fake_claude.chmod(0o755)
     assert pinned_command(str(fake_claude)) == [str(fake_claude)]
+
+
+def test_agent_host_resume_records_receipt_and_redacts_provider_output(
+        tmp_path, monkeypatch):
+    attention = Attention()
+    adapter = ClaudeQuestionAdapter(
+        binding=BINDING, http=attention, journal_path=str(tmp_path / "journal"))
+    adapter.handle_hook(hook())
+    attention.decision = {"answers": {"Which color?": "Blue"}}
+    adapter.handle_hook(hook())
+    monkeypatch.setattr(
+        question_adapter, "pinned_command", lambda executable: [executable])
+    provider_output = json.dumps({
+        "type": "result",
+        "session_id": "session-24",
+        "stop_reason": "end_turn",
+        "terminal_reason": "completed",
+        "result": "provider output must remain redacted",
+    })
+    resumed = resume_question(
+        adapter,
+        session_id="session-24",
+        run=lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], 0, stdout=provider_output, stderr=""),
+    )
+    assert resumed["receipt_count"] == 1
+    assert resumed["provider_output_redacted"] is True
+    assert resumed["provider_output_bytes"] == len(provider_output.encode())
+    assert "provider output must remain redacted" not in json.dumps(resumed)
+    assert attention.calls[-1][1].endswith("/delivery")
 
 
 def test_settings_scope_hook_to_native_question_tool():

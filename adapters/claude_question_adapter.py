@@ -305,6 +305,49 @@ def pinned_command(executable: str) -> list[str]:
     return [executable]
 
 
+def resume_question(
+    adapter: ClaudeQuestionAdapter, *, session_id: str,
+    executable: str = "claude", cwd: str | None = None,
+    env: dict[str, str] | None = None, timeout_s: float = 600,
+    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> dict[str, Any]:
+    """Resume a deferred Agent Host turn and record its receipt."""
+    session_id = str(session_id or "").strip()
+    if not session_id:
+        raise ClaudeQuestionError("Claude resume is missing session_id")
+    command = pinned_command(executable)
+    command.extend(["-p", "--resume", session_id, "--output-format", "json"])
+    completed = run(
+        command, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        timeout=timeout_s, check=False,
+    )
+    output = str(completed.stdout or "")
+    if completed.returncode != 0 or not output.strip():
+        raise ClaudeQuestionError("Claude deferred-question resume failed")
+    try:
+        result = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise ClaudeQuestionError(
+            "Claude deferred-question resume returned malformed JSON") from exc
+    if not isinstance(result, dict):
+        raise ClaudeQuestionError(
+            "Claude deferred-question resume returned a non-object result")
+    receipts = adapter.record_continuation(result)
+    encoded = output.encode()
+    return {
+        "schema": "switchboard.claude_question_resume.v1",
+        "session_id": str(result.get("session_id") or ""),
+        "stop_reason": result.get("stop_reason"),
+        "terminal_reason": result.get("terminal_reason"),
+        "receipt_count": len(receipts),
+        "receipts": receipts,
+        "provider_output_sha256": hashlib.sha256(encoded).hexdigest(),
+        "provider_output_bytes": len(encoded),
+        "provider_output_redacted": True,
+    }
+
+
 def hook_settings(command: list[str]) -> dict[str, Any]:
     """Return the exact Claude settings fragment for the question hook."""
     shell_command = " ".join(_shell_quote(part) for part in command)
@@ -335,20 +378,21 @@ def _environment_binding() -> dict[str, str]:
 
 
 def main() -> int:
-    """Command-hook entrypoint. It emits only Claude's structured hook reply."""
+    """Hook and Agent Host resume entrypoint with structured redacted output."""
     try:
         executable = str(
             os.environ.get("PM_CLAUDE_EXECUTABLE") or "claude").strip()
         if not executable:
             raise ClaudeQuestionError("PM_CLAUDE_EXECUTABLE is empty")
-        # This check deliberately lives in the command-hook entrypoint.  A
-        # caller cannot reach capture, claim, or replay on an unprobed runtime.
-        pinned_command(executable)
+        mode = str(
+            os.environ.get("PM_CLAUDE_QUESTION_MODE") or "hook").strip().lower()
+        if mode == "hook":
+            # A caller cannot reach capture, claim, or replay on an unprobed runtime.
+            pinned_command(executable)
         try:
             from switchboard_core import _http
         except ModuleNotFoundError:
             from adapters.switchboard_core import _http
-        payload = json.load(sys.stdin)
         journal = str(os.environ.get("PM_CLAUDE_QUESTION_JOURNAL") or "").strip()
         if not journal:
             raise ClaudeQuestionError("PM_CLAUDE_QUESTION_JOURNAL is required")
@@ -357,7 +401,20 @@ def main() -> int:
             http=lambda method, path, body: _http(method, path, body),
             journal_path=journal,
         )
-        print(json.dumps(adapter.handle_hook(payload), separators=(",", ":")))
+        if mode == "hook":
+            output = adapter.handle_hook(json.load(sys.stdin))
+        elif mode == "resume":
+            output = resume_question(
+                adapter,
+                session_id=str(
+                    os.environ.get("PM_CLAUDE_SESSION_ID") or "").strip(),
+                executable=executable,
+                cwd=str(os.environ.get("PM_CLAUDE_WORKSPACE") or "").strip() or None,
+                env=dict(os.environ),
+            )
+        else:
+            raise ClaudeQuestionError("unsupported Claude question adapter mode")
+        print(json.dumps(output, separators=(",", ":")))
         return 0
     except Exception as exc:
         # Hook failures are explicit denials. Never dump environment, HTTP bodies,
