@@ -253,7 +253,7 @@ def execute_for(task_id: str, *, project: str,
     pr_number = git.get("pr_number")
     head_sha = str(git.get("head_sha") or "")
     generation = int((attempt or {}).get("generation") or 0)
-    if pr_number and head_sha:
+    if pr_number and head_sha and generation > 0:
         completion = completion_repo.get_completion(
             task_id, pr_number=int(pr_number), head_sha=head_sha,
             runner_generation=generation, project=project)

@@ -53,6 +53,25 @@ class TaskCompletionTest(unittest.TestCase):
         with self.assertRaisesRegex(task_completion.TaskCompletionError, "identity conflict"):
             self.transition(evidence={"receipt_id": "different"})
 
+    def test_pending_advances_once_to_terminal_outcome(self):
+        pending = self.transition(outcome="pending")
+        succeeded = self.transition(
+            outcome="succeeded", evidence={"receipt_id": "review-accepted"})
+        self.assertEqual(succeeded["transition_id"], pending["transition_id"])
+        self.assertEqual(succeeded["outcome"], "succeeded")
+        self.assertEqual(self.transition(
+            outcome="succeeded", evidence={"receipt_id": "review-accepted"}), succeeded)
+        with self.assertRaisesRegex(task_completion.TaskCompletionError, "identity conflict"):
+            self.transition(
+                outcome="failed", evidence={}, failure={"code": "late_failure"})
+
+    def test_pending_can_advance_to_failed(self):
+        self.transition("ci", outcome="pending")
+        failed = self.transition(
+            "ci", outcome="failed", evidence={},
+            failure={"code": "exact_head_ci_failed"})
+        self.assertEqual(failed["outcome"], "failed")
+
     def test_failure_must_be_explicit(self):
         with self.assertRaisesRegex(task_completion.TaskCompletionError, "explicit failure"):
             self.transition("ci", outcome="failed", evidence={})

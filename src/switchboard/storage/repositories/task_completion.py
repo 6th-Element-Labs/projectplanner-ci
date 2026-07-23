@@ -92,10 +92,20 @@ def record_transition(data: Mapping[str, Any], *, actor: str,
             (task_id, pr_number, head_sha, generation, phase)).fetchone()
             if existing:
                 current = _row(existing)
-                if (current["outcome"] != outcome or current["evidence"] != evidence
-                        or current["failure"] != failure):
+                if (current["outcome"] == outcome and current["evidence"] == evidence
+                        and current["failure"] == failure):
+                    return current
+                if current["outcome"] != "pending" or outcome == "pending":
                     raise TaskCompletionError("completion transition identity conflict")
-                return current
+                c.execute(
+                    "UPDATE task_execution_completion_phases SET outcome=?,evidence_json=?,"
+                    "failure_json=?,actor=?,transitioned_at=? WHERE transition_id=?",
+                    (outcome, json.dumps(evidence, sort_keys=True),
+                     json.dumps(failure, sort_keys=True), str(actor or "system"), now,
+                     transition_id))
+                return _row(c.execute(
+                    "SELECT * FROM task_execution_completion_phases WHERE transition_id=?",
+                    (transition_id,)).fetchone())
             c.execute(
                 "INSERT INTO task_execution_completion_phases("
                 "transition_id,task_id,pr_number,head_sha,runner_generation,phase,outcome,"
