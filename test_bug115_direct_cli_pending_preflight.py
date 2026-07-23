@@ -10,8 +10,9 @@ attestation (BUG-97). Previously the server fell back to ``repo_preflight``, whi
 
 The fix: while a live host runner owns the session but has not attested yet, the
 server returns a visible, NON-blocking "awaiting host attestation" pending report
-instead of statting the remote path. A truly missing worktree (no live host runner)
-still fails closed, and a stale runner cannot mask a missing path.
+instead of statting the remote path. BUG-159 extends that truthfulness to every
+workspace outside the coordinator-managed workspace root, regardless of runner
+liveness. Missing coordinator-managed workspaces still fail closed.
 """
 import importlib.util
 import json
@@ -29,6 +30,7 @@ os.environ["PM_HELM_DB_PATH"] = os.path.join(TMP, "helm.db")
 os.environ["PM_SWITCHBOARD_DB_PATH"] = os.path.join(TMP, "switchboard.db")
 os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = os.path.join(TMP, "registry.db")
 os.environ["PM_DYNAMIC_PROJECTS_DIR"] = TMP
+os.environ["PM_WORKSPACE_ROOT"] = os.path.join(TMP, "managed-workspaces")
 sys.path.insert(0, str(ROOT))
 
 import store  # noqa: E402
@@ -47,7 +49,8 @@ REMOTE = "/Users/steveridder/Library/Application Support/SwitchboardAgentHost/wo
 HEAD = "c" * 40
 
 
-def _make_session(project, task_id, agent_id, session_id, principal_id):
+def _make_session(project, task_id, agent_id, session_id, principal_id,
+                  worktree_path=REMOTE):
     return store.create_work_session({
         "work_session_id": session_id,
         "task_id": task_id,
@@ -57,7 +60,7 @@ def _make_session(project, task_id, agent_id, session_id, principal_id):
         "branch": f"codex/{task_id}-direct",
         "head_sha": HEAD,
         "base_sha": HEAD,
-        "worktree_path": REMOTE,
+        "worktree_path": worktree_path,
         "storage_mode": "worktree",
         "status": "active",
         "dirty_status": "clean",
@@ -140,8 +143,8 @@ try:
     ok((res2.get("preflight") or {}).get("source") == "agent_host_pending",
        "work_session_id-bound live runner also yields a pending report")
 
-    # --- Case 3: no live host runner -> genuinely missing -> fail closed -------
-    task3 = store.create_task({"workstream_id": "BUG", "title": "truly missing"},
+    # --- Case 3: no runner cannot make an external path observable -------------
+    task3 = store.create_task({"workstream_id": "BUG", "title": "external unknown"},
                               actor="bug115-test", project=project)
     task3_id = task3["task_id"]
     agent3 = f"codex/{task3_id}"
@@ -150,10 +153,15 @@ try:
                   principal_id=f"direct-session/run_bug115_c")
     # No runner registered for this task at all.
     res3 = store.preflight_work_session(session3, actor="bug115-test", project=project)
-    ok(_verdict(res3) == "deny" and "worktree_missing" in _codes(res3),
-       "a missing worktree with no live host runner still fails closed (worktree_missing)")
+    ok(_verdict(res3) == "warn"
+       and "work_session_preflight_unverifiable" in _codes(res3)
+       and "worktree_missing" not in _codes(res3),
+       "external worktree with no live runner is reported unverifiable, not missing")
+    health3 = store.get_work_session_health(session3, project=project)
+    ok(health3.get("safe") is True and health3.get("status") == "warning",
+       "unverifiable external worktree leaves Work Session warning, not unsafe")
 
-    # --- Case 4: stale runner cannot mask a missing worktree ------------------
+    # --- Case 4: stale runner does not change path observability ---------------
     task4 = store.create_task({"workstream_id": "BUG", "title": "stale runner"},
                               actor="bug115-test", project=project)
     task4_id = task4["task_id"]
@@ -164,8 +172,23 @@ try:
                   principal_id=f"direct-session/{runner4}")
     _live_runner(project, task4_id, agent4, runner4, heartbeat_age=10_000)
     res4 = store.preflight_work_session(session4, actor="bug115-test", project=project)
-    ok(_verdict(res4) == "deny" and "worktree_missing" in _codes(res4),
-       "a stale (expired-heartbeat) runner does not mask a missing worktree")
+    ok(_verdict(res4) == "warn"
+       and "work_session_preflight_unverifiable" in _codes(res4)
+       and "worktree_missing" not in _codes(res4),
+       "stale runner does not turn an unobservable external path into missing")
+
+    # --- Case 5: missing coordinator-managed worktree still fails closed ------
+    task5 = store.create_task({"workstream_id": "BUG", "title": "managed missing"},
+                              actor="bug115-test", project=project)
+    task5_id = task5["task_id"]
+    agent5 = f"codex/{task5_id}"
+    session5 = "worksession-bug159-managed"
+    managed_missing = os.path.join(os.environ["PM_WORKSPACE_ROOT"], "missing")
+    _make_session(project, task5_id, agent5, session5,
+                  principal_id="env-mcp-token", worktree_path=managed_missing)
+    res5 = store.preflight_work_session(session5, actor="bug115-test", project=project)
+    ok(_verdict(res5) == "deny" and "worktree_missing" in _codes(res5),
+       "missing coordinator-managed worktree still fails closed")
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
 
