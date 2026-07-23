@@ -135,5 +135,7 @@ def test_projection_is_project_scoped_counts_sources_and_tracks_source_transitio
 if __name__ == "__main__":
     test_agent_item_carries_the_decide_contract()
     test_inbox_item_summarizes_triage_and_routes_to_confirm()
-    test_rank_puts_parked_agents_before_inbound()
+    test_rank_is_impact_then_downstream_then_deadline_then_age()
     test_rank_prefers_deadlines_then_breadth_within_a_source()
+    test_projection_sources_have_stable_ids_links_blast_radius_and_evidence()
+    test_projection_is_project_scoped_counts_sources_and_tracks_source_transition()
