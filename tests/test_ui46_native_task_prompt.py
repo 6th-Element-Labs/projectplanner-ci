@@ -83,9 +83,9 @@ ok(any("mcp_servers.taikun_plan.url" in item for item in overrides)
    and not any("enabled_tools" in item for item in overrides),
    "one-run Codex configuration connects the complete authenticated MCP surface")
 worker_source = Path(codex_local_worker.__file__).read_text(encoding="utf-8")
-ok('"--dangerously-bypass-approvals-and-sandbox"' in worker_source
-   and '"workspace-write"' not in worker_source,
-   "legacy native worker launches with the same unrestricted envelope as desktop")
+ok('"app-server"' in worker_source
+   and '"--dangerously-bypass-approvals-and-sandbox"' not in worker_source,
+   "native worker launches the structured Codex App Server approval path")
 
 store.init_project_registry()
 store.init_db("switchboard")

@@ -1,15 +1,14 @@
 # How a CLI agent tells you it has a question
 
-**The premise, tested:** a coding-agent CLI does not "print a question to the
-terminal and hope someone reads it." When it needs a human it emits a
-**structured machine event** on a side channel, and the host process that owns
-the terminal receives it. Detecting questions is therefore not screen-scraping
-or classification — it is *receiving events the runtime is built to send.*
+**The premise under test:** a coding-agent integration may enter the Needs-you
+queue only when the runtime emits a structured machine request and accepts a
+structured reply. Detecting questions must not be screen-scraping or text
+classification. Claude and Codex expose qualifying paths; the pinned Cursor
+build below does not and therefore fails closed.
 
 This doc covers all three runtimes Switchboard dispatches to — **Claude Code**,
-**Codex**, **Cursor** — with the exact mechanism, the exact event, and how the
-host runner turns each into one row in the operator **question queue** (the
-thing behind the bell / the "Needs you" list).
+**Codex**, **Cursor** — including the exact proven event or the exact evidence
+that support is absent.
 
 Reproduce any of it: `scripts/cli_question_probe/run_probe.sh {claude|codex|cursor}`.
 
@@ -17,7 +16,7 @@ Reproduce any of it: `scripts/cli_question_probe/run_probe.sh {claude|codex|curs
 |---|---|---|---|
 | Claude Code | ✅ **live-tested** | `--permission-prompt-tool` (+ `AskUserQuestion`) | a tool call into a tool the runner owns, with the action as JSON |
 | Codex | ⬤ event stream proven; full turn blocked on `OPENAI_API_KEY` | `--ask-for-approval` + `exec --json` (or `mcp-server`) | `item/commandExecution/requestApproval` JSONL event |
-| Cursor | ⬤ blocked on `CURSOR_API_KEY` | `-p --output-format stream-json` + `--force`/`--trust` policy | gated tool-call event in the stream |
+| Cursor | ⛔ **live-probed; fail closed** | pinned CLI `2026.07.23-e383d2b` | no structured human request/reply event exposed |
 
 ---
 
@@ -81,24 +80,30 @@ decision; treat `item.completed` as authoritative.
 
 ---
 
-## 3. Cursor — mechanism confirmed, full turn needs a key
+## 3. Cursor — live-probed, structured human round trip unsupported
 
-**Mechanism.** `cursor-agent -p --output-format stream-json` runs headless and
-emits stream events: `system` (init: session id, model, `permissionMode`),
-`user`, `assistant` (incremental), and **tool-call** events. Shell/tool actions
-need an explicit policy: `--force`/`--yolo` (allow), `--trust` (trusted
-workspace), `--approve-mcps` (auto-approve MCPs). Without an allow policy a tool
-call is **gated** — it surfaces as a tool-call event the runner must approve
-before the agent proceeds. (Refs: [Cursor output-format](https://docs.cursor.com/en/cli/reference/output-format),
-[headless CLI](https://cursor.com/docs/cli/headless),
-[parameters](https://cursor.com/docs/cli/reference/parameters).)
+**Pinned live probe.** Cursor Agent `2026.07.23-e383d2b` on `darwin-arm64`,
+authenticated by browser login, was exercised in print and interactive modes.
+The redacted replay fixture is
+`tests/fixtures/cursor_attention_2026_07_23.json`.
 
-**Tested here.** `cursor-agent -p --output-format stream-json` reaches a clean
-auth wall: `Authentication required … set CURSOR_API_KEY`. With a key,
-`run_probe.sh cursor` captures the gated tool-call events.
+- A forced two-choice human question appeared only as ordinary `assistant` text,
+  followed by a terminal successful `result`. The process did not park and
+  exposed no reply handle.
+- A shell event carried `skipApproval:false`, but print mode executed it and
+  emitted only `tool_call started` and `tool_call completed`. That flag is not a
+  decision request.
+- A real MCP `elicitation/create` request with an enum schema returned
+  `{"action":"decline"}` in both print and interactive runs. Cursor did not
+  expose the choices for an external operator decision. Text typed during the
+  interactive wait became a later chat follow-up, not the elicitation reply.
 
-**Runner contract.** parse the stream-json; a gated tool-call event → enqueue;
-the operator's answer maps to allow/deny for that call.
+**Product contract.** Cursor attention is therefore
+`unsupported_fail_closed`. `adapters/cursor/attention.py` preserves proven
+session/result identifiers for diagnostics but refuses to normalize assistant
+text, tool-call events, or auto-declined elicitation into the attention queue.
+Support may be enabled only after a future pinned Cursor build proves capture,
+external reply delivery, provider receipt, and same-session continuation.
 
 ---
 

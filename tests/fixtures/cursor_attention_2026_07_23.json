@@ -1,0 +1,101 @@
+{
+  "schema": "switchboard.cursor_attention_probe_fixture.v1",
+  "provider": "cursor",
+  "provider_version": "2026.07.23-e383d2b",
+  "platform": "darwin-arm64",
+  "authentication": "login",
+  "secrets_redacted": true,
+  "cases": {
+    "question_text": [
+      {
+        "type": "system",
+        "subtype": "init",
+        "apiKeySource": "login",
+        "cwd": "<WORKSPACE>",
+        "session_id": "bc00d858-c8aa-44d3-99dd-5c9089a61619",
+        "model": "Auto",
+        "permissionMode": "default"
+      },
+      {
+        "type": "assistant",
+        "message": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "Which rollout should I use? canary or all-at-once?"
+            }
+          ]
+        },
+        "session_id": "bc00d858-c8aa-44d3-99dd-5c9089a61619"
+      },
+      {
+        "type": "result",
+        "subtype": "success",
+        "is_error": false,
+        "result": "Which rollout should I use? canary or all-at-once?",
+        "session_id": "bc00d858-c8aa-44d3-99dd-5c9089a61619",
+        "request_id": "572a376f-4f18-4e2c-8f93-f537fb27c3f5"
+      }
+    ],
+    "shell_without_attention_request": [
+      {
+        "type": "tool_call",
+        "subtype": "started",
+        "call_id": "call-74baa2f1-f2ee-4ec1-8d63-a5179312c571",
+        "tool_call": {
+          "shellToolCall": {
+            "args": {
+              "command": "printf CURSOR_ADAPTER_25_APPROVAL_PROBE",
+              "skipApproval": false,
+              "conversationId": "44ba9f3e-a5fd-4eb8-a18e-9267a4b29331"
+            }
+          }
+        },
+        "session_id": "44ba9f3e-a5fd-4eb8-a18e-9267a4b29331"
+      },
+      {
+        "type": "tool_call",
+        "subtype": "completed",
+        "call_id": "call-74baa2f1-f2ee-4ec1-8d63-a5179312c571",
+        "tool_call": {
+          "shellToolCall": {
+            "result": {
+              "success": {
+                "exitCode": 0,
+                "stdout": "CURSOR_ADAPTER_25_APPROVAL_PROBE"
+              }
+            }
+          }
+        },
+        "session_id": "44ba9f3e-a5fd-4eb8-a18e-9267a4b29331"
+      }
+    ],
+    "mcp_elicitation": [
+      {
+        "type": "probe_observation",
+        "probe": "mcp_elicitation_reply",
+        "session_id": "a5d6471e-4dcb-41e3-9541-b605b0922bda",
+        "provider_request_id": "cursor-elicitation-2",
+        "requested_schema": {
+          "type": "object",
+          "properties": {
+            "rollout": {
+              "type": "string",
+              "enum": [
+                "canary",
+                "all-at-once"
+              ]
+            }
+          },
+          "required": [
+            "rollout"
+          ]
+        },
+        "native_reply": {
+          "action": "decline"
+        }
+      }
+    ]
+  }
+}

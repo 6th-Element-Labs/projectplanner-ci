@@ -248,6 +248,7 @@ app.include_router(_create_messaging_router(
 app.include_router(_create_attention_router(
     resolve_project=_proj,
     resolve_principal=_principal,
+    resolve_body_project=_body_project,
     list_pending_acks=store.list_pending_acks,
     list_inbox=store.list_inbox,
 ))
@@ -280,6 +281,7 @@ app.include_router(_create_access_router(
 ))
 app.include_router(_create_board_router(
     resolve_project=_proj,
+    resolve_principal=_principal,
     etag_json=_etag_json,
     saturation_snapshot=_saturation_snapshot,
     sibling_bc_only=_COORD_HTTP_PRIMARY == "service",

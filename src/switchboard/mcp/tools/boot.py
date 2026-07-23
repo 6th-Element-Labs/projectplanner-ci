@@ -60,6 +60,8 @@ def prepare_agent_session(
     lane: str = "",
     model: str = "",
     intent: str = "",
+    mode: str = "",
+    launch_runtime: str = "",
     deliverable_id: str = "",
     board_id: str = "",
     mission_id: str = "",
@@ -76,6 +78,12 @@ def prepare_agent_session(
     When deliverable_id or board_id/mission_id is set, the session is deliverable-first:
     project is the mission-home project that owns the deliverable record, and first_calls
     include get_mission_status before task work begins.
+
+    Opt-in operator launch: pass mode=\"launcher\" (or intent aliases launch|operator|start).
+    That returns allowed_actions/forbidden_actions and first_calls ending in start_task —
+    the same Connect door as the UI Start button. Default/worker mode is unchanged.
+    launch_runtime selects the CLI worker runtime (default codex); it is never inferred
+    from the launcher's own runtime. mode wins when both mode and intent are set.
     """
     return _services().dumps(session_boot.prepare_agent_session(
         runtime=runtime,
@@ -85,6 +93,8 @@ def prepare_agent_session(
         lane=lane,
         model=model,
         intent=intent,
+        mode=mode,
+        launch_runtime=launch_runtime,
         deliverable_id=deliverable_id,
         board_id=board_id,
         mission_id=mission_id,

@@ -163,6 +163,14 @@ def execute(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             "inbox(unacked)",
             "check+claim before first write",
         ],
+        "session_start_sequence_launcher": [
+            "prepare_agent_session(mode=launcher, project=..., task_id=..., launch_runtime=codex)",
+            "get_working_agreement(project)",
+            "register_agent (launcher identity; task_id=\"\")",
+            "inbox(unacked)",
+            "for each task: start_task(task_id, runtime=codex|claude) — serialize writes",
+            "poll get_task_execution — do not claim",
+        ],
         "deliverable_first_startup": {
             "doc": "docs/DELIVERABLE-FIRST-STARTUP.md",
             "ownership": {

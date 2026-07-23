@@ -25,6 +25,15 @@ contract as every other runtime.
 invokes the shared-core `guard_tool` before each tool and honors deny. NMI = runner kill if
 Switchboard owns the process. Set the `control` block accordingly at `register_agent`.
 
+### Human questions and approvals
+
+Cursor Agent `2026.07.23-e383d2b` does not expose a proven structured external
+question/approval reply path. Live probes found assistant text, automatically
+executed print-mode tool events, and MCP elicitation returning
+`{"action":"decline"}` without an operator reply surface. The attention adapter
+therefore advertises no supported request kinds and fails closed. See
+`attention.py` and `tests/fixtures/cursor_attention_2026_07_23.json`.
+
 ## Config
 `PM_BASE`, `PM_PROJECT`, `PM_MCP_TOKEN`, `PM_AGENT_ID` (`cursor/<scope>`).
 

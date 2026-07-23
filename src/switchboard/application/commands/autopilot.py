@@ -145,14 +145,24 @@ def control_autopilot(deliverable_id: Any, *, project: str = DEFAULT_PROJECT,
             "invalid_input",
             f"action must be one of {', '.join(ACTIONS)}",
             action=action, deliverable_id=deliverable_id, project=project)
-    if not deliverable_id:
-        raise AutopilotError("invalid_input", "deliverable_id required",
+    kind = str(scope_type or "deliverable").strip().lower()
+    # A task scope is identified by its task, a deliverable scope by its
+    # deliverable. Demanding a deliverable_id for a standalone task scope made
+    # such a scope armable but not stoppable: Start could create one, and every
+    # pause/resume/stop then refused because there was no deliverable to name.
+    if kind == "task":
+        if not str(task_id or "").strip():
+            raise AutopilotError("invalid_input", "task_id required for a task scope",
+                                 project=project)
+    elif not deliverable_id:
+        raise AutopilotError("invalid_input",
+                             "deliverable_id required for a deliverable scope",
                              project=project)
     runtime = str(runtime or "codex").strip().lower()
     common = {
         "project": project, "profile_id": profile_id,
         "deliverable_id": deliverable_id,
-        "scope_type": str(scope_type or "deliverable").strip().lower(),
+        "scope_type": kind,
         "task_project": task_project, "task_id": task_id, "actor": actor,
     }
     task_start = None

@@ -18,6 +18,7 @@ import sqlite3
 import subprocess
 import time
 import urllib.request
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -46,6 +47,22 @@ def _store_facade():
     """Resolve transitional store helpers after store.py is initialized."""
     import store
     return store
+
+
+def _recorded_pr_stamp_eligible(
+        task_status: str, *, default_branch_merge: bool, pr_names_task: bool,
+        has_merged_sha: bool) -> bool:
+    """Whether reconcile may stamp merge provenance for a recorded PR.
+
+    ``Blocked`` is included so completion runs projected as remediation still
+    reach Done after a dropped merge webhook (SIMPLIFY-22).
+    """
+    status = str(task_status or "")
+    if status in ("In Review", "Blocked", "Done"):
+        return status != "Done" or not has_merged_sha
+    if status == "In Progress":
+        return bool(default_branch_merge and pr_names_task)
+    return False
 
 
 SEVERITY_VALUE = {"low": 1, "medium": 2, "high": 3, "critical": 4}
@@ -402,6 +419,44 @@ def _mark_task_merged_impl(task_id: str, merged_sha: str, pr_number: Optional[in
                 **({"merged_evidence_only": True} if not done_gate.get("ok") else {}),
             },
         })
+        # Keep completion_runs current-state aligned with merge provenance (SIMPLIFY-22).
+        # Upsert: a merge webhook may be the first write, so UPDATE-only would leave
+        # Done tasks without the claimed current-state authority.
+        if done_gate.get("ok"):
+            try:
+                evidence_refs = {
+                    "merge": {
+                        "merged_sha": merged_sha,
+                        "provenance_source": provenance_source or "github_pr_merged",
+                        "repo_role": "canonical",
+                        "pr_number": pr_number,
+                    }
+                }
+                evidence_json = json.dumps(evidence_refs, sort_keys=True)
+                run_head = (head_sha or current.get("head_sha") or merged_sha or "").strip().lower()
+                run_pr = int(pr_number or current.get("pr_number") or 0)
+                if run_pr > 0 and len(run_head) >= 7:
+                    run_id = "completion-run-" + uuid.uuid4().hex[:16]
+                    c.execute(
+                        "INSERT INTO completion_runs("
+                        "run_id, task_id, pr_number, head_sha, state, route, reason_code, "
+                        "desired_role, attempt, state_version, next_retry_at, "
+                        "evidence_refs_json, board_status, created_at, updated_at, actor) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                        "ON CONFLICT(task_id) DO UPDATE SET "
+                        "pr_number=excluded.pr_number, head_sha=excluded.head_sha, "
+                        "state=excluded.state, route=excluded.route, "
+                        "reason_code=excluded.reason_code, desired_role=excluded.desired_role, "
+                        "evidence_refs_json=excluded.evidence_refs_json, "
+                        "board_status=excluded.board_status, updated_at=excluded.updated_at, "
+                        "actor=excluded.actor, "
+                        "state_version=completion_runs.state_version+1",
+                        (run_id, task_id, run_pr, run_head, "done", "none",
+                         "canonical_merge", "", 1, 1, None, evidence_json, "Done",
+                         now, now, actor),
+                    )
+            except sqlite3.OperationalError:
+                pass
         activity_kind = ("git.pr_merged" if done_gate.get("ok")
                          else "git.pr_merged_evidence")
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
@@ -1151,12 +1206,13 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
             # reach In Review). Auto-promote them ONLY when the PR actually merged into the
             # project's canonical default branch AND the PR itself names the task — never off a
             # feature/integration branch and never from a mis-attributed PR reference.
-            stamp_eligible = (
-                (task_status in ("In Review", "Done")
-                 and (task_status != "Done" or not state.get("merged_sha")))
-                or (task_status == "In Progress"
-                    and default_branch_merge
-                    and _pr_references_task(pr, task["task_id"]))
+            # Blocked (e.g. route=remediation) must also stamp when a recorded PR merges and
+            # the webhook was dropped — board status alone must not narrow Done recovery.
+            stamp_eligible = _recorded_pr_stamp_eligible(
+                task_status,
+                default_branch_merge=default_branch_merge,
+                pr_names_task=_pr_references_task(pr, task["task_id"]),
+                has_merged_sha=bool(state.get("merged_sha")),
             )
             if merged and merge_sha and stamp_eligible:
                 if default_branch_merge:
@@ -1370,6 +1426,21 @@ def reconcile(project: str = DEFAULT_PROJECT, incremental: bool = False,
     tasks: List[Dict[str, Any]] = []
     git_states: Dict[str, Dict[str, Any]] = {}
     repo = _store_facade().get_project_github_repo(project)
+    # SIMPLIFY-22 — recover orphaned nonterminal PR-backed tasks into completion_runs
+    # before status-keyed stamp sweeps run. Failures must not hide reconcile.
+    completion_run_recovery: Dict[str, Any] = {"recovered": 0}
+    try:
+        from switchboard.storage.repositories import completion_runs as completion_runs_repo
+        completion_run_recovery = completion_runs_repo.recover_incomplete_runs(
+            project=project, actor="reconcile/completion_runs")
+    except Exception as exc:  # noqa: BLE001 — never block provenance reconcile
+        findings.append({
+            "severity": "medium",
+            "task_id": "",
+            "code": "completion_run_recovery_failed",
+            "detail": f"completion_run recovery failed: {exc}",
+            "failure_class": "failed_gate",
+        })
     previous_cursor = int(_store_facade().get_meta(_reconcile_cursor_key(), 0, project=project) or 0) if incremental else 0
     previous_task_cursor = str(_store_facade().get_meta(
         "reconcile.task_cursor", "", project=project) or "") if incremental else ""
@@ -1532,7 +1603,8 @@ def reconcile(project: str = DEFAULT_PROJECT, incremental: bool = False,
         external_checks["evidence_batch_limit"] = max(1, min(int(evidence_limit), 5000))
     return {"project": project, "ok": not findings, "findings": findings,
             "activity_cursor": cursor, "checked_at": now,
-            "external_checks": external_checks, "backfilled": backfilled}
+            "external_checks": external_checks, "backfilled": backfilled,
+            "completion_run_recovery": completion_run_recovery}
 
 
 def close_stale_reconcile_alert_inbox(project: str = DEFAULT_PROJECT,
@@ -1765,6 +1837,7 @@ __all__ = [
     "retire_merged_branch",
     "_activity_text",
     "_pr_references_task",
+    "_recorded_pr_stamp_eligible",
     "_has_immutable_canonical_merge",
     "_needs_live_pr_recheck",
     "_external_reconcile_findings",

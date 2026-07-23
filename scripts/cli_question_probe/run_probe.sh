@@ -43,16 +43,15 @@ JSON
     grep -E 'requestApproval|"type":"error"' "$here/codex-stream.jsonl" | head -5
     ;;
   cursor)
-    # Cursor: cursor-agent -p --output-format stream-json emits system/user/
-    # assistant/tool-call events. Shell commands need an allow/deny policy;
-    # without --force a tool call is gated and surfaces as a tool-call event
-    # the runner must approve.
-    cursor-agent -p --output-format stream-json \
-      "Run the shell command 'whoami'." \
+    # Cursor: capture the lifecycle/tool stream. A tool event, including one
+    # with skipApproval:false, is not an attention request: the pinned live
+    # probe executed it without exposing an external decision/reply handle.
+    cursor-agent -p --trust --output-format stream-json \
+      "Run the shell command 'printf CURSOR_ATTENTION_PROBE'." \
       < /dev/null > "$here/cursor-stream.jsonl" 2>"$here/cursor.err"
     ;;
   *) echo "usage: $0 {claude|codex|cursor}"; exit 2 ;;
 esac
 
-echo "=== questions-queue.jsonl (machine events captured) ==="
-cat "$QUESTION_QUEUE" 2>/dev/null || echo "(empty — see the *-stream.jsonl for the raw event stream / auth wall)"
+echo "=== questions-queue.jsonl (qualifying requests only) ==="
+cat "$QUESTION_QUEUE" 2>/dev/null || true

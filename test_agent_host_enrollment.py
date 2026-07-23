@@ -2491,11 +2491,8 @@ try:
        and local_evidence["verification"]["auth_mode"] == "chatgpt_personal"
        and local_evidence["verification"]["runner_heartbeat_errors_recovered"] == 1
        and local_evidence["verification"]["provider_credential_exported"] is False
-       and "exec" in local_command and "ADAPTER-18" in str(local_command[-1])
-       and "--dangerously-bypass-approvals-and-sandbox" in local_command
-       and "workspace-write" not in local_command
-       and local_command.count("--add-dir") == 1
-       and str(local_git_common) in local_command and str(local_git_dir) not in local_command
+       and "app-server" in local_command and "--stdio" in local_command
+       and "--dangerously-bypass-approvals-and-sandbox" not in local_command
        and "OPENAI_API_KEY" not in local_environment
        and "PM_MCP_TOKEN" not in local_environment
        and "SWITCHBOARD_TOKEN" not in local_environment

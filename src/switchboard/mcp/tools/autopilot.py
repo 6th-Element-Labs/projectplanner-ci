@@ -46,7 +46,7 @@ def get_autopilot(deliverable_id: str, project: str = "maxwell",
         "get_autopilot", deliverable_id, project=project, profile_id=profile_id))
 
 
-def control_autopilot(deliverable_id: str, ctx: Context, project: str = "maxwell",
+def control_autopilot(deliverable_id: str = "", ctx: Context = None, project: str = "maxwell",
                       action: str = "start", scope_type: str = "deliverable",
                       task_project: str = "", task_id: str = "",
                       runtime: str = "codex",
@@ -54,8 +54,10 @@ def control_autopilot(deliverable_id: str, ctx: Context, project: str = "maxwell
                       agent_id: str = "") -> str:
     """Start, pause, resume, or stop one durable Autopilot scope.
 
-    action ∈ start|pause|resume|stop. scope_type ∈ deliverable|task (a task scope
-    also needs task_id, and task_project defaults to project). start creates or
+    action ∈ start|pause|resume|stop. A deliverable scope is named by
+    deliverable_id; a task scope is named by task_id alone (task_project defaults
+    to project) and needs no deliverable, so a task started on its own can also be
+    paused, resumed and stopped. start creates or
     idempotently reads back a scope; the other three move an existing live one
     and refuse with no_active_scope when none exists. runtime must be one the
     host supports; an unsupported value returns the real supported_runtimes list.
