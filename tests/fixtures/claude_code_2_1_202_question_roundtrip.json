@@ -1,0 +1,71 @@
+{
+  "schema": "switchboard.claude_question_conformance.v1",
+  "runtime": {
+    "binary": "claude",
+    "version": "2.1.202",
+    "mechanism": "PreToolUse permissionDecision=defer",
+    "minimum_defer_version": "2.1.89"
+  },
+  "capture": {
+    "session_id": "session-24",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "AskUserQuestion",
+    "tool_use_id": "toolu_24",
+    "tool_input": {
+      "questions": [
+        {
+          "question": "Which color?",
+          "header": "Color",
+          "options": [
+            {"label": "Blue", "description": "Use blue"},
+            {"label": "Green", "description": "Use green"}
+          ],
+          "multiSelect": false
+        }
+      ]
+    }
+  },
+  "first_hook_reply": {
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "permissionDecision": "defer"
+    }
+  },
+  "deferred_result": {
+    "type": "result",
+    "stop_reason": "tool_deferred",
+    "session_id": "session-24",
+    "deferred_tool_use": {
+      "id": "toolu_24",
+      "name": "AskUserQuestion"
+    }
+  },
+  "decision": {
+    "answers": {"Which color?": "Blue"}
+  },
+  "resume": {
+    "command_shape": ["claude", "-p", "--resume", "session-24"],
+    "same_session_required": true,
+    "updated_input_answers": {"Which color?": "Blue"},
+    "lost_allow_output_recovery": {
+      "reload_journal": true,
+      "replay_stored_updated_input": true,
+      "reclaim_decision": false
+    }
+  },
+  "completion": {
+    "session_id": "session-24",
+    "stop_reason": "end_turn",
+    "same_session_continuation": true
+  },
+  "unsupported": {
+    "request_kinds": "deny",
+    "malformed_answers": "deny",
+    "cross_session_completion": "error",
+    "unpinned_runtime_version": "deny-before-attention-http"
+  },
+  "secrets": {
+    "fixture_contains_credentials": false,
+    "journal_mode": "0600"
+  }
+}
