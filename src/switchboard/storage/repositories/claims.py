@@ -1243,16 +1243,24 @@ def _surrender_claim_runner_leases_in(
     durable fence which rejects late heartbeats until the existing lease-expiry
     reaper terminalizes them.
     """
+    # Connect registers the supervised generation before a claim exists, then
+    # late-binds the claim.  A completion racing that late heartbeat can still
+    # see claim_id=NULL, so the Work Session binding is the exact durable join
+    # for that production shape.  Never widen this to every runner for a task.
     rows = c.execute(
-        "SELECT runner_session_id, heartbeat_ttl_s, metadata_json "
-        "FROM runner_sessions WHERE claim_id=?",
-        (claim_id,),
+        "SELECT runner_session_id, claim_id, heartbeat_ttl_s, metadata_json "
+        "FROM runner_sessions WHERE claim_id=? OR "
+        "(COALESCE(claim_id,'')='' AND task_id=?)",
+        (claim_id, task_id),
     ).fetchall()
     surrendered: List[str] = []
     for runner in rows:
         metadata = json.loads(runner["metadata_json"] or "{}")
         bound_work_session = str(metadata.get("work_session_id") or "")
         if work_session_id and bound_work_session != work_session_id:
+            continue
+        if not str(runner["claim_id"] or "") and (
+                not work_session_id or bound_work_session != work_session_id):
             continue
         fence = metadata.get("lease_surrender") or {}
         if str(fence.get("claim_id") or "") == claim_id:
@@ -1268,9 +1276,9 @@ def _surrender_claim_runner_leases_in(
         ttl_s = max(10, int(runner["heartbeat_ttl_s"] or 60))
         c.execute(
             "UPDATE runner_sessions SET heartbeat_at=?, metadata_json=?, updated_at=? "
-            "WHERE runner_session_id=? AND claim_id=?",
+            "WHERE runner_session_id=?",
             (now - ttl_s, json.dumps(metadata, sort_keys=True), now,
-             runner["runner_session_id"], claim_id),
+             runner["runner_session_id"]),
         )
         surrendered.append(runner["runner_session_id"])
     if surrendered:
