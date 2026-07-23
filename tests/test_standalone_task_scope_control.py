@@ -107,7 +107,9 @@ ok(refused_missing_deliverable,
    "a deliverable scope still requires a deliverable_id")
 
 # The UI needs a route that is not nested under a deliverable.
-router_src = (ROOT / "src/switchboard/api/routers/deliverables.py").read_text(
+# ARCH-MS-16: /api/tasks endpoints are owned by the tasks router, not the
+# deliverables router where this route first (wrongly) lived.
+router_src = (ROOT / "src/switchboard/api/routers/tasks.py").read_text(
     encoding="utf-8")
 ok('"/api/tasks/{task_id}/autopilot"' in router_src,
    "a standalone task scope has a REST route not nested under a deliverable")

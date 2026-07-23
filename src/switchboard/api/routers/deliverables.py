@@ -247,24 +247,6 @@ def create_router(*, resolve_project: ProjectResolver,
             profile_id=body.profile_id, actor=auth.actor(principal),
             agent_id=body.agent_id))
 
-    @router.post("/api/tasks/{task_id}/autopilot")
-    async def control_standalone_task_autopilot(request: Request, task_id: str,
-                                                body: AutopilotControlBody,
-                                                project: str = Query(...)):
-        """Control the scope of a task started on its own.
-
-        The deliverable-nested route below cannot address a task scope that has
-        no deliverable, which left such a scope armable but not stoppable.
-        """
-        project = resolve_project(project)
-        principal = resolve_principal(request, project, ("write:tasks",), dev_actor="web")
-        return _autopilot_json(autopilot_command.execute_mapping_result(
-            "control_autopilot", "", project=project,
-            action=body.action, scope_type="task",
-            task_project=body.task_project or project, task_id=task_id,
-            runtime=body.runtime, profile_id=body.profile_id,
-            actor=auth.actor(principal), agent_id=body.agent_id))
-
     @router.post("/api/deliverables/{deliverable_id}/tasks/{task_id}/autopilot")
     async def control_task_autopilot(request: Request, deliverable_id: str, task_id: str,
                                      body: AutopilotControlBody,
