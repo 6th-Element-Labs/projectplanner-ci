@@ -56,7 +56,8 @@ try:
         "repo_root": str(ROOT),
         "runtimes": [{
             "runtime": "codex", "provider": "openai", "lanes": [],
-            "capabilities": ["tests"],
+            "capabilities": [
+                "tests", "execution_lease_v2", "runner_lease_enforcement"],
             "policy": {"allow_work": True, "lane_mode": "all_project_lanes"},
         }],
         "limits": {"max_sessions": 2},

@@ -53,6 +53,18 @@ class MintHostTunnelUrlBody(BaseModel):
     host_id: Optional[str] = None
 
 
+class RunnerLeaseDueBody(BaseModel):
+    """Typed capacity-plane request to make the canonical lease due."""
+
+    model_config = ConfigDict(extra="allow")
+
+    project: Optional[str] = None
+    runner_session_id: Optional[str] = None
+    host_id: Optional[str] = None
+    reason: Optional[str] = None
+    authority: Optional[str] = None
+
+
 def create_router(*, resolve_project: ProjectResolver,
                   resolve_principal: PrincipalResolver,
                   resolve_body_project: BodyProjectResolver) -> APIRouter:
@@ -231,19 +243,20 @@ def create_router(*, resolve_project: ProjectResolver,
         return _request_control(request, payload, "inject", options=options)
 
     @router.post("/ixp/v1/runner_lease_due")
-    async def ixp_runner_lease_due(request: Request, body: dict = Body(...)):
-        project = resolve_body_project(body)
+    async def ixp_runner_lease_due(request: Request, body: RunnerLeaseDueBody):
+        payload = body.model_dump(exclude_none=True)
+        project = resolve_body_project(payload)
         principal = resolve_agent_host_principal(
             resolve_principal, request, project,
-            dev_actor=body.get("host_id") or "agent-host")
+            dev_actor=payload.get("host_id") or "agent-host")
         require_agent_host_identity(
-            principal, str(body.get("host_id") or ""), project)
+            principal, str(payload.get("host_id") or ""), project)
         result = runner_control_command.make_lease_due_mapping_result(
             {
                 "project": project,
-                "runner_session_id": body.get("runner_session_id"),
-                "reason": body.get("reason") or "",
-                "authority": body.get("authority") or "capacity_plane",
+                "runner_session_id": payload.get("runner_session_id"),
+                "reason": payload.get("reason") or "",
+                "authority": payload.get("authority") or "capacity_plane",
             },
             actor=auth.actor(principal),
         )

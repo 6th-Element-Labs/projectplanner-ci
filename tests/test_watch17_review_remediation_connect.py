@@ -79,7 +79,8 @@ wake = captured[0]
 assert wake["source"] == "connect"
 assert wake["policy"]["mode"] == "connect"
 assert wake["policy"]["assignment"]["work_ref"] == "task:switchboard:WATCH-17"
-assert "capabilities" not in wake["selector"]
+assert wake["selector"]["capabilities"] == [
+    "execution_lease_v2", "runner_lease_enforcement"]
 
 # This is the unextended inventory shipped by the personal Agent Host.  The
 # former code_review_remediation selector rejected it forever; Connect must be
@@ -90,7 +91,9 @@ stock_inventory = {
         "runtime": "codex",
         "provider": "openai",
         "lanes": [],
-        "capabilities": ["docs", "python", "github", "tests"],
+        "capabilities": [
+            "docs", "python", "github", "tests",
+            "execution_lease_v2", "runner_lease_enforcement"],
         "policy": {},
     }],
 }
