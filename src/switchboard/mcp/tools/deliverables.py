@@ -365,6 +365,7 @@ def run_mission_coordinator(deliverable_id: str, ctx: Context, project: str = "m
                           board_id: str = "", mission_id: str = "",
                           coordinator_agent_id: str = "", auto_start: bool = True,
                           auto_refresh_brief: bool = True, policy_json: str = "",
+                          scope_authority_json: str = "",
                           idem_key: str = "") -> str:
     """Run one deliverable-scoped coordinator tick: refresh brief, dispatch, monitor, or escalate."""
     services = _services()
@@ -381,6 +382,11 @@ def run_mission_coordinator(deliverable_id: str, ctx: Context, project: str = "m
         if not isinstance(extra, dict):
             return services.dumps({"error": "policy_json must be a JSON object"})
         policy.update(extra)
+    try:
+        scope_authority = (
+            json.loads(scope_authority_json) if scope_authority_json else {})
+    except json.JSONDecodeError as exc:
+        return services.dumps({"error": f"invalid scope_authority_json: {exc}"})
     return services.dumps(store.run_mission_coordinator_tick(
         project=project,
         deliverable_id=deliverable_id,
@@ -390,6 +396,7 @@ def run_mission_coordinator(deliverable_id: str, ctx: Context, project: str = "m
         actor=auth.actor(principal),
         idem_key=idem_key,
         policy=policy,
+        scope_authority=scope_authority,
     ))
 
 

@@ -81,6 +81,7 @@ mission = (root / "mission_coordinator.py").read_text()
 review = (root / "review_steward.py").read_text()
 remediation = (root / "src/switchboard/storage/repositories/review_remediations.py").read_text()
 daemon = (root / "coordinator_daemon.py").read_text()
+scoped = (root / "scoped_completion_coordinator.py").read_text()
 jobs = (root / "jobs.py").read_text()
 redeploy = (root / "deploy/redeploy.sh").read_text()
 agent_host = (root / "adapters/agent_host.py").read_text()
@@ -113,11 +114,14 @@ aux_units = redeploy.split("AUX_UNITS=(", 1)[1].split(")", 1)[0]
 ok("projectplanner-coordinator-autopilot.service" in aux_units
    and 'systemctl is-active --quiet "$u"' in redeploy
    and 'systemctl restart "$u"' in redeploy,
-   "redeploy restarts the active unified lifecycle owner after updating its code")
-ok('"decision_stream"' in daemon
-   and "review_steward.steward_project" in daemon
-   and "merge_steward.steward_project" in daemon,
-   "one leader tick emits the ordered review, merge, reconcile, and execution stream")
+   "redeploy restarts the global janitor after updating its code")
+ok('"action_census"' in daemon
+   and "review_steward" not in daemon
+   and "merge_steward" not in daemon
+   and "run_mission_coordinator_tick" not in daemon
+   and "run_mission_coordinator_tick" in scoped
+   and "scope_authority=authority" in scoped,
+   "scoped owner drives lifecycle work while the global daemon is janitor-only")
 ok('"lifecycle_role"' in agent_host and 'assignment.get("role")' in agent_host,
    "runner registration preserves the ensured lifecycle role")
 

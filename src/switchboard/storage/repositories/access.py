@@ -1039,7 +1039,7 @@ def resolve_write_actor(actor: str,
     agent_id = (agent_id or "").strip()
     system_actor = (system_actor or "").strip()
     system_reason = (system_reason or "").strip()
-    if not is_unbound_system_actor(actor):
+    if not is_unbound_system_actor(actor) and not agent_id:
         return binding_for_principal(actor, principal_id=principal_id)
 
     base_error = shared_token_binding_error(
@@ -1099,6 +1099,8 @@ def resolve_write_actor(actor: str,
                     "active_agents": active_agents,
                     "message": "multiple live agents are bound to this task; pass agent_id.",
                 }
+    if not is_unbound_system_actor(actor):
+        return binding_for_principal(actor, principal_id=principal_id)
     return {
         **base_error,
         "message": "shared-token writes require a bound live agent or explicit system actor/reason.",

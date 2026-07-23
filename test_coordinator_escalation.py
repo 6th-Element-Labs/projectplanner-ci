@@ -184,6 +184,14 @@ try:
         "required": True,
         "approval_reason": "Needs product sign-off",
     }, project="qa-esc-target")
+    store.register_agent(
+        "agent/coordinator", "codex", ttl_s=300,
+        actor="test", project="qa-esc-home")
+    scope = store.start_autopilot_scope(
+        project="qa-esc-home", deliverable_id="esc-mission", actor="test")
+    scope_authority = store.acquire_autopilot_scope_lease(
+        scope["scope_id"], holder_agent_id="agent/coordinator",
+        project="qa-esc-home")
 
     tick = store.run_mission_coordinator_tick(
         project="qa-esc-home",
@@ -191,6 +199,7 @@ try:
         coordinator_agent_id="agent/coordinator",
         actor="test",
         policy={"auto_start": True, "auto_refresh_brief": False},
+        scope_authority=scope_authority,
         idem_key="esc-tick-1",
     )
     ok(tick.get("status") == "session_ensured",

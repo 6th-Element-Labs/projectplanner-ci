@@ -99,11 +99,28 @@ ok(runners == [], "no runner row exists for the claimed task")
 ok(store.task_has_live_execution(tid, project=P) is False,
    "a live claim and live presence do NOT constitute a live execution")
 
-# --- 5. A stale claim/Work Session cannot block start_task (acceptance 3) ---
+# --- 5. Claims coordinate ownership, not physical liveness -----------------
 ok(store.blocking_execution_for(tid, project=P) is None,
    "no execution lease blocks start_task when only a claim exists")
 ok(not hasattr(live, "task_has_live_execution"),
    "the domain module stays pure -- no storage access leaked into it")
+from switchboard.application.commands import task_execution  # noqa: E402
+
+launches = []
+try:
+    task_execution.start_task(
+        tid, project=P,
+        launcher=lambda *_args, **_kwargs: launches.append(True) or
+        {"dispatched": True})
+except task_execution.TaskExecutionError as exc:
+    ownership_refusal = exc.as_dict()
+else:
+    ownership_refusal = {}
+ok(ownership_refusal.get("start_error") == "active_claim_conflict"
+   and launches == []
+   and store.list_runner_sessions(task_id=tid, project=P) == []
+   and store.list_wake_intents(task_id=tid, project=P) == [],
+   "foreign claim conflict creates no runner, wake, or launch side effect")
 
 # --- 6. One nonterminal physical generation per task -----------------------
 runner = store.upsert_runner_session({
@@ -135,22 +152,31 @@ ok(store.blocking_execution_for(
 
 # The shared start command, used by UI/MCP/scheduler/host callers, enforces the
 # same decision rather than relying on callers to remember the helper.
-from switchboard.application.commands import task_execution  # noqa: E402
-
+try:
+    task_execution.start_task(
+        tid, role="implementation", source_sha="a" * 40, project=P)
+except task_execution.TaskExecutionError as exc:
+    foreign_refusal = exc.as_dict()
+else:
+    foreign_refusal = {}
+ok(foreign_refusal.get("start_error") == "active_claim_conflict",
+   "an unbound caller cannot start or attach through another agent's claim")
 attached = task_execution.start_task(
-    tid, role="implementation", source_sha="a" * 40, project=P)
+    tid, agent_id=agent, role="implementation",
+    source_sha="a" * 40, project=P)
 ok(attached["action"] == "attach"
    and attached.get("execution_id") == "run-s18-live",
    "same role/head start_task attaches to the existing generation")
 try:
     task_execution.start_task(
-        tid, role="review_merge", source_sha="a" * 40, project=P)
+        tid, agent_id=agent, role="implementation",
+        source_sha="b" * 40, project=P)
 except task_execution.TaskExecutionError as exc:
     refused = exc.as_dict()
 else:
     refused = {}
 ok(refused.get("start_error") == "live_execution_conflict",
-   "shared start_task refuses a different live role")
+   "shared start_task separately reports an execution-generation conflict")
 
 # --- 7. Fence and Fleet identity evidence -----------------------------------
 ok(live.heartbeat_is_fenced(
@@ -189,6 +215,15 @@ ok(current_renewal.get("error_code") is None
 ok(all(identity.get(field) is not None for field in (
        "execution_id", "generation", "role", "fence_epoch", "expires_at")),
    "Fleet execution identity exposes generation, role, fence, and expiry")
+original_control = task_execution._control
+task_execution._control = lambda *_args, **_kwargs: {"request_id": "control-review"}
+review_transition = task_execution.start_task(
+    tid, agent_id=agent, role="review_merge",
+    source_sha="a" * 40, project=P)
+task_execution._control = original_control
+ok(review_transition.get("action") == "transitioning"
+   and review_transition.get("superseded_execution_id") == "run-s18-live",
+   "exact-head review handoff supersedes the implementation generation first")
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

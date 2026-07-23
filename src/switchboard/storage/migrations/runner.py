@@ -173,6 +173,21 @@ ADDITIVE_COLUMN_MIGRATIONS: List[Tuple[str, str, str, str]] = [
      "ALTER TABLE resource_leases ADD COLUMN head_sha TEXT"),
     ("0089_resource_leases_wake_id", "resource_leases", "wake_id",
      "ALTER TABLE resource_leases ADD COLUMN wake_id TEXT"),
+    # SIMPLIFY-15 — one fenced owner drives each operator-started scope.
+    ("0090_autopilot_scopes_lease_id", "autopilot_scopes", "lease_id",
+     "ALTER TABLE autopilot_scopes ADD COLUMN lease_id TEXT NOT NULL DEFAULT ''"),
+    ("0091_autopilot_scopes_holder_agent_id", "autopilot_scopes", "holder_agent_id",
+     "ALTER TABLE autopilot_scopes ADD COLUMN holder_agent_id TEXT NOT NULL DEFAULT ''"),
+    ("0092_autopilot_scopes_fence_epoch", "autopilot_scopes", "fence_epoch",
+     "ALTER TABLE autopilot_scopes ADD COLUMN fence_epoch INTEGER NOT NULL DEFAULT 0"),
+    ("0093_autopilot_scopes_heartbeat_at", "autopilot_scopes", "heartbeat_at",
+     "ALTER TABLE autopilot_scopes ADD COLUMN heartbeat_at REAL"),
+    ("0094_autopilot_scopes_expires_at", "autopilot_scopes", "expires_at",
+     "ALTER TABLE autopilot_scopes ADD COLUMN expires_at REAL"),
+    ("0095_autopilot_scopes_started_by", "autopilot_scopes", "started_by",
+     "ALTER TABLE autopilot_scopes ADD COLUMN started_by TEXT NOT NULL DEFAULT ''"),
+    ("0096_autopilot_scopes_started_at", "autopilot_scopes", "started_at",
+     "ALTER TABLE autopilot_scopes ADD COLUMN started_at REAL"),
 ]
 
 # Idempotent DDL migrations (``CREATE ... IF NOT EXISTS``) applied after the column set,

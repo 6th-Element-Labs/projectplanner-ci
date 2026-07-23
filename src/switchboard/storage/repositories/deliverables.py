@@ -2324,6 +2324,7 @@ def _mission_next_actions(deliverable: Dict[str, Any],
                 title=detail.get("title"), lane=lane,
                 milestone_id=link.get("milestone_id")))
         elif automatic_eligible and status == "In Review":
+            git_state = detail.get("git_state") or {}
             actions.append(_action(
                 "verify_merge_provenance", owner="coordinator", automatic=True,
                 delivery_impact="none",
@@ -2331,7 +2332,11 @@ def _mission_next_actions(deliverable: Dict[str, Any],
                 reason="Awaiting merge/default-branch provenance for Done",
                 project_id=link.get("project_id"), task_id=detail.get("task_id"),
                 title=detail.get("title"), lane=lane,
-                milestone_id=link.get("milestone_id")))
+                milestone_id=link.get("milestone_id"),
+                head_sha=git_state.get("head_sha"),
+                pr_number=git_state.get("pr_number"),
+                pr_url=git_state.get("pr_url"),
+                merged_sha=git_state.get("merged_sha")))
         elif automatic_eligible and status == "In Progress" and not claims:
             actions.append(_action(
                 "resume_or_claim", owner="agent", automatic=True,
@@ -2874,13 +2879,17 @@ def set_deliverable_narration(deliverable_id: str, narration: str, source_finger
 def run_mission_coordinator_tick(project: str = DEFAULT_PROJECT, deliverable_id: str = "",
                                board_id: str = "", mission_id: str = "",
                                coordinator_agent_id: str = "", actor: str = "system",
-                               idem_key: str = "", policy: Any = None) -> Dict[str, Any]:
+                               idem_key: str = "", policy: Any = None,
+                               scope_authority: Any = None) -> Dict[str, Any]:
     """Run one deliverable-scoped coordinator tick: brief refresh, dispatch, or escalation."""
     import mission_coordinator
 
     if not _store_facade().has_project(project):
         return {"error": f"unknown project: {project}"}
     policy_obj = _store_facade()._parse_jsonish(policy) if policy not in (None, "") else None
+    authority_obj = (
+        _store_facade()._parse_jsonish(scope_authority)
+        if scope_authority not in (None, "") else None)
     if policy_obj is not None and not isinstance(policy_obj, dict):
         return {"error": "policy must be a JSON object"}
     # BUG-140: the idem payload hash must contain only restart-stable request
@@ -2894,6 +2903,7 @@ def run_mission_coordinator_tick(project: str = DEFAULT_PROJECT, deliverable_id:
         "board_id": (board_id or "").strip(),
         "mission_id": (mission_id or "").strip(),
         "policy": policy_obj or {},
+        "scope_authority": authority_obj or {},
     }
     with _store_facade()._conn(project) as c:
         hit = _store_facade()._idem_hit(c, "run_mission_coordinator_tick", idem_key, actor, payload)
@@ -2913,6 +2923,7 @@ def run_mission_coordinator_tick(project: str = DEFAULT_PROJECT, deliverable_id:
             actor=actor,
             policy=policy_obj,
             idem_key=idem_key,
+            scope_authority=authority_obj,
         )
         now = time.time()
         c.execute(

@@ -12,6 +12,7 @@ from switchboard.storage.repositories import deliverables as deliverables_reposi
 
 
 AUTOPILOT_SCOPE_SCHEMA = "switchboard.autopilot_scope.v1"
+AUTOPILOT_SCOPE_AUTHORITY_SCHEMA = "switchboard.autopilot_scope_authority.v1"
 LIVE_SCOPE_STATUSES = frozenset({"active", "paused"})
 SCOPE_TYPES = frozenset({"deliverable", "task"})
 SUPPORTED_RUNTIMES = frozenset({
@@ -131,6 +132,7 @@ def transition_deliverable_scopes_in(
         if replacement:
             connection.execute(
                 "UPDATE autopilot_scopes SET deliverable_id=?, generation=generation+1, "
+                "fence_epoch=fence_epoch+1,lease_id='',holder_agent_id='',expires_at=NULL,"
                 "updated_at=?, last_result_json=? WHERE scope_id=?",
                 (replacement, at, _scope_result_with_transition(row, transition),
                  row["scope_id"]),
@@ -138,6 +140,7 @@ def transition_deliverable_scopes_in(
         else:
             connection.execute(
                 "UPDATE autopilot_scopes SET status='stopped', generation=generation+1, "
+                "fence_epoch=fence_epoch+1,lease_id='',holder_agent_id='',expires_at=NULL,"
                 "updated_at=?, last_result_json=? WHERE scope_id=?",
                 (at, _scope_result_with_transition(row, transition), row["scope_id"]),
             )
@@ -311,7 +314,9 @@ def start_autopilot_scope(*, project: str = DEFAULT_PROJECT,
         ).fetchone()
         if existing:
             if existing["status"] == "paused":
-                c.execute("UPDATE autopilot_scopes SET status='active', updated_at=? WHERE scope_id=?",
+                c.execute("UPDATE autopilot_scopes SET status='active',generation=generation+1,"
+                          "fence_epoch=fence_epoch+1,lease_id='',holder_agent_id='',"
+                          "expires_at=NULL,updated_at=? WHERE scope_id=?",
                           (now, existing["scope_id"]))
             row = c.execute("SELECT * FROM autopilot_scopes WHERE scope_id=?",
                             (existing["scope_id"],)).fetchone()
@@ -322,9 +327,9 @@ def start_autopilot_scope(*, project: str = DEFAULT_PROJECT,
         c.execute(
             "INSERT INTO autopilot_scopes(scope_id,profile_id,scope_type,deliverable_id,"
             "task_project,task_id,runtime,status,requested_by,generation,created_at,updated_at,"
-            "last_result_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "last_result_json,started_by,started_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (scope_id, profile_id, kind, deliverable_id, task_project, task_id,
-             runtime, "active", actor, 1, now, now, "{}"),
+             runtime, "active", actor, 1, now, now, "{}", actor, now),
         )
         if kind == "deliverable":
             # Preserve the audit rows but stop narrower scopes now covered by the
@@ -344,6 +349,128 @@ def start_autopilot_scope(*, project: str = DEFAULT_PROJECT,
         )
         row = c.execute("SELECT * FROM autopilot_scopes WHERE scope_id=?", (scope_id,)).fetchone()
         return _row(row)
+
+
+def acquire_autopilot_scope_lease(
+        scope_id: str, *, holder_agent_id: str,
+        project: str = DEFAULT_PROJECT, ttl_seconds: int = 120,
+        now: Optional[float] = None) -> Dict[str, Any]:
+    """Acquire or renew the sole fenced coordinator authority for one scope."""
+    at = time.time() if now is None else float(now)
+    holder = str(holder_agent_id or "").strip()
+    if not holder:
+        return {"error": "holder_agent_id required", "scope_id": scope_id}
+    ttl = max(30, min(int(ttl_seconds or 120), 3600))
+    with _conn(project) as c:
+        presence = c.execute(
+            "SELECT heartbeat_at,ttl_s FROM agent_presence WHERE agent_id=?",
+            (holder,),
+        ).fetchone()
+        if (not presence
+                or float(presence["heartbeat_at"] or 0)
+                + int(presence["ttl_s"] or 0) <= at):
+            return {
+                "error": "scope_holder_not_registered",
+                "scope_id": scope_id,
+                "holder_agent_id": holder,
+            }
+        row = c.execute(
+            "SELECT * FROM autopilot_scopes WHERE scope_id=?", (scope_id,)).fetchone()
+        if not row:
+            return {"error": "autopilot scope not found", "scope_id": scope_id}
+        if row["status"] != "active":
+            return {"error": "autopilot scope is not active", "scope_id": scope_id,
+                    "status": row["status"]}
+        current_holder = str(row["holder_agent_id"] or "")
+        current_expiry = float(row["expires_at"] or 0)
+        if current_holder and current_holder != holder and current_expiry > at:
+            return {
+                "error": "scope_lease_conflict",
+                "scope_id": scope_id,
+                "holder_agent_id": current_holder,
+                "expires_at": current_expiry,
+            }
+        takeover = bool(current_holder and current_holder != holder)
+        lease_id = (
+            str(row["lease_id"] or "")
+            if current_holder == holder and current_expiry > at
+            else "scopelease-" + uuid.uuid4().hex[:16]
+        )
+        fence_epoch = int(row["fence_epoch"] or 0) + (
+            1 if takeover or not str(row["lease_id"] or "") else 0)
+        generation = int(row["generation"] or 1) + (1 if takeover else 0)
+        expires_at = at + ttl
+        c.execute(
+            "UPDATE autopilot_scopes SET lease_id=?,holder_agent_id=?,"
+            "fence_epoch=?,generation=?,heartbeat_at=?,expires_at=?,updated_at=? "
+            "WHERE scope_id=?",
+            (lease_id, holder, fence_epoch, generation, at, expires_at, at, scope_id),
+        )
+        return {
+            "schema": AUTOPILOT_SCOPE_AUTHORITY_SCHEMA,
+            "scope_id": scope_id,
+            "holder_agent_id": holder,
+            "lease_id": lease_id,
+            "generation": generation,
+            "fence_epoch": fence_epoch,
+            "expires_at": expires_at,
+            "deliverable_id": row["deliverable_id"],
+            "task_project": row["task_project"],
+            "task_id": row["task_id"],
+            "renewed": current_holder == holder and current_expiry > at,
+            "takeover": takeover,
+        }
+
+
+def validate_autopilot_scope_authority(
+        authority: Dict[str, Any], *, project: str = DEFAULT_PROJECT,
+        deliverable_id: str = "", task_project: str = "", task_id: str = "",
+        now: Optional[float] = None) -> Dict[str, Any]:
+    """Fail closed unless the exact live lease/fence still covers the target."""
+    supplied = dict(authority or {})
+    scope_id = str(supplied.get("scope_id") or "")
+    at = time.time() if now is None else float(now)
+    if supplied.get("schema") != AUTOPILOT_SCOPE_AUTHORITY_SCHEMA or not scope_id:
+        return {"allowed": False, "error": "scope_authority_required"}
+    with _conn(project) as c:
+        row = c.execute(
+            "SELECT * FROM autopilot_scopes WHERE scope_id=?", (scope_id,)).fetchone()
+        target_linked = True
+        if row and row["scope_type"] == "deliverable" and task_id:
+            target_linked = bool(c.execute(
+                "SELECT 1 FROM deliverable_task_links "
+                "WHERE deliverable_id=? AND project_id=? AND task_id=? LIMIT 1",
+                (row["deliverable_id"], task_project or project,
+                 str(task_id).upper()),
+            ).fetchone())
+    if not row:
+        return {"allowed": False, "error": "autopilot_scope_not_found",
+                "scope_id": scope_id}
+    checks = {
+        "status": row["status"] == "active",
+        "lease_id": str(row["lease_id"] or "") == str(supplied.get("lease_id") or ""),
+        "holder_agent_id": str(row["holder_agent_id"] or "")
+        == str(supplied.get("holder_agent_id") or ""),
+        "generation": int(row["generation"] or 0)
+        == int(supplied.get("generation") or -1),
+        "fence_epoch": int(row["fence_epoch"] or 0)
+        == int(supplied.get("fence_epoch") or -1),
+        "unexpired": float(row["expires_at"] or 0) > at,
+        "deliverable_id": (
+            not deliverable_id or str(row["deliverable_id"] or "") == deliverable_id),
+        "task_project": (
+            row["scope_type"] == "deliverable" or not task_project
+            or str(row["task_project"] or "") == task_project),
+        "task_id": (
+            row["scope_type"] == "deliverable" or not task_id
+            or str(row["task_id"] or "").upper() == str(task_id).upper()),
+        "target_membership": target_linked,
+    }
+    failed = sorted(key for key, passed in checks.items() if not passed)
+    if failed:
+        return {"allowed": False, "error": "scope_authority_denied",
+                "scope_id": scope_id, "reason_codes": failed}
+    return {"allowed": True, "scope": _row(row), "authority": supplied}
 
 
 def control_autopilot_scope(*, project: str = DEFAULT_PROJECT,
@@ -368,8 +495,11 @@ def control_autopilot_scope(*, project: str = DEFAULT_PROJECT,
         ).fetchone()
         if not row:
             return {"error": "live autopilot scope not found"}
-        c.execute("UPDATE autopilot_scopes SET status=?, updated_at=? WHERE scope_id=?",
-                  (target, now, row["scope_id"]))
+        c.execute(
+            "UPDATE autopilot_scopes SET status=?,generation=generation+1,"
+            "fence_epoch=fence_epoch+1,lease_id='',holder_agent_id='',expires_at=NULL,"
+            "updated_at=? WHERE scope_id=?",
+            (target, now, row["scope_id"]))
         c.execute(
             "INSERT INTO activity(task_id,actor,kind,payload,created_at) VALUES (?,?,?,?,?)",
             (task_id or None, actor, f"autopilot.scope_{action}",
@@ -390,11 +520,23 @@ def update_autopilot_scope(scope_id: str, *, project: str = DEFAULT_PROJECT,
         if not row:
             return {"error": "autopilot scope not found", "scope_id": scope_id}
         next_status = status or row["status"]
-        c.execute(
-            "UPDATE autopilot_scopes SET status=?, updated_at=?, last_tick_at=?, "
-            "last_result_json=? WHERE scope_id=?",
-            (next_status, now, now, json.dumps(last_result or {}, sort_keys=True), scope_id),
-        )
+        closing = row["status"] == "active" and next_status != "active"
+        if closing:
+            c.execute(
+                "UPDATE autopilot_scopes SET status=?,generation=generation+1,"
+                "fence_epoch=fence_epoch+1,lease_id='',holder_agent_id='',"
+                "heartbeat_at=NULL,expires_at=NULL,updated_at=?,last_tick_at=?,"
+                "last_result_json=? WHERE scope_id=?",
+                (next_status, now, now, json.dumps(last_result or {}, sort_keys=True),
+                 scope_id),
+            )
+        else:
+            c.execute(
+                "UPDATE autopilot_scopes SET status=?, updated_at=?, last_tick_at=?, "
+                "last_result_json=? WHERE scope_id=?",
+                (next_status, now, now, json.dumps(last_result or {}, sort_keys=True),
+                 scope_id),
+            )
         current = c.execute("SELECT * FROM autopilot_scopes WHERE scope_id=?", (scope_id,)).fetchone()
         return _row(current)
 
@@ -415,16 +557,24 @@ class StoreAutopilotScopeRepository:
     def update_autopilot_scope(self, *args, **kwargs):
         return update_autopilot_scope(*args, **kwargs)
 
+    def acquire_autopilot_scope_lease(self, *args, **kwargs):
+        return acquire_autopilot_scope_lease(*args, **kwargs)
+
+    def validate_autopilot_scope_authority(self, *args, **kwargs):
+        return validate_autopilot_scope_authority(*args, **kwargs)
+
 
 def default_autopilot_scope_repository() -> StoreAutopilotScopeRepository:
     return StoreAutopilotScopeRepository()
 
 
 __all__ = [
-    "AUTOPILOT_SCOPE_SCHEMA", "LIVE_SCOPE_STATUSES", "SCOPE_TYPES", "SUPPORTED_RUNTIMES",
+    "AUTOPILOT_SCOPE_SCHEMA", "AUTOPILOT_SCOPE_AUTHORITY_SCHEMA",
+    "LIVE_SCOPE_STATUSES", "SCOPE_TYPES", "SUPPORTED_RUNTIMES",
     "StoreAutopilotScopeRepository", "default_autopilot_scope_repository",
     "list_autopilot_scopes", "get_autopilot_scope", "validate_autopilot_target",
     "start_autopilot_scope",
     "control_autopilot_scope", "update_autopilot_scope",
+    "acquire_autopilot_scope_lease", "validate_autopilot_scope_authority",
     "transition_deliverable_scopes_in",
 ]

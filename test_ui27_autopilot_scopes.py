@@ -17,6 +17,7 @@ os.environ["PM_DYNAMIC_PROJECTS_DIR"] = _TMP
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import coordinator_daemon  # noqa: E402
+import scoped_completion_coordinator  # noqa: E402
 import store  # noqa: E402
 from switchboard.application.commands import task_execution  # noqa: E402
 
@@ -113,33 +114,39 @@ try:
        and covered.get("covered") is True,
        "task Start inside a live deliverable run does not create overlap")
 
-    daemon = coordinator_daemon.CoordinatorDaemon(
+    daemon = scoped_completion_coordinator.ScopedCompletionCoordinator(
         coordinator_daemon.DaemonConfig(
             profile_id="autopilot-default", projects=("qa-ui27",), act=True,
             max_tasks_per_scope_tick=8),
-        store_mod=store, instance_id="ui27-test")
-    first_wave = daemon._run_scope("qa-ui27", deliverable_scope)
+        store_mod=store, agent_id="coordinator/ui27")
+    first_wave = daemon.run_scope("qa-ui27", deliverable_scope)
     task_ids = {row.get("task_id") for row in first_wave.get("receipts") or []}
     ok(first_wave.get("candidate_count") == 2 and task_ids == {"AUTO-1", "AUTO-3"},
        "deliverable Start fans out across the complete ready frontier")
     ok({row.get("task_id") for row in ensures} == {"AUTO-1", "AUTO-3"}
        and all(row.get("role") == "implementation" for row in ensures),
        "each ready frontier task receives its own role-aware session ensure")
-    daemon._run_scope("qa-ui27", deliverable_scope)
+    daemon.run_scope("qa-ui27", deliverable_scope)
     ok(len(ensures) == 2,
        "repeated daemon ticks replay the same durable ensure receipts")
 
     mission = store.get_mission_status(
         project="qa-ui27", deliverable_id="ui27-deliverable")
-    blocked_scope = {**task_scope, "status": "active"}
-    blocked_candidates = daemon._scope_candidates(blocked_scope, mission)
+    store.control_autopilot_scope(
+        project="qa-ui27", deliverable_id="ui27-deliverable",
+        scope_type="deliverable", action="stop", actor="test")
+    blocked_scope = store.start_autopilot_scope(
+        project="qa-ui27", deliverable_id="ui27-deliverable",
+        scope_type="task", task_project="qa-ui27", task_id="AUTO-2",
+        actor="test")
+    blocked_candidates = daemon.scope_candidates(blocked_scope, mission)
     ok(blocked_candidates == [{"task_id": "AUTO-2", "task_project": "qa-ui27",
                                "action": "target_task"}],
        "task scope remains targeted while its dependency is blocked")
     with store._conn("qa-ui27") as connection:
         connection.execute(
             "UPDATE tasks SET status='Done', updated_at=updated_at+1 WHERE task_id='AUTO-1'")
-    unblocked = daemon._run_scope("qa-ui27", blocked_scope)
+    unblocked = daemon.run_scope("qa-ui27", blocked_scope)
     ok([row.get("task_id") for row in unblocked.get("receipts") or []] == ["AUTO-2"]
        and any(row.get("task_id") == "AUTO-2" for row in ensures),
        "an armed blocked task dispatches automatically when its dependency becomes Done")

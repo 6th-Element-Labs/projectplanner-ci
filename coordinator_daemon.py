@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
-"""Durable operator-scoped lifecycle coordinator (COORD-8 / SIMPLIFY-2).
+"""Global coordinator janitor (SIMPLIFY-15).
 
-The daemon is intentionally a thin control shell around the existing mission
-coordinator. It adds a single-leader lease, presence heartbeat, project/lane
-allowlists, durable pause controls, operator-started scopes, and a crash-safe
-round-robin cursor.
-All task-session effects pass through ``Task Execution.start_task(role=...)``.
+This process owns bounded cleanup and observation only. Scoped completion
+coordinators own implementation, review, remediation, merge, and reconciliation.
 """
 from __future__ import annotations
 
@@ -159,35 +156,40 @@ class CoordinatorDaemon:
         self._stop = False
 
     def _drain_lifecycle(self, project: str) -> Dict[str, Any]:
-        """Drain review, merge, and reconcile as phases of this leader tick."""
-        if not self.config.lifecycle_enabled:
-            return {"status": "disabled"}
-        if self.lifecycle_runner is not None:
-            result = dict(self.lifecycle_runner(project=project, daemon=self) or {})
-            result.setdefault("decision_stream", [])
-            return result
-        # Small hermetic fakes used by daemon tests do not expose a database path.
-        if not callable(getattr(self.store, "_resolve", None)):
-            return {"status": "unavailable"}
-        import review_steward
-        import merge_steward
-        review = review_steward.steward_project(
-            project, actor=self.config.actor, dry_run=not self.config.act)
-        merge = merge_steward.steward_project(
-            project, actor=self.config.actor, dry_run=not self.config.act)
-        stream = []
-        for phase, receipt in (("review", review), ("merge_reconcile", merge)):
-            for row in receipt.get("executed") or []:
-                stream.append({
-                    "phase": phase,
-                    "task_id": row.get("task_id"),
-                    "action": row.get("action"),
-                    "status": (row.get("result") or {}).get("status"),
-                    "decision_id": row.get("decision_id"),
-                })
-        return {"status": "drained", "review": review, "merge": merge,
-                "reserved_slots": self.config.review_reserved_slots,
-                "decision_stream": stream}
+        """Publish an auditable zero-work-driving action census."""
+        return {
+            "status": "janitor_only",
+            "decision_stream": [],
+            "action_census": {
+                "cleanup": 0,
+                "start_task": 0,
+                "review": 0,
+                "remediation": 0,
+                "merge": 0,
+                "retry": 0,
+                "message": 0,
+            },
+        }
+
+    def _janitor_scope(self, project: str, scope: Dict[str, Any]) -> Dict[str, Any]:
+        """Close terminal scope records without driving task lifecycle work."""
+        deliverable_id = str(scope.get("deliverable_id") or "")
+        mission_status = self.store.get_mission_status(
+            project=project, deliverable_id=deliverable_id)
+        if mission_status.get("error"):
+            return {"status": "observed_error", "error": mission_status.get("error")}
+        if not self._scope_complete(scope, mission_status):
+            return {"status": "observed_active"}
+        result = {
+            "status": "completed",
+            "scope_id": scope.get("scope_id"),
+            "deliverable_id": deliverable_id,
+            "janitor": True,
+        }
+        self.store.update_autopilot_scope(
+            scope["scope_id"], project=project, status="completed",
+            last_result=result, ticked_at=float(self.clock()))
+        return result
 
     def _state(self, project: str) -> Dict[str, Any]:
         saved = self.store.get_meta(
@@ -223,11 +225,11 @@ class CoordinatorDaemon:
             lane="COORD",
             ttl_s=max(self.config.heartbeat_seconds * 3, 30),
             control={
-                "mode": "deliverable_autopilot",
+                "mode": "janitor",
                 "profile_id": self.config.profile_id,
                 "project_allowlist": list(self.config.projects),
                 "lane_allowlist": list(self.config.allowed_lanes),
-                "acting": self.config.act,
+                "acting": False,
             },
             actor=self.config.actor,
             project=project,
@@ -447,94 +449,6 @@ class CoordinatorDaemon:
             and str(row.get("status") or "") in terminal
         )
 
-    def _run_scope(self, project: str, scope: Dict[str, Any],
-                   denied_lanes: Iterable[str] = ()) -> Dict[str, Any]:
-        deliverable_id = str(scope.get("deliverable_id") or "")
-        mission_status = self.store.get_mission_status(
-            project=project, deliverable_id=deliverable_id)
-        if mission_status.get("error"):
-            result = {"status": "failed", "error": mission_status.get("error"),
-                      "deliverable_id": deliverable_id}
-            self.store.update_autopilot_scope(
-                scope["scope_id"], project=project, status="failed",
-                last_result=result, ticked_at=float(self.clock()))
-            return result
-        if self._scope_complete(scope, mission_status):
-            result = {"status": "completed", "deliverable_id": deliverable_id,
-                      "scope_id": scope.get("scope_id"), "receipts": []}
-            self.store.update_autopilot_scope(
-                scope["scope_id"], project=project, status="completed",
-                last_result=result, ticked_at=float(self.clock()))
-            return result
-
-        candidates = self._scope_candidates(scope, mission_status)
-        receipts = []
-        for candidate in candidates:
-            task_id = str(candidate.get("task_id") or "").upper()
-            revision = self._candidate_revision(mission_status, candidate)
-            wake_generation = self._wake_generation(
-                project, deliverable_id, task_id)
-            policy = {
-                "auto_refresh_brief": not receipts,
-                "auto_start": bool(self.config.act),
-                "allowed_lanes": list(self.config.allowed_lanes),
-                "denied_lanes": list(denied_lanes),
-                "target_task_id": task_id,
-                "target_project_id": candidate.get("task_project")
-                    or candidate.get("project_id") or project,
-            }
-            # Idempotency is exact-payload scoped.  A deployed policy change must
-            # not collide with a receipt created by the previous policy version,
-            # while byte-equivalent crash replay must retain the same key.
-            policy_revision = hashlib.sha256(
-                json.dumps(policy, sort_keys=True, default=str).encode()
-            ).hexdigest()[:12]
-            idem_key = (f"ui30:{scope['scope_id']}:{task_id}:{revision}:"
-                        f"wake-generation-{wake_generation}:policy-{policy_revision}")
-            result = self.store.run_mission_coordinator_tick(
-                project=project,
-                deliverable_id=deliverable_id,
-                coordinator_agent_id=self.agent_id,
-                actor=self.config.actor,
-                policy=policy,
-                idem_key=idem_key,
-            )
-            receipts.append({
-                "task_id": task_id,
-                "task_project": candidate.get("task_project")
-                    or candidate.get("project_id") or project,
-                "status": result.get("status"),
-                "decision_id": result.get("decision_id"),
-                "dispatch": result.get("dispatch"),
-                "error": result.get("error"),
-                "idem_key": idem_key,
-            })
-        waiting_receipts = [
-            receipt for receipt in receipts
-            if receipt.get("status") == "dispatch_blocked"
-            and "eligible_host_count" in (receipt.get("dispatch") or {})
-            and int((receipt.get("dispatch") or {}).get("eligible_host_count") or 0) == 0
-        ]
-        waiting_reason = (
-            "no_eligible_host" if waiting_receipts
-            else ("dependencies_or_policy" if not receipts else "")
-        )
-        result = {
-            "status": ("waiting" if not receipts or len(waiting_receipts) == len(receipts)
-                       else "running"),
-            "scope_id": scope.get("scope_id"),
-            "scope_type": scope.get("scope_type"),
-            "deliverable_id": deliverable_id,
-            "task_id": scope.get("task_id") or None,
-            "candidate_count": len(candidates),
-            "receipts": receipts,
-            "waiting_reason": waiting_reason or None,
-        }
-        self.store.update_autopilot_scope(
-            scope["scope_id"], project=project, last_result=result,
-            ticked_at=float(self.clock()))
-        return result
-
     def tick_project(self, project: str) -> Dict[str, Any]:
         if project not in self.config.projects:
             return {"project": project, "status": "denied_project"}
@@ -562,30 +476,17 @@ class CoordinatorDaemon:
                 break
             deliverable_id = str(scope.get("deliverable_id") or "")
             sequence = int(state.get("sequence") or 0)
-            result = self._run_scope(
-                project, scope, denied_lanes=control.get("paused_lanes") or [])
+            result = self._janitor_scope(project, scope)
             receipts.append({
                 "scope_id": scope.get("scope_id"),
                 "scope_type": scope.get("scope_type"),
                 "deliverable_id": deliverable_id,
                 "status": result.get("status"),
                 "task_id": scope.get("task_id") or None,
-                "candidate_count": result.get("candidate_count", 0),
-                "task_receipts": result.get("receipts") or [],
+                "candidate_count": 0,
+                "task_receipts": [],
                 "error": result.get("error"),
             })
-            for task_receipt in result.get("receipts") or []:
-                decision_stream.append({
-                    "phase": "implementation_or_remediation",
-                    "scope_id": scope.get("scope_id"),
-                    "deliverable_id": deliverable_id,
-                    "task_id": task_receipt.get("task_id"),
-                    "action": "start_task",
-                    "role": ((task_receipt.get("dispatch") or {}).get("role")
-                             or "implementation"),
-                    "status": task_receipt.get("status"),
-                    "decision_id": task_receipt.get("decision_id"),
-                })
             # Persist only after the scope's idempotent task ticks return. A crash
             # before this write reuses the same candidate revision keys on restart.
             state.update({
@@ -600,6 +501,8 @@ class CoordinatorDaemon:
             self._save_state(project, state)
 
         status = "running" if receipts else "idle"
+        lifecycle["action_census"]["cleanup"] = sum(
+            1 for receipt in receipts if receipt.get("status") == "completed")
         state.update({"status": status, "last_heartbeat_at": float(self.clock()),
                       "last_result": receipts[-1] if receipts else {"control": control}})
         self._save_state(project, state)

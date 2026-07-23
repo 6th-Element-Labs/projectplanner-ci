@@ -33,6 +33,7 @@ class AutopilotControlBody(BaseModel):
     profile_id: str = Field(default="autopilot-default", min_length=1, max_length=128)
     runtime: str = Field(default="codex", min_length=1, max_length=64)
     task_project: str = Field(default="", max_length=128)
+    agent_id: str = Field(default="", max_length=255)
 
 
 class UpdateDeliverableBody(BaseModel):
@@ -243,7 +244,8 @@ def create_router(*, resolve_project: ProjectResolver,
         return _autopilot_json(autopilot_command.execute_mapping_result(
             "control_autopilot", deliverable_id, project=project,
             action=body.action, scope_type="deliverable", runtime=body.runtime,
-            profile_id=body.profile_id, actor=auth.actor(principal)))
+            profile_id=body.profile_id, actor=auth.actor(principal),
+            agent_id=body.agent_id))
 
     @router.post("/api/deliverables/{deliverable_id}/tasks/{task_id}/autopilot")
     async def control_task_autopilot(request: Request, deliverable_id: str, task_id: str,
@@ -256,7 +258,7 @@ def create_router(*, resolve_project: ProjectResolver,
             action=body.action, scope_type="task",
             task_project=body.task_project or project, task_id=task_id,
             runtime=body.runtime, profile_id=body.profile_id,
-            actor=auth.actor(principal)))
+            actor=auth.actor(principal), agent_id=body.agent_id))
 
     @router.post("/api/deliverables/{deliverable_id}/closure_verify")
     async def verify_deliverable_closure_route(request: Request, deliverable_id: str,
@@ -317,6 +319,7 @@ def create_router(*, resolve_project: ProjectResolver,
             actor=auth.actor(principal),
             idem_key=body.get("idem_key") or "",
             policy=body.get("policy"),
+            scope_authority=body.get("scope_authority"),
         )
         if result.get("error"):
             code = 404 if "unknown" in result["error"] else 400
