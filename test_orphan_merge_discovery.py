@@ -262,5 +262,30 @@ nd_prs, _ = orphan_merge_discovery.fetch_recent_merged_prs(
     "6th-Element-Labs/projectplanner", token="t", now=NOW, request_fn=_req_nondefault)
 ok(nd_prs == [], "fetch_recent_merged_prs excludes merges to a non-default branch (BUG-27 negative)")
 
+# SIMPLIFY-22: Blocked remediation with empty git_state still reaches Done via orphan discovery.
+blocked_remediation = store.create_task(
+    {"workstream_id": "SIMPLIFY", "title": "blocked remediation orphan"},
+    actor="test", project=P,
+)
+with store._conn(P) as c:
+    c.execute("UPDATE tasks SET status='Blocked' WHERE task_id=?",
+              (blocked_remediation["task_id"],))
+_FAKE_MERGED_PRS = [_merged_pr(801, blocked_remediation["task_id"])]
+orphan_merge_discovery.fetch_recent_merged_prs = _fake_fetch
+os.environ["PM_GITHUB_TOKEN"] = "test-token"
+try:
+    blocked_report = store.reconcile(project=P)
+finally:
+    orphan_merge_discovery.fetch_recent_merged_prs = original_fetch
+blocked_after = store.get_task(blocked_remediation["task_id"], project=P)
+ok(blocked_after["status"] == "Done",
+   "Blocked remediation task with empty git_state reaches Done via orphan discovery")
+ok(blocked_after["git_state"]["merged_sha"] == "merge801",
+   "Blocked orphan repair stamps merged_sha")
+ok(any(b["task_id"] == blocked_remediation["task_id"]
+       and b.get("source") == "orphan_merge_discovery"
+       for b in blocked_report["backfilled"]),
+   "Blocked orphan backfill is reported")
+
 print(f"\norphan_merge_discovery: {passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)

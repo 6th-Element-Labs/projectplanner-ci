@@ -412,6 +412,29 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
     ("0108_ix_attention_requests_binding", ATTENTION_INDEX_SQL[1]),
     ("0109_ix_attention_decisions_request", ATTENTION_INDEX_SQL[2]),
     ("0110_ix_attention_events_request", ATTENTION_INDEX_SQL[3]),
+    # SIMPLIFY-22 — durable current-state authority for PR-backed completion.
+    # task_execution_completion_phases remains append-only history.
+    ("0111_completion_runs",
+     "CREATE TABLE IF NOT EXISTS completion_runs ("
+     "run_id TEXT PRIMARY KEY, "
+     "task_id TEXT NOT NULL UNIQUE, "
+     "pr_number INTEGER NOT NULL, "
+     "head_sha TEXT NOT NULL, "
+     "state TEXT NOT NULL, "
+     "route TEXT NOT NULL, "
+     "reason_code TEXT NOT NULL DEFAULT '', "
+     "desired_role TEXT NOT NULL DEFAULT '', "
+     "attempt INTEGER NOT NULL DEFAULT 1, "
+     "state_version INTEGER NOT NULL DEFAULT 1, "
+     "next_retry_at REAL, "
+     "evidence_refs_json TEXT NOT NULL DEFAULT '{}', "
+     "board_status TEXT NOT NULL DEFAULT '', "
+     "created_at REAL NOT NULL, "
+     "updated_at REAL NOT NULL, "
+     "actor TEXT NOT NULL DEFAULT '')"),
+    ("0112_ux_completion_runs_task",
+     "CREATE UNIQUE INDEX IF NOT EXISTS ux_completion_runs_task "
+     "ON completion_runs(task_id)"),
 ]
 
 

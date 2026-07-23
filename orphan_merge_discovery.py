@@ -28,7 +28,9 @@ import task_id_parser
 SCHEMA = "switchboard.orphan_merge_discovery.v1"
 OPEN_PR_SCHEMA = "switchboard.open_pr_backstop.v1"
 DEFAULT_LOOKBACK_DAYS = 30
-ELIGIBLE_STATUSES = frozenset({"Not Started", "In Progress", "In Review"})
+# Blocked is eligible so remediation-parked tasks still recover Done when the
+# merge webhook is dropped (SIMPLIFY-22 / completion-run route=remediation).
+ELIGIBLE_STATUSES = frozenset({"Not Started", "In Progress", "In Review", "Blocked"})
 SKIP_STATUSES = frozenset({"Done", "Cancelled", "Canceled"})
 # Open PRs advance pre-review tasks only; In Review/Done already have evidence.
 OPEN_PR_ELIGIBLE_STATUSES = frozenset({"Not Started", "In Progress"})
