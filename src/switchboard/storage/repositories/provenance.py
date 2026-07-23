@@ -18,6 +18,7 @@ import sqlite3
 import subprocess
 import time
 import urllib.request
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -419,6 +420,8 @@ def _mark_task_merged_impl(task_id: str, merged_sha: str, pr_number: Optional[in
             },
         })
         # Keep completion_runs current-state aligned with merge provenance (SIMPLIFY-22).
+        # Upsert: a merge webhook may be the first write, so UPDATE-only would leave
+        # Done tasks without the claimed current-state authority.
         if done_gate.get("ok"):
             try:
                 evidence_refs = {
@@ -429,14 +432,29 @@ def _mark_task_merged_impl(task_id: str, merged_sha: str, pr_number: Optional[in
                         "pr_number": pr_number,
                     }
                 }
-                c.execute(
-                    "UPDATE completion_runs SET state=?, route=?, reason_code=?, "
-                    "desired_role=?, board_status=?, evidence_refs_json=?, "
-                    "updated_at=?, actor=?, state_version=state_version+1 "
-                    "WHERE task_id=?",
-                    ("done", "none", "canonical_merge", "", "Done",
-                     json.dumps(evidence_refs, sort_keys=True), now, actor, task_id),
-                )
+                evidence_json = json.dumps(evidence_refs, sort_keys=True)
+                run_head = (head_sha or current.get("head_sha") or merged_sha or "").strip().lower()
+                run_pr = int(pr_number or current.get("pr_number") or 0)
+                if run_pr > 0 and len(run_head) >= 7:
+                    run_id = "completion-run-" + uuid.uuid4().hex[:16]
+                    c.execute(
+                        "INSERT INTO completion_runs("
+                        "run_id, task_id, pr_number, head_sha, state, route, reason_code, "
+                        "desired_role, attempt, state_version, next_retry_at, "
+                        "evidence_refs_json, board_status, created_at, updated_at, actor) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                        "ON CONFLICT(task_id) DO UPDATE SET "
+                        "pr_number=excluded.pr_number, head_sha=excluded.head_sha, "
+                        "state=excluded.state, route=excluded.route, "
+                        "reason_code=excluded.reason_code, desired_role=excluded.desired_role, "
+                        "evidence_refs_json=excluded.evidence_refs_json, "
+                        "board_status=excluded.board_status, updated_at=excluded.updated_at, "
+                        "actor=excluded.actor, "
+                        "state_version=completion_runs.state_version+1",
+                        (run_id, task_id, run_pr, run_head, "done", "none",
+                         "canonical_merge", "", 1, 1, None, evidence_json, "Done",
+                         now, now, actor),
+                    )
             except sqlite3.OperationalError:
                 pass
         activity_kind = ("git.pr_merged" if done_gate.get("ok")

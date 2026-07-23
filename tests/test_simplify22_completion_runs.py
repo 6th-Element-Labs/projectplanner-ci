@@ -275,5 +275,74 @@ class BlockedMergeEligibilityTest(unittest.TestCase):
                 has_merged_sha=False))
 
 
+class MergeWebhookCreatesCompletionRunTest(unittest.TestCase):
+    """A merge webhook may be the first completion_runs write for a task."""
+
+    def setUp(self):
+        self.db = sqlite3.connect(":memory:")
+        self.db.row_factory = sqlite3.Row
+        self.db.execute(
+            "CREATE TABLE tasks ("
+            "task_id TEXT PRIMARY KEY, status TEXT NOT NULL, updated_at REAL)")
+        self.db.execute(
+            "CREATE TABLE activity ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT, actor TEXT, "
+            "kind TEXT, payload TEXT, created_at REAL)")
+        for name, sql in migrations.DDL_MIGRATIONS:
+            if name in {"0111_completion_runs", "0112_ux_completion_runs_task"}:
+                self.db.execute(sql)
+        self.db.execute(
+            "INSERT INTO tasks(task_id, status, updated_at) VALUES (?,?,?)",
+            ("SIMPLIFY-22", "In Review", 1.0))
+        self.db.commit()
+
+        from switchboard.storage.repositories import provenance
+        self.provenance = provenance
+        self.patches = [
+            patch.object(provenance, "_conn", return_value=self.db),
+            patch.object(
+                provenance, "_task_row",
+                return_value={"task_id": "SIMPLIFY-22", "status": "In Review"}),
+            patch.object(
+                provenance, "_load_git_state",
+                return_value={"pr_number": 818, "head_sha": "a" * 40, "evidence": {}}),
+            patch.object(
+                provenance, "_upsert_git_state",
+                return_value={"merged_sha": "c" * 40, "pr_number": 818,
+                              "head_sha": "a" * 40}),
+            patch.object(
+                provenance, "semantic_completion_gate",
+                return_value={"ok": True, "status": "passed"}),
+            patch.object(
+                provenance, "merge_done_gate",
+                return_value={"ok": True, "status": "passed"}),
+            patch.object(provenance, "_heal_dependency_blocked_tasks_in",
+                         return_value=None),
+        ]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.db.close()
+
+    def test_merge_webhook_upserts_completion_run_when_missing(self):
+        result = self.provenance._mark_task_merged_impl(
+            "SIMPLIFY-22", "c" * 40, pr_number=818,
+            pr_url="https://github.com/6th-Element-Labs/projectplanner/pull/818",
+            branch="codex/SIMPLIFY-22-x", head_sha="a" * 40,
+            actor="github-webhook", project="switchboard",
+            provenance_source="github_pr_merged")
+        self.assertEqual(result.get("status"), "Done")
+        row = self.db.execute(
+            "SELECT * FROM completion_runs WHERE task_id=?",
+            ("SIMPLIFY-22",)).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["state"], "done")
+        self.assertEqual(row["route"], "none")
+        self.assertEqual(row["pr_number"], 818)
+
+
 if __name__ == "__main__":
     unittest.main()
