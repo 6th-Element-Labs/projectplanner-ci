@@ -54,13 +54,15 @@ def get_task_execution(task_id: str, project: str = "maxwell") -> str:
 
 
 def start_task(task_id: str, ctx: Context, project: str = "maxwell",
-               role: str = "implementation", runtime: str = "codex") -> str:
+               role: str = "implementation", runtime: str = "codex",
+               agent_id: str = "") -> str:
     """Start or resume THE task session — identical to the UI Start button.
     Attaches when a live watchable runner exists, reports 'starting' when a dispatch
     is already in flight (idempotent), otherwise asks Connect for capacity matching
     ``runtime``. Callers never pick a host or runner and never assemble a wake;
     failures return the dispatcher's own truthful reason."""
-    return _run("start_task", task_id, ctx, project, role=role, runtime=runtime)
+    return _run("start_task", task_id, ctx, project, role=role, runtime=runtime,
+                agent_id=agent_id)
 
 
 def open_session(task_id: str, ctx: Context, project: str = "maxwell",

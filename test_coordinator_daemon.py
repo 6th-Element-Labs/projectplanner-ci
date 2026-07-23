@@ -186,16 +186,18 @@ ok(first._scope_complete(explicit_scope, nonblocking_status) is True,
 
 run1 = first.tick_project("switchboard")
 ok(run1["status"] == "running" and run1["receipts"][0]["deliverable_id"] == "deliverable-a",
-   "leader processes one bounded operator-started scope")
-ok(run1["decision_stream"][-1]["action"] == "start_task"
-   and run1["decision_stream"][-1]["task_id"] == "TASK-A",
-   "leader emits one ordered lifecycle decision stream")
+   "janitor observes one bounded operator-started scope")
+work_actions = {
+    key: value for key, value in run1["lifecycle"]["action_census"].items()
+    if key != "cleanup"
+}
+ok(not run1["decision_stream"] and all(value == 0 for value in work_actions.values()),
+   "global daemon action census contains no work-driving or messaging effects")
+ok(not [call for call in store.calls if call[0] == "mission"],
+   "global daemon never invokes the scoped mission coordinator")
 state1 = run1["state"]
 ok(state1["sequence"] == 1 and state1["last_deliverable_id"] == "deliverable-a",
-   "sequence and deliverable cursor persist after the idempotent effect")
-policy = [call[2] for call in store.calls if call[0] == "mission"][-1]
-ok(policy["allowed_lanes"] == ["CO", "COORD"] and policy["auto_start"] is True,
-   "project/lane policy and acting session ensure reach the mission coordinator")
+   "janitor cursor persists after the bounded observation")
 
 second = daemon_mod.CoordinatorDaemon(
     config, store_mod=store, instance_id="instance-two", clock=clock)
@@ -206,77 +208,7 @@ ok(standby["status"] == "standby" and standby["lease"].get("conflict"),
 clock.value += 31
 run2 = second.tick_project("switchboard")
 ok(run2["status"] == "running" and run2["receipts"][0]["deliverable_id"] == "deliverable-b",
-   "replacement leader resumes after the durable deliverable cursor")
-
-# Simulate a crash after an effect but before its state checkpoint by restoring
-# the prior sequence/cursor. The wrapper receives the same idem key, so no second
-# wake/effect is created.
-effects_before = len(store.effects)
-store.set_meta(daemon_mod._state_key("test"), state1, project="switchboard")
-clock.value += 31
-third = daemon_mod.CoordinatorDaemon(
-    config, store_mod=store, instance_id="instance-three", clock=clock)
-replay = third.tick_project("switchboard")
-ok(replay["receipts"][0]["task_receipts"][0]["idem_key"] in store.effects
-   and len(store.effects) == effects_before,
-   "crash replay reuses the durable idempotency key without duplicating effects")
-
-# A host can fail before it creates a claim, leaving the task snapshot unchanged.
-# The terminal wake advances the daemon generation so the next tick is a real
-# retry, while subsequent polls of that same generation remain idempotent.
-store.wakes.append({
-    "wake_id": "wake-terminal", "task_id": "TASK-B", "status": "failed",
-    "selector": {"deliverable_id": "deliverable-b"},
-})
-retry_effects_before = len(store.effects)
-store.set_meta(daemon_mod._state_key("test"), state1, project="switchboard")
-clock.value += 31
-retry_run = daemon_mod.CoordinatorDaemon(
-    config, store_mod=store, instance_id="instance-retry", clock=clock,
-).tick_project("switchboard")
-retry_key = retry_run["receipts"][0]["task_receipts"][0]["idem_key"]
-ok("wake-generation-1" in retry_key
-   and len(store.effects) == retry_effects_before + 1,
-   "terminal wake advances the durable retry generation without a task-state change")
-
-# BUG-138: production Connect wakes carry NO deliverable_id in their selector
-# (selector = agent/lane/provider/runtime/task only). Filtering the generation
-# count on selector.deliverable_id therefore counted nothing, and live Autopilot
-# scopes replayed wake-generation-0 into "idempotency conflict" on every tick.
-# A terminal Connect wake must advance the generation; a wake explicitly bound
-# to a DIFFERENT deliverable still must not.
-store.wakes.append({
-    "wake_id": "wake-connect-terminal", "task_id": "TASK-B", "status": "completed",
-    "selector": {"agent_id": "agent/codex/task-b", "lane": "CO",
-                 "provider": "openai", "runtime": "codex", "task_id": "TASK-B"},
-})
-store.wakes.append({
-    "wake_id": "wake-other-deliverable", "task_id": "TASK-B", "status": "failed",
-    "selector": {"deliverable_id": "some-other-deliverable"},
-})
-store.set_meta(daemon_mod._state_key("test"), state1, project="switchboard")
-clock.value += 31
-connect_retry_run = daemon_mod.CoordinatorDaemon(
-    config, store_mod=store, instance_id="instance-connect-retry", clock=clock,
-).tick_project("switchboard")
-connect_retry_key = connect_retry_run["receipts"][0]["task_receipts"][0]["idem_key"]
-ok("wake-generation-2" in connect_retry_key,
-   "a terminal Connect wake WITHOUT selector.deliverable_id advances the generation, "
-   "and a wake bound to another deliverable does not")
-
-policy_variant = daemon_mod.DaemonConfig(
-    profile_id="test", projects=("switchboard",), allowed_lanes=("CO",),
-    act=True, max_deliverables_per_tick=1, heartbeat_seconds=10,
-    lease_ttl_seconds=30,
-)
-store.set_meta(daemon_mod._state_key("test"), state1, project="switchboard")
-clock.value += 31
-policy_run = daemon_mod.CoordinatorDaemon(
-    policy_variant, store_mod=store, instance_id="instance-policy", clock=clock,
-).tick_project("switchboard")
-policy_key = policy_run["receipts"][0]["task_receipts"][0]["idem_key"]
-ok(policy_key != retry_key and ":policy-" in policy_key,
-   "a deployed dispatch-policy change cannot conflict with the prior receipt")
+   "replacement janitor resumes after the durable scope cursor")
 
 paused = daemon_mod.set_control(
     store, "switchboard", "test", actor="operator", paused=True, now=clock())
@@ -292,14 +224,20 @@ daemon_mod.set_control(
 clock.value += 31
 lane_run = daemon_mod.CoordinatorDaemon(
     config, store_mod=store, instance_id="instance-five", clock=clock).tick_project("switchboard")
-lane_policy = [call[2] for call in store.calls if call[0] == "mission"][-1]
-ok(lane_run["status"] == "running" and lane_policy["denied_lanes"] == ["CO"],
-   "paused lanes are re-read and removed from automatic selection")
+ok(lane_run["status"] == "running"
+   and not [call for call in store.calls if call[0] == "mission"],
+   "lane controls cannot turn the janitor into a work scheduler")
 
 service = Path("deploy/projectplanner-coordinator-autopilot.service").read_text()
 ok("Restart=always" in service and "coordinator_daemon.py run" in service
-   and "PM_COORDINATOR_AUTOPILOT_ACT=1" in service,
-   "systemd profile is persistent and active scopes are the arming boundary")
+   and "PM_COORDINATOR_AUTOPILOT_ACT=0" in service,
+   "systemd profile is persistent and explicitly janitor-only")
+daemon_source = Path("coordinator_daemon.py").read_text()
+ok("run_mission_coordinator_tick" not in daemon_source
+   and "review_steward" not in daemon_source
+   and "merge_steward" not in daemon_source
+   and "send_agent_message" not in daemon_source,
+   "janitor source contains no independent work scheduler or messaging path")
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

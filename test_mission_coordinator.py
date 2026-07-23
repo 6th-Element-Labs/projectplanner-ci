@@ -69,6 +69,15 @@ try:
         data={"role": "contributes", "blocks_deliverable": True},
         actor="test", project="qa-coord-home",
     )
+    store.register_agent(
+        "agent/coordinator", "codex", ttl_s=1000,
+        actor="test", project="qa-coord-home")
+    scope = store.start_autopilot_scope(
+        project="qa-coord-home", deliverable_id="coord-mission",
+        actor="test")
+    scope_authority = store.acquire_autopilot_scope_lease(
+        scope["scope_id"], holder_agent_id="agent/coordinator",
+        project="qa-coord-home")
 
     # BUG-143 mixed scope: ready flow work is selected structurally. Parked
     # context stays visible and dependencies still block dispatch.
@@ -165,6 +174,7 @@ try:
         coordinator_agent_id="agent/coordinator",
         actor="test",
         policy={"auto_start": True, "auto_refresh_brief": True},
+        scope_authority=scope_authority,
         idem_key="tick-1",
     )
     ok(tick.get("schema") == "switchboard.mission_coordinator_tick.v1",
@@ -211,6 +221,7 @@ try:
         coordinator_agent_id="agent/coordinator",
         actor="test",
         policy={"auto_start": True},
+        scope_authority=scope_authority,
         idem_key="tick-wake",
     )
     wake_decision = wake_tick.get("decision") or {}
@@ -234,6 +245,7 @@ try:
         coordinator_agent_id="agent/coordinator",
         actor="test",
         policy={"auto_start": True},
+        scope_authority=scope_authority,
         idem_key="tick-gated",
     )
     ok(gated_tick.get("status") == "session_ensured" and not gated_tick.get("escalations"),
@@ -247,8 +259,10 @@ try:
         "approved_by": "test",
         "approval_reason": "Signed off",
     }, project="qa-coord-target")
-    store.update_task("RENDER-1", {"status": "In Review", "assignee": None},
-                      actor="test", project="qa-coord-target")
+    store.mark_task_pr_opened(
+        "RENDER-1", 42, pr_url="https://github.com/example/repo/pull/42",
+        branch="codex/render-1", head_sha="a" * 40,
+        actor="test", project="qa-coord-target")
     review_status = store.get_mission_status(
         project="qa-coord-home", deliverable_id="coord-mission")
     review_plan = mission_coordinator.coordinator_tick_plan(review_status)
@@ -260,13 +274,16 @@ try:
         deliverable_id="coord-mission",
         coordinator_agent_id="agent/coordinator",
         actor="test",
+        policy={"auto_start": True, "auto_refresh_brief": False},
+        scope_authority=scope_authority,
         idem_key="tick-review",
     )
     review_decision = review_tick.get("decision") or {}
-    ok(review_tick.get("status") == "monitor" and
-       review_decision.get("decision_kind") == "monitor" and
+    ok(review_tick.get("status") == "session_ensured" and
+       review_tick.get("dispatch", {}).get("role") == "review_merge" and
+       review_tick.get("dispatch", {}).get("head_sha") == "a" * 40 and
        review_decision.get("result", {}).get("monitors"),
-       "unmerged PR monitoring persists its merge-provenance result")
+       "In Review ensures one exact-head review_merge owner")
 
     idem_repeat = store.run_mission_coordinator_tick(
         project="qa-coord-home",
@@ -274,6 +291,7 @@ try:
         coordinator_agent_id="agent/coordinator",
         actor="test",
         policy={"auto_start": True, "auto_refresh_brief": True},
+        scope_authority=scope_authority,
         idem_key="tick-1",
     )
     ok(idem_repeat.get("status") == "session_ensured"
@@ -284,8 +302,34 @@ try:
     complete_trail = store.list_coordinator_decisions(
         deliverable_id="coord-mission", project="qa-coord-home")
     ok(len(complete_trail) == 4 and
-       {item.get("decision_kind") for item in complete_trail} == {"action", "monitor"},
-       "decision trail stores session ensures and monitor without replay duplicates")
+       {item.get("decision_kind") for item in complete_trail} == {"action"},
+       "decision trail stores completion-owner session ensures without replay duplicates")
+    wrong_holder = {
+        **scope_authority, "holder_agent_id": "agent/not-the-owner"}
+    denied = store.validate_autopilot_scope_authority(
+        wrong_holder, project="qa-coord-home",
+        deliverable_id="coord-mission")
+    ok(not denied.get("allowed")
+       and "holder_agent_id" in denied.get("reason_codes", []),
+       "scope effects fail closed for the wrong holder")
+    store.register_agent(
+        "agent/replacement", "codex", ttl_s=1000,
+        actor="test", project="qa-coord-home")
+    replacement = store.acquire_autopilot_scope_lease(
+        scope["scope_id"], holder_agent_id="agent/replacement",
+        project="qa-coord-home", now=float(scope_authority["expires_at"]) + 1)
+    stale = store.validate_autopilot_scope_authority(
+        scope_authority, project="qa-coord-home",
+        deliverable_id="coord-mission",
+        now=float(scope_authority["expires_at"]) + 1)
+    current = store.validate_autopilot_scope_authority(
+        replacement, project="qa-coord-home",
+        deliverable_id="coord-mission",
+        now=float(scope_authority["expires_at"]) + 1)
+    ok(replacement.get("takeover") and not stale.get("allowed")
+       and current.get("allowed")
+       and replacement.get("fence_epoch") > scope_authority.get("fence_epoch"),
+       "expired scope takeover advances the fence and invalidates the old owner")
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 

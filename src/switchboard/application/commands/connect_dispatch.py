@@ -185,6 +185,9 @@ def enqueue_task(
     predecessor_wake_id: str = "",
     generation_ref: str = "",
     role: str = "implementation",
+    caller_agent_id: str = "",
+    principal_id: str = "",
+    source_sha: str = "",
 ) -> dict[str, Any]:
     """Persist one provider-neutral assignment for any Start surface.
 
@@ -208,9 +211,11 @@ def enqueue_task(
     lane = str(task.get("_wsId") or task.get("workstream") or "").strip()
     generation = generation_ref or str(predecessor_wake_id or "")
     assignment_id = _assignment_id(project, task_id, runtime_name, generation)
+    execution_agent_id = str(caller_agent_id or "").strip()
     assignment = Assignment(
         assignment_id=assignment_id,
-        principal_ref=f"agent/{runtime_name}/{task_id.lower()}",
+        principal_ref=(execution_agent_id
+                       or f"agent/{runtime_name}/{task_id.lower()}"),
         work_ref=f"task:{project}:{task_id}",
         runtime=runtime_name,
         provider=provider,
@@ -256,7 +261,8 @@ def enqueue_task(
         "lifecycle": {
             "schema": "switchboard.execution_lifecycle.v1",
             "role": str(role or "implementation"),
-            "head_sha": str((task.get("git_state") or {}).get("head_sha") or ""),
+            "head_sha": str(
+                source_sha or (task.get("git_state") or {}).get("head_sha") or ""),
             "ttl_seconds": int(
                 os.environ.get("PM_CONNECT_MAX_RUNTIME_SECONDS", "7200")),
         },
@@ -269,6 +275,9 @@ def enqueue_task(
         policy=policy,
         task_id=task_id,
         actor=actor,
+        principal_id=principal_id,
+        caller_agent_id=caller_agent_id,
+        enforce_task_ownership=True,
         project=project,
         idem_key=f"connect-start:v1:{project}:{task_id}:{runtime_name}:{suffix}",
     )

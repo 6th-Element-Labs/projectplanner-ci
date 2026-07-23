@@ -129,7 +129,7 @@ def control_autopilot(deliverable_id: Any, *, project: str = DEFAULT_PROJECT,
                       action: str = "start", scope_type: str = "deliverable",
                       task_project: str = "", task_id: str = "",
                       runtime: str = "codex", profile_id: str = "autopilot-default",
-                      actor: str = "user",
+                      actor: str = "user", agent_id: str = "",
                       task_starter: Optional[Callable[..., dict[str, Any]]] = None,
                       ) -> dict[str, Any]:
     """Start, pause, resume, or stop one durable Autopilot scope.
@@ -167,7 +167,7 @@ def control_autopilot(deliverable_id: Any, *, project: str = DEFAULT_PROJECT,
             task_starter = task_execution.execute_mapping_result
         task_start = task_starter(
             "start_task", task_id, project=task_project or project,
-            actor=actor, runtime=runtime)
+            actor=actor, agent_id=agent_id, runtime=runtime)
         if task_start.get("refused") or task_start.get("error"):
             raise AutopilotError(
                 "structural_blocker",

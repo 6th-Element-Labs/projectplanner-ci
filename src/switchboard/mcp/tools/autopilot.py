@@ -50,7 +50,8 @@ def control_autopilot(deliverable_id: str, ctx: Context, project: str = "maxwell
                       action: str = "start", scope_type: str = "deliverable",
                       task_project: str = "", task_id: str = "",
                       runtime: str = "codex",
-                      profile_id: str = "autopilot-default") -> str:
+                      profile_id: str = "autopilot-default",
+                      agent_id: str = "") -> str:
     """Start, pause, resume, or stop one durable Autopilot scope.
 
     action ∈ start|pause|resume|stop. scope_type ∈ deliverable|task (a task scope
@@ -64,7 +65,8 @@ def control_autopilot(deliverable_id: str, ctx: Context, project: str = "maxwell
     return services.dumps(autopilot_command.execute_mapping_result(
         "control_autopilot", deliverable_id, project=project, action=action,
         scope_type=scope_type, task_project=task_project, task_id=task_id,
-        runtime=runtime, profile_id=profile_id, actor=auth.actor(principal)))
+        runtime=runtime, profile_id=profile_id, actor=auth.actor(principal),
+        agent_id=agent_id))
 
 
 AUTOPILOT_TOOL_NAMES = ("get_autopilot", "control_autopilot")

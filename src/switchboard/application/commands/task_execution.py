@@ -420,7 +420,8 @@ def get_task_execution(task_id: Any, *, project: str = DEFAULT_PROJECT) -> dict[
 # --------------------------------------------------------------------------
 
 def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "user",
-               principal_id: str = "", role: str = "implementation",
+               principal_id: str = "", agent_id: str = "",
+               role: str = "implementation",
                runtime: str = "codex", source_sha: str = "",
                instruction: str = "", findings: Optional[list[dict[str, Any]]] = None,
                launcher: Optional[Callable[..., dict[str, Any]]] = None) -> dict[str, Any]:
@@ -432,6 +433,29 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
     task_id = _normalize(task_id)
     if not task_id:
         raise TaskExecutionError("invalid_input", "task_id required", project=project)
+    from switchboard.storage.repositories import access as access_repo
+    binding = access_repo.resolve_write_actor(
+        actor, project=project, task_id=task_id, agent_id=agent_id,
+        principal_id=principal_id)
+    if not binding.get("ok"):
+        raise TaskExecutionError(
+            "start_refused",
+            str(binding.get("message") or binding.get("error") or
+                "start identity could not be bound"),
+            task_id=task_id, project=project,
+            start_error=binding.get("error") or "start_identity_unbound")
+    caller_agent_id = str(binding.get("agent_id") or "").strip()
+    actor = str(binding.get("actor") or actor)
+    active_claim = coordination_repo.task_start_ownership(task_id, project=project)
+    if active_claim and (
+            not caller_agent_id
+            or caller_agent_id != str(active_claim.get("agent_id") or "")):
+        raise TaskExecutionError(
+            "start_refused", "Another agent owns this task.",
+            task_id=task_id, project=project,
+            start_error="active_claim_conflict",
+            claim_id=active_claim.get("claim_id"),
+            owner_agent_id=active_claim.get("agent_id"))
     role = str(role or "").strip().lower()
     projection = _projection(task_id, project)
     task = projection.get("task") or {}
@@ -454,7 +478,13 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
                 start_error=intake_routing.get("error") or "bug_intake_not_routable",
                 intake_routing=intake_routing)
         projection = _projection(task_id, project)
-    live_executions = runner_repo.task_live_executions(task_id, project=project)
+    try:
+        live_executions = runner_repo.task_live_executions(task_id, project=project)
+    except Exception as exc:
+        if launcher is not None and "no such table" in str(exc).lower():
+            live_executions = []
+        else:
+            raise
     if len(live_executions) > 1:
         raise TaskExecutionError(
             "start_refused",
@@ -470,6 +500,29 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
     if live_execution and (
             existing_role != role
             or (requested_head and existing_head != requested_head)):
+        if role in {"review_merge", "remediation"} and requested_head:
+            superseded = _supersede(
+                {**projection, "active_runner": live_execution},
+                task_id, project, actor=actor,
+                principal_id=principal_id,
+                reason=(
+                    f"replace {existing_role or 'unknown'} generation with "
+                    f"{role} at exact head {requested_head}"),
+                grace_seconds=DEFAULT_GRACE_SECONDS,
+            )
+            return _envelope(
+                "start_task", task_id, project,
+                action="transitioning",
+                started=False,
+                attached=False,
+                role=role,
+                requested_head_sha=requested_head,
+                superseded_execution_id=superseded.get("execution_id") or None,
+                superseded_wake_id=superseded.get("wake_id") or None,
+                message=(
+                    "The prior generation is being stopped. The next scoped "
+                    "coordinator tick will start the exact-head generation."),
+            )
         raise TaskExecutionError(
             "start_refused",
             "A different live execution generation already owns this task.",
@@ -480,6 +533,17 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
             requested_head_sha=requested_head or None)
     active_runner = live_execution or projection.get("active_runner") or {}
     pending = _in_flight_wake(projection)
+    pending_agent_id = str(
+        ((pending.get("selector") or {}).get("agent_id")
+         if isinstance(pending, dict) else "") or "")
+    if (pending and caller_agent_id and pending_agent_id
+            and pending_agent_id != caller_agent_id):
+        raise TaskExecutionError(
+            "start_refused",
+            "A different execution lease already owns this task generation.",
+            task_id=task_id, project=project,
+            start_error="execution_lease_conflict",
+            owner_agent_id=pending_agent_id)
     if active_runner:
         result = {
             "action": "attach",
@@ -516,6 +580,9 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
                             if role in {"review_merge", "remediation"}
                             and source_sha else ""),
             role=role,
+            caller_agent_id=caller_agent_id,
+            principal_id=principal_id,
+            source_sha=source_sha,
         )
     else:
         # Test/adapter seam retained while all product surfaces use Connect.

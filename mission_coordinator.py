@@ -400,6 +400,7 @@ def run_coordinator_tick(
     store_mod: Any = None,
     task_starter: Any = None,
     idem_key: str = "",
+    scope_authority: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Execute one deliverable-scoped coordinator tick with auditing."""
     import mission_narrative
@@ -409,6 +410,24 @@ def run_coordinator_tick(
     pol = _normalize_policy(policy)
     mission_status = _scope_mission_status(mission_status, pol)
     deliverable_id = mission_status.get("deliverable_id") or ""
+    authority_validator = getattr(
+        store_mod, "validate_autopilot_scope_authority", None)
+    if callable(authority_validator) and (
+            pol["auto_start"] or pol["auto_refresh_brief"]):
+        authority = authority_validator(
+            scope_authority or {}, project=mission_project,
+            deliverable_id=deliverable_id,
+            task_project=pol.get("target_project_id") or "",
+            task_id=pol.get("target_task_id") or "")
+        if not authority.get("allowed"):
+            return {
+                "schema": "switchboard.mission_coordinator_tick.v1",
+                "status": "scope_authority_denied",
+                "project_id": mission_project,
+                "deliverable_id": deliverable_id,
+                "error": authority.get("error"),
+                "reason_codes": authority.get("reason_codes") or [],
+            }
     plan = coordinator_tick_plan(mission_status, policy=pol)
     executed: List[Dict[str, Any]] = []
     now = time.time()
@@ -460,8 +479,47 @@ def run_coordinator_tick(
         result["status"] = "human_required"
         result["escalations"] = plan.get("escalations") or []
     elif status == "monitor":
-        result["status"] = "monitor"
-        result["monitors"] = plan.get("monitors") or []
+        monitor = next(iter(plan.get("monitors") or []), {})
+        task_id = str(monitor.get("task_id") or "").upper()
+        task_project = str(monitor.get("project_id") or mission_project)
+        role = _lifecycle_role(store_mod, task_project, task_id)
+        if role != "remediation":
+            role = "review_merge"
+        head_sha = str(monitor.get("head_sha") or "").strip().lower()
+        if not head_sha:
+            result["status"] = "dispatch_blocked"
+            result["dispatch"] = {
+                "action": "refused", "error": "review_head_sha_required",
+                "task_id": task_id, "project": task_project, "role": role,
+            }
+        else:
+            if task_starter is None:
+                from switchboard.application.commands import task_execution
+                task_starter = task_execution.start_task
+            try:
+                ensured = task_starter(
+                    task_id, project=task_project, actor=actor,
+                    agent_id=coordinator_agent_id, role=role,
+                    source_sha=head_sha)
+            except Exception as exc:
+                ensured = {"action": "refused", "error": type(exc).__name__,
+                           "reason": str(exc)}
+            ensured = {**ensured, "task_id": task_id,
+                       "project": task_project, "role": role,
+                       "head_sha": head_sha}
+            result["dispatch"] = ensured
+            result["monitors"] = [monitor]
+            refused = ensured.get("action") == "refused" or bool(ensured.get("error"))
+            transitioning = ensured.get("action") == "transitioning"
+            result["status"] = (
+                "dispatch_blocked" if refused else
+                "session_transitioning" if transitioning else
+                "session_ensured")
+            if role == "remediation" and not refused and not transitioning:
+                marker = getattr(store_mod, "mark_review_remediation_ensured", None)
+                if callable(marker):
+                    marker(task_id, wake_id=str(ensured.get("wake_id") or ""),
+                           actor=actor, project=task_project)
     elif status == "idle":
         result["status"] = "idle"
     elif status != "dispatch_ready":
@@ -480,7 +538,8 @@ def run_coordinator_tick(
             try:
                 ensured = task_starter(
                     task_id, project=task_project, actor=actor,
-                    principal_id=principal_id, role=role)
+                    principal_id=principal_id,
+                    agent_id=coordinator_agent_id, role=role)
             except Exception as exc:  # fail visibly; the next tick may retry
                 ensured = {"action": "refused", "error": type(exc).__name__,
                            "reason": str(exc), "task_id": task_id,

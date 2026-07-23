@@ -486,10 +486,53 @@ def _insert_wake_intent(c: sqlite3.Connection, selector: Dict[str, Any],
     wake["eligible_hosts"] = [h["host_id"] for h in eligible]
     return wake
 
+def _active_task_claim_in(c: sqlite3.Connection, task_id: str,
+                          now: float) -> Dict[str, Any]:
+    if not task_id:
+        return {}
+    row = c.execute(
+        "SELECT id,task_id,agent_id,principal_id,expires_at FROM task_claims "
+        "WHERE task_id=? AND status='active' AND expires_at>? "
+        "ORDER BY claimed_at LIMIT 1",
+        (task_id, now),
+    ).fetchone()
+    if not row:
+        return {}
+    return {
+        "claim_id": row["id"],
+        "task_id": row["task_id"],
+        "agent_id": row["agent_id"],
+        "principal_id": row["principal_id"],
+        "expires_at": row["expires_at"],
+    }
+
+
+def task_start_ownership(task_id: str, *,
+                         project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Return the active coordination owner, if any.
+
+    This read is for early refusal and operator diagnostics only. ``request_wake``
+    repeats the check in the execution-generation transaction.
+    """
+    try:
+        with _control_plane_conn(project) as c:
+            return _active_task_claim_in(
+                c, str(task_id or "").strip().upper(), time.time())
+    except sqlite3.OperationalError as exc:
+        # Lightweight command tests and bootstrap probes may exercise a launcher
+        # seam before schema initialization. The atomic wake transaction still
+        # enforces ownership once persistence is available.
+        if "no such table" in str(exc).lower():
+            return {}
+        raise
+
+
 def request_wake(selector: Dict[str, Any], reason: str = "",
                  source: str = "", policy: Optional[Dict[str, Any]] = None,
                  task_id: Optional[str] = None, principal_id: str = "",
                  actor: str = "system", idem_key: str = "",
+                 caller_agent_id: str = "",
+                 enforce_task_ownership: bool = False,
                  project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     started_at = time.time()
     now = time.time()
@@ -501,8 +544,15 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
             selector["runtime"] = runtime
     if not selector.get("runtime") and not selector.get("agent_id"):
         return {"error": "selector.runtime or selector.agent_id required"}
-    payload = {"selector": selector, "reason": reason or "wake requested",
-               "source": source or actor, "policy": dict(policy), "task_id": task_id}
+    payload = {
+        "selector": selector,
+        "reason": reason or "wake requested",
+        "source": source or actor,
+        "policy": dict(policy),
+        "task_id": task_id,
+        "caller_agent_id": str(caller_agent_id or ""),
+        "enforce_task_ownership": bool(enforce_task_ownership),
+    }
     if (str((policy.get("scheduler") or {}).get("mode") or "") == "hybrid"
             and policy.get("account_binding")):
         policy["provider_capacity"] = _provider_capacity_decision(
@@ -511,6 +561,28 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
         )
     try:
         with _control_plane_conn(project) as c:
+            active_claim = (
+                _active_task_claim_in(c, str(task_id or "").strip().upper(), now)
+                if enforce_task_ownership else {}
+            )
+            if active_claim:
+                owner = str(active_claim.get("agent_id") or "")
+                caller = str(caller_agent_id or "").strip()
+                if not caller or caller != owner:
+                    return {
+                        "requested": False,
+                        "error": "active_claim_conflict",
+                        "reason": "another agent owns this task",
+                        "task_id": str(task_id or "").strip().upper(),
+                        "claim_id": active_claim["claim_id"],
+                        "owner_agent_id": owner,
+                    }
+                policy["ownership"] = {
+                    "schema": "switchboard.task_ownership.v1",
+                    "claim_id": active_claim["claim_id"],
+                    "agent_id": owner,
+                    "expires_at": active_claim["expires_at"],
+                }
             hit = _store_facade()._idem_hit(
                 c, "request_wake", idem_key, actor, payload)
             if hit is not None:
@@ -1735,6 +1807,24 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
             wake = _wake_row(wake_row)
             policy = dict(wake.get("policy") or {})
             binding = dict(policy.get("account_binding") or {})
+            ownership = dict(policy.get("ownership") or {})
+            if ownership:
+                current_claim = _active_task_claim_in(
+                    c, str(wake.get("task_id") or "").strip().upper(), now)
+                expected_claim_id = str(ownership.get("claim_id") or "")
+                expected_agent_id = str(ownership.get("agent_id") or "")
+                selector_agent_id = str(
+                    (wake.get("selector") or {}).get("agent_id") or "")
+                if (not current_claim
+                        or current_claim.get("claim_id") != expected_claim_id
+                        or current_claim.get("agent_id") != expected_agent_id
+                        or selector_agent_id != expected_agent_id):
+                    return {
+                        "claimed": False,
+                        "reason": "ownership_binding_denied",
+                        "reason_codes": ["active_claim_binding_changed"],
+                        "wake_id": wake_id,
+                    }
             personal = (policy.get("execution_mode") == "personal_agent_host"
                         or policy.get("require_exact_host_binding") is True)
             host_identity = _store_facade().check_agent_host_identity(

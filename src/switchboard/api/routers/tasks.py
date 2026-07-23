@@ -54,6 +54,7 @@ class StartTaskBody(BaseModel):
     project: Optional[str] = None
     role: Optional[str] = None
     runtime: Optional[str] = None
+    agent_id: Optional[str] = None
 
 
 class ExecutionCommandBody(BaseModel):
@@ -522,7 +523,8 @@ def create_router(*, resolve_project: ProjectResolver,
             """
             return await run_execution_command(
                 request, "start_task", task_id, resolve_project(body.project),
-                role=body.role or "implementation", runtime=body.runtime or "codex")
+                role=body.role or "implementation", runtime=body.runtime or "codex",
+                agent_id=body.agent_id or "")
 
         @router.get("/api/tasks/{task_id}/execution")
         async def get_task_execution(task_id: str, project: str = Query(...)):
