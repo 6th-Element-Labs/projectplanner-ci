@@ -1,7 +1,7 @@
-"""Runner session / control MCP tools.
+"""Runner registry and Agent Host control-delivery MCP tools.
 
-Transport adapter extracted in ARCH-MS-67. Authentication and MCP serialization
-remain edge concerns; shared runner_control commands own transport-neutral mapping.
+Operators control executions through the task-execution tools. These tools keep
+only the physical registry and the host-side request delivery protocol.
 """
 from __future__ import annotations
 
@@ -13,13 +13,10 @@ from mcp.server.fastmcp import Context
 
 import auth
 from switchboard.application.commands import runner_control as runner_control_command
-from switchboard.application.commands import runner_pty as runner_pty_command
 
 
 @dataclass(frozen=True)
 class RunnerToolServices:
-    """Monolith edge services injected while ``mcp_server`` remains the host."""
-
     dumps: Callable[[Any], str]
     require_write: Callable[..., dict[str, Any]]
 
@@ -33,171 +30,35 @@ def _services() -> RunnerToolServices:
     return _SERVICES
 
 
-def list_runner_sessions(project: str = "maxwell", host_id: str = "", runtime: str = "",
-                         task_id: str = "", status: str = "",
-                         include_stale: bool = False) -> str:
-    """List live runner sessions with host/runtime/task/claim/fidelity and available actions."""
+def list_runner_sessions(project: str = "maxwell", host_id: str = "",
+                         runtime: str = "", task_id: str = "",
+                         status: str = "", include_stale: bool = False) -> str:
     services = _services()
     return services.dumps(runner_control_command.list_sessions(
         host_id=host_id, runtime=runtime, task_id=task_id, status=status,
         include_stale=include_stale, project=project))
 
 
-def resolve_runner_watch(task_id: str, project: str = "maxwell",
-                         include_stale: bool = False) -> str:
-    """Fail-closed Watch/Chat gate (COORD-34 / UI-17).
-
-    Returns a watchable session when task_id/claim_id/host_id/wake_id/work_session_id
-    are all present on a live runner. Incomplete bind returns typed
-    error_code=runner_bind_incomplete.
-    """
-    services = _services()
-    return services.dumps(runner_control_command.resolve_watch(
-        task_id=task_id, include_stale=include_stale, project=project))
-
-
 def register_runner_session(runner_session_json: str, ctx: Context,
                             project: str = "maxwell") -> str:
-    """Register or heartbeat one supervised runner session.
-
-    Claim-bound / ready / running sessions must include task_id, claim_id,
-    host_id=host/<instance-id>, wake_id, and work_session_id (COORD-34). Incomplete
-    bind returns error_code=runner_bind_incomplete. Preclaim starting rows may omit
-    claim/work_session until the worker rebinds. runner_kill is accepted only for
-    host-owned managed_process sessions.
-    """
     services = _services()
     principal = services.require_write(ctx, project, ("write:ixp",))
     try:
         record = json.loads(runner_session_json or "{}")
     except Exception:
-        return services.dumps({"error": "runner_session_json must be a JSON object string"})
+        return services.dumps(
+            {"error": "runner_session_json must be a JSON object string"})
     if not isinstance(record, dict):
-        return services.dumps({"error": "runner_session_json must be a JSON object string"})
+        return services.dumps(
+            {"error": "runner_session_json must be a JSON object string"})
     return services.dumps(runner_control_command.upsert_session_mapping_result(
         {**record, "project": project},
         principal_id=principal["id"], actor=auth.actor(principal)))
 
 
-def request_runner_snapshot(runner_session_id: str, ctx: Context,
-                            reason: str = "", project: str = "maxwell") -> str:
-    """Request a host-side snapshot for a managed runner session."""
-    services = _services()
-    principal = services.require_write(ctx, project, ("write:ixp",))
-    return services.dumps(runner_control_command.request_mapping_result(
-        {"runner_session_id": runner_session_id, "action": "snapshot",
-         "reason": reason, "project": project},
-        actor=auth.actor(principal), principal_id=principal["id"]))
-
-
-def request_runner_kill(runner_session_id: str, ctx: Context,
-                        reason: str = "", grace_seconds: float = 5.0,
-                        signal: str = "TERM", project: str = "maxwell") -> str:
-    """Request a host-side runner kill. The request is audited and carries a pre-kill snapshot."""
-    services = _services()
-    principal = services.require_write(ctx, project, ("write:ixp",))
-    return services.dumps(runner_control_command.request_mapping_result(
-        {"runner_session_id": runner_session_id, "action": "kill", "reason": reason,
-         "options": {"grace_seconds": grace_seconds, "signal": signal or "TERM"},
-         "project": project},
-        actor=auth.actor(principal), principal_id=principal["id"]))
-
-
-def request_runner_health(runner_session_id: str, ctx: Context,
-                          reason: str = "", project: str = "maxwell") -> str:
-    """Request host-side runner health from an environment that supports it.
-
-    Unsupported runtimes return a refused control request with reason=not_supported.
-    """
-    services = _services()
-    principal = services.require_write(ctx, project, ("write:ixp",))
-    return services.dumps(runner_control_command.request_mapping_result(
-        {"runner_session_id": runner_session_id, "action": "health",
-         "reason": reason, "project": project},
-        actor=auth.actor(principal), principal_id=principal["id"]))
-
-
-def request_runner_logs(runner_session_id: str, ctx: Context,
-                        reason: str = "", project: str = "maxwell") -> str:
-    """Request host-side runner logs from an environment that supports it.
-
-    Unsupported runtimes return a refused control request with reason=not_supported.
-    """
-    services = _services()
-    principal = services.require_write(ctx, project, ("write:ixp",))
-    return services.dumps(runner_control_command.request_mapping_result(
-        {"runner_session_id": runner_session_id, "action": "logs",
-         "reason": reason, "project": project},
-        actor=auth.actor(principal), principal_id=principal["id"]))
-
-
-def request_runner_open(runner_session_id: str, ctx: Context,
-                        reason: str = "", project: str = "maxwell") -> str:
-    """Request a host-side open action when the runtime explicitly advertises runner_open.
-
-    Unsupported runtimes return a refused control request with reason=not_supported.
-    """
-    services = _services()
-    principal = services.require_write(ctx, project, ("write:ixp",))
-    return services.dumps(runner_control_command.request_mapping_result(
-        {"runner_session_id": runner_session_id, "action": "open",
-         "reason": reason, "project": project},
-        actor=auth.actor(principal), principal_id=principal["id"]))
-
-
-def request_runner_inject(runner_session_id: str, ctx: Context,
-                          task_id: str, text: str, kind: str = "freeform",
-                          reason: str = "", project: str = "maxwell") -> str:
-    """Inject chat into a bound live Codex PTY (CO-13). Requires matching task_id.
-
-    Unsupported or mismatched-session requests are refused fail-closed.
-    """
-    services = _services()
-    principal = services.require_write(ctx, project, ("write:ixp",))
-    return services.dumps(runner_control_command.request_mapping_result(
-        {"runner_session_id": runner_session_id, "action": "inject",
-         "reason": reason,
-         "options": {"task_id": task_id, "text": text, "kind": kind or "freeform"},
-         "project": project},
-        actor=auth.actor(principal), principal_id=principal["id"]))
-
-
-def mint_runner_pty_ticket(runner_session_id: str, ctx: Context,
-                           scopes_json: str = '["watch"]',
-                           ttl_seconds: int = 900,
-                           binding_json: str = "{}",
-                           project: str = "maxwell") -> str:
-    """Mint a short-lived browser PTY relay capability ticket (ADAPTER-22).
-
-    Requires a fully COORD-34-bound runner session. Tickets never embed host-local
-    loopback URLs; browsers connect through the Switchboard relay path.
-    """
-    services = _services()
-    principal = services.require_write(ctx, project, ("write:ixp",))
-    try:
-        scopes = json.loads(scopes_json or "[]")
-    except Exception:
-        return services.dumps({"error": "scopes_json must be a JSON array string"})
-    try:
-        overlay = json.loads(binding_json or "{}")
-    except Exception:
-        return services.dumps({"error": "binding_json must be a JSON object string"})
-    if not isinstance(overlay, dict):
-        return services.dumps({"error": "binding_json must be a JSON object string"})
-    return services.dumps(runner_pty_command.mint_ticket_for_session(
-        runner_session_id=runner_session_id,
-        project=project,
-        scopes=scopes,
-        ttl_seconds=ttl_seconds,
-        binding_overlay=overlay,
-        actor=auth.actor(principal),
-    ))
-
-
 def list_runner_control_requests(project: str = "maxwell", status: str = "",
                                  host_id: str = "",
                                  runner_session_id: str = "") -> str:
-    """List pending/completed runner snapshot/kill/restart/health/log/open/inject control requests."""
     services = _services()
     return services.dumps(runner_control_command.list_control_requests(
         status=status, host_id=host_id, runner_session_id=runner_session_id,
@@ -206,7 +67,6 @@ def list_runner_control_requests(project: str = "maxwell", status: str = "",
 
 def claim_runner_control(host_id: str, request_id: str, ctx: Context,
                          project: str = "maxwell") -> str:
-    """Agent Host claims a pending runner control request for one of its sessions."""
     services = _services()
     principal = services.require_write(ctx, project, ("write:ixp",))
     return services.dumps(runner_control_command.claim_mapping_result(
@@ -214,10 +74,9 @@ def claim_runner_control(host_id: str, request_id: str, ctx: Context,
         actor=auth.actor(principal)))
 
 
-def complete_runner_control(request_id: str, ctx: Context, result_json: str = "{}",
-                            snapshot_json: str = "{}", status: str = "",
-                            project: str = "maxwell") -> str:
-    """Agent Host completes a runner control request after snapshot/kill execution."""
+def complete_runner_control(request_id: str, ctx: Context,
+                            result_json: str = "{}", snapshot_json: str = "{}",
+                            status: str = "", project: str = "maxwell") -> str:
     services = _services()
     principal = services.require_write(ctx, project, ("write:ixp",))
     try:
@@ -234,23 +93,15 @@ def complete_runner_control(request_id: str, ctx: Context, result_json: str = "{
 
 RUNNER_TOOL_NAMES = (
     "list_runner_sessions",
-    "resolve_runner_watch",
     "register_runner_session",
-    "request_runner_snapshot",
-    "request_runner_kill",
-    "request_runner_health",
-    "request_runner_logs",
-    "request_runner_open",
-    "request_runner_inject",
-    "mint_runner_pty_ticket",
     "list_runner_control_requests",
     "claim_runner_control",
     "complete_runner_control",
 )
 
 
-def register_runner_tools(mcp: Any, services: RunnerToolServices) -> dict[str, Callable[..., str]]:
-    """Configure and register the tool set on one FastMCP host."""
+def register_runner_tools(
+        mcp: Any, services: RunnerToolServices) -> dict[str, Callable[..., str]]:
     global _SERVICES
     _SERVICES = services
     registered = {}

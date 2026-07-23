@@ -130,12 +130,14 @@
 
         for (const taskId of ids) {
             try {
-                const wq = `project=${encodeURIComponent(project)}&task_id=${encodeURIComponent(taskId)}`;
-                const watch = await (await fetch(`/ixp/v1/runner_sessions/watch?${wq}`, { cache: 'no-store' })).json();
-                if (watch && watch.watchable && !watch.error && watch.error_code !== 'runner_bind_incomplete') {
+                const execution = await (await fetch(
+                    `/api/tasks/${encodeURIComponent(taskId)}/execution?project=${encodeURIComponent(project)}`,
+                    { cache: 'no-store' })).json();
+                const runner = execution?.execution?.active_runner || null;
+                if (runner && !execution.error && !execution.error_code) {
                     out.selectedTaskId = taskId;
-                    out.watch = watch;
-                    out.runner = watch.session || null;
+                    out.watch = execution;
+                    out.runner = runner;
                     break;
                 }
             } catch (e) { /* try next */ }

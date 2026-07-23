@@ -54,10 +54,12 @@ ok("new WebSocket(" in RUNNER_SESSION, "a real browser WebSocket connects to the
 # attaches the host tunnel, and mints the ticket.
 ok("/execution/open" in RUNNER_SESSION,
    "the terminal opens through the task-scoped open_session command")
+ok("data-runner-task=" in RUNNER_SESSION,
+   "shared Fleet runner controls carry the task id required by Task Execution")
 ok("/pty/ticket" not in RUNNER_SESSION,
    "the browser no longer mints its own relay ticket for a self-chosen runner")
-ok("request_runner_open" in RUNNER_SESSION,
-   "opening watch also ensures the host tunnel via request_runner_open (idempotent)")
+ok("request_runner_open" not in RUNNER_SESSION,
+   "opening Watch exposes no runner-selected host-control side door")
 ok("term.write(bytes)" in RUNNER_SESSION or "term.write(" in RUNNER_SESSION,
    "inbound output frames are written into the terminal, not just logged")
 ok("_runnerPtySendInput" in RUNNER_SESSION and "term.onData(" in RUNNER_SESSION,
@@ -108,10 +110,10 @@ ok("fallbackIfNotWatchable" in MISSION,
 ok("openNodeModal" in MISSION, "the pre-existing deliverable-link node modal is preserved as the fallback")
 ok("mission-dag-node" in APP and "await this.openRunnerSessionPanel" in APP,
    "the visible dependency-map pills use the same runner-first path as Mermaid graph nodes")
-ok("_runnerPtyIntentTask" in RUNNER_SESSION and "include_stale=true" in RUNNER_SESSION,
-   "closing a watched runner remembers repeat-click intent and reopens its truthful stale gate")
-ok("opts.includeStale" in RUNNER_SESSION and "!sessions.length" in RUNNER_SESSION,
-   "a fresh page can discover stale runner history while never-run tasks still fall back to authoring")
+ok("_runnerPtyIntentTask" in RUNNER_SESSION and "has_ended_session" in RUNNER_SESSION,
+   "closing a watched runner remembers task intent while server history stays authoritative")
+ok("has_ended_session" in RUNNER_SESSION and "!sessions.length" in RUNNER_SESSION,
+   "server-reported ended history distinguishes prior execution from never-run tasks")
 # BUG-91: one task accumulates one runner row per dispatch attempt (SEG-2 held 8
 # rows across 3 hosts and 31 hours). A client-side memo of WHICH runner therefore
 # outranked the truth on every reopen. The memo is now a task id only; the server
@@ -159,12 +161,12 @@ ok("openRunnerWatch" not in PROOF, "the Proof Console no longer calls the retire
 
 # ---- one plain-language chat composer stays bound to the same exact PTY ----
 for needle in ("Message the live agent", "delivery is acknowledged against this exact run",
-               "request_runner_inject"):
+               "/execution/message"):
     ok(needle in INDEX or needle in RUNNER_SESSION, f"chat/shortcut wiring present: {needle}")
 ok("e.preventDefault()" in RUNNER_SESSION and "!e.isComposing" in RUNNER_SESSION,
    "Enter submits the composer exactly once without swallowing IME composition")
-ok("_runnerPtyAwaitChatDelivery" in RUNNER_SESSION and "Delivered to ${rp.taskId}" in RUNNER_SESSION,
-   "session chat distinguishes a queued request from confirmed host delivery")
+ok("Message queued through Task Execution." in RUNNER_SESSION,
+   "session chat reports durable queue truth without polling by runner id")
 ok("els.chatInput.value = text" in RUNNER_SESSION,
    "failed session chat restores the operator's text instead of discarding it")
 

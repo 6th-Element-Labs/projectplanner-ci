@@ -19,7 +19,7 @@
 
 - `GET /api/people`, `GET /api/dispatch/status`
 - `GET /ixp/v1/saturation_signals`
-- `GET|POST /api/coordinator_dispatch*` (write / dry-plan acting paths)
+- No project-wide coordinator dispatch route exists; Task Execution owns starts.
 - Agents, messaging, wakes, monitors (except `/ixp/v1/delta`), resource leases, work sessions
 - Deliverables / mission HTTP
 - MCP (`:8111`)

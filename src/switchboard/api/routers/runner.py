@@ -5,10 +5,10 @@ boundaries; shared runner_control commands own transport-neutral mapping.
 """
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 import auth
 import store
@@ -24,22 +24,6 @@ from switchboard.application.commands import runner_control as runner_control_co
 ProjectResolver = Callable[[str], str]
 PrincipalResolver = Callable[..., dict]
 BodyProjectResolver = Callable[[dict], str]
-
-
-class RunnerInjectBody(BaseModel):
-    """Typed CO-13 inject request (keeps ARCH-MS-84 untyped-body ceiling flat)."""
-
-    model_config = ConfigDict(extra="allow")
-
-    project: Optional[str] = None
-    runner_session_id: Optional[str] = None
-    id: Optional[str] = None
-    task_id: Optional[str] = None
-    text: Optional[str] = None
-    message: Optional[str] = None
-    kind: Optional[str] = None
-    reason: Optional[str] = None
-    options: dict[str, Any] = Field(default_factory=dict)
 
 
 class MintHostTunnelUrlBody(BaseModel):
@@ -75,26 +59,11 @@ def create_router(*, resolve_project: ProjectResolver,
     async def ixp_runner_sessions(project: str = Query(...),
                                   host_id: str = "", runtime: str = "",
                                   task_id: str = "", status: str = "",
-                                  include_stale: bool = False,
-                                  for_watch: bool = False):
+                                  include_stale: bool = False):
         project_id = resolve_project(project)
-        if for_watch:
-            # COORD-34 / UI-17: list alone is not enough — Watch/Chat opens only
-            # through the typed bind gate.
-            return runner_control_command.resolve_watch(
-                task_id=task_id, include_stale=include_stale, project=project_id)
         return {"sessions": runner_control_command.list_sessions(
             host_id=host_id, runtime=runtime, task_id=task_id, status=status,
             include_stale=include_stale, project=project_id)}
-
-    @router.get("/ixp/v1/runner_sessions/watch")
-    async def ixp_runner_sessions_watch(task_id: str = Query(...),
-                                        project: str = Query(...),
-                                        include_stale: bool = False):
-        """Open gate for operator Watch/Chat (COORD-34). Fail closed on incomplete bind."""
-        return runner_control_command.resolve_watch(
-            task_id=task_id, include_stale=include_stale,
-            project=resolve_project(project))
 
     @router.get("/ixp/v1/runner_sessions/{runner_session_id}/relay_attachment")
     async def ixp_runner_session_relay_attachment(runner_session_id: str):
@@ -179,68 +148,6 @@ def create_router(*, resolve_project: ProjectResolver,
                 and result.get("server_relay", {}).get("error")):
             raise HTTPException(403, result)
         return result
-
-    def _request_control(request: Request, body: dict, action: str,
-                         options: dict | None = None):
-        project = resolve_body_project(body)
-        principal = resolve_principal(
-            request, project, ("write:ixp",),
-            dev_actor="switchboard/operator")
-        result = runner_control_command.request_mapping_result(
-            {
-                "runner_session_id": body.get("runner_session_id") or body.get("id") or "",
-                "action": action,
-                "reason": body.get("reason") or "",
-                "options": options if options is not None else (body.get("options") or {}),
-                "project": project,
-            },
-            actor=auth.actor(principal),
-            principal_id=principal["id"],
-        )
-        if result.get("error"):
-            raise HTTPException(400, result["error"])
-        return result
-
-    @router.post("/ixp/v1/request_runner_snapshot")
-    async def ixp_request_runner_snapshot(request: Request, body: dict = Body(...)):
-        return _request_control(request, body, "snapshot")
-
-    @router.post("/ixp/v1/request_runner_kill")
-    async def ixp_request_runner_kill(request: Request, body: dict = Body(...)):
-        return _request_control(
-            request, body, "kill",
-            options={"grace_seconds": body.get("grace_seconds"),
-                     "signal": body.get("signal") or "TERM"})
-
-    @router.post("/ixp/v1/request_runner_restart")
-    async def ixp_request_runner_restart(request: Request, body: dict = Body(...)):
-        return _request_control(request, body, "restart")
-
-    @router.post("/ixp/v1/request_runner_health")
-    async def ixp_request_runner_health(request: Request, body: dict = Body(...)):
-        return _request_control(request, body, "health")
-
-    @router.post("/ixp/v1/request_runner_logs")
-    async def ixp_request_runner_logs(request: Request, body: dict = Body(...)):
-        return _request_control(request, body, "logs")
-
-    @router.post("/ixp/v1/request_runner_open")
-    async def ixp_request_runner_open(request: Request, body: dict = Body(...)):
-        return _request_control(request, body, "open")
-
-    @router.post("/ixp/v1/request_runner_inject")
-    async def ixp_request_runner_inject(request: Request, body: RunnerInjectBody):
-        payload = body.model_dump(exclude_none=True)
-        options = dict(payload.get("options") or {})
-        if payload.get("task_id") and "task_id" not in options:
-            options["task_id"] = payload.get("task_id")
-        if payload.get("text") is not None and "text" not in options:
-            options["text"] = payload.get("text")
-        elif payload.get("message") is not None and "text" not in options and "message" not in options:
-            options["text"] = payload.get("message")
-        if payload.get("kind") and "kind" not in options:
-            options["kind"] = payload.get("kind")
-        return _request_control(request, payload, "inject", options=options)
 
     @router.post("/ixp/v1/runner_lease_due")
     async def ixp_runner_lease_due(request: Request, body: RunnerLeaseDueBody):

@@ -19,11 +19,11 @@ assert '"lease_stop", runner_id' in co_drain
 assert "P_RUNNER_LEASE_DUE" in agent_host
 assert "outcomes = expire_runner_leases(inventory)" in agent_host
 
-# One rollback flag controls both placement and enforcement. A second lifecycle
-# clock would let capable and enforcing fleets disagree.
+# Lease enforcement and placement are unconditional after SIMPLIFY-16.
 assert "PM_EXECUTION_LIFECYCLE_V1" not in dispatch
-assert 'PM_RUNNER_LEASE_ENFORCEMENT", "1"' in dispatch
-assert 'PM_RUNNER_LEASE_ENFORCEMENT", "1"' in agent_host
+assert "PM_RUNNER_LEASE_ENFORCEMENT" not in dispatch
+assert "PM_RUNNER_LEASE_ENFORCEMENT" not in agent_host
+assert '"execution_lease_v2", "runner_lease_enforcement"' in dispatch
 
 # These are the only production functions allowed to issue a managed-process
 # kill: lease expiry, explicit operator control, and fail-closed spawn cleanup.

@@ -55,7 +55,7 @@ Auth or Tasks Path A cuts, ADR-0007’s Caddy decision, or ARCH-19’s Postgres 
 - Other BCs (Deliverables/mission, Tally, Ingest, Messaging, Runner, …) as process cuts.
 - Full `/ixp/v1/*` edge move — **thin IXP only** (`/ixp/v1/delta`); agents/messaging/wakes/claims stay on monolith (or Tasks for claim TXP).
 - MCP process cut — MCP stays on `:8111`.
-- Coordinator **write** dispatch (`POST /api/coordinator_dispatch*`) day one — stays monolith until independence + Go widen.
+- Coordinator work starts only through Task Execution; no project-wide dispatch route remains.
 - `/api/people`, `/api/dispatch/status`, `/ixp/v1/saturation_signals` day one (ops/UI siblings).
 - Nginx; Postgres migration (ARCH-19); mandatory Coord leave-process if independence fails.
 
@@ -85,7 +85,7 @@ Canonical table: [`docs/coord/thin_day_one_surface.md`](../coord/thin_day_one_su
 | Board summary | `GET /api/board` | — |
 | Plan signals | `GET /api/signals` | — |
 | Lane delta | `GET /ixp/v1/delta` | Other `/ixp/v1/*` |
-| Coord read | `GET /api/coordination`, `GET /api/coordinator_decisions` | `POST /api/coordinator_dispatch*`, plan preview |
+| Coord read | `GET /api/coordination`, `GET /api/coordinator_decisions` | Task Execution owns all work starts |
 | Process | `src/switchboard/services/coord/` (future) · systemd · **`:8123`** | Web `:8110`, MCP `:8111`, Auth `:8121`, Tasks `:8122` |
 | Dual-strip | `PM_COORD_HTTP_PRIMARY=service` (Auth/Tasks analogue) after parity | Hermetic TestClient may leave unset |
 | MCP | Out of Mode A cut | `:8111` |

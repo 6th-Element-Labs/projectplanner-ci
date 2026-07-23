@@ -95,56 +95,6 @@ def notify(subject: str, text: str, ctx: Context, project: str = "maxwell") -> s
     return services.dumps(notify_mod.send(subject, text))
 
 
-def dispatch_to_claude_code(task_id: str, ctx: Context, project: str = "maxwell") -> str:
-    """Queue a task for autonomous development via the fleet. Enqueues a lane-scoped claim_next
-    wake intent that a work-capable Agent Host claims and runs in an isolated worktree, opening a
-    PR on a `claude/<task>` branch — never main. Returns {dispatched, wake_id, work_hosts_online, …}.
-    If no work-capable host is online for the task's project/lane, the wake queues until one is
-    (deploy/switchboard-agent-host-work.service.example). project selects the board."""
-    services = _services()
-    principal = services.require_write(ctx, project)
-    from switchboard.application.commands import task_execution
-    return services.dumps(task_execution.execute_mapping_result(
-        "start_task", task_id, actor=auth.actor(principal), project=project,
-        runtime="claude-code"))
-
-
-def dispatch_to_codex_cloud(task_id: str, ctx: Context,
-                            project: str = "maxwell") -> str:
-    """Queue a task for OpenAI-hosted Codex cloud execution.
-
-    The eligible bridge host uses the official ``codex cloud exec`` command, then binds the
-    app-visible ChatGPT/Codex task URL to the wake and runner-session registry. Dispatch fails
-    visibly when Codex auth, the cloud environment, canonical-repo grant, scoped MCP bridge, or
-    agent internet allowlist is absent; it never substitutes local ``codex exec`` compute.
-    """
-    services = _services()
-    principal = services.require_write(ctx, project)
-    from switchboard.application.commands import task_execution
-    return services.dumps(task_execution.execute_mapping_result(
-        "start_task", task_id, actor=auth.actor(principal), project=project,
-        runtime="codex"))
-
-
-def dispatch_to_co_fleet(task_id: str, runtime_config_ref: str, ctx: Context,
-                         project: str = "switchboard", runtime: str = "claude-code",
-                         capabilities: str = "", allow_on_demand: bool = False,
-                         account_binding_json: str = "") -> str:
-    """Queue a task for zero-to-one elastic CO Fleet capacity.
-
-    ``runtime_config_ref`` must be an SSM/Secrets Manager reference, never a token.
-    Optional ``account_binding_json`` carries the non-secret BYOA account-affinity
-    contract; incomplete or inconsistent bindings fail closed. On-Demand is an
-    explicit infrastructure fallback only and never authorizes metered model/API use.
-    """
-    services = _services()
-    principal = services.require_write(ctx, project)
-    from switchboard.application.commands import task_execution
-    return services.dumps(task_execution.execute_mapping_result(
-        "start_task", task_id, actor=auth.actor(principal), project=project,
-        runtime=runtime))
-
-
 def ingest_and_triage(kind: str, title: str, text: str, ctx: Context, project: str = "maxwell") -> str:
     """Ingest an artifact (email / transcript / document / note) into `project`'s RAG corpus AND
     triage it against that board. Returns {summary, proposals, new_tasks, sources} — proposals are
@@ -160,8 +110,7 @@ def ingest_and_triage(kind: str, title: str, text: str, ctx: Context, project: s
 
 
 OPS_TOOL_NAMES = (
-    "submit_bug", "generate_digest", "notify", "dispatch_to_claude_code",
-    "dispatch_to_codex_cloud", "dispatch_to_co_fleet", "ingest_and_triage",
+    "submit_bug", "generate_digest", "notify", "ingest_and_triage",
 )
 
 

@@ -1634,7 +1634,7 @@ try:
                     "execution_connection_id")}},
         )
     ok(host_principal.get("scopes") == ["read", "write:agent_host"]
-       and generic_wake_write.status_code == 403
+       and generic_wake_write.status_code == 405
        and generic_wake_completion.status_code == 403
        and cross_host_runner.status_code == 403
        and spoofed_host_registration.status_code == 403

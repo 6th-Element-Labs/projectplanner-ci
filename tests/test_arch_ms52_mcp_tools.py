@@ -50,7 +50,6 @@ EXTRACTED = {
     "heartbeat": agent_tools,
     "host_status": agent_tools,
     "list_wake_intents": wake_tools,
-    "cancel_wake": wake_tools,
     "abandon_claim": claim_tools,
     "verify_offline_completion": claim_tools,
 }

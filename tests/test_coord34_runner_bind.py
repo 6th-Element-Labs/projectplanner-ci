@@ -164,18 +164,7 @@ try:
        and empty_watch.get("refused") is True,
        "Watch gate refuses when no runner sessions exist for the task")
 
-    # ---- REST: for_watch + dedicated watch path --------------------------------
-    rest = client.get("/ixp/v1/runner_sessions", params={
-        "project": P, "task_id": task_id, "for_watch": True})
-    ok(rest.status_code == 200 and rest.json().get("watchable") is True,
-       "GET /ixp/v1/runner_sessions?for_watch=1 returns watchable bind")
-
-    rest_watch = client.get("/ixp/v1/runner_sessions/watch", params={
-        "project": P, "task_id": bare_id})
-    ok(rest_watch.status_code == 200
-       and rest_watch.json().get("error_code") == "runner_bind_incomplete",
-       "GET /ixp/v1/runner_sessions/watch refuses incomplete bind")
-
+    # ---- REST registry remains read-only; Task Execution owns Watch/open --------
     rest_list = client.get("/ixp/v1/runner_sessions", params={
         "project": P, "task_id": task_id})
     ok(rest_list.status_code == 200
@@ -198,18 +187,17 @@ try:
         "openRunnerSessionPanel",  # UI-24: renamed from openRunnerWatch
         "runner-watch-open",
         "runner_bind_incomplete",
-        "/ixp/v1/runner_sessions/watch",
+        "/execution?project=",
         "Watch / Chat",
-        "request_runner_inject",
+        "/execution/message",
         "_runnerPtySendChat",  # UI-24: renamed from sendRunnerSessionChat
     ):
         ok(needle in app_js, f"app.js exposes UI-17/CO-13/UI-24 needle {needle}")
 
     mcp_src = (Path(ROOT) / "src/switchboard/mcp/tools/runner.py").read_text(encoding="utf-8")
-    ok("resolve_runner_watch" in mcp_src
-       and "runner_bind_incomplete" in mcp_src
-       and "request_runner_inject" in mcp_src,
-       "MCP runner tools advertise resolve_runner_watch + inject + typed bind error")
+    ok("resolve_runner_watch" not in mcp_src
+       and "request_runner_inject" not in mcp_src,
+       "MCP runner tools expose no task-wide Watch or inject side door")
 
 finally:
     shutil.rmtree(TMP, ignore_errors=True)

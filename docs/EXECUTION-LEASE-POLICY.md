@@ -17,10 +17,8 @@ do not send process signals.
 - Stopping acknowledgement retries use the durable receipt and do not create a
   second stop clock.
 
-`PM_RUNNER_LEASE_ENFORCEMENT` defaults to enabled and is the only temporary
-rollback switch. Setting it to `0` is an audited emergency rollback during the
-SIMPLIFY-16 observation window. SIMPLIFY-11 owns deletion of this final switch
-after the hands-off proof passes.
+Lease enforcement is unconditional on every work-capable host. Placement
+requires both lease capabilities, and no observe-only or rollback branch exists.
 
 ## Explicit exceptions
 
@@ -28,11 +26,8 @@ Operator Kill is explicit, authenticated, and audited human authority.
 Fail-closed spawn cleanup may stop a child that never obtained a valid runner
 binding. Neither exception is a timer or an inferred lifecycle transition.
 
-## Promotion and rollback retirement
+## Promotion evidence
 
-Promotion evidence must record the observation start, host build/config
-versions, eligible-host capability census, and zero false `would_expire` events
-for the bounded observation window. Rollback retirement requires the
-SIMPLIFY-16 hands-off proof, no unsupported eligible host, durable restart
-acknowledgement proof, and a passing kill census. SIMPLIFY-11 then deletes the
-rollback flag and compatibility branch.
+SIMPLIFY-16 recorded the hands-off proof, supported-host census, durable restart
+acknowledgement, and passing kill census. SIMPLIFY-11 retired the rollout flag
+and observe-only compatibility branch.

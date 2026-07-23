@@ -957,7 +957,7 @@ const TeepPlan = {
         if (env.failure_reason) attn.push(env.failure_reason);
         if (dirty) attn.push(`${dirty} uncommitted file${dirty === 1 ? '' : 's'} in its workspace`);
         const btn = (action, icon, label, cls, disabled) =>
-            `<button class="btn btn-sm ${cls}" data-runner-id="${this.esc(s.runner_session_id)}" data-runner-action="${action}"${disabled ? ' disabled' : ''}><i class="ti ti-${icon} me-1"></i>${label}</button>`;
+            `<button class="btn btn-sm ${cls}" data-runner-task="${this.esc(s.task_id || '')}" data-runner-action="${action}"${disabled ? ' disabled' : ''}><i class="ti ti-${icon} me-1"></i>${label}</button>`;
         const watch = s.task_id && !dead
             ? `<button class="btn btn-sm btn-azure" data-runner-watch-task="${this.esc(s.task_id)}"><i class="ti ti-terminal-2 me-1"></i>Watch</button>` : '';
         return `<div class="p-2 border rounded mb-2">
@@ -970,8 +970,6 @@ const TeepPlan = {
             ${attn.length ? `<div class="text-${dead ? 'danger' : 'secondary'}" style="font-size:12px;">${this.esc(attn.join(' · '))}</div>` : ''}
             <div class="mt-2 d-flex gap-2 align-items-center">
                 ${watch}
-                ${btn('logs', 'file-text', 'Logs', 'btn-outline-secondary', !actions.includes('logs'))}
-                ${btn('snapshot', 'git-branch', 'On disk', 'btn-outline-secondary', !actions.includes('snapshot'))}
                 <span class="ms-auto"></span>
                 ${btn('kill', 'square', 'Kill', 'btn-outline-danger', !actions.includes('kill'))}
             </div>
@@ -1093,7 +1091,8 @@ const TeepPlan = {
         host.querySelectorAll('[data-dock-tab]').forEach((b) =>
             b.addEventListener('click', () => { this._dockTab = b.getAttribute('data-dock-tab'); rerender(); }));
         host.querySelectorAll('[data-runner-action]').forEach((b) =>
-            b.addEventListener('click', () => this._fleetRunnerAction(b.getAttribute('data-runner-id'), b.getAttribute('data-runner-action'))));
+            b.addEventListener('click', () => this._fleetRunnerAction(
+                b.getAttribute('data-runner-task'), b.getAttribute('data-runner-action'))));
         host.querySelectorAll('[data-runner-watch-task]').forEach((b) =>
             b.addEventListener('click', () => this.openRunnerSessionPanel(b.getAttribute('data-runner-watch-task'))));
         document.getElementById('fleet-dock-min').addEventListener('click', () => { this._dockCollapsed = true; rerender(); });
@@ -1772,8 +1771,8 @@ const TeepPlan = {
         body.innerHTML = `<div class="table-responsive"><table class="table table-sm mb-0 align-middle">
             <thead><tr><th>Target</th><th>Task</th><th>Reason</th><th>Status</th><th>Requested</th><th class="text-end"></th></tr></thead>
             <tbody>${rows.map((w) => this._wakeRow(w)).join('')}</tbody></table></div>${hist}`;
-        body.querySelectorAll('[data-cancel-wake]').forEach((b) =>
-            b.addEventListener('click', () => this._cancelWake(b.getAttribute('data-cancel-wake'))));
+        body.querySelectorAll('[data-cancel-task]').forEach((b) =>
+            b.addEventListener('click', () => this._cancelWake(b.getAttribute('data-cancel-task'))));
     },
     _wakeRow(w) {
         const sel = w.selector || {};
@@ -1787,7 +1786,7 @@ const TeepPlan = {
             <td class="small">${this.esc(w.reason || '—')}</td>
             <td><span class="badge bg-${c}-lt">${this.esc(w.status || '')}</span></td>
             <td class="text-secondary small">${this.esc(this._fleetAge(w.requested_at))}</td>
-            <td class="text-end">${cancelable ? `<button class="btn btn-sm btn-ghost-danger" data-cancel-wake="${this.esc(w.wake_id || '')}">Cancel</button>` : ''}</td>
+            <td class="text-end">${cancelable && w.task_id ? `<button class="btn btn-sm btn-ghost-danger" data-cancel-task="${this.esc(w.task_id)}">Stop</button>` : ''}</td>
         </tr>`;
     },
     // ONE source of truth for runners: the Fleet page's query. The page table, the
@@ -1823,7 +1822,8 @@ const TeepPlan = {
             <thead><tr><th>Session</th><th>Host</th><th>Runtime</th><th>Fidelity</th><th>Environment</th><th>Snapshot</th><th class="text-end">Actions</th></tr></thead>
             <tbody>${sessions.map((s) => this._runnerSessionRow(s)).join('')}</tbody></table></div>`;
         body.querySelectorAll('[data-runner-action]').forEach((btn) =>
-            btn.addEventListener('click', () => this._fleetRunnerAction(btn.getAttribute('data-runner-id'), btn.getAttribute('data-runner-action'))));
+            btn.addEventListener('click', () => this._fleetRunnerAction(
+                btn.getAttribute('data-runner-task'), btn.getAttribute('data-runner-action'))));
         body.querySelectorAll('[data-runner-watch-task]').forEach((btn) =>
             btn.addEventListener('click', () => this.openRunnerSessionPanel(btn.getAttribute('data-runner-watch-task'))));
     },
@@ -1837,17 +1837,15 @@ const TeepPlan = {
     async _submitWake() {
         const val = (id) => ((document.getElementById(id) || {}).value || '').trim();
         const flash = document.getElementById('wake-flash');
-        const runtime = val('wake-runtime');
-        if (!runtime) { if (flash) { flash.className = 'small text-danger'; flash.textContent = 'Runtime is required.'; } return; }
-        const selector = { runtime };
-        const lane = val('wake-lane'); if (lane) selector.lane = lane;
+        const runtime = val('wake-runtime') || 'codex';
+        const taskId = val('wake-task');
+        if (!taskId) { if (flash) { flash.className = 'small text-danger'; flash.textContent = 'Task is required.'; } return; }
         if (flash) { flash.className = 'small text-secondary'; flash.textContent = 'Sending…'; }
         try {
-            const res = await fetch('/ixp/v1/request_wake', {
+            const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/start`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    project: window.PM_PROJECT || 'maxwell', selector,
-                    reason: val('wake-reason') || 'operator launch from Fleet', task_id: val('wake-task'),
+                    project: window.PM_PROJECT || 'maxwell', runtime,
                 }),
             });
             const data = await res.json();
@@ -1857,33 +1855,33 @@ const TeepPlan = {
             setTimeout(() => window.bootstrap.Modal.getOrCreateInstance(document.getElementById('wake-modal')).hide(), 800);
         } catch (e) { if (flash) { flash.className = 'small text-danger'; flash.textContent = `Launch failed: ${e.message}`; } }
     },
-    async _cancelWake(wakeId) {
-        if (!wakeId || !window.confirm(`Cancel launch request ${wakeId}?`)) return;
+    async _cancelWake(taskId) {
+        if (!taskId || !window.confirm(`Stop the current execution for ${taskId}?`)) return;
         try {
-            const res = await fetch('/ixp/v1/cancel_wake', {
+            const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/execution/stop`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ project: window.PM_PROJECT || 'maxwell', wake_id: wakeId }),
+                body: JSON.stringify({ project: window.PM_PROJECT || 'maxwell', reason: 'operator stop from Fleet' }),
             });
             const data = await res.json();
             if (!res.ok || data.error) throw new Error(data.error || data.detail || `HTTP ${res.status}`);
         } catch (e) { /* result reflected on reload */ }
         this._loadWakeIntents();
     },
-    async _fleetRunnerAction(runnerId, action) {
-        if (!runnerId || !action) return;
+    async _fleetRunnerAction(taskId, action) {
+        if (!taskId || !action) return;
         if (action === 'kill') {
-            const typed = window.prompt(`Kill is destructive and can't be undone.\nType the runner id to confirm:\n${runnerId}`);
-            if (typed !== runnerId) return;
+            const typed = window.prompt(`Stop is destructive and can't be undone.\nType the task id to confirm:\n${taskId}`);
+            if (typed !== taskId) return;
         }
         const endpoints = {
-            kill: '/ixp/v1/request_runner_kill', snapshot: '/ixp/v1/request_runner_snapshot',
-            health: '/ixp/v1/request_runner_health', logs: '/ixp/v1/request_runner_logs',
-            open: '/ixp/v1/request_runner_open',
+            kill: `/api/tasks/${encodeURIComponent(taskId)}/execution/stop`,
+            open: `/api/tasks/${encodeURIComponent(taskId)}/execution/open`,
         };
+        if (!endpoints[action]) return;
         try {
-            await fetch(endpoints[action] || endpoints.snapshot, {
+            await fetch(endpoints[action], {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ project: window.PM_PROJECT || 'maxwell', runner_session_id: runnerId, reason: `operator ${action} from Fleet` }),
+                body: JSON.stringify({ project: window.PM_PROJECT || 'maxwell', reason: `operator ${action} from Fleet` }),
             });
         } catch (e) { /* result reflected on reload */ }
         this._loadFleetRunners();

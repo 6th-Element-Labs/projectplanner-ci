@@ -84,8 +84,7 @@ for route in routes:
     ok(route not in paths, f"dual-strip monolith omits {route}")
 for sibling in (
     "/api/people", "/api/dispatch/status", "/ixp/v1/saturation_signals",
-    "/ixp/v1/working_agreement", "/api/coordinator_dispatch/plan",
-    "/api/coordinator_dispatch",
+    "/ixp/v1/working_agreement",
 ):
     ok(sibling in paths, f"dual-strip preserves sibling {sibling}")
 

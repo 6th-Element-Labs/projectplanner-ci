@@ -109,7 +109,7 @@
         const logTail = env.log_tail ? `<div class="text-secondary small text-truncate" style="max-width:220px" title="${this.esc(env.log_tail)}">${this.esc(env.log_tail.split('\n').slice(-1)[0])}</div>` : '';
         const failure = env.failure_reason ? `<div class="text-danger small">${this.esc(env.failure_reason)}</div>` : '';
         const btn = (action, icon, label, color, disabled) =>
-            `<button class="btn btn-sm btn-${color}" data-runner-id="${this.esc(s.runner_session_id)}" data-runner-action="${action}"${disabled ? ' disabled' : ''} title="${this.esc(label)}"><i class="ti ti-${icon}"></i></button>`;
+            `<button class="btn btn-sm btn-${color}" data-runner-id="${this.esc(s.runner_session_id)}" data-runner-task="${this.esc(s.task_id || '')}" data-runner-action="${action}"${disabled ? ' disabled' : ''} title="${this.esc(label)}"><i class="ti ti-${icon}"></i></button>`;
         const watch = s.task_id && !s.stale && s.status === 'running'
             ? `<button class="btn btn-sm btn-azure" data-runner-watch-task="${this.esc(s.task_id)}" title="Watch / Chat"><i class="ti ti-terminal-2 me-1"></i>Watch</button>` : '';
         return `<tr>
@@ -146,18 +146,18 @@
         }
         flash(action === 'kill' ? 'Requesting kill…' : `Requesting ${action}…`);
         const endpoints = {
-            kill: '/ixp/v1/request_runner_kill',
-            snapshot: '/ixp/v1/request_runner_snapshot',
-            health: '/ixp/v1/request_runner_health',
-            logs: '/ixp/v1/request_runner_logs',
-            open: '/ixp/v1/request_runner_open',
-            inject: '/ixp/v1/request_runner_inject',
+            kill: `/api/tasks/${encodeURIComponent(taskId)}/execution/stop`,
+            open: `/api/tasks/${encodeURIComponent(taskId)}/execution/open`,
+            inject: `/api/tasks/${encodeURIComponent(taskId)}/execution/message`,
         };
-        const endpoint = endpoints[action] || '/ixp/v1/request_runner_snapshot';
+        const endpoint = endpoints[action];
+        if (!endpoint) {
+            flash(`${action} is read-only in the task execution view`, 'warning');
+            return;
+        }
         try {
             const body = {
                 project: window.PM_PROJECT || 'maxwell',
-                runner_session_id: runnerId,
                 reason: `operator ${action} from task ${taskId}`,
             };
             if (action === 'inject') {
@@ -380,10 +380,18 @@
         const remembered = String(this._runnerPtyIntentTask || '') === id;
         let watch;
         try {
-            const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`
-                + `&task_id=${encodeURIComponent(id)}`
-                + ((remembered || opts.includeStale) ? '&include_stale=true' : '');
-            watch = await (await fetch(`/ixp/v1/runner_sessions/watch?${q}`)).json();
+            const project = encodeURIComponent(window.PM_PROJECT || 'maxwell');
+            const state = await (await fetch(
+                `/api/tasks/${encodeURIComponent(id)}/execution?project=${project}`,
+                { cache: 'no-store' })).json();
+            const runner = state?.execution?.active_runner || null;
+            watch = {
+                ...state,
+                watchable: !!runner && !state.error && !state.error_code,
+                session: runner,
+                runner_session_id: runner?.runner_session_id || '',
+                sessions: state.has_ended_session ? [{}] : [],
+            };
         } catch (e) {
             if (opts.fallbackIfNotWatchable && !remembered) return false;
             this._runnerPtyShowShell(opts.dockInto);
@@ -445,11 +453,13 @@
             const localTask = (this.tasks || []).find((task) => String(task.task_id || '') === id);
             const taskStatus = String(opts.taskStatus || localTask?.status || '');
             const endedStatuses = new Set(['completed', 'failed', 'cancelled', 'expired', 'lost', 'killed', 'exited']);
-            const ended = currentSession && (
+            const ended = watch?.has_ended_session === true || (currentSession && (
                 currentSession.stale === true
-                || endedStatuses.has(String(currentSession.status || '').toLowerCase()));
-            if (resumeBox) resumeBox.hidden = !(taskStatus === 'In Review' && currentSid && ended);
-            if (resumeButton && taskStatus === 'In Review' && currentSid && ended) {
+                || endedStatuses.has(String(currentSession.status || '').toLowerCase())));
+            const canResumeReview = taskStatus === 'In Review' && ended
+                && watch?.resumable_review !== false;
+            if (resumeBox) resumeBox.hidden = !canResumeReview;
+            if (resumeButton && canResumeReview) {
                 resumeButton.onclick = () => this.resumeTaskReview(id, opts);
             }
             const missing = (watch && watch.missing || []).join(', ') || 'bind fields';
@@ -667,9 +677,11 @@
             const deadline = Date.now() + 30000;
             while (Date.now() < deadline) {
                 await new Promise((resolve) => setTimeout(resolve, 1000));
-                const watch = await fetch(`/ixp/v1/runner_sessions/watch?project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&task_id=${encodeURIComponent(id)}`, { cache: 'no-store' });
-                const state = await watch.json();
-                if (watch.ok && state && state.watchable !== false && !state.error) {
+                const response = await fetch(
+                    `/api/tasks/${encodeURIComponent(id)}/execution?project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`,
+                    { cache: 'no-store' });
+                const state = await response.json();
+                if (response.ok && state?.execution?.active_runner && !state.error) {
                     if (box) box.hidden = true;
                     return this.openRunnerSessionPanel(id, opts || {});
                 }
@@ -1156,7 +1168,12 @@
                 throw new Error(this._runnerPtyApiError(data, `HTTP ${res.status}`));
             }
             if (els.chatInput) els.chatInput.value = '';
-            this._runnerPtyAwaitChatDelivery(data.control_request_id, entry, text);
+            const statusBadge = entry && entry.querySelector('[data-runner-chat-status]');
+            if (statusBadge) {
+                statusBadge.className = 'badge bg-yellow-lt';
+                statusBadge.textContent = 'Queued';
+            }
+            this._runnerPtyGate('Message queued through Task Execution.', 'warning');
         } catch (e) {
             flash(`inject failed: ${e.message}`, 'danger');
             if (els.chatInput && !els.chatInput.value) els.chatInput.value = text;
@@ -1165,43 +1182,6 @@
         }
     },
 
-    async _runnerPtyAwaitChatDelivery(requestId, entry, text) {
-        const rp = this._runnerPty;
-        const statusBadge = entry && entry.querySelector('[data-runner-chat-status]');
-        if (!requestId || !rp) return;
-        const deadline = Date.now() + 30000;
-        while (Date.now() < deadline && this._runnerPty === rp) {
-            try {
-                const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&runner_session_id=${encodeURIComponent(rp.runnerSessionId)}`;
-                const data = await (await fetch(`/ixp/v1/runner_controls?${q}`, { cache: 'no-store' })).json();
-                const request = (data.requests || []).find((item) => item.request_id === requestId);
-                if (request && request.status === 'completed') {
-                    if (statusBadge) {
-                        statusBadge.className = 'badge bg-green-lt';
-                        statusBadge.textContent = 'Delivered';
-                    }
-                    this._runnerPtyGate(`Delivered to ${rp.taskId} · ${rp.runnerSessionId}`, 'green');
-                    return;
-                }
-                if (request && ['failed', 'cancelled', 'refused'].includes(request.status)) {
-                    if (statusBadge) {
-                        statusBadge.className = 'badge bg-red-lt';
-                        statusBadge.textContent = 'Failed';
-                    }
-                    const els = this._runnerPtyEls();
-                    if (els.chatInput && !els.chatInput.value) els.chatInput.value = text;
-                    this._runnerPtyGate(`Message was not delivered: ${(request.result || {}).error || request.status}`, 'danger');
-                    return;
-                }
-            } catch (e) { /* keep waiting; the queued request remains durable */ }
-            await new Promise((resolve) => setTimeout(resolve, 750));
-        }
-        if (statusBadge) {
-            statusBadge.className = 'badge bg-yellow-lt';
-            statusBadge.textContent = 'Queued';
-        }
-        if (this._runnerPty === rp) this._runnerPtyGate('Message queued on the host; delivery confirmation is still pending.', 'warning');
-    },
     };
 
     global.SwitchboardRunnerSession = Object.freeze({ methods });

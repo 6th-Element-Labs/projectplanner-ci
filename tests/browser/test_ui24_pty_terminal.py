@@ -381,11 +381,25 @@ try:
         page.on("pageerror", lambda e: console_errors.append(str(e)))
 
         # ---- fail-closed gate for a task with no runner bind -----------------
+        def _idle_execution(route):
+            route.fulfill(
+                status=200, content_type="application/json",
+                body=json.dumps({
+                    "running": False, "starting": False,
+                    "has_ended_session": False, "resumable_review": False,
+                    "panel": {"state": "idle", "label": "Ready",
+                              "detail": "No execution is active"},
+                    "execution": {"active_runner": None},
+                }),
+            )
+
+        page.route("**/api/tasks/FAKE-TASK-1/execution?**", _idle_execution)
         opened = page.evaluate("TeepPlan.openRunnerSessionPanel('FAKE-TASK-1')")
         ok(opened is True, "openRunnerSessionPanel opens the panel even when not watchable (shows a gate, not a no-op)")
         page.wait_for_timeout(300)
         gate_text = page.locator("#runner-pty-gate").inner_text()
-        ok("runner_bind_incomplete" in gate_text, "the fail-closed gate reason is rendered in the DOM")
+        ok("Ready" in gate_text and "No execution is active" in gate_text,
+           "the fail-closed Task Execution reason is rendered in the DOM")
         panel_visible = page.locator("#runner-pty-panel").is_visible()
         ok(panel_visible, "the sidecar is actually visible, not just present in the DOM")
 
@@ -859,23 +873,22 @@ try:
             # deliberately returns no history. The latest typed refusal still
             # controls the gate message, while the selected runner identity is
             # presentation state that must survive the close/reopen lifecycle.
-            sessions = ([{
-                "runner_session_id": "run_stale_after_reload",
-                "host_id": "host/browser-test",
-                "status": "failed",
-                "stale": True,
-            }] if len(stale_watch_urls) == 1 else [])
             route.fulfill(
                 status=200, content_type="application/json",
                 body=json.dumps({
-                    "watchable": False,
-                    "error_code": "runner_bind_incomplete",
-                    "message": "Session ended after worker failure",
-                    "sessions": sessions,
+                    "running": False,
+                    "has_ended_session": len(stale_watch_urls) == 1,
+                    "resumable_review": False,
+                    "panel": {
+                        "state": "ended",
+                        "label": "Ended",
+                        "detail": "Session ended after worker failure",
+                    },
+                    "execution": {"active_runner": None},
                 }),
             )
 
-        page.route("**/ixp/v1/runner_sessions/watch?**", _stale_watch)
+        page.route("**/api/tasks/FAKE-TASK-1/execution?**", _stale_watch)
         page.evaluate("() => { TeepPlan._runnerPtyIntentTask = null; }")
         page.locator('.mission-dag-node[data-linked-task="FAKE-TASK-1"]').click()
         page.wait_for_timeout(300)
@@ -887,12 +900,12 @@ try:
                 nodeModalOpen: document.getElementById('dl-node-modal').classList.contains('show'),
             })
         """)
-        ok(len(stale_watch_urls) == 1 and "include_stale=true" in stale_watch_urls[0],
-           "a first dependency-box click after reload explicitly discovers stale runner history")
+        ok(len(stale_watch_urls) == 1,
+           "a first dependency-box click asks Task Execution for authoritative history")
         ok(fresh_stale_open["visible"]
-           and "run_stale_after_reload" in fresh_stale_open["title"]
+           and "FAKE-TASK-1" in fresh_stale_open["title"]
            and "Session ended after worker failure" in fresh_stale_open["gate"],
-           "the discovered stale runner opens a truthful runner window on the first click")
+           "server-reported ended history opens a truthful runner window on the first click")
         ok(not fresh_stale_open["nodeModalOpen"],
            "fresh stale-runner discovery does not fall through to the authoring modal")
 
@@ -911,8 +924,8 @@ try:
                 nodeModalOpen: document.getElementById('dl-node-modal').classList.contains('show'),
             })
         """)
-        ok(len(stale_watch_urls) == 2 and "include_stale=true" in stale_watch_urls[1],
-           "reopening a closed stale runner performs the authoritative stale lookup")
+        ok(len(stale_watch_urls) == 2,
+           "reopening a closed task performs the authoritative execution lookup")
         # BUG-91: the reopen keeps the operator on the runner surface because the
         # TASK intent survived — not because a runner id was memoised. When the
         # authoritative lookup reports no session, the panel must not resurrect
@@ -924,7 +937,7 @@ try:
            "an empty authoritative lookup never resurrects the previously-shown runner identity")
         ok(not stale_reopen_after_empty_lookup["nodeModalOpen"],
            "an empty follow-up lookup does not fall through to the authoring modal")
-        page.unroute("**/ixp/v1/runner_sessions/watch?**", _stale_watch)
+        page.unroute("**/api/tasks/FAKE-TASK-1/execution?**", _stale_watch)
         page.evaluate("() => TeepPlan._runnerPtyClose()")
 
         # ---- a NEWER live runner always outranks the one last shown ----------
@@ -942,14 +955,12 @@ try:
                 route.fulfill(
                     status=200, content_type="application/json",
                     body=json.dumps({
-                        "watchable": False,
-                        "error_code": "runner_bind_incomplete",
-                        "message": "Runner session is stale; Watch/Chat refused until a live bind exists",
-                        "runner_session_id": "run_old_dead_attempt",
-                        "sessions": [{
-                            "runner_session_id": "run_old_dead_attempt",
-                            "host_id": "host/i-old", "status": "expired", "stale": True,
-                        }],
+                        "running": False,
+                        "has_ended_session": True,
+                        "resumable_review": False,
+                        "panel": {"state": "ended", "label": "Ended",
+                                  "detail": "The prior execution ended"},
+                        "execution": {"active_runner": None},
                     }),
                 )
                 return
@@ -958,20 +969,17 @@ try:
             route.fulfill(
                 status=200, content_type="application/json",
                 body=json.dumps({
-                    "watchable": True,
-                    "runner_session_id": "run_new_live_attempt",
-                    "task_id": "FAKE-TASK-1",
-                    "bind": {"host_id": "host/i-new"},
-                    "sessions": [
-                        {"runner_session_id": "run_new_live_attempt",
-                         "host_id": "host/i-new", "status": "running", "stale": False},
-                        {"runner_session_id": "run_old_dead_attempt",
-                         "host_id": "host/i-old", "status": "expired", "stale": True},
-                    ],
+                    "running": True,
+                    "has_ended_session": False,
+                    "resumable_review": False,
+                    "execution": {"active_runner": {
+                        "runner_session_id": "run_new_live_attempt",
+                        "host_id": "host/i-new", "status": "running",
+                    }},
                 }),
             )
 
-        page.route("**/ixp/v1/runner_sessions/watch?**", _newer_runner_watch)
+        page.route("**/api/tasks/FAKE-TASK-1/execution?**", _newer_runner_watch)
         # Same hermetic handoff as the Resume-review case below: this test proves
         # WHICH runner gets selected, not the already-covered relay handshake.
         # Without this the mocked live runner would ask the throwaway server for
@@ -991,8 +999,8 @@ try:
         page.wait_for_timeout(300)
         pinned_to_dead = page.evaluate(
             "() => document.getElementById('runner-pty-title').textContent")
-        ok("run_old_dead_attempt" in pinned_to_dead,
-           "the first click shows the only runner that exists — the dead attempt")
+        ok("FAKE-TASK-1" in pinned_to_dead and "run_old_dead_attempt" not in pinned_to_dead,
+           "the first click shows task history without selecting a dead runner identity")
 
         page.get_by_role("button", name="Close Watch/Chat").click()
         page.wait_for_timeout(300)
@@ -1012,7 +1020,7 @@ try:
            "the live PTY session object is the newer runner, so Watch/Chat attaches to the real process")
         ok(after_newer["intent"] == "FAKE-TASK-1",
            "only the task intent persisted across the close/reopen")
-        page.unroute("**/ixp/v1/runner_sessions/watch?**", _newer_runner_watch)
+        page.unroute("**/api/tasks/FAKE-TASK-1/execution?**", _newer_runner_watch)
         page.evaluate("""
             () => {
                 if (window.__ui24SavedConnect) TeepPlan._runnerPtyConnect = window.__ui24SavedConnect;
@@ -1028,30 +1036,27 @@ try:
             review_watch_calls.append(route.request.url)
             if len(review_watch_calls) == 1:
                 body = {
-                    "watchable": False,
-                    "error_code": "runner_bind_incomplete",
-                    "message": "Review runner crashed",
-                    "sessions": [{
-                        "runner_session_id": "run_ui48_dead",
-                        "host_id": "host/browser-test",
-                        "status": "failed",
-                        "stale": True,
-                    }],
+                    "running": False,
+                    "has_ended_session": True,
+                    "resumable_review": True,
+                    "panel": {"state": "ended", "label": "Ended",
+                              "detail": "Review runner crashed"},
+                    "execution": {"active_runner": None},
                 }
             else:
                 body = {
-                    "watchable": True,
-                    "runner_session_id": "run_ui48_replacement",
-                    "bind": {"host_id": "host/browser-test"},
-                    "session": {
+                    "running": True,
+                    "has_ended_session": False,
+                    "resumable_review": False,
+                    "execution": {"active_runner": {
                         "runner_session_id": "run_ui48_replacement",
                         "host_id": "host/browser-test",
                         "status": "running",
-                    },
+                    }},
                 }
             route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
 
-        page.route("**/ixp/v1/runner_sessions/watch?**", _review_watch)
+        page.route("**/api/tasks/FAKE-TASK-1/execution?**", _review_watch)
         def _resume_review(route):
             resume_requests.append(json.loads(route.request.post_data or "{}"))
             route.fulfill(
@@ -1154,7 +1159,7 @@ try:
         page.evaluate("() => document.getElementById('ui50-task-modal-runner-fixture').remove()")
         page.unroute("**/api/tasks/FAKE-TASK-1/execution?**", _review_execution)
         page.unroute("**/api/tasks/FAKE-TASK-1/start**", _resume_review)
-        page.unroute("**/ixp/v1/runner_sessions/watch?**", _review_watch)
+        page.unroute("**/api/tasks/FAKE-TASK-1/execution?**", _review_watch)
         page.evaluate("() => TeepPlan._runnerPtyClose()")
 
         ok(not console_errors, f"no uncaught console/page errors during the whole flow (got: {console_errors})")

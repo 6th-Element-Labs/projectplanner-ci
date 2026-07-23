@@ -456,21 +456,6 @@ def verify_and_record_closure(
 #: (and the mission UI) can recognise a closure-verification hand-off.
 CLOSURE_VERIFICATION_SIGNAL = "deliverable.closure_verification"
 
-#: Runtime the verifier agent runs on. Same fleet runtime as task dispatch.
-_VERIFIER_RUNTIME = "claude-code"
-
-
-def _work_hosts_online(project: str) -> int:
-    """Count work-capable hosts for ``project`` so the caller can say "queued,
-    waiting for a work host" instead of implying the verifier started. Reuses the
-    task-dispatch host detection; any error is a defensive 0 (never a false ready)."""
-    try:
-        import dispatch  # lazy: dispatch imports store, avoid an import cycle at module load
-        return int(dispatch.status(project).get("work_hosts_online") or 0)
-    except Exception:
-        return 0
-
-
 def gate_manifest(resolved: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Compact, prompt-friendly view of a deliverable's resolved gates: identity and
     how each is proven, without the command/env internals the verifier re-resolves.
@@ -550,21 +535,18 @@ def request_closure_verification(
     waivers: Optional[List[Dict[str, Any]]] = None,
     idem_key: str = "",
 ) -> Dict[str, Any]:
-    """Operator "Verify & stamp closure" dispatch (DELIVERABLES-17).
+    """Store a durable closure-verification request in the verifier mailbox.
 
     Assembles the deliverable's context, its resolved scope+functional gate list,
-    and a closure prompt template, then dispatches a verifier agent: a directed
-    inbox message carries the prompt/context and a lane-less ``message_only`` wake
-    rouses the verifier to drain it (never a claim_next task grab — see
-    ``adapters/agent_host.wake_mode``). The verifier runs the gates and records a
+    and a closure prompt template, then sends a directed inbox message. Messages
+    are communication only: they never create an execution or wake an offline
+    recipient. The verifier runs the gates and records a
     graded report through :func:`verify_and_record_closure` (DELIVERABLES-16); it
     never marks the deliverable done.
 
     Returns a dispatch record, or ``{"error": ...}`` (missing deliverable, malformed
     ``proof_requirements``, or invalid waivers) mirroring the store's error
-    convention. Servicing needs a work-capable host online for the runtime;
-    otherwise the wake queues (``work_hosts_online``/``queued`` surface that),
-    exactly as :func:`dispatch.dispatch` does for tasks."""
+    convention."""
     deliverable = store.get_deliverable(deliverable_id, project=project)
     if not deliverable:
         return {"error": f"deliverable {deliverable_id!r} not found on project {project!r}",
@@ -585,52 +567,30 @@ def request_closure_verification(
     gates = gate_manifest(resolved)
     prompt = build_closure_prompt(deliverable, gates, project=project, waivers=waiver_list)
     verifier_agent = (agent_id or "").strip() or f"verifier/closure/{deliverable_id}"
-    # Idempotency dedupes a double-clicked button. It keys on the target agent so
-    # re-dispatching the same deliverable to a *different* verifier is a distinct
-    # intent, not an idempotency conflict (_idem_hit rejects a key reused with a
-    # different payload). Default target is stable per deliverable, so a repeat is a
-    # clean hit that returns the same wake/message.
+    # Idempotency dedupes a double-clicked button while allowing a distinct
+    # verifier to receive its own durable mailbox request.
     base_idem = (idem_key or "").strip() or f"closure-verify:{project}:{deliverable_id}:{verifier_agent}"
 
-    # 1. Deliver the prompt + context to the verifier's mailbox. It is stored even if
-    #    no agent is registered under that id yet (mailbox_stored); the verifier drains
-    #    it on wake. requires_ack stays off so a queued dispatch raises no ack-timeout.
+    # Delivery is durable even if no agent is currently registered.
     message = store.send_agent_message(
         from_agent="switchboard/closure", to_agent=verifier_agent, message=prompt,
         requires_ack=False, signal=CLOSURE_VERIFICATION_SIGNAL, priority=1,
         project=project, idem_key=f"{base_idem}:msg")
     message_id = message.get("id")
 
-    # 2. Rouse the verifier. Lane-less + mode=message_only => the Agent Host launches it
-    #    inbox-only, so an unknown "closure_verification" job never becomes a task claim.
     gate_ids = [g["id"] for g in gates]
-    wake = store.request_wake(
-        selector={"runtime": _VERIFIER_RUNTIME, "agent_id": verifier_agent},
-        reason=f"Verify & stamp closure for {deliverable_id}",
-        source=f"ui:{actor}",
-        policy={"mode": "message_only", "kind": "closure_verification",
-                "deliverable_id": deliverable_id, "project": project,
-                "gate_ids": gate_ids, "message_id": message_id, "waivers": waiver_list},
-        actor=actor, project=project, idem_key=base_idem)
-    wake_id = wake.get("wake_id")
-    if wake.get("error") or not wake_id:
-        return {"dispatched": False, "deliverable_id": deliverable_id, "project": project,
-                "agent_id": verifier_agent, "message_id": message_id,
-                "error": wake.get("error") or wake.get("reason") or "wake not created"}
-
-    # 3. Stamp the deliverable activity feed (task_id=None => deliverable-scoped) so the
-    #    dispatch is legible on the mission header (DELIVERABLES-18 reads this).
     store.append_activity(
         "deliverable.closure_verification_requested", actor,
         {"deliverable_id": deliverable_id, "project": project, "agent_id": verifier_agent,
-         "wake_id": wake_id, "message_id": message_id, "gate_ids": gate_ids},
+         "message_id": message_id, "gate_ids": gate_ids,
+         "delivery_status": message.get("delivery_status")},
         project=project)
 
-    hosts = _work_hosts_online(project)
     return {
-        "dispatched": True, "deliverable_id": deliverable_id, "project": project,
-        "agent_id": verifier_agent, "wake_id": wake_id, "wake_status": wake.get("status"),
+        "requested": True, "dispatched": False,
+        "deliverable_id": deliverable_id, "project": project,
+        "agent_id": verifier_agent,
         "message_id": message_id, "delivery_status": message.get("delivery_status"),
         "signal": CLOSURE_VERIFICATION_SIGNAL, "gates": gates, "prompt": prompt,
-        "work_hosts_online": hosts, "queued": hosts == 0,
+        "execution_started": False,
     }

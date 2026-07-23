@@ -44,7 +44,8 @@ for route in (
 ):
     ok(route in surf, f"thin surface lists {route}")
 ok("/api/people" in surf or "people" in surf.lower(), "thin surface excludes people (noted)")
-ok("coordinator_dispatch" in surf, "thin surface keeps write dispatch off day-one")
+ok("No project-wide coordinator dispatch route exists" in surf,
+   "thin surface records deletion of project-wide write dispatch")
 ok("PM_COORD_HTTP_PRIMARY" in surf or "dual-strip" in surf.lower(),
    "thin surface names dual-strip analogue")
 
