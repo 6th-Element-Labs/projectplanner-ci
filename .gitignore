@@ -25,3 +25,11 @@ teep-project-plan.xml
 
 # macOS filesystem cruft
 .DS_Store
+
+# Agent worktrees. The fleet creates a per-task git worktree inside the shared
+# checkout, so the repo root can hold gigabytes of working copies of itself. They
+# are checkouts, not source: a single `git add -A` would otherwise commit the
+# whole fleet's in-flight work. `.claude/worktrees/` was previously covered only
+# by .git/info/exclude, which is per-clone and never shared.
+.worktrees/
+**/.claude/worktrees/
