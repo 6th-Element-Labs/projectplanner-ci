@@ -7,7 +7,7 @@ import os
 import tempfile
 from pathlib import Path
 
-import path_setup  # noqa: F401
+from path_setup import ROOT  # noqa: F401 — makes repo-root / src modules importable
 
 TMP = tempfile.mkdtemp(prefix="access28-scm-")
 os.environ["PM_DB_PATH"] = str(Path(TMP) / "maxwell.db")
