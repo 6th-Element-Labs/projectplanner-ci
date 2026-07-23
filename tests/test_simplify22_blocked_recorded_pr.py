@@ -5,6 +5,8 @@ import os
 import tempfile
 import unittest
 
+from path_setup import ROOT  # noqa: F401
+
 _TMP = tempfile.mkdtemp(prefix="simplify22-blocked-pr-")
 os.environ["PM_DB_PATH"] = os.path.join(_TMP, "maxwell.db")
 os.environ["PM_SWITCHBOARD_DB_PATH"] = os.path.join(_TMP, "switchboard.db")
