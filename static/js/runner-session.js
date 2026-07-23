@@ -109,7 +109,7 @@
         const logTail = env.log_tail ? `<div class="text-secondary small text-truncate" style="max-width:220px" title="${this.esc(env.log_tail)}">${this.esc(env.log_tail.split('\n').slice(-1)[0])}</div>` : '';
         const failure = env.failure_reason ? `<div class="text-danger small">${this.esc(env.failure_reason)}</div>` : '';
         const btn = (action, icon, label, color, disabled) =>
-            `<button class="btn btn-sm btn-${color}" data-runner-id="${this.esc(s.runner_session_id)}" data-runner-action="${action}"${disabled ? ' disabled' : ''} title="${this.esc(label)}"><i class="ti ti-${icon}"></i></button>`;
+            `<button class="btn btn-sm btn-${color}" data-runner-id="${this.esc(s.runner_session_id)}" data-runner-task="${this.esc(s.task_id || '')}" data-runner-action="${action}"${disabled ? ' disabled' : ''} title="${this.esc(label)}"><i class="ti ti-${icon}"></i></button>`;
         const watch = s.task_id && !s.stale && s.status === 'running'
             ? `<button class="btn btn-sm btn-azure" data-runner-watch-task="${this.esc(s.task_id)}" title="Watch / Chat"><i class="ti ti-terminal-2 me-1"></i>Watch</button>` : '';
         return `<tr>

@@ -54,6 +54,8 @@ ok("new WebSocket(" in RUNNER_SESSION, "a real browser WebSocket connects to the
 # attaches the host tunnel, and mints the ticket.
 ok("/execution/open" in RUNNER_SESSION,
    "the terminal opens through the task-scoped open_session command")
+ok("data-runner-task=" in RUNNER_SESSION,
+   "shared Fleet runner controls carry the task id required by Task Execution")
 ok("/pty/ticket" not in RUNNER_SESSION,
    "the browser no longer mints its own relay ticket for a self-chosen runner")
 ok("request_runner_open" not in RUNNER_SESSION,
