@@ -385,6 +385,33 @@ def create_router(*, resolve_project: ProjectResolver,
                 raise HTTPException(404, "task not found")
             return {"deleted": task_id}
 
+        @router.post("/api/tasks/{task_id}/autopilot")
+        async def control_task_autopilot(request: Request, task_id: str,
+                                         body: dict = Body(default={}),
+                                         project: str = Query(...)):
+            """Control the Autopilot scope of a task started on its own.
+
+            The deliverable-nested route cannot address a task scope that has no
+            deliverable, which left such a scope armable but not stoppable. A task
+            scope is named by its task; ARCH-MS-16 puts /api/tasks here.
+            """
+            from switchboard.application.commands import autopilot as autopilot_command
+            project = resolve_project(project)
+            principal = resolve_principal(
+                request, project, ("write:tasks",), dev_actor="web")
+            body = body or {}
+            result = autopilot_command.execute_mapping_result(
+                "control_autopilot", "", project=project,
+                action=body.get("action") or "start", scope_type="task",
+                task_project=body.get("task_project") or project, task_id=task_id,
+                runtime=body.get("runtime") or "codex",
+                profile_id=body.get("profile_id") or "autopilot-default",
+                actor=auth.actor(principal), agent_id=body.get("agent_id") or "")
+            if result.get("error"):
+                raise HTTPException(
+                    autopilot_command.error_status(result), result)
+            return result
+
         @router.post("/api/tasks/{task_id}/archive")
         async def archive_task(request: Request, task_id: str,
                                body: dict = Body(default={}), project: str = Query(...)):
