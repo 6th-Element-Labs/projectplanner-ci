@@ -132,5 +132,17 @@ ok("worktree_missing" in _codes(r2) and _verdict(r2) == "deny",
 ok(_health(r2).get("status") == "unsafe",
    "a genuinely missing managed workspace still marks the session unsafe")
 
+# 4. A real, present local worktree still gets a genuine verified preflight --
+#    the fix must not short-circuit paths the coordinator CAN actually inspect.
+present = os.path.join(MANAGED_ROOT, "switchboard", "BUG159C", "wt")
+os.makedirs(present, exist_ok=True)
+s3 = _session("BUG159C", "claude/BUG-159c", "worksession-bug159c",
+              "env-mcp-token", present)
+r3 = store.preflight_work_session(s3["work_session_id"], actor="env-mcp-token",
+                                  project=P, expected_branch=s3["branch"])
+ok("worktree_missing" not in _codes(r3) and
+   (r3.get("preflight") or {}).get("unverifiable") is not True,
+   "an existing local path is really inspected, not shortcut to unverifiable")
+
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
