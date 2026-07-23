@@ -18,7 +18,11 @@ EnvironmentFile=/opt/projectplanner/.env
 Environment=PM_SQLITE_MMAP_BYTES=0
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PM_COORDINATOR_AUTOPILOT_PROJECTS=switchboard
-Environment=PM_COORDINATOR_AUTOPILOT_ACT=0
+# ADR-0008 W2: the scoped completion coordinator drives operator-armed
+# scopes to Done. ACT=1 is the default; work only moves when an operator
+# Starts a task or deliverable, and dormant scopes stay dormant until then.
+# Emergency dry-run rollback: set to 0 and restart this unit.
+Environment=PM_COORDINATOR_AUTOPILOT_ACT=1
 Environment=PM_COORDINATOR_AUTOPILOT_MAX_DELIVERABLES=64
 Environment=PM_COORDINATOR_AUTOPILOT_MAX_TASKS_PER_SCOPE=64
 RuntimeDirectory=projectplanner
