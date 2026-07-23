@@ -1888,59 +1888,63 @@ def reap_finished_or_idle_runners(inventory, *, now=None):
                 reason = "idle_timeout"
         if not reason or now - activity_at < threshold_s:
             continue
-        killed = supervisor_action("kill", runner_id, {
-            "reason": reason,
-            "task_id": task_id,
-        })
-        kill_ok = bool(killed and not killed.get("error")
-                       and killed.get("alive") is not True)
-        if not kill_ok:
-            outcomes.append({"runner_session_id": runner_id, "task_id": task_id,
-                             "reason": reason, "reaped": False,
-                             "error": (killed or {}).get("error")})
-            continue
-        _drop_host_bridge(runner_id)
-        metadata = dict(session.get("metadata") or {})
-        terminal = _try("POST", P_HEARTBEAT_RUNNER, {
-            "project": PROJECT,
-            "runner_session_id": runner_id,
-            "host_id": host_id,
-            "task_id": task_id,
-            "claim_id": session.get("claim_id") or "",
-            "agent_id": session.get("agent_id") or f"codex/{task_id}",
-            "status": terminal_status,
-            "metadata": {**metadata, "terminalized_by": "session_reaper",
-                         "reaped_reason": reason, "reaped_at": now,
-                         "last_output_at": output_at},
-        })
-        terminal_ok = bool(terminal and not terminal.get("error"))
-        wake_id = str(metadata.get("wake_id") or session.get("wake_id") or "")
-        wake_completed = False
-        if wake_id and terminal_ok:
-            completion = _try("POST", P_COMPLETE_WAKE, {
-                "project": PROJECT,
-                "wake_id": wake_id,
-                "runner_session_id": runner_id,
-                "agent_id": session.get("agent_id") or f"codex/{task_id}",
-                "result": {"started": True, "reaped": True, "reason": reason,
-                           "runner_session_id": runner_id, "task_id": task_id,
-                           "host_id": host_id},
-            })
-            wake_completed = bool(completion and not completion.get("error")
-                                  and not completion.get("error_code"))
         outcomes.append({"runner_session_id": runner_id, "task_id": task_id,
-                         "reason": reason, "reaped": terminal_ok,
-                         "wake_completed": wake_completed,
-                         "error": None if terminal_ok else (terminal or {}).get("error")})
+                         "reason": reason, "reaped": False,
+                         "observe_only": True,
+                         "error": "lease expiry is the only kill authority"})
+    return outcomes
+
+
+def expire_runner_leases(inventory, *, now=None):
+    """Enforce the single process-stop clock: the renewable runner lease.
+
+    Deployments begin in observe-only mode. Set PM_RUNNER_LEASE_ENFORCEMENT=1
+    after the 24-hour observation window to allow expired leases to stop their
+    supervised process. No task/claim/ack/idle state participates.
+    """
+    now = time.time() if now is None else float(now)
+    enforce = _truthy(os.environ.get("PM_RUNNER_LEASE_ENFORCEMENT"))
+    host_id = str((inventory or {}).get("host_id") or "")
+    outcomes = []
+    for session in _drain_runners(host_id):
+        if session.get("alive") is not True or not session.get("stale"):
+            continue
+        runner_id = str(session.get("runner_session_id") or "")
+        task_id = str(session.get("task_id") or "")
+        outcome = {"runner_session_id": runner_id, "task_id": task_id,
+                   "reason": "runner_lease_expired", "would_expire": not enforce}
+        if not enforce:
+            outcomes.append(outcome)
+            continue
+        stopped = supervisor_action("kill", runner_id, {
+            "reason": "runner heartbeat lease expired", "task_id": task_id})
+        ok = bool(stopped and not stopped.get("error") and stopped.get("alive") is not True)
+        if ok:
+            _drop_host_bridge(runner_id)
+            metadata = dict(session.get("metadata") or {})
+            terminal = _try("POST", P_HEARTBEAT_RUNNER, {
+                "project": PROJECT, "runner_session_id": runner_id,
+                "host_id": host_id, "task_id": task_id,
+                "claim_id": session.get("claim_id") or "",
+                "agent_id": session.get("agent_id") or f"codex/{task_id}",
+                "status": "expired",
+                "metadata": {**metadata, "terminalized_by": "runner_lease_expiry",
+                             "lease_expired_at": now,
+                             "failure_reason": "runner heartbeat lease expired"},
+            })
+            outcome["expired"] = bool(terminal and not terminal.get("error"))
+        else:
+            outcome["expired"] = False
+            outcome["error"] = (stopped or {}).get("error")
+        outcomes.append(outcome)
     return outcomes
 
 
 def converge_terminal_task_runners(inventory, heartbeat):
-    """Kill and acknowledge processes whose tasks are already terminal.
+    """Refuse legacy terminal-task kill directives for a live process.
 
-    The server repeats a directive until this host publishes the terminal
-    runner heartbeat, making cleanup idempotent across a lost response or host
-    restart. Supervisor logs and PTY metadata are retained.
+    Kept temporarily as a compatibility boundary while old servers drain.
+    Only an already-exited runner may be acknowledged; lease expiry owns kills.
     """
     host_id = str((inventory or {}).get("host_id") or "")
     cleanup = (heartbeat or {}).get("terminal_runner_cleanup") or {}
@@ -1953,10 +1957,9 @@ def converge_terminal_task_runners(inventory, heartbeat):
             continue
         health = supervisor_action("health", runner_session_id)
         alive = bool(health and not health.get("error") and health.get("alive"))
-        killed = supervisor_action("kill", runner_session_id, {
-            "reason": directive.get("reason") or "task is terminal",
-            "task_id": task_id,
-        }) if alive else {"status": "already_exited", "alive": False}
+        killed = ({"status": "observed_only", "alive": alive,
+                   "error": "lease expiry is the only kill authority"}
+                  if alive else {"status": "already_exited", "alive": False})
         kill_ok = not killed.get("error") and killed.get("alive") is not True
         if kill_ok:
             _drop_host_bridge(runner_session_id)
@@ -2472,7 +2475,8 @@ def _finalize_bound_runner(wake, inventory, runner_session_id, rec):
         started = False
         reason = "runner_stream_not_ready"
     if not started:
-        supervisor_action("kill", runner_session_id, {"grace_seconds": 2.0})
+        supervisor_action("kill", runner_session_id, {
+            "grace_seconds": 2.0, "reason": "spawn failed before runner binding"})
         failed_rec = {
             **(rec or {}),
             "runner_session_id": runner_session_id,
@@ -2500,7 +2504,8 @@ def _finalize_bound_runner(wake, inventory, runner_session_id, rec):
             reason = ((runner_registration or {}).get("error_code")
                       or (runner_registration or {}).get("error")
                       or "runner_bind_registration_failed")
-            supervisor_action("kill", runner_session_id, {"grace_seconds": 2.0})
+            supervisor_action("kill", runner_session_id, {
+                "grace_seconds": 2.0, "reason": reason})
             failed_rec = {
                 **(rec or {}),
                 "runner_session_id": runner_session_id,
@@ -2598,7 +2603,8 @@ def _submit_bound_finalizer(wake, inventory, runner_session_id, rec):
         except Exception as exc:
             # A background exception must still fail closed and release the
             # durable wake instead of silently stranding it as claimed.
-            supervisor_action("kill", runner_session_id, {"grace_seconds": 2.0})
+            supervisor_action("kill", runner_session_id, {
+                "grace_seconds": 2.0, "reason": "runner bind finalizer failed"})
             result = {
                 "started": False,
                 "runner_session_id": runner_session_id,
@@ -2750,15 +2756,8 @@ def run_once(inventory):
         advertised = _try("POST", P_REGISTER_HOST, registration_inventory(inventory))
         apply_authoritative_execution_policy(inventory, advertised)
         capacity = heartbeat_capacity(inventory)
-    terminal_runner_cleanup = converge_terminal_task_runners(inventory, heartbeat)
-    if terminal_runner_cleanup:
-        capacity = heartbeat_capacity(inventory)
-        heartbeat = _try("POST", P_HEARTBEAT_HOST, {
-            "project": PROJECT, "host_id": host_id,
-            "active_sessions": capacity["active_sessions"], "capacity": capacity,
-        }) or heartbeat
-    reaped_runners = reap_finished_or_idle_runners(inventory)
-    if reaped_runners:
+    expired_runner_leases = expire_runner_leases(inventory)
+    if expired_runner_leases:
         capacity = heartbeat_capacity(inventory)
     runner_heartbeats = renew_live_direct_runners(inventory)
     local_auth = capacity.get("local_auth")
@@ -2770,8 +2769,7 @@ def run_once(inventory):
             "refused": [],
             "runner_controls": [],
             "runner_heartbeats": runner_heartbeats,
-            "terminal_runner_cleanup": terminal_runner_cleanup,
-            "reaped_runners": reaped_runners,
+            "expired_runner_leases": expired_runner_leases,
             "auth_available": False,
         }
     recovery = None
@@ -2802,8 +2800,7 @@ def run_once(inventory):
             "acted": finalized,
             "refused": [],
             "runner_controls": [],
-            "terminal_runner_cleanup": terminal_runner_cleanup,
-            "reaped_runners": reaped_runners,
+            "expired_runner_leases": expired_runner_leases,
             "postprocessing_recovery": recovery,
         }
     controls = handle_runner_controls(inventory)
@@ -2947,7 +2944,8 @@ def run_once(inventory):
                     "direct_runner_registration_failed" if not registered
                     else "direct_complete_wake_failed"
                 )
-                supervisor_action("kill", runner_session_id, {"grace_seconds": 2.0})
+                supervisor_action("kill", runner_session_id, {
+                    "grace_seconds": 2.0, "reason": failure_reason})
                 failed_rec = {
                     **(rec or {}),
                     "runner_session_id": runner_session_id,
@@ -3156,15 +3154,14 @@ def run_once(inventory):
                     not runner_registration
                     or runner_registration.get("error")
                     or runner_registration.get("error_code")):
-                supervisor_action(
-                    "kill", (rec or {}).get("runner_session_id") or runner_session_id,
-                    {"grace_seconds": 2.0},
-                )
                 rec = {
                     **(rec or {}),
                     "failure_class": "failed_gate",
                     "provider_error": "Connect runner registry rejected the launch",
                 }
+                supervisor_action("kill", runner_session_id, {
+                    "grace_seconds": 2.0,
+                    "reason": "connect runner registration failed"})
                 started = False
                 result_reason = "connect_runner_registration_failed"
             # COORD-34: non-BYOA claimed-task boots must publish a successful bind
@@ -3179,6 +3176,8 @@ def run_once(inventory):
                         or (runner_registration or {}).get("error")
                         or "runner_bind_incomplete"
                     )
+                    supervisor_action("kill", runner_session_id, {
+                        "grace_seconds": 2.0, "reason": result_reason})
                 else:
                     result_reason = "started"
             else:
@@ -3224,8 +3223,7 @@ def run_once(inventory):
             "refused": refused,
             "runner_controls": controls,
             "runner_heartbeats": runner_heartbeats,
-            "terminal_runner_cleanup": terminal_runner_cleanup,
-            "reaped_runners": reaped_runners,
+            "expired_runner_leases": expired_runner_leases,
             "postprocessing_recovery": recovery}
 
 

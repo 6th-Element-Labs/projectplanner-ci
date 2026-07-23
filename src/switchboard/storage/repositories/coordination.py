@@ -401,9 +401,11 @@ def _insert_wake_intent(c: sqlite3.Connection, selector: Dict[str, Any],
                         task_id: Optional[str], principal_id: str, actor: str,
                         now: float, project: str, idem_key: str = "",
                         effect_key: str = "", wake_id: str = "") -> Dict[str, Any]:
+    # Every wake is a lease.  A missing caller deadline used to mean "queue
+    # forever", which made no_eligible_host=wait an unbounded hidden state.
     deadline_s = (policy.get("deadline_seconds") or policy.get("claim_timeout_s") or
-                  policy.get("ttl_s"))
-    deadline = now + float(deadline_s) if deadline_s else None
+                  policy.get("ttl_s") or 15 * 60)
+    deadline = now + float(deadline_s)
     personal = (policy.get("execution_mode") == "personal_agent_host"
                 or policy.get("require_exact_host_binding") is True)
     hybrid = str((policy.get("scheduler") or {}).get("mode") or "") == "hybrid"
@@ -3233,9 +3235,6 @@ def heartbeat_host(host_id: str, active_sessions: Optional[int] = None,
                 (now, json.dumps(current, sort_keys=True), status or "online",
                  last_error or None, reported_host_version, reported_host_version, host_id),
             )
-            from .runner import terminal_task_cleanup_for_host_in
-            terminal_cleanup = terminal_task_cleanup_for_host_in(
-                c, host_id, actor, now)
             c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                       (None, actor, "agent_host.heartbeat",
                        json.dumps({"host_id": host_id, "capacity": current,
@@ -3246,7 +3245,6 @@ def heartbeat_host(host_id: str, active_sessions: Optional[int] = None,
             return _control_plane_unavailable("heartbeat_host", project, started_at, exc)
         raise
     result = _host_row(row, now=now)
-    result["terminal_runner_cleanup"] = terminal_cleanup
     if identity.get("required"):
         result["authoritative_execution_policy"] = dict(
             identity.get("execution_policy") or {})

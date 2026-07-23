@@ -150,6 +150,18 @@ The horizons, so this document is also the master plan of record:
 
 ## Consequences
 
+### SIMPLIFY-17 accounting — one execution clock
+
+Phase 1 removes three autonomous stop authorities: the Agent Host claim/idle reaper, the
+review-steward acknowledgement-timeout replacement, and terminal-task cleanup. One authority
+replaces them: expiry of the renewable runner heartbeat lease. Wake intents use the same model
+and always receive a deadline. Lease enforcement deploys observe-only for 24 hours
+(`PM_RUNNER_LEASE_ENFORCEMENT=0`, the default) before an operator enables enforcement.
+
+- Kill mechanisms deleted: **3**
+- Kill mechanisms added: **1**
+- Net authority reduction: **2**
+
 - Some redundancy that occasionally caught real issues is deliberately removed; the two-path
   backstop plus prevention layer is judged sufficient, and the Helm sprint is the test.
 - Parked ≠ deleted: RECON-8/9 code stays but receives zero investment; the post-sprint review

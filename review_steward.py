@@ -427,39 +427,31 @@ def _execute_action(action: Mapping[str, Any], *, project: str, actor: str,
                             superseded.get("error") or superseded.get("reason")
                             or "timed-out review instruction could not be superseded")
                     else:
-                        replacement = task_retrier(
-                            task_id, project=project, actor=actor, role="review_merge",
-                            source_sha=head_sha, instruction=prompt,
-                            reason="review instruction acknowledgement timed out")
+                        # Ack deadlines are delivery observations, never process
+                        # ownership. Retry the instruction once on the same live
+                        # runner, then fail loudly; lease expiry is the sole kill
+                        # authority.
+                        retry_message = task_messenger(
+                            task_id, prompt, project=project, actor=actor)
                         result["effects"].append({
-                            "kind": "retry_task", "payload": replacement})
-                        if (replacement.get("action") == "superseding"
-                                and runner_terminal_waiter is not None):
-                            terminal = runner_terminal_waiter(
-                                task_id, project=project,
-                                timeout_s=review_restart_timeout_s)
-                            result["effects"].append({
-                                "kind": "await_runner_terminal", "payload": terminal})
-                            if terminal.get("terminal"):
-                                replacement = task_retrier(
-                                    task_id, project=project, actor=actor,
-                                    role="review_merge", source_sha=head_sha,
-                                    instruction=prompt,
-                                    reason="start fresh exact-head review generation")
-                                result["effects"].append({
-                                    "kind": "start_fresh_review", "payload": replacement})
-                        if replacement.get("started"):
-                            result["status"] = "new_generation_started"
+                            "kind": "retry_review_instruction", "payload": retry_message})
+                        retry_id = str(retry_message.get("control_request_id") or "").strip()
+                        retry_ack = (control_request_waiter(
+                            retry_id, project=project, timeout_s=review_ack_timeout_s)
+                            if retry_id else {"status": "failed",
+                                              "reason": "retry control request missing"})
+                        result["effects"].append({
+                            "kind": "await_retry_control_request", "payload": retry_ack})
+                        if str(retry_ack.get("status") or "").lower() == "completed":
+                            result["status"] = "instruction_acknowledged"
+                            result["control_request_id"] = retry_id
                             result["head_sha"] = head_sha
                             result["awaiting_exact_head_verdict"] = True
+                            result["review_completed"] = False
                         else:
                             result["status"] = "review_handoff_failed"
-                            result["error"] = (
-                                replacement.get("error")
-                                or replacement.get("reason")
-                                or replacement.get("message")
-                                or "fresh exact-head review generation did not start"
-                            )
+                            result["error"] = "review instruction acknowledgement timed out after one retry"
+                            result["failure_reason"] = "ack_timeout_after_retry"
             else:
                 result["status"] = "review_handoff_failed"
                 result["error"] = (

@@ -2061,20 +2061,25 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
     _sync_direct_session_token_lease_in(
         c, record, metadata, runner_session_id, now)
     work_session_id = str(metadata.get("work_session_id") or "").strip()
+    lease_expired = metadata.get("terminalized_by") == "runner_lease_expiry"
     if (work_session_id
-            and str(metadata.get("auth_lane") or "") == "codex_host_local"
+            and (lease_expired
+                 or str(metadata.get("auth_lane") or "") == "codex_host_local")
             and runner_status in RUNNER_FAILURE_TERMINAL_STATUSES):
+        work_session_status = "archived" if lease_expired else "expired"
         changed = c.execute(
-            "UPDATE work_sessions SET status='expired', updated_at=?, updated_by=? "
+            "UPDATE work_sessions SET status=?, completed_at=COALESCE(completed_at,?), "
+            "updated_at=?, updated_by=? "
             "WHERE work_session_id=? AND status IN ('active','proposed','blocked')",
-            (now, actor, work_session_id),
+            (work_session_status, now, now, actor, work_session_id),
         )
         if changed.rowcount:
             c.execute(
                 "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
                 "VALUES (?,?,?,?,?)",
                 (record.get("task_id") or None, actor,
-                 "work_session.expired_by_terminal_runner",
+                 ("work_session.archived_by_runner_lease_expiry" if lease_expired
+                  else "work_session.expired_by_terminal_runner"),
                  json.dumps({"runner_session_id": runner_session_id,
                              "work_session_id": work_session_id,
                              "runner_status": runner_status}, sort_keys=True), now),

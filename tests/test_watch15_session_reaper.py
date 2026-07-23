@@ -31,6 +31,7 @@ def run():
     old_drop = agent_host._drop_host_bridge
     old_grace = os.environ.get("PM_AGENT_HOST_REAP_GRACE_SECONDS")
     old_idle = os.environ.get("PM_AGENT_HOST_IDLE_TIMEOUT_SECONDS")
+    old_enforcement = os.environ.get("PM_RUNNER_LEASE_ENFORCEMENT")
     calls = []
     try:
         os.environ["PM_AGENT_HOST_REAP_GRACE_SECONDS"] = "120"
@@ -80,22 +81,44 @@ def run():
 
         assert {row["runner_session_id"] for row in outcomes} == {"complete", "idle"}
         assert {row["reason"] for row in outcomes} == {"claim_completed", "idle_timeout"}
-        assert all(row["reaped"] and row["wake_completed"] for row in outcomes)
+        assert all(not row["reaped"] and row["observe_only"] for row in outcomes)
+        assert all(row["error"] == "lease expiry is the only kill authority"
+                   for row in outcomes)
         killed = {call[2] for call in calls if call[:2] == ("supervisor", "kill")}
-        assert killed == {"complete", "idle"}
+        assert killed == set()
         heartbeats = [call[2] for call in calls
                       if call[:2] == ("POST", agent_host.P_HEARTBEAT_RUNNER)]
-        assert {body["metadata"]["reaped_reason"] for body in heartbeats} == {
-            "claim_completed", "idle_timeout"}
-        assert all(body["metadata"]["terminalized_by"] == "session_reaper"
-                   for body in heartbeats)
+        assert heartbeats == []
+
+        calls.clear()
+        expired = session(Path("expired.log"), runner_id="lease-expired")
+        expired["stale"] = True
+        expired["metadata"]["work_session_id"] = "worksession-expired"
+        agent_host._drain_runners = lambda host_id: [expired]
+        os.environ["PM_RUNNER_LEASE_ENFORCEMENT"] = "1"
+        enforced = agent_host.expire_runner_leases(
+            {"host_id": "host/test"}, now=now)
+        terminal = next(
+            call[2] for call in calls
+            if len(call) == 3 and call[:2] == (
+                "POST", agent_host.P_HEARTBEAT_RUNNER))
+        assert enforced == [{
+            "runner_session_id": "lease-expired", "task_id": "WATCH-15",
+            "reason": "runner_lease_expired", "would_expire": False,
+            "expired": True,
+        }]
+        assert terminal["status"] == "expired"
+        assert terminal["metadata"]["terminalized_by"] == "runner_lease_expiry"
+        assert terminal["metadata"]["work_session_id"] == "worksession-expired"
+        assert "started" not in terminal and "started" not in terminal["metadata"]
     finally:
         agent_host._drain_runners = old_drain
         agent_host.supervisor_action = old_action
         agent_host._try = old_try
         agent_host._drop_host_bridge = old_drop
         for key, value in (("PM_AGENT_HOST_REAP_GRACE_SECONDS", old_grace),
-                           ("PM_AGENT_HOST_IDLE_TIMEOUT_SECONDS", old_idle)):
+                           ("PM_AGENT_HOST_IDLE_TIMEOUT_SECONDS", old_idle),
+                           ("PM_RUNNER_LEASE_ENFORCEMENT", old_enforcement)):
             if value is None:
                 os.environ.pop(key, None)
             else:

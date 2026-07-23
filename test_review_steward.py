@@ -335,17 +335,15 @@ def test_attached_review_timeout_supersedes_and_starts_exact_head_generation():
         runner_terminal_waiter=lambda *args, **kwargs: {"terminal": True},
         review_ack_timeout_s=0, review_restart_timeout_s=0)
     result = outcome["result"]
-    ok(result["status"] == "new_generation_started",
-       "an unacknowledged attach becomes a fresh review generation")
+    ok(result["status"] == "review_handoff_failed"
+       and result.get("failure_reason") == "ack_timeout_after_retry",
+       "an unacknowledged attach retries once and then fails loudly")
     ok(superseded and superseded[0]["request_id"] == "runnerreq-review-141",
        "the timed-out inject control request is explicitly superseded")
-    ok(len(retries) == 2 and all(row["role"] == "review_merge" for row in retries),
-       "restart remains inside the existing Task Execution lifecycle")
-    ok(retries[-1]["source_sha"] == "a" * 40
-       and "head_sha: " + "a" * 40 in retries[-1]["instruction"],
-       "the replacement generation is bound to the exact review head")
-    ok(result["awaiting_exact_head_verdict"] is True,
-       "starting a replacement still does not claim review completion")
+    ok(not retries, "ack timeout never replaces or kills the live runner")
+    ok(any(effect["kind"] == "retry_review_instruction"
+           for effect in result["effects"]),
+       "the same-runner instruction is retried exactly once")
 
     retries.clear()
     raced = rs._execute_action(

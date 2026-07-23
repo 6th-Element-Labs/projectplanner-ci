@@ -42,6 +42,30 @@ def ok(condition, message):
 
 try:
     store.init_db(PROJECT)
+    pending_ttl = store.request_wake(
+        {"runtime": "codex"}, reason="default TTL pending proof",
+        source="simplify17-test", project=PROJECT)
+    claimed_ttl = store.request_wake(
+        {"runtime": "codex"}, reason="default TTL claimed proof",
+        source="simplify17-test", project=PROJECT)
+    ok(pending_ttl.get("deadline") is not None
+       and claimed_ttl.get("deadline") is not None,
+       "every wake receives a default TTL deadline")
+    with _conn(PROJECT) as c:
+        c.execute(
+            "UPDATE wake_intents SET status='claimed', claimed_at=?, "
+            "claimed_by_host='host/unspawned' WHERE wake_id=?",
+            (BASE, claimed_ttl["wake_id"]),
+        )
+    swept = store.sweep_wake_intents(
+        project=PROJECT,
+        now=max(pending_ttl["deadline"], claimed_ttl["deadline"]) + 1,
+    )
+    swept_ids = {event.get("wake_id") for event in swept.get("events") or []
+                 if event.get("reason") == "deadline_expired"}
+    ok({pending_ttl["wake_id"], claimed_ttl["wake_id"]} <= swept_ids,
+       "pending and claimed-but-unspawned wakes fail loudly after TTL")
+
     terminal_rows = []
     statuses = ("completed", "failed", "cancelled")
     for i in range(HISTORY_ROWS):
