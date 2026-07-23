@@ -2295,20 +2295,24 @@ def blocking_execution_for(task_id: str, *, role: str = "",
     """
     role = str(role or "").strip().lower()
     head_sha = str(head_sha or "").strip()
-    for session in task_live_executions(task_id, project=project):
+    sessions = task_live_executions(task_id, project=project)
+    # More than one live physical generation is itself an invariant violation.
+    # Fail closed instead of blessing whichever row happens to sort first.
+    if len(sessions) > 1:
+        return sessions[0]
+    for session in sessions:
         identity = execution_liveness.execution_identity(session)
-        if role and identity.get("role") and identity["role"] != role:
+        existing_role = str(identity.get("role") or "").strip().lower()
+        existing_head = str(identity.get("head_sha") or "").strip().lower()
+        requested_head = head_sha.lower()
+        if not role:
             return session
-        if (head_sha and identity.get("head_sha")
-                and identity["head_sha"] != head_sha):
+        if existing_role != role:
             return session
-        if not role and not head_sha:
+        if requested_head and existing_head != requested_head:
             return session
-        # Same role and head: the caller owns this generation already.
-        if (role and identity.get("role") == role
-                and (not head_sha or not identity.get("head_sha")
-                     or identity["head_sha"] == head_sha)):
-            return None
+        # Same role and, when supplied, the same exact head: idempotent attach.
+        return None
     return None
 
 
