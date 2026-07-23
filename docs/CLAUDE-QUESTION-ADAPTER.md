@@ -27,8 +27,9 @@ fail closed and remain visible as a hook denial.
    `PreToolUse` hook fires for the preserved `tool_use_id`; the adapter claims
    the decision and returns `permissionDecision: "allow"` with the original
    questions plus `updatedInput.answers`.
-6. Only after a non-deferred result from the same `session_id` does the adapter
-   record the Switchboard delivery receipt and resolve the request.
+6. Only after a non-deferred result from the same `session_id` does the Agent
+   Host resume entrypoint record the Switchboard delivery receipt and resolve
+   the request.
 
 Cancellation before delivery leaves the request deferred. Reconnect replays the
 same provider request id and journal entry. If the process loses the first
@@ -68,6 +69,22 @@ atomically with mode `0600`. The command emits only the structured Claude hook
 reply. On internal failure it emits a typed denial without environment,
 request bodies, credentials, or traceback content.
 
+After the operator decision, the Agent Host resumes and receipts the provider
+turn through the same executable:
+
+```bash
+PM_CLAUDE_QUESTION_MODE=resume \
+PM_CLAUDE_SESSION_ID=<session_id> \
+PM_CLAUDE_WORKSPACE=/path/to/worktree \
+python3 /path/to/adapters/claude_question_adapter.py
+```
+
+Resume mode runs the pinned
+`claude -p --resume <session_id> --output-format json` command and calls
+`record_continuation` before returning. Its output contains receipt metadata
+plus a provider-output hash and byte count; the provider output itself is not
+printed.
+
 ## Proof
 
 The replayable fixture is
@@ -80,8 +97,8 @@ python3 tests/test_proto8_attention_api.py
 
 The fixture and tests cover capture schema, queue normalization, exact provider
 ids and payload, decision delivery, reconnect, cancellation/session fencing,
-completion receipts, version pinning, journal permissions, and fail-closed
-unsupported request kinds.
+Agent Host resume receipts, version pinning, journal permissions, redacted
+provider output, and fail-closed unsupported request kinds.
 
 The host probe on 2026-07-24 confirmed the exact binary/version and structured
 stream envelope, but the local Claude account was unauthenticated
