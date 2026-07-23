@@ -968,15 +968,34 @@ try:
     pending = store.list_pending_acks("codex/TEST#1", project=P)
     ok(any(m["id"] == timed["id"] and m["monitor"]["status"] == "pending" for m in pending),
        "list_pending_acks exposes outstanding ack monitors")
+    ok(timed.get("ack_expectation", {}).get("status") == "below_delivery_floor",
+       "sub-cadence ack deadlines are flagged against the delivery floor at send time")
     swept = store.sweep_coordination_monitors(project=P)
     ok(swept["fired"] == 1, "sweep_coordination_monitors fires timed-out ack monitor")
     timed_status = store.get_message_status(timed["id"], project=P)
-    ok(timed_status["monitor"]["status"] == "fired", "timed-out monitor stays fired until resolved")
+    ok(timed_status["monitor"]["status"] == "fired" and
+       timed_status["monitor"]["result"].get("terminal") is True and
+       timed_status["monitor"].get("resolved_at") is not None,
+       "timed-out monitors are terminal at fire time, never immortal")
     ok(timed_status["monitor"]["result"]["failure_class"] == "unreachable_agent",
        "timed-out monitors preserve failure class in result")
-    timeout_notice = store.list_unacked_messages("codex/TEST#1", project=P)
-    ok(any(m.get("signal") == "ack_timeout" for m in timeout_notice),
-       "ack timeout sends a notice back to the sender")
+    reswept = store.sweep_coordination_monitors(project=P)
+    ok(not any(e.get("message_id") == timed["id"] for e in reswept["events"]),
+       "duplicate sweeps never re-fire a terminal monitor")
+    late_ack = store.ack_message(timed["id"], response="late", actor="claude/TEST#2", project=P)
+    ok(late_ack["acked_at"] is not None, "a late ack still records delivery truth on the message")
+    late_status = store.get_message_status(timed["id"], project=P)
+    ok(late_status["monitor"]["status"] == "fired" and
+       late_status["monitor"]["result"].get("late_ack_effect") == "audit_only",
+       "a late ack is audit-only and cannot un-fire the terminal monitor")
+    late_task = store.get_task(message_task["task_id"], project=P)
+    ok(any(a["kind"] == "message.late_ack" and a["payload"].get("audit_only")
+           for a in late_task["activity"]),
+       "late acks write an explicit audit-only activity")
+    timeout_notice = store.list_agent_messages(project=P, agent="codex/TEST#1")
+    ok(any(m.get("signal") == "ack_timeout" and not m.get("requires_ack")
+           for m in timeout_notice),
+       "ack timeout sends a non-recursive notice back to the sender")
     timeout_task_after = store.get_task(message_task["task_id"], project=P)
     ok(any(a["kind"] == "monitor.timeout" and
            a["payload"].get("failure_class") == "unreachable_agent"
@@ -985,24 +1004,23 @@ try:
     wake_timed = store.send_agent_message(
         "codex/TEST#1",
         "claude/TEST#2",
-        "wake if absent",
+        "legacy lifecycle timeout action",
         task_id=message_task["task_id"],
         requires_ack=True,
         ack_deadline_minutes=-1,
-        on_ack_timeout="wake_target",
+        on_ack_timeout="notify_sender",
         project=P,
     )
     swept_wake = store.sweep_coordination_monitors(project=P)
     wake_events = [e for e in swept_wake["events"] if e.get("message_id") == wake_timed["id"]]
-    ok(wake_events and wake_events[0].get("wake_id"),
-       "ack-timeout monitor can create a wake intent")
+    ok(wake_events and "wake_id" not in wake_events[0],
+       "ack-timeout monitor never creates a wake intent")
     wake_status = store.get_message_status(wake_timed["id"], project=P)
-    ok(wake_status["monitor"]["result"]["wake_status"] == "pending",
-       "monitor result records the created wake intent")
+    ok("wake_status" not in wake_status["monitor"]["result"],
+       "monitor result contains no lifecycle-control result")
     wakes = store.list_wake_intents(status="pending", runtime="claude-code", project=P)
-    ok(any(w["source"] == f"monitor:{wake_status['monitor']['id']}" and
-           w["selector"]["agent_id"] == "claude/TEST#2" for w in wakes),
-       "list_wake_intents exposes monitor-created wakes")
+    ok(not any(w["source"] == f"monitor:{wake_status['monitor']['id']}" for w in wakes),
+       "ack timeout has no wake-intent side effect")
     live_reg = store.register_agent(
         agent_id="claude/LIVE#1",
         runtime="claude-code",

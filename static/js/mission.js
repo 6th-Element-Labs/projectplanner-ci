@@ -485,6 +485,14 @@
         }
     },
 
+    _agoShort(seconds) {
+        const s = Math.max(0, Math.floor(Number(seconds) || 0));
+        if (s < 60) return `${s}s`;
+        if (s < 3600) return `${Math.floor(s / 60)}m`;
+        if (s < 86400) return `${Math.floor(s / 3600)}h`;
+        return `${Math.floor(s / 86400)}d`;
+    },
+
     _missionBadge(status, map, fallback) {
         const key = String(status || '').toLowerCase().replace(/\s+/g, '_');
         const color = map[key] || fallback || 'secondary';
@@ -983,8 +991,13 @@
         // dependency map already outlines blockers with a thick dark border.
         const blockerHtml = '';
         const nextActions = this._missionActionsHtml(s);
-        const agents = (s.active_agents || []).length ? `<div class="card mb-4"><div class="card-header"><h3 class="card-title">Live agents</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Agent</th><th>Task</th><th>Project</th></tr></thead><tbody>${(s.active_agents || []).map((a) =>
-            `<tr><td>${this.esc(a.agent_id || '')}</td><td><a href="#" data-linked-task="${this.esc(a.task_id)}" data-linked-project="${this.esc(a.project_id)}">${this.esc(a.task_id || '')}</a></td><td>${this.esc(a.project_id || '')}</td></tr>`).join('')}</tbody></table></div></div>` : '';
+        const agents = (s.active_agents || []).length ? `<div class="card mb-4"><div class="card-header"><h3 class="card-title">Live agents</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Agent</th><th>Task</th><th>Mailbox</th><th>Project</th></tr></thead><tbody>${(s.active_agents || []).map((a) => {
+            const mailbox = a.mailbox || {};
+            const count = Number(mailbox.unacked_count || 0);
+            const oldest = mailbox.oldest_unacked_age_seconds == null
+                ? '' : ` · oldest ${this._agoShort(Number(mailbox.oldest_unacked_age_seconds))}`;
+            return `<tr><td>${this.esc(a.agent_id || '')}</td><td><a href="#" data-linked-task="${this.esc(a.task_id)}" data-linked-project="${this.esc(a.project_id)}">${this.esc(a.task_id || '')}</a></td><td><span class="badge ${count ? 'bg-yellow-lt' : 'bg-green-lt'}">${count} unacked</span>${count ? `<span class="text-secondary small">${this.esc(oldest)}</span>` : ''}</td><td>${this.esc(a.project_id || '')}</td></tr>`;
+        }).join('')}</tbody></table></div><div class="card-footer text-secondary small">Mailbox age is a delivery-honesty signal only; it does not mark a live agent dead or offline.</div></div>` : '';
         const activeRows = (s.active_work || []).map((w) => `<tr><td><a href="#" data-linked-task="${this.esc(w.task_id)}" data-linked-project="${this.esc(w.project_id)}">${this.esc(w.task_id)}</a></td><td>${this.esc(w.title || '')}</td><td>${this._missionBadge(w.status, this.STATUS_COLOR)}</td><td>${this.sessionHealthPill(w.session_health)}</td><td>${this.esc(w.assignee || '—')}</td><td class="small">${this.esc((w.active_claims || []).map((c) => c.agent_id).join(', ') || '—')}</td></tr>`).join('') || '<tr><td colspan="6" class="text-secondary">No active linked work</td></tr>';
         // Keep the currently-rendered graph so a live re-render can show it until the new
         // SVG is ready (no blank/flash while colours update in place).

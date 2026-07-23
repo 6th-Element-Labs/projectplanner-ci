@@ -213,6 +213,57 @@ def apply_field_aliases(
     return result
 
 
+# SIMPLIFY-21 / ADR-0008 M2: an ack deadline is a delivery expectation, never
+# lifecycle authority. The floor below states the shortest deadline a recipient
+# could plausibly win given its advertised poll cadence plus startup margin.
+ACK_STARTUP_MARGIN_SECONDS = 180.0
+DEFAULT_ACK_POLL_CADENCE_SECONDS = 120.0
+
+
+def ack_deadline_expectation(
+        deadline_seconds: float | None,
+        *,
+        poll_cadence_seconds: float | None = None) -> dict[str, Any]:
+    """Classify a requires_ack deadline against the recipient's delivery floor.
+
+    Advisory only: a below-floor deadline is stored unchanged and its expiry
+    still produces nothing but audit/notification effects.
+    """
+    try:
+        cadence = float(poll_cadence_seconds or DEFAULT_ACK_POLL_CADENCE_SECONDS)
+    except (TypeError, ValueError):
+        cadence = DEFAULT_ACK_POLL_CADENCE_SECONDS
+    floor = cadence + ACK_STARTUP_MARGIN_SECONDS
+    expectation: dict[str, Any] = {
+        "schema": "switchboard.ack_deadline_expectation.v1",
+        "poll_cadence_seconds": cadence,
+        "startup_margin_seconds": ACK_STARTUP_MARGIN_SECONDS,
+        "floor_seconds": floor,
+        "execution_effect": "none",
+    }
+    if deadline_seconds is None:
+        expectation.update({
+            "status": "no_deadline",
+            "message": "No ack deadline set; the monitor terminates only on ack.",
+        })
+        return expectation
+    deadline_seconds = float(deadline_seconds)
+    if deadline_seconds < floor:
+        expectation.update({
+            "status": "below_delivery_floor",
+            "deadline_seconds": deadline_seconds,
+            "message": (
+                "Ack deadline is shorter than the recipient's advertised poll "
+                "cadence plus startup margin; expect a timeout notice before "
+                "the recipient can plausibly ack. Expiry has no execution effect."
+            ),
+        })
+    else:
+        expectation.update({"status": "achievable",
+                            "deadline_seconds": deadline_seconds})
+    return expectation
+
+
 def normalize_send_ack_deadline(
     *,
     ack_deadline_minutes: Any = None,

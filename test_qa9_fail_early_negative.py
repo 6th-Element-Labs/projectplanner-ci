@@ -258,7 +258,6 @@ try:
         task_id=message_task["task_id"],
         requires_ack=True,
         ack_deadline_minutes=-1,
-        on_ack_timeout="wake_target",
         principal_id="qa9-principal",
         project=P,
     )
@@ -269,8 +268,8 @@ try:
     timeout = store.get_message_status(unreachable["id"], project=P)
     ok(swept["fired"] >= 1 and
        timeout["monitor"]["result"]["failure_class"] == "unreachable_agent" and
-       timeout["monitor"]["result"].get("wake_id"),
-       "expired ack monitor preserves failure class and wake intent")
+       not timeout["monitor"]["result"].get("wake_id"),
+       "expired ack monitor preserves failure class without lifecycle effects")
 
     unbound_task = store.create_task({"workstream_id": "QA", "title": "unbound identity"},
                                      actor="seed", project=P)
