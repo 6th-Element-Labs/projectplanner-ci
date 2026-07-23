@@ -212,7 +212,9 @@ def dispatch_scratchpad_ref(
         "mirror_branch": mirror_branch,
         "workflow": DEFAULT_WORKFLOW,
         "push_triggered": True,
-        "poll_after_push": True,
+        # Webhook delivery only owns the durable push/dispatch handoff.  CI
+        # completion is asynchronous and may exceed GitHub's webhook deadline.
+        "poll_after_push": False,
         "cleanup_mirror_branch": True,
         "request": {
             "label": label,

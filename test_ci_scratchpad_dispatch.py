@@ -78,6 +78,22 @@ ok(mirror_calls[0].get("source_fetch_ref") == "refs/pull/412/head",
 ok(mirror_calls[0].get("cleanup_mirror_branch") is True,
    "scratchpad requests terminal disposable-branch cleanup")
 
+mirror_calls.clear()
+ref_result = csd.dispatch_scratchpad_ref(
+    VALID_SHA,
+    "refs/heads/gh-readonly-queue/master/pr-412-merge",
+    label="merge-group",
+    project=P,
+    source_path=source_path,
+    dry_run=False,
+)
+ok(ref_result["dispatched"] and mirror_calls,
+   "merge-group exact-ref dispatch persists the mirror request")
+ok(mirror_calls[0].get("poll_after_push") is False,
+   "merge-group webhook dispatch does not poll CI before returning")
+ok(mirror_calls[0].get("source_sha") == VALID_SHA,
+   "merge-group dispatch preserves the exact requested SHA")
+
 csd.cvd.resolve_head_sha = orig_resolve
 csd.cvd.verify_commit_exists = orig_verify
 csd.external_ci_mirror.request_external_ci_mirror_run = orig_mirror
