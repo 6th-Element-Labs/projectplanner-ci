@@ -454,7 +454,31 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
                 start_error=intake_routing.get("error") or "bug_intake_not_routable",
                 intake_routing=intake_routing)
         projection = _projection(task_id, project)
-    active_runner = projection.get("active_runner") or {}
+    live_executions = runner_repo.task_live_executions(task_id, project=project)
+    if len(live_executions) > 1:
+        raise TaskExecutionError(
+            "start_refused",
+            "Multiple live execution generations violate the one-execution invariant.",
+            task_id=task_id, project=project,
+            start_error="multiple_live_execution_generations")
+    live_execution = live_executions[0] if live_executions else {}
+    live_identity = (live_execution.get("execution")
+                     if isinstance(live_execution.get("execution"), dict) else {})
+    existing_role = str(live_identity.get("role") or "").strip().lower()
+    existing_head = str(live_identity.get("head_sha") or "").strip().lower()
+    requested_head = str(source_sha or "").strip().lower()
+    if live_execution and (
+            existing_role != role
+            or (requested_head and existing_head != requested_head)):
+        raise TaskExecutionError(
+            "start_refused",
+            "A different live execution generation already owns this task.",
+            task_id=task_id, project=project,
+            start_error="live_execution_conflict",
+            live_execution=live_identity,
+            requested_role=role,
+            requested_head_sha=requested_head or None)
+    active_runner = live_execution or projection.get("active_runner") or {}
     pending = _in_flight_wake(projection)
     if active_runner:
         result = {

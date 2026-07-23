@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 TMP = tempfile.mkdtemp(prefix="simplify18-")
@@ -106,6 +107,64 @@ ok(store.blocking_execution_for(tid, project=P) is None,
    "no execution lease blocks start_task when only a claim exists")
 ok(not hasattr(live, "task_has_live_execution"),
    "the domain module stays pure -- no storage access leaked into it")
+
+# --- 6. One nonterminal physical generation per task -----------------------
+runner = store.upsert_runner_session({
+    "runner_session_id": "run-s18-live", "host_id": "host/s18",
+    "agent_id": agent, "runtime": "codex", "task_id": tid,
+    "claim_id": claim.get("claim_id") or "", "status": "running",
+    "heartbeat_at": time.time(), "heartbeat_ttl_s": 180,
+    "metadata": {
+        "execution_id": "exec-s18-1", "execution_generation": 1,
+        "execution_role": "implementation", "execution_head_sha": "a" * 40,
+        "assignment_id": "assign-s18-1", "lease_epoch": 7,
+        "lease_state": "active",
+    },
+}, actor="simplify18-test", project=P)
+ok(runner.get("runner_session_id") == "run-s18-live",
+   "canonical runner row records the physical execution")
+identity = runner["execution"]
+ok(identity["head_sha"] == "a" * 40 and identity["generation"] == 1,
+   "execution identity carries the canonical head and generation")
+ok(store.blocking_execution_for(
+       tid, role="implementation", head_sha="a" * 40, project=P) is None,
+   "same role and head is an idempotent attach")
+ok(store.blocking_execution_for(
+       tid, role="review_merge", head_sha="a" * 40, project=P) is not None,
+   "a different role is blocked by the live task execution")
+ok(store.blocking_execution_for(
+       tid, role="implementation", head_sha="b" * 40, project=P) is not None,
+   "a different head is blocked by the live task execution")
+
+# The shared start command, used by UI/MCP/scheduler/host callers, enforces the
+# same decision rather than relying on callers to remember the helper.
+from switchboard.application.commands import task_execution  # noqa: E402
+
+attached = task_execution.start_task(
+    tid, role="implementation", source_sha="a" * 40, project=P)
+ok(attached["action"] == "attach"
+   and attached.get("execution_id") == "run-s18-live",
+   "same role/head start_task attaches to the existing generation")
+try:
+    task_execution.start_task(
+        tid, role="review_merge", source_sha="a" * 40, project=P)
+except task_execution.TaskExecutionError as exc:
+    refused = exc.as_dict()
+else:
+    refused = {}
+ok(refused.get("start_error") == "live_execution_conflict",
+   "shared start_task refuses a different live role")
+
+# --- 7. Fence and Fleet identity evidence -----------------------------------
+ok(live.heartbeat_is_fenced(
+       {"metadata": {"lease_epoch": 7}}, claimed_epoch=6) is True,
+   "a heartbeat from an older fence epoch is rejected")
+ok(live.heartbeat_is_fenced(
+       {"metadata": {"lease_epoch": 7}}, claimed_epoch=7) is False,
+   "the current fence epoch may renew")
+ok(all(identity.get(field) is not None for field in (
+       "execution_id", "generation", "role", "fence_epoch", "expires_at")),
+   "Fleet execution identity exposes generation, role, fence, and expiry")
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

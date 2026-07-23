@@ -37,8 +37,9 @@ LIVE_EXECUTION_STATES: frozenset[str] = frozenset({
     "starting", "ready", "running", "stopping", "unknown",
 })
 
-#: Execution roles. One nonterminal generation per (task, role) — enforced by
-#: the ``ux_active_execution_lease`` unique index.
+#: Execution roles. ``start_task`` permits only one nonterminal physical
+#: generation per task; role is part of the identity used to decide whether a
+#: repeated start is an idempotent attach or a conflicting request.
 EXECUTION_ROLES: frozenset[str] = frozenset({
     "implementation", "review_merge", "remediation",
 })
@@ -107,7 +108,8 @@ def execution_identity(row: Mapping[str, Any]) -> dict[str, Any]:
         "generation": _int_or_none(metadata.get("execution_generation")),
         "role": str(metadata.get("execution_role")
                     or metadata.get("role") or "") or None,
-        "head_sha": str(metadata.get("head_sha") or "") or None,
+        "head_sha": str(metadata.get("execution_head_sha")
+                        or metadata.get("head_sha") or "") or None,
         "assignment_id": str(metadata.get("assignment_id") or "") or None,
         "fence_epoch": _int_or_none(metadata.get("lease_epoch")),
         "lease_state": str(metadata.get("lease_state") or "") or None,
