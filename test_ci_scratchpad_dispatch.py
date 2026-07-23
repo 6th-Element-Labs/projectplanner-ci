@@ -43,6 +43,33 @@ os.environ["SWITCHBOARD_CI_SCRATCHPAD"] = "0"
 ok(not csd.is_scratchpad_enabled(), "scratchpad can be disabled explicitly")
 os.environ["SWITCHBOARD_CI_SCRATCHPAD"] = "1"
 
+source_env_names = (
+    "SWITCHBOARD_CI_SOURCE_PATH",
+    "PM_WORK_SESSION_SOURCE_PATH",
+    "PM_REPO_PATH",
+)
+saved_source_env = {name: os.environ.get(name) for name in source_env_names}
+for name in source_env_names:
+    os.environ.pop(name, None)
+os.environ["PM_REPO_PATH"] = "/var/lib/projectplanner/ci-source"
+ok(csd.source_checkout_path() == "/var/lib/projectplanner/ci-source",
+   "scratchpad source falls back to the service-owned PM_REPO_PATH clone")
+os.environ["SWITCHBOARD_CI_SOURCE_PATH"] = "/srv/switchboard/ci-source"
+ok(csd.source_checkout_path() == "/srv/switchboard/ci-source",
+   "dedicated scratchpad source overrides PM_REPO_PATH")
+for name in source_env_names:
+    os.environ.pop(name, None)
+try:
+    csd.source_checkout_path()
+except csd.cvd.CiVerifyDispatchError as exc:
+    ok("not configured" in str(exc) and "PM_REPO_PATH" in str(exc),
+       "missing source configuration fails closed before Git dispatch")
+else:
+    ok(False, "missing source configuration fails closed before Git dispatch")
+for name, value in saved_source_env.items():
+    if value is not None:
+        os.environ[name] = value
+
 source_path = os.path.join(_TMP, "checkout")
 os.makedirs(source_path)
 
