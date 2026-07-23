@@ -1358,11 +1358,62 @@ def _tcp_port_open(host, port, timeout_s=0.5):
 # no LocalPtyRelayBridge / localhost /stream+/control hop on the Watch path.
 _HOST_BRIDGES = {}
 _HOST_BRIDGES_LOCK = threading.Lock()
+# BUG-162: remember the applied host-tunnel ticket expiry so heartbeat mints
+# (fresh JWT every ~10s tick) do not tear down a healthy live WebSocket.
+_HOST_RELAY_APPLIED = {}
+# Rotate when the *applied* ticket has this many seconds (or fewer) remaining.
+# Server tickets are ttl=900; Agent Host ticks every ~10s, so 120s leaves many
+# renewal chances without flashing Watch Detached on every heartbeat.
+HOST_RELAY_ROTATE_SKEW_S = 120.0
+
+
+def _host_relay_needs_rotation(expires_at, *, now=None, skew_s=None) -> bool:
+    """True when a live host tunnel should accept a freshly minted host_url.
+
+    Gate on the *currently applied* ticket's expiry, not the newly minted one
+    (every heartbeat returns expires_at≈now+900). Missing/invalid expiry fails
+    closed to rotate so a tunnel cannot go dark from a missing ledger entry.
+    """
+    try:
+        exp = float(expires_at or 0)
+    except (TypeError, ValueError):
+        return True
+    if exp <= 0:
+        return True
+    clock = time.time() if now is None else float(now)
+    window = HOST_RELAY_ROTATE_SKEW_S if skew_s is None else float(skew_s)
+    return (exp - clock) <= max(0.0, window)
+
+
+def _publish_host_relay_url(runner_session_id, relay_ws_url) -> None:
+    """Best-effort publish for the executor companion (host_relay.url)."""
+    if not relay_ws_url:
+        return
+    try:
+        from codex import supervisor as _sup
+        relay_path = _sup._session_dir(runner_session_id) / "host_relay.url"
+        relay_path.parent.mkdir(parents=True, exist_ok=True)
+        relay_path.write_text(relay_ws_url, encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _record_applied_host_relay(runner_session_id, relay_ws_url, expires_at) -> None:
+    sid = str(runner_session_id or "").strip()
+    if not sid or not relay_ws_url:
+        return
+    try:
+        exp = float(expires_at or 0)
+    except (TypeError, ValueError):
+        exp = 0.0
+    _HOST_RELAY_APPLIED[sid] = {"url": str(relay_ws_url), "expires_at": exp}
 
 
 def _drop_host_bridge(runner_session_id):
+    sid = str(runner_session_id or "").strip()
     with _HOST_BRIDGES_LOCK:
-        session = _HOST_BRIDGES.pop(runner_session_id, None)
+        session = _HOST_BRIDGES.pop(sid, None)
+        _HOST_RELAY_APPLIED.pop(sid, None)
     if session is not None:
         try:
             session.stop()
@@ -1372,34 +1423,39 @@ def _drop_host_bridge(runner_session_id):
 
 def _ensure_host_bridge(*, runner_session_id, host_id, binding, public_base,
                          host_relay_url="", master_fd=None, child_pid=0,
-                         log_path=""):
+                         log_path="", expires_at=None, force_rotate=False):
     """Idempotently ensure a live host tunnel for this session.
 
     Starting *is* opening: dial /pty/host immediately. Optional master_fd makes
     this process the executor (PTY I/O + stdout.log). Re-entrant across
     poll-loop iterations: a healthy existing bridge is a no-op; a dead one is
     replaced. No localhost stream/control URLs are required.
+
+    BUG-162: a freshly minted ``host_relay_url`` only rotates an already-live
+    tunnel when the *applied* ticket is within ``HOST_RELAY_ROTATE_SKEW_S`` of
+    expiry (or unknown). Mid-lifetime heartbeat mints must not close the WS.
+    Pass ``force_rotate=True`` for an explicit companion refresh request.
     """
     relay_ws_url = str(host_relay_url or "").strip()
-    # Ticket renewal must reach an already-running executor before the
-    # idempotency return. The companion watches this file and reconnects with
-    # the new URL; an in-process bridge rotates directly.
-    if relay_ws_url:
-        try:
-            from codex import supervisor as _sup
-            relay_path = _sup._session_dir(runner_session_id) / "host_relay.url"
-            relay_path.parent.mkdir(parents=True, exist_ok=True)
-            relay_path.write_text(relay_ws_url, encoding="utf-8")
-        except Exception:
-            pass
+    sid = str(runner_session_id or "").strip()
     with _HOST_BRIDGES_LOCK:
-        existing = _HOST_BRIDGES.get(runner_session_id)
+        existing = _HOST_BRIDGES.get(sid)
         if existing is not None and existing.is_alive():
             if relay_ws_url:
-                existing.update_relay_url(relay_ws_url)
+                applied = _HOST_RELAY_APPLIED.get(sid) or {}
+                if force_rotate or _host_relay_needs_rotation(applied.get("expires_at")):
+                    # Ticket renewal must reach an already-running executor.
+                    # The companion watches host_relay.url and reconnects; an
+                    # in-process bridge rotates directly via update_relay_url.
+                    _publish_host_relay_url(sid, relay_ws_url)
+                    try:
+                        existing.update_relay_url(relay_ws_url)
+                    except Exception:
+                        pass
+                    _record_applied_host_relay(sid, relay_ws_url, expires_at)
             return existing
     if existing is not None:
-        _drop_host_bridge(runner_session_id)
+        _drop_host_bridge(sid)
 
     try:
         from switchboard.application import runner_pty_relay as pty_relay
@@ -1413,26 +1469,23 @@ def _ensure_host_bridge(*, runner_session_id, host_id, binding, public_base,
         from switchboard.application import runner_pty_relay as pty_relay
         from codex.pty_host_ws_client import open_host_bridge
 
+    minted_expires_at = expires_at
     if not relay_ws_url:
         # Legacy/in-process compatibility. Real enrolled hosts receive a
         # server-minted one-session URL in the claimed control request because
         # they must never possess the server relay signing secret.
-        host_ticket, _host_payload = pty_relay.mint_host_tunnel_ticket(
+        host_ticket, host_payload = pty_relay.mint_host_tunnel_ticket(
             binding, ttl_seconds=3600)
         relay_ws_url = pty_relay.public_host_relay_url(
             public_base, runner_session_id, host_ticket)
         relay_ws_url = relay_ws_url + "&" + urllib.parse.urlencode({"host_id": host_id})
+        if minted_expires_at is None:
+            minted_expires_at = host_payload.get("exp")
 
     # Publish the host relay URL for the executor companion (same Mac/AWS binary)
     # so it can dial without a localhost HTTP hop. The companion owns master_fd
     # and is the single outbound WS speaker when master_fd is not in-process.
-    try:
-        from codex import supervisor as _sup
-        ready = _sup._session_dir(runner_session_id) / "host_relay.url"
-        ready.parent.mkdir(parents=True, exist_ok=True)
-        ready.write_text(relay_ws_url, encoding="utf-8")
-    except Exception:
-        pass
+    _publish_host_relay_url(sid, relay_ws_url)
 
     session = open_host_bridge(
         runner_session_id=runner_session_id,
@@ -1443,7 +1496,8 @@ def _ensure_host_bridge(*, runner_session_id, host_id, binding, public_base,
         on_close=lambda reason: _drop_host_bridge(runner_session_id),
     )
     with _HOST_BRIDGES_LOCK:
-        _HOST_BRIDGES[runner_session_id] = session
+        _HOST_BRIDGES[sid] = session
+        _record_applied_host_relay(sid, relay_ws_url, minted_expires_at)
     return session
 
 
@@ -2168,6 +2222,8 @@ def renew_live_direct_runners(inventory):
                     host_relay_url=str(server_relay.get("host_url") or ""),
                     child_pid=int(session.get("pid") or 0),
                     log_path=str(session.get("log_path") or metadata.get("log_path") or ""),
+                    expires_at=server_relay.get("expires_at"),
+                    force_rotate=bool(requested_relay and requested_relay.get("host_url")),
                 )
             except Exception as exc:
                 if isinstance(result, dict):
@@ -2548,6 +2604,7 @@ def _finalize_bound_runner(wake, inventory, runner_session_id, rec):
                         host_relay_url=str(server_relay.get("host_url") or ""),
                         child_pid=int((rec or {}).get("pid") or 0),
                         log_path=str((rec or {}).get("log_path") or ""),
+                        expires_at=server_relay.get("expires_at"),
                     )
                 except Exception as exc:
                     # Keep the provider process alive: the heartbeat will retry
@@ -2936,6 +2993,7 @@ def run_once(inventory):
                             host_relay_url=str(server_relay.get("host_url") or ""),
                             child_pid=int((rec or {}).get("pid") or 0),
                             log_path=str((rec or {}).get("log_path") or ""),
+                            expires_at=server_relay.get("expires_at"),
                         )
                     except Exception as exc:
                         if isinstance(runner_registration, dict):
