@@ -3,6 +3,8 @@ from __future__ import annotations
 import io
 import json
 
+from path_setup import ROOT  # noqa: F401
+
 from adapters.codex_app_server import (
     ATTENTION_METHODS, CodexAppServer, _reply, _stable_key,
 )
