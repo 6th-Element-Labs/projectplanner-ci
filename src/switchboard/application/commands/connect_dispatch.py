@@ -266,6 +266,23 @@ def enqueue_task(
     }
     selector["capabilities"] = [
         "execution_lease_v2", "runner_lease_enforcement"]
+    lifecycle = {
+        "schema": "switchboard.execution_lifecycle.v1",
+        "role": str(role or "implementation"),
+        "head_sha": str(
+            source_sha or (task.get("git_state") or {}).get("head_sha") or ""),
+        "ttl_seconds": int(
+            os.environ.get("PM_CONNECT_MAX_RUNTIME_SECONDS", "7200")),
+    }
+    if lifecycle["role"] in {"review_merge", "remediation"}:
+        lifecycle.update({
+            "task_id": task_id,
+            "reason_code": str(reason_code or ""),
+            "acceptance_findings": list(acceptance_findings or []),
+            "route": str(route or ""),
+            "attempt": int(decision_attempt or 0),
+            "state_version": int(state_version or 0),
+        })
     policy = {
         "mode": CONNECT_WAKE_MODE,
         "assignment": {
@@ -275,25 +292,11 @@ def enqueue_task(
         # Assignment v1 is an adapter compatibility boundary. Server-owned
         # execution identity travels beside it so older hosts can continue to
         # decode the Assignment byte-for-byte.
-        "lifecycle": {
-            "schema": "switchboard.execution_lifecycle.v1",
-            "task_id": task_id,
-            "role": str(role or "implementation"),
-            "head_sha": str(
-                source_sha or (task.get("git_state") or {}).get("head_sha") or ""),
-            "reason_code": str(reason_code or ""),
-            "acceptance_findings": list(acceptance_findings or []),
-            "route": str(route or ""),
-            "attempt": int(decision_attempt or 0),
-            "state_version": int(state_version or 0),
-            "ttl_seconds": int(
-                os.environ.get("PM_CONNECT_MAX_RUNTIME_SECONDS", "7200")),
-        },
+        "lifecycle": lifecycle,
     }
     # The external effect represents one durable completion decision, not the
     # coordinator/lease that happened to request it. Generation and fence are
     # allocated atomically below and intentionally do not participate either.
-    lifecycle = policy["lifecycle"]
     if lifecycle["role"] in {"review_merge", "remediation"}:
         policy["effect_identity"] = {
             "schema": "switchboard.completion_effect_identity.v1",
