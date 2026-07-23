@@ -6,7 +6,7 @@ import json
 import sqlite3
 import time
 import uuid
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Sequence
 
 from constants import DEFAULT_PROJECT
 from db.connection import _conn, _write_through
@@ -193,7 +193,8 @@ def create_attention_request_in(
 
 def record_attention_decision_in(
     c: sqlite3.Connection, request_id: str, data: Mapping[str, Any], *,
-    actor: str, actor_principal_id: str = "", now: Optional[float] = None,
+    actor: str, actor_principal_id: str = "", project: str = "",
+    now: Optional[float] = None,
 ) -> dict[str, Any]:
     """Record one version-fenced decision and advance pending -> decision_recorded."""
     payload = dict(data or {})
@@ -205,7 +206,9 @@ def record_attention_decision_in(
             "expected_version, choice, and idempotency_key are required",
         )
     request = c.execute(
-        "SELECT * FROM attention_requests WHERE request_id=?", (request_id,)
+        "SELECT * FROM attention_requests WHERE request_id=?"
+        + (" AND project_id=?" if project else ""),
+        (request_id, project) if project else (request_id,),
     ).fetchone()
     if not request:
         raise AttentionStoreError("attention_request_not_found", "request does not exist")
@@ -273,11 +276,14 @@ def record_attention_decision_in(
 def transition_attention_request_in(
     c: sqlite3.Connection, request_id: str, *, expected_version: int,
     target_status: str, actor: str, reason: str = "", delivery_receipt: Any = None,
-    delivery_claimed_by: str = "", now: Optional[float] = None,
+    delivery_claimed_by: str = "", project: str = "",
+    now: Optional[float] = None,
 ) -> dict[str, Any]:
     """Advance a request using optimistic concurrency and append an audit event."""
     row = c.execute(
-        "SELECT * FROM attention_requests WHERE request_id=?", (request_id,)
+        "SELECT * FROM attention_requests WHERE request_id=?"
+        + (" AND project_id=?" if project else ""),
+        (request_id, project) if project else (request_id,),
     ).fetchone()
     if not row:
         raise AttentionStoreError("attention_request_not_found", "request does not exist")
@@ -337,10 +343,12 @@ def transition_attention_request_in(
 
 
 def reconstruct_attention_audit_in(
-    c: sqlite3.Connection, request_id: str,
+    c: sqlite3.Connection, request_id: str, *, project: str = "",
 ) -> dict[str, Any]:
     request = c.execute(
-        "SELECT * FROM attention_requests WHERE request_id=?", (request_id,)
+        "SELECT * FROM attention_requests WHERE request_id=?"
+        + (" AND project_id=?" if project else ""),
+        (request_id, project) if project else (request_id,),
     ).fetchone()
     if not request:
         raise AttentionStoreError("attention_request_not_found", "request does not exist")
@@ -365,6 +373,86 @@ def reconstruct_attention_audit_in(
     ).fetchall()]
     return {"schema": ATTENTION_AUDIT_SCHEMA, "request": _request_from_row(request),
             "decisions": decisions, "events": events}
+
+
+def _operator_queue_clause(now: float) -> tuple[str, Sequence[Any]]:
+    """Single predicate shared by the operator queue and bell count."""
+    return (
+        "project_id=? AND status='pending' "
+        "AND (expires_at IS NULL OR expires_at>?)",
+        (now,),
+    )
+
+
+def list_attention_requests_in(
+    c: sqlite3.Connection, *, project: str, now: Optional[float] = None,
+    limit: int = 100, offset: int = 0,
+) -> list[dict[str, Any]]:
+    now_value = float(now if now is not None else time.time())
+    clause, tail = _operator_queue_clause(now_value)
+    rows = c.execute(
+        f"SELECT * FROM attention_requests WHERE {clause} "
+        "ORDER BY created_at, request_id LIMIT ? OFFSET ?",
+        (project, *tail, max(1, min(int(limit), 500)), max(0, int(offset))),
+    ).fetchall()
+    return [_request_from_row(row) for row in rows]
+
+
+def count_attention_requests_in(
+    c: sqlite3.Connection, *, project: str, now: Optional[float] = None,
+) -> int:
+    now_value = float(now if now is not None else time.time())
+    clause, tail = _operator_queue_clause(now_value)
+    return int(c.execute(
+        f"SELECT COUNT(*) FROM attention_requests WHERE {clause}",
+        (project, *tail),
+    ).fetchone()[0])
+
+
+def get_attention_request_in(
+    c: sqlite3.Connection, request_id: str, *, project: str,
+) -> dict[str, Any]:
+    row = c.execute(
+        "SELECT * FROM attention_requests WHERE request_id=? AND project_id=?",
+        (request_id, project),
+    ).fetchone()
+    if not row:
+        raise AttentionStoreError("attention_request_not_found", "request does not exist")
+    return _request_from_row(row)
+
+
+def claim_attention_decision_in(
+    c: sqlite3.Connection, *, project: str, host_id: str, actor: str,
+    provider: str = "", request_id: str = "", now: Optional[float] = None,
+) -> Optional[dict[str, Any]]:
+    """Atomically claim the oldest matching recorded decision for one Agent Host."""
+    filters = ["project_id=?", "status='decision_recorded'", "host_id=?"]
+    values: list[Any] = [project, host_id]
+    if provider:
+        filters.append("provider=?")
+        values.append(provider)
+    if request_id:
+        filters.append("request_id=?")
+        values.append(request_id)
+    row = c.execute(
+        "SELECT * FROM attention_requests WHERE "
+        + " AND ".join(filters)
+        + " ORDER BY decided_at, request_id LIMIT 1",
+        values,
+    ).fetchone()
+    if not row:
+        return None
+    request = transition_attention_request_in(
+        c, row["request_id"], expected_version=row["version"],
+        target_status="delivering", actor=actor, delivery_claimed_by=host_id,
+        project=project, now=now,
+    )
+    decision = c.execute(
+        "SELECT * FROM attention_decisions WHERE request_id=? "
+        "ORDER BY created_at DESC LIMIT 1",
+        (row["request_id"],),
+    ).fetchone()
+    return {"request": request, "decision": _decision_from_row(decision)}
 
 
 class AttentionRepository:
@@ -395,7 +483,7 @@ class AttentionRepository:
         with _conn(project) as c:
             return record_attention_decision_in(
                 c, request_id, data, actor=actor,
-                actor_principal_id=actor_principal_id)
+                actor_principal_id=actor_principal_id, project=project)
 
     def transition(self, request_id: str, *, expected_version: int,
                    target_status: str, actor: str, reason: str = "",
@@ -418,12 +506,45 @@ class AttentionRepository:
                 c, request_id, expected_version=expected_version,
                 target_status=target_status, actor=actor, reason=reason,
                 delivery_receipt=delivery_receipt,
-                delivery_claimed_by=delivery_claimed_by)
+                delivery_claimed_by=delivery_claimed_by, project=project)
 
     def reconstruct_audit(self, request_id: str, *,
                           project: str = DEFAULT_PROJECT) -> dict[str, Any]:
         with _conn(project) as c:
-            return reconstruct_attention_audit_in(c, request_id)
+            return reconstruct_attention_audit_in(c, request_id, project=project)
+
+    def list_requests(self, *, project: str, now: Optional[float] = None,
+                      limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+        with _conn(project) as c:
+            return list_attention_requests_in(
+                c, project=project, now=now, limit=limit, offset=offset)
+
+    def count_requests(self, *, project: str,
+                       now: Optional[float] = None) -> int:
+        with _conn(project) as c:
+            return count_attention_requests_in(c, project=project, now=now)
+
+    def get_request(self, request_id: str, *,
+                    project: str) -> dict[str, Any]:
+        with _conn(project) as c:
+            return get_attention_request_in(c, request_id, project=project)
+
+    def claim_decision(self, *, project: str, host_id: str, actor: str,
+                       provider: str = "", request_id: str = "",
+                       now: Optional[float] = None) -> Optional[dict[str, Any]]:
+        return _write_through(
+            project, lambda: self._claim_decision(
+                project=project, host_id=host_id, actor=actor, provider=provider,
+                request_id=request_id, now=now))
+
+    @staticmethod
+    def _claim_decision(*, project: str, host_id: str, actor: str,
+                        provider: str, request_id: str,
+                        now: Optional[float]) -> Optional[dict[str, Any]]:
+        with _conn(project) as c:
+            return claim_attention_decision_in(
+                c, project=project, host_id=host_id, actor=actor,
+                provider=provider, request_id=request_id, now=now)
 
 
 default_attention_repository = AttentionRepository()
@@ -434,8 +555,12 @@ __all__ = [
     "ATTENTION_REQUEST_SCHEMA",
     "AttentionRepository",
     "AttentionStoreError",
+    "claim_attention_decision_in",
+    "count_attention_requests_in",
     "create_attention_request_in",
     "default_attention_repository",
+    "get_attention_request_in",
+    "list_attention_requests_in",
     "record_attention_decision_in",
     "reconstruct_attention_audit_in",
     "transition_attention_request_in",

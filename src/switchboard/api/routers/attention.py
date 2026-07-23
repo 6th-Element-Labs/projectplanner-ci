@@ -1,35 +1,90 @@
-"""UI-29: the universal attention view — one queue of everything awaiting a human.
+"""Universal attention ingress for operators and Agent Hosts.
 
-``GET /api/attention`` unions the stores that already hold human-blocking work
+The legacy ``GET /api/attention`` unions stores that hold human-blocking work
 into one normalized, ranked feed:
 
   * ``agent_messages``  — unacked required messages (an agent is parked on you)
   * ``inbox``           — pending triaged inbound (plan@taikunai.com, uploads)
 
-READ-ONLY by design: deciding an item routes to the endpoints that already own
+That legacy feed remains read-only: deciding an item routes to endpoints that own
 each store's writes (``/api/agent_messages/ack``, ``/api/inbox/{id}/confirm`` /
-``/dismiss``), so this view adds no new mutation path. Later slices can fold in
-plan decisions and deliverable next-actions where ``attention=True``
-(see switchboard/storage/repositories/deliverables.py) and replace the
-heuristic rank with a mission_graph blast radius.
+``/dismiss``).
 
-Persistence reads are injected by the composition root (``list_pending_acks``,
-``list_inbox``) rather than importing the ``store`` façade — same dependency
-pattern as ``resolve_project`` / ``resolve_principal``.
+PROTO-8 adds project-scoped durable request, decision, claim, and delivery
+contracts below it. Those handlers are thin adapters over ``AttentionService``;
+provider-specific behavior belongs outside this router.
 """
 from __future__ import annotations
 
 import time
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel, ConfigDict, Field
 
 import auth
+from switchboard.api.deps import (
+    require_agent_host_identity,
+    resolve_agent_host_principal,
+)
+from switchboard.application.attention import (
+    AttentionService,
+    default_attention_service,
+)
+from switchboard.domain.projects.context import ProjectContext
+from switchboard.storage.repositories.attention import AttentionStoreError
 
 ProjectResolver = Callable[[str], str]
 PrincipalResolver = Callable[..., dict]
+BodyProjectResolver = Callable[[dict], str]
 PendingAcksFn = Callable[..., List[Dict[str, Any]]]
 ListInboxFn = Callable[..., List[Dict[str, Any]]]
+
+
+class AttentionRequestBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project: str = Field(min_length=1)
+    provider: str = Field(min_length=1)
+    provider_request_id: str = Field(min_length=1)
+    schema_version: str = Field(min_length=1)
+    prompt: str = Field(min_length=1)
+    choices: list[Any] = Field(min_length=1)
+    idempotency_key: str = Field(min_length=1)
+    host_id: str = Field(min_length=1)
+    task_id: Optional[str] = None
+    runner_session_id: Optional[str] = None
+    work_session_id: Optional[str] = None
+    context: dict[str, Any] = Field(default_factory=dict)
+    recommended_default: Any = None
+    expires_at: Optional[float] = None
+
+
+class AttentionDecisionBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int = Field(ge=1)
+    choice: Any
+    idempotency_key: str = Field(min_length=1)
+
+
+class AttentionClaimBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project: str = Field(min_length=1)
+    host_id: str = Field(min_length=1)
+    provider: str = ""
+    request_id: str = ""
+
+
+class AttentionDeliveryBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project: str = Field(min_length=1)
+    host_id: str = Field(min_length=1)
+    expected_version: int = Field(ge=1)
+    receipt: Any = None
+    error: str = ""
 
 
 def _age_s(ts: Any) -> int:
@@ -95,11 +150,39 @@ def _rank(item: Dict[str, Any]) -> tuple:
     return (src_w, dl, breadth, -item.get("age_s", 0))
 
 
+def _context(project: str, principal: dict, *, source: str) -> ProjectContext:
+    scopes = principal.get("effective_scopes") or principal.get("scopes") or []
+    return ProjectContext(
+        project_id=project,
+        source=source,
+        principal_id=str(principal.get("id") or ""),
+        principal_kind=str(principal.get("kind") or ""),
+        principal_binding=str(principal.get("project") or ""),
+        principal_display_name=str(principal.get("display_name") or ""),
+        effective_scopes=tuple(sorted(str(scope) for scope in scopes)),
+    )
+
+
+def _raise_attention_error(exc: AttentionStoreError) -> None:
+    status = {
+        "attention_request_not_found": 404,
+        "stale_attention_decision": 409,
+        "stale_attention_version": 409,
+        "attention_idempotency_conflict": 409,
+        "attention_decision_idempotency_conflict": 409,
+        "attention_provider_request_conflict": 409,
+        "attention_host_mismatch": 403,
+    }.get(exc.code, 400)
+    raise HTTPException(status, exc.as_dict()) from exc
+
+
 def create_router(*, resolve_project: ProjectResolver,
                   resolve_principal: PrincipalResolver,
+                  resolve_body_project: BodyProjectResolver,
                   list_pending_acks: PendingAcksFn,
-                  list_inbox: ListInboxFn) -> APIRouter:
-    """Read-only attention view against the monolith's shared trust boundaries."""
+                  list_inbox: ListInboxFn,
+                  service: AttentionService = default_attention_service) -> APIRouter:
+    """Mount legacy feed plus durable operator and Agent Host attention contracts."""
     router = APIRouter()
 
     @router.get("/api/attention")
@@ -119,5 +202,110 @@ def create_router(*, resolve_project: ProjectResolver,
         return {"project": proj, "count": len(items), "items": items,
                 "sources": {"agent": sum(1 for i in items if i["source"] == "agent"),
                             "inbox": sum(1 for i in items if i["source"] == "inbox")}}
+
+    @router.get("/api/attention/requests")
+    async def list_attention_requests(
+        request: Request, project: str = Query(...),
+        limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0),
+    ):
+        project_id = resolve_project(project)
+        principal = resolve_principal(
+            request, project_id, ("read",), dev_actor="attention-operator")
+        return service.list_operator_queue(
+            _context(project_id, principal, source="query"),
+            limit=limit, offset=offset)
+
+    @router.get("/api/attention/count")
+    async def count_attention_requests(request: Request, project: str = Query(...)):
+        project_id = resolve_project(project)
+        principal = resolve_principal(
+            request, project_id, ("read",), dev_actor="attention-operator")
+        return service.count_operator_queue(
+            _context(project_id, principal, source="query"))
+
+    @router.get("/api/attention/requests/{request_id}")
+    async def get_attention_request(
+        request_id: str, request: Request, project: str = Query(...),
+    ):
+        project_id = resolve_project(project)
+        principal = resolve_principal(
+            request, project_id, ("read",), dev_actor="attention-operator")
+        try:
+            return service.get_request(
+                _context(project_id, principal, source="query"), request_id)
+        except AttentionStoreError as exc:
+            _raise_attention_error(exc)
+
+    @router.post("/api/attention/requests/{request_id}/decide")
+    async def decide_attention_request(
+        request_id: str, request: Request, body: AttentionDecisionBody,
+        project: str = Query(...),
+    ):
+        project_id = resolve_project(project)
+        principal = resolve_principal(
+            request, project_id, ("write:ixp",), dev_actor="attention-operator")
+        try:
+            return service.decide(
+                _context(project_id, principal, source="query"), request_id,
+                body.model_dump(), actor=auth.actor(principal))
+        except AttentionStoreError as exc:
+            _raise_attention_error(exc)
+
+    @router.post("/ixp/v1/attention/requests")
+    async def upsert_attention_request(
+        request: Request, body: AttentionRequestBody,
+    ):
+        payload = body.model_dump()
+        project_id = resolve_body_project(payload)
+        principal = resolve_agent_host_principal(
+            resolve_principal, request, project_id,
+            dev_actor=payload["host_id"])
+        require_agent_host_identity(principal, payload["host_id"], project_id)
+        payload.pop("project", None)
+        try:
+            return service.upsert_request(
+                _context(project_id, principal, source="body"), payload,
+                actor=auth.actor(principal))
+        except AttentionStoreError as exc:
+            _raise_attention_error(exc)
+
+    @router.post("/ixp/v1/attention/decisions/claim")
+    async def claim_attention_decision(
+        request: Request, body: AttentionClaimBody,
+    ):
+        payload = body.model_dump()
+        project_id = resolve_body_project(payload)
+        principal = resolve_agent_host_principal(
+            resolve_principal, request, project_id,
+            dev_actor=payload["host_id"])
+        require_agent_host_identity(principal, payload["host_id"], project_id)
+        try:
+            claimed = service.claim_decision(
+                _context(project_id, principal, source="body"),
+                host_id=payload["host_id"], provider=payload["provider"],
+                request_id=payload["request_id"], actor=auth.actor(principal))
+        except AttentionStoreError as exc:
+            _raise_attention_error(exc)
+        return {"claimed": claimed is not None, "delivery": claimed}
+
+    @router.post("/ixp/v1/attention/requests/{request_id}/delivery")
+    async def acknowledge_attention_delivery(
+        request_id: str, request: Request, body: AttentionDeliveryBody,
+    ):
+        payload = body.model_dump()
+        project_id = resolve_body_project(payload)
+        principal = resolve_agent_host_principal(
+            resolve_principal, request, project_id,
+            dev_actor=payload["host_id"])
+        require_agent_host_identity(principal, payload["host_id"], project_id)
+        try:
+            return service.acknowledge_delivery(
+                _context(project_id, principal, source="body"), request_id,
+                expected_version=payload["expected_version"],
+                host_id=payload["host_id"], actor=auth.actor(principal),
+                receipt=payload["receipt"],
+                error=payload["error"])
+        except AttentionStoreError as exc:
+            _raise_attention_error(exc)
 
     return router
