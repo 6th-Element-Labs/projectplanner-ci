@@ -457,6 +457,8 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
                role: str = "implementation",
                runtime: str = "codex", source_sha: str = "",
                instruction: str = "", findings: Optional[list[dict[str, Any]]] = None,
+               reason_code: str = "", route: str = "",
+               decision_attempt: int = 0, state_version: int = 0,
                launcher: Optional[Callable[..., dict[str, Any]]] = None) -> dict[str, Any]:
     """Start or resume THE task session (COORD-44 contract, service-owned).
 
@@ -609,13 +611,20 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
         result = connect_dispatch.enqueue_task(
             task, project=project, actor=actor, runtime=runtime,
             predecessor_wake_id=predecessor,
-            generation_ref=(f"{role}:{source_sha.lower()}"
+            generation_ref=(f"{role}:{source_sha.lower()}:{route}:"
+                            f"{int(decision_attempt or 0)}:"
+                            f"{int(state_version or 0)}"
                             if role in {"review_merge", "remediation"}
                             and source_sha else ""),
             role=role,
             caller_agent_id=caller_agent_id,
             principal_id=principal_id,
             source_sha=source_sha,
+            reason_code=reason_code,
+            acceptance_findings=list(findings or []),
+            route=route,
+            decision_attempt=decision_attempt,
+            state_version=state_version,
         )
     else:
         # Test/adapter seam retained while all product surfaces use Connect.

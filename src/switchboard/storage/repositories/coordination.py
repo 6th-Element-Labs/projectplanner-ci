@@ -553,6 +553,12 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
         "caller_agent_id": str(caller_agent_id or ""),
         "enforce_task_ownership": bool(enforce_task_ownership),
     }
+    effect_identity = policy.get("effect_identity")
+    idem_payload = (
+        dict(effect_identity)
+        if isinstance(effect_identity, dict) and effect_identity.get("schema")
+        else payload
+    )
     if (str((policy.get("scheduler") or {}).get("mode") or "") == "hybrid"
             and policy.get("account_binding")):
         policy["provider_capacity"] = _provider_capacity_decision(
@@ -584,7 +590,7 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
                     "expires_at": active_claim["expires_at"],
                 }
             hit = _store_facade()._idem_hit(
-                c, "request_wake", idem_key, actor, payload)
+                c, "request_wake", idem_key, actor, idem_payload)
             if hit is not None:
                 return hit
             execution_lease = None
@@ -633,11 +639,21 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
                     "reason_codes": binding_errors,
                 }
                 _store_facade()._idem_store(
-                    c, "request_wake", idem_key, actor, payload, out)
+                    c, "request_wake", idem_key, actor, idem_payload, out)
                 return out
+            effect_payload = (
+                dict(effect_identity)
+                if isinstance(effect_identity, dict) and effect_identity.get("schema")
+                else payload
+            )
+            effect_resource = (
+                f"completion:{str(task_id or '').strip().upper()}"
+                if effect_payload is not payload
+                else json.dumps(selector, sort_keys=True)
+            )
             effect_claim = _store_facade()._claim_external_effect_in(
-                c, "wake", "agent_host", json.dumps(selector, sort_keys=True),
-                payload, task_id=task_id, agent_id=selector.get("agent_id") or "",
+                c, "wake", "agent_host", effect_resource,
+                effect_payload, task_id=task_id, agent_id=selector.get("agent_id") or "",
                 idem_key=idem_key, actor=actor, principal_id=principal_id,
                 project=project, now=now)
             if not effect_claim.get("claimed"):
@@ -655,7 +671,8 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
                 if effect_claim.get("verified"):
                     out["verified"] = True
                     out["proof"] = effect_claim.get("proof")
-                _store_facade()._idem_store(c, "request_wake", idem_key, actor, payload, out)
+                _store_facade()._idem_store(
+                    c, "request_wake", idem_key, actor, idem_payload, out)
                 return out
             wake = _insert_wake_intent(
                 c, selector=selector, reason=reason or "wake requested",
@@ -668,7 +685,8 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
                 readback={"wake_id": wake["wake_id"], "wake_status": wake["status"]},
                 actor=actor, task_id=task_id, project=project, now=now)
             wake["effect_key"] = effect_claim["effect_key"]
-            _store_facade()._idem_store(c, "request_wake", idem_key, actor, payload, wake)
+            _store_facade()._idem_store(
+                c, "request_wake", idem_key, actor, idem_payload, wake)
             return wake
     except sqlite3.OperationalError as exc:
         if _store_facade()._sqlite_busy(exc):

@@ -961,6 +961,8 @@ def launch_command(wake, inventory, runner_session_id=""):
             ),
             config,
             workspace_path=str(inventory.get("repo_root") or _git_root()),
+            completion_contract=dict(
+                (wake.get("policy") or {}).get("lifecycle") or {}),
         )
         child = list(spec.argv)
     elif mode == "direct_task":

@@ -77,6 +77,15 @@ class ScopedCompletionCoordinator(CoordinatorDaemon):
 
         role = mission_coordinator._lifecycle_role(
             self.store, task_project, task_id)
+        from switchboard.storage.repositories import completion_runs
+        completion_run = (
+            completion_runs.get_active_completion_run(
+                task_id, project=task_project) or {})
+        reason_code = str(
+            completion_run.get("reason_code")
+            or ("current_head_remediation_required"
+                if role == "remediation"
+                else "current_head_review_required"))
         head_sha = str((detail.get("git_state") or {}).get("head_sha") or "").strip()
         if detail.get("status") == "In Review" and role != "remediation":
             role = "review_merge"
@@ -92,7 +101,15 @@ class ScopedCompletionCoordinator(CoordinatorDaemon):
             dispatch = task_execution.start_task(
                 task_id, project=task_project, actor=self.config.actor,
                 agent_id=self.agent_id, role=role,
-                source_sha=head_sha or "")
+                source_sha=head_sha or "",
+                reason_code=reason_code,
+                route=str(completion_run.get("route") or role),
+                decision_attempt=int(completion_run.get("attempt") or 0),
+                state_version=int(completion_run.get("state_version") or 0),
+                findings=list(
+                    (completion_run.get("evidence_refs") or {}).get(
+                        "acceptance_findings") or []),
+            )
         except Exception as exc:  # noqa: BLE001 - surface, never swallow
             dispatch = {"action": "refused", "error": type(exc).__name__,
                         "reason": str(exc)}
