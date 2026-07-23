@@ -230,8 +230,8 @@ ok(lane_run["status"] == "running"
 
 service = Path("deploy/projectplanner-coordinator-autopilot.service").read_text()
 ok("Restart=always" in service and "coordinator_daemon.py run" in service
-   and "PM_COORDINATOR_AUTOPILOT_ACT=0" in service,
-   "systemd profile is persistent and explicitly janitor-only")
+   and "PM_COORDINATOR_AUTOPILOT_ACT=1" in service,
+   "systemd profile is persistent and ships the scoped completion driver (ACT=1)")
 daemon_source = Path("coordinator_daemon.py").read_text()
 ok("run_mission_coordinator_tick" not in daemon_source
    and "review_steward" not in daemon_source
