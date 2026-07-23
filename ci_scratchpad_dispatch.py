@@ -12,7 +12,6 @@ import argparse
 import json
 import os
 import sys
-from pathlib import Path
 from typing import Any, Dict, Optional
 
 import ci_verify_dispatch as cvd
@@ -30,10 +29,17 @@ def is_scratchpad_enabled() -> bool:
 
 
 def source_checkout_path() -> str:
-    return (
-        os.environ.get("SWITCHBOARD_CI_SOURCE_PATH")
-        or os.environ.get("PM_WORK_SESSION_SOURCE_PATH")
-        or str(Path(__file__).resolve().parent)
+    for name in (
+        "SWITCHBOARD_CI_SOURCE_PATH",
+        "PM_WORK_SESSION_SOURCE_PATH",
+        "PM_REPO_PATH",
+    ):
+        configured = (os.environ.get(name) or "").strip()
+        if configured:
+            return configured
+    raise cvd.CiVerifyDispatchError(
+        "Scratchpad CI source checkout is not configured; set "
+        "SWITCHBOARD_CI_SOURCE_PATH or PM_REPO_PATH to a writable coordination clone."
     )
 
 
