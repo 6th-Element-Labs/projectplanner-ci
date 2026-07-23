@@ -435,6 +435,14 @@ def validate_autopilot_scope_authority(
     with _conn(project) as c:
         row = c.execute(
             "SELECT * FROM autopilot_scopes WHERE scope_id=?", (scope_id,)).fetchone()
+        target_linked = True
+        if row and row["scope_type"] == "deliverable" and task_id:
+            target_linked = bool(c.execute(
+                "SELECT 1 FROM deliverable_task_links "
+                "WHERE deliverable_id=? AND project_id=? AND task_id=? LIMIT 1",
+                (row["deliverable_id"], task_project or project,
+                 str(task_id).upper()),
+            ).fetchone())
     if not row:
         return {"allowed": False, "error": "autopilot_scope_not_found",
                 "scope_id": scope_id}
@@ -456,6 +464,7 @@ def validate_autopilot_scope_authority(
         "task_id": (
             row["scope_type"] == "deliverable" or not task_id
             or str(row["task_id"] or "").upper() == str(task_id).upper()),
+        "target_membership": target_linked,
     }
     failed = sorted(key for key, passed in checks.items() if not passed)
     if failed:
@@ -511,11 +520,23 @@ def update_autopilot_scope(scope_id: str, *, project: str = DEFAULT_PROJECT,
         if not row:
             return {"error": "autopilot scope not found", "scope_id": scope_id}
         next_status = status or row["status"]
-        c.execute(
-            "UPDATE autopilot_scopes SET status=?, updated_at=?, last_tick_at=?, "
-            "last_result_json=? WHERE scope_id=?",
-            (next_status, now, now, json.dumps(last_result or {}, sort_keys=True), scope_id),
-        )
+        closing = row["status"] == "active" and next_status != "active"
+        if closing:
+            c.execute(
+                "UPDATE autopilot_scopes SET status=?,generation=generation+1,"
+                "fence_epoch=fence_epoch+1,lease_id='',holder_agent_id='',"
+                "heartbeat_at=NULL,expires_at=NULL,updated_at=?,last_tick_at=?,"
+                "last_result_json=? WHERE scope_id=?",
+                (next_status, now, now, json.dumps(last_result or {}, sort_keys=True),
+                 scope_id),
+            )
+        else:
+            c.execute(
+                "UPDATE autopilot_scopes SET status=?, updated_at=?, last_tick_at=?, "
+                "last_result_json=? WHERE scope_id=?",
+                (next_status, now, now, json.dumps(last_result or {}, sort_keys=True),
+                 scope_id),
+            )
         current = c.execute("SELECT * FROM autopilot_scopes WHERE scope_id=?", (scope_id,)).fetchone()
         return _row(current)
 

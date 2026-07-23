@@ -312,6 +312,13 @@ try:
     ok(not denied.get("allowed")
        and "holder_agent_id" in denied.get("reason_codes", []),
        "scope effects fail closed for the wrong holder")
+    cross_write = store.validate_autopilot_scope_authority(
+        scope_authority, project="qa-coord-home",
+        deliverable_id="coord-mission", task_project="qa-coord-target",
+        task_id="RENDER-2")
+    ok(not cross_write.get("allowed")
+       and "target_membership" in cross_write.get("reason_codes", []),
+       "deliverable scope cannot write to an unlinked task")
     store.register_agent(
         "agent/replacement", "codex", ttl_s=1000,
         actor="test", project="qa-coord-home")
@@ -330,6 +337,17 @@ try:
        and current.get("allowed")
        and replacement.get("fence_epoch") > scope_authority.get("fence_epoch"),
        "expired scope takeover advances the fence and invalidates the old owner")
+    closed = store.update_autopilot_scope(
+        scope["scope_id"], project="qa-coord-home", status="completed",
+        last_result={"status": "completed"})
+    closed_authority = store.validate_autopilot_scope_authority(
+        replacement, project="qa-coord-home",
+        deliverable_id="coord-mission",
+        now=float(scope_authority["expires_at"]) + 1)
+    ok(closed.get("status") == "completed"
+       and not closed.get("lease_id") and not closed.get("holder_agent_id")
+       and not closed_authority.get("allowed"),
+       "scope closure releases authority and invalidates the prior fence")
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 
