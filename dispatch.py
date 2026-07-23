@@ -13,6 +13,7 @@ import time
 
 import store
 from switchboard.domain.coordination.runtime_profile import runtime_profile_requirement
+from switchboard.domain import execution_liveness
 
 _RUNTIME = "claude-code"
 _CODEX_RUNTIME = "codex"
@@ -549,9 +550,7 @@ def resume_review(task_id, actor="user", project=store.DEFAULT_PROJECT,
                 "task_id": task_id,
                 "runner_session_id": watch.get("runner_session_id")}
     sessions = list(watch.get("sessions") or [])
-    terminal_statuses = {
-        "completed", "failed", "cancelled", "expired", "lost", "killed", "exited",
-    }
+    terminal_statuses = execution_liveness.TERMINAL_EXECUTION_STATES
     live_unwatchable = [session for session in sessions if (
         session.get("stale") is not True
         and str(session.get("status") or "").strip().lower()

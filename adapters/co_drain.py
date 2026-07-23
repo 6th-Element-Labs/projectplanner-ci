@@ -24,15 +24,15 @@ import urllib.request
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
+from switchboard.domain import execution_liveness
 
 
 REQUEST_SCHEMA = "switchboard.co_drain.request.v1"
 RECEIPT_SCHEMA = "switchboard.co_drain.receipt.v1"
 DEFAULT_REQUEST_PATH = "/run/switchboard-co/drain-request.json"
 DEFAULT_RECEIPT_PATH = "/run/switchboard-co/drain-receipt.json"
-TERMINAL_RUNNER_STATES = {
-    "completed", "failed", "cancelled", "expired", "lost", "killed", "exited", "stopped",
-}
+# SIMPLIFY-18: drain reads the one canonical vocabulary.
+TERMINAL_RUNNER_STATES = execution_liveness.TERMINAL_EXECUTION_STATES
 ALLOWED_REASONS = {
     "planned_scale_in", "spot_interruption", "rebalance_recommendation",
     "persistent_host_removal", "operator_request",

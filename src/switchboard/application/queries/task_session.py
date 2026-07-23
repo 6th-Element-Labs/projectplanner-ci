@@ -15,13 +15,13 @@ from switchboard.storage.repositories import tasks as tasks_repo
 from switchboard.storage.repositories import task_completion as completion_repo
 
 
+from switchboard.domain import execution_liveness
+
 SCHEMA = "switchboard.task_session.v1"
 DISPLAY_SCHEMA = "switchboard.task_honest_display.v1"
 DOCTOR_SCHEMA = "switchboard.task_session_doctor.v1"
-TERMINAL_RUNNERS = {
-    "completed", "failed", "cancelled", "expired", "lost", "killed",
-    "exited", "stopped",
-}
+# SIMPLIFY-18: one vocabulary, owned by the capacity plane.
+TERMINAL_RUNNERS = execution_liveness.TERMINAL_EXECUTION_STATES
 
 # Board / modal / dependency-graph labels derived from lifecycle_phase.
 # Durable workflow status stays untouched; this is the operator-facing truth.

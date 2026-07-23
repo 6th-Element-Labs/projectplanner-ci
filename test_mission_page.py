@@ -164,10 +164,13 @@ try:
         item for item in pointer_status.get("active_work") or []
         if item.get("task_id") == target_task["task_id"])
     pointer_runner = pointer_work.get("active_runner") or {}
+    # SIMPLIFY-18: the agent_state pointer was a second, denormalized store of
+    # "which runner is current". runner_sessions is now the only authority, so
+    # the pointer no longer appears as a source.
     ok(pointer_runner.get("active") is True
-       and pointer_runner.get("source") == "agent_state_pointer"
+       and pointer_runner.get("source") == "runner_sessions"
        and (pointer_runner.get("session") or {}).get("host_id") == "host/mission-proof",
-       "Mission active_work resolves the registered runner through agent_state")
+       "Mission active_work resolves the live runner from runner_sessions alone")
 
     with store._conn(TARGET) as c:
         c.execute("UPDATE tasks SET agent_state='{}', updated_at=? WHERE task_id=?",
@@ -179,9 +182,12 @@ try:
     fallback_work = next(
         item for item in fallback_status.get("active_work") or []
         if item.get("task_id") == target_task["task_id"])
-    ok((fallback_work.get("active_runner") or {}).get("source")
-       == "runner_sessions_fallback",
-       "Mission active_work falls back to authoritative runner_sessions")
+    # Clearing the pointer must change nothing at all: it was never authority.
+    fallback_runner = fallback_work.get("active_runner") or {}
+    ok(fallback_runner.get("active") is True
+       and fallback_runner.get("source") == "runner_sessions"
+       and (fallback_runner.get("session") or {}).get("host_id") == "host/mission-proof",
+       "clearing agent_state does not change liveness — the pointer is not authority")
 
     brief_res = client.post(
         f"/api/deliverables/{deliverable['id']}/mission_brief",

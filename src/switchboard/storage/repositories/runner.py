@@ -17,6 +17,7 @@ from typing import Any, Callable, Dict, List, Optional
 from constants import DEFAULT_PROJECT, MCP_OPERATOR_SCOPES
 from db.connection import _conn
 from db.core import _json_obj, _text_tail, hash_token
+from switchboard.domain import execution_liveness
 
 RUNNER_CONTROL_ACTIONS = {"snapshot", "kill", "restart", "health", "logs", "open", "inject"}
 # COORD-34 / M4.6: operator Watch/Chat may open only when this bind is complete.
@@ -25,9 +26,9 @@ RUNNER_CONTROL_ACTIONS = {"snapshot", "kill", "restart", "health", "logs", "open
 # CO-13: inject additionally requires matching task_id on the control request.
 RUNNER_BIND_FIELDS = ("task_id", "claim_id", "host_id", "wake_id", "work_session_id")
 RUNNER_WATCHABLE_STATUSES = frozenset({"ready", "running"})
-RUNNER_TERMINAL_STATUSES = frozenset({
-    "completed", "failed", "cancelled", "expired", "lost", "killed", "exited",
-})
+# SIMPLIFY-18: this set had drifted -- it omitted "stopped", so a stopped
+# generation never released its execution lease or Work Session.
+RUNNER_TERMINAL_STATUSES = execution_liveness.TERMINAL_EXECUTION_STATES
 RUNNER_FAILURE_TERMINAL_STATUSES = frozenset(
     RUNNER_TERMINAL_STATUSES - {"completed"}
 )
@@ -48,6 +49,9 @@ __all__ = [
     "upsert_runner_session",
     "list_runner_sessions",
     "get_runner_session",
+    "task_live_executions",
+    "task_has_live_execution",
+    "blocking_execution_for",
     "make_runner_lease_due",
     "terminal_task_cleanup_for_host_in",
     "runner_bind_tuple",
@@ -711,7 +715,7 @@ def _runner_available_actions(session: Dict[str, Any]) -> List[str]:
     control = session.get("control") or {}
     metadata = session.get("metadata") or {}
     status = str(session.get("status") or "").lower()
-    if session.get("stale") or status in {"exited", "killed", "failed", "completed"}:
+    if session.get("stale") or execution_liveness.is_terminal(status):
         return []
     actions: List[str] = []
     has_host = bool(session.get("host_id"))
@@ -777,13 +781,16 @@ def _runner_session_row(row: sqlite3.Row, now: Optional[float] = None,
                         c: Optional[sqlite3.Connection] = None) -> Dict[str, Any]:
     now = time.time() if now is None else now
     d = dict(row)
-    ttl_s = d.get("heartbeat_ttl_s") or 60
-    expires_at = (d.get("heartbeat_at") or 0) + ttl_s
+    # SIMPLIFY-18: expiry and staleness come from the one canonical
+    # predicate so every surface agrees on what "alive" means.
+    expires_at = execution_liveness.expires_at(d)
     d["control"] = _json_obj(d.pop("control_json", "{}"), {})
     d["metadata"] = _json_obj(d.pop("metadata_json", "{}"), {})
     d["last_snapshot"] = _json_obj(d.pop("last_snapshot_json", "{}"), {})
     d["expires_at"] = expires_at
-    d["stale"] = now >= expires_at
+    d["stale"] = execution_liveness.is_expired(d, now=now)
+    d["live"] = execution_liveness.is_live(d, now=now)
+    d["execution"] = execution_liveness.execution_identity(d)
     d["available_actions"] = _runner_available_actions(d)
     d["environment"] = _runner_environment(d, now)
     if include_claim and c is not None and d.get("claim_id"):
@@ -1388,9 +1395,8 @@ def _maybe_set_active_runner_pointer(c: sqlite3.Connection, record: Dict[str, An
               (json.dumps(current, sort_keys=True), now, task_id))
 
 
-TERMINAL_RUNNER_STATES = frozenset({
-    "completed", "failed", "cancelled", "expired", "lost", "killed", "exited", "stopped",
-})
+# SIMPLIFY-18: one vocabulary (already imported above).
+TERMINAL_RUNNER_STATES = execution_liveness.TERMINAL_EXECUTION_STATES
 
 
 def terminalize_wake_runners_in(c: sqlite3.Connection, wake_id: str, *,
@@ -2003,6 +2009,25 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
     terminalizing_fenced_generation = (
         incoming_metadata.get("terminalized_by") in {
             "runner_lease_expiry", "host_supervisor"})
+    # SIMPLIFY-18 / ADR-0008 C2-C3: runner_sessions is the authoritative
+    # heartbeat boundary. Once a managed generation has a server-owned fence,
+    # every nonterminal renewal must present that exact epoch. Checking only a
+    # helper or the later lease-surrender handoff leaves a window where an old
+    # process can renew the canonical row after its generation was fenced.
+    if (previous_row and previous_metadata.get("execution_id")
+            and not terminalizing_fenced_generation
+            and execution_liveness.heartbeat_is_fenced(
+                {"metadata": previous_metadata},
+                claimed_epoch=incoming_metadata.get("lease_epoch"))):
+        return {
+            "error": "execution generation is fenced",
+            "error_code": "runner_generation_fenced",
+            "failure_class": "unbound_identity",
+            "runner_session_id": runner_session_id,
+            "claimed_lease_epoch": incoming_metadata.get("lease_epoch"),
+            "current_lease_epoch": execution_liveness.fence_epoch_of(
+                {"metadata": previous_metadata}),
+        }
     completion_handoff = previous_metadata.get("completion_handoff") or {}
     if lease_surrender and terminalizing_fenced_generation and completion_handoff:
         mismatched = []
@@ -2246,6 +2271,68 @@ def list_runner_sessions(host_id: str = "", runtime: str = "", task_id: str = ""
     if not include_stale:
         sessions = [s for s in sessions if not s.get("stale")]
     return sessions
+
+
+def task_live_executions(task_id: str,
+                         project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    """Every genuinely live execution for one task — the one liveness authority.
+
+    SIMPLIFY-18 / ADR-0008 C1. Liveness comes from this registry alone. Claims,
+    Work Sessions, agent presence, and wake intents are ownership, evidence,
+    diagnostics, or transport; unioning them in is what produced contradictory
+    answers before this task.
+    """
+    task_id = str(task_id or "").strip()
+    if not task_id:
+        return []
+    now = time.time()
+    with _conn(project) as c:
+        rows = c.execute(
+            "SELECT * FROM runner_sessions WHERE task_id=? "
+            "ORDER BY heartbeat_at DESC, runner_session_id", (task_id,)).fetchall()
+        sessions = [_runner_session_row(r, now=now, include_claim=True, c=c)
+                    for r in rows]
+    return [s for s in sessions if execution_liveness.is_live(s, now=now)]
+
+
+def task_has_live_execution(task_id: str,
+                            project: str = DEFAULT_PROJECT) -> bool:
+    """True only when a real supervised execution is alive for this task."""
+    return bool(task_live_executions(task_id, project=project))
+
+
+def blocking_execution_for(task_id: str, *, role: str = "",
+                           head_sha: str = "",
+                           project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+    """The live execution that must block a duplicate start, or None.
+
+    Acceptance 3 and 4. A stale claim or Work Session can never block a start,
+    because neither is consulted. Re-entering with the same role and head is
+    idempotent (the caller attaches to that generation); a *different* role or
+    head must not silently fork a second generation, so it is returned as a
+    blocker for the caller to refuse loudly.
+    """
+    role = str(role or "").strip().lower()
+    head_sha = str(head_sha or "").strip()
+    sessions = task_live_executions(task_id, project=project)
+    # More than one live physical generation is itself an invariant violation.
+    # Fail closed instead of blessing whichever row happens to sort first.
+    if len(sessions) > 1:
+        return sessions[0]
+    for session in sessions:
+        identity = execution_liveness.execution_identity(session)
+        existing_role = str(identity.get("role") or "").strip().lower()
+        existing_head = str(identity.get("head_sha") or "").strip().lower()
+        requested_head = head_sha.lower()
+        if not role:
+            return session
+        if existing_role != role:
+            return session
+        if requested_head and existing_head != requested_head:
+            return session
+        # Same role and, when supplied, the same exact head: idempotent attach.
+        return None
+    return None
 
 
 def get_runner_session(runner_session_id: str,
