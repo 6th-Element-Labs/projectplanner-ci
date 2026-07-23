@@ -234,20 +234,14 @@ def create_external_ci_run(data: Dict[str, Any], actor: str = "system",
         return error
     now = time.time()
     run_id = (data.get("run_id") or "ecir-" + uuid.uuid4().hex[:16]).strip()
+    # Dispatch identity is the canonical source repository plus exact source SHA.
+    # Branch labels, tasks, claims, and webhook/manual callers are observations
+    # of that dispatch, not reasons to issue another push-triggered workflow.
     side_payload = {
         "source_project": normalized["source_project"],
         "source_repo": normalized["source_repo"],
-        "source_branch": normalized["source_branch"],
         "source_sha": normalized["source_sha"],
-        "mirror_repo": normalized["mirror_repo"],
-        "mirror_branch": normalized["mirror_branch"],
-        "workflow": normalized["workflow"],
-        "status_context": normalized["status_context"],
-        "required_status_contexts": normalized["required_status_contexts"],
-        "ci_repo": normalized["mirror_repo"],
         "evidence_only": True,
-        "task_id": normalized["task_id"],
-        "claim_id": normalized["claim_id"],
     }
     request_payload = {
         **(normalized["request"] or {}),
@@ -267,11 +261,15 @@ def create_external_ci_run(data: Dict[str, Any], actor: str = "system",
         },
     }
     with _conn(project) as c:
+        # Serialize the effect-key read/claim/run insert. Without an immediate
+        # write reservation, concurrent webhook/manual callers can both observe
+        # no row before either inserts the deterministic dispatch.
+        c.execute("BEGIN IMMEDIATE")
         effect = _claim_external_effect_in(
             c,
             "external_ci_mirror",
-            normalized["mirror_repo"],
-            normalized["mirror_branch"],
+            normalized["source_repo"],
+            normalized["source_sha"],
             side_payload,
             task_id=normalized["task_id"],
             claim_id=normalized["claim_id"] or "",

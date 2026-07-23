@@ -77,13 +77,14 @@ try:
     effects = store.list_external_effects(effect_type="external_ci_mirror",
                                           task_id=task["task_id"],
                                           project="switchboard")
-    ok(len(effects) == 1 and effects[0]["target"] == "6th-Element-Labs/public-ci",
+    ok(len(effects) == 1 and
+       effects[0]["target"] == "6th-Element-Labs/private-product",
        "external CI run reserves exactly one side-effect ledger row")
-    ok(effects[0]["payload"]["ci_repo"] == "6th-Element-Labs/public-ci" and
-       effects[0]["payload"]["status_context"] == "public-ci/full-suite",
-       "side-effect payload carries ci_repo/status_context proof")
-    ok(effects[0]["resource"] == created["mirror_branch"],
-       "side-effect resource is the disposable public mirror branch")
+    ok(effects[0]["payload"]["source_repo"] == "6th-Element-Labs/private-product" and
+       effects[0]["payload"]["source_sha"] == created["source_sha"],
+       "side-effect payload carries the stable exact-source dispatch identity")
+    ok(effects[0]["resource"] == created["source_sha"],
+       "side-effect resource is the exact canonical source SHA")
 
     topology_default = store.create_external_ci_run(
         {
@@ -103,9 +104,10 @@ try:
     duplicate = store.create_external_ci_run(
         {
             "source_project": "private-product",
-            "source_branch": "codex/CIQA-1-proof",
+            "source_branch": "manual/retry",
             "source_sha": source_sha,
             "mirror_repo": "6th-Element-Labs/public-ci",
+            "mirror_branch": "ci/manual-retry/abcdef123456",
             "workflow": "strict.yml",
             "task_id": task["task_id"],
             "claim_id": "claim-123",
@@ -116,7 +118,7 @@ try:
         project="switchboard",
     )
     ok(duplicate["run_id"] == created["run_id"] and duplicate["idempotent"] is True,
-       "duplicate mirror request returns the existing run")
+       "manual/webhook variants for the same source repo and SHA coalesce")
 
     updated = store.update_external_ci_run(
         created["run_id"],

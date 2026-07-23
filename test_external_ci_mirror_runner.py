@@ -45,6 +45,7 @@ class FakeRunner:
         self.mode = mode
         self.commands = []
         self.run_list_calls = 0
+        self.remote_read_calls = 0
 
     def __call__(self, args, cwd):
         self.commands.append(args)
@@ -55,8 +56,28 @@ class FakeRunner:
                 args, 0, "abcdef1234567890abcdef1234567890abcdef12\n", "")
         if args[:3] == ["git", "fetch", "--no-tags"]:
             return subprocess.CompletedProcess(args, 0, "", "fetched")
+        if args[:3] == ["git", "ls-remote", "--heads"]:
+            self.remote_read_calls += 1
+            if self.mode == "race_same" and self.remote_read_calls == 1:
+                return subprocess.CompletedProcess(args, 0, "", "")
+            if self.mode == "same_ref":
+                return subprocess.CompletedProcess(
+                    args, 0,
+                    "abcdef1234567890abcdef1234567890abcdef12\t"
+                    "refs/heads/ci/existing/ref\n", "")
+            if self.mode == "race_same":
+                return subprocess.CompletedProcess(
+                    args, 0,
+                    "abcdef1234567890abcdef1234567890abcdef12\t"
+                    "refs/heads/ci/existing/ref\n", "")
+            if self.mode == "different_ref":
+                return subprocess.CompletedProcess(
+                    args, 0,
+                    "1111111111111111111111111111111111111111\t"
+                    "refs/heads/ci/existing/ref\n", "")
+            return subprocess.CompletedProcess(args, 0, "", "")
         if args[:2] == ["git", "push"]:
-            if self.mode == "push_fail":
+            if self.mode in {"push_fail", "race_same"}:
                 return subprocess.CompletedProcess(args, 1, "", "permission denied")
             return subprocess.CompletedProcess(args, 0, "", "pushed")
         if args[:3] == ["gh", "workflow", "run"]:
@@ -152,6 +173,7 @@ try:
     push_task = store.create_task({"workstream_id": "CIQA", "title": "push trigger"},
                                   actor="test", project=P)
     push_request = make_request(push_task["task_id"])
+    push_request["source_sha"] = "bbbbbb1234567890abcdef1234567890abcdef12"
     push_request["push_triggered"] = True
     push_request["poll_after_push"] = True
     push_request["cleanup_mirror_branch"] = True
@@ -177,18 +199,58 @@ try:
     duplicate = external_ci_mirror.request_external_ci_mirror_run(
         make_request(task["task_id"]), source_path, actor="test", project=P,
         runner=duplicate_runner, sleep_fn=clock.sleep, now_fn=clock.time)
-    ok(duplicate.get("resumed_terminal") is True and not duplicate_runner.commands,
+    ok(duplicate.get("coalesced") is True and not duplicate_runner.commands,
        "terminal duplicate is idempotent and does not push or dispatch again")
 
-    for mode, expected_class in (
-        ("push_fail", "mirror_sync_failed"),
-        ("trigger_fail", "workflow_trigger_failed"),
-        ("workflow_fail", "workflow_failed"),
+    same_ref_task = store.create_task(
+        {"workstream_id": "CIQA", "title": "same remote ref"}, actor="test", project=P)
+    same_ref_request = make_request(same_ref_task["task_id"])
+    same_ref_request["source_sha"] = "cccccc1234567890abcdef1234567890abcdef12"
+    same_ref_request["push_triggered"] = True
+    same_ref_request["poll_after_push"] = False
+    same_ref = external_ci_mirror.request_external_ci_mirror_run(
+        same_ref_request, source_path, actor="test", project=P,
+        runner=FakeRunner("same_ref"), sleep_fn=clock.sleep, now_fn=clock.time)
+    ok(same_ref["ok"] is True and same_ref["result"]["mirror_ref_reused"] is True,
+       "an existing mirror ref at the exact SHA is idempotent success")
+
+    race_ref_task = store.create_task(
+        {"workstream_id": "CIQA", "title": "concurrent remote ref"}, actor="test", project=P)
+    race_ref_request = make_request(race_ref_task["task_id"])
+    race_ref_request["source_sha"] = "dddddd1234567890abcdef1234567890abcdef12"
+    race_ref_request["push_triggered"] = True
+    race_ref_request["poll_after_push"] = False
+    race_ref = external_ci_mirror.request_external_ci_mirror_run(
+        race_ref_request, source_path, actor="test", project=P,
+        runner=FakeRunner("race_same"), sleep_fn=clock.sleep, now_fn=clock.time)
+    ok(race_ref["ok"] is True and race_ref["result"]["mirror_ref_reused"] is True,
+       "a concurrent exact-ref creation closes the readback/push race")
+
+    different_ref_task = store.create_task(
+        {"workstream_id": "CIQA", "title": "different remote ref"}, actor="test", project=P)
+    different_ref_request = make_request(different_ref_task["task_id"])
+    different_ref_request["source_sha"] = "2222222222222222222222222222222222222222"
+    different_ref = external_ci_mirror.request_external_ci_mirror_run(
+        different_ref_request, source_path, actor="test", project=P,
+        runner=FakeRunner("different_ref"), sleep_fn=clock.sleep, now_fn=clock.time)
+    ok(different_ref["ok"] is False and
+       different_ref["failure_class"] == "mirror_sync_failed",
+       "an existing mirror ref at a different SHA fails closed")
+
+    for mode, expected_class, source_sha in (
+        ("push_fail", "mirror_sync_failed",
+         "3333333333333333333333333333333333333333"),
+        ("trigger_fail", "workflow_trigger_failed",
+         "4444444444444444444444444444444444444444"),
+        ("workflow_fail", "workflow_failed",
+         "5555555555555555555555555555555555555555"),
     ):
         t = store.create_task({"workstream_id": "CIQA", "title": mode},
                               actor="test", project=P)
+        failure_request = make_request(t["task_id"])
+        failure_request["source_sha"] = source_sha
         result = external_ci_mirror.request_external_ci_mirror_run(
-            make_request(t["task_id"]), source_path, actor="test", project=P,
+            failure_request, source_path, actor="test", project=P,
             runner=FakeRunner(mode), sleep_fn=clock.sleep, now_fn=clock.time)
         ok(result["ok"] is False and result["failure_class"] == expected_class,
            f"{mode} records {expected_class}")
