@@ -419,6 +419,39 @@ def get_task_execution(task_id: Any, *, project: str = DEFAULT_PROJECT) -> dict[
 # 2. start_task — attach, dedupe, or launch. Never two sessions for one task.
 # --------------------------------------------------------------------------
 
+def _arm_task_scope(task_id: str, *, project: str, role: str,
+                    runtime: str, actor: str) -> dict[str, Any]:
+    """Give an operator-started task the authority to finish itself.
+
+    Only an implementation start arms a scope. review_merge and remediation are
+    generations the scope itself requested, so re-arming on them would be
+    circular. Creation is idempotent, and an existing scope covering this task
+    is reused rather than duplicated.
+    """
+    if str(role or "").strip().lower() != "implementation":
+        return {}
+    from switchboard.storage.repositories import autopilot_scopes as scopes_repo
+    try:
+        live = scopes_repo.list_autopilot_scopes(
+            project=project, status="active,paused", limit=500)
+        for row in live:
+            if (str(row.get("scope_type") or "") == "task"
+                    and str(row.get("task_id") or "").upper() == task_id):
+                return {"scope_id": row.get("scope_id"), "already_started": True}
+        started = scopes_repo.start_autopilot_scope(
+            project=project, scope_type="task", task_project=project,
+            task_id=task_id, runtime=runtime, actor=actor)
+    except Exception as exc:  # noqa: BLE001
+        # Capacity already started; report the gap rather than failing the start
+        # or silently pretending the task can drive itself.
+        return {"error": "scope_not_armed", "reason": str(exc)}
+    if started.get("error"):
+        return {"error": "scope_not_armed", "reason": started.get("error")}
+    return {"scope_id": started.get("scope_id"),
+            "scope_type": started.get("scope_type"),
+            "already_started": bool(started.get("already_started"))}
+
+
 def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "user",
                principal_id: str = "", agent_id: str = "",
                role: str = "implementation",
@@ -605,6 +638,15 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
             start_error=result.get("error"),
             last_dispatch_outcome=result.get("dispatch"),
         )
+    # W1/W2: a Start must grant coordination authority as well as capacity.
+    # Without a scope the task gets a runner and then stalls at In Review,
+    # because nothing is authorised to drive its review/remediation/merge
+    # rounds. Armed only after the start is known good, so a refused start
+    # never leaves an active scope behind.
+    scope = _arm_task_scope(task_id, project=project, role=role,
+                            runtime=runtime, actor=actor)
+    if scope:
+        result = {**result, "scope": scope}
     execution_id = str(result.get("runner_session_id") or "").strip()
     wake_id = str(result.get("wake_id") or "").strip()
     host_id = str(result.get("host_id") or "").strip()

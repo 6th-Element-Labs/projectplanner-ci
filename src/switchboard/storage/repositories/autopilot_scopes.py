@@ -220,6 +220,17 @@ def get_autopilot_scope(scope_id: str, *, project: str = DEFAULT_PROJECT) -> Opt
 
 def _validate_target(project: str, deliverable_id: str, scope_type: str,
                      task_project: str, task_id: str) -> Optional[Dict[str, Any]]:
+    if scope_type == "task" and not deliverable_id:
+        # A standalone task scope: "Start this one task and carry it to Done."
+        # Deliverables group outcomes; requiring one to drive a single task would
+        # force bookkeeping onto every ad-hoc start (ADR-0006 subtraction). The
+        # task itself is the target, so validate the task and nothing else.
+        from switchboard.storage.repositories import tasks as tasks_repository
+        task = tasks_repository.get_task(task_id, project=task_project or project)
+        if not task:
+            return {"error": "unknown task", "task_project": task_project,
+                    "task_id": task_id}
+        return None
     deliverable = deliverables_repository.get_deliverable(
         deliverable_id, project=project, include_task_snapshots=False)
     if not deliverable:
@@ -250,7 +261,7 @@ def _validate_target(project: str, deliverable_id: str, scope_type: str,
 
 
 def validate_autopilot_target(*, project: str = DEFAULT_PROJECT,
-                              deliverable_id: str, scope_type: str = "deliverable",
+                              deliverable_id: str = "", scope_type: str = "deliverable",
                               task_project: str = "", task_id: str = "",
                               runtime: str = "codex") -> Optional[Dict[str, Any]]:
     """Validate a scope target without creating it.
@@ -271,7 +282,7 @@ def validate_autopilot_target(*, project: str = DEFAULT_PROJECT,
 
 def start_autopilot_scope(*, project: str = DEFAULT_PROJECT,
                           profile_id: str = "autopilot-default",
-                          deliverable_id: str, scope_type: str = "deliverable",
+                          deliverable_id: str = "", scope_type: str = "deliverable",
                           task_project: str = "", task_id: str = "",
                           runtime: str = "codex", actor: str = "user") -> Dict[str, Any]:
     kind = str(scope_type or "deliverable").strip().lower()
@@ -280,8 +291,11 @@ def start_autopilot_scope(*, project: str = DEFAULT_PROJECT,
     deliverable_id = str(deliverable_id or "").strip()
     task_project = str(task_project or project).strip() if kind == "task" else ""
     task_id = str(task_id or "").strip().upper() if kind == "task" else ""
-    if not deliverable_id or (kind == "task" and not task_id):
-        return {"error": "deliverable_id and task_id are required for this scope"}
+    if kind == "task":
+        if not task_id:
+            return {"error": "task_id is required for a task scope"}
+    elif not deliverable_id:
+        return {"error": "deliverable_id is required for a deliverable scope"}
     runtime = str(runtime or "codex").strip().lower()
     if runtime not in SUPPORTED_RUNTIMES:
         return {"error": "unsupported autopilot runtime", "runtime": runtime,
@@ -295,7 +309,7 @@ def start_autopilot_scope(*, project: str = DEFAULT_PROJECT,
     with _conn(project) as c:
         # A deliverable scope already covers every eligible linked task. Clicking
         # Start on one of those tasks is an idempotent readback, not a second run.
-        if kind == "task":
+        if kind == "task" and deliverable_id:
             covering = c.execute(
                 "SELECT * FROM autopilot_scopes WHERE profile_id=? AND scope_type='deliverable' "
                 "AND deliverable_id=? AND status IN ('active','paused') ORDER BY updated_at DESC LIMIT 1",

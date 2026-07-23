@@ -44,6 +44,72 @@ class ScopedCompletionCoordinator(CoordinatorDaemon):
             project=project,
         )
 
+
+    def _run_standalone_task_scope(self, project: str, scope: Dict[str, Any],
+                                   authority: Dict[str, Any]) -> Dict[str, Any]:
+        """Carry one task from Start to Done without a deliverable.
+
+        Reuses the existing completion owner rather than running a second
+        lifecycle: mission_coordinator decides which role the task needs next,
+        and Task Execution's start_task creates that generation. This method
+        only supplies the target and the scope authority.
+        """
+        import mission_coordinator
+
+        task_project = str(scope.get("task_project") or project)
+        task_id = str(scope.get("task_id") or "").upper()
+        detail = self.store.get_task(task_id, project=task_project) or {}
+        if not detail or detail.get("error"):
+            return {"status": "failed", "error": "unknown task",
+                    "scope_id": scope.get("scope_id"), "task_id": task_id}
+
+        if self._terminal_task(detail):
+            result = {"status": "completed", "scope_id": scope.get("scope_id"),
+                      "task_id": task_id, "receipts": []}
+            self.store.update_autopilot_scope(
+                scope["scope_id"], project=project, status="completed",
+                last_result=result, ticked_at=float(self.clock()))
+            return result
+
+        if not self.config.act:
+            return {"status": "observed", "scope_id": scope.get("scope_id"),
+                    "task_id": task_id, "task_status": detail.get("status")}
+
+        role = mission_coordinator._lifecycle_role(
+            self.store, task_project, task_id)
+        head_sha = str((detail.get("git_state") or {}).get("head_sha") or "").strip()
+        if detail.get("status") == "In Review" and role != "remediation":
+            role = "review_merge"
+        if role in {"review_merge", "remediation"} and not head_sha:
+            # Refusing loudly beats dispatching a review generation that cannot
+            # bind to an exact head.
+            return {"status": "dispatch_blocked", "scope_id": scope.get("scope_id"),
+                    "task_id": task_id, "role": role,
+                    "error": "review_head_sha_required"}
+
+        from switchboard.application.commands import task_execution
+        try:
+            dispatch = task_execution.start_task(
+                task_id, project=task_project, actor=self.config.actor,
+                agent_id=self.agent_id, role=role,
+                source_sha=head_sha or "")
+        except Exception as exc:  # noqa: BLE001 - surface, never swallow
+            dispatch = {"action": "refused", "error": type(exc).__name__,
+                        "reason": str(exc)}
+
+        result = {
+            "status": "dispatched", "scope_id": scope.get("scope_id"),
+            "task_id": task_id, "task_project": task_project, "role": role,
+            "head_sha": head_sha or None,
+            "generation": authority.get("generation"),
+            "fence_epoch": authority.get("fence_epoch"),
+            "receipts": [dispatch],
+        }
+        self.store.update_autopilot_scope(
+            scope["scope_id"], project=project, last_result=result,
+            ticked_at=float(self.clock()))
+        return result
+
     def run_scope(self, project: str, scope: Dict[str, Any],
                   denied_lanes: Iterable[str] = ()) -> Dict[str, Any]:
         self._register_or_heartbeat(project)
@@ -58,6 +124,11 @@ class ScopedCompletionCoordinator(CoordinatorDaemon):
                 "error": authority.get("error"),
             }
         deliverable_id = str(scope.get("deliverable_id") or "")
+        if scope.get("scope_type") == "task" and not deliverable_id:
+            # A standalone task scope carries one task from Start to Done. There
+            # is no deliverable to read a mission from, so drive the task itself
+            # through the same completion owner every other path uses.
+            return self._run_standalone_task_scope(project, scope, authority)
         mission_status = self.store.get_mission_status(
             project=project, deliverable_id=deliverable_id)
         if mission_status.get("error"):
