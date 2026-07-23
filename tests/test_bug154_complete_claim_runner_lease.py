@@ -129,6 +129,15 @@ with store._conn(P) as c:
               (hashlib.sha256(b"bug154-token").hexdigest(), P, task["task_id"],
                f"agent/{task['task_id']}", HOST, "wake-run-bug154-bound",
                "run-bug154-bound", now, now + 3600))
+    c.execute(
+        "INSERT INTO resource_leases("
+        "id,agent_id,principal_id,task_id,resource_type,names,claimed_at,"
+        "ttl_seconds,execution_role,execution_generation,fence_epoch,"
+        "lease_state,head_sha,wake_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        ("exec-run-bug154-bound", f"agent/{task['task_id']}", HOST_PRINCIPAL,
+         task["task_id"], "execution", json.dumps([task["task_id"], "implementation"]),
+         now, 7200, "implementation", 1, 1, "active", HEAD,
+         "wake-run-bug154-bound"))
 claim = store.claim_task(
     task["task_id"], f"agent/{task['task_id']}",
     principal_id="direct-session/run-bug154-bound",

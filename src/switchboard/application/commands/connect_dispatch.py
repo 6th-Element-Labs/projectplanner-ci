@@ -226,8 +226,6 @@ def enqueue_task(
         queued_at=(_queued_at({}, assignment_id) if generation_ref
                    else _queued_at(task, assignment_id)),
     )
-    execution_generation = coordination_repo.allocate_execution_generation(
-        task_id, assignment_id, project=project)
     selector = {
         "runtime": runtime_name,
         "provider": provider,
@@ -254,11 +252,10 @@ def enqueue_task(
         # decode the Assignment byte-for-byte.
         "lifecycle": {
             "schema": "switchboard.execution_lifecycle.v1",
-            "execution_id": assignment.assignment_id,
-            "generation": execution_generation,
             "role": str(role or "implementation"),
             "head_sha": str((task.get("git_state") or {}).get("head_sha") or ""),
-            "fence_epoch": 1,
+            "ttl_seconds": int(
+                os.environ.get("PM_CONNECT_MAX_RUNTIME_SECONDS", "7200")),
         },
     }
     suffix = generation_ref or str(predecessor_wake_id or "initial")

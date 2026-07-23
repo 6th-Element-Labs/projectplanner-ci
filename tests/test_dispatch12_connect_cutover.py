@@ -70,8 +70,8 @@ for row in captured:
     } and assignment["schema"] == "switchboard.connect.assignment.v1",
        "Assignment v1 remains byte-compatible")
     ok(set(lifecycle) == {
-        "schema", "execution_id", "generation", "role", "head_sha", "fence_epoch",
-    }, "sibling lifecycle policy carries server-owned execution identity")
+        "schema", "role", "head_sha", "ttl_seconds",
+    }, "sibling lifecycle request leaves identity allocation to the server")
     forbidden = {
         "mcp", "token", "credential", "claim", "work_session", "review",
         "evidence", "instruction", "prompt", "pull_request",

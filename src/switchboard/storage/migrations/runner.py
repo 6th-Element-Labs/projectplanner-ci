@@ -152,6 +152,19 @@ ADDITIVE_COLUMN_MIGRATIONS: List[Tuple[str, str, str, str]] = [
      "ALTER TABLE work_sessions ADD COLUMN execution_role TEXT"),
     ("0083_work_sessions_lease_epoch", "work_sessions", "lease_epoch",
      "ALTER TABLE work_sessions ADD COLUMN lease_epoch INTEGER"),
+    ("0084_resource_leases_execution_role", "resource_leases", "execution_role",
+     "ALTER TABLE resource_leases ADD COLUMN execution_role TEXT"),
+    ("0085_resource_leases_execution_generation", "resource_leases",
+     "execution_generation",
+     "ALTER TABLE resource_leases ADD COLUMN execution_generation INTEGER"),
+    ("0086_resource_leases_fence_epoch", "resource_leases", "fence_epoch",
+     "ALTER TABLE resource_leases ADD COLUMN fence_epoch INTEGER"),
+    ("0087_resource_leases_lease_state", "resource_leases", "lease_state",
+     "ALTER TABLE resource_leases ADD COLUMN lease_state TEXT"),
+    ("0088_resource_leases_head_sha", "resource_leases", "head_sha",
+     "ALTER TABLE resource_leases ADD COLUMN head_sha TEXT"),
+    ("0089_resource_leases_wake_id", "resource_leases", "wake_id",
+     "ALTER TABLE resource_leases ADD COLUMN wake_id TEXT"),
 ]
 
 # Idempotent DDL migrations (``CREATE ... IF NOT EXISTS``) applied after the column set,
@@ -357,11 +370,10 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
      "CREATE INDEX IF NOT EXISTS ix_task_execution_completion_identity "
      "ON task_execution_completion_phases("
      "task_id, pr_number, head_sha, runner_generation, transitioned_at DESC)"),
-    ("0084_task_execution_generations",
-     "CREATE TABLE IF NOT EXISTS task_execution_generations ("
-     "assignment_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, "
-     "generation INTEGER NOT NULL, allocated_at REAL NOT NULL, "
-     "UNIQUE(task_id, generation))"),
+    ("0090_ux_active_execution_lease",
+     "CREATE UNIQUE INDEX IF NOT EXISTS ux_active_execution_lease "
+     "ON resource_leases(task_id, execution_role) "
+     "WHERE resource_type='execution' AND released_at IS NULL"),
 ]
 
 

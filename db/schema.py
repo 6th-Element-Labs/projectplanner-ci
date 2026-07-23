@@ -325,7 +325,13 @@ def apply_schema(c):
             names         TEXT NOT NULL,
             claimed_at    REAL NOT NULL,
             ttl_seconds   INTEGER NOT NULL DEFAULT 1800,
-            released_at   REAL
+            released_at   REAL,
+            execution_role TEXT,
+            execution_generation INTEGER,
+            fence_epoch INTEGER,
+            lease_state TEXT,
+            head_sha TEXT,
+            wake_id TEXT
         );
         CREATE INDEX IF NOT EXISTS ix_resource_leases_agent ON resource_leases(agent_id);
         CREATE INDEX IF NOT EXISTS ix_resource_leases_type ON resource_leases(resource_type, released_at);
@@ -347,13 +353,6 @@ def apply_schema(c):
         );
         CREATE INDEX IF NOT EXISTS ix_task_claims_active
             ON task_claims(task_id, status, expires_at);
-        CREATE TABLE IF NOT EXISTS task_execution_generations (
-            assignment_id TEXT PRIMARY KEY,
-            task_id TEXT NOT NULL,
-            generation INTEGER NOT NULL,
-            allocated_at REAL NOT NULL,
-            UNIQUE(task_id, generation)
-        );
         CREATE TABLE IF NOT EXISTS task_git_state (
             task_id            TEXT PRIMARY KEY,
             branch             TEXT,

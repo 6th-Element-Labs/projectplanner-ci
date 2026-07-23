@@ -490,7 +490,43 @@ def _attach_work_session_claim_in(c: sqlite3.Connection, verdict: Dict[str, Any]
         generation = int(metadata.get("execution_generation") or 0)
         role = str(metadata.get("execution_role") or "").strip().lower()
         epoch = int(metadata.get("lease_epoch") or 0)
-        if token and runner and generation > 0 and role and epoch > 0:
+        execution_lease_id = str(metadata.get("execution_id") or "")
+        managed = any((execution_lease_id, generation, role, epoch))
+        execution_lease = c.execute(
+            "SELECT * FROM resource_leases WHERE id=? "
+            "AND resource_type='execution' AND released_at IS NULL",
+            (execution_lease_id,)).fetchone() if execution_lease_id else None
+        binding_valid = bool(
+            token and runner and execution_lease
+            and generation > 0 and role and epoch > 0
+            and execution_lease["task_id"] == task_id
+            and str(execution_lease["execution_role"] or "").lower() == role
+            and int(execution_lease["execution_generation"] or 0) == generation
+            and int(execution_lease["fence_epoch"] or 0) == epoch
+            and str(execution_lease["wake_id"] or "")
+            == str(metadata.get("wake_id") or ""))
+        if managed and not binding_valid:
+            c.execute(
+                "UPDATE task_claims SET status='revoked',completed_at=?,"
+                "abandon_reason='managed_execution_binding_invalid' WHERE id=?",
+                (now, claim_id))
+            c.execute(
+                "UPDATE resource_leases SET released_at=? WHERE resource_type='task' "
+                "AND task_id=? AND agent_id=? AND released_at IS NULL",
+                (now, task_id, agent_id))
+            c.execute(
+                "UPDATE work_sessions SET claim_id=NULL,updated_at=?,updated_by=? "
+                "WHERE work_session_id=?", (now, actor, session["work_session_id"]))
+            c.execute(
+                "UPDATE tasks SET status='Not Started',assignee=NULL,updated_at=? "
+                "WHERE task_id=? AND status='In Progress'", (now, task_id))
+            return {
+                "error": "managed execution binding is incomplete or ambiguous",
+                "reason": "managed_execution_binding_invalid",
+                "failure_class": "unbound_identity",
+                "work_session_id": session.get("work_session_id"),
+            }
+        if binding_valid:
             c.execute(
                 "UPDATE task_claims SET runner_session_id=?,execution_generation=?,"
                 "execution_role=?,lease_epoch=? WHERE id=?",
@@ -1317,6 +1353,18 @@ def _stage_managed_completion_stop_in(
         return {"completed": False, "reason": "implementation_execution_binding_mismatch",
                 "failure_class": "unbound_identity", "claim_id": claim["id"],
                 "task_id": claim["task_id"], "execution_id": runner_id}
+    execution_lease_id = str(metadata.get("execution_id") or "")
+    execution_lease = c.execute(
+        "SELECT * FROM resource_leases WHERE id=? AND resource_type='execution' "
+        "AND released_at IS NULL", (execution_lease_id,)).fetchone()
+    if (not execution_lease
+            or execution_lease["task_id"] != claim["task_id"]
+            or str(execution_lease["execution_role"] or "").lower() != role
+            or int(execution_lease["execution_generation"] or 0) != generation
+            or int(execution_lease["fence_epoch"] or 0) != epoch):
+        return {"completed": False, "reason": "canonical_execution_lease_mismatch",
+                "failure_class": "unbound_identity", "claim_id": claim["id"],
+                "task_id": claim["task_id"], "execution_id": runner_id}
     try:
         pr_number = int(evidence.get("pr_number") or 0)
     except (TypeError, ValueError):
@@ -1359,6 +1407,11 @@ def _stage_managed_completion_stop_in(
                   (next_epoch, now, ws_id))
     c.execute("UPDATE direct_session_tokens SET revoked_at=? WHERE runner_session_id=? "
               "AND revoked_at IS NULL", (now, runner_id))
+    c.execute(
+        "UPDATE resource_leases SET lease_state='stopping',fence_epoch=?,"
+        "claimed_at=? WHERE id=? AND released_at IS NULL",
+        (next_epoch, now - int(execution_lease["ttl_seconds"] or 60),
+         execution_lease_id))
     transition_id = "completion-" + uuid.uuid5(
         uuid.NAMESPACE_URL,
         f"{claim['task_id']}:{pr_number}:{head_sha}:{generation}:review_handoff",
@@ -1407,6 +1460,16 @@ def terminal_ack_claim_completion_in(c: sqlite3.Connection, runner_session_id: s
             != int(metadata.get("execution_generation") or 0)
             or int(handoff.get("lease_epoch") or 0)
             != int(metadata.get("lease_epoch") or 0)):
+        return None
+    execution_lease = c.execute(
+        "SELECT * FROM resource_leases WHERE id=? AND resource_type='execution'",
+        (str(metadata.get("execution_id") or ""),)).fetchone()
+    if (not execution_lease
+            or str(execution_lease["lease_state"] or "") != "stopping"
+            or int(execution_lease["execution_generation"] or 0)
+            != int(handoff.get("generation") or 0)
+            or int(execution_lease["fence_epoch"] or 0)
+            != int(handoff.get("lease_epoch") or 0)):
         return None
     claim_id = str(handoff.get("claim_id") or "")
     claim = c.execute("SELECT * FROM task_claims WHERE id=?", (claim_id,)).fetchone()

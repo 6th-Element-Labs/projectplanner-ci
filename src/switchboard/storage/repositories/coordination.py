@@ -40,34 +40,6 @@ from switchboard.domain.ixp.protocol import (
 )
 
 
-def allocate_execution_generation(task_id: str, assignment_id: str, *,
-                                  project: str = DEFAULT_PROJECT) -> int:
-    """Allocate one idempotent, per-task monotonic execution generation."""
-    task_id = str(task_id or "").strip().upper()
-    assignment_id = str(assignment_id or "").strip()
-    if not task_id or not assignment_id:
-        raise ValueError("task_id and assignment_id are required")
-    with _conn(project) as c:
-        c.execute(
-            "CREATE TABLE IF NOT EXISTS task_execution_generations ("
-            "assignment_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, "
-            "generation INTEGER NOT NULL, allocated_at REAL NOT NULL, "
-            "UNIQUE(task_id, generation))")
-        existing = c.execute(
-            "SELECT generation FROM task_execution_generations "
-            "WHERE assignment_id=?", (assignment_id,)).fetchone()
-        if existing:
-            return int(existing["generation"])
-        row = c.execute(
-            "SELECT COALESCE(MAX(generation),0)+1 AS next_generation "
-            "FROM task_execution_generations WHERE task_id=?",
-            (task_id,)).fetchone()
-        generation = int(row["next_generation"])
-        c.execute(
-            "INSERT INTO task_execution_generations("
-            "assignment_id,task_id,generation,allocated_at) VALUES (?,?,?,?)",
-            (assignment_id, task_id, generation, time.time()))
-        return generation
 from switchboard.domain.provider_credentials import CredentialPrincipal
 from switchboard.storage.repositories.provider_capacity import (
     PROVIDER_CAPACITY_DECISION_SCHEMA,
@@ -538,10 +510,45 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
         )
     try:
         with _control_plane_conn(project) as c:
-            hit = _store_facade()._idem_hit(c, "request_wake", idem_key, actor, payload)
+            hit = _store_facade()._idem_hit(
+                c, "request_wake", idem_key, actor, payload)
             if hit is not None:
                 return hit
-            wake_id = "wake-" + uuid.uuid4().hex[:16]
+            execution_lease = None
+            lifecycle = dict(policy.get("lifecycle") or {})
+            if lifecycle.get("schema") == "switchboard.execution_lifecycle.v1":
+                execution_lease = _acquire_execution_lease_in(
+                    c, task_id=str(task_id or ""),
+                    role=str(lifecycle.get("role") or "implementation"),
+                    head_sha=str(lifecycle.get("head_sha") or ""),
+                    ttl_seconds=int(lifecycle.get("ttl_seconds") or 7200),
+                    agent_id=str(selector.get("agent_id") or ""),
+                    principal_id=principal_id, now=now)
+                if (execution_lease.get("wake_id")
+                        and not execution_lease.get("_acquired_new")):
+                    row = c.execute(
+                        "SELECT * FROM wake_intents WHERE wake_id=?",
+                        (execution_lease["wake_id"],)).fetchone()
+                    if row:
+                        return {
+                            **_wake_row(row), "coalesced": True,
+                            "execution_lease_id": execution_lease["id"],
+                        }
+                    return {
+                        "wake_id": execution_lease["wake_id"],
+                        "status": "pending", "coalesced": True,
+                        "execution_lease_id": execution_lease["id"],
+                    }
+                policy["lifecycle"] = {
+                    **lifecycle,
+                    "execution_id": execution_lease["id"],
+                    "generation": execution_lease["execution_generation"],
+                    "fence_epoch": execution_lease["fence_epoch"],
+                    "ttl_seconds": execution_lease["ttl_seconds"],
+                }
+            wake_id = (
+                str((execution_lease or {}).get("wake_id") or "")
+                or "wake-" + uuid.uuid4().hex[:16])
             policy, binding_errors = _bind_personal_wake_policy(
                 c, wake_id=wake_id, selector=selector, policy=policy,
                 task_id=task_id, project=project, now=now,
@@ -594,6 +601,55 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
         if _store_facade()._sqlite_busy(exc):
             return _control_plane_unavailable("request_wake", project, started_at, exc)
         raise
+
+
+def _acquire_execution_lease_in(
+        c: sqlite3.Connection, *, task_id: str, role: str, head_sha: str,
+        ttl_seconds: int, agent_id: str, principal_id: str,
+        now: float) -> Dict[str, Any]:
+    """Acquire the one canonical nonterminal execution for project/task/role."""
+    if not task_id:
+        raise ValueError("execution lifecycle requires task_id")
+    role = str(role or "implementation").strip().lower()
+    ttl_seconds = max(10, int(ttl_seconds or 7200))
+    rows = c.execute(
+        "SELECT * FROM resource_leases WHERE resource_type='execution' "
+        "AND task_id=? AND execution_role=? AND released_at IS NULL "
+        "ORDER BY claimed_at DESC", (task_id, role)).fetchall()
+    for row in rows:
+        lease = dict(row)
+        expires_at = float(lease["claimed_at"]) + int(lease["ttl_seconds"])
+        if expires_at > now and str(lease.get("lease_state") or "active") in {
+                "reserved", "starting", "active", "stopping"}:
+            return lease
+        c.execute(
+            "UPDATE resource_leases SET released_at=?,lease_state='expired',"
+            "fence_epoch=COALESCE(fence_epoch,0)+1 WHERE id=?",
+            (now, lease["id"]))
+    generation_row = c.execute(
+        "SELECT COALESCE(MAX(execution_generation),0)+1 AS next_generation "
+        "FROM resource_leases WHERE resource_type='execution' "
+        "AND task_id=? AND execution_role=?", (task_id, role)).fetchone()
+    generation = int(generation_row["next_generation"])
+    lease_id = "execlease-" + uuid.uuid4().hex[:20]
+    reserved_wake_id = "wake-" + uuid.uuid4().hex[:16]
+    c.execute(
+        "INSERT OR IGNORE INTO resource_leases("
+        "id,agent_id,principal_id,task_id,resource_type,names,claimed_at,"
+        "ttl_seconds,execution_role,execution_generation,fence_epoch,"
+        "lease_state,head_sha,wake_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (lease_id, agent_id or "switchboard/execution", principal_id or None,
+         task_id, "execution", json.dumps([task_id, role]), now, ttl_seconds,
+         role, generation, 1, "reserved", head_sha or None, reserved_wake_id))
+    winner = c.execute(
+        "SELECT * FROM resource_leases WHERE resource_type='execution' "
+        "AND task_id=? AND execution_role=? AND released_at IS NULL",
+        (task_id, role)).fetchone()
+    if not winner:
+        raise RuntimeError("canonical execution lease acquisition lost without winner")
+    result = dict(winner)
+    result["_acquired_new"] = result["id"] == lease_id
+    return result
 
 
 def deliver_coordination_escalation(plan: Dict[str, Any], *, actor: str,
@@ -2047,6 +2103,13 @@ def complete_wake(wake_id: str, runner_session_id: str = "",
                 (status, now, runner_session_id or None, agent_id or None,
                  json.dumps(result, sort_keys=True), wake_id),
             )
+            if status != "completed" or result.get("started") is False:
+                c.execute(
+                    "UPDATE resource_leases SET released_at=?,lease_state='failed',"
+                    "fence_epoch=COALESCE(fence_epoch,0)+1 "
+                    "WHERE resource_type='execution' AND wake_id=? "
+                    "AND released_at IS NULL",
+                    (now, wake_id))
             if execution.get("execution_connection_id") and not personal:
                 c.execute(
                     "UPDATE personal_execution_connections SET status=?, completed_at=?, "

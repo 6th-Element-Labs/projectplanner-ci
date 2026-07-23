@@ -2092,13 +2092,23 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
             now,
         ),
     )
+    runner_status = str(record.get("status") or "").strip().lower()
+    execution_lease_id = str(metadata.get("execution_id") or "")
+    if execution_lease_id and runner_status not in RUNNER_TERMINAL_STATUSES:
+        c.execute(
+            "UPDATE resource_leases SET lease_state='active',claimed_at=? WHERE id=? "
+            "AND resource_type='execution' AND wake_id=? AND task_id=? "
+            "AND execution_generation=? AND fence_epoch=? AND released_at IS NULL",
+            (now, execution_lease_id, str(metadata.get("wake_id") or ""),
+             str(record.get("task_id") or ""),
+             int(metadata.get("execution_generation") or 0),
+             int(metadata.get("lease_epoch") or 0)))
     # A terminal failure is also the end of its exact Work Session attempt.  The
     # child normally expires the session after abandoning its claim, but hard kills
     # and host loss cannot execute that cleanup.  Closing it here makes the central
     # runner heartbeat the durable fallback and prevents failed attempts remaining
     # "active" forever. Successful runners stay active until checkpoint/claim
     # completion owns their stronger lifecycle transition.
-    runner_status = str(record.get("status") or "").strip().lower()
     _sync_direct_session_token_lease_in(
         c, record, metadata, runner_session_id, now)
     # Expected completion handoff owns the claim and Work Session until the
@@ -2136,6 +2146,11 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
     if not completion_resume:
         _release_terminal_runner_ownership_in(
             c, record, metadata, runner_session_id, actor, now)
+    if runner_status in RUNNER_TERMINAL_STATUSES:
+        c.execute(
+            "UPDATE resource_leases SET released_at=COALESCE(released_at,?),"
+            "lease_state='terminal' WHERE id=? AND resource_type='execution'",
+            (now, str(metadata.get("execution_id") or "")))
     _renew_personal_claim_from_runner_in(c, record, principal_id, now)
     c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
               (record.get("task_id") or None, actor, "runner.session_registered",
