@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 import time
+import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import store
@@ -25,6 +26,24 @@ class ExternalCiError(Exception):
         self.failure_class = failure_class
         self.message = message
         self.result = result or {}
+
+
+def _update_run(run: Dict[str, Any], fields: Dict[str, Any], actor: str,
+                project: str) -> Dict[str, Any]:
+    """Write only while this caller still owns the persisted execution fence."""
+    guarded = dict(fields)
+    if run.get("execution_owner_id"):
+        guarded["_execution_owner_id"] = run["execution_owner_id"]
+        guarded["_execution_fence"] = run.get("execution_fence")
+    updated = store.update_external_ci_run(
+        run["run_id"], guarded, actor=actor, project=project)
+    if updated.get("error") == "external_ci_execution_fence_lost":
+        raise ExternalCiError(
+            "workflow_poll_failed",
+            "external CI execution ownership was superseded",
+            updated,
+        )
+    return updated
 
 
 def _default_run(args: List[str], cwd: str) -> subprocess.CompletedProcess:
@@ -153,8 +172,8 @@ def _run_url(mirror_repo: str, run_id: Any) -> str:
 def _update_failure(run: Dict[str, Any], failure_class: str, reason: str,
                     readback: Dict[str, Any], actor: str, project: str) -> Dict[str, Any]:
     status = "failure" if failure_class == "workflow_failed" else "error"
-    updated = store.update_external_ci_run(
-        run["run_id"],
+    updated = _update_run(
+        run,
         {
             "status": status,
             "conclusion": readback.get("conclusion") or ("failure" if status == "failure" else "error"),
@@ -208,8 +227,8 @@ def _cleanup_terminal_mirror_branch(run: Dict[str, Any], source_path: str,
         project=project,
     )
     was_ok = run.get("ok")
-    updated = store.update_external_ci_run(
-        run["run_id"],
+    updated = _update_run(
+        run,
         {"result": {**(run.get("result") or {}), "branch_cleanup": cleanup}},
         actor=actor,
         project=project,
@@ -229,22 +248,42 @@ def request_external_ci_mirror_run(request: Dict[str, Any], source_path: str,
     if not source_path or not os.path.isdir(source_path):
         return {"error": "source_path must be an existing local git checkout",
                 "failure_class": "mirror_sync_failed"}
-    run = store.create_external_ci_run(request or {}, actor=actor, project=project)
+    request = dict(request or {})
+    # The execution owner is server-owned identity. The REST route forwards the
+    # caller's raw body, so accepting an owner from it would let a caller choose
+    # or collide with another dispatcher's identity. Drop any supplied value.
+    request.pop("_execution_owner_id", None)
+    execution_owner_id = "ecio-" + uuid.uuid4().hex
+    execution_lease_seconds = store.clamp_external_ci_lease_seconds(
+        request.pop("execution_lease_seconds",
+                    store.EXTERNAL_CI_EXECUTION_LEASE_SECONDS))
+    execution_now = now_fn()
+    run = store.create_external_ci_run(
+        {**request,
+         "_execution_owner_id": execution_owner_id,
+         "_execution_lease_seconds": execution_lease_seconds,
+         "_execution_now": execution_now},
+        actor=actor, project=project)
     if run.get("error"):
         return run
     if run.get("idempotent"):
-        # Another caller already owns this exact source repo + SHA dispatch.
-        # Returning the durable run is the successful handoff; executing it
-        # again would create a second push-triggered workflow.
-        run["coalesced"] = True
-        run["ok"] = run.get("status") not in {"failure", "cancelled", "error"}
-        return run
+        acquired = store.acquire_external_ci_execution(
+            run["run_id"], execution_owner_id,
+            lease_seconds=execution_lease_seconds,
+            now=execution_now, actor=actor, project=project)
+        if not acquired.get("execution_acquired"):
+            acquired["coalesced"] = True
+            acquired["ok"] = acquired.get("status") not in {
+                "failure", "cancelled", "error"
+            }
+            return acquired
+        run = acquired
     if run.get("status") in store.EXTERNAL_CI_TERMINAL_STATUSES:
         run["resumed_terminal"] = True
         return run
     try:
         result = _execute_run(run, source_path, actor, project, runner, sleep_fn, now_fn,
-                              request or {})
+                              request)
     except ExternalCiError as e:
         result = _update_failure(run, e.failure_class, e.message, e.result,
                                  actor=actor, project=project)
@@ -337,8 +376,8 @@ def _execute_run(run: Dict[str, Any], source_path: str, actor: str,
             push = subprocess.CompletedProcess(
                 ["git", "push", mirror_remote_url], 0, "",
                 "concurrent exact ref reused")
-    mirrored = store.update_external_ci_run(
-        run["run_id"],
+    mirrored = _update_run(
+        run,
         {
             "status": "mirrored",
             "result": {
@@ -382,8 +421,8 @@ def _execute_run(run: Dict[str, Any], source_path: str, actor: str,
     if push_triggered:
         result_payload["push_triggered"] = True
         result_payload["workflow_dispatch"] = "skipped_push_triggered"
-        updated = store.update_external_ci_run(
-            run["run_id"],
+        updated = _update_run(
+            run,
             {"status": "triggered", "result": result_payload},
             actor=actor,
             project=project,
@@ -400,8 +439,8 @@ def _execute_run(run: Dict[str, Any], source_path: str, actor: str,
     trigger_args.extend(_workflow_inputs_args(_workflow_inputs_for_run(run, request)))
     trigger = _check(trigger_args, source_path, "workflow_trigger_failed",
                      "workflow dispatch", runner)
-    store.update_external_ci_run(
-        run["run_id"],
+    _update_run(
+        run,
         {
             "status": "triggered",
             "result": {
@@ -441,8 +480,8 @@ def _poll_run(run: Dict[str, Any], source_path: str, actor: str,
         )
         selected = _select_run(runs)
         if not selected:
-            store.update_external_ci_run(
-                run["run_id"], {"status": "triggered", "result": {"poll": "no_run_yet"}},
+            _update_run(
+                run, {"status": "triggered", "result": {"poll": "no_run_yet"}},
                 actor=actor, project=project)
             sleep_fn(max(0.1, poll_interval_seconds))
             continue
@@ -452,8 +491,8 @@ def _poll_run(run: Dict[str, Any], source_path: str, actor: str,
         run_url = selected.get("url") or _run_url(mirror_repo, run_id)
         logs_url = f"{run_url}/logs" if run_url else None
         if status and status != "completed":
-            store.update_external_ci_run(
-                run["run_id"],
+            _update_run(
+                run,
                 {"status": "running", "run_url": run_url, "logs_url": logs_url,
                  "result": {"provider_run": selected}},
                 actor=actor,
@@ -473,8 +512,8 @@ def _poll_run(run: Dict[str, Any], source_path: str, actor: str,
             "status_context": run.get("status_context"),
         }
         if conclusion == "success":
-            updated = store.update_external_ci_run(
-                run["run_id"],
+            updated = _update_run(
+                run,
                 {"status": "success", "conclusion": "success", "run_url": run_url,
                  "logs_url": logs_url, "artifacts": artifacts, "result": result},
                 actor=actor, project=project,
