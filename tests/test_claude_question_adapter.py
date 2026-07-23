@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 
 from path_setup import ROOT
 
 from adapters.claude_question_adapter import (
-    ClaudeQuestionAdapter, ClaudeQuestionError, hook_settings, pinned_version,
+    ClaudeQuestionAdapter, ClaudeQuestionError, hook_settings, pinned_command,
+    pinned_version,
 )
 
 
@@ -91,7 +95,16 @@ def test_replayable_ask_queue_decide_delivery_same_session(tmp_path):
             "answers": {"Which color?": "Blue"},
         },
     }
-    receipts = reconnected.record_continuation({
+    claim_count = sum(
+        path == "/ixp/v1/attention/decisions/claim"
+        for _, path, _ in attention.calls)
+    after_lost_output = ClaudeQuestionAdapter(
+        binding=BINDING, http=attention, journal_path=str(journal))
+    assert after_lost_output.handle_hook(hook()) == delivered
+    assert sum(
+        path == "/ixp/v1/attention/decisions/claim"
+        for _, path, _ in attention.calls) == claim_count
+    receipts = after_lost_output.record_continuation({
         "type": "result",
         "session_id": "session-24",
         "stop_reason": "end_turn",
@@ -154,6 +167,35 @@ def test_exact_probed_version_is_pinned(monkeypatch):
         assert "version mismatch" in str(exc)
     else:
         raise AssertionError("unprobed Claude Code image must fail closed")
+
+
+def test_hook_command_denies_unpinned_runtime_before_http(tmp_path):
+    fake_claude = tmp_path / "claude"
+    fake_claude.write_text("#!/bin/sh\nprintf '2.1.203 (Claude Code)\\n'\n")
+    fake_claude.chmod(0o755)
+    env = {
+        **os.environ,
+        "PM_CLAUDE_EXECUTABLE": str(fake_claude),
+        "PM_CLAUDE_QUESTION_JOURNAL": str(tmp_path / "journal"),
+    }
+    completed = subprocess.run(
+        [sys.executable, str(ROOT / "adapters" / "claude_question_adapter.py")],
+        input=json.dumps(hook()), capture_output=True, text=True, env=env,
+        check=False,
+    )
+    assert completed.returncode == 0
+    output = json.loads(completed.stdout)
+    assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert output["hookSpecificOutput"]["permissionDecisionReason"] == (
+        "Claude question bridge failed closed: ClaudeQuestionError")
+    assert not (tmp_path / "journal").exists()
+
+
+def test_pinned_command_accepts_exact_runtime(tmp_path):
+    fake_claude = tmp_path / "claude"
+    fake_claude.write_text("#!/bin/sh\nprintf '2.1.202 (Claude Code)\\n'\n")
+    fake_claude.chmod(0o755)
+    assert pinned_command(str(fake_claude)) == [str(fake_claude)]
 
 
 def test_settings_scope_hook_to_native_question_tool():

@@ -31,9 +31,12 @@ fail closed and remain visible as a hook denial.
    record the Switchboard delivery receipt and resolve the request.
 
 Cancellation before delivery leaves the request deferred. Reconnect replays the
-same provider request id and journal entry. A completion from another Claude
-session is rejected. A malformed or partial answer is denied rather than
-silently defaulted.
+same provider request id and journal entry. If the process loses the first
+`allow` hook output after claiming the decision, the next same-session,
+same-tool invocation replays the journaled `updatedInput` without trying to
+claim the one-shot decision again. A completion from another Claude session is
+rejected. A malformed or partial answer is denied rather than silently
+defaulted.
 
 ## Hook configuration
 
@@ -57,10 +60,13 @@ equivalent command directly:
 
 The command requires `PM_PROJECT`, `PM_TASK_ID`, `PM_WORK_SESSION_ID`,
 `PM_RUNNER_SESSION_ID`, `PM_HOST_ID`, and an absolute
-`PM_CLAUDE_QUESTION_JOURNAL`. The journal is written atomically with mode
-`0600`. The command emits only the structured Claude hook reply. On internal
-failure it emits a typed denial without environment, request bodies,
-credentials, or traceback content.
+`PM_CLAUDE_QUESTION_JOURNAL`. `PM_CLAUDE_EXECUTABLE` may select the Claude
+binary and defaults to `claude`. Every hook invocation runs that executable
+with `--version` and denies the request before any Switchboard HTTP call unless
+the result is exactly the probed `2.1.202` version. The journal is written
+atomically with mode `0600`. The command emits only the structured Claude hook
+reply. On internal failure it emits a typed denial without environment,
+request bodies, credentials, or traceback content.
 
 ## Proof
 

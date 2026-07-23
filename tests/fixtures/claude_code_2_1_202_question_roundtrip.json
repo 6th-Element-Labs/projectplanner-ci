@@ -46,7 +46,12 @@
   "resume": {
     "command_shape": ["claude", "-p", "--resume", "session-24"],
     "same_session_required": true,
-    "updated_input_answers": {"Which color?": "Blue"}
+    "updated_input_answers": {"Which color?": "Blue"},
+    "lost_allow_output_recovery": {
+      "reload_journal": true,
+      "replay_stored_updated_input": true,
+      "reclaim_decision": false
+    }
   },
   "completion": {
     "session_id": "session-24",
@@ -56,7 +61,8 @@
   "unsupported": {
     "request_kinds": "deny",
     "malformed_answers": "deny",
-    "cross_session_completion": "error"
+    "cross_session_completion": "error",
+    "unpinned_runtime_version": "deny-before-attention-http"
   },
   "secrets": {
     "fixture_contains_credentials": false,
