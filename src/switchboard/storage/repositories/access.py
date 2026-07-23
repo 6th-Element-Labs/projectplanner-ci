@@ -1025,7 +1025,10 @@ def resolve_write_actor(actor: str,
                         agent_id: str = "",
                         system_actor: str = "",
                         system_reason: str = "",
-                        principal_id: str = "") -> Dict[str, Any]:
+                        principal_id: str = "",
+                        principal_kind: str = "",
+                        bound_task_id: str = "",
+                        bound_agent_id: str = "") -> Dict[str, Any]:
     """Resolve a public write actor, binding shared env tokens before mutation.
 
     Compatibility env tokens are intentionally broad system principals. They
@@ -1037,8 +1040,45 @@ def resolve_write_actor(actor: str,
     actor = (actor or "").strip() or "unknown"
     task_id = (task_id or "").strip()
     agent_id = (agent_id or "").strip()
+    principal_kind = (principal_kind or "").strip()
+    bound_task_id = (bound_task_id or "").strip()
+    bound_agent_id = (bound_agent_id or "").strip()
     system_actor = (system_actor or "").strip()
     system_reason = (system_reason or "").strip()
+
+    # A direct-session bearer is minted from a claimed Connect assignment.  Its
+    # task/agent tuple is authenticated token state and must outrank mutable
+    # agent presence, which can briefly retain an older task for a reused agent
+    # identity.  Fail closed if the caller asks that bearer to cross either
+    # boundary; otherwise bind directly to the token's agent.
+    if principal_kind == "direct_session":
+        if task_id and bound_task_id != task_id:
+            return shared_token_binding_error(
+                actor=actor, principal_id=principal_id, task_id=task_id,
+                error="direct_session_bound_to_different_task",
+                message="direct-session principal is not bound to this task.",
+                bound_task_id=bound_task_id or None,
+            )
+        if agent_id and bound_agent_id != agent_id:
+            return shared_token_binding_error(
+                actor=actor, principal_id=principal_id, task_id=task_id,
+                error="direct_session_bound_to_different_agent",
+                message="reviewer agent does not match the direct-session principal.",
+                agent_id=agent_id, bound_agent_id=bound_agent_id or None,
+            )
+        if not bound_task_id or not bound_agent_id:
+            return shared_token_binding_error(
+                actor=actor, principal_id=principal_id, task_id=task_id,
+                error="direct_session_binding_incomplete",
+                message="direct-session principal is missing its task/agent binding.",
+            )
+        return binding_for_registered_agent(
+            agent_id=bound_agent_id,
+            principal_actor=actor,
+            principal_id=principal_id,
+            binding="direct_session",
+        )
+
     if not is_unbound_system_actor(actor) and not agent_id:
         return binding_for_principal(actor, principal_id=principal_id)
 

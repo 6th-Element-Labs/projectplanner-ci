@@ -72,6 +72,9 @@ def _resolve_write_actor(principal, project: str = "maxwell", task_id: str = "",
         system_actor=system_actor,
         system_reason=system_reason,
         principal_id=principal.get("id") or "",
+        principal_kind=principal.get("kind") or "",
+        bound_task_id=principal.get("bound_task_id") or "",
+        bound_agent_id=principal.get("bound_agent_id") or "",
     )
     if not binding.get("ok"):
         return binding
