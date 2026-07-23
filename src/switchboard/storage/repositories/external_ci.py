@@ -55,6 +55,7 @@ EXTERNAL_CI_STATUSES = {
     "requested", "mirrored", "triggered", "running", "success", "failure", "cancelled", "error"
 }
 EXTERNAL_CI_TERMINAL_STATUSES = {"success", "failure", "cancelled", "error"}
+EXTERNAL_CI_EXECUTION_LEASE_SECONDS = 3600.0
 EXTERNAL_CI_FAILURE_CLASSES = {
     "mirror_sync_failed": "stale_branch",
     "workflow_trigger_failed": "broken_connection",
@@ -232,7 +233,14 @@ def create_external_ci_run(data: Dict[str, Any], actor: str = "system",
     normalized, error = _external_ci_request_payload(data or {}, project)
     if error:
         return error
-    now = time.time()
+    now = float(data.get("_execution_now") or time.time())
+    execution_owner_id = (
+        str(data.get("_execution_owner_id") or "").strip()
+        or "ecio-" + uuid.uuid4().hex
+    )
+    execution_lease_seconds = max(
+        1.0, float(data.get("_execution_lease_seconds")
+                   or EXTERNAL_CI_EXECUTION_LEASE_SECONDS))
     run_id = (data.get("run_id") or "ecir-" + uuid.uuid4().hex[:16]).strip()
     # Dispatch identity is the canonical source repository plus exact source SHA.
     # Branch labels, tasks, claims, and webhook/manual callers are observations
@@ -293,10 +301,12 @@ def create_external_ci_run(data: Dict[str, Any], actor: str = "system",
                (run_id, source_project, source_repo, source_branch, source_sha,
                 mirror_repo, mirror_branch, workflow, status_context, status, conclusion, run_url,
                 logs_url, artifacts_json, failure_class, failure_reason, task_id,
-                claim_id, agent_id, actor, principal_id, effect_key, request_json,
+                claim_id, agent_id, actor, principal_id, effect_key,
+                execution_owner_id, execution_fence, execution_lease_expires_at,
+                execution_started_at, request_json,
                 result_json, requested_at, mirrored_at, triggered_at, completed_at,
                 updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 run_id, normalized["source_project"], normalized["source_repo"],
                 normalized["source_branch"], normalized["source_sha"], normalized["mirror_repo"],
@@ -307,6 +317,7 @@ def create_external_ci_run(data: Dict[str, Any], actor: str = "system",
                 normalized["failure_class"], normalized["failure_reason"], normalized["task_id"],
                 normalized["claim_id"], normalized["agent_id"], actor,
                 normalized["principal_id"], effect_key,
+                execution_owner_id, 1, now + execution_lease_seconds, now,
                 json.dumps(request_payload, sort_keys=True),
                 json.dumps(normalized["result"], sort_keys=True),
                 now,
@@ -334,12 +345,76 @@ def create_external_ci_run(data: Dict[str, Any], actor: str = "system",
     return out
 
 
+def acquire_external_ci_execution(run_id: str, owner_id: str,
+                                  lease_seconds: float = EXTERNAL_CI_EXECUTION_LEASE_SECONDS,
+                                  now: Optional[float] = None,
+                                  actor: str = "system",
+                                  project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Acquire or reclaim one nonterminal run with a fenced SQLite CAS."""
+    init_db(project)
+    owner_id = (owner_id or "").strip()
+    if not owner_id:
+        return {"error": "owner_id required", "run_id": run_id}
+    now = float(now if now is not None else time.time())
+    lease_expires_at = now + max(1.0, float(lease_seconds))
+    with _conn(project) as c:
+        c.execute("BEGIN IMMEDIATE")
+        row = c.execute(
+            "SELECT * FROM external_ci_runs WHERE run_id=?", (run_id,)
+        ).fetchone()
+        if not row:
+            return {"error": "external_ci_run not found", "run_id": run_id}
+        current = _external_ci_row(row)
+        if current.get("status") in EXTERNAL_CI_TERMINAL_STATUSES:
+            current["execution_acquired"] = False
+            current["execution_terminal"] = True
+            return current
+        current_owner = (current.get("execution_owner_id") or "").strip()
+        current_expiry = float(current.get("execution_lease_expires_at") or 0)
+        if current_owner == owner_id and current_expiry > now:
+            current["execution_acquired"] = True
+            current["execution_reentrant"] = True
+            return current
+        changed = c.execute(
+            """UPDATE external_ci_runs
+               SET execution_owner_id=?,
+                   execution_fence=COALESCE(execution_fence, 0)+1,
+                   execution_lease_expires_at=?,
+                   execution_started_at=?,
+                   updated_at=?
+               WHERE run_id=?
+                 AND status NOT IN ('success','failure','cancelled','error')
+                 AND (execution_owner_id IS NULL OR execution_owner_id=''
+                      OR execution_lease_expires_at IS NULL
+                      OR execution_lease_expires_at<=?)""",
+            (owner_id, lease_expires_at, now, now, run_id, now),
+        ).rowcount
+        fresh = _external_ci_row(c.execute(
+            "SELECT * FROM external_ci_runs WHERE run_id=?", (run_id,)
+        ).fetchone())
+        fresh["execution_acquired"] = changed == 1
+        fresh["execution_reclaimed"] = changed == 1 and bool(current_owner)
+        if changed == 1:
+            c.execute(
+                "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                "VALUES (?,?,?,?,?)",
+                (fresh.get("task_id"), actor, "external_ci.execution_acquired",
+                 json.dumps({"run_id": run_id, "owner_id": owner_id,
+                             "execution_fence": fresh.get("execution_fence"),
+                             "reclaimed": bool(current_owner)}, sort_keys=True), now),
+            )
+        return fresh
+
+
 def update_external_ci_run(run_id: str, fields: Dict[str, Any], actor: str = "system",
                            project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     init_db(project)
     allowed = {"status", "conclusion", "run_url", "logs_url", "artifacts",
                "failure_class", "failure_reason", "result"}
-    updates = {k: v for k, v in (fields or {}).items() if k in allowed}
+    fields = fields or {}
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    expected_owner = str(fields.get("_execution_owner_id") or "").strip()
+    expected_fence = fields.get("_execution_fence")
     if not updates:
         return get_external_ci_run(run_id, project=project) or {"error": "external_ci_run not found"}
     status = _validate_external_ci_status(updates.get("status") or "")
@@ -376,11 +451,28 @@ def update_external_ci_run(run_id: str, fields: Dict[str, Any], actor: str = "sy
         sets.append("result_json=?")
         vals.append(json.dumps(updates.get("result") or {}, sort_keys=True))
     vals.append(run_id)
+    where = "run_id=?"
+    if expected_owner:
+        where += " AND execution_owner_id=?"
+        vals.append(expected_owner)
+    if expected_fence is not None:
+        where += " AND execution_fence=?"
+        vals.append(int(expected_fence))
     with _conn(project) as c:
         row = c.execute("SELECT * FROM external_ci_runs WHERE run_id=?", (run_id,)).fetchone()
         if not row:
             return {"error": "external_ci_run not found", "run_id": run_id}
-        c.execute(f"UPDATE external_ci_runs SET {', '.join(sets)} WHERE run_id=?", vals)
+        changed = c.execute(
+            f"UPDATE external_ci_runs SET {', '.join(sets)} WHERE {where}", vals
+        ).rowcount
+        if changed != 1:
+            return {
+                "error": "external_ci_execution_fence_lost",
+                "failure_class": "failed_gate",
+                "run_id": run_id,
+                "expected_execution_owner_id": expected_owner or None,
+                "expected_execution_fence": expected_fence,
+            }
         if "status" in updates:
             c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                       (row["task_id"], actor, "external_ci.status",
@@ -609,12 +701,14 @@ __all__ = [
     "EXTERNAL_CI_STATUSES",
     "EXTERNAL_CI_TERMINAL_STATUSES",
     "EXTERNAL_CI_FAILURE_CLASSES",
+    "EXTERNAL_CI_EXECUTION_LEASE_SECONDS",
     "GIT_SHA_RE",
     "WORKFLOW_REF_RE",
     "StoreExternalCiRepository",
     "default_external_ci_repository",
     "default_external_ci_mirror_branch",
     "create_external_ci_run",
+    "acquire_external_ci_execution",
     "update_external_ci_run",
     "get_external_ci_run",
     "list_external_ci_runs",

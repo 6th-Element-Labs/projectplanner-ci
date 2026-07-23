@@ -142,6 +142,49 @@ try:
     source_path = os.path.join(_TMP, "source")
     os.makedirs(source_path)
 
+    orphan_task = store.create_task(
+        {"workstream_id": "CIQA", "title": "orphan recovery"}, actor="test", project=P)
+    orphan_request = make_request(orphan_task["task_id"])
+    orphan_request["source_sha"] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    orphan = store.create_external_ci_run(
+        {**orphan_request, "_execution_owner_id": "crashed-owner",
+         "_execution_now": 10.0, "_execution_lease_seconds": 5.0},
+        actor="test", project=P)
+    recovery_clock = FakeClock()
+    recovery_runner = FakeRunner()
+    recovered = external_ci_mirror.request_external_ci_mirror_run(
+        {**orphan_request, "_execution_owner_id": "retry-owner"},
+        source_path, actor="test", project=P, runner=recovery_runner,
+        sleep_fn=recovery_clock.sleep, now_fn=recovery_clock.time)
+    ok(orphan["status"] == "requested" and recovered["status"] == "success" and
+       recovered["execution_fence"] == 2 and recovery_runner.commands,
+       "expired requested owner is atomically reclaimed and executed on retry")
+    stale_write = store.update_external_ci_run(
+        recovered["run_id"],
+        {"status": "error", "_execution_owner_id": "crashed-owner",
+         "_execution_fence": 1},
+        actor="test", project=P)
+    ok(stale_write.get("error") == "external_ci_execution_fence_lost" and
+       store.get_external_ci_run(recovered["run_id"], project=P)["status"] == "success",
+       "superseded execution fence cannot overwrite the reclaimed run")
+
+    healthy_task = store.create_task(
+        {"workstream_id": "CIQA", "title": "healthy coalescing"}, actor="test", project=P)
+    healthy_request = make_request(healthy_task["task_id"])
+    healthy_request["source_sha"] = "9999999999999999999999999999999999999999"
+    store.create_external_ci_run(
+        {**healthy_request, "_execution_owner_id": "healthy-owner",
+         "_execution_now": 1000.0, "_execution_lease_seconds": 100.0},
+        actor="test", project=P)
+    healthy_runner = FakeRunner()
+    healthy_duplicate = external_ci_mirror.request_external_ci_mirror_run(
+        {**healthy_request, "_execution_owner_id": "duplicate-owner"},
+        source_path, actor="test", project=P, runner=healthy_runner,
+        sleep_fn=lambda _seconds: None, now_fn=lambda: 1001.0)
+    ok(healthy_duplicate.get("coalesced") is True and
+       healthy_duplicate["status"] == "requested" and not healthy_runner.commands,
+       "healthy requested owner coalesces concurrent duplicates without execution")
+
     task = store.create_task({"workstream_id": "CIQA", "title": "runner proof"},
                              actor="test", project=P)
     clock = FakeClock()
