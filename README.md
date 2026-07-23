@@ -88,5 +88,6 @@ two systemd units, Caddy, and a Route 53 A record.
 | [`docs/decisions/0001-…`](docs/decisions/0001-multi-agent-coordination-primitives.md) | ADR: build order for the multi-agent coordination primitives |
 | [`docs/decisions/0005-store-module-decomposition.md`](docs/decisions/0005-store-module-decomposition.md) | ADR: strangler-split `store.py` — foundation shipped (ARCH-1…5); remainder superseded by ADR-0006 |
 | [`docs/decisions/0006-control-plane-done-enough.md`](docs/decisions/0006-control-plane-done-enough.md) | **ADR: the control plane is done enough** — the one-page provenance model, the subtraction rule (no new mechanism without deleting one), the kill list, and the four-horizon master plan (stabilize → prove on Helm → COORD → productize) |
+| [`docs/decisions/0008-three-plane-separation.md`](docs/decisions/0008-three-plane-separation.md) | **ADR: three-plane separation** — capacity owns execution leases, communication owns delivery truth, and scoped coordination owns outcomes; SIMPLIFY-16 is the hands-off acceptance gate |
 | [`docs/MCP.md`](docs/MCP.md) | MCP server design and tool reference |
 | [`docs/UNIVERSAL_WORKFLOW_UI.md`](docs/UNIVERSAL_WORKFLOW_UI.md) | Universal workflow UI spec |
