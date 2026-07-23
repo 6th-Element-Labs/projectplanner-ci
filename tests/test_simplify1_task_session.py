@@ -13,6 +13,31 @@ def _task():
 
 
 class TaskSessionProjectionTest(unittest.TestCase):
+    @patch.object(task_session.completion_repo, "get_completion", return_value={
+        "phase": "merge_queue", "outcome": "succeeded", "head_sha": "a" * 40,
+        "runner_generation": 2,
+    })
+    @patch.object(task_session.deliverables_repo, "list_task_deliverable_links", return_value=[])
+    @patch.object(task_session.runner_repo, "latest_dispatch_outcome", return_value={})
+    @patch.object(task_session.tasks_repo, "get_task", return_value={
+        "task_id": "SIMPLIFY-1", "status": "In Review", "agent_state": {},
+        "git_state": {"pr_number": 780, "head_sha": "a" * 40},
+    })
+    def test_durable_completion_owns_post_runner_phase(
+            self, _task_mock, _outcome, _links, completion):
+        wake = {"wake_id": "wake-1", "status": "completed", "requested_at": 1,
+                "policy": {"assignment": {"generation": 2}}, "result": {}}
+        with patch.object(task_session.runner_repo, "list_runner_sessions", return_value=[]), \
+                patch.object(task_session.coordination_repo, "list_wake_intents", return_value=[wake]), \
+                patch.object(task_session.runner_repo, "resolve_task_active_runner",
+                             return_value={"active": False, "session": None}):
+            view = task_session.execute_for("SIMPLIFY-1", project="switchboard")
+        self.assertEqual(view["completion_phase"], "merge_queue")
+        self.assertEqual(view["lifecycle_phase"], "review")
+        completion.assert_called_once_with(
+            "SIMPLIFY-1", pr_number=780, head_sha="a" * 40,
+            runner_generation=2, project="switchboard")
+
     @patch.object(task_session.deliverables_repo, "list_task_deliverable_links", return_value=[])
     @patch.object(task_session.runner_repo, "latest_dispatch_outcome", return_value={})
     @patch.object(task_session.tasks_repo, "get_task", side_effect=lambda *a, **k: _task())

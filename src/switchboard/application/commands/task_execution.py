@@ -24,6 +24,7 @@ from switchboard.application.queries import task_session as task_session_query
 from switchboard.security import redact_provider_secrets
 from switchboard.storage.repositories import coordination as coordination_repo
 from switchboard.storage.repositories import runner as runner_repo
+from switchboard.storage.repositories import task_completion as completion_repo
 
 SCHEMA = "switchboard.task_execution.v1"
 ERROR_SCHEMA = "switchboard.task_execution_error.v1"
@@ -33,6 +34,12 @@ COMMANDS = (
     "get_task_execution", "start_task", "open_session", "send_message",
     "stop_task", "retry_task", "get_execution_transcript",
 )
+
+
+def record_completion_transition(data: dict[str, Any], *, actor: str = "system",
+                                 project: str = DEFAULT_PROJECT) -> dict[str, Any]:
+    """Persist one idempotent, exact-head completion transition."""
+    return completion_repo.record_transition(data, actor=actor, project=project)
 
 #: Wake statuses that still own the lifecycle: a second start would fork.
 IN_FLIGHT_WAKE_STATUSES = frozenset({"pending", "claimed"})
