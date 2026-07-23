@@ -1150,6 +1150,10 @@ def _complete_claim_impl(claim_id: str, evidence: str = "", final_status: str = 
                                    "source": "complete_claim",
                                    "policy_profile": work_session_gate.get("policy_profile")},
                                   sort_keys=True), now))
+        _surrender_claim_runner_leases_in(
+            c, claim_id, row["task_id"], actor, now,
+            work_session_id=str(gated_work_session.get("work_session_id") or ""),
+        )
         if done_gate:
             c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                       (row["task_id"], actor, "task.done_blocked",
@@ -1227,6 +1231,58 @@ def _complete_claim_impl(claim_id: str, evidence: str = "", final_status: str = 
         return response
     return _finalize_complete_claim_response(
         response, evidence_obj, project, mission_project, actor)
+
+
+def _surrender_claim_runner_leases_in(
+        c: sqlite3.Connection, claim_id: str, task_id: str, actor: str,
+        now: float, *, work_session_id: str = "") -> List[str]:
+    """Fence heartbeat renewal for the exact implementation generation.
+
+    The runner-session heartbeat remains the sole automatic stop clock.  Claim
+    completion merely makes the bound rows immediately stale and records a
+    durable fence which rejects late heartbeats until the existing lease-expiry
+    reaper terminalizes them.
+    """
+    rows = c.execute(
+        "SELECT runner_session_id, heartbeat_ttl_s, metadata_json "
+        "FROM runner_sessions WHERE claim_id=?",
+        (claim_id,),
+    ).fetchall()
+    surrendered: List[str] = []
+    for runner in rows:
+        metadata = json.loads(runner["metadata_json"] or "{}")
+        bound_work_session = str(metadata.get("work_session_id") or "")
+        if work_session_id and bound_work_session != work_session_id:
+            continue
+        fence = metadata.get("lease_surrender") or {}
+        if str(fence.get("claim_id") or "") == claim_id:
+            surrendered.append(runner["runner_session_id"])
+            continue
+        metadata["lease_surrender"] = {
+            "schema": "switchboard.runner_lease_surrender.v1",
+            "claim_id": claim_id,
+            "work_session_id": bound_work_session or None,
+            "surrendered_at": now,
+            "reason": "claim_completed",
+        }
+        ttl_s = max(10, int(runner["heartbeat_ttl_s"] or 60))
+        c.execute(
+            "UPDATE runner_sessions SET heartbeat_at=?, metadata_json=?, updated_at=? "
+            "WHERE runner_session_id=? AND claim_id=?",
+            (now - ttl_s, json.dumps(metadata, sort_keys=True), now,
+             runner["runner_session_id"], claim_id),
+        )
+        surrendered.append(runner["runner_session_id"])
+    if surrendered:
+        c.execute(
+            "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+            "VALUES (?,?,?,?,?)",
+            (task_id, actor, "runner.lease_surrendered",
+             json.dumps({"claim_id": claim_id,
+                         "work_session_id": work_session_id or None,
+                         "runner_session_ids": surrendered}, sort_keys=True), now),
+        )
+    return surrendered
 
 def _finalize_complete_claim_response(
         response: Dict[str, Any], evidence_obj: Dict[str, Any], project: str,
