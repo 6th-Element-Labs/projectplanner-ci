@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -61,11 +62,11 @@ def _via_switchboard_instruction(work_ref: str) -> str:
     return f"Do {work_ref} via Switchboard."
 
 
-def assignment_note(ack: Ack) -> str:
+def assignment_note(ack: Ack, completion_contract: dict | None = None) -> str:
     """The complete, intentionally tiny note given to a newly booted agent."""
 
     assignment = ack.assignment
-    return (
+    note = (
         "Switchboard assigned execution identity: "
         f"agent_id={assignment.principal_ref}; "
         f"assignment_id={assignment.assignment_id}. "
@@ -73,6 +74,14 @@ def assignment_note(ack: Ack) -> str:
         "claims, and Work Sessions. Do not derive, slugify, or replace it.\n"
         f"{_via_switchboard_instruction(assignment.work_ref)}"
     )
+    if completion_contract:
+        note += (
+            "\nImmutable completion assignment: "
+            + json.dumps(completion_contract, sort_keys=True, separators=(",", ":"))
+            + " Use this admitted contract as lifecycle authority; do not wait "
+              "for post-start runner injection."
+        )
+    return note
 
 
 def build_launch_spec(
@@ -80,6 +89,7 @@ def build_launch_spec(
     config: HostRuntimeConfig,
     *,
     workspace_path: str,
+    completion_contract: dict | None = None,
 ) -> LaunchSpec:
     """Translate one Ack using provider syntax already configured on the host."""
 
@@ -94,15 +104,19 @@ def build_launch_spec(
     if not workspace.is_absolute():
         raise LaunchRefused("workspace_path_not_absolute")
 
-    note = assignment_note(ack)
-    environment = tuple(sorted({
+    note = assignment_note(ack, completion_contract)
+    environment_values = {
         "SWITCHBOARD_CONNECT_ASSIGNMENT_ID": assignment.assignment_id,
         "SWITCHBOARD_CONNECT_LEASE_ID": ack.lease_id,
         "SWITCHBOARD_CONNECT_PRINCIPAL_REF": assignment.principal_ref,
         "SWITCHBOARD_CONNECT_RUNNER_ID": ack.runner_id,
         "SWITCHBOARD_CONNECT_WORK_REF": assignment.work_ref,
         "SWITCHBOARD_CONNECT_WORKSPACE_REF": assignment.workspace_ref,
-    }.items()))
+    }
+    if completion_contract:
+        environment_values["SWITCHBOARD_COMPLETION_CONTRACT_JSON"] = json.dumps(
+            completion_contract, sort_keys=True, separators=(",", ":"))
+    environment = tuple(sorted(environment_values.items()))
     return LaunchSpec(
         argv=(
             config.executable,
