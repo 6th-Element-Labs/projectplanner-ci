@@ -92,6 +92,7 @@ def build(
         workstream = task.get("_wsId") or ""
     access = store.project_access(selected)
     repo_topology = store.get_project_repo_topology(selected)
+    execution_policy = store.get_project_execution_policy(selected)
     lane_tasks = (
         store.list_tasks_slim(workstream=workstream, project=selected)
         if workstream
@@ -135,6 +136,8 @@ def build(
         "Treat Project as the repo, trust, policy, access, CI, model, budget, and Done authority boundary.",
         "Boards and workstreams own execution; deliverables own outcomes and cross-board proof rollup.",
         "Treat repo_topology.roles.canonical as the only code-truth and Done authority.",
+        "Treat execution_policy as the runner authority for runtimes, workspace, "
+        "placement, providers, SCM, and Autopilot; execution_readiness fails closed.",
         "Read task description, deliverable, exit criteria, dependencies, and recent activity before editing.",
         "Do not import another project's lane or file ownership into this project.",
     ]
@@ -160,6 +163,8 @@ def build(
         "repo_role_guide": store.repo_topology_role_guide(selected),
         "session_policy_profiles": store.get_session_policy_profiles(selected),
         "work_session_contract": store.work_session_contract(selected),
+        "execution_policy": execution_policy,
+        "execution_readiness": execution_policy.get("readiness"),
         "code_repo_gate": repo_topology.get("code_repo_gate"),
         "validation_policy": project_validation_policy(selected),
         "effective_task_validation": task_validation(task, selected) if task else None,

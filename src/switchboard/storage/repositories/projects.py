@@ -719,8 +719,17 @@ def repo_topology_role_guide(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     }
 
 
+def _execution_policy(project: str) -> Dict[str, Any]:
+    # Imported lazily: the execution-policy repository reads repo_topology from here.
+    from switchboard.storage.repositories.project_execution_policy import (
+        get_project_execution_policy,
+    )
+    return get_project_execution_policy(project)
+
+
 def get_project_context(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     topology = get_project_repo_topology(project)
+    execution_policy = _execution_policy(project)
     access = project_access(project)
     boards = list_project_boards(project=project)
     hierarchy = topology.get("project_hierarchy") or _project_hierarchy_contract(project)
@@ -743,6 +752,8 @@ def get_project_context(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         "session_policy_profiles": get_session_policy_profiles(project),
         "boards_missions": boards,
         "code_repo_gate": topology.get("code_repo_gate"),
+        "execution_policy": execution_policy,
+        "execution_readiness": execution_policy.get("readiness"),
     }
 
 

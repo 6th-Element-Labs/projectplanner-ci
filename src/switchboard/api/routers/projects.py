@@ -115,6 +115,24 @@ def create_router(*, resolve_project: ProjectResolver,
     async def project_repo_topology(project: str):
         return store.get_project_repo_topology(project=resolve_project(project))
 
+    @router.get("/api/projects/{project}/execution_policy")
+    async def project_execution_policy(project: str):
+        """ACCESS-27: the runner authority plus its typed readiness gate."""
+        return store.get_project_execution_policy(project=resolve_project(project))
+
+    @router.post("/api/projects/{project}/execution_policy")
+    async def set_project_execution_policy(request: Request, project: str,
+                                           body: dict = Body(...)):
+        """Merge an execution-policy update. Rejected updates persist nothing."""
+        principal = resolve_principal(request, project, ("write:system",), dev_actor="web")
+        result = store.set_project_execution_policy(
+            project=resolve_project(project),
+            updates=body if isinstance(body, dict) else {},
+            actor=auth.actor(principal))
+        if result.get("error"):
+            raise HTTPException(400, result)
+        return result
+
     @router.get("/api/projects/{project}/context")
     def project_context(request: Request, project: str):
         # HARDEN-35: project_context (repo roles, hierarchy, policy profiles) is a

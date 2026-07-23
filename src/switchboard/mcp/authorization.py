@@ -187,6 +187,7 @@ READ_TOOLS = frozenset({
     "list_review_findings", "list_review_remediations",
     "list_runner_control_requests", "list_runner_sessions", "list_session_health",
     "list_unacked_messages", "list_unblock_requests", "list_wake_intents",
+    "get_project_execution_policy",
     "list_work_sessions", "mission_status", "prepare_agent_session",
     "search_tasks",
 })
@@ -227,6 +228,7 @@ WRITE_TOOLS = frozenset({
     "revoke_scoped_token", "rollback_project_consolidation",
     "rotate_provider_connection", "run_background_job", "run_mission_coordinator",
     "send_agent_message", "send_message", "set_agent_state", "set_project_github_repo",
+    "set_project_execution_policy",
     "set_project_repo_topology", "start_task", "stop_task", "submit_bug",
     "submit_deliverable_outcome",
     "sweep_monitors", "unlink_task_from_deliverable",

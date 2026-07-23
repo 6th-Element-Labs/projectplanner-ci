@@ -154,6 +154,18 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
   `public_ci` is a shared public CI sandbox for verification evidence only; `public` and `release`
   are publication/release evidence roles only. Legacy `ci_*` arguments are accepted as aliases for
   `public_ci_*`.
+- `get_project_execution_policy(project)` / `set_project_execution_policy(project, policy_json)` —
+  read and merge `switchboard.project_execution_policy.v1`, the project-level runner authority:
+  allowed runtimes and default runtime, workspace repo role and isolation, host classes, trust
+  zones, burst policy, provider selectors, SCM connection reference, Autopilot enablement, and
+  lifecycle/versioning. `readiness` is a typed gate that fails closed
+  (`project_execution_policy_missing` / `_incomplete` / `_invalid` / `_not_active`) so a runner
+  never places work against unconfigured policy. Writes need `write:system` **on that project** —
+  a project-bound principal cannot configure another project. References and policy only: `branch`,
+  `env`, and secret-bearing fields are rejected, and an invalid merged result persists nothing.
+  Branch truth stays in `repo_topology`; credential material stays in the vault. The contract is
+  projected into `get_project_contract` / `prepare_agent_session` and `/api/projects/{p}/context`
+  as `execution_policy` + `execution_readiness`, so onboarding a new project is configuration only.
 - `record_publication_evidence(project, source_project?, source_sha, public_repo?, public_ref,
   public_sha?, public_tag?, script?, guard_status?, guard_json?, artifact_url?, task_id?, claim_id?,
   agent_id?)` — record evidence that a canonical source SHA was published to a public mirror/release
