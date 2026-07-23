@@ -248,6 +248,7 @@ app.include_router(_create_messaging_router(
 app.include_router(_create_attention_router(
     resolve_project=_proj,
     resolve_principal=_principal,
+    resolve_body_project=_body_project,
     list_pending_acks=store.list_pending_acks,
     list_inbox=store.list_inbox,
 ))
