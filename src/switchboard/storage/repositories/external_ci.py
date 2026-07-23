@@ -56,6 +56,24 @@ EXTERNAL_CI_STATUSES = {
 }
 EXTERNAL_CI_TERMINAL_STATUSES = {"success", "failure", "cancelled", "error"}
 EXTERNAL_CI_EXECUTION_LEASE_SECONDS = 3600.0
+# A lease is a recovery deadline, not a caller preference. Bounding it at the
+# storage boundary is what makes reclaim guaranteed: an unbounded lease would
+# recreate the very orphan-forever run this fence exists to recover, and would
+# make it unreclaimable by the CAS below.
+EXTERNAL_CI_EXECUTION_LEASE_MIN_SECONDS = 1.0
+EXTERNAL_CI_EXECUTION_LEASE_MAX_SECONDS = 14400.0
+
+
+def clamp_external_ci_lease_seconds(value: Any) -> float:
+    """Bound a requested execution lease to the recoverable range."""
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        seconds = EXTERNAL_CI_EXECUTION_LEASE_SECONDS
+    if seconds != seconds or seconds in (float("inf"), float("-inf")):
+        seconds = EXTERNAL_CI_EXECUTION_LEASE_SECONDS
+    return max(EXTERNAL_CI_EXECUTION_LEASE_MIN_SECONDS,
+               min(EXTERNAL_CI_EXECUTION_LEASE_MAX_SECONDS, seconds))
 EXTERNAL_CI_FAILURE_CLASSES = {
     "mirror_sync_failed": "stale_branch",
     "workflow_trigger_failed": "broken_connection",
@@ -238,9 +256,9 @@ def create_external_ci_run(data: Dict[str, Any], actor: str = "system",
         str(data.get("_execution_owner_id") or "").strip()
         or "ecio-" + uuid.uuid4().hex
     )
-    execution_lease_seconds = max(
-        1.0, float(data.get("_execution_lease_seconds")
-                   or EXTERNAL_CI_EXECUTION_LEASE_SECONDS))
+    execution_lease_seconds = clamp_external_ci_lease_seconds(
+        data.get("_execution_lease_seconds")
+        or EXTERNAL_CI_EXECUTION_LEASE_SECONDS)
     run_id = (data.get("run_id") or "ecir-" + uuid.uuid4().hex[:16]).strip()
     # Dispatch identity is the canonical source repository plus exact source SHA.
     # Branch labels, tasks, claims, and webhook/manual callers are observations
@@ -356,7 +374,7 @@ def acquire_external_ci_execution(run_id: str, owner_id: str,
     if not owner_id:
         return {"error": "owner_id required", "run_id": run_id}
     now = float(now if now is not None else time.time())
-    lease_expires_at = now + max(1.0, float(lease_seconds))
+    lease_expires_at = now + clamp_external_ci_lease_seconds(lease_seconds)
     with _conn(project) as c:
         c.execute("BEGIN IMMEDIATE")
         row = c.execute(
@@ -702,6 +720,8 @@ __all__ = [
     "EXTERNAL_CI_TERMINAL_STATUSES",
     "EXTERNAL_CI_FAILURE_CLASSES",
     "EXTERNAL_CI_EXECUTION_LEASE_SECONDS",
+    "EXTERNAL_CI_EXECUTION_LEASE_MAX_SECONDS",
+    "clamp_external_ci_lease_seconds",
     "GIT_SHA_RE",
     "WORKFLOW_REF_RE",
     "StoreExternalCiRepository",

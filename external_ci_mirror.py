@@ -249,14 +249,14 @@ def request_external_ci_mirror_run(request: Dict[str, Any], source_path: str,
         return {"error": "source_path must be an existing local git checkout",
                 "failure_class": "mirror_sync_failed"}
     request = dict(request or {})
-    execution_owner_id = (
-        str(request.pop("_execution_owner_id", "") or "").strip()
-        or "ecio-" + uuid.uuid4().hex
-    )
-    execution_lease_seconds = float(
+    # The execution owner is server-owned identity. The REST route forwards the
+    # caller's raw body, so accepting an owner from it would let a caller choose
+    # or collide with another dispatcher's identity. Drop any supplied value.
+    request.pop("_execution_owner_id", None)
+    execution_owner_id = "ecio-" + uuid.uuid4().hex
+    execution_lease_seconds = store.clamp_external_ci_lease_seconds(
         request.pop("execution_lease_seconds",
-                    store.EXTERNAL_CI_EXECUTION_LEASE_SECONDS)
-    )
+                    store.EXTERNAL_CI_EXECUTION_LEASE_SECONDS))
     execution_now = now_fn()
     run = store.create_external_ci_run(
         {**request,

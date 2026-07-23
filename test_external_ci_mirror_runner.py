@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """CI-MIRROR-2 operational runner regressions."""
 import os
+import pathlib
 import shutil
 import subprocess
 import sys
@@ -307,6 +308,27 @@ try:
        "external CI runs can be listed by status after execution")
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
+
+# --- BUG-158 hardening: a caller cannot make a run unreclaimable ------------
+# The REST route forwards the caller's raw body into the run request, so the
+# lease bound and the owner identity must both be server-owned. An unbounded
+# lease would recreate the orphan-forever run this fence exists to recover.
+_clamp = store.clamp_external_ci_lease_seconds
+ok(_clamp(10 ** 12) == store.EXTERNAL_CI_EXECUTION_LEASE_MAX_SECONDS,
+   "an enormous requested lease is clamped to the recoverable maximum")
+ok(_clamp(float("inf")) == store.EXTERNAL_CI_EXECUTION_LEASE_SECONDS,
+   "a non-finite lease falls back to the default rather than never expiring")
+ok(_clamp(0) >= 1.0 and _clamp(-5) >= 1.0,
+   "a zero or negative lease still yields a positive deadline")
+ok(_clamp("not-a-number") == store.EXTERNAL_CI_EXECUTION_LEASE_SECONDS,
+   "an unparseable lease falls back to the default")
+
+_mirror_src = pathlib.Path(__file__).resolve().parent.joinpath(
+    "external_ci_mirror.py").read_text(encoding="utf-8")
+ok('request.pop("_execution_owner_id", None)' in _mirror_src,
+   "a caller-supplied execution owner id is dropped, never honoured")
+ok("execution_owner_id = \"ecio-\" + uuid.uuid4().hex" in _mirror_src,
+   "the execution owner identity is always generated server-side")
 
 print("\n%d passed, %d failed" % (passed, failed))
 sys.exit(1 if failed else 0)
