@@ -551,7 +551,6 @@ def deliver_human_escalation(
             requires_ack=requires_ack,
             signal=SIGNAL,
             priority=95,
-            on_ack_timeout="wake_or_operator_alert",
             idem_key=f"{idem_key}:message",
             project=project,
         )

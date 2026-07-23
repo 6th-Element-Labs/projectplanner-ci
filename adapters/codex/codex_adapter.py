@@ -233,6 +233,9 @@ def on_pre_tool(pending):
     tool_name, tool_input, cwd = normalize_pending(pending)
 
     me = codex_agent_id(cwd)
+    # A tool boundary is the Codex adapter's work-loop tick. Always drain the
+    # durable mailbox here so long-running sessions do not rely on startup only.
+    inbox = drain_inbox(me)
     verdict = sb.evaluate_tool(PROJECT, me, tool_name, tool_input, cwd=cwd)
     verdict.update({
         "event": "pre_tool",
@@ -241,6 +244,8 @@ def on_pre_tool(pending):
         "tool_name": tool_name,
         "tool_input": tool_input,
         "control": control_fidelity(),
+        "unacked_messages": inbox,
+        "mailbox_drained_at": time.time(),
     })
     return verdict
 

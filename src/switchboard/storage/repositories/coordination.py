@@ -2495,10 +2495,10 @@ def _create_ack_monitor(c: sqlite3.Connection, message_id: int, from_agent: str,
                         now: float, on_ack_timeout: str = "notify_sender") -> Dict[str, Any]:
     monitor_id = f"mon-{uuid.uuid4().hex[:16]}"
     condition = {"type": "message_ack", "message_id": message_id}
-    action = (on_ack_timeout or "notify_sender").strip()
-    if action not in ("notify_sender", "wake_target", "wake_or_operator_alert"):
-        action = "notify_sender"
-    on_timeout = {"action": action, "signal": "ack_timeout"}
+    # Ack deadlines are delivery expectations, never lifecycle authority.
+    # The application contract rejects legacy control actions; this defensive
+    # normalization also keeps direct repository callers transport-only.
+    on_timeout = {"action": "notify_sender", "signal": "ack_timeout"}
     c.execute(
         "INSERT INTO coordination_monitors"
         "(id, kind, target_type, target_id, task_id, owner_agent, subject_agent, status, "
@@ -2780,11 +2780,12 @@ def sweep_coordination_monitors(project: str = DEFAULT_PROJECT,
                     "requires_ack, ack_deadline, sent_at, signal, priority, idem_key, principal_id) "
                     "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                     ("switchboard/monitor", msg["from_agent"], msg["task_id"], notice,
-                     1, None, now, "ack_timeout", 100, None, None),
+                     0, None, now, "ack_timeout", 100,
+                     f"ack-timeout-notice:{mon['id']}", None),
                 )
                 notice_payload = {"id": cur.lastrowid, "from_agent": "switchboard/monitor",
                                   "to_agent": msg["from_agent"], "task_id": msg["task_id"],
-                                  "message": notice, "requires_ack": True,
+                                  "message": notice, "requires_ack": False,
                                   "signal": "ack_timeout", "priority": 100,
                                   "sent_at": now,
                                   "failure_class": "unreachable_agent",
@@ -2792,41 +2793,16 @@ def sweep_coordination_monitors(project: str = DEFAULT_PROJECT,
                 c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                           (msg["task_id"], "switchboard/monitor", "message.sent",
                            json.dumps(notice_payload, sort_keys=True), now))
-                wake = None
-                if action in ("wake_target", "wake_or_operator_alert"):
-                    selector = {"agent_id": msg["to_agent"]}
-                    runtime = _store_facade()._selector_runtime_for_agent(msg["to_agent"])
-                    if runtime:
-                        selector["runtime"] = runtime
-                    wake = _insert_wake_intent(
-                        c, selector=selector, reason="ack_timeout",
-                        source=f"monitor:{mon['id']}",
-                        policy={"no_eligible_host": "wait",
-                                "operator_alert": action == "wake_or_operator_alert"},
-                        task_id=msg["task_id"], principal_id="",
-                        actor="switchboard/monitor", now=now,
-                        project=project,
-                        idem_key=f"ack-timeout:{mon['id']}")
-                    result["wake_id"] = wake["wake_id"]
-                    result["wake_status"] = wake["status"]
-                    c.execute(
-                        "UPDATE coordination_monitors SET result_json=? WHERE id=?",
-                        (json.dumps(result, sort_keys=True), mon["id"]),
-                    )
                 fired += 1
                 event = {"monitor_id": mon["id"], "status": "fired",
                          "message_id": msg["id"], "notice_id": cur.lastrowid,
                          "failure_class": "unreachable_agent"}
-                if wake:
-                    event["wake_id"] = wake["wake_id"]
-                    event["wake_status"] = wake["status"]
                 events.append(event)
             else:
                 c.execute("UPDATE coordination_monitors SET last_checked_at=?, updated_at=? WHERE id=?",
                           (now, now, mon["id"]))
-    wake_sweep = sweep_wake_intents(project=project, now=now)
     return {"project": project, "checked": checked, "resolved": resolved,
-            "fired": fired, "events": events, "wake_sweep": wake_sweep}
+            "fired": fired, "events": events}
 
 
 # --- ARCH-MS-50: agents + hosts ---
@@ -2996,7 +2972,27 @@ def list_active_agents(lane: str = "", project: str = DEFAULT_PROJECT) -> List[D
                              (lane,)).fetchall()
         else:
             rows = c.execute("SELECT * FROM agent_presence ORDER BY heartbeat_at DESC").fetchall()
-    return [p for p in (_presence_row(r, now=now) for r in rows) if not p["stale"]]
+        mailbox_rows = c.execute(
+            "SELECT to_agent, COUNT(*) AS unacked_count, MIN(sent_at) AS oldest_sent_at "
+            "FROM agent_messages WHERE requires_ack=1 AND acked_at IS NULL GROUP BY to_agent"
+        ).fetchall()
+    mailbox = {str(r["to_agent"]): dict(r) for r in mailbox_rows}
+    active = []
+    for presence in (_presence_row(r, now=now) for r in rows):
+        if presence["stale"]:
+            continue
+        stats = mailbox.get(presence["agent_id"]) or {}
+        oldest = stats.get("oldest_sent_at")
+        presence["mailbox"] = {
+            "unacked_count": int(stats.get("unacked_count") or 0),
+            "oldest_unacked_at": oldest,
+            "oldest_unacked_age_seconds": (
+                max(0.0, now - float(oldest)) if oldest is not None else None
+            ),
+            "stale_is_lifecycle_authority": False,
+        }
+        active.append(presence)
+    return active
 
 
 def _host_row(row: sqlite3.Row, now: Optional[float] = None) -> Dict[str, Any]:

@@ -52,7 +52,7 @@ try:
         "task": " ARCH-1 ",
         "requires_ack": "true",
         "ack_timeout_s": "90",
-        "ack_timeout_action": "wake_target",
+        "ack_timeout_action": "notify_sender",
         "signal": " heads_up ",
         "priority": "2",
         "idem_key": " idem-1 ",
@@ -65,7 +65,7 @@ try:
        and send_cmd.task_id == "ARCH-1"
        and send_cmd.requires_ack is True
        and send_cmd.ack_timeout_seconds == 90.0
-       and send_cmd.on_ack_timeout == "wake_target"
+       and send_cmd.on_ack_timeout == "notify_sender"
        and send_cmd.signal == "heads_up"
        and send_cmd.priority == 2
        and send_cmd.idem_key == "idem-1",

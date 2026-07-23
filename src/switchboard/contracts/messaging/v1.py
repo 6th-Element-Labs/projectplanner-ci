@@ -64,11 +64,21 @@ class SendAgentMessageCommand(VersionedModel):
 
     @field_validator(
         "from_agent", "to_agent", "message", "project", "task_id",
-        "on_ack_timeout", "signal", "idem_key", mode="before",
+        "signal", "idem_key", mode="before",
     )
     @classmethod
     def _strip(cls, value: Any) -> str:
         return _strip_text(value)
+
+    @field_validator("on_ack_timeout", mode="before")
+    @classmethod
+    def _transport_only_timeout(cls, value: Any) -> str:
+        action = _strip_text(value) or "notify_sender"
+        if action != "notify_sender":
+            raise ValueError(
+                "ack timeout actions are transport-only; only notify_sender is supported"
+            )
+        return action
 
     @field_validator("requires_ack", mode="before")
     @classmethod

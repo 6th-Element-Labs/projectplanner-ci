@@ -2475,6 +2475,22 @@ def _build_mission_status(project: str = DEFAULT_PROJECT, deliverable_id: str = 
                     info["runtime"] = pres.get("runtime")
                     info["model"] = pres.get("model")
                     info["stale"] = pres.get("stale")
+                mailbox = c.execute(
+                    "SELECT COUNT(*) AS unacked_count, MIN(sent_at) AS oldest_sent_at "
+                    "FROM agent_messages WHERE to_agent=? AND requires_ack=1 "
+                    "AND acked_at IS NULL",
+                    (agent_id,),
+                ).fetchone()
+                oldest = mailbox["oldest_sent_at"] if mailbox else None
+                info["mailbox"] = {
+                    "unacked_count": int(mailbox["unacked_count"] or 0) if mailbox else 0,
+                    "oldest_unacked_at": oldest,
+                    "oldest_unacked_age_seconds": (
+                        max(0.0, time.time() - float(oldest))
+                        if oldest is not None else None
+                    ),
+                    "stale_is_lifecycle_authority": False,
+                }
     pending_proposal = None
     with _store_facade()._conn(project) as c:
         row = c.execute(
