@@ -861,9 +861,7 @@ def active_codex_cloud_session_count():
         metadata = session.get("metadata") or {}
         if metadata.get("vendor_id") != "openai-codex-cloud" or session.get("stale"):
             continue
-        if str(session.get("status") or "").lower() not in {
-            "completed", "failed", "cancelled", "expired", "lost", "killed", "exited"
-        }:
+        if str(session.get("status") or "").lower() not in _TERMINAL_RUNNER_STATES:
             active += 1
     return active
 
@@ -1832,9 +1830,10 @@ def _drain_runners(host_id, recover_stale_local=True):
     return list(merged.values())
 
 
-_TERMINAL_RUNNER_STATES = frozenset({
-    "completed", "failed", "cancelled", "expired", "lost", "killed", "exited", "stopped",
-})
+# SIMPLIFY-18: the host shares the server's one terminal vocabulary. The
+# release bundle ships src/, so there is no second spelling to drift.
+from switchboard.domain.execution_liveness import (
+    TERMINAL_EXECUTION_STATES as _TERMINAL_RUNNER_STATES)
 
 
 def _positive_seconds(env_name, default):

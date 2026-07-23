@@ -39,9 +39,10 @@ MANAGED_BY = "switchboard-co-fleet-v1"
 PROJECT_TAG = "switchboard-co"
 GUARDRAILS_PARAMETER = "/switchboard/co/guardrails"
 LAUNCH_SWITCH_PARAMETER = "/switchboard/co/launch-enabled"
-TERMINAL_RUNNER_STATES = {
-    "completed", "failed", "cancelled", "expired", "lost", "killed", "exited", "stopped",
-}
+from switchboard.domain import execution_liveness
+
+# SIMPLIFY-18: the autoscaler reads the one canonical vocabulary.
+TERMINAL_RUNNER_STATES = execution_liveness.TERMINAL_EXECUTION_STATES
 SAFE_SELECTOR = re.compile(r"^[A-Za-z0-9._:/@+\-]{1,160}$")
 
 
