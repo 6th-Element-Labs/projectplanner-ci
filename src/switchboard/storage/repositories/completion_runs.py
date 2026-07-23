@@ -189,6 +189,37 @@ def get_active_completion_run(task_id: str, *,
     return _row(row)
 
 
+def list_active_completion_runs(
+        task_ids: Any, *,
+        project: str = DEFAULT_PROJECT) -> dict[str, dict[str, Any]]:
+    """Active runs for many tasks, keyed by task id.
+
+    The mission read model needs the completion route for every linked task on
+    a polled path, so this is one query rather than one per task.
+    """
+    wanted = list(dict.fromkeys(
+        str(item or "").strip().upper() for item in (task_ids or [])
+        if str(item or "").strip()
+    ))
+    if not wanted:
+        return {}
+    runs: dict[str, dict[str, Any]] = {}
+    with _conn(project) as c:
+        # Chunked to stay well inside SQLite's parameter limit on wide missions.
+        for start in range(0, len(wanted), 400):
+            chunk = wanted[start:start + 400]
+            placeholders = ",".join("?" for _ in chunk)
+            rows = c.execute(
+                f"SELECT * FROM completion_runs WHERE task_id IN ({placeholders})",
+                tuple(chunk),
+            ).fetchall()
+            for row in rows:
+                parsed = _row(row)
+                if parsed and parsed.get("task_id"):
+                    runs[str(parsed["task_id"]).strip().upper()] = parsed
+    return runs
+
+
 def transition_completion_run(data: Mapping[str, Any], *, actor: str,
                               project: str = DEFAULT_PROJECT) -> dict[str, Any]:
     task_id = str(data.get("task_id") or "").strip().upper()
