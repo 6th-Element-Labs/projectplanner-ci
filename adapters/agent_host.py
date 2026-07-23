@@ -88,6 +88,7 @@ P_COMPLETE_RUNNER_CONTROL = "/ixp/v1/complete_runner_control"
 P_LIST_RUNNERS = "/ixp/v1/runner_sessions"
 P_LIST_WORK_SESSIONS = "/ixp/v1/work_sessions"
 P_DIRECT_SESSION_MCP_TOKEN = "/ixp/v1/direct_assignments/mcp_token"
+P_RUNNER_LEASE_DUE = "/ixp/v1/runner_lease_due"
 P_TALLY_SPEND = "/tally/v1/spend/ingest"
 MESSAGE_ONLY_LANE = "__MESSAGE_ONLY__"
 RUNTIME_PROVIDERS = {
@@ -99,6 +100,7 @@ AGENT_HOST_VERSION = os.environ.get("PM_AGENT_HOST_VERSION", "0.2.0")
 # Advertised when this build can serve browser Watch/Chat (supervisor PTY +
 # outbound relay). Placement keys off this instead of sniffing version strings.
 RUNNER_WATCH_CAPABILITY = "runner_watch"
+RUNNER_LEASE_CAPABILITIES = ("execution_lease_v2", "runner_lease_enforcement")
 
 
 def host_serves_runner_watch():
@@ -139,6 +141,18 @@ def _csv(value):
     if isinstance(value, list):
         return [str(x).strip() for x in value if str(x).strip()]
     return [x.strip() for x in str(value or "").replace("\n", ",").split(",") if x.strip()]
+
+
+def runner_lease_enforcement_enabled():
+    """Return the fleet default, with one audited emergency rollback switch.
+
+    SIMPLIFY-20 promotes the proven BUG-155 lease path to the normal execution
+    authority.  An operator may temporarily set PM_RUNNER_LEASE_ENFORCEMENT=0
+    through the SIMPLIFY-16 observation window; SIMPLIFY-11 owns deleting that
+    final rollback branch.
+    """
+    value = str(os.environ.get("PM_RUNNER_LEASE_ENFORCEMENT", "1")).strip().lower()
+    return value not in {"0", "false", "no", "off"}
 
 
 def _truthy(value):
@@ -471,8 +485,8 @@ def default_inventory():
     cloud_enabled = runtime == "codex" and bool(os.environ.get("PM_CODEX_CLOUD_ENVIRONMENT_ID"))
     profiles = ["ixp.v1", "txp.dispatch.v0"]
     capabilities = ["docs", "python", "github", "tests"]
-    if _truthy(os.environ.get("PM_RUNNER_LEASE_ENFORCEMENT")):
-        capabilities.extend(["execution_lease_v2", "runner_lease_enforcement"])
+    if runner_lease_enforcement_enabled():
+        capabilities.extend(RUNNER_LEASE_CAPABILITIES)
     # Fleet workers advertise a host-owned capability profile.  The wake payload may
     # select from this inventory, but it cannot add capabilities to the host.  Keeping
     # this in configuration lets co-general/co-build use the same immutable AMI while
@@ -1913,7 +1927,7 @@ def expire_runner_leases(inventory, *, now=None):
     already-enabled lease authority.
     """
     now = time.time() if now is None else float(now)
-    enforce = _truthy(os.environ.get("PM_RUNNER_LEASE_ENFORCEMENT"))
+    enforce = runner_lease_enforcement_enabled()
     host_id = str((inventory or {}).get("host_id") or "")
     outcomes = _drain_pending_stop_receipts(host_id)
     for session in _drain_runners(host_id):
@@ -2778,6 +2792,33 @@ def _update_drained_runner(runner):
     return _try("POST", P_REGISTER_RUNNER, {"project": PROJECT, **dict(runner)})
 
 
+def _drain_runner_action(inventory, action, runner_session_id, options=None):
+    """Route automatic CO drain stops through the one execution-lease clock."""
+    if action != "lease_stop":
+        return supervisor_action(action, runner_session_id, options)
+    transition = _try("POST", P_RUNNER_LEASE_DUE, {
+        "project": PROJECT,
+        "host_id": inventory["host_id"],
+        "runner_session_id": runner_session_id,
+        "reason": str((options or {}).get("reason") or "host drain"),
+        "authority": "co_drain",
+    }) or {}
+    if transition.get("error"):
+        return {"error": transition.get("error"), "alive": True,
+                "lease_transition": transition}
+    outcomes = expire_runner_leases(inventory)
+    outcome = next((
+        item for item in outcomes
+        if item.get("runner_session_id") == runner_session_id
+    ), {})
+    health = supervisor_action("health", runner_session_id)
+    return {
+        **outcome,
+        "alive": bool(health and not health.get("error") and health.get("alive")),
+        "lease_transition": transition,
+    }
+
+
 def handle_drain(request, inventory):
     """Stop claims first, then interrupt/checkpoint/release/purge and acknowledge."""
     current = co_drain.read_receipt()
@@ -2798,7 +2839,8 @@ def handle_drain(request, inventory):
         co_drain.inventory_for_drain(inventory),
         runners=_drain_runners(inventory["host_id"], recover_stale_local=False),
         work_sessions=_drain_work_sessions(),
-        supervisor=supervisor_action,
+        supervisor=lambda action, runner_id, options=None: _drain_runner_action(
+            inventory, action, runner_id, options),
         release_lease=_release_provider_lease,
         publish_host=lambda status, capacity: _publish_drain_host(
             inventory, status, capacity),

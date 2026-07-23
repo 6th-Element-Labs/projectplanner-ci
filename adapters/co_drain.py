@@ -431,7 +431,8 @@ def drain_host(
                 failures.append(f"{runner_id}:runner_draining_report_failed")
         try:
             killed = dict(supervisor(
-                "kill", runner_id, {"signal": "INT", "grace_seconds": 8}) or {})
+                "lease_stop", runner_id, {
+                    "reason": f"host drain: {request['reason']}"}) or {})
         except Exception:
             killed = {"error": "runner_stop_failed", "alive": True}
         session = _select_work_session(runner, sessions)

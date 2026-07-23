@@ -155,8 +155,9 @@ The horizons, so this document is also the master plan of record:
 Phase 1 removes three autonomous stop authorities: the Agent Host claim/idle reaper, the
 review-steward acknowledgement-timeout replacement, and terminal-task cleanup. One authority
 replaces them: expiry of the renewable runner heartbeat lease. Wake intents use the same model
-and always receive a deadline. Lease enforcement deploys observe-only for 24 hours
-(`PM_RUNNER_LEASE_ENFORCEMENT=0`, the default) before an operator enables enforcement.
+and always receive a deadline. Lease enforcement now defaults on.
+`PM_RUNNER_LEASE_ENFORCEMENT=0` is the temporary audited rollback during the
+SIMPLIFY-16 observation window; SIMPLIFY-11 owns deleting that final branch.
 
 - Kill mechanisms deleted: **3**
 - Kill mechanisms added: **1**

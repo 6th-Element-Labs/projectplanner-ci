@@ -48,6 +48,7 @@ __all__ = [
     "upsert_runner_session",
     "list_runner_sessions",
     "get_runner_session",
+    "make_runner_lease_due",
     "terminal_task_cleanup_for_host_in",
     "runner_bind_tuple",
     "missing_runner_bind_fields",
@@ -2254,6 +2255,88 @@ def get_runner_session(runner_session_id: str,
         row = c.execute("SELECT * FROM runner_sessions WHERE runner_session_id=?",
                         (runner_session_id,)).fetchone()
         return _runner_session_row(row, now=now, include_claim=True, c=c) if row else None
+
+
+def make_runner_lease_due(
+        runner_session_id: str, *, reason: str, authority: str,
+        actor: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Fence one exact generation and make its renewable lease due now.
+
+    This is the canonical translation boundary for automatic stop requests such
+    as CO drain. It never sends a process signal. The owning Agent Host lease
+    reaper remains the only automatic process-stop authority.
+    """
+    now = time.time()
+    with _conn(project) as c:
+        row = c.execute(
+            "SELECT * FROM runner_sessions WHERE runner_session_id=?",
+            (runner_session_id,)).fetchone()
+        if not row:
+            return {"updated": False, "error": "runner_session_not_found",
+                    "runner_session_id": runner_session_id}
+        metadata = json.loads(row["metadata_json"] or "{}")
+        execution_id = str(metadata.get("execution_id") or "")
+        generation = int(metadata.get("execution_generation") or 0)
+        lease_epoch = int(metadata.get("lease_epoch") or 0)
+        if not execution_id or generation <= 0:
+            return {"updated": False, "error": "execution_lease_unbound",
+                    "runner_session_id": runner_session_id}
+        lease = c.execute(
+            "SELECT * FROM resource_leases WHERE id=? AND resource_type='execution'",
+            (execution_id,)).fetchone()
+        if (not lease
+                or int(lease["execution_generation"] or 0) != generation):
+            return {"updated": False, "error": "execution_lease_mismatch",
+                    "runner_session_id": runner_session_id}
+        if str(lease["lease_state"] or "") not in {
+                "reserved", "starting", "active", "stopping"}:
+            return {"updated": True, "idempotent": True,
+                    "runner_session_id": runner_session_id,
+                    "lease_state": lease["lease_state"]}
+        if str(lease["lease_state"] or "") != "stopping":
+            lease_epoch = int(lease["fence_epoch"] or 0) + 1
+            c.execute(
+                "UPDATE resource_leases SET lease_state='stopping',fence_epoch=?,"
+                "claimed_at=? WHERE id=? AND released_at IS NULL",
+                (lease_epoch, now - int(lease["ttl_seconds"] or 60),
+                 execution_id))
+        else:
+            lease_epoch = int(lease["fence_epoch"] or lease_epoch or 0)
+        metadata["lease_epoch"] = lease_epoch
+        metadata["lease_surrender"] = {
+            "schema": "switchboard.runner_lease_surrender.v1",
+            "authority": authority,
+            "reason": reason,
+            "surrendered_at": now,
+            "execution_id": execution_id,
+            "generation": generation,
+            "lease_epoch": lease_epoch,
+        }
+        ttl_s = max(10, int(row["heartbeat_ttl_s"] or 60))
+        c.execute(
+            "UPDATE runner_sessions SET heartbeat_at=?,metadata_json=?,updated_at=? "
+            "WHERE runner_session_id=?",
+            (now - ttl_s, json.dumps(metadata, sort_keys=True), now,
+             runner_session_id))
+        c.execute(
+            "UPDATE direct_session_tokens SET revoked_at=? "
+            "WHERE runner_session_id=? AND revoked_at IS NULL",
+            (now, runner_session_id))
+        c.execute(
+            "INSERT INTO activity(task_id,actor,kind,payload,created_at) "
+            "VALUES (?,?,?,?,?)",
+            (row["task_id"], actor, "runner.lease_due",
+             json.dumps({
+                 "runner_session_id": runner_session_id,
+                 "execution_id": execution_id,
+                 "generation": generation,
+                 "lease_epoch": lease_epoch,
+                 "authority": authority,
+                 "reason": reason,
+             }, sort_keys=True), now))
+    return {"updated": True, "runner_session_id": runner_session_id,
+            "execution_id": execution_id, "generation": generation,
+            "lease_epoch": lease_epoch, "lease_state": "stopping"}
 
 
 def request_runner_control(runner_session_id: str, action: str, reason: str = "",

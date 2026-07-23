@@ -30,6 +30,7 @@ Environment=PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM=0
 Environment=PM_HOST_MAX_SESSIONS=1
 Environment=PM_REPO_ROOT=/opt/projectplanner
 Environment=PM_RUNNER_DIR=/var/lib/projectplanner/runner
+Environment=PM_RUNNER_LEASE_ENFORCEMENT=1
 Environment=PM_AGENT_HOST_INBOX_IDLE_SECONDS=6
 Environment=PYTHONDONTWRITEBYTECODE=1
 ExecStart=/opt/projectplanner/.venv/bin/python /opt/projectplanner/adapters/agent_host.py --interval 10

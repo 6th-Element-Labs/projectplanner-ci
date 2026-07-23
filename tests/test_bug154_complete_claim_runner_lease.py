@@ -179,6 +179,36 @@ assert store.get_runner_session("run-bug154-review", project=P)["stale"] is Fals
 assert unrelated["stale"] is False
 assert "lease_surrender" not in unrelated["metadata"]
 
+# SIMPLIFY-20: a non-completion automatic stop first moves the exact execution
+# lease to Stopping and makes the runner lease due. It never signals a process.
+with store._conn(P) as c:
+    c.execute(
+        "INSERT INTO resource_leases("
+        "id,agent_id,principal_id,task_id,resource_type,names,claimed_at,"
+        "ttl_seconds,execution_role,execution_generation,fence_epoch,"
+        "lease_state,head_sha,wake_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        ("exec-run-bug154-other", f"agent/{other_task['task_id']}", HOST_PRINCIPAL,
+         other_task["task_id"], "execution",
+         json.dumps([other_task["task_id"], "implementation"]),
+         now, 7200, "implementation", 1, 1, "active", HEAD,
+         "wake-run-bug154-other"))
+due = store.make_runner_lease_due(
+    "run-bug154-other", reason="host drain: spot_interruption",
+    authority="co_drain", actor=HOST, project=P)
+assert due["updated"] is True and due["lease_state"] == "stopping", due
+draining = store.get_runner_session("run-bug154-other", project=P)
+assert draining["stale"] is True
+assert draining["metadata"]["lease_surrender"]["authority"] == "co_drain"
+with store._conn(P) as c:
+    lease = c.execute(
+        "SELECT lease_state,fence_epoch FROM resource_leases WHERE id=?",
+        ("exec-run-bug154-other",)).fetchone()
+assert lease["lease_state"] == "stopping" and lease["fence_epoch"] == 2
+again = store.make_runner_lease_due(
+    "run-bug154-other", reason="host drain retry",
+    authority="co_drain", actor=HOST, project=P)
+assert again["updated"] is True and again["lease_epoch"] == 2, again
+
 # A late host heartbeat must neither renew nor resurrect the fenced generation.
 prior_heartbeat = surrendered["heartbeat_at"]
 late = register("run-bug154-bound", task["task_id"], claim["claim_id"])

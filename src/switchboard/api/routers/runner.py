@@ -230,6 +230,27 @@ def create_router(*, resolve_project: ProjectResolver,
             options["kind"] = payload.get("kind")
         return _request_control(request, payload, "inject", options=options)
 
+    @router.post("/ixp/v1/runner_lease_due")
+    async def ixp_runner_lease_due(request: Request, body: dict = Body(...)):
+        project = resolve_body_project(body)
+        principal = resolve_agent_host_principal(
+            resolve_principal, request, project,
+            dev_actor=body.get("host_id") or "agent-host")
+        require_agent_host_identity(
+            principal, str(body.get("host_id") or ""), project)
+        result = runner_control_command.make_lease_due_mapping_result(
+            {
+                "project": project,
+                "runner_session_id": body.get("runner_session_id"),
+                "reason": body.get("reason") or "",
+                "authority": body.get("authority") or "capacity_plane",
+            },
+            actor=auth.actor(principal),
+        )
+        if result.get("error"):
+            raise HTTPException(400, result["error"])
+        return result
+
     @router.get("/ixp/v1/runner_controls")
     async def ixp_runner_controls(project: str = Query(...),
                                   status: str = "", host_id: str = "",

@@ -267,7 +267,7 @@ def _write_watch_output(chunk: bytes, stream: Any = None) -> None:
 
 
 def _run_streaming_command(
-    command: list[str], *, cwd: str, env: dict[str, str], timeout: float,
+    command: list[str], *, cwd: str, env: dict[str, str], timeout: float | None,
     stream: Any = None,
 ) -> subprocess.CompletedProcess:
     """Run a child while teeing its combined output to the browser Watch PTY.
@@ -293,13 +293,16 @@ def _run_streaming_command(
     output = bytearray()
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ)
-    deadline = time.monotonic() + max(0.0, float(timeout))
+    deadline = (
+        time.monotonic() + max(0.0, float(timeout))
+        if timeout is not None else None)
     try:
         while selector.get_map():
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            remaining = deadline - time.monotonic() if deadline is not None else None
+            if remaining is not None and remaining <= 0:
                 raise subprocess.TimeoutExpired(command, timeout)
-            for key, _mask in selector.select(min(0.25, remaining)):
+            for key, _mask in selector.select(
+                    0.25 if remaining is None else min(0.25, remaining)):
                 chunk = os.read(key.fd, 65536)
                 if not chunk:
                     selector.unregister(key.fileobj)
@@ -307,8 +310,8 @@ def _run_streaming_command(
                 output.extend(chunk)
                 _write_watch_output(chunk, stream)
 
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
+        remaining = deadline - time.monotonic() if deadline is not None else None
+        if remaining is not None and remaining <= 0:
             raise subprocess.TimeoutExpired(command, timeout, output=bytes(output))
         returncode = process.wait(timeout=remaining)
     except subprocess.TimeoutExpired as exc:
@@ -550,7 +553,7 @@ def run(
         heartbeat_thread.start()
         if runner is None:
             completed = _run_streaming_command(
-                command, cwd=workspace, env=environment, timeout=7200)
+                command, cwd=workspace, env=environment, timeout=None)
         else:
             # Test and embedding hook. Production deliberately takes the
             # streaming path above; injected runners retain the previous
@@ -563,7 +566,6 @@ def run(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                timeout=7200,
                 check=False,
             )
         output = ((completed.stdout or "") + (completed.stderr or "")).encode()

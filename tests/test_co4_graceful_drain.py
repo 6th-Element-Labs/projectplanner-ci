@@ -243,7 +243,7 @@ try:
     receipt_text = json.dumps(drain_receipt, sort_keys=True)
     runner_checkpoint = drain_receipt["runners"][0]["checkpoint"]
     ok(drain_receipt.get("status") == "drained"
-       and sequence == ["snapshot", "kill", "release"]
+       and sequence == ["snapshot", "lease_stop", "release"]
        and runner_checkpoint.get("pushed") is True
        and host_updates[-1][0] == "drained" and runner_updates,
        "active runner is snapshotted, interrupted, checkpointed, fenced, and reported")

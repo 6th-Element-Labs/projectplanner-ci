@@ -80,6 +80,18 @@ def request_mapping_result(
     )
 
 
+def make_lease_due_mapping_result(
+        data: dict[str, Any], *, actor: str) -> dict[str, Any]:
+    """Translate an automatic stop request into the canonical lease clock."""
+    return runner_repo.make_runner_lease_due(
+        str(data.get("runner_session_id") or data.get("id") or ""),
+        reason=str(data.get("reason") or "automatic stop requested"),
+        authority=str(data.get("authority") or "capacity_plane"),
+        actor=actor,
+        project=data.get("project") or DEFAULT_PROJECT,
+    )
+
+
 def claim_mapping_result(
         data: dict[str, Any], *, actor: str) -> dict[str, Any]:
     """Agent Host claims a pending runner control request."""
