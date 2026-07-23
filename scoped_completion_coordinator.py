@@ -110,6 +110,10 @@ class ScopedCompletionCoordinator(CoordinatorDaemon):
             ticked_at=float(self.clock()))
         return result
 
+    def _drive_scope(self, project: str, scope: Dict[str, Any]) -> Dict[str, Any]:
+        """The tick's per-scope action: drive this scope through its lifecycle."""
+        return self.run_scope(project, scope)
+
     def run_scope(self, project: str, scope: Dict[str, Any],
                   denied_lanes: Iterable[str] = ()) -> Dict[str, Any]:
         self._register_or_heartbeat(project)

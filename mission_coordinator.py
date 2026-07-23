@@ -140,6 +140,12 @@ def _explicit_target_actions(mission_status: Dict[str, Any],
             "automatic": True,
             "attention": False,
             "delivery_impact": "none",
+            # An In Review action becomes the monitor the dispatch path reads,
+            # and review_merge must bind to the exact PR head or it refuses with
+            # review_head_sha_required. The generic planner already carries this;
+            # the explicit-target builder must too, or a scoped task stalls at
+            # In Review with a live PR it never enqueues.
+            "head_sha": str((detail.get("git_state") or {}).get("head_sha") or ""),
         }
         if status == "Not Started" and dependency.get("ready") and not claims:
             actions.append({
