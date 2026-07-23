@@ -50,6 +50,25 @@ DEFAULT_HEARTBEAT_TTL_S = 60
 MIN_HEARTBEAT_TTL_S = 10
 
 
+#: Relay tickets for native/relay-attached runners may substitute a transport
+#: placeholder where a real claim, Work Session, execution connection, or source
+#: SHA does not exist. The prefix is historical and stable because it is already
+#: serialized into issued tickets. It is NOT a claim id and must never be read as
+#: ownership evidence (ADR-0008 C1: claims may not be impersonated).
+SYNTHETIC_BIND_PREFIX = "direct/"
+
+
+def is_synthetic_bind_ref(value: Any) -> bool:
+    """True when a bind field holds a transport placeholder, not a real record."""
+    return str(value or "").startswith(SYNTHETIC_BIND_PREFIX)
+
+
+def synthetic_bind_fields(binding: Mapping[str, Any]) -> list[str]:
+    """Which bind fields are placeholders rather than real records."""
+    return sorted(key for key, value in (binding or {}).items()
+                  if is_synthetic_bind_ref(value))
+
+
 def normalize_status(status: Any) -> str:
     return str(status or "").strip().lower()
 
@@ -159,6 +178,9 @@ __all__ = [
     "EXECUTION_ROLES",
     "DEFAULT_HEARTBEAT_TTL_S",
     "MIN_HEARTBEAT_TTL_S",
+    "SYNTHETIC_BIND_PREFIX",
+    "is_synthetic_bind_ref",
+    "synthetic_bind_fields",
     "normalize_status",
     "is_terminal",
     "ttl_seconds",
