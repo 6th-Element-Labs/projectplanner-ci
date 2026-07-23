@@ -1990,6 +1990,21 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
     ).fetchone()
     previous_metadata = _json_obj(previous_row["metadata_json"], {}) \
         if previous_row else {}
+    lease_surrender = previous_metadata.get("lease_surrender") or {}
+    incoming_metadata = record.get("metadata") \
+        if isinstance(record.get("metadata"), dict) else {}
+    terminalizing_expired_lease = (
+        incoming_metadata.get("terminalized_by") == "runner_lease_expiry")
+    if lease_surrender and not terminalizing_expired_lease:
+        # complete_claim fenced this exact runner generation.  Returning the
+        # stored row makes retries harmless and prevents a delayed host
+        # heartbeat from renewing or resurrecting it.
+        fenced_row = c.execute(
+            "SELECT * FROM runner_sessions WHERE runner_session_id=?",
+            (runner_session_id,),
+        ).fetchone()
+        return _runner_session_row(
+            fenced_row, now=now, include_claim=True, c=c)
     record = _merge_existing_runner_record(c, record)
     host_id = (record.get("host_id") or "").strip()
     control = _normalize_runner_control(record.get("control") or {}, host_id)
