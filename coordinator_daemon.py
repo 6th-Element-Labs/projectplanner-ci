@@ -171,6 +171,16 @@ class CoordinatorDaemon:
             },
         }
 
+    def _drive_scope(self, project: str, scope: Dict[str, Any]) -> Dict[str, Any]:
+        """One scope's action for this tick.
+
+        The base daemon is a janitor (ADR-0008 W3): it observes and closes
+        terminal scopes but drives no lifecycle work. ACT=1 swaps in
+        ScopedCompletionCoordinator, which overrides this to drive the scope's
+        task(s) through the completion owner.
+        """
+        return self._janitor_scope(project, scope)
+
     def _janitor_scope(self, project: str, scope: Dict[str, Any]) -> Dict[str, Any]:
         """Close terminal scope records without driving task lifecycle work."""
         deliverable_id = str(scope.get("deliverable_id") or "")
@@ -476,15 +486,15 @@ class CoordinatorDaemon:
                 break
             deliverable_id = str(scope.get("deliverable_id") or "")
             sequence = int(state.get("sequence") or 0)
-            result = self._janitor_scope(project, scope)
+            result = self._drive_scope(project, scope)
             receipts.append({
                 "scope_id": scope.get("scope_id"),
                 "scope_type": scope.get("scope_type"),
                 "deliverable_id": deliverable_id,
                 "status": result.get("status"),
                 "task_id": scope.get("task_id") or None,
-                "candidate_count": 0,
-                "task_receipts": [],
+                "candidate_count": int(result.get("candidate_count") or 0),
+                "task_receipts": result.get("receipts") or result.get("task_receipts") or [],
                 "error": result.get("error"),
             })
             # Persist only after the scope's idempotent task ticks return. A crash
@@ -567,7 +577,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     import store
 
     config = DaemonConfig.from_env()
-    daemon = CoordinatorDaemon(config, store_mod=store)
+    if config.act:
+        # ACT=1: this process owns and drives operator-armed scopes. ACT=0 stays
+        # the janitor above. One switch, matching docs/COORDINATOR-AUTOPILOT.md.
+        from scoped_completion_coordinator import ScopedCompletionCoordinator
+        daemon = ScopedCompletionCoordinator(
+            config, store_mod=store,
+            agent_id=f"{config.actor}/{uuid.uuid4().hex[:12]}")
+    else:
+        daemon = CoordinatorDaemon(config, store_mod=store)
     if args.command == "run":
         if args.once:
             print(json.dumps(daemon.tick(), indent=2, sort_keys=True, default=str))
