@@ -34,6 +34,10 @@ def run():
     old_enforcement = os.environ.get("PM_RUNNER_LEASE_ENFORCEMENT")
     calls = []
     try:
+        os.environ.pop("PM_RUNNER_LEASE_ENFORCEMENT", None)
+        assert agent_host.runner_lease_enforcement_enabled() is True
+        assert {"execution_lease_v2", "runner_lease_enforcement"}.issubset(
+            set(agent_host.default_inventory()["runtimes"][0]["capabilities"]))
         os.environ["PM_AGENT_HOST_REAP_GRACE_SECONDS"] = "120"
         os.environ["PM_AGENT_HOST_IDLE_TIMEOUT_SECONDS"] = "1800"
         with tempfile.TemporaryDirectory() as td:

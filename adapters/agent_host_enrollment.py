@@ -2130,6 +2130,7 @@ def service_run(identity_path: Path, config_path: Path) -> None:
         "PM_AGENT_HOST_WORK_SOURCE_ROOT": str(
             config.get("work_source_root") or source_repo_root),
         "PM_RUNNER_DIR": config["runner_dir"],
+        "PM_RUNNER_LEASE_ENFORCEMENT": "1",
         "PM_PROVIDER_RUNTIME_ROOT": config["runtime_root"],
         "PM_AGENT_HOST_VERSION": config.get("agent_host_version") or AGENT_HOST_VERSION,
         "PM_AGENT_HOST_PLATFORM": config.get("platform") or _platform(),
