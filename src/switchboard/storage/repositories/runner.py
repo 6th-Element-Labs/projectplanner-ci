@@ -2119,6 +2119,19 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
         completion_resume = terminal_ack_claim_completion_in(
             c, runner_session_id, actor, principal_id, narrow_host, now,
             project=project)
+    # A supervised execution ends when its process does.  The lease is acquired at
+    # dispatch and promoted to 'active' above; this is its only other half.  Without
+    # it a lease outlives its own runner for the whole TTL, and the next start
+    # coalesces onto a dead generation instead of forking a fresh one (BUG-133).
+    # Released only after the terminal acknowledgement above, which still needs the
+    # 'stopping' state that complete_claim set.
+    lease_wake_id = str(metadata.get("wake_id") or "").strip()
+    if runner_status in RUNNER_TERMINAL_STATUSES and lease_wake_id:
+        c.execute(
+            "UPDATE resource_leases SET released_at=?,lease_state='stopped',"
+            "fence_epoch=COALESCE(fence_epoch,0)+1 "
+            "WHERE resource_type='execution' AND wake_id=? AND released_at IS NULL",
+            (now, lease_wake_id))
     work_session_id = str(metadata.get("work_session_id") or "").strip()
     lease_expired = metadata.get("terminalized_by") == "runner_lease_expiry"
     if (not completion_resume and work_session_id
