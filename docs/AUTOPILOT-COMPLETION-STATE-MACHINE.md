@@ -186,9 +186,10 @@ short-lived hydration, dispatch, or idempotency repairs.
 `Cancelled` is honoured as terminal by the reconciliation, replay, and
 deliverable-closure paths, but it is not in the writable status enum exposed by
 the task APIs (`Not Started`, `In Progress`, `In Review`, `Blocked`, `Done`). It
-is readable-but-not-settable through the standard path; this projection assumes
-that gap is closed or that cancellation is set by the paths that already
-recognise it.
+is readable-but-not-settable through the standard path. This completion-machine
+scope must continue to treat an already-present cancellation as terminal, but
+it does not introduce a new cancellation command. Making cancellation writable
+is a separate lifecycle/API decision.
 
 ## COORD-20 transition
 
@@ -581,8 +582,10 @@ Before rollout, tests must prove:
 - recovery remains hands-off across coordinator and host restarts;
 - a task at `Blocked(route=remediation)` is still produced as a coordinator
   candidate and still dispatches;
-- a task at `Blocked` whose PR merges with no webhook is still recovered to
-  `Done` by the reconciliation sweep.
+- a task at `Blocked` with a recorded PR whose merge webhook is dropped is
+  still recovered to `Done`;
+- a task at `Blocked` with empty git state whose canonical PR merged without
+  either PR webhook is still recovered to `Done` by orphan discovery.
 
 ## Current implementation gaps
 
@@ -612,33 +615,51 @@ change is deliberate, but two live mechanisms are keyed on board status today
 and both fail **silently** if the status moves first. They are prerequisites,
 not follow-ups.
 
-**1. Coordinator candidate selection is status-keyed.**
-`mission_coordinator` builds candidate actions for exactly three statuses:
-`Not Started` + ready + unclaimed, `In Progress` + unclaimed, and `In Review`.
-`Blocked` produces no candidate at all. This is precisely why COORD-20 reopens
-to `Not Started` with `assignee=None` — the existing test calls it "ready
-unclaimed remediation work", and that is the mechanism that makes the task
-visible again. `_scope_candidates` / `next_actions` must become route-keyed
-before the status change lands, or deliverable-scoped remediation stops
-dispatching with no error.
+**1. Coordinator candidate selection is status-keyed in multiple layers.**
+`mission_coordinator` and deliverable `_mission_next_actions` build candidate
+actions from ready statuses, `In Progress`, and `In Review`.
+`coordinator_daemon._task_ready_for_dispatch` likewise excludes `Blocked`, so
+deliverable-scoped fallback candidate generation also drops the task.
+`Blocked` therefore produces no deliverable-scoped remediation candidate. This
+is precisely why COORD-20 reopens to `Not Started` with `assignee=None` — the
+existing test calls it "ready unclaimed remediation work", and that is the
+mechanism that makes the task visible again. Candidate production,
+`_scope_candidates`, and `next_actions` must become route-keyed before the
+status change lands, or remediation stops dispatching with no error.
 
-**2. Reconciliation eligibility excludes `Blocked`.**
+**2. Both merged-PR reconciliation paths exclude `Blocked`.**
+The orphan path handles tasks with empty git state.
 `orphan_merge_discovery.ELIGIBLE_STATUSES` is
-`{"Not Started", "In Progress", "In Review"}`. This is the sweep that self-heals
-dropped merge webhooks. A task parked at `Blocked` whose PR then merges is never
-swept, so the change would quietly narrow Done-recovery coverage for exactly the
-tasks most likely to need it. Either add `Blocked` to the eligible set, or key
-the sweep off open completion runs rather than board status.
+`{"Not Started", "In Progress", "In Review"}`, so it excludes a
+`Blocked` task whose PR-open and merge webhooks were both dropped.
+
+The normal recorded-PR path is separate. It fetches mutable state for a known PR,
+but its merge `stamp_eligible` rule permits only `In Review`, `Done`, and a
+constrained `In Progress` case. Therefore adding `Blocked` only to
+`ELIGIBLE_STATUSES` is insufficient: a typical remediation task with a recorded
+PR would still be fetched but never stamped `Done` after a dropped merge
+webhook.
+
+The preferred fix is for recovery to select nonterminal tasks from active
+completion runs and apply the same canonical default-branch merge proof
+regardless of board projection. If status compatibility is retained during
+migration, both orphan-discovery eligibility and recorded-PR merge-stamp
+eligibility must include `Blocked`, with the existing canonical-repository,
+default-branch, task-attribution, and merge-SHA checks preserved.
 
 Verified as **not** a blocker: `start_task` has no `Blocked` refusal. The only
 status-based refusal in the admission path is `Triage`, so the
 `Blocked(route=remediation) -> In Progress` transition is admissible as
 designed.
 
-### Adjacent hole, out of scope here
+### Adjacent review-authority policy, out of scope here
 
 The exact-head review verdict is a merge-authorizing gate under invariant 6, but
 nothing requires the reviewer principal to differ from the implementer. The
 observed PR #810 verdict was recorded in `standard` mode by
 `cli/COORD-41-...` — the implementing session reviewing its own work. That is a
-separate defect from this design, but it weakens the gate this design leans on.
+separate policy question from this design. The current live working agreement
+explicitly permits self-review, so this completion-machine build must not
+silently introduce a reviewer-independence fence. If independent review becomes
+required, it needs a separately approved authority model that is satisfiable by
+the available principals and cannot deadlock completion.
