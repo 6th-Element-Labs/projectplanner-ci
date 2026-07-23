@@ -42,6 +42,7 @@ class RemediationStore:
 captured: list[dict] = []
 saved_request = connect_dispatch.coordination_repo.request_wake
 saved_projection = task_execution._projection
+saved_live_executions = task_execution.runner_repo.task_live_executions
 
 
 def request_wake(**kwargs):
@@ -51,6 +52,7 @@ def request_wake(**kwargs):
 
 try:
     connect_dispatch.coordination_repo.request_wake = request_wake
+    task_execution.runner_repo.task_live_executions = lambda *_args, **_kwargs: []
     task_execution._projection = lambda *_args, **_kwargs: {
         "task": {
             "task_id": "WATCH-17",
@@ -70,6 +72,7 @@ try:
 finally:
     connect_dispatch.coordination_repo.request_wake = saved_request
     task_execution._projection = saved_projection
+    task_execution.runner_repo.task_live_executions = saved_live_executions
 
 
 assert role == "remediation"

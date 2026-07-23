@@ -502,11 +502,28 @@ def run_coordinator_tick(
             if task_starter is None:
                 from switchboard.application.commands import task_execution
                 task_starter = task_execution.start_task
+            from switchboard.storage.repositories import completion_runs
+            completion_run = (
+                completion_runs.get_active_completion_run(
+                    task_id, project=task_project) or {})
+            reason_code = str(
+                completion_run.get("reason_code")
+                or ("current_head_remediation_required"
+                    if role == "remediation"
+                    else "current_head_review_required"))
             try:
                 ensured = task_starter(
                     task_id, project=task_project, actor=actor,
                     agent_id=coordinator_agent_id, role=role,
-                    source_sha=head_sha)
+                    source_sha=head_sha,
+                    reason_code=reason_code,
+                    route=str(completion_run.get("route") or role),
+                    decision_attempt=int(completion_run.get("attempt") or 0),
+                    state_version=int(completion_run.get("state_version") or 0),
+                    findings=list(
+                        (completion_run.get("evidence_refs") or {}).get(
+                            "acceptance_findings") or []),
+                )
             except Exception as exc:
                 ensured = {"action": "refused", "error": type(exc).__name__,
                            "reason": str(exc)}

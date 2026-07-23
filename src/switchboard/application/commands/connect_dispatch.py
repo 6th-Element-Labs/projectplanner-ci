@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 import hashlib
+import json
 import os
 from typing import Any
 
@@ -206,6 +207,11 @@ def enqueue_task(
     caller_agent_id: str = "",
     principal_id: str = "",
     source_sha: str = "",
+    reason_code: str = "",
+    acceptance_findings: list[dict[str, Any]] | None = None,
+    route: str = "",
+    decision_attempt: int = 0,
+    state_version: int = 0,
 ) -> dict[str, Any]:
     """Persist one provider-neutral assignment for any Start surface.
 
@@ -271,13 +277,37 @@ def enqueue_task(
         # decode the Assignment byte-for-byte.
         "lifecycle": {
             "schema": "switchboard.execution_lifecycle.v1",
+            "task_id": task_id,
             "role": str(role or "implementation"),
             "head_sha": str(
                 source_sha or (task.get("git_state") or {}).get("head_sha") or ""),
+            "reason_code": str(reason_code or ""),
+            "acceptance_findings": list(acceptance_findings or []),
+            "route": str(route or ""),
+            "attempt": int(decision_attempt or 0),
+            "state_version": int(state_version or 0),
             "ttl_seconds": int(
                 os.environ.get("PM_CONNECT_MAX_RUNTIME_SECONDS", "7200")),
         },
     }
+    # The external effect represents one durable completion decision, not the
+    # coordinator/lease that happened to request it. Generation and fence are
+    # allocated atomically below and intentionally do not participate either.
+    lifecycle = policy["lifecycle"]
+    if lifecycle["role"] in {"review_merge", "remediation"}:
+        policy["effect_identity"] = {
+            "schema": "switchboard.completion_effect_identity.v1",
+            "task_id": task_id,
+            "head_sha": lifecycle["head_sha"],
+            "route": lifecycle["route"],
+            "role": lifecycle["role"],
+            "reason_code": lifecycle["reason_code"],
+            "attempt": lifecycle["attempt"],
+            "state_version": lifecycle["state_version"],
+            "acceptance_findings_hash": hashlib.sha256(json.dumps(
+                lifecycle["acceptance_findings"], sort_keys=True,
+                separators=(",", ":"), default=str).encode()).hexdigest(),
+        }
     suffix = generation_ref or str(predecessor_wake_id or "initial")
     wake = coordination_repo.request_wake(
         selector=selector,
