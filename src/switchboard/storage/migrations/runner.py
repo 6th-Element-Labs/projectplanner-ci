@@ -35,6 +35,13 @@ import sqlite3
 import time
 from typing import List, Tuple
 
+from switchboard.storage.migrations.attention import (
+    ATTENTION_DECISIONS_SQL,
+    ATTENTION_EVENTS_SQL,
+    ATTENTION_INDEX_SQL,
+    ATTENTION_REQUESTS_SQL,
+)
+
 # Ordered and append-only. ``name`` is the immutable ledger key — never renumber, rename,
 # or reuse one. Each tuple is (name, table, column, ddl); every entry adds one column and
 # mirrors, in order, the additive ALTER statements this module replaced.
@@ -397,6 +404,14 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
      "CREATE UNIQUE INDEX IF NOT EXISTS ux_active_execution_lease "
      "ON resource_leases(task_id, execution_role) "
      "WHERE resource_type='execution' AND released_at IS NULL"),
+    # PROTO-7 — durable provider questions, decisions, delivery, and audit trail.
+    ("0104_attention_requests", ATTENTION_REQUESTS_SQL),
+    ("0105_attention_decisions", ATTENTION_DECISIONS_SQL),
+    ("0106_attention_events", ATTENTION_EVENTS_SQL),
+    ("0107_ix_attention_requests_queue", ATTENTION_INDEX_SQL[0]),
+    ("0108_ix_attention_requests_binding", ATTENTION_INDEX_SQL[1]),
+    ("0109_ix_attention_decisions_request", ATTENTION_INDEX_SQL[2]),
+    ("0110_ix_attention_events_request", ATTENTION_INDEX_SQL[3]),
 ]
 
 

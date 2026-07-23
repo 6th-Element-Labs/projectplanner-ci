@@ -3,6 +3,11 @@ from switchboard.storage.repositories.access import (
     AccessStoreRepository,
     default_access_repository,
 )
+from switchboard.storage.repositories.attention import (
+    AttentionRepository,
+    AttentionStoreError,
+    default_attention_repository,
+)
 from switchboard.storage.repositories.claims import (
     StoreClaimsRepository,
     default_claims_repository,
@@ -65,6 +70,8 @@ from switchboard.storage.repositories.review_remediations import (
 
 __all__ = [
     "AccessRepository",
+    "AttentionRepository",
+    "AttentionStoreError",
     "AccessStoreRepository",
     "ClaimsRepository",
     "StoreClaimsRepository",
@@ -84,6 +91,7 @@ __all__ = [
     "StoreTaskRepository",
     "TaskRepository",
     "default_access_repository",
+    "default_attention_repository",
     "default_claims_repository",
     "default_coordination_repository",
     "default_deliverables_repository",
