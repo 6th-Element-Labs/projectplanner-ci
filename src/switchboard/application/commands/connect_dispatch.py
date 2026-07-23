@@ -13,6 +13,7 @@ import hashlib
 import os
 from typing import Any
 
+from switchboard.application.session_boot import ADVERTISED_LAUNCH_RUNTIMES
 from switchboard.connect import Assignment, ResourceLimits
 from switchboard.storage.repositories import coordination as coordination_repo
 
@@ -26,6 +27,10 @@ _RUNTIMES = {
     "anthropic": ("claude-code", "anthropic"),
     "cursor": ("cursor", "cursor"),
 }
+_UNSUPPORTED_RUNTIME_REPAIR = (
+    "Call start_task with a supported runtime; do not use runtime=cli. "
+    "Connect boots the CLI worker. From a launcher session do not claim_task."
+)
 
 
 def _runtime(value: str) -> tuple[str, str]:
@@ -33,6 +38,19 @@ def _runtime(value: str) -> tuple[str, str]:
     if not selected:
         raise ValueError("unsupported_runtime")
     return selected
+
+
+def unsupported_runtime_payload(requested_runtime: str) -> dict[str, Any]:
+    """Structured refusal for unknown Connect launch runtimes."""
+    return {
+        "dispatched": False,
+        "error": "unsupported_runtime",
+        "requested_runtime": str(requested_runtime or ""),
+        "supported_runtimes": list(ADVERTISED_LAUNCH_RUNTIMES),
+        "reason": _UNSUPPORTED_RUNTIME_REPAIR,
+        "repair": _UNSUPPORTED_RUNTIME_REPAIR,
+        "message": _UNSUPPORTED_RUNTIME_REPAIR,
+    }
 
 
 def _assignment_id(project: str, task_id: str, runtime: str, generation: str) -> str:
@@ -204,6 +222,8 @@ def enqueue_task(
     try:
         runtime_name, provider = _runtime(runtime)
     except ValueError as exc:
+        if str(exc) == "unsupported_runtime":
+            return unsupported_runtime_payload(runtime)
         return {"dispatched": False, "error": str(exc), "runtime": runtime}
     generation_ref = str(generation_ref or "").strip()
     if not predecessor_wake_id and not generation_ref:

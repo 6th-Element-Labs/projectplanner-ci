@@ -40,12 +40,18 @@ agent-collaboration product itself.
 
 Reads (bearer required when `PM_AUTH_MODE=required`; `dev-open` for local/test):
 - `list_projects()` — list routable boards.
-- `prepare_agent_session(runtime, agent_id?, project?, task_id?, lane?, deliverable_id?,
-  board_id?, mission_id?, milestone_id?)` — boot-time project resolver. It validates or infers
-  the selected project and returns a project-bound startup prompt, first calls, and a project-level
-  `project_contract`. When `deliverable_id` or `board_id`/`mission_id` is set, the session is
-  deliverable-first: `first_calls` include `get_mission_status` and `project_contract` carries
-  `mission_context`. See [`DELIVERABLE-FIRST-STARTUP.md`](DELIVERABLE-FIRST-STARTUP.md).
+- `prepare_agent_session(runtime, agent_id?, project?, task_id?, lane?, mode?, intent?,
+  launch_runtime?, deliverable_id?, board_id?, mission_id?, milestone_id?)` — boot-time project
+  resolver. It validates or infers the selected project and returns a project-bound startup prompt,
+  first calls, and a project-level `project_contract`. When `deliverable_id` or
+  `board_id`/`mission_id` is set, the session is deliverable-first: `first_calls` include
+  `get_mission_status` and `project_contract` carries `mission_context`. See
+  [`DELIVERABLE-FIRST-STARTUP.md`](DELIVERABLE-FIRST-STARTUP.md).
+  Opt-in **operator launch**: `mode="launcher"` (aliases via `intent=launch|operator|start`)
+  prepares a desktop/operator session whose `first_calls` end in `start_task` — the same Connect
+  door as the UI Start button. Default/worker boot is unchanged. `launch_runtime` selects the CLI
+  worker (default `codex`); it is never inferred from the launcher's own runtime. Advertised
+  launch runtimes today: `codex`, `claude`.
 - `get_project_contract(project, lane?, task_id?, deliverable_id?, board_id?, mission_id?,
   milestone_id?)` — project-agnostic lane/task contract from the board.
   selected Project workspace: selected project, lane tasks, assigned task deliverable/exit criteria,
@@ -251,6 +257,12 @@ Scheduled reconcile alert rule:
 Project contract rule:
 - At boot, agents should call `prepare_agent_session(...)` before registration and use the returned
   `selected_project` on every call.
+- **Operator launch (opt-in):** when told to launch CLI agents on tasks, call
+  `prepare_agent_session(mode="launcher", project=..., task_id=..., launch_runtime="codex")`,
+  follow `first_calls`, then `start_task` / `get_task_execution`.
+  `prepare_agent_session` only prepares the operator; `start_task` performs the launch.
+  Do not `claim_task` from a launcher session. Direct human↔agent work omits `mode=launcher`
+  and uses the normal worker claim path.
 - For cross-board outcomes, boot with `deliverable_id` or `board_id`/`mission_id` on
   `prepare_agent_session` and read `get_mission_status` before editing. Boards own execution;
   deliverables own outcomes. See [`DELIVERABLE-FIRST-STARTUP.md`](DELIVERABLE-FIRST-STARTUP.md).

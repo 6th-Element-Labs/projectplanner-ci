@@ -13,6 +13,12 @@ from typing import Any, Optional
 import project_contract as project_contract_service
 import store
 
+# Proven end-to-end launch runtimes advertised to MCP clients. Aliases may still
+# be accepted by Connect; do not advertise cursor until Host→CLI proof lands.
+ADVERTISED_LAUNCH_RUNTIMES = ("codex", "claude")
+DEFAULT_LAUNCH_RUNTIME = "codex"
+_LAUNCHER_INTENT_ALIASES = frozenset({"launch", "operator", "start"})
+
 
 def resolve_project_input(project: str) -> str:
     """Accept either a project id or its display label, case-insensitively."""
@@ -66,15 +72,45 @@ def slugify(value: str) -> str:
     return slug[:48].strip("-") or "session"
 
 
+def normalize_session_mode(mode: str = "", intent: str = "") -> str:
+    """Return ``worker`` or ``launcher``. ``mode`` wins when both are set."""
+    explicit = str(mode or "").strip().lower()
+    if explicit == "launcher":
+        return "launcher"
+    if explicit == "worker":
+        return "worker"
+    alias = str(intent or "").strip().lower()
+    if alias in _LAUNCHER_INTENT_ALIASES:
+        return "launcher"
+    return "worker"
+
+
+def is_launcher_intent(intent: str | None) -> bool:
+    """Compatibility helper — prefer ``normalize_session_mode`` for branching."""
+    return normalize_session_mode(intent=str(intent or "")) == "launcher"
+
+
+def resolve_launch_runtime(launch_runtime: str = "") -> str:
+    """Explicit launch runtime for start_task; never inferred from launcher runtime."""
+    selected = str(launch_runtime or "").strip().lower()
+    return selected or DEFAULT_LAUNCH_RUNTIME
+
+
 def suggest_agent_id(
     runtime: str,
     agent_id: str,
     task_id: str,
     lane: str,
     task: Optional[dict[str, Any]],
+    *,
+    mode: str = "",
+    intent: str = "",
 ) -> str:
     if (agent_id or "").strip():
         return agent_id.strip()
+    if normalize_session_mode(mode=mode, intent=intent) == "launcher":
+        rt = (runtime or "").strip() or "cursor"
+        return f"{rt}/launcher"
     rt = (runtime or "").strip() or "<runtime>"
     if task_id:
         title = (task or {}).get("title") if task else ""
@@ -93,10 +129,15 @@ def build_startup_prompt(
     board_id: str = "",
     mission_id: str = "",
     milestone_id: str = "",
+    *,
+    mode: str = "",
+    intent: str = "",
+    launch_runtime: str = "",
 ) -> str:
     """Build the project-bound boot prompt (no FastMCP dependency)."""
     access = store.project_access(project)
     deliverable_scope = bool((deliverable_id or board_id or mission_id).strip())
+    session_mode = normalize_session_mode(mode=mode, intent=intent)
     lines = [
         f'You are enlisting on Switchboard project="{project}" '
         f"({project_contract_service.project_label(project)}).",
@@ -111,6 +152,41 @@ def build_startup_prompt(
         "Ownership: boards/workstreams own execution; deliverables own outcomes, "
         "end_state, milestones, and cross-board proof rollup.",
     ]
+    if session_mode == "launcher":
+        runtime = resolve_launch_runtime(launch_runtime)
+        lines.extend([
+            "Session mode: launcher (operator). You are not the implementing CLI agent.",
+            "Follow allowed_actions / forbidden_actions on the prepare_agent_session payload.",
+            "Boot sequence:",
+            f'1. get_working_agreement(project="{project}")',
+            f'2. register_agent(agent_id="{agent_id}", runtime="<your-runtime>", '
+            f'lane="{lane or ""}", task_id="", project="{project}", '
+            f'control_json="{{...}}", protocol_json="{{...}}")',
+            f'3. list_unacked_messages(to_agent="{agent_id}", project="{project}")',
+            f'4. list_unblock_requests(owner_agent="{agent_id}", project="{project}")',
+        ])
+        step = 5
+        if task_id:
+            lines.append(
+                f'{step}. start_task(task_id="{task_id}", project="{project}", '
+                f'runtime="{runtime}", role="implementation")'
+            )
+            step += 1
+        else:
+            lines.append(
+                f"{step}. When launching known task ids, call start_task once per "
+                f'task_id with runtime="{runtime}" (serialize MCP writes). '
+                "Do not invent a target from the board."
+            )
+            step += 1
+        lines.extend([
+            f'{step}. poll get_task_execution(task_id=..., project="{project}")',
+            "Do not claim_task or claim_next. Do not open a local worktree for launched tasks.",
+            "Connect boots the CLI worker; that worker owns the claim, Work Session, and completion.",
+            f"Advertised launch runtimes: {', '.join(ADVERTISED_LAUNCH_RUNTIMES)}.",
+        ])
+        return "\n".join(lines)
+
     if deliverable_scope:
         scope_ref = (deliverable_id or board_id or mission_id).strip()
         lines.append(
@@ -161,14 +237,20 @@ def build_first_calls(
     board_id: str = "",
     mission_id: str = "",
     milestone_id: str = "",
+    *,
+    mode: str = "",
+    intent: str = "",
+    launch_runtime: str = "",
 ) -> list[dict[str, Any]]:
     """Exact first MCP calls for the boot handshake (no FastMCP dependency)."""
+    session_mode = normalize_session_mode(mode=mode, intent=intent)
+    register_task_id = "" if session_mode == "launcher" else (task_id or "")
     register_args = {
         "agent_id": agent_id,
         "runtime": runtime or "<runtime>",
         "model": model or "",
         "lane": lane or "",
-        "task_id": task_id or "",
+        "task_id": register_task_id,
         "control_json": json.dumps({"mode": "advisory_poll"}, sort_keys=True),
         "protocol_json": json.dumps(agreement.get("protocol") or {}, sort_keys=True),
         "project": project,
@@ -186,6 +268,19 @@ def build_first_calls(
             "milestone_id": milestone_id or "",
         }},
     ]
+    if session_mode == "launcher":
+        if task_id:
+            calls.append({
+                "tool": "start_task",
+                "args": {
+                    "task_id": task_id,
+                    "project": project,
+                    "runtime": resolve_launch_runtime(launch_runtime),
+                    "role": "implementation",
+                },
+            })
+        return calls
+
     if (deliverable_id or board_id or mission_id).strip():
         ms_args: dict[str, str] = {"project": project}
         if deliverable_id:
@@ -233,6 +328,8 @@ def prepare_agent_session(
     lane: str = "",
     model: str = "",
     intent: str = "",
+    mode: str = "",
+    launch_runtime: str = "",
     deliverable_id: str = "",
     board_id: str = "",
     mission_id: str = "",
@@ -246,6 +343,8 @@ def prepare_agent_session(
     lane_matches = project_ids_for_lane(ws)
     warnings: list[str] = []
     projects_payload = store.projects()
+    session_mode = normalize_session_mode(mode=mode, intent=intent)
+    resolved_launch_runtime = resolve_launch_runtime(launch_runtime)
 
     if selected and not store.has_project(selected):
         return {
@@ -353,7 +452,8 @@ def prepare_agent_session(
         ws = task.get("_wsId") or ""
 
     agreement = store.get_working_agreement(project=selected)
-    chosen_agent_id = suggest_agent_id(runtime, agent_id, tid, ws, task)
+    chosen_agent_id = suggest_agent_id(
+        runtime, agent_id, tid, ws, task, mode=mode, intent=intent)
     contract = get_project_contract(
         selected,
         lane=ws,
@@ -364,7 +464,7 @@ def prepare_agent_session(
         milestone_id=milestone_id,
     )
     deliverable_scope = bool((deliverable_id or board_id or mission_id).strip())
-    return {
+    payload = {
         "ok": True,
         "status": "ready",
         "projects": projects_payload,
@@ -389,9 +489,22 @@ def prepare_agent_session(
         "first_calls": build_first_calls(
             selected, chosen_agent_id, runtime, model, tid, ws, agreement,
             deliverable_id=deliverable_id, board_id=board_id,
-            mission_id=mission_id, milestone_id=milestone_id),
+            mission_id=mission_id, milestone_id=milestone_id,
+            mode=mode, intent=intent, launch_runtime=launch_runtime),
         "startup_prompt": build_startup_prompt(
             selected, chosen_agent_id, tid, ws,
             deliverable_id=deliverable_id, board_id=board_id,
-            mission_id=mission_id, milestone_id=milestone_id),
+            mission_id=mission_id, milestone_id=milestone_id,
+            mode=mode, intent=intent, launch_runtime=launch_runtime),
     }
+    # Worker payload stays pre-change shape (no new top-level contract keys).
+    if session_mode == "launcher":
+        payload["mode"] = "launcher"
+        payload["allowed_actions"] = ["start_task", "get_task_execution"]
+        payload["forbidden_actions"] = ["claim_task", "claim_next"]
+        payload["launch_defaults"] = {
+            "role": "implementation",
+            "runtime": resolved_launch_runtime,
+        }
+        payload["supported_launch_runtimes"] = list(ADVERTISED_LAUNCH_RUNTIMES)
+    return payload
