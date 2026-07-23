@@ -631,13 +631,26 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
         }
     action = str(result.get("action") or "")
     if action == "refused":
-        raise TaskExecutionError(
-            "start_refused",
-            str(result.get("reason") or result.get("error") or "start refused"),
-            task_id=task_id, project=project,
-            start_error=result.get("error"),
-            last_dispatch_outcome=result.get("dispatch"),
-        )
+        details: dict[str, Any] = {
+            "task_id": task_id,
+            "project": project,
+            "start_error": result.get("error"),
+            "last_dispatch_outcome": result.get("dispatch"),
+        }
+        if result.get("error") == "unsupported_runtime":
+            details.update({
+                "error": "unsupported_runtime",
+                "requested_runtime": result.get("requested_runtime") or runtime,
+                "supported_runtimes": list(result.get("supported_runtimes") or []),
+                "repair": result.get("repair"),
+            })
+            message = str(
+                result.get("repair") or result.get("reason")
+                or result.get("message") or "unsupported_runtime")
+        else:
+            message = str(
+                result.get("reason") or result.get("error") or "start refused")
+        raise TaskExecutionError("start_refused", message, **details)
     # W1/W2: a Start must grant coordination authority as well as capacity.
     # Without a scope the task gets a runner and then stalls at In Review,
     # because nothing is authorised to drive its review/remediation/merge
