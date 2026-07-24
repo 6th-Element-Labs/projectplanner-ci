@@ -86,6 +86,12 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
   `revoke_provider_connection(...)`, and `delete_provider_connection(...)` — manage encrypted
   BYOA provider identities through metadata-only responses. These require the dedicated
   `read:credentials` or `write:credentials` scopes.
+- `create_scm_connection(connection_json)`, `list_scm_connections(...)`,
+  `get_scm_connection(...)`, `update_scm_connection(...)`, `rotate_scm_connection(...)`,
+  `revoke_scm_connection(...)`, `delete_scm_connection(...)`, and
+  `preflight_scm_repository(...)` — project-scoped GitHub App installation trust boundary
+  (opaque `installation_ref` only; admin + credentials scopes). Preflight fails closed with
+  `repository_not_authorized` before clone/push when project/repo/org/scope/topology mismatch.
 - `acquire_provider_credential_lease(binding_json)` and
   `release_provider_credential_lease(lease_id, reason)` — bind a credential reference to one
   exact user/provider account/project/task/host/runner/Work Session tuple. These require

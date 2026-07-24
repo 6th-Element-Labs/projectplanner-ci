@@ -582,4 +582,54 @@ def run_registry_migrations(c: sqlite3.Connection) -> List[str]:
         _record(c, verification_migration)
         newly.append(verification_migration)
 
+    scm_connection_migration = "access28_scm_connections"
+    if scm_connection_migration not in done:
+        c.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS scm_connections (
+                connection_id TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                installation_ref TEXT NOT NULL,
+                installation_version INTEGER NOT NULL,
+                org_allowlist_json TEXT NOT NULL,
+                project_allowlist_json TEXT NOT NULL,
+                repository_allowlist_json TEXT NOT NULL,
+                operation_scopes_json TEXT NOT NULL,
+                lifecycle_state TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                created_by TEXT NOT NULL,
+                rotated_at REAL,
+                rotated_by TEXT,
+                revoked_at REAL,
+                revoked_by TEXT,
+                revocation_reason TEXT,
+                deleted_at REAL,
+                deleted_by TEXT,
+                deletion_reason TEXT,
+                updated_at REAL NOT NULL,
+                updated_by TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_scm_connections_lifecycle
+                ON scm_connections(lifecycle_state, updated_at, connection_id);
+
+            CREATE TABLE IF NOT EXISTS scm_connection_events (
+                event_id TEXT PRIMARY KEY,
+                connection_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                project_id TEXT,
+                repository TEXT,
+                operation TEXT,
+                reason_code TEXT,
+                details_json TEXT NOT NULL DEFAULT '{}',
+                created_at REAL NOT NULL,
+                FOREIGN KEY(connection_id) REFERENCES scm_connections(connection_id)
+            );
+            CREATE INDEX IF NOT EXISTS ix_scm_connection_events_connection
+                ON scm_connection_events(connection_id, created_at, event_id);
+            """
+        )
+        _record(c, scm_connection_migration)
+        newly.append(scm_connection_migration)
+
     return newly
