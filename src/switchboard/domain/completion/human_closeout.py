@@ -20,6 +20,103 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _human_action(reason: str) -> dict[str, Any]:
+    """Return truthful operator copy and choices for one human reason."""
+    normalized = reason.strip().lower()
+    if any(token in normalized for token in (
+        "credential", "permission", "authority", "policy", "approval",
+    )):
+        return {
+            "why": (
+                "An eligible credential, authenticated host, approval, or policy "
+                "authority required for the remaining proof is unavailable."
+            ),
+            "prompt": "Supply the missing authority or keep the task blocked.",
+            "choices": [
+                {"id": "supply_credential",
+                 "label": "Supply eligible authenticated host or credential",
+                 "effect": "resume_assessment"},
+                {"id": "authorize_policy",
+                 "label": "Record an authorized policy decision",
+                 "effect": "resume_assessment"},
+                {"id": "hold", "label": "Keep blocked",
+                 "effect": "remain_blocked"},
+            ],
+        }
+    if normalized in {"wrong_target_branch", "pr_branch_behind"}:
+        return {
+            "why": "The pull request targets or tracks the wrong branch for canonical landing.",
+            "prompt": "Correct the pull request branch authority or keep the task blocked.",
+            "choices": [
+                {"id": "correct_target_branch",
+                 "label": "Correct the target or branch",
+                 "effect": "resume_assessment"},
+                {"id": "authorize_current_target",
+                 "label": "Authorize the current target",
+                 "effect": "resume_assessment"},
+                {"id": "hold", "label": "Keep blocked",
+                 "effect": "remain_blocked"},
+            ],
+        }
+    if normalized in {"canonical_repo_missing", "repo_role_cannot_merge"}:
+        return {
+            "why": "Canonical repository or merge authority is not configured for this task.",
+            "prompt": "Configure canonical repository authority or keep the task blocked.",
+            "choices": [
+                {"id": "configure_canonical_repo",
+                 "label": "Configure canonical repository authority",
+                 "effect": "resume_assessment"},
+                {"id": "assign_merge_authority",
+                 "label": "Assign an eligible merge authority",
+                 "effect": "resume_assessment"},
+                {"id": "hold", "label": "Keep blocked",
+                 "effect": "remain_blocked"},
+            ],
+        }
+    if normalized == "pr_closed_unmerged":
+        return {
+            "why": "The pull request closed without canonical merge provenance.",
+            "prompt": "Reopen or replace the pull request, or keep the task blocked.",
+            "choices": [
+                {"id": "reopen_pull_request", "label": "Reopen the pull request",
+                 "effect": "resume_assessment"},
+                {"id": "create_replacement_pull_request",
+                 "label": "Create a replacement pull request",
+                 "effect": "resume_assessment"},
+                {"id": "hold", "label": "Keep blocked",
+                 "effect": "remain_blocked"},
+            ],
+        }
+    if "retry" in normalized or normalized in {
+        "human_review_findings", "unclassified_failed_gate",
+    }:
+        return {
+            "why": (
+                "Automation exhausted its safe retry or encountered a judgment "
+                "finding that requires an operator decision."
+            ),
+            "prompt": "Resolve the named finding, extend the retry, or keep the task blocked.",
+            "choices": [
+                {"id": "resolve_finding", "label": "Resolve the named finding",
+                 "effect": "resume_assessment"},
+                {"id": "extend_retry_budget", "label": "Authorize another retry",
+                 "effect": "resume_assessment"},
+                {"id": "hold", "label": "Keep blocked",
+                 "effect": "remain_blocked"},
+            ],
+        }
+    return {
+        "why": f"Automation cannot safely resolve the remaining gate ({reason}).",
+        "prompt": "Resolve the named blocker or keep the task blocked.",
+        "choices": [
+            {"id": "resolve_blocker", "label": "Resolve the named blocker",
+             "effect": "resume_assessment"},
+            {"id": "hold", "label": "Keep blocked",
+             "effect": "remain_blocked"},
+        ],
+    }
+
+
 def build_human_closeout_request(
     *,
     plan: Mapping[str, Any],
@@ -56,24 +153,24 @@ def build_human_closeout_request(
             "route": "human",
         },
     }
-    choices = [
-        {
-            "id": "supply_credential",
-            "label": "Supply eligible authenticated host or credential",
-            "effect": "resume_assessment",
-        },
-        {
-            "id": "authorize_policy",
-            "label": "Record authorized policy exception",
-            "effect": "resume_assessment",
-        },
-        {
-            "id": "hold",
-            "label": "Keep blocked — do not dispatch another coder",
-            "effect": "remain_blocked",
-        },
-    ]
+    action = _human_action(reason)
+    choices = action["choices"]
     recommended = choices[0]
+    review = _map(snapshot.get("review"))
+    contexts = _map(snapshot.get("status_contexts"))
+    passed_review = str(
+        review.get("status") or review.get("state") or review.get("verdict") or ""
+    ).strip().lower() in {"pass", "passed", "approved", "success"}
+    observed_ci = bool(contexts)
+    evidence_summary = "Implementation reached"
+    if passed_review and observed_ci:
+        evidence_summary += " exact-head review and CI assessment at"
+    elif passed_review:
+        evidence_summary += " exact-head review assessment at"
+    elif observed_ci:
+        evidence_summary += " exact-head CI assessment at"
+    else:
+        evidence_summary += " completion assessment at"
     context = {
         "schema": CLOSEOUT_SCHEMA,
         "task_id": _text(plan.get("task_id") or snapshot.get("task_id")).upper(),
@@ -85,17 +182,13 @@ def build_human_closeout_request(
         "pr_number": pr_number,
         "head_sha": head_sha,
         "completed_work_summary": (
-            f"Implementation reached PR #{pr_number} at {head_sha[:12]} "
-            "with exact-head review/CI evidence; automation cannot prove the "
-            f"remaining gate ({reason})."
+            f"{evidence_summary} PR #{pr_number} / {head_sha[:12]}; "
+            f"the remaining gate is {reason}."
         ),
         "evidence_refs": evidence,
         "unresolved_gate": reason,
         "reason_code": reason,
-        "why_automation_stopped": (
-            "A credential, host, or policy authority required for live proof is "
-            "absent. Dispatching another coder would not resolve the gate."
-        ),
+        "why_automation_stopped": action["why"],
         "delivery_impact": (
             "Autopilot stays sticky Blocked(route=human) until an authorized "
             "decision supplies the missing authority."
@@ -121,9 +214,8 @@ def build_human_closeout_request(
         "provider_request_id": f"completion-human:{idem_key}",
         "schema_version": CLOSEOUT_SCHEMA,
         "prompt": (
-            f"{context['task_id']} needs you: {reason}. "
-            "Supply an eligible authenticated host/credential or authorize the "
-            "policy action so Autopilot can resume assessment."
+            f"{context['task_id']} needs you: {reason}. {action['prompt']} "
+            "Autopilot will re-assess the exact current head after the decision."
         ),
         "choices": choices,
         "recommended_default": recommended,
