@@ -450,8 +450,12 @@ def _resolve_cross_task_repair_impl(
             == link["source_verdict_id"]
         ):
             c.execute(
-                "UPDATE tasks SET exit_criteria=?, updated_at=? WHERE task_id=?",
-                (remediation["original_exit_criteria"], now, link["source_task_id"]),
+                "UPDATE tasks SET exit_criteria=?, updated_at=? "
+                "WHERE task_id=? AND exit_criteria=?",
+                (
+                    remediation["original_exit_criteria"], now,
+                    link["source_task_id"], source_task["exit_criteria"],
+                ),
             )
         repair_state["review_repair"] = resolution
         c.execute(
