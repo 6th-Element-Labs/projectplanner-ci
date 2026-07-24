@@ -39,6 +39,7 @@ from switchboard.mcp.tools import plan as plan_tools
 from switchboard.mcp.tools import projects as project_tools
 from switchboard.mcp.tools import provider_credentials as provider_credential_tools
 from switchboard.mcp.tools import scm_connections as scm_connection_tools
+from switchboard.mcp.tools import scm_leases as scm_lease_tools
 from switchboard.mcp.tools import reconcile as reconcile_tools
 from switchboard.mcp.tools import reviews as review_tools
 from switchboard.mcp.tools import task_execution as task_execution_tools
@@ -353,6 +354,17 @@ _scm_connection_tool_functions = scm_connection_tools.register_scm_connection_to
     ),
 )
 globals().update(_scm_connection_tool_functions)
+
+_scm_lease_tool_functions = scm_lease_tools.register_scm_lease_tools(
+    mcp,
+    scm_lease_tools.SCMLeaseToolServices(
+        dumps=_dumps,
+        require_read=_require_read,
+        require_write=_require_write,
+        principal_actor=auth.actor,
+    ),
+)
+globals().update(_scm_lease_tool_functions)
 
 _boot_tool_functions = boot_tools.register_boot_tools(
     mcp,

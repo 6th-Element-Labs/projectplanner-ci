@@ -79,6 +79,7 @@ from switchboard.api.routers.plan_chat import create_router as _create_plan_chat
 from switchboard.api.routers.projects import create_router as _create_project_router  # noqa: E402
 from switchboard.api.routers.provider_credentials import create_router as _create_provider_credentials_router  # noqa: E402
 from switchboard.api.routers.scm_connections import create_router as _create_scm_connections_router  # noqa: E402
+from switchboard.api.routers.scm_leases import create_router as _create_scm_leases_router  # noqa: E402
 from switchboard.api.routers.tasks import create_router as _create_task_router  # noqa: E402
 from switchboard.api.routers.claims import create_router as _create_claims_router  # noqa: E402
 from switchboard.api.routers.wakes import create_router as _create_wakes_router  # noqa: E402
@@ -307,6 +308,10 @@ app.include_router(_create_provider_credentials_router(
     resolve_principal=_principal,
 ))
 app.include_router(_create_scm_connections_router(
+    resolve_project=_proj,
+    resolve_principal=_principal,
+))
+app.include_router(_create_scm_leases_router(
     resolve_project=_proj,
     resolve_principal=_principal,
 ))

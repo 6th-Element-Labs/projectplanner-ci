@@ -178,7 +178,7 @@ READ_TOOLS = frozenset({
     "get_preflight_calibration", "get_preflight_run",
     "get_project", "get_project_board", "get_project_contract",
     "get_project_impact_report", "get_provider_connection",
-    "get_scm_connection",
+    "get_scm_connection", "get_scm_lease",
     "get_review_remediation_metrics", "get_review_verdict",
     "get_saturation_signals", "get_task", "get_task_execution", "get_task_session",
     "task_session_doctor", "get_task_tally", "get_work_session",
@@ -202,6 +202,7 @@ READ_TOOLS = frozenset({
 
 WRITE_TOOLS = frozenset({
     "abandon_claim", "ack_message", "acquire_provider_credential_lease",
+    "acquire_scm_lease", "release_scm_lease",
     "add_comment", "add_deliverable_milestone", "add_dependency", "apply_cleanup",
     "control_autopilot",
     "apply_project_consolidation", "approve_deliverable_breakdown", "archive_project",
