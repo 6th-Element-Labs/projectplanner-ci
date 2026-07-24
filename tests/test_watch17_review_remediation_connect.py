@@ -9,6 +9,10 @@ from pathlib import Path
 
 import mission_coordinator
 from switchboard.application.commands import connect_dispatch, task_execution
+from switchboard.storage.repositories import (
+    project_execution_policy,
+    project_execution_readiness,
+)
 
 
 def load_host_eligibility():
@@ -43,6 +47,8 @@ captured: list[dict] = []
 saved_request = connect_dispatch.coordination_repo.request_wake
 saved_projection = task_execution._projection
 saved_live_executions = task_execution.runner_repo.task_live_executions
+saved_readiness = project_execution_readiness.get_project_execution_readiness
+saved_policy = project_execution_policy.get_project_execution_policy
 
 
 def request_wake(**kwargs):
@@ -51,6 +57,12 @@ def request_wake(**kwargs):
 
 
 try:
+    project_execution_readiness.get_project_execution_readiness = (
+        lambda _project: {"passed": True}
+    )
+    project_execution_policy.get_project_execution_policy = (
+        lambda _project: {"configured": False}
+    )
     connect_dispatch.coordination_repo.request_wake = request_wake
     task_execution.runner_repo.task_live_executions = lambda *_args, **_kwargs: []
     task_execution._projection = lambda *_args, **_kwargs: {
@@ -73,6 +85,8 @@ finally:
     connect_dispatch.coordination_repo.request_wake = saved_request
     task_execution._projection = saved_projection
     task_execution.runner_repo.task_live_executions = saved_live_executions
+    project_execution_readiness.get_project_execution_readiness = saved_readiness
+    project_execution_policy.get_project_execution_policy = saved_policy
 
 
 assert role == "remediation"
