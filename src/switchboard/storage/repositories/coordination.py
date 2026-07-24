@@ -39,6 +39,7 @@ from switchboard.domain.ixp.protocol import (
     normalize_send_ack_deadline,
     protocol_envelope,
 )
+from switchboard.connect.execution_assignment import build_execution_assignment
 
 
 from switchboard.domain.provider_credentials import CredentialPrincipal
@@ -625,6 +626,16 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
                     "fence_epoch": execution_lease["fence_epoch"],
                     "ttl_seconds": execution_lease["ttl_seconds"],
                 }
+                # Mint the contract only after the server owns the execution
+                # lease identity and generation. A caller cannot provide or
+                # override this admitted contract.
+                assignment = dict(policy.get("assignment") or {})
+                admitted = policy["lifecycle"]
+                policy["execution_assignment"] = build_execution_assignment(
+                    task_id=str(task_id or ""),
+                    assignment=assignment,
+                    lifecycle=admitted,
+                )
             wake_id = (
                 str((execution_lease or {}).get("wake_id") or "")
                 or "wake-" + uuid.uuid4().hex[:16])

@@ -909,7 +909,8 @@ def launch_command(wake, inventory, runner_session_id=""):
     if mode == "refused":
         raise ValueError("wake asks for global claim_next but host policy forbids global work")
     if mode == "connect":
-        assignment_data = dict((wake.get("policy") or {}).get("assignment") or {})
+        connect_policy = wake.get("policy") or {}
+        assignment_data = dict(connect_policy.get("assignment") or {})
         assignment_schema = assignment_data.pop("schema", "")
         if assignment_schema != "switchboard.connect.assignment.v1":
             raise ValueError("connect assignment schema is invalid")
@@ -946,6 +947,27 @@ def launch_command(wake, inventory, runner_session_id=""):
             executable=executable,
             arguments_before_note=before,
         )
+        lifecycle = dict(connect_policy.get("lifecycle") or {})
+        execution_assignment = dict(
+            connect_policy.get("execution_assignment") or {})
+        if not execution_assignment:
+            raise ValueError("connect execution assignment contract is missing")
+        from switchboard.connect.execution_assignment import (
+            ExecutionAssignmentError,
+            build_execution_assignment,
+            require_exact_execution_assignment,
+        )
+        try:
+            expected = build_execution_assignment(
+                task_id=str(wake.get("task_id") or ""),
+                assignment=assignment_data,
+                lifecycle=lifecycle,
+            )
+            require_exact_execution_assignment(execution_assignment, expected)
+        except ExecutionAssignmentError as exc:
+            raise ValueError(
+                "connect execution assignment disagrees with persisted lease: "
+                f"{exc.code}") from exc
         now = time.time()
         spec = build_launch_spec(
             Ack(
@@ -961,8 +983,7 @@ def launch_command(wake, inventory, runner_session_id=""):
             ),
             config,
             workspace_path=str(inventory.get("repo_root") or _git_root()),
-            completion_contract=dict(
-                (wake.get("policy") or {}).get("lifecycle") or {}),
+            completion_contract=execution_assignment,
         )
         child = list(spec.argv)
     elif mode == "direct_task":
@@ -1033,6 +1054,8 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
         env = os.environ.copy()
         if mode == "connect":
             assignment = dict((wake.get("policy") or {}).get("assignment") or {})
+            execution_assignment = dict(
+                (wake.get("policy") or {}).get("execution_assignment") or {})
             env.update({
                 "SWITCHBOARD_CONNECT_ASSIGNMENT_ID": str(
                     assignment.get("assignment_id") or ""),
@@ -1044,6 +1067,10 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
                 "SWITCHBOARD_CONNECT_LEASE_ID": str(wake.get("wake_id") or ""),
                 "SWITCHBOARD_CONNECT_RUNNER_ID": str(runner_session_id or ""),
             })
+            encoded_assignment = json.dumps(
+                execution_assignment, sort_keys=True, separators=(",", ":"))
+            env["SWITCHBOARD_EXECUTION_ASSIGNMENT_JSON"] = encoded_assignment
+            env["SWITCHBOARD_COMPLETION_CONTRACT_JSON"] = encoded_assignment
             # Never expose the enrolled host bearer to the child.  It only has
             # host-management authority; the session receives an exact,
             # short-lived task principal minted after claim_wake.  The session's

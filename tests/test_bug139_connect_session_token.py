@@ -7,10 +7,11 @@ import os
 from path_setup import ROOT  # noqa: F401
 
 from adapters import agent_host
+from switchboard.connect.execution_assignment import build_execution_assignment
 
 
 def _wake():
-    return {
+    wake = {
         "wake_id": "wake-bug139",
         "task_id": "BUG-139",
         "selector": {
@@ -26,8 +27,20 @@ def _wake():
             "workspace_ref": "repo:canonical", "queued_at": 1.0,
             "limits": {"max_runtime_seconds": 7200,
                        "spend_limit_microunits": 0, "memory_limit_bytes": 0},
+        }, "lifecycle": {
+            "schema": "switchboard.execution_lifecycle.v1",
+            "role": "implementation", "head_sha": "",
+            "pr_number": 0, "pr_url": "", "ttl_seconds": 7200,
+            "execution_id": "execlease-bug139",
+            "generation": 1, "fence_epoch": 1,
         }},
     }
+    wake["policy"]["execution_assignment"] = build_execution_assignment(
+        task_id=wake["task_id"],
+        assignment=wake["policy"]["assignment"],
+        lifecycle=wake["policy"]["lifecycle"],
+    )
+    return wake
 
 
 inventory = {

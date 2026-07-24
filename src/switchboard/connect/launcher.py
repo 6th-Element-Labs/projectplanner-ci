@@ -7,6 +7,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .contract import Ack, ResourceLimits
+from .execution_assignment import (
+    EXACT_HEAD_ROLES,
+    SCHEMA as EXECUTION_ASSIGNMENT_SCHEMA,
+)
 
 
 class LaunchRefused(RuntimeError):
@@ -76,10 +80,15 @@ def assignment_note(ack: Ack, completion_contract: dict | None = None) -> str:
     )
     if completion_contract:
         note += (
-            "\nImmutable completion assignment: "
+            "\nImmutable execution assignment: "
             + json.dumps(completion_contract, sort_keys=True, separators=(",", ":"))
-            + " Use this admitted contract as lifecycle authority; do not wait "
-              "for post-start runner injection."
+            + " This server-owned contract is lifecycle authority. Fail closed "
+              "before claiming or starting work if task_id, assignment_id, "
+              "execution_id, generation, desired_role, or exact_head_sha "
+              "disagrees with the persisted execution lease. Claim and start "
+              "exactly desired_role, applying its acceptance_findings; do not "
+              "infer a different role from board status and do not wait for "
+              "post-start runner injection."
         )
     return note
 
@@ -100,6 +109,26 @@ def build_launch_spec(
         raise LaunchRefused("runtime_mismatch")
     if assignment.provider != config.provider:
         raise LaunchRefused("provider_mismatch")
+    if (completion_contract
+            and completion_contract.get("schema") == EXECUTION_ASSIGNMENT_SCHEMA):
+        if str(completion_contract.get("assignment_id") or "") != assignment.assignment_id:
+            raise LaunchRefused("execution_assignment_id_mismatch")
+        parts = str(assignment.work_ref or "").split(":")
+        expected_task = (
+            parts[2] if len(parts) == 3 and parts[0] == "task" else "")
+        if (expected_task and str(completion_contract.get("task_id") or "")
+                != expected_task):
+            raise LaunchRefused("execution_assignment_task_mismatch")
+        role = str(completion_contract.get("desired_role") or "")
+        if role not in {"implementation", *EXACT_HEAD_ROLES}:
+            raise LaunchRefused("execution_assignment_role_invalid")
+        if (role in EXACT_HEAD_ROLES
+                and not str(completion_contract.get("exact_head_sha") or "")):
+            raise LaunchRefused("execution_assignment_exact_head_missing")
+        if not str(completion_contract.get("execution_id") or ""):
+            raise LaunchRefused("execution_assignment_execution_id_missing")
+        if int(completion_contract.get("generation") or 0) <= 0:
+            raise LaunchRefused("execution_assignment_generation_invalid")
     workspace = Path(workspace_path).expanduser()
     if not workspace.is_absolute():
         raise LaunchRefused("workspace_path_not_absolute")
@@ -114,8 +143,11 @@ def build_launch_spec(
         "SWITCHBOARD_CONNECT_WORKSPACE_REF": assignment.workspace_ref,
     }
     if completion_contract:
-        environment_values["SWITCHBOARD_COMPLETION_CONTRACT_JSON"] = json.dumps(
+        encoded_contract = json.dumps(
             completion_contract, sort_keys=True, separators=(",", ":"))
+        environment_values["SWITCHBOARD_EXECUTION_ASSIGNMENT_JSON"] = encoded_contract
+        # Compatibility for hosts/adapters introduced by ADAPTER-26.
+        environment_values["SWITCHBOARD_COMPLETION_CONTRACT_JSON"] = encoded_contract
     environment = tuple(sorted(environment_values.items()))
     return LaunchSpec(
         argv=(

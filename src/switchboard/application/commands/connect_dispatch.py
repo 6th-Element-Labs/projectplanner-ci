@@ -271,9 +271,19 @@ def enqueue_task(
         "role": str(role or "implementation"),
         "head_sha": str(
             source_sha or (task.get("git_state") or {}).get("head_sha") or ""),
+        "pr_number": int((task.get("git_state") or {}).get("pr_number") or 0),
+        "pr_url": str((task.get("git_state") or {}).get("pr_url") or ""),
         "ttl_seconds": int(
             os.environ.get("PM_CONNECT_MAX_RUNTIME_SECONDS", "7200")),
     }
+    if (lifecycle["role"] in {"review_merge", "remediation"}
+            and not lifecycle["head_sha"]):
+        return {
+            "dispatched": False,
+            "error": "exact_head_required",
+            "role": lifecycle["role"],
+            "task_id": task_id,
+        }
     if lifecycle["role"] in {"review_merge", "remediation"}:
         lifecycle.update({
             "task_id": task_id,

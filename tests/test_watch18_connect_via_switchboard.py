@@ -10,6 +10,7 @@ from path_setup import ROOT  # noqa: F401
 
 from adapters import agent_host
 from switchboard.connect import Ack, Assignment, HostRuntimeConfig, ResourceLimits
+from switchboard.connect.execution_assignment import build_execution_assignment
 from switchboard.connect.launcher import assignment_note, build_launch_spec
 
 
@@ -104,8 +105,20 @@ wake = {
                 "memory_limit_bytes": 0,
             },
         },
+        "lifecycle": {
+            "schema": "switchboard.execution_lifecycle.v1",
+            "role": "implementation", "head_sha": "",
+            "pr_number": 0, "pr_url": "", "ttl_seconds": 7200,
+            "execution_id": "execlease-watch18",
+            "generation": 1, "fence_epoch": 1,
+        },
     },
 }
+wake["policy"]["execution_assignment"] = build_execution_assignment(
+    task_id=wake["task_id"],
+    assignment=wake["policy"]["assignment"],
+    lifecycle=wake["policy"]["lifecycle"],
+)
 inventory = {
     "host_id": "host/watch18",
     "repo_root": str(ROOT),
