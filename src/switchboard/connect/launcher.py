@@ -7,6 +7,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .contract import Ack, ResourceLimits
+from .execution_assignment import (
+    EXACT_HEAD_ROLES,
+    SCHEMA as EXECUTION_ASSIGNMENT_SCHEMA,
+)
 
 
 class LaunchRefused(RuntimeError):
@@ -106,8 +110,7 @@ def build_launch_spec(
     if assignment.provider != config.provider:
         raise LaunchRefused("provider_mismatch")
     if (completion_contract
-            and completion_contract.get("schema")
-            == "switchboard.execution_assignment.v1"):
+            and completion_contract.get("schema") == EXECUTION_ASSIGNMENT_SCHEMA):
         if str(completion_contract.get("assignment_id") or "") != assignment.assignment_id:
             raise LaunchRefused("execution_assignment_id_mismatch")
         parts = str(assignment.work_ref or "").split(":")
@@ -116,9 +119,12 @@ def build_launch_spec(
         if (expected_task and str(completion_contract.get("task_id") or "")
                 != expected_task):
             raise LaunchRefused("execution_assignment_task_mismatch")
-        if str(completion_contract.get("desired_role") or "") not in {
-                "implementation", "review_merge", "remediation"}:
+        role = str(completion_contract.get("desired_role") or "")
+        if role not in {"implementation", *EXACT_HEAD_ROLES}:
             raise LaunchRefused("execution_assignment_role_invalid")
+        if (role in EXACT_HEAD_ROLES
+                and not str(completion_contract.get("exact_head_sha") or "")):
+            raise LaunchRefused("execution_assignment_exact_head_missing")
         if not str(completion_contract.get("execution_id") or ""):
             raise LaunchRefused("execution_assignment_execution_id_missing")
         if int(completion_contract.get("generation") or 0) <= 0:

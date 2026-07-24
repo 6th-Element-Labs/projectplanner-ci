@@ -7,6 +7,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 from path_setup import ROOT  # noqa: F401
 
@@ -22,6 +23,7 @@ from switchboard.application.commands import connect_dispatch  # noqa: E402
 from switchboard.connect import (  # noqa: E402
     Ack, HostRuntimeConfig, LaunchRefused, LeaseState, build_launch_spec,
 )
+import adapters.agent_host as agent_host  # noqa: E402
 
 
 P = "switchboard"
@@ -91,17 +93,104 @@ try:
     assert json.loads(
         spec.env_dict()["SWITCHBOARD_EXECUTION_ASSIGNMENT_JSON"]) == contract
 
-    forged = {**contract, "desired_role": "review_merge"}
-    # The host compares the prompt contract to lifecycle before calling this
-    # builder; its final boundary also rejects assignment identity forgery.
+    inventory = {
+        "host_id": "host/bug168",
+        "repo_root": str(ROOT),
+        "policy": {"allow_work": True},
+        "runtimes": [{
+            "runtime": "codex",
+            "provider": "openai",
+            "lanes": ["BUG"],
+            "capabilities": [
+                "execution_lease_v2", "runner_lease_enforcement"],
+            "policy": {
+                "allow_work": True,
+                "lane_mode": "all_project_lanes",
+            },
+        }],
+    }
+    command, mode = agent_host.launch_command(
+        wake, inventory, runner_session_id="run_13a36dcc04555b14")
+    child = command[command.index("--") + 1:]
+    host_prompt = next(
+        part for part in child
+        if isinstance(part, str) and "Immutable execution assignment:" in part)
+    assert mode == "connect"
+    assert '"desired_role":"remediation"' in host_prompt
+    assert HEAD in host_prompt
+    assert "Claim and start exactly desired_role" in host_prompt
+
+    original_token = agent_host._issue_connect_session_mcp_token
+    original_run = agent_host.subprocess.run
+    captured = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["env"] = kwargs["env"]
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({
+                "runner_session_id": "run_13a36dcc04555b14",
+                "started": True,
+            }),
+            stderr="",
+        )
+
+    try:
+        agent_host._issue_connect_session_mcp_token = (
+            lambda *_args, **_kwargs: "dst-bug168")
+        agent_host.subprocess.run = fake_run
+        launched = agent_host.launch(
+            wake, inventory, runner_session_id="run_13a36dcc04555b14")
+    finally:
+        agent_host._issue_connect_session_mcp_token = original_token
+        agent_host.subprocess.run = original_run
+    assert launched["started"] is True
+    assert json.loads(
+        captured["env"]["SWITCHBOARD_EXECUTION_ASSIGNMENT_JSON"]) == contract
+    assert json.loads(
+        captured["env"]["SWITCHBOARD_COMPLETION_CONTRACT_JSON"]) == contract
+
+    for forged in (
+        {**contract, "desired_role": "review_merge"},
+        {**contract, "exact_pr": {**contract["exact_pr"], "number": 999}},
+        {**contract, "acceptance_findings": []},
+    ):
+        forged_wake = {
+            **wake,
+            "policy": {**policy, "execution_assignment": forged},
+        }
+        try:
+            agent_host.launch_command(
+                forged_wake, inventory,
+                runner_session_id="run_13a36dcc04555b14")
+        except ValueError as exc:
+            assert "execution assignment disagrees" in str(exc)
+        else:
+            raise AssertionError("tampered execution contract launched")
+
+    refused = connect_dispatch.enqueue_task(
+        {**task, "git_state": {}},
+        project=P, actor="bug168-test", runtime="codex",
+        generation_ref="remediation:missing-head",
+        role="remediation", source_sha="",
+    )
+    assert refused == {
+        "dispatched": False,
+        "error": "exact_head_required",
+        "role": "remediation",
+        "task_id": task["task_id"],
+    }
+
+    empty_head = {**contract, "exact_head_sha": ""}
     try:
         build_launch_spec(
             ack, config, workspace_path=str(ROOT),
-            completion_contract={**forged, "assignment_id": "assignment-forged"})
+            completion_contract=empty_head)
     except LaunchRefused as exc:
-        assert exc.code == "execution_assignment_id_mismatch"
+        assert exc.code == "execution_assignment_exact_head_missing"
     else:
-        raise AssertionError("forged assignment contract launched")
+        raise AssertionError("exact-head role launched without a head")
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
 

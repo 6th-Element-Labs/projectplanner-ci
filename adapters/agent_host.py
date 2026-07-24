@@ -952,22 +952,22 @@ def launch_command(wake, inventory, runner_session_id=""):
             connect_policy.get("execution_assignment") or {})
         if not execution_assignment:
             raise ValueError("connect execution assignment contract is missing")
-        expected = {
-            "assignment_id": assignment.assignment_id,
-            "execution_id": str(lifecycle.get("execution_id") or ""),
-            "generation": int(lifecycle.get("generation") or 0),
-            "desired_role": str(lifecycle.get("role") or ""),
-            "exact_head_sha": str(lifecycle.get("head_sha") or ""),
-        }
-        observed = {
-            "assignment_id": str(execution_assignment.get("assignment_id") or ""),
-            "execution_id": str(execution_assignment.get("execution_id") or ""),
-            "generation": int(execution_assignment.get("generation") or 0),
-            "desired_role": str(execution_assignment.get("desired_role") or ""),
-            "exact_head_sha": str(execution_assignment.get("exact_head_sha") or ""),
-        }
-        if observed != expected:
-            raise ValueError("connect execution assignment disagrees with persisted lease")
+        from switchboard.connect.execution_assignment import (
+            ExecutionAssignmentError,
+            build_execution_assignment,
+            require_exact_execution_assignment,
+        )
+        try:
+            expected = build_execution_assignment(
+                task_id=str(wake.get("task_id") or ""),
+                assignment=assignment_data,
+                lifecycle=lifecycle,
+            )
+            require_exact_execution_assignment(execution_assignment, expected)
+        except ExecutionAssignmentError as exc:
+            raise ValueError(
+                "connect execution assignment disagrees with persisted lease: "
+                f"{exc.code}") from exc
         now = time.time()
         spec = build_launch_spec(
             Ack(
@@ -1054,6 +1054,8 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
         env = os.environ.copy()
         if mode == "connect":
             assignment = dict((wake.get("policy") or {}).get("assignment") or {})
+            execution_assignment = dict(
+                (wake.get("policy") or {}).get("execution_assignment") or {})
             env.update({
                 "SWITCHBOARD_CONNECT_ASSIGNMENT_ID": str(
                     assignment.get("assignment_id") or ""),
@@ -1065,6 +1067,10 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
                 "SWITCHBOARD_CONNECT_LEASE_ID": str(wake.get("wake_id") or ""),
                 "SWITCHBOARD_CONNECT_RUNNER_ID": str(runner_session_id or ""),
             })
+            encoded_assignment = json.dumps(
+                execution_assignment, sort_keys=True, separators=(",", ":"))
+            env["SWITCHBOARD_EXECUTION_ASSIGNMENT_JSON"] = encoded_assignment
+            env["SWITCHBOARD_COMPLETION_CONTRACT_JSON"] = encoded_assignment
             # Never expose the enrolled host bearer to the child.  It only has
             # host-management authority; the session receives an exact,
             # short-lived task principal minted after claim_wake.  The session's

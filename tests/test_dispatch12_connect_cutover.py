@@ -11,6 +11,7 @@ from path_setup import ROOT
 
 from switchboard.application.commands import connect_dispatch
 from switchboard.application.commands import task_execution
+from switchboard.connect.execution_assignment import build_execution_assignment
 
 
 passed = failed = 0
@@ -70,7 +71,7 @@ for row in captured:
     } and assignment["schema"] == "switchboard.connect.assignment.v1",
        "Assignment v1 remains byte-compatible")
     ok(set(lifecycle) == {
-        "schema", "role", "head_sha", "ttl_seconds",
+        "schema", "role", "head_sha", "pr_number", "pr_url", "ttl_seconds",
     }, "sibling lifecycle request leaves identity allocation to the server")
     forbidden = {
         "mcp", "token", "credential", "claim", "work_session", "review",
@@ -195,9 +196,23 @@ os.environ["PM_RUNNER_LEASE_ENFORCEMENT"] = "1"
 saved_work_module = os.environ.pop("PM_AGENT_WORK_MODULE", None)
 for row in captured:
     runtime = row["selector"]["runtime"]
+    host_policy = {
+        **row["policy"],
+        "lifecycle": {
+            **row["policy"]["lifecycle"],
+            "execution_id": f"execlease-dispatch12-{runtime}",
+            "generation": 1,
+            "fence_epoch": 1,
+        },
+    }
+    host_policy["execution_assignment"] = build_execution_assignment(
+        task_id="DISPATCH-12",
+        assignment=host_policy["assignment"],
+        lifecycle=host_policy["lifecycle"],
+    )
     wake = {
         "wake_id": "wake-host-test", "task_id": "DISPATCH-12",
-        "selector": row["selector"], "policy": row["policy"],
+        "selector": row["selector"], "policy": host_policy,
     }
     inventory = {
         "host_id": "host/test", "repo_root": str(ROOT),

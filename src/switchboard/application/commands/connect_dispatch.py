@@ -276,6 +276,14 @@ def enqueue_task(
         "ttl_seconds": int(
             os.environ.get("PM_CONNECT_MAX_RUNTIME_SECONDS", "7200")),
     }
+    if (lifecycle["role"] in {"review_merge", "remediation"}
+            and not lifecycle["head_sha"]):
+        return {
+            "dispatched": False,
+            "error": "exact_head_required",
+            "role": lifecycle["role"],
+            "task_id": task_id,
+        }
     if lifecycle["role"] in {"review_merge", "remediation"}:
         lifecycle.update({
             "task_id": task_id,

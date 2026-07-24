@@ -14,6 +14,7 @@ from __future__ import annotations
 from path_setup import ROOT  # noqa: F401
 
 from adapters import agent_host
+from switchboard.connect.execution_assignment import build_execution_assignment
 
 
 passed = failed = 0
@@ -27,7 +28,7 @@ def ok(condition, message):
 
 
 def connect_wake(runtime):
-    return {
+    wake = {
         "wake_id": "wake-interactive",
         "task_id": "WATCH-10",
         "selector": {"runtime": runtime, "task_id": "WATCH-10",
@@ -44,8 +45,20 @@ def connect_wake(runtime):
             "queued_at": 1.0,
             "limits": {"max_runtime_seconds": 7200,
                        "spend_limit_microunits": 0, "memory_limit_bytes": 0},
+        }, "lifecycle": {
+            "schema": "switchboard.execution_lifecycle.v1",
+            "role": "implementation", "head_sha": "",
+            "pr_number": 0, "pr_url": "", "ttl_seconds": 7200,
+            "execution_id": f"execlease-interactive-{runtime}",
+            "generation": 1, "fence_epoch": 1,
         }},
     }
+    wake["policy"]["execution_assignment"] = build_execution_assignment(
+        task_id=wake["task_id"],
+        assignment=wake["policy"]["assignment"],
+        lifecycle=wake["policy"]["lifecycle"],
+    )
+    return wake
 
 
 inventory = {"host_id": "host/interactive-test", "repo_root": str(ROOT),
