@@ -33,10 +33,11 @@ def test_completion_handoff_and_receipt_gated_states_are_explicit():
         "What you need to do",
         "Resume condition",
         "Next automatic step",
-        "Safe custom response",
+        "Only the frozen choices above are authorized",
         "Open session",
     ):
         assert label in source
     assert "request.status === 'resolved' && request.delivery_receipt" in source
     assert "failed', 'expired', 'cancelled', 'orphaned" in source
     assert "if (delivering) return" in source
+    assert "needs-custom" not in source

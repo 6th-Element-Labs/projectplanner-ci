@@ -206,6 +206,8 @@ class CodexAppServer:
                 "host_id": self.binding["host_id"],
                 "provider": "openai-codex-app-server",
                 "request_id": request_id,
+                "runner_session_id": self.binding["runner_session_id"],
+                "work_session_id": self.binding["work_session_id"],
             })
             delivery = claimed.get("delivery") if claimed.get("claimed") else None
             if delivery is None:
@@ -240,6 +242,9 @@ class CodexAppServer:
                 "POST", f"/ixp/v1/attention/requests/{request_id}/delivery", {
                     "project": self.binding["project"],
                     "host_id": self.binding["host_id"],
+                    "provider": "openai-codex-app-server",
+                    "runner_session_id": self.binding["runner_session_id"],
+                    "work_session_id": self.binding["work_session_id"],
                     "expected_version": expected_version,
                     "receipt": receipt,
                 })

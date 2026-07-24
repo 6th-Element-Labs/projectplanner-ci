@@ -67,6 +67,7 @@ class AttentionRequestBody(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict)
     recommended_default: Any = None
     expires_at: Optional[float] = None
+    auto_proceed: bool = False
 
 
 class AttentionDecisionBody(BaseModel):
@@ -84,6 +85,8 @@ class AttentionClaimBody(BaseModel):
     host_id: str = Field(min_length=1)
     provider: str = ""
     request_id: str = ""
+    runner_session_id: str = ""
+    work_session_id: str = ""
 
 
 class AttentionDeliveryBody(BaseModel):
@@ -94,6 +97,9 @@ class AttentionDeliveryBody(BaseModel):
     expected_version: int = Field(ge=1)
     receipt: Any = None
     error: str = ""
+    provider: str = ""
+    runner_session_id: str = ""
+    work_session_id: str = ""
 
 
 def _age_s(ts: Any) -> int:
@@ -313,6 +319,11 @@ def _raise_attention_error(exc: AttentionStoreError) -> None:
         "attention_decision_idempotency_conflict": 409,
         "attention_provider_request_conflict": 409,
         "attention_host_mismatch": 403,
+        "attention_binding_mismatch": 403,
+        "attention_principal_unbound": 403,
+        "attention_request_expired": 409,
+        "stale_attention_head": 409,
+        "attention_head_unverifiable": 409,
     }.get(exc.code, 400)
     raise HTTPException(status, exc.as_dict()) from exc
 
@@ -430,6 +441,10 @@ def create_router(*, resolve_project: ProjectResolver,
         request: Request, body: AttentionRequestBody,
     ):
         payload = body.model_dump()
+        if payload.pop("auto_proceed", False):
+            raise HTTPException(
+                400, {"error": "attention_auto_proceed_forbidden",
+                      "message": "attention requests require an explicit operator decision"})
         project_id = resolve_body_project(payload)
         principal = resolve_agent_host_principal(
             resolve_principal, request, project_id,
@@ -457,7 +472,10 @@ def create_router(*, resolve_project: ProjectResolver,
             claimed = service.claim_decision(
                 _context(project_id, principal, source="body"),
                 host_id=payload["host_id"], provider=payload["provider"],
-                request_id=payload["request_id"], actor=auth.actor(principal))
+                request_id=payload["request_id"],
+                runner_session_id=payload["runner_session_id"],
+                work_session_id=payload["work_session_id"],
+                actor=auth.actor(principal))
         except AttentionStoreError as exc:
             _raise_attention_error(exc)
         return {"claimed": claimed is not None, "delivery": claimed}
@@ -478,7 +496,9 @@ def create_router(*, resolve_project: ProjectResolver,
                 expected_version=payload["expected_version"],
                 host_id=payload["host_id"], actor=auth.actor(principal),
                 receipt=payload["receipt"],
-                error=payload["error"])
+                error=payload["error"], provider=payload["provider"],
+                runner_session_id=payload["runner_session_id"],
+                work_session_id=payload["work_session_id"])
         except AttentionStoreError as exc:
             _raise_attention_error(exc)
 

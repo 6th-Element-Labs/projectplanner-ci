@@ -441,6 +441,7 @@ def mark_human_resume_receipt(
         expected_version=version,
         target_status="resolved",
         actor=actor,
+        reason="completion_execution_receipt_recorded",
         delivery_receipt=dict(receipt or {}),
         delivery_claimed_by=host_id,
         project=project,
