@@ -13,6 +13,9 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, List, Optional
 
+import scripts.switchboard_path  # noqa: F401 — make src/switchboard importable
+from switchboard.domain.completion import routing as completion_routing
+
 ACTION_PRIORITY: Dict[str, int] = {
     "approve_breakdown": 1,
     "repair_task_link": 2,
@@ -147,7 +150,21 @@ def _explicit_target_actions(mission_status: Dict[str, Any],
             # In Review with a live PR it never enqueues.
             "head_sha": str((detail.get("git_state") or {}).get("head_sha") or ""),
         }
-        if status == "Not Started" and dependency.get("ready") and not claims:
+        route = completion_routing.completion_route(detail)
+        if route:
+            common["completion_route"] = route
+        if status in completion_routing.ROUTE_KEYED_STATUSES:
+            # Blocked is a projection of two very different completion routes.
+            # Only the automatic ones are dispatchable; human blockers stay
+            # sticky, and a Blocked task with no run is not dispatchable at all.
+            if completion_routing.task_ready_for_dispatch(detail, route=route):
+                actions.append({
+                    **common, "action": "resume_or_claim", "owner_type": "agent",
+                    "label": f"Agent will drive the {route} route for the "
+                             "explicitly targeted task",
+                    "reason": f"Automatic completion route: {route}",
+                })
+        elif status == "Not Started" and dependency.get("ready") and not claims:
             actions.append({
                 **common, "action": "claim_task", "owner_type": "agent",
                 "label": "Agent will claim the explicitly targeted task",
