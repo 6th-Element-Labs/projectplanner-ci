@@ -56,7 +56,13 @@ def test_projection_sources_have_stable_ids_links_blast_radius_and_evidence():
     provider = _provider_item({
         "request_id": "req-1", "prompt": "Choose", "provider": "openai",
         "task_id": "COORD-41", "host_id": "host-1", "runner_session_id": "run-1",
-        "context": {"mission_id": "operator-ui", "unfinished_downstream": 4,
+        "status": "pending", "schema_version": "provider.question.v1",
+        "context": {"mission_id": "operator-ui", "deliverable_id": "alerts",
+                    "unfinished_downstream": 4,
+                    "completed_work_summary": "Shipped PR #812",
+                    "why_automation_stopped": "Credential required",
+                    "resume_condition": "Credential supplied",
+                    "next_automatic_action": "Re-run live proof",
                     "blast_radius": {"tasks": 4}, "evidence": {"steps": []}},
     })
     mission = _mission_item(
@@ -73,6 +79,10 @@ def test_projection_sources_have_stable_ids_links_blast_radius_and_evidence():
     assert provider["links"]["host"] == "host-1"
     assert provider["links"]["session"] == "run-1"
     assert provider["payload"]["blast_radius"]["tasks"] == 4
+    assert provider["payload"]["status"] == "pending"
+    assert provider["payload"]["completed_work_summary"] == "Shipped PR #812"
+    assert provider["payload"]["frozen_payload"]["deliverable_id"] == "alerts"
+    assert provider["links"]["deliverable"] == "alerts"
     assert mission["links"]["mission"] == "operator-ui"
     assert mission["payload"]["evidence"]["proof"] == "fixture"
     assert decision["source_id"] == "decision:12"

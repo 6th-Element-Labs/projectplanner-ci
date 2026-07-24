@@ -170,6 +170,7 @@ def _provider_item(item: Dict[str, Any]) -> Dict[str, Any]:
     recommended = item.get("recommended_default")
     completion_human = provider.startswith("switchboard.completion")
     kind = "completion_human" if completion_human else "provider_request"
+    status = str(item.get("status") or "pending")
     return {
         "attention_id": f"provider:{request_id}", "source_id": f"provider:{request_id}",
         "source": "provider", "kind": kind, "task_id": task_id,
@@ -180,17 +181,27 @@ def _provider_item(item: Dict[str, Any]) -> Dict[str, Any]:
         "unfinished_downstream": int(context.get("unfinished_downstream") or 0),
         "payload": {
             "request_id": request_id, "version": item.get("version"),
+            "schema_version": item.get("schema_version"),
+            "provider": provider, "status": status,
             "choices": item.get("choices"), "recommended_default": recommended,
             "reason_code": context.get("reason_code") or context.get("unresolved_gate"),
             "pr_number": context.get("pr_number"),
             "head_sha": context.get("head_sha"),
+            "deliverable_id": context.get("deliverable_id"),
+            "completed_work_summary": context.get("completed_work_summary"),
+            "why_automation_stopped": context.get("why_automation_stopped"),
+            "what_you_need_to_do": context.get("what_you_need_to_do"),
             "resume_condition": context.get("resume_condition"),
             "next_automatic_action": context.get("next_automatic_action"),
             "evidence": context.get("evidence") or context.get("evidence_refs"),
             "blast_radius": context.get("blast_radius"),
+            "frozen_payload": context,
+            "delivery_receipt": item.get("delivery_receipt"),
+            "terminal_reason": item.get("terminal_reason"),
         },
         "links": {
             "mission": context.get("mission_id") or context.get("deliverable_id"),
+            "deliverable": context.get("deliverable_id"),
             "task": f"#task/{task_id}" if task_id else None,
             "provider": provider or None, "host": item.get("host_id"),
             "session": item.get("runner_session_id") or item.get("work_session_id"),
