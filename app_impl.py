@@ -35,23 +35,28 @@ _req_obs = request_observability.RequestObservability()
 
 
 def _wake_completion_after_attention(decided, project, actor):
-    """Idempotently re-arm the task completion owner after a human decision."""
-    from switchboard.domain.completion.executor import resume_after_human_decision
+    """Attempt the durable outbox wake created with the human decision."""
     from switchboard.storage.repositories import autopilot_scopes
+    from switchboard.storage.repositories import attention
 
     def wake(payload):
         task_id = str(payload.get("task_id") or "").strip().upper()
         return autopilot_scopes.start_autopilot_scope(
             project=project,
             scope_type="task",
+            deliverable_id=str(payload.get("deliverable_id") or "").strip(),
             task_project=project,
             task_id=task_id,
             runtime="codex",
             actor=actor,
         )
 
-    return resume_after_human_decision(
-        decided,
+    wake_row = decided.get("completion_wake") or {}
+    request_id = str(wake_row.get("request_id") or "").strip()
+    if not request_id:
+        return {}
+    return attention.attempt_completion_wake(
+        request_id,
         project=project,
         actor=actor,
         wake_completion_owner=wake,

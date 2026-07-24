@@ -35,9 +35,11 @@ def connection() -> sqlite3.Connection:
     db = sqlite3.connect(":memory:")
     db.row_factory = sqlite3.Row
     db.execute(
-        "CREATE TABLE task_git_state (task_id TEXT PRIMARY KEY, head_sha TEXT)")
+        "CREATE TABLE task_git_state ("
+        "task_id TEXT PRIMARY KEY, head_sha TEXT, pr_number INTEGER)")
     db.execute(
-        "INSERT INTO task_git_state(task_id, head_sha) VALUES ('HARDEN-77', ?)",
+        "INSERT INTO task_git_state(task_id, head_sha, pr_number) "
+        "VALUES ('HARDEN-77', ?, NULL)",
         (HEAD,),
     )
     upgrade_attention_schema(db)

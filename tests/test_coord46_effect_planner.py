@@ -99,6 +99,26 @@ class RouteToEffect(unittest.TestCase):
     def test_generic_coordination_retry_repairs_dispatch(self):
         self.assertEqual(_plan("coordination_retry")["effect"], "repair_dispatch")
 
+    def test_fence_runner_is_fence_only_not_dispatch(self):
+        plan = _plan(
+            "coordination_retry",
+            effect="fence_runner",
+            runner={
+                "live": True,
+                "runner_session_id": "runner-9",
+                "execution_id": "execution-9",
+                "execution_connection_id": "connection-9",
+                "generation": 9,
+                "fence_epoch": 4,
+                "role": "review_merge",
+                "head_sha": HEAD,
+            },
+        )
+        self.assertEqual(plan["effect"], "fence_runner")
+        self.assertTrue(plan["fence_required"])
+        self.assertEqual(
+            plan["fence_identity"]["runner_session_id"], "runner-9")
+
 
 class ClassifierBeatsLiveRunner(unittest.TestCase):
     """A decision outranks whatever process happens to be running."""
@@ -217,17 +237,20 @@ class EndToEndFixtures(unittest.TestCase):
 
     def test_pr810_routes_remediation_and_fences_live_review(self):
         head = "88624a605727fd44df98191d5b7dd99c73b75d9c"
+        pr_url = "https://github.com/6th-Element-Labs/projectplanner/pull/810"
         snapshot = build_completion_snapshot(
             task={"task_id": "COORD-41", "status": "In Review",
-                  "git_state": {"head_sha": head}},
+                  "git_state": {"head_sha": head, "pr_number": 810,
+                                "pr_url": pr_url}},
             github_pr={"number": 810, "state": "open", "draft": True,
+                       "url": pr_url,
                        "mergeable": True, "mergeStateStatus": "BLOCKED",
                        "head": {"sha": head}},
             required_status_contexts=["Switchboard CI / VM gate"],
             status_contexts=[{"name": "Switchboard CI / VM gate",
                               "conclusion": "failure",
                               "failure_attribution": "product"}],
-            review={"status": "passed", "head_sha": head},
+            review={"status": "passed", "head_sha": head, "pr_url": pr_url},
             runner={"live": True, "role": "review_merge", "head_sha": head,
                     "generation": 9},
         )
@@ -243,16 +266,19 @@ class EndToEndFixtures(unittest.TestCase):
 
     def test_pr811_routes_review_merge_at_current_head_without_a_coder(self):
         head = "ebd76cbf01603880d16e5ab84071da17885334b1"
+        pr_url = "https://github.com/6th-Element-Labs/projectplanner/pull/811"
         snapshot = build_completion_snapshot(
             task={"task_id": "ADAPTER-23", "status": "In Review",
-                  "git_state": {"head_sha": head}},
+                  "git_state": {"head_sha": head, "pr_number": 811,
+                                "pr_url": pr_url}},
             github_pr={"number": 811, "state": "open", "draft": True,
+                       "url": pr_url,
                        "mergeable": True, "mergeStateStatus": "CLEAN",
                        "head": {"sha": head}},
             required_status_contexts=["Switchboard CI / VM gate"],
             status_contexts=[{"name": "Switchboard CI / VM gate",
                               "conclusion": "success"}],
-            review={"status": "passed", "head_sha": head},
+            review={"status": "passed", "head_sha": head, "pr_url": pr_url},
             runner={"live": False},
         )
         decision = classify_completion(None, snapshot)

@@ -34,7 +34,11 @@ from switchboard.application.attention import (
     default_attention_service,
 )
 from switchboard.domain.projects.context import ProjectContext
-from switchboard.storage.repositories.attention import AttentionStoreError
+from switchboard.storage.repositories.attention import (
+    AttentionStoreError,
+    COMPLETION_CLOSEOUT_SCHEMA,
+    COMPLETION_PROVIDER,
+)
 
 ProjectResolver = Callable[[str], str]
 PrincipalResolver = Callable[..., dict]
@@ -175,7 +179,10 @@ def _provider_item(item: Dict[str, Any]) -> Dict[str, Any]:
     context = item.get("context") if isinstance(item.get("context"), dict) else {}
     provider = str(item.get("provider") or "")
     recommended = item.get("recommended_default")
-    completion_human = provider.startswith("switchboard.completion")
+    completion_human = (
+        provider == COMPLETION_PROVIDER
+        and str(item.get("schema_version") or "") == COMPLETION_CLOSEOUT_SCHEMA
+    )
     kind = "completion_human" if completion_human else "provider_request"
     status = str(item.get("status") or "pending")
     return {
@@ -204,6 +211,7 @@ def _provider_item(item: Dict[str, Any]) -> Dict[str, Any]:
             "blast_radius": context.get("blast_radius"),
             "frozen_payload": context,
             "delivery_receipt": item.get("delivery_receipt"),
+            "completion_wake": item.get("completion_wake"),
             "terminal_reason": item.get("terminal_reason"),
         },
         "links": {
@@ -321,8 +329,11 @@ def _raise_attention_error(exc: AttentionStoreError) -> None:
         "attention_host_mismatch": 403,
         "attention_binding_mismatch": 403,
         "attention_principal_unbound": 403,
+        "attention_completion_owner_required": 403,
         "attention_request_expired": 409,
         "stale_attention_head": 409,
+        "stale_attention_pr": 409,
+        "stale_attention_completion_run": 409,
         "attention_head_unverifiable": 409,
     }.get(exc.code, 400)
     raise HTTPException(status, exc.as_dict()) from exc
@@ -422,14 +433,26 @@ def create_router(*, resolve_project: ProjectResolver,
             decided = service.decide(
                 _context(project_id, principal, source="query"), request_id,
                 body.model_dump(), actor=auth.actor(principal))
-            if on_decision_recorded is not None:
+            wake = decided.get("completion_wake")
+            if (
+                on_decision_recorded is not None
+                and isinstance(wake, dict)
+                and str(wake.get("status") or "") in {"pending", "failed"}
+            ):
                 try:
-                    decided["completion_wake"] = on_decision_recorded(
+                    attempted = on_decision_recorded(
                         decided, project_id, auth.actor(principal))
+                    if attempted:
+                        decided["completion_wake"] = attempted
+                        if isinstance(attempted.get("request"), dict):
+                            decided["request"] = attempted["request"]
                 except Exception as exc:  # the decision remains authoritative
+                    # The decision and pending outbox row committed together.
+                    # Preserve that authority and let the daemon retry it.
                     decided["completion_wake"] = {
-                        "error": type(exc).__name__,
-                        "reason": str(exc),
+                        **wake,
+                        "status": "pending",
+                        "last_error": f"{type(exc).__name__}: {exc}",
                         "retryable": True,
                     }
             return decided

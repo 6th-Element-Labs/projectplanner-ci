@@ -177,8 +177,14 @@
         const isInbox = it.source === 'inbox';
         const isProvider = it.source === 'provider' && Array.isArray(it.payload && it.payload.choices) && it.payload.choices.length;
         const p = it.payload || {};
-        const state = STATE[p.status] || STATE.pending;
         const completion = it.kind === 'completion_human';
+        const wake = p.completion_wake || {};
+        let state = STATE[p.status] || STATE.pending;
+        if (completion && p.status === 'decision_recorded' && wake.status === 'failed') {
+            state = ['bg-red-lt', 'Wake retrying'];
+        } else if (completion && p.status === 'decision_recorded' && wake.status === 'pending') {
+            state = ['bg-yellow-lt', 'Wake queued'];
+        }
         const choiceButtons = isProvider ? (it.payload.choices || []).map((c) => {
             const id = (c && c.id) || c;
             const label = (c && (c.label || c.id)) || String(c);
@@ -304,11 +310,28 @@
                             status: (data.request && data.request.status) || data.status || 'decision_recorded',
                             version: (data.request && data.request.version) || it.payload.version,
                             delivery_receipt: (data.request && data.request.delivery_receipt) || null,
+                            completion_wake: data.completion_wake || null,
                         }),
                     });
                     renderDetail(detail, tracked);
-                    flash('Resuming — the completion owner is reassessing this exact task.', 'text-azure');
-                    pollRequest(it.payload.request_id);
+                    const wake = data.completion_wake || {};
+                    if (completion && wake.status === 'failed') {
+                        flash(`Decision recorded — wake retry queued${wake.last_error ? ': ' + wake.last_error : '.'}`, 'text-danger');
+                        pollRequest(it.payload.request_id);
+                    } else if (completion && wake.status === 'pending') {
+                        flash('Decision recorded — completion wake is durably queued.', 'text-orange');
+                        pollRequest(it.payload.request_id);
+                    } else if (completion && wake.status === 'accepted') {
+                        flash('Resuming — the fenced completion owner accepted the wake.', 'text-azure');
+                        pollRequest(it.payload.request_id);
+                    } else if (completion && data.request && data.request.status === 'resolved') {
+                        delivering = false;
+                        flash('Decision recorded — task remains blocked.', 'text-secondary');
+                        setTimeout(() => load(), 900);
+                    } else {
+                        flash('Decision recorded — awaiting the bound provider receipt.', 'text-azure');
+                        pollRequest(it.payload.request_id);
+                    }
                 } catch (e) {
                     delivering = false;
                     renderDetail(detail, it);
@@ -336,16 +359,37 @@
                 tracked.payload.status = request.status;
                 tracked.payload.version = request.version;
                 tracked.payload.delivery_receipt = request.delivery_receipt;
+                tracked.payload.completion_wake = request.completion_wake || null;
                 tracked.payload.terminal_reason = request.terminal_reason;
                 const detail = el('needs-detail');
                 if (detail) renderDetail(detail, tracked);
             }
-            if (request.status === 'resolved' && request.delivery_receipt) {
+            const receipt = request.delivery_receipt || {};
+            const completionReceipt = (
+                tracked && tracked.kind === 'completion_human'
+                && receipt.schema === 'switchboard.completion_resume_receipt.v1'
+                && receipt.effect === 'resume_assessment'
+                && receipt.verified === true
+            );
+            const providerReceipt = (
+                tracked && tracked.kind !== 'completion_human'
+                && request.status === 'resolved' && request.delivery_receipt
+            );
+            if (request.status === 'resolved' && (completionReceipt || providerReceipt)) {
                 delivering = false;
                 const detail = el('needs-detail');
                 if (detail && tracked) renderDetail(detail, tracked);
                 const flash = el('needs-flash');
                 if (flash) { flash.className = 'small text-green'; flash.textContent = 'Resumed — provider receipt verified.'; }
+                setTimeout(() => load(), 900);
+            } else if (
+                request.status === 'resolved'
+                && tracked && tracked.kind === 'completion_human'
+                && receipt.effect === 'remain_blocked'
+            ) {
+                delivering = false;
+                const flash = el('needs-flash');
+                if (flash) { flash.className = 'small text-secondary'; flash.textContent = 'Decision recorded — task remains blocked.'; }
                 setTimeout(() => load(), 900);
             } else if (['failed', 'expired', 'cancelled', 'orphaned'].includes(request.status)) {
                 delivering = false;

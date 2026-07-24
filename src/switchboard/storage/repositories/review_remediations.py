@@ -18,6 +18,9 @@ from typing import Any, Mapping, Optional
 
 from constants import DEFAULT_PROJECT
 from db.connection import _conn, _write_through
+from switchboard.domain.completion.repair_proof import (
+    classify_cross_task_repair_proof,
+)
 from switchboard.storage.repositories.coordination import (
     deliver_coordination_escalation,
 )
@@ -161,12 +164,19 @@ def _criteria_document(verdict: Mapping[str, Any], round_no: int,
 
 
 def _resolve_prior_in(c: sqlite3.Connection, task_id: str, new_head_sha: str,
+                      new_pr_url: str,
                       actor: str, now: float, *, final_pass: bool = False) -> list[str]:
     placeholders = ",".join("?" for _ in PENDING_STATUSES)
     rows = c.execute(
         f"SELECT * FROM review_remediations WHERE task_id=? "
-        f"AND status IN ({placeholders}) AND source_head_sha<>? ORDER BY round_no",
-        (task_id, *sorted(PENDING_STATUSES), new_head_sha),
+        f"AND status IN ({placeholders}) "
+        "AND (source_head_sha<>? OR source_pr_url<>?) ORDER BY round_no",
+        (
+            task_id,
+            *sorted(PENDING_STATUSES),
+            new_head_sha,
+            str(new_pr_url or ""),
+        ),
     ).fetchall()
     resolved: list[str] = []
     for row in rows:
@@ -203,9 +213,14 @@ def _resolve_prior_in(c: sqlite3.Connection, task_id: str, new_head_sha: str,
 
 def _cross_task_repair_link(task_row: sqlite3.Row) -> dict[str, Any]:
     state = _json_object(task_row["agent_state"])
+    if "review_repair" not in state:
+        return {}
     link = _json_object(state.get("review_repair"))
     if not link:
-        return {}
+        return {
+            "repair_task_id": str(task_row["task_id"] or "").strip().upper(),
+            "_present_but_invalid": True,
+        }
     link["repair_task_id"] = str(
         link.get("repair_task_id") or task_row["task_id"] or ""
     ).strip().upper()
@@ -220,8 +235,9 @@ def _cross_task_repair_link(task_row: sqlite3.Row) -> dict[str, Any]:
     return link
 
 
-def _exact_head_merge_gate_in(
+def _exact_pr_head_merge_gate_in(
         c: sqlite3.Connection, task_id: str, head_sha: str,
+        pr_url: str, pr_number: Any,
 ) -> Optional[dict[str, Any]]:
     rows = c.execute(
         "SELECT payload FROM activity WHERE task_id=? AND kind='merge.gate' "
@@ -232,11 +248,11 @@ def _exact_head_merge_gate_in(
         gate = _json_object(row["payload"])
         if str(gate.get("head_sha") or "").strip() != head_sha:
             continue
-        if gate.get("ok") is True or str(gate.get("status") or "").lower() in {
-            "pass", "passed", "green",
-        }:
-            return gate
-        return None
+        if str(gate.get("pr_url") or "").strip() != str(pr_url or "").strip():
+            continue
+        if str(gate.get("pr_number") or "") != str(pr_number or ""):
+            continue
+        return gate
     return None
 
 
@@ -290,139 +306,112 @@ def _resolve_cross_task_repair_impl(
                 "status": "not_applicable",
                 "repair_task_id": repair_task_id,
             }
-        if link["repair_task_id"] != repair_task_id:
-            return _repair_blocked(link, "repair_task_mismatch")
-        required = {
-            "source_task_id": link["source_task_id"],
-            "source_verdict_id": link["source_verdict_id"],
-            "remediation_id": link["remediation_id"],
-            "finding_ids": link["finding_ids"],
-        }
-        missing = sorted(key for key, value in required.items() if not value)
-        if missing:
-            return _repair_blocked(link, "repair_link_incomplete", missing=missing)
-
         repair_state = _json_object(repair_task["agent_state"])
         bug_report = _json_object(repair_state.get("bug_report"))
-        if str(bug_report.get("source_task") or "").strip().upper() != link["source_task_id"]:
-            return _repair_blocked(link, "bug_source_task_mismatch")
-
         source_task = c.execute(
-            "SELECT * FROM tasks WHERE task_id=?", (link["source_task_id"],),
+            "SELECT * FROM tasks WHERE task_id=?",
+            (str(link.get("source_task_id") or "").strip().upper(),),
         ).fetchone()
+        if link.get("source_task_id") and not source_task:
+            return _repair_blocked(link, "source_task_not_found")
         remediation = c.execute(
             "SELECT * FROM review_remediations WHERE remediation_id=?",
-            (link["remediation_id"],),
+            (str(link.get("remediation_id") or "").strip(),),
         ).fetchone()
-        if not source_task:
-            return _repair_blocked(link, "source_task_not_found")
-        if not remediation:
-            return _repair_blocked(link, "source_remediation_not_found")
-        if (
-            remediation["task_id"] != link["source_task_id"]
-            or remediation["verdict_id"] != link["source_verdict_id"]
-        ):
-            return _repair_blocked(link, "source_remediation_mismatch")
-
-        expected_ids = sorted(
-            finding["id"]
-            for finding in _json_list(remediation["acceptance_criteria_json"])
-            if finding.get("id")
-        )
-        if link["finding_ids"] != expected_ids:
-            return _repair_blocked(
-                link,
-                "repair_finding_set_mismatch",
-                expected_finding_ids=expected_ids,
-                supplied_finding_ids=link["finding_ids"],
-            )
-        if bool(remediation["human_intervention_required"]):
-            return _repair_blocked(link, "human_authority_required")
-
-        placeholders = ",".join("?" for _ in link["finding_ids"])
+        source_verdict = c.execute(
+            "SELECT * FROM review_verdicts WHERE verdict_id=?",
+            (str(link.get("source_verdict_id") or "").strip(),),
+        ).fetchone()
         finding_rows = c.execute(
-            f"SELECT * FROM review_findings WHERE verdict_id=? "
-            f"AND finding_id IN ({placeholders}) ORDER BY finding_id",
-            (link["source_verdict_id"], *link["finding_ids"]),
+            "SELECT * FROM review_findings WHERE verdict_id=? ORDER BY finding_id",
+            (str(link.get("source_verdict_id") or "").strip(),),
         ).fetchall()
-        if (
-            [row["finding_id"] for row in finding_rows] != link["finding_ids"]
-            or any(row["finding_class"] != "auto" for row in finding_rows)
-        ):
-            return _repair_blocked(link, "source_findings_mismatch")
 
         git_state = c.execute(
             "SELECT * FROM task_git_state WHERE task_id=?", (repair_task_id,),
         ).fetchone()
         repair_head = str((git_state or {})["head_sha"] or "").strip() if git_state else ""
-        merged_sha = str((git_state or {})["merged_sha"] or "").strip() if git_state else ""
-        if (
-            str(repair_task["status"] or "") != "Done"
-            or not git_state
-            or not bool(git_state["in_main_content"])
-            or not repair_head
-            or not merged_sha
-        ):
-            return _repair_waiting(link, "canonical_repair_merge_required")
-
+        repair_pr_url = str(git_state["pr_url"] or "").strip() if git_state else ""
+        repair_pr_number = git_state["pr_number"] if git_state else None
         repair_verdict = c.execute(
-            "SELECT * FROM review_verdicts WHERE task_id=? AND head_sha=?",
-            (repair_task_id, repair_head),
+            "SELECT * FROM review_verdicts "
+            "WHERE task_id=? AND pr_url=? AND head_sha=?",
+            (repair_task_id, repair_pr_url, repair_head),
         ).fetchone()
-        if not repair_verdict or repair_verdict["status"] != "pass":
-            return _repair_waiting(
-                link, "exact_head_pass_required", repair_head_sha=repair_head)
-        open_repair_findings = int(c.execute(
-            "SELECT COUNT(*) FROM review_findings WHERE verdict_id=? AND state='open'",
-            (repair_verdict["verdict_id"],),
-        ).fetchone()[0])
-        if open_repair_findings:
-            return _repair_blocked(
-                link, "repair_verdict_has_open_findings",
-                open_finding_count=open_repair_findings,
-            )
-        if not _exact_head_merge_gate_in(c, repair_task_id, repair_head):
-            return _repair_waiting(
-                link, "exact_head_merge_gate_pass_required",
-                repair_head_sha=repair_head,
-            )
-
-        already_resolved = (
-            remediation["status"] in RESOLVED_STATUSES
-            and remediation["resolved_head_sha"] == repair_head
-            and all(
-                row["state"] == "fixed" and row["resolved_sha"] == repair_head
-                for row in finding_rows
-            )
+        repair_verdict_data = dict(repair_verdict) if repair_verdict else {}
+        if repair_verdict:
+            repair_verdict_data["open_finding_count"] = int(c.execute(
+                "SELECT COUNT(*) FROM review_findings "
+                "WHERE verdict_id=? AND state='open'",
+                (repair_verdict["verdict_id"],),
+            ).fetchone()[0])
+        merge_gate = _exact_pr_head_merge_gate_in(
+            c, repair_task_id, repair_head, repair_pr_url, repair_pr_number,
         )
+        remediation_data = _remediation_from_row(remediation) if remediation else {}
+        proof = classify_cross_task_repair_proof(
+            link=link,
+            bug_report=bug_report,
+            remediation=remediation_data,
+            source_verdict=dict(source_verdict) if source_verdict else {},
+            source_findings=[dict(row) for row in finding_rows],
+            repair_task=dict(repair_task),
+            repair_git=dict(git_state) if git_state else {},
+            repair_verdict=repair_verdict_data,
+            merge_gate=merge_gate or {},
+        )
+        if proof["status"] == "blocked":
+            return _repair_blocked(
+                link, str(proof["reason"]),
+                **{
+                    key: value for key, value in proof.items()
+                    if key not in {"status", "reason"}
+                },
+            )
+        if proof["status"] == "waiting":
+            return _repair_waiting(
+                link, str(proof["reason"]),
+                **{
+                    key: value for key, value in proof.items()
+                    if key not in {"status", "reason"}
+                },
+            )
+        if proof["status"] == "resolved":
+            replay = dict(link)
+            replay.update({
+                "schema": CROSS_TASK_REPAIR_SCHEMA,
+                "status": "resolved",
+                "idempotent_replay": True,
+            })
+            return replay
+
+        canonical_ids = list(proof["canonical_finding_ids"])
+        human_followup_required = bool(proof.get("human_followup_required"))
+        placeholders = ",".join("?" for _ in canonical_ids)
+        merged_sha = str(proof["repair_merged_sha"])
         resolution = {
             "schema": CROSS_TASK_REPAIR_SCHEMA,
             "status": "resolved",
-            "source_task_id": link["source_task_id"],
-            "source_verdict_id": link["source_verdict_id"],
-            "remediation_id": link["remediation_id"],
-            "finding_ids": link["finding_ids"],
+            "source_task_id": str(link["source_task_id"]),
+            "source_verdict_id": str(link["source_verdict_id"]),
+            "remediation_id": str(link["remediation_id"]),
+            "finding_ids": canonical_ids,
+            "human_followup_required": human_followup_required,
+            "escalation_finding_ids": list(
+                proof.get("escalation_finding_ids") or []),
             "repair_task_id": repair_task_id,
             "repair_head_sha": repair_head,
-            "repair_verdict_id": repair_verdict["verdict_id"],
+            "repair_pr_url": repair_pr_url,
+            "repair_pr_number": repair_pr_number,
+            "repair_verdict_id": str(proof["repair_verdict_id"]),
             "repair_merged_sha": merged_sha,
-            "resolved_at": link.get("resolved_at") or now,
+            "resolved_at": now,
             "resolved_by": actor,
         }
-        if already_resolved:
-            resolution["idempotent_replay"] = True
-            return resolution
-        if remediation["status"] not in HUMAN_RESOLVABLE_STATUSES:
-            return _repair_blocked(
-                link, "source_remediation_not_resolvable",
-                source_remediation_status=remediation["status"],
-            )
-        if any(row["state"] != "open" for row in finding_rows):
-            return _repair_blocked(link, "source_findings_not_open")
 
         reason = (
             f"Fixed by {repair_task_id} exact head {repair_head}; "
-            f"review {repair_verdict['verdict_id']} passed and canonical merge "
+            f"review {proof['repair_verdict_id']} passed and canonical merge "
             f"{merged_sha} landed."
         )
         finding_update = c.execute(
@@ -432,29 +421,63 @@ def _resolve_cross_task_repair_impl(
             "AND finding_class='auto' AND state='open'",
             (
                 actor, reason, repair_head, now, now,
-                link["source_verdict_id"], *link["finding_ids"],
+                link["source_verdict_id"], *canonical_ids,
             ),
         )
-        if finding_update.rowcount != len(link["finding_ids"]):
+        if finding_update.rowcount != len(canonical_ids):
             raise RuntimeError("cross-task repair finding update lost its exact-set fence")
-        c.execute(
-            "UPDATE review_remediations SET status='resolved', "
-            "resolved_without_human=1, resolved_head_sha=?, resolved_at=?, updated_at=? "
-            "WHERE remediation_id=?",
-            (repair_head, now, now, link["remediation_id"]),
+        resolution_status = (
+            "resolved_with_followup"
+            if human_followup_required else "resolved"
         )
-        source_acceptance = _json_object(source_task["exit_criteria"])
-        if (
-            source_acceptance.get("schema") == ACCEPTANCE_SCHEMA
-            and str(source_acceptance.get("verdict_id") or "").strip()
-            == link["source_verdict_id"]
-        ):
+        remediation_update = c.execute(
+            "UPDATE review_remediations SET status=?, "
+            "resolved_without_human=?, resolved_head_sha=?, resolved_at=?, updated_at=? "
+            "WHERE remediation_id=? AND status IN "
+            "('queued','wake_requested','remediating','review_pending',"
+            "'blocked','escalated','wake_failed')",
+            (
+                resolution_status,
+                int(not human_followup_required),
+                repair_head,
+                now,
+                now,
+                link["remediation_id"],
+            ),
+        )
+        if remediation_update.rowcount != 1:
+            raise RuntimeError("cross-task repair remediation fence was lost")
+
+        acceptance_findings = [
+            _acceptance_finding({
+                "id": row["finding_id"],
+                "location": row["location"],
+                "category": row["category"],
+                "severity": row["severity"],
+                "invariant_violated": row["invariant_violated"],
+                "repair_requirement": row["repair_requirement"],
+                "class": row["finding_class"],
+            })
+            for row in finding_rows
+            if row["finding_class"] == "auto"
+        ]
+        expected_acceptance = _criteria_document(
+            {
+                "task_id": source_verdict["task_id"],
+                "verdict_id": source_verdict["verdict_id"],
+                "head_sha": source_verdict["head_sha"],
+            },
+            int(remediation["round_no"]),
+            acceptance_findings,
+            bool(remediation["requires_adversarial_review"]),
+        )
+        if source_task and source_task["exit_criteria"] == expected_acceptance:
             c.execute(
                 "UPDATE tasks SET exit_criteria=?, updated_at=? "
                 "WHERE task_id=? AND exit_criteria=?",
                 (
                     remediation["original_exit_criteria"], now,
-                    link["source_task_id"], source_task["exit_criteria"],
+                    link["source_task_id"], expected_acceptance,
                 ),
             )
         repair_state["review_repair"] = resolution
@@ -526,14 +549,20 @@ def review_remediation_summary_in(c: sqlite3.Connection, task_id: str) -> dict[s
 
 
 def required_review_mode_in(c: sqlite3.Connection, task_id: str,
-                            head_sha: str) -> dict[str, Any]:
+                            head_sha: str, pr_url: str = "") -> dict[str, Any]:
     """Return the review mode required by an older unresolved remediation."""
     placeholders = ",".join("?" for _ in HUMAN_RESOLVABLE_STATUSES)
     row = c.execute(
         f"SELECT * FROM review_remediations WHERE task_id=? "
-        f"AND status IN ({placeholders}) AND source_head_sha<>? "
+        f"AND status IN ({placeholders}) "
+        "AND (source_head_sha<>? OR source_pr_url<>?) "
         "AND requires_adversarial_review=1 ORDER BY round_no DESC LIMIT 1",
-        (task_id, *sorted(HUMAN_RESOLVABLE_STATUSES), head_sha),
+        (
+            task_id,
+            *sorted(HUMAN_RESOLVABLE_STATUSES),
+            head_sha,
+            str(pr_url or ""),
+        ),
     ).fetchone()
     return {
         "required": bool(row),
@@ -563,15 +592,31 @@ class ReviewRemediationRepository:
         with _conn(project) as c:
             rows = c.execute(
                 "SELECT task_id FROM tasks "
-                "WHERE json_extract(agent_state, '$.review_repair.status')='linked' "
-                "ORDER BY updated_at LIMIT ?",
+                "WHERE json_extract(CASE WHEN json_valid(agent_state) "
+                "THEN agent_state ELSE '{}' END, "
+                "'$.review_repair.status')='linked' "
+                "ORDER BY COALESCE(CAST(json_extract("
+                "CASE WHEN json_valid(agent_state) THEN agent_state "
+                "ELSE '{}' END, '$.review_repair.last_reconcile_at') "
+                "AS REAL), 0), "
+                "updated_at, task_id LIMIT ?",
                 (bounded,),
             ).fetchall()
-        results = [
-            self.resolve_cross_task_repair(
-                row["task_id"], actor=actor, project=project)
-            for row in rows
-        ]
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            task_id = str(row["task_id"])
+            try:
+                result = self.resolve_cross_task_repair(
+                    task_id, actor=actor, project=project)
+            except Exception as exc:  # one corrupt link must not stop the sweep
+                result = _repair_blocked(
+                    {"repair_task_id": task_id},
+                    "reconcile_exception",
+                    error_type=type(exc).__name__,
+                )
+            results.append(result)
+            self._record_reconcile_attempt(
+                task_id, result=result, actor=actor, project=project)
         return {
             "schema": "switchboard.cross_task_review_repair_reconcile.v1",
             "checked": len(results),
@@ -583,6 +628,50 @@ class ReviewRemediationRepository:
             "blocked": sum(result.get("status") == "blocked" for result in results),
             "results": results,
         }
+
+    @staticmethod
+    def _record_reconcile_attempt(
+            task_id: str, *, result: Mapping[str, Any], actor: str,
+            project: str) -> None:
+        """Rotate a nonterminal link to the back of the bounded sweep."""
+        now = time.time()
+
+        def persist() -> None:
+            with _conn(project) as c:
+                row = c.execute(
+                    "SELECT agent_state FROM tasks WHERE task_id=?", (task_id,),
+                ).fetchone()
+                if not row:
+                    return
+                state = _json_object(row["agent_state"])
+                link = _json_object(state.get("review_repair"))
+                if str(link.get("status") or "") != "linked":
+                    return
+                link["last_reconcile_at"] = now
+                link["last_reconcile_status"] = result.get("status")
+                link["last_reconcile_reason"] = result.get("reason")
+                state["review_repair"] = link
+                c.execute(
+                    "UPDATE tasks SET agent_state=?, updated_at=? WHERE task_id=? "
+                    "AND json_extract(CASE WHEN json_valid(agent_state) "
+                    "THEN agent_state ELSE '{}' END, "
+                    "'$.review_repair.status')='linked'",
+                    (json.dumps(state, sort_keys=True), now, task_id),
+                )
+                c.execute(
+                    "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                    "VALUES (?,?,?,?,?)",
+                    (
+                        task_id, actor, "review.cross_task_repair_checked",
+                        json.dumps({
+                            "status": result.get("status"),
+                            "reason": result.get("reason"),
+                        }, sort_keys=True),
+                        now,
+                    ),
+                )
+
+        _write_through(project, persist)
 
     def handle_verdict(self, verdict: Mapping[str, Any], *, actor: str,
                        project: str = DEFAULT_PROJECT,
@@ -652,7 +741,8 @@ class ReviewRemediationRepository:
         now = time.time()
         with _conn(project) as c:
             resolved = _resolve_prior_in(
-                c, task_id, head_sha, actor, now, final_pass=True)
+                c, task_id, head_sha, str(verdict.get("pr_url") or ""),
+                actor, now, final_pass=True)
             first = c.execute(
                 "SELECT original_exit_criteria FROM review_remediations WHERE task_id=? "
                 "ORDER BY round_no LIMIT 1", (task_id,),
@@ -696,15 +786,25 @@ class ReviewRemediationRepository:
             git_state = c.execute(
                 "SELECT head_sha, pr_url FROM task_git_state WHERE task_id=?", (task_id,),
             ).fetchone()
-            if not git_state or str(git_state["head_sha"] or "") != head_sha:
+            current_pr_url = str(git_state["pr_url"] or "") if git_state else ""
+            verdict_pr_url = str(verdict.get("pr_url") or "")
+            if (
+                not git_state
+                or str(git_state["head_sha"] or "") != head_sha
+                or not current_pr_url
+                or current_pr_url != verdict_pr_url
+            ):
                 return {
-                    "error": "stale_review_remediation_head",
+                    "error": "stale_review_remediation_pr_head",
                     "task_id": task_id,
                     "expected_head_sha": str((git_state or {}).get("head_sha") or "")
                     if isinstance(git_state, dict) else (str(git_state["head_sha"] or "") if git_state else ""),
+                    "expected_pr_url": current_pr_url,
+                    "verdict_pr_url": verdict_pr_url,
                 }
 
-            _resolve_prior_in(c, task_id, head_sha, actor, now)
+            _resolve_prior_in(
+                c, task_id, head_sha, verdict_pr_url, actor, now)
             findings = [
                 _acceptance_finding(finding) for finding in verdict.get("findings") or []
                 if str(finding.get("state") or "open").lower() == "open"
@@ -863,7 +963,16 @@ class ReviewRemediationRepository:
     def required_review_mode(self, task_id: str, *, head_sha: str,
                              project: str = DEFAULT_PROJECT) -> dict[str, Any]:
         with _conn(project) as c:
-            return required_review_mode_in(c, task_id, head_sha)
+            git = c.execute(
+                "SELECT pr_url FROM task_git_state WHERE task_id=?",
+                (task_id,),
+            ).fetchone()
+            return required_review_mode_in(
+                c,
+                task_id,
+                head_sha,
+                str(git["pr_url"] or "") if git else "",
+            )
 
     def resolve_human_authority(self, task_id: str, *, head_sha: str,
                                 actor: str,

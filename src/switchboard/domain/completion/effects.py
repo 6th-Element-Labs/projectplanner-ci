@@ -21,7 +21,7 @@ EFFECT_SCHEMA = "switchboard.completion_effect.v1"
 #: Effects that change something outside the completion run itself.
 MUTATING_EFFECTS = frozenset({
     "ensure_review_generation", "start_remediation", "mark_ready", "enqueue",
-    "requeue_merge_group", "repair_dispatch", "escalate_human",
+    "requeue_merge_group", "repair_dispatch", "fence_runner", "escalate_human",
     "reconcile_provenance",
 })
 
@@ -37,7 +37,7 @@ def _map(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
-def _canonical_findings(value: Any) -> list[dict[str, Any]]:
+def canonical_findings(value: Any) -> list[dict[str, Any]]:
     """Return a deterministic finding set for effect identity."""
     rows = [
         _map(item) for item in (value or [])
@@ -51,6 +51,8 @@ def _canonical_findings(value: Any) -> list[dict[str, Any]]:
 
 def _effect_for(route: str, decision_effect: str,
                 snapshot: Mapping[str, Any]) -> str:
+    if decision_effect == "fence_runner":
+        return "fence_runner"
     if route == "none":
         return "none"
     if route == "wait":
@@ -76,23 +78,55 @@ def _effect_for(route: str, decision_effect: str,
     return "repair_dispatch"
 
 
+def _runner_fence_identity(runner: Mapping[str, Any]) -> dict[str, Any]:
+    identity = _map(runner.get("execution"))
+    metadata = _map(runner.get("metadata"))
+    return {
+        "runner_session_id": str(runner.get("runner_session_id") or ""),
+        "execution_id": str(
+            runner.get("execution_id") or identity.get("execution_id") or ""),
+        "execution_connection_id": str(
+            runner.get("execution_connection_id")
+            or metadata.get("execution_connection_id") or ""),
+        "generation": (
+            runner.get("generation")
+            or runner.get("execution_generation")
+            or identity.get("generation")
+        ),
+        "fence_epoch": (
+            runner.get("fence_epoch")
+            or runner.get("lease_epoch")
+            or identity.get("fence_epoch")
+        ),
+        "role": str(
+            runner.get("role")
+            or runner.get("execution_role")
+            or identity.get("role") or ""),
+        "head_sha": str(
+            runner.get("head_sha")
+            or runner.get("execution_head_sha")
+            or identity.get("head_sha") or ""),
+    }
+
+
 def _fence(snapshot: Mapping[str, Any], desired_role: str,
-           head_sha: str) -> tuple[bool, Any]:
+           head_sha: str) -> tuple[bool, dict[str, Any]]:
     """A live generation may be kept only if role AND exact head both match."""
     runner = _map(snapshot.get("runner"))
     if not runner or not runner.get("live"):
-        return False, None
+        return False, {}
     runner_role = _text(runner.get("role") or runner.get("execution_role"))
     runner_head = str(runner.get("head_sha") or "").strip()
     if desired_role and runner_role == _text(desired_role) and runner_head == head_sha:
-        return False, runner.get("generation")
-    return True, runner.get("generation")
+        return False, {}
+    return True, _runner_fence_identity(runner)
 
 
 def effect_key(run: Mapping[str, Any], snapshot: Mapping[str, Any],
                route: str, desired_role: str, *,
                acceptance_findings: Any = None,
-               escalated_findings: Any = None) -> str:
+               escalated_findings: Any = None,
+               fence_identity: Any = None) -> str:
     """Stable for one repair contract; changes with findings or execution identity.
 
     Deliberately excludes every continuously changing liveness value (lease
@@ -108,8 +142,11 @@ def effect_key(run: Mapping[str, Any], snapshot: Mapping[str, Any],
         "route": _text(route),
         "desired_role": _text(desired_role),
         "attempt": int(run.get("attempt") or 0),
-        "acceptance_findings": _canonical_findings(acceptance_findings),
-        "escalated_findings": _canonical_findings(escalated_findings),
+        "acceptance_findings": canonical_findings(acceptance_findings),
+        "escalated_findings": canonical_findings(escalated_findings),
+        # Immutable execution identity is part of a stop/replace decision.
+        # Heartbeats and expiry are intentionally absent.
+        "fence_identity": _map(fence_identity),
     }
     digest = hashlib.sha256(
         json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
@@ -125,11 +162,14 @@ def plan_effect(decision: Mapping[str, Any], snapshot: Mapping[str, Any],
     route = _text(decision.get("route"))
     desired_role = decision.get("desired_role") or ""
     head_sha = str(snapshot.get("head_sha") or "").strip()
-    acceptance_findings = list(decision.get("acceptance_findings") or [])
-    escalated_findings = list(decision.get("escalated_findings") or [])
+    acceptance_findings = canonical_findings(
+        decision.get("acceptance_findings"))
+    escalated_findings = canonical_findings(
+        decision.get("escalated_findings"))
 
     effect = _effect_for(route, _text(decision.get("effect")), snapshot)
-    fence_required, generation = _fence(snapshot, desired_role, head_sha)
+    fence_required, fence_identity = _fence(
+        snapshot, desired_role, head_sha)
 
     # Precedence: the classifier decides before any running process does. A
     # live generation is attached to only when it already matches the desired
@@ -148,11 +188,17 @@ def plan_effect(decision: Mapping[str, Any], snapshot: Mapping[str, Any],
         "task_id": str(snapshot.get("task_id") or "").strip().upper(),
         "pr_number": snapshot.get("pr_number"),
         "head_sha": head_sha,
+        "completion_run_id": str(run.get("run_id") or ""),
+        "decision_attempt": int(run.get("attempt") or 0),
+        "state_version": int(run.get("state_version") or 0),
         "board_projection": decision.get("board_projection"),
         "acceptance_findings": acceptance_findings,
         "escalated_findings": escalated_findings,
         "fence_required": fence_required,
-        "fence_generation": generation if fence_required else None,
+        "fence_generation": (
+            fence_identity.get("generation") if fence_required else None
+        ),
+        "fence_identity": fence_identity if fence_required else None,
         "queue_remediation_round": effect == "start_remediation",
         "reread_after": effect == "mark_ready",
         "once_only": effect in ONCE_ONLY_EFFECTS,
@@ -164,6 +210,7 @@ def plan_effect(decision: Mapping[str, Any], snapshot: Mapping[str, Any],
             desired_role,
             acceptance_findings=acceptance_findings,
             escalated_findings=escalated_findings,
+            fence_identity=fence_identity if fence_required else None,
         ),
     }
 
@@ -172,6 +219,7 @@ __all__ = [
     "EFFECT_SCHEMA",
     "MUTATING_EFFECTS",
     "ONCE_ONLY_EFFECTS",
+    "canonical_findings",
     "effect_key",
     "plan_effect",
 ]

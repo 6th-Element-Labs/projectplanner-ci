@@ -2376,7 +2376,8 @@ def get_runner_session(runner_session_id: str,
 
 def make_runner_lease_due(
         runner_session_id: str, *, reason: str, authority: str,
-        actor: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+        actor: str, project: str = DEFAULT_PROJECT,
+        expected_identity: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Fence one exact generation and make its renewable lease due now.
 
     This is the canonical translation boundary for automatic stop requests such
@@ -2405,6 +2406,50 @@ def make_runner_lease_due(
                 or int(lease["execution_generation"] or 0) != generation):
             return {"updated": False, "error": "execution_lease_mismatch",
                     "runner_session_id": runner_session_id}
+        if expected_identity is not None:
+            expected = dict(expected_identity)
+            current = {
+                "runner_session_id": str(row["runner_session_id"] or ""),
+                "execution_id": execution_id,
+                "execution_connection_id": str(
+                    metadata.get("execution_connection_id") or ""),
+                "generation": generation,
+                # The resource lease is the server-owned fence authority. The
+                # runner row can lag it during a stop race.
+                "fence_epoch": int(lease["fence_epoch"] or 0),
+                "role": str(
+                    metadata.get("execution_role")
+                    or metadata.get("role") or "").strip().lower(),
+                "head_sha": str(
+                    metadata.get("execution_head_sha")
+                    or metadata.get("head_sha") or "").strip().lower(),
+            }
+            mismatched = []
+            for field in (
+                    "runner_session_id", "execution_id",
+                    "execution_connection_id", "generation", "fence_epoch",
+                    "role", "head_sha"):
+                supplied = expected.get(field)
+                actual = current.get(field)
+                if field in {"generation", "fence_epoch"}:
+                    try:
+                        matches = int(supplied) == int(actual)
+                    except (TypeError, ValueError):
+                        matches = False
+                else:
+                    matches = str(supplied or "").strip().lower() == str(
+                        actual or "").strip().lower()
+                if not matches:
+                    mismatched.append(field)
+            if mismatched:
+                return {
+                    "updated": False,
+                    "error": "execution_identity_mismatch",
+                    "runner_session_id": runner_session_id,
+                    "mismatched_fields": mismatched,
+                    "expected_identity": expected,
+                    "current_identity": current,
+                }
         if str(lease["lease_state"] or "") not in {
                 "reserved", "starting", "active", "stopping"}:
             return {"updated": True, "idempotent": True,

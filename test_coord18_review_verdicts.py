@@ -187,6 +187,23 @@ try:
         task_id, project=PROJECT, current_head_only=True) == [],
        "current-head finding query never leaks findings from stale code")
 
+    self_review = commands.execute_mapping(
+        {
+            **verdict(
+                task_id, head=HEAD_2, status="pass", findings=[],
+                reviewer=WORKER,
+            ),
+            "review_mode": "adversarial",
+        },
+        actor=WORKER,
+        principal_id=WORKER_PRINCIPAL_ID,
+        project=PROJECT,
+    )
+    ok(
+        self_review.get("error_code") == "adversarial_self_review_forbidden",
+        "an implementation actor cannot authorize its own adversarial review",
+    )
+
     pass_result = commands.execute_mapping(
         {**verdict(task_id, head=HEAD_2, status="pass", findings=[]),
          "review_mode": "adversarial"},
@@ -270,6 +287,58 @@ try:
         ).fetchone()[0]
     ok(race_verdict_rows == 1 and race_event_rows == 1,
        "concurrent replay persists exactly one verdict and one audit event atomically")
+
+    replacement_pr_url = (
+        "https://github.com/6th-Element-Labs/projectplanner/pull/522"
+    )
+    store.mark_task_pr_opened(
+        race_task_id,
+        522,
+        replacement_pr_url,
+        branch=f"codex/{race_task_id}-replacement",
+        head_sha=HEAD_RACE,
+        actor="coord18-test",
+        project=PROJECT,
+    )
+    replacement_payload = verdict(
+        race_task_id,
+        head=HEAD_RACE,
+        status="pass",
+        findings=[],
+        reviewer=race_reviewer,
+        pr_url=replacement_pr_url,
+    )
+    replacement_barrier = threading.Barrier(12)
+
+    def record_replacement_verdict(_index):
+        replacement_barrier.wait()
+        return commands.execute_mapping(
+            replacement_payload,
+            actor=race_reviewer,
+            principal_id="principal-reviewer-race",
+            project=PROJECT,
+        )
+
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        replacement_results = list(
+            pool.map(record_replacement_verdict, range(12)))
+    with store._conn(PROJECT) as c:
+        same_sha_rows = c.execute(
+            "SELECT pr_url FROM review_verdicts "
+            "WHERE task_id=? AND head_sha=? ORDER BY pr_url",
+            (race_task_id, HEAD_RACE),
+        ).fetchall()
+    ok(
+        sum(row.get("created") is True for row in replacement_results) == 1
+        and sum(
+            row.get("idempotent_replay") is True
+            for row in replacement_results
+        ) == 11
+        and [row["pr_url"] for row in same_sha_rows]
+        == sorted([race_pr_url, replacement_pr_url]),
+        "12 concurrent replacement-PR writes converge without reusing the "
+        "same-SHA historical verdict",
+    )
 
     # A failure after the verdict and finding rows are written must roll back the whole
     # command, including its audit event. This catches regressions back to per-statement

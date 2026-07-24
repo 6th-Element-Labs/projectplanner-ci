@@ -8,6 +8,7 @@ from typing import Any, Callable, Mapping, Optional
 from switchboard.domain.completion.effects import plan_effect
 from switchboard.domain.completion.executor import (
     CompletionEffectAdapters,
+    ensure_completion_run,
     execute_effect,
 )
 from switchboard.domain.completion.normalize import normalize_snapshot
@@ -94,10 +95,14 @@ def hydrate_completion_snapshot(
     runner = {
         **active_runner,
         "live": bool(active_runner),
+        "execution_id": identity.get("execution_id"),
+        "execution_connection_id": _map(
+            active_runner.get("metadata")).get("execution_connection_id"),
         "generation": (
             identity.get("generation")
             or active_runner.get("execution_generation")
         ),
+        "fence_epoch": identity.get("fence_epoch"),
         "role": identity.get("role") or active_runner.get("execution_role"),
         "head_sha": identity.get("head_sha") or active_runner.get("head_sha"),
     }
@@ -146,6 +151,8 @@ def production_effect_adapters(
             reason_code=str(plan.get("reason_code") or ""),
             route=str(plan.get("route") or ""),
             findings=list(plan.get("acceptance_findings") or []),
+            decision_attempt=int(plan.get("decision_attempt") or 0),
+            state_version=int(plan.get("state_version") or 0),
         )
 
     def mark_ready(plan: Mapping[str, Any]) -> dict[str, Any]:
@@ -177,6 +184,13 @@ def production_effect_adapters(
     def reconcile(_: Mapping[str, Any]) -> dict[str, Any]:
         return provenance.reconcile(project=project, incremental=True)
 
+    def fence_only(plan: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            "action": "stopping",
+            "runner_session_id": _map(
+                plan.get("fence_identity")).get("runner_session_id"),
+        }
+
     return CompletionEffectAdapters(
         ensure_review_generation=start,
         start_remediation=start,
@@ -184,6 +198,7 @@ def production_effect_adapters(
         enqueue=enqueue,
         requeue_merge_group=enqueue,
         repair_dispatch=start,
+        fence_runner=fence_only,
         reconcile_provenance=reconcile,
     )
 
@@ -209,27 +224,39 @@ def run_completion_tick(
         task_id, project=project,
     ) or {}
     decision = classify_completion(current, snapshot)
-    plan = plan_effect(decision, snapshot, current)
+    # Human projection and its Needs-you authority must commit atomically in
+    # execute_effect; pre-persisting Blocked(route=human) could strand a task
+    # without an operator-visible request.
+    persisted = (
+        current
+        if str(decision.get("route") or "") == "human"
+        else ensure_completion_run(
+            decision=decision,
+            snapshot=snapshot,
+            current=current,
+            actor=actor,
+            project=project,
+        )
+    )
+    plan = plan_effect(decision, snapshot, persisted)
 
-    def fence(_: Any) -> Any:
-        try:
-            return task_execution.stop_task(
-                task_id, project=project, actor=actor,
-                reason=(
-                    f"completion route changed to {plan.get('route')} at "
-                    f"{plan.get('head_sha')}"
-                ),
-            )
-        except task_execution.TaskExecutionError as exc:
-            if exc.code == "not_running":
-                return {"stopped": False, "reason": "already_terminal"}
-            raise
+    def fence(identity: Any) -> Any:
+        return task_execution.fence_task_generation(
+            task_id,
+            _map(identity),
+            project=project,
+            actor=actor,
+            reason=(
+                f"completion route changed to {plan.get('route')} at "
+                f"{plan.get('head_sha')}"
+            ),
+        )
 
     result = execute_effect(
         plan,
         decision=decision,
         snapshot=snapshot,
-        run=current,
+        run=persisted,
         project=project,
         actor=actor,
         fence_generation=fence,

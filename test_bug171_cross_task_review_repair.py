@@ -131,7 +131,10 @@ def create_repair(source_task, verdict_id, remediation_id, finding_ids):
     store.append_activity(
         "merge.gate", "bug171-test",
         {
+            "schema": "switchboard.merge_gate.v1",
             "task_id": task_id,
+            "pr_url": "https://example.test/pull/901",
+            "pr_number": 901,
             "head_sha": REPAIR_HEAD,
             "status": "passed",
             "ok": True,
@@ -224,8 +227,8 @@ try:
             (newer_acceptance, advanced_source),
         )
     store.mark_task_merged(
-        advanced_repair, "5" * 40, pr_number=903,
-        pr_url="https://example.test/pull/903",
+        advanced_repair, "5" * 40, pr_number=901,
+        pr_url="https://example.test/pull/901",
         branch=f"codex/{advanced_repair}", head_sha=REPAIR_HEAD,
         actor="bug171-test", project=PROJECT,
         provenance_source="github_pr_merged",
@@ -240,8 +243,8 @@ try:
     bad_repair = create_repair(
         bad_source, bad_verdict, bad_remediation, ["FIX-1"])
     bad_merge = store.mark_task_merged(
-        bad_repair, "4" * 40, pr_number=902,
-        pr_url="https://example.test/pull/902",
+        bad_repair, "4" * 40, pr_number=901,
+        pr_url="https://example.test/pull/901",
         branch=f"codex/{bad_repair}", head_sha=REPAIR_HEAD,
         actor="bug171-test", project=PROJECT,
         provenance_source="github_pr_merged",

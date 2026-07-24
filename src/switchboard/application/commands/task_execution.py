@@ -16,7 +16,7 @@ runner session id: one execution attempt, one durable identity.
 from __future__ import annotations
 
 import time
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from constants import DEFAULT_PROJECT
 from switchboard.application.commands import runner_pty as runner_pty_command
@@ -56,6 +56,7 @@ ERROR_STATUS: dict[str, int] = {
     "no_active_session": 409,
     "not_running": 409,
     "runner_bind_incomplete": 409,
+    "stale_execution_generation": 409,
     "wrong_session": 409,
     "start_refused": 409,
     "control_refused": 502,
@@ -68,6 +69,7 @@ ERROR_FAILURE_CLASS: dict[str, str] = {
     "no_active_session": "missing_data",
     "not_running": "missing_data",
     "runner_bind_incomplete": "unbound_identity",
+    "stale_execution_generation": "unbound_identity",
     "wrong_session": "unbound_identity",
     "start_refused": "failed_gate",
     "control_refused": "unreachable_agent",
@@ -839,6 +841,77 @@ def stop_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "use
         killed=bool(stopped["execution_id"]),
         # The host owns process death; the server owns "this is no longer current".
         pending_host_ack=bool(stopped["execution_id"]),
+        reason=reason,
+    )
+
+
+def fence_task_generation(
+        task_id: Any, expected_identity: Mapping[str, Any], *,
+        project: str = DEFAULT_PROJECT, actor: str = "system",
+        reason: str = "completion route changed") -> dict[str, Any]:
+    """Fence only the exact managed generation assessed by completion.
+
+    Automatic completion work must never call task-wide ``stop_task``: between
+    assessment and effect issuance, a newer generation or wake may have become
+    current. The repository re-reads and compares the full server-owned bind in
+    the same transaction that advances the execution lease fence.
+    """
+    task_id = _normalize(task_id)
+    expected = dict(expected_identity or {})
+    required = (
+        "runner_session_id", "execution_id", "execution_connection_id",
+        "generation", "fence_epoch", "role", "head_sha",
+    )
+    missing = [
+        field for field in required
+        if expected.get(field) in (None, "")
+    ]
+    if not task_id or missing:
+        raise TaskExecutionError(
+            "runner_bind_incomplete",
+            "exact execution generation identity is required",
+            task_id=task_id, project=project, missing=missing,
+        )
+    runner_session_id = str(expected["runner_session_id"])
+    result = runner_repo.make_runner_lease_due(
+        runner_session_id,
+        reason=reason,
+        authority="completion_owner",
+        actor=actor,
+        project=project,
+        expected_identity=expected,
+    )
+    if not result.get("updated"):
+        error = str(result.get("error") or "execution_identity_mismatch")
+        if error == "execution_identity_mismatch":
+            raise TaskExecutionError(
+                "stale_execution_generation",
+                "the assessed execution generation is no longer current",
+                task_id=task_id,
+                project=project,
+                runner_session_id=runner_session_id,
+                mismatched_fields=list(result.get("mismatched_fields") or []),
+                current_identity=result.get("current_identity"),
+            )
+        raise TaskExecutionError(
+            "stale_execution_generation",
+            "the assessed execution generation cannot be fenced",
+            task_id=task_id,
+            project=project,
+            runner_session_id=runner_session_id,
+            fence_error=error,
+        )
+    return _envelope(
+        "fence_task_generation",
+        task_id,
+        project,
+        action="stopping",
+        stopped=False,
+        fenced=True,
+        execution_id=runner_session_id,
+        generation=result.get("generation"),
+        fence_epoch=result.get("lease_epoch"),
+        pending_host_ack=True,
         reason=reason,
     )
 

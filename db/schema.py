@@ -383,7 +383,7 @@ def apply_schema(c):
             source              TEXT NOT NULL DEFAULT 'review_command',
             created_at          REAL NOT NULL,
             recorded_at         REAL NOT NULL,
-            UNIQUE(task_id, head_sha)
+            UNIQUE(task_id, pr_url, head_sha)
         );
         CREATE INDEX IF NOT EXISTS ix_review_verdicts_task
             ON review_verdicts(task_id, created_at);
