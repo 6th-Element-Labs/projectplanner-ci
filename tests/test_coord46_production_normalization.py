@@ -65,7 +65,8 @@ class MergeGateStatusHydration(unittest.TestCase):
             hydrated, source = merge_gate_command._merge_gate_pr_evidence(
                 "", 840, {}, "6th-Element-Labs/projectplanner")
 
-        self.assertEqual(source, {"source": "github_api"})
+        self.assertEqual(source.get("source"), "github_api")
+        self.assertTrue(source.get("hydrated_status_contexts"))
         self.assertEqual(
             hydrated["status_contexts"][0]["context"],
             "Switchboard CI / VM gate",
