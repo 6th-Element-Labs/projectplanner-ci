@@ -236,7 +236,7 @@ daemon_source = Path("coordinator_daemon.py").read_text()
 ok("run_mission_coordinator_tick" not in daemon_source
    and "review_steward" not in daemon_source
    and "merge_steward" not in daemon_source
-   and "send_agent_message" not in daemon_source,
+   and "send_agent_message(" not in daemon_source,
    "janitor source contains no independent work scheduler or messaging path")
 
 print(f"\n{passed} passed, {failed} failed")

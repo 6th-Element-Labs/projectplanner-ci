@@ -1,0 +1,202 @@
+{
+  "schema": "switchboard.hands_off_acceptance.v1",
+  "run_id": "simplify16-four-task-restart-proof-2026-07-24",
+  "evidence_mode": "hermetic_acceptance_fixture",
+  "manual_actions": {
+    "review_instructions": 0,
+    "injections": 0,
+    "merge_nudges": 0,
+    "runner_kills": 0
+  },
+  "restarts": [
+    {
+      "component": "coordinator",
+      "boundary": "clean-b-review_merge_admitted",
+      "recovered_scope_ids": ["scope-clean-a", "scope-clean-b"],
+      "duplicate_dispatches": 0,
+      "duplicate_merge_queue_entries": 0
+    },
+    {
+      "component": "agent_host",
+      "boundary": "red-ci-remediation_stopping",
+      "recovered_scope_ids": ["scope-red-ci", "scope-review-correction"],
+      "lost_stopping_states": 0,
+      "task_wide_kills": 0
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "S16-CLEAN-A",
+      "path": "clean",
+      "scope_id": "scope-clean-a",
+      "implementation": {
+        "execution_id": "exec-clean-a-implementation",
+        "generation": 1,
+        "role": "implementation",
+        "terminal_ack_sequence": 20,
+        "in_review_sequence": 21,
+        "pid_terminal": true,
+        "pty_terminal": true,
+        "token_rejected": true,
+        "lease_terminal": true,
+        "fleet_live_absent": true,
+        "direct_session_authority_terminal": true
+      },
+      "role_generations": [
+        {"execution_id": "exec-clean-a-review", "generation": 2, "role": "review_merge"}
+      ],
+      "heads": {
+        "pr": "1111111111111111111111111111111111111111",
+        "ci": "1111111111111111111111111111111111111111",
+        "verdict": "1111111111111111111111111111111111111111",
+        "merge_group": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "canonical_merged": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+      },
+      "done_provenance": "github_pr_merged",
+      "merge_queue_entries": 1
+    },
+    {
+      "task_id": "S16-CLEAN-B",
+      "path": "clean",
+      "scope_id": "scope-clean-b",
+      "implementation": {
+        "execution_id": "exec-clean-b-implementation",
+        "generation": 1,
+        "role": "implementation",
+        "terminal_ack_sequence": 30,
+        "in_review_sequence": 31,
+        "pid_terminal": true,
+        "pty_terminal": true,
+        "token_rejected": true,
+        "lease_terminal": true,
+        "fleet_live_absent": true,
+        "direct_session_authority_terminal": true
+      },
+      "role_generations": [
+        {"execution_id": "exec-clean-b-review", "generation": 2, "role": "review_merge"}
+      ],
+      "heads": {
+        "pr": "2222222222222222222222222222222222222222",
+        "ci": "2222222222222222222222222222222222222222",
+        "verdict": "2222222222222222222222222222222222222222",
+        "merge_group": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "canonical_merged": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+      },
+      "done_provenance": "github_pr_merged",
+      "merge_queue_entries": 1
+    },
+    {
+      "task_id": "S16-RED-CI",
+      "path": "red_ci",
+      "scope_id": "scope-red-ci",
+      "implementation": {
+        "execution_id": "exec-red-implementation",
+        "generation": 1,
+        "role": "implementation",
+        "terminal_ack_sequence": 40,
+        "in_review_sequence": 41,
+        "pid_terminal": true,
+        "pty_terminal": true,
+        "token_rejected": true,
+        "lease_terminal": true,
+        "fleet_live_absent": true,
+        "direct_session_authority_terminal": true
+      },
+      "role_generations": [
+        {"execution_id": "exec-red-review", "generation": 2, "role": "review_merge"},
+        {"execution_id": "exec-red-remediation", "generation": 3, "role": "remediation"},
+        {"execution_id": "exec-red-rereview", "generation": 4, "role": "review_merge"}
+      ],
+      "remediation_rounds": 1,
+      "blocked_reason": "exact_head_ci_failed",
+      "prior_head": "3333333333333333333333333333333333333333",
+      "heads": {
+        "pr": "4444444444444444444444444444444444444444",
+        "ci": "4444444444444444444444444444444444444444",
+        "verdict": "4444444444444444444444444444444444444444",
+        "merge_group": "cccccccccccccccccccccccccccccccccccccccc",
+        "canonical_merged": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"
+      },
+      "done_provenance": "github_pr_merged",
+      "merge_queue_entries": 1
+    },
+    {
+      "task_id": "S16-REVIEW-CORRECTION",
+      "path": "review_correction",
+      "scope_id": "scope-review-correction",
+      "implementation": {
+        "execution_id": "exec-correction-implementation",
+        "generation": 1,
+        "role": "implementation",
+        "terminal_ack_sequence": 50,
+        "in_review_sequence": 51,
+        "pid_terminal": true,
+        "pty_terminal": true,
+        "token_rejected": true,
+        "lease_terminal": true,
+        "fleet_live_absent": true,
+        "direct_session_authority_terminal": true
+      },
+      "role_generations": [
+        {"execution_id": "exec-correction-review", "generation": 2, "role": "review_merge"},
+        {"execution_id": "exec-correction-remediation", "generation": 3, "role": "remediation"},
+        {"execution_id": "exec-correction-rereview", "generation": 4, "role": "review_merge"}
+      ],
+      "remediation_rounds": 1,
+      "blocked_reason": "review_changes_requested",
+      "prior_head": "5555555555555555555555555555555555555555",
+      "heads": {
+        "pr": "6666666666666666666666666666666666666666",
+        "ci": "6666666666666666666666666666666666666666",
+        "verdict": "6666666666666666666666666666666666666666",
+        "merge_group": "dddddddddddddddddddddddddddddddddddddddd",
+        "canonical_merged": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4"
+      },
+      "done_provenance": "github_pr_merged",
+      "merge_queue_entries": 1
+    }
+  ],
+  "scope_authority": {
+    "max_concurrent_leases": 4,
+    "canonical_registry": "autopilot_scopes",
+    "exact_holder_fence_generation_enforced": true,
+    "out_of_scope_refusals": 2,
+    "out_of_scope_side_effects": 0,
+    "race_safe_takeovers": 1,
+    "closed_scope_authority_released": true,
+    "restart_resumed_only_durable_scopes": true
+  },
+  "messaging": {
+    "cases": [
+      "ack_timeout",
+      "duplicate_timeout",
+      "late_ack",
+      "stale_recipient_generation",
+      "unavailable_target",
+      "monitor_restart"
+    ],
+    "audit_facts": 1,
+    "sender_notifications": 1,
+    "operator_findings": 1,
+    "wake_effects": 0,
+    "restart_effects": 0,
+    "supersession_effects": 0,
+    "retry_effects": 0,
+    "lease_mutations": 0,
+    "process_stops": 0,
+    "nonterminal_monitors": 0
+  },
+  "janitor_action_census": {
+    "cleanup": 4,
+    "start_task": 0,
+    "review": 0,
+    "remediation": 0,
+    "merge": 0,
+    "retry": 0,
+    "message": 0,
+    "send_agent_message": 0,
+    "work_instruction": 0,
+    "acknowledgement_monitor": 0,
+    "agent_directed_message": 0
+  }
+}

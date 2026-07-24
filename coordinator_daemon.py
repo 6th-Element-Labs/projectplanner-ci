@@ -168,6 +168,10 @@ class CoordinatorDaemon:
                 "merge": 0,
                 "retry": 0,
                 "message": 0,
+                "send_agent_message": 0,
+                "work_instruction": 0,
+                "acknowledgement_monitor": 0,
+                "agent_directed_message": 0,
             },
         }
 
