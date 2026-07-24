@@ -632,7 +632,21 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
                 "missing_work_session_preflight",
                 "Merge gate requires a recorded clean Work Session preflight.",
                 "missing_data",
-                details={"work_session_id": session.get("work_session_id")}))
+                # BUG-177: this used to state the requirement without naming the fix, so
+                # agents whose workspace is off the coordinator's filesystem assumed it was
+                # unsatisfiable and skipped preflight entirely — wedging their own PR.
+                # preflight_work_session ALWAYS records something usable: for a host-local
+                # path it falls through to the BUG-97/BUG-159 ladder and stores a
+                # non-blocking `coordinator_unverifiable`/`agent_host_pending` report
+                # (verdict "warn"), which this gate accepts. Only a never-run preflight
+                # blocks here.
+                details={"work_session_id": session.get("work_session_id"),
+                         "repair": (
+                             "Run preflight_work_session(work_session_id=...) before "
+                             "requesting merge authorization. A workspace the coordinator "
+                             "cannot stat records a non-blocking unverifiable/pending "
+                             "preflight, which satisfies this gate."
+                         )}))
         else:
             preflight_verdict = (preflight.get("verdict") or "").strip().lower()
             blocking_preflight_findings = [

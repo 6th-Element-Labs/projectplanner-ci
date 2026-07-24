@@ -202,7 +202,45 @@ try:
     )
     ok(review.get("created") is True,
        "merge fixture records a passing independent exact-head review")
+    # BUG-176: the requirement must key on whether the TASK has a Work Session, not on
+    # whether the caller happened to pass its id. The branch-protection projection
+    # (`Switchboard / merge authorization`) sends only task/PR facts — no claim_id and no
+    # work_session_id — so keying on the argument made every code_strict fleet PR report
+    # work_session_required forever. Use a code_strict task with no session at all, which
+    # is the state the requirement actually exists to catch.
+    sessionless_task = task(
+        "helm",
+        "Build C++ tessellation API",
+        description="Implement code, tests, branch, PR, and CI for Helm runtime.",
+        workstream="ENGINE",
+        order=15,
+    )
+    store.mark_task_pr_opened(
+        sessionless_task["task_id"], 910,
+        "https://github.com/StevenRidder/Helm/pull/910",
+        f"codex/{sessionless_task['task_id']}-policy-profiles", HEAD_SHA,
+        actor="test", project="helm")
     merge_without_session = store.merge_gate({
+        "task_id": sessionless_task["task_id"],
+        "agent_id": AGENT,
+        "repo": "StevenRidder/Helm",
+        "target_branch": "main",
+        "branch": f"codex/{sessionless_task['task_id']}-policy-profiles",
+        "head_sha": HEAD_SHA,
+        "pr_url": "https://github.com/StevenRidder/Helm/pull/910",
+        "pr_number": 910,
+        "github_pr": github_pr(sessionless_task["task_id"]),
+        "status_contexts": {"helm-ci/full-suite": "success"},
+    }, actor="test", project="helm")
+    ok(merge_without_session["ok"] is False and
+       merge_without_session["policy_profile"] == "code_strict" and
+       any(f["code"] == "work_session_required" for f in merge_without_session["findings"]),
+       "merge_gate derives Work Session requirement from code_strict policy")
+
+    # The same call for a task that DOES have a bound session must resolve it without the
+    # caller supplying an id — otherwise the CI merge-authorization projection can never
+    # authorize a code_strict fleet PR (BUG-176, PRs #850/#852).
+    merge_task_scoped = store.merge_gate({
         "task_id": code_task["task_id"],
         "agent_id": AGENT,
         "repo": "StevenRidder/Helm",
@@ -214,10 +252,9 @@ try:
         "github_pr": github_pr(code_task["task_id"]),
         "status_contexts": {"helm-ci/full-suite": "success"},
     }, actor="test", project="helm")
-    ok(merge_without_session["ok"] is False and
-       merge_without_session["policy_profile"] == "code_strict" and
-       any(f["code"] == "work_session_required" for f in merge_without_session["findings"]),
-       "merge_gate derives Work Session requirement from code_strict policy")
+    ok(not any(f["code"] == "work_session_required"
+               for f in merge_task_scoped["findings"]),
+       "merge_gate resolves the task's Work Session when the caller passes no id")
 
     merge_with_session = store.merge_gate({
         "task_id": code_task["task_id"],

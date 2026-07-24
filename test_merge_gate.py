@@ -282,6 +282,73 @@ try:
         for f in warning_gate["findings"]),
        "merge_gate accepts repo preflight with only non-blocking warnings")
 
+    # BUG-177: a workspace off the coordinator's filesystem can never be statted, so
+    # preflight_work_session records a `coordinator_unverifiable` (BUG-159) or
+    # `agent_host_pending` (BUG-115) report instead — verdict "warn", ok False, one
+    # non-blocking finding. That is the ONLY preflight a host-local fleet agent can
+    # produce, so the merge gate must accept it; treating it as a failure would make
+    # every host-local code_strict PR unmergeable. Pinned because the absence of this
+    # coverage led to it being misdiagnosed as unsatisfiable.
+    for label, report_extra in (
+        ("unverifiable", {"source": "coordinator_unverifiable", "unverifiable": True,
+                          "code": "work_session_preflight_unverifiable"}),
+        ("pending", {"source": "agent_host_pending", "pending": True,
+                     "code": "host_preflight_pending"}),
+    ):
+        hl_task, hl_claim, hl_branch, hl_sha = ready_task(
+            f"host-local {label} preflight passes")
+        hl_session = store.get_work_session(hl_claim["work_session_id"], project=P)
+        hl_hygiene = dict(hl_session.get("hygiene") or {})
+        hl_hygiene["repo_preflight"] = {
+            "schema": "switchboard.repo_preflight.v1",
+            "ok": False,
+            "verdict": "warn",
+            "source": report_extra["source"],
+            report_extra["source"].split("_")[-1]: True,
+            "repo_role": "canonical",
+            "branch": hl_branch,
+            "head_sha": hl_sha,
+            "findings": [{
+                "code": report_extra["code"],
+                "failure_class": "missing_data",
+                "severity": "medium",
+                "blocking": False,
+            }],
+        }
+        store.update_work_session(
+            hl_claim["work_session_id"], {"hygiene": hl_hygiene},
+            actor="test", project=P)
+        hl_gate = store.merge_gate(
+            gate_payload(hl_task, hl_claim, hl_branch, hl_sha),
+            actor="test", project=P,
+        )
+        ok(hl_gate["ok"] is True and not any(
+            f["code"] in {"work_session_preflight_failed",
+                          "missing_work_session_preflight"}
+            for f in hl_gate["findings"]),
+           f"merge_gate accepts a host-local {label} preflight report")
+
+    # ...but a session that never ran preflight at all still blocks, and now says how to fix it.
+    none_task, none_claim, none_branch, none_sha = ready_task("no preflight blocks")
+    none_session = store.get_work_session(none_claim["work_session_id"], project=P)
+    none_hygiene = {k: v for k, v in (none_session.get("hygiene") or {}).items()
+                    if k != "repo_preflight"}
+    store.update_work_session(
+        none_claim["work_session_id"], {"hygiene": none_hygiene},
+        actor="test", project=P)
+    none_gate = store.merge_gate(
+        gate_payload(none_task, none_claim, none_branch, none_sha),
+        actor="test", project=P,
+    )
+    none_finding = next(
+        (f for f in none_gate["findings"]
+         if f["code"] == "missing_work_session_preflight"), None)
+    # _merge_gate_finding splats details into the finding itself, so repair is top-level.
+    ok(none_finding is not None
+       and none_finding.get("blocking") is True
+       and "preflight_work_session" in str(none_finding.get("repair") or ""),
+       "a never-run preflight still blocks and names preflight_work_session as the repair")
+
     ci_task, ci_claim, ci_branch, ci_sha = ready_task("missing CI blocks")
     missing_ci = store.merge_gate(
         gate_payload(
