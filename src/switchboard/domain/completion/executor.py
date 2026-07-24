@@ -6,6 +6,7 @@ duplicate ticks can replay.
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Optional
 
@@ -164,6 +165,13 @@ def _effect_failed(result: Any) -> str:
     return ""
 
 
+def _effect_pending(result: Any) -> bool:
+    row = _map(result)
+    return str(row.get("action") or row.get("status") or "").strip().lower() in {
+        "transitioning", "pending", "stopping", "starting",
+    }
+
+
 def _execute_mutating_effect(
     effect: str,
     plan: Mapping[str, Any],
@@ -192,6 +200,8 @@ def _execute_mutating_effect(
         "role": plan.get("role"),
         "head_sha": plan.get("head_sha"),
         "pr_number": plan.get("pr_number"),
+        "acceptance_findings": list(plan.get("acceptance_findings") or []),
+        "escalated_findings": list(plan.get("escalated_findings") or []),
     }
     ledger = external_effects.claim_external_effect(
         "completion_effect",
@@ -218,6 +228,31 @@ def _execute_mutating_effect(
                 "idempotent_replay": True,
             },
         }
+    existing_effect = _map(ledger.get("effect"))
+    if (
+        not ledger.get("claimed")
+        and existing_effect.get("status") == "claimed"
+        and time.time() - float(existing_effect.get("updated_at") or time.time()) < 60
+    ):
+        # Another tick currently owns issuance. A stale claim is recoverable
+        # after the bounded window; a fresh one must never double-fire.
+        return {
+            "effect": effect,
+            "route": plan.get("route"),
+            "run": persisted,
+            "plan": dict(plan),
+            "result": existing_effect.get("readback") or {},
+            "receipt": {
+                "schema": "switchboard.completion_effect_receipt.v1",
+                "effect": effect,
+                "idem_key": plan.get("idem_key"),
+                "effect_key": ledger.get("effect_key"),
+                "verified": False,
+                "pending": True,
+                "idempotent_replay": True,
+                "reason": "effect_claim_in_flight",
+            },
+        }
 
     fenced_generation = None
     if plan.get("fence_required") and fence_generation is not None:
@@ -232,12 +267,20 @@ def _execute_mutating_effect(
         failure = _effect_failed(result)
         if failure:
             raise RuntimeError(failure)
-        verified = external_effects.verify_external_effect(
-            str(ledger.get("effect_key") or ""),
-            readback=_map(result),
-            actor=actor,
-            project=project,
-        )
+        if _effect_pending(result):
+            verified = external_effects.mark_external_effect_issued(
+                str(ledger.get("effect_key") or ""),
+                readback=_map(result),
+                actor=actor,
+                project=project,
+            )
+        else:
+            verified = external_effects.verify_external_effect(
+                str(ledger.get("effect_key") or ""),
+                readback=_map(result),
+                actor=actor,
+                project=project,
+            )
     except Exception as exc:
         external_effects.fail_external_effect(
             str(ledger.get("effect_key") or ""),
@@ -258,7 +301,11 @@ def _execute_mutating_effect(
             "effect": effect,
             "idem_key": plan.get("idem_key"),
             "effect_key": ledger.get("effect_key"),
-            "verified": not bool(verified.get("error")),
+            "verified": (
+                not _effect_pending(result)
+                and not bool(verified.get("error"))
+            ),
+            "pending": _effect_pending(result),
             "idempotent_replay": not bool(ledger.get("claimed")),
         },
     }
@@ -348,12 +395,14 @@ def resume_after_human_decision(
         "reason_code": context.get("reason_code"),
         "action": "rehydrate_and_classify",
     }
+    wake_receipt = None
     if wake_completion_owner is not None:
-        wake_completion_owner(payload)
+        wake_receipt = wake_completion_owner(payload)
     return {
         "status": request.get("status") or "decision_recorded",
         "resumed": False,
         "wake": payload,
+        "wake_receipt": wake_receipt,
         "reason": "awaiting_delivery_or_execution_receipt",
     }
 

@@ -75,13 +75,48 @@ class ScopedCompletionCoordinator(CoordinatorDaemon):
             return {"status": "observed", "scope_id": scope.get("scope_id"),
                     "task_id": task_id, "task_status": detail.get("status")}
 
-        role = mission_coordinator._lifecycle_role(
-            self.store, task_project, task_id)
-        from switchboard.domain.completion.routing import route_allows_dispatch
         from switchboard.storage.repositories import completion_runs
         completion_run = (
             completion_runs.get_active_completion_run(
                 task_id, project=task_project) or {})
+        git_state = detail.get("git_state") or {}
+        if completion_run or git_state.get("pr_number") or git_state.get("pr_url"):
+            from switchboard.application.completion_driver import run_completion_tick
+            try:
+                tick = run_completion_tick(
+                    task_id,
+                    project=task_project,
+                    actor=self.config.actor,
+                    agent_id=self.agent_id,
+                    store_mod=self.store,
+                )
+                result = {
+                    "status": "completion_tick",
+                    "scope_id": scope.get("scope_id"),
+                    "task_id": task_id,
+                    "task_project": task_project,
+                    "generation": authority.get("generation"),
+                    "fence_epoch": authority.get("fence_epoch"),
+                    "receipts": [tick],
+                }
+            except Exception as exc:  # noqa: BLE001 - durable run preserves intent
+                result = {
+                    "status": "completion_tick_failed",
+                    "scope_id": scope.get("scope_id"),
+                    "task_id": task_id,
+                    "task_project": task_project,
+                    "error": type(exc).__name__,
+                    "reason": str(exc),
+                    "receipts": [],
+                }
+            self.store.update_autopilot_scope(
+                scope["scope_id"], project=project, last_result=result,
+                ticked_at=float(self.clock()))
+            return result
+
+        role = mission_coordinator._lifecycle_role(
+            self.store, task_project, task_id)
+        from switchboard.domain.completion.routing import route_allows_dispatch
         route = str(completion_run.get("route") or "").strip().lower()
         # Sticky human blockers stay on the attention_request authority path.
         # Never dispatch another coder from a route=human completion decision.
@@ -204,6 +239,37 @@ class ScopedCompletionCoordinator(CoordinatorDaemon):
             )
             if task_project != project:
                 self._register_or_heartbeat(task_project)
+            detail = self.store.get_task(task_id, project=task_project) or {}
+            git_state = detail.get("git_state") or {}
+            from switchboard.storage.repositories import completion_runs
+            active_run = completion_runs.get_active_completion_run(
+                task_id, project=task_project) or {}
+            if self.config.act and (
+                    active_run or git_state.get("pr_number") or git_state.get("pr_url")):
+                from switchboard.application.completion_driver import run_completion_tick
+                try:
+                    tick = run_completion_tick(
+                        task_id,
+                        project=task_project,
+                        actor=self.config.actor,
+                        agent_id=self.agent_id,
+                        store_mod=self.store,
+                    )
+                    receipts.append({
+                        "task_id": task_id,
+                        "task_project": task_project,
+                        "status": "completion_tick",
+                        "completion": tick,
+                    })
+                except Exception as exc:  # noqa: BLE001 - expose failed tick
+                    receipts.append({
+                        "task_id": task_id,
+                        "task_project": task_project,
+                        "status": "completion_tick_failed",
+                        "error": type(exc).__name__,
+                        "reason": str(exc),
+                    })
+                continue
             revision = self._candidate_revision(mission_status, candidate)
             wake_generation = self._wake_generation(
                 project, deliverable_id, task_id)

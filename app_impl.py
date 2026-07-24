@@ -33,6 +33,30 @@ import store  # noqa: E402
 app = FastAPI(title="Taikun PM", version="0.1.0")
 _req_obs = request_observability.RequestObservability()
 
+
+def _wake_completion_after_attention(decided, project, actor):
+    """Idempotently re-arm the task completion owner after a human decision."""
+    from switchboard.domain.completion.executor import resume_after_human_decision
+    from switchboard.storage.repositories import autopilot_scopes
+
+    def wake(payload):
+        task_id = str(payload.get("task_id") or "").strip().upper()
+        return autopilot_scopes.start_autopilot_scope(
+            project=project,
+            scope_type="task",
+            task_project=project,
+            task_id=task_id,
+            runtime="codex",
+            actor=actor,
+        )
+
+    return resume_after_human_decision(
+        decided,
+        project=project,
+        actor=actor,
+        wake_completion_owner=wake,
+    )
+
 # Auth HTTP routes: production monolith sets PM_AUTH_HTTP_PRIMARY=service so the
 # edge-owned Auth process (:8121) is the sole HTTP surface (ARCH-MS-77). Hermetic
 # TestClient suites leave the env unset and mount the *same* shared router
@@ -255,6 +279,7 @@ app.include_router(_create_attention_router(
     list_deliverables=store.list_deliverables,
     get_mission_status=store.get_mission_status,
     list_decisions=store.list_decisions,
+    on_decision_recorded=_wake_completion_after_attention,
 ))
 app.include_router(_create_kickoff_router(
     resolve_project=_proj,

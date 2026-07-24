@@ -60,7 +60,15 @@ def _check_rows(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, Mapping):
         if any(k in value for k in ("name", "context", "state", "status", "conclusion")):
             return [_map(value)]
-        return [{"name": str(k), "state": v} for k, v in value.items()]
+        rows = []
+        for key, item in value.items():
+            if isinstance(item, Mapping):
+                row = _map(item)
+                row.setdefault("name", str(key))
+                rows.append(row)
+            else:
+                rows.append({"name": str(key), "state": item})
+        return rows
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         rows: list[dict[str, Any]] = []
         for item in value:
