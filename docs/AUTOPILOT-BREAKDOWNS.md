@@ -291,3 +291,123 @@ Until the gate's typed reason codes are routed to distinct worker actions, hands
 completion cannot close, no matter how good the implementation is.
 
 **Not repaired.** Left in place for review, per the run's observer protocol.
+
+---
+
+## CORRECTION to BREAKDOWN 8 — runner growth was **not** a leak
+
+**STATUS: WITHDRAWN.** The earlier entry called 6 concurrent runners a capacity leak on
+4 launched tasks. `list_runner_sessions` shows that reading was wrong:
+
+| Runner | Task | Role | Why |
+|---|---|---|---|
+| `coordinator-autopilot/3f4da0e93df4` | CO-20 | **remediation** | `reason_code: required_exact_head_ci_failed` |
+| `coordinator-autopilot/7598d05c47f4` | UI-63 | **remediation** | same |
+| `coordinator-autopilot/7598d05c47f4` | ADAPTER-27 | **remediation** | same |
+| `claude/DOGFOOD-19` | CO-21 | implementation | genuine orphan (BREAKDOWN 3) |
+| `agent/codex/bug-178` | BUG-178 | implementation | **expired cleanly**, PR #867 |
+| `agent/codex/bug-179` | BUG-179 | implementation | autonomously filed + dispatched |
+
+Three are legitimate **remediation** runners the coordinator dispatched after detecting
+CI failure at the exact head. Two are autonomously-created BUG tasks. Only CO-21 is a
+real orphan. Growth 4 → 6 is the system reacting correctly, not leaking.
+
+**Lesson for future entries in this file:** a raw counter (`active_sessions`) is not
+evidence of a leak. Resolve every session to its task, role and `reason_code` before
+calling it one. This entry is left in place rather than deleted, as the header requires.
+
+---
+
+## OBSERVATION — autonomous bug intake and clean terminalization both work
+
+**BUG-178** was created, dispatched, implemented and handed off with **no operator
+involvement**, and its runner ended *correctly*:
+```
+completion_handoff:
+  pr: #867   head_sha: 5fd70534…   git_diff_check: clean
+  executed_test_run: { commands: [...5 commands...], exit_code: 0,
+                       output_hash: sha256:667160f5…, status: success,
+                       work_session_id: worksession-958275775b83403e }
+lease_surrender: { reason: "completion_requested", lease_epoch: 2 }
+terminalized_by: runner_lease_expiry
+```
+This matters for two reasons:
+1. It **narrows BREAKDOWN 7**. Workers *can* produce a well-formed
+   `switchboard.executed_test_run.v1` — BUG-178's is complete and correct. So the
+   evidence gap on UI-63 is not "the runtime cannot do this"; it is specific to the
+   remediation path. Worth re-scoping rather than treating as universal.
+2. Host slot recovery works: the lease surrendered with a reason and terminalized on
+   expiry, which is exactly what the 2026-07-21 amendment demands.
+
+---
+
+## BREAKDOWN 9 — reason codes are recorded but never aggregated (no learning loop) ⚠️
+
+**Severity:** HIGH (product/strategic, not a runtime defect)
+
+Switchboard records decisions *and their justification* with unusual rigor. Every runner
+carries an immutable `switchboard.execution_assignment.v1`:
+```
+reason_code:    required_exact_head_ci_failed
+route:          remediation
+desired_role:   remediation
+exact_head_sha: 259812aa…   generation: 1   fence_epoch: 1
+```
+plus `runner_lease_surrender.v1` (why a lease ended), `terminalized_by`, an idempotent
+side-effect ledger with `payload_hash` and provider readback, exact-head review verdicts
+that preserve `invalidated_by_head_sha` instead of deleting history, `merge.gate`
+activity events, and a cursored per-task event stream.
+
+**The gap:** nothing ever *counts* these. In this run the identical
+`required_exact_head_ci_failed` fired on **3 of 3** PRs, and the true cause was not CI at
+all — two PRs were drafts and one lacked an exact-head verdict. No surface aggregates
+reason codes across tasks, so a systemic, single-cause stall reads as three unrelated
+per-task retries. A human had to notice.
+
+**Why it's the moat:** the expensive part (typed, fenced, justified decision records) is
+already built. What is missing is cheap by comparison — count reason codes over a window,
+per deliverable and per host, and alert when one dominates. That converts a forensic log
+into a system that gets smarter as it runs.
+
+**Suggested fix direction:** a `reason_code` rollup alongside the existing
+`get_review_remediation_metrics` / `get_saturation_signals` / `get_plan_signals`, with a
+"same reason_code on N tasks in window W" signal routed to the attention queue. Cheap,
+and it would have caught this run's real problem in one glance.
+
+---
+
+## BREAKDOWN 10 — execution transcripts are incomplete, so *reasoning* is not retained
+
+**Severity:** MEDIUM-HIGH (blocks the learning loop above)
+
+`get_execution_transcript` documents that `complete` is **always false** with an explicit
+`incomplete_reason` — full session capture is deferred to **SIMPLIFY-9**. Observed live:
+`log_tail: ""` and `last_snapshot: {}` on every running session, with only a host-side
+`stdout.log` path on disk.
+
+**Consequence:** outcomes are durable but the agent's *reasoning* is not. We can prove
+what a runner decided and what it produced, never why it chose that path or where it went
+wrong. For the learning objective in BREAKDOWN 9 that is the missing input — reason codes
+tell you a route was taken, transcripts would tell you whether it was the right one.
+
+**Suggested fix direction:** land SIMPLIFY-9 session capture, and persist transcripts to
+the same durable store as the assignment records so a post-hoc analyzer can join
+`reason_code` → transcript → outcome.
+
+---
+
+## WHAT TO CAPTURE GOING FORWARD (product recommendations)
+
+Concrete gaps this run exposed, ordered by leverage:
+
+1. **Aggregate reason codes** (BREAKDOWN 9). Highest leverage, lowest cost. Would have
+   diagnosed this entire run instantly.
+2. **Make gate failures actionable per type.** The gate already emits typed codes
+   (`draft_pr`, `review_required`, `missing_executed_test_run`), but the worker receives
+   one undifferentiated "failure" and answers every one with another commit. Route
+   process-state codes to process-state actions.
+3. **Capture full transcripts** (SIMPLIFY-9) so reasoning is analyzable, not just outcomes.
+4. **Record dependency readiness at dispatch**, not only at claim (BREAKDOWN 3).
+5. **Emit a per-run economic summary** — runners spawned, quota consumed, commits pushed
+   against unwinnable gates. This run burned three remediation runners on a problem no
+   commit could fix; nothing surfaced that cost.
