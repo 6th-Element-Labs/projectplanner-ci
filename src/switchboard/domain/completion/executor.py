@@ -71,6 +71,7 @@ def _persist_run(
                     "reason_code": plan.get("reason_code"),
                     "idem_key": plan.get("idem_key"),
                     "head_sha": plan.get("head_sha"),
+                    "effect": plan.get("effect"),
                 },
                 "ci": {
                     "head_sha": plan.get("head_sha"),
