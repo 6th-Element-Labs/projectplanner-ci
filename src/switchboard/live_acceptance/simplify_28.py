@@ -1,12 +1,7 @@
-"""Generation-one fixture for the SIMPLIFY-28 live acceptance path."""
+"""Remediation generation for the SIMPLIFY-28 live acceptance path."""
 
 
 def normalize_scope(value: str) -> str:
-    """Normalize the case of a scope value.
+    """Normalize scope: trim whitespace and lowercase."""
 
-    Generation one intentionally leaves surrounding whitespace intact.  The
-    live review/remediation lifecycle must detect and repair that contract
-    violation.
-    """
-
-    return value.lower()
+    return value.strip().lower()
