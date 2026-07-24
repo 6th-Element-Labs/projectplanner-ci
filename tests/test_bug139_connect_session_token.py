@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 
 from path_setup import ROOT  # noqa: F401
 
@@ -40,6 +41,19 @@ def _wake():
         assignment=wake["policy"]["assignment"],
         lifecycle=wake["policy"]["lifecycle"],
     )
+    wake["policy"]["execution_context"] = {
+        "schema": "switchboard.execution_context.v1",
+        "project_id": "switchboard",
+        "task_id": "BUG-139",
+        "repository": "6th-Element-Labs/projectplanner",
+        "default_branch": "master",
+        "base_sha": "1" * 40,
+        "workspace": {"isolation": "worktree", "repo_role": "canonical"},
+        "runtime": {"registry_name": "codex"},
+        "generation": 1,
+        "authority_digest": "sha256:bug139-authority",
+        "digest": "sha256:bug139-context",
+    }
     return wake
 
 
@@ -54,6 +68,7 @@ inventory = {
 
 saved_http = agent_host.sb._http
 saved_run = agent_host.subprocess.run
+saved_materialize = agent_host.materialize_repository_workspace
 saved_host_token = os.environ.get("PM_MCP_TOKEN")
 captured = {}
 try:
@@ -75,6 +90,13 @@ try:
 
     agent_host.sb._http = fake_http
     agent_host.subprocess.run = fake_run
+    agent_host.materialize_repository_workspace = (
+        lambda *_args, **_kwargs: SimpleNamespace(
+            path=ROOT,
+            receipt_path=ROOT / "workspace-receipt.json",
+            receipt={"schema": "switchboard.repository_workspace_receipt.v1"},
+        )
+    )
     result = agent_host.launch(
         _wake(), inventory, runner_session_id="run_bug139")
 
@@ -96,6 +118,7 @@ try:
 finally:
     agent_host.sb._http = saved_http
     agent_host.subprocess.run = saved_run
+    agent_host.materialize_repository_workspace = saved_materialize
     if saved_host_token is None:
         os.environ.pop("PM_MCP_TOKEN", None)
     else:

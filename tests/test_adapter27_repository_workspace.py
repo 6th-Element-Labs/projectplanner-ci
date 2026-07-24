@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import pytest
+from path_setup import ROOT  # noqa: F401
 
 from adapters.repository_workspace import (
     WorkspaceMaterializationError,
@@ -14,6 +15,14 @@ from adapters.repository_workspace import (
     materialize,
     repository_remote,
 )
+
+
+def raises(error_type, fn):
+    try:
+        fn()
+    except error_type as exc:
+        return exc
+    raise AssertionError(f"expected {error_type.__name__}")
 
 
 def git(*args: str, cwd: Path | None = None) -> str:
@@ -55,10 +64,6 @@ def context(slug: str, sha: str, task: str = "ADAPTER-27",
     }
 
 
-@pytest.mark.parametrize("slug", [
-    "6th-Element-Labs/projectplanner",
-    "6th-Element-Labs/ActionEngine",
-])
 def test_previously_unseen_repository_materializes_exact_clean_checkout(
         tmp_path: Path, slug: str):
     remote, sha = remote_fixture(tmp_path, slug)
@@ -74,7 +79,8 @@ def test_previously_unseen_repository_materializes_exact_clean_checkout(
     assert git("status", "--porcelain", cwd=result.path) == ""
     assert result.receipt["repository"] == slug
     assert result.receipt["cache_created"] is True
-    assert result.receipt_path.is_relative_to(tmp_path / "workspaces" / ".receipts")
+    assert result.receipt_path.is_relative_to(
+        (tmp_path / "workspaces" / ".receipts").resolve())
 
 
 def test_retry_and_restart_reuse_only_exact_receipt(tmp_path: Path):
@@ -133,20 +139,24 @@ def test_context_mismatch_unreachable_sha_and_path_escape_fail_closed(tmp_path: 
     slug = "6th-Element-Labs/projectplanner"
     remote, sha = remote_fixture(tmp_path, slug)
     ctx = context(slug, sha)
-    with pytest.raises(WorkspaceMaterializationError) as mismatch:
-        materialize(
+    mismatch = raises(
+        WorkspaceMaterializationError,
+        lambda: materialize(
             ctx, task_id="OTHER-1", execution_id="execlease-x", branch="agent/x",
             cache_root=tmp_path / "cache", workspace_root=tmp_path / "workspaces",
-            remote_url=remote)
-    assert mismatch.value.code == "execution_context_task_mismatch"
+            remote_url=remote),
+    )
+    assert mismatch.code == "execution_context_task_mismatch"
 
     unreachable = {**ctx, "base_sha": "f" * 40}
-    with pytest.raises(WorkspaceMaterializationError) as missing:
-        materialize(
+    missing = raises(
+        WorkspaceMaterializationError,
+        lambda: materialize(
             unreachable, task_id="ADAPTER-27", execution_id="execlease-y",
             branch="agent/y", cache_root=tmp_path / "cache",
-            workspace_root=tmp_path / "workspaces", remote_url=remote)
-    assert missing.value.code == "base_sha_unreachable"
+            workspace_root=tmp_path / "workspaces", remote_url=remote),
+    )
+    assert missing.code == "base_sha_unreachable"
 
     escaped = materialize(
         ctx, task_id="ADAPTER-27", execution_id="../../outside",
@@ -155,10 +165,12 @@ def test_context_mismatch_unreachable_sha_and_path_escape_fail_closed(tmp_path: 
     assert escaped.path.is_relative_to((tmp_path / "workspaces").resolve())
     assert ".." not in escaped.path.parts
 
-    with pytest.raises(WorkspaceMaterializationError) as credential:
-        repository_remote(
-            slug, "https://secret@example.test/6th-Element-Labs/projectplanner.git")
-    assert credential.value.code == "repository_remote_contains_credential"
+    credential = raises(
+        WorkspaceMaterializationError,
+        lambda: repository_remote(
+            slug, "https://secret@example.test/6th-Element-Labs/projectplanner.git"),
+    )
+    assert credential.code == "repository_remote_contains_credential"
 
 
 def test_concurrent_executions_are_isolated_and_cleanup_is_bounded(tmp_path: Path):
@@ -193,3 +205,21 @@ def test_materializer_has_no_legacy_repo_authority_fallbacks():
     assert "PM_REPO_PATH_" not in source
     assert "PM_REPO_ROOT" not in source
     assert "_git_root" not in source
+
+
+with tempfile.TemporaryDirectory(prefix="adapter27-") as temporary:
+    root = Path(temporary)
+    for repository_slug in (
+        "6th-Element-Labs/projectplanner",
+        "6th-Element-Labs/ActionEngine",
+    ):
+        test_previously_unseen_repository_materializes_exact_clean_checkout(
+            root / repository_slug.rsplit("/", 1)[-1], repository_slug)
+    test_retry_and_restart_reuse_only_exact_receipt(root / "retry")
+    test_cache_origin_mismatch_and_poison_are_quarantined(root / "cache")
+    test_context_mismatch_unreachable_sha_and_path_escape_fail_closed(
+        root / "fail-closed")
+    test_concurrent_executions_are_isolated_and_cleanup_is_bounded(
+        root / "concurrent")
+test_materializer_has_no_legacy_repo_authority_fallbacks()
+print("ADAPTER-27 repository workspace materializer: passed")
