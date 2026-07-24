@@ -121,6 +121,41 @@ _CAPABILITIES: tuple[dict[str, Any], ...] = (
         ),
     },
     {
+        # CO-22: host-bound personal-subscription posture. Distinct from the
+        # portable `claude-subscription-switchboard` entry above, which stays
+        # disabled. Here the operator runs `claude /login` ON the host; the
+        # credential lives only in that host's OS keychain and is never minted
+        # (no `claude setup-token`), exported, or brokered by Switchboard. This
+        # mirrors the already-approved `cursor-browser-login-user-host` posture
+        # and removes exactly what the portable entry's disable_reason names —
+        # third-party subscription ROUTING. Approved by operator decision
+        # (decision-979, 2026-07-24) accepting the residual Consumer-Terms risk;
+        # no separate written Anthropic confirmation was obtained. Aliases are
+        # kept disjoint from the portable entry so `oauth_personal` (what the
+        # runtime preflight yields) resolves here, while `setup_token*` /
+        # `subscription` still resolve to the disabled portable entry.
+        "capability_id": "claude-host-bound-native-cli",
+        "provider": "anthropic-claude",
+        "auth_mode": "claude_subscription_oauth",
+        "auth_type_aliases": (
+            "browser_login", "claude_ai_oauth", "claude_login_on_host",
+            "host_login", "local_login_session", "oauth_personal",
+        ),
+        "host_class": "user_owned_persistent",
+        "portability": "host_bound",
+        "bootstrap_method": "claude_login_on_host",
+        "concurrency": {"mode": "exclusive", "max_parallel": 1},
+        "state": "supported_host_bound",
+        "approval_state": "operator_accepted_host_bound_local_cli",
+        "disable_reason": "",
+        "execution_path": "registered_agent_host_native_cli",
+        "litellm": {"eligible": False, "reason": "personal_subscription_not_api_auth"},
+        "evidence": _evidence(
+            "https://code.claude.com/docs/en/cli-usage",
+            "https://code.claude.com/docs/en/legal-and-compliance",
+        ),
+    },
+    {
         "capability_id": "claude-api-key-managed-worker",
         "provider": "anthropic-claude",
         "auth_mode": "api_key",
