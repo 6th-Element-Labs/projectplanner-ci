@@ -625,6 +625,35 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
                     "fence_epoch": execution_lease["fence_epoch"],
                     "ttl_seconds": execution_lease["ttl_seconds"],
                 }
+                # BUG-168: mint the assignment contract only after the server
+                # owns the execution lease identity and generation.  A caller
+                # may request a role, but cannot provide or override this
+                # admitted contract.
+                assignment = dict(policy.get("assignment") or {})
+                admitted = policy["lifecycle"]
+                role = str(admitted.get("role") or "implementation")
+                policy["execution_assignment"] = {
+                    "schema": "switchboard.execution_assignment.v1",
+                    "task_id": str(task_id or "").strip().upper(),
+                    "execution_id": execution_lease["id"],
+                    "assignment_id": str(assignment.get("assignment_id") or ""),
+                    "generation": execution_lease["execution_generation"],
+                    "desired_role": role,
+                    "exact_head_sha": str(admitted.get("head_sha") or ""),
+                    "exact_pr": {
+                        "number": int(admitted.get("pr_number") or 0),
+                        "url": str(admitted.get("pr_url") or ""),
+                    },
+                    "claim_expectations": {
+                        "required": True,
+                        "work_session_required": True,
+                        "role": role,
+                    },
+                    "reason_code": str(admitted.get("reason_code") or ""),
+                    "route": str(admitted.get("route") or ""),
+                    "acceptance_findings": list(
+                        admitted.get("acceptance_findings") or []),
+                }
             wake_id = (
                 str((execution_lease or {}).get("wake_id") or "")
                 or "wake-" + uuid.uuid4().hex[:16])

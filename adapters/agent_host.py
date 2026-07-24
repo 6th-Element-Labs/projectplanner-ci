@@ -909,7 +909,8 @@ def launch_command(wake, inventory, runner_session_id=""):
     if mode == "refused":
         raise ValueError("wake asks for global claim_next but host policy forbids global work")
     if mode == "connect":
-        assignment_data = dict((wake.get("policy") or {}).get("assignment") or {})
+        connect_policy = wake.get("policy") or {}
+        assignment_data = dict(connect_policy.get("assignment") or {})
         assignment_schema = assignment_data.pop("schema", "")
         if assignment_schema != "switchboard.connect.assignment.v1":
             raise ValueError("connect assignment schema is invalid")
@@ -946,6 +947,27 @@ def launch_command(wake, inventory, runner_session_id=""):
             executable=executable,
             arguments_before_note=before,
         )
+        lifecycle = dict(connect_policy.get("lifecycle") or {})
+        execution_assignment = dict(
+            connect_policy.get("execution_assignment") or {})
+        if not execution_assignment:
+            raise ValueError("connect execution assignment contract is missing")
+        expected = {
+            "assignment_id": assignment.assignment_id,
+            "execution_id": str(lifecycle.get("execution_id") or ""),
+            "generation": int(lifecycle.get("generation") or 0),
+            "desired_role": str(lifecycle.get("role") or ""),
+            "exact_head_sha": str(lifecycle.get("head_sha") or ""),
+        }
+        observed = {
+            "assignment_id": str(execution_assignment.get("assignment_id") or ""),
+            "execution_id": str(execution_assignment.get("execution_id") or ""),
+            "generation": int(execution_assignment.get("generation") or 0),
+            "desired_role": str(execution_assignment.get("desired_role") or ""),
+            "exact_head_sha": str(execution_assignment.get("exact_head_sha") or ""),
+        }
+        if observed != expected:
+            raise ValueError("connect execution assignment disagrees with persisted lease")
         now = time.time()
         spec = build_launch_spec(
             Ack(
@@ -961,8 +983,7 @@ def launch_command(wake, inventory, runner_session_id=""):
             ),
             config,
             workspace_path=str(inventory.get("repo_root") or _git_root()),
-            completion_contract=dict(
-                (wake.get("policy") or {}).get("lifecycle") or {}),
+            completion_contract=execution_assignment,
         )
         child = list(spec.argv)
     elif mode == "direct_task":
