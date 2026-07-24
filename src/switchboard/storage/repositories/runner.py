@@ -137,11 +137,13 @@ def record_server_relay_failure(session: Dict[str, Any], failure: Dict[str, Any]
 def terminal_task_cleanup_for_host_in(
         c: sqlite3.Connection, host_id: str, actor: str,
         now: Optional[float] = None) -> Dict[str, Any]:
-    """Project terminal task truth into its live host-owned execution rows.
+    """Make renewable runner leases due when their task is already terminal.
 
-    The host consumes these directives and kills the supervised process. Until
-    it acknowledges that kill, the central runner stays non-terminal so a lost
-    heartbeat response is retried. Work Sessions and leases close immediately
+    SIMPLIFY-17 keeps lease expiry as the only automatic process-stop clock.
+    Done/Cancelled tasks are an automatic capacity event: this projection
+    force-stales the host's nonterminal runners (and fences a bound execution
+    generation when present) so ``expire_runner_leases`` can kill them. It never
+    sends a process signal. Work Sessions and non-execution leases close now
     because the task is already the stronger lifecycle authority.
     """
     now = time.time() if now is None else float(now)
@@ -162,7 +164,8 @@ def terminal_task_cleanup_for_host_in(
     task_marks = ",".join("?" for _ in terminal_tasks)
     runner_marks = ",".join("?" for _ in terminal_runners)
     rows = c.execute(
-        "SELECT r.runner_session_id,r.task_id,r.status,r.metadata_json,t.status AS task_status "
+        "SELECT r.runner_session_id,r.task_id,r.status,r.metadata_json,"
+        "r.heartbeat_ttl_s,t.status AS task_status "
         "FROM runner_sessions r JOIN tasks t ON t.task_id=r.task_id "
         f"WHERE r.host_id=? AND t.status IN ({task_marks}) "
         f"AND lower(r.status) NOT IN ({runner_marks}) "
@@ -184,8 +187,11 @@ def terminal_task_cleanup_for_host_in(
             (now, now, actor, task_id),
         )
         closed_work_sessions += changed.rowcount
+        # Execution leases stay owned until the host lease reaper acks stop;
+        # only non-execution resource holds are released immediately.
         released_resource_leases += c.execute(
-            "UPDATE resource_leases SET released_at=? WHERE task_id=? AND released_at IS NULL",
+            "UPDATE resource_leases SET released_at=? WHERE task_id=? AND released_at IS NULL "
+            "AND COALESCE(resource_type,'') != 'execution'",
             (now, task_id),
         ).rowcount
         released_file_leases += c.execute(
@@ -203,22 +209,59 @@ def terminal_task_cleanup_for_host_in(
     for row in rows:
         metadata = _json_obj(row["metadata_json"], {})
         first_request = not metadata.get("terminal_cleanup_requested_at")
+        ttl_s = max(10, int(row["heartbeat_ttl_s"] or 60))
+        reason = f"task is terminal: {row['task_status']}"
+        execution_id = str(metadata.get("execution_id") or "").strip()
+        generation = int(metadata.get("execution_generation") or 0)
+        lease_epoch = int(metadata.get("lease_epoch") or 0)
+        if execution_id and generation > 0:
+            lease = c.execute(
+                "SELECT * FROM resource_leases WHERE id=? AND resource_type='execution'",
+                (execution_id,),
+            ).fetchone()
+            if (lease
+                    and int(lease["execution_generation"] or 0) == generation
+                    and str(lease["lease_state"] or "") in {
+                        "reserved", "starting", "active", "stopping"}):
+                if str(lease["lease_state"] or "") != "stopping":
+                    lease_epoch = int(lease["fence_epoch"] or 0) + 1
+                    c.execute(
+                        "UPDATE resource_leases SET lease_state='stopping',fence_epoch=?,"
+                        "claimed_at=? WHERE id=? AND released_at IS NULL",
+                        (lease_epoch, now - int(lease["ttl_seconds"] or 60),
+                         execution_id))
+                else:
+                    lease_epoch = int(lease["fence_epoch"] or lease_epoch or 0)
         metadata.update({
             "terminal_cleanup_requested_at": (
                 metadata.get("terminal_cleanup_requested_at") or now),
             "terminal_cleanup_task_status": row["task_status"],
+            "lease_epoch": lease_epoch or metadata.get("lease_epoch") or 0,
+            "lease_surrender": metadata.get("lease_surrender") or {
+                "schema": "switchboard.runner_lease_surrender.v1",
+                "authority": "terminal_task",
+                "reason": reason,
+                "surrendered_at": now,
+                "execution_id": execution_id,
+                "generation": generation,
+                "lease_epoch": lease_epoch,
+            },
         })
+        # Backdate the renewable heartbeat so the runner is immediately stale.
+        # expire_runner_leases remains the only automatic kill authority.
         c.execute(
-            "UPDATE runner_sessions SET metadata_json=?,updated_at=? WHERE runner_session_id=?",
-            (json.dumps(metadata, sort_keys=True), now, row["runner_session_id"]),
+            "UPDATE runner_sessions SET heartbeat_at=?,metadata_json=?,updated_at=? "
+            "WHERE runner_session_id=?",
+            (now - ttl_s, json.dumps(metadata, sort_keys=True), now,
+             row["runner_session_id"]),
         )
         directive = {
             "runner_session_id": row["runner_session_id"],
             "task_id": row["task_id"],
             "task_status": row["task_status"],
             "runner_status": row["status"],
-            "action": "kill",
-            "reason": f"task is terminal: {row['task_status']}",
+            "action": "make_lease_due",
+            "reason": reason,
         }
         directives.append(directive)
         if first_request:

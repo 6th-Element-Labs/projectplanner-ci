@@ -2205,6 +2205,11 @@ def renew_live_direct_runners(inventory):
         if (not native_transport or session.get("alive") is not True
                 or str(session.get("status") or "").lower() != "running"):
             continue
+        # BUG-175: a due/fenced lease must not be renewed. Terminal-task
+        # cleanup (and complete_claim) make the lease due; renewing it was the
+        # zombie amplifier that kept Done-task PTYs alive for hours.
+        if session.get("stale") is True or metadata.get("lease_surrender"):
+            continue
         if not wake_id or not task_id:
             continue
         body = {

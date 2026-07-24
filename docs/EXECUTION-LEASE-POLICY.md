@@ -11,9 +11,13 @@ do not send process signals.
 - A runner heartbeat renews the exact execution generation until its TTL.
 - `complete_claim` and automatic capacity events make that exact lease due,
   move it to `stopping`, and fence its generation.
+- Terminal task status (`Done` / `Cancelled`) is an automatic capacity event:
+  host heartbeat projects it into `terminal_runner_cleanup` with
+  `action=make_lease_due`, force-stales the runner, and fences a bound
+  execution generation. It does not send a process signal.
 - The owning Agent Host lease reaper stops the supervised generation, persists
   a terminal receipt, and retries acknowledgement after restart.
-- A stopped or fenced generation cannot heartbeat, renew, or mutate state.
+- A stopped, fenced, or due generation cannot heartbeat, renew, or mutate state.
 - Stopping acknowledgement retries use the durable receipt and do not create a
   second stop clock.
 

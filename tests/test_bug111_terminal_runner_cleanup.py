@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""BUG-111: terminal tasks release host runners and Work Sessions."""
+"""BUG-111 / BUG-175: terminal tasks make runner leases due for the sole stop clock.
+
+SIMPLIFY-17 retired process-kill-from-task-status. Terminal tasks must still
+reclaim capacity by making the renewable runner lease due (force-stale + fence)
+so expire_runner_leases remains the only automatic kill authority. Renewals
+must not resurrect a due lease.
+"""
 from __future__ import annotations
 
 import os
@@ -17,6 +23,7 @@ os.environ["PM_SWITCHBOARD_DB_PATH"] = str(TMP / "switchboard.db")
 os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = str(TMP / "project_registry.db")
 os.environ["PM_DYNAMIC_PROJECTS_DIR"] = str(TMP)
 os.environ["PM_AUTH_MODE"] = "dev-open"
+os.environ["PM_RUNNER_DIR"] = str(TMP / "runner-state")
 
 import store  # noqa: E402
 from adapters import agent_host  # noqa: E402
@@ -63,7 +70,12 @@ try:
         "runner_session_id": runner_id, "host_id": host_id,
         "agent_id": f"codex/{task_id}", "runtime": "codex",
         "task_id": task_id, "status": "running", "pid": 111,
-        "metadata": {"work_session_id": work_session["work_session_id"]},
+        "heartbeat_ttl_s": 180,
+        "metadata": {
+            "work_session_id": work_session["work_session_id"],
+            "wake_id": f"wake-{runner_id}",
+            "native_host_execution": True,
+        },
     }, principal_id=principal_id, actor=host_id, project=P)
     with _conn(P) as c:
         c.execute("UPDATE tasks SET status='Done' WHERE task_id=?", (task_id,))
@@ -74,13 +86,21 @@ try:
             "agent_host_version": "0.2.27",
         }}},
         principal_id=principal_id, actor=host_id, project=P)
+    cleanup = heartbeat.get("terminal_runner_cleanup") or {}
     ok(heartbeat.get("agent_host_version") == "0.2.27",
        "heartbeat runtime-profile version repairs the stale top-level host version")
-    ok("terminal_runner_cleanup" not in heartbeat,
-       "terminal task does not produce an automatic cleanup directive")
+    ok(cleanup.get("session_count") == 1
+       and cleanup.get("sessions", [{}])[0].get("runner_session_id") == runner_id
+       and cleanup.get("sessions", [{}])[0].get("action") == "make_lease_due",
+       "terminal task produces a lease-due cleanup directive")
+    due = store.get_runner_session(runner_id, project=P)
+    ok(due.get("stale") is True
+       and (due.get("metadata") or {}).get("lease_surrender", {}).get("authority")
+       == "terminal_task",
+       "terminal task makes the exact runner lease due without process kill")
     closed = store.get_work_session(work_session["work_session_id"], project=P)
-    ok(closed.get("status") == "active" and not closed.get("completed_at"),
-       "terminal task alone does not close its active Work Session")
+    ok(closed.get("status") == "completed" and closed.get("completed_at"),
+       "terminal task completes its active Work Session")
 
     second = store.heartbeat_host(
         host_id, active_sessions=1,
@@ -88,31 +108,82 @@ try:
             "agent_host_version": "0.2.27",
         }}},
         principal_id=principal_id, actor=host_id, project=P)
-    ok("terminal_runner_cleanup" not in second,
-       "a repeated heartbeat still emits no cleanup directive")
+    ok((second.get("terminal_runner_cleanup") or {}).get(
+        "closed_work_session_count") == 0,
+       "a repeated heartbeat does not complete the Work Session twice")
     with _conn(P) as c:
         activity_count = c.execute(
             "SELECT COUNT(*) FROM activity WHERE task_id=? "
             "AND kind='runner.terminal_cleanup_requested'", (task_id,),
         ).fetchone()[0]
-    ok(activity_count == 0,
-       "terminal status creates no automatic-kill audit event")
+    ok(activity_count == 1,
+       "repeated cleanup delivery records only one request audit event")
 
-    calls = []
-    original_supervisor, original_try = agent_host.supervisor_action, agent_host._try
+    # Host must not renew a due lease — that was the zombie amplifier.
+    renew_calls = []
+    original_drain, original_try = agent_host._drain_runners, agent_host._try
 
-    def fake_supervisor(action, selected_runner, options=None):
-        calls.append((action, selected_runner, dict(options or {})))
-        if action == "health":
-            return {"alive": True, "status": "running"}
-        return {"alive": False, "status": "killed"}
+    def fake_drain(_host_id, recover_stale_local=True):
+        return [{
+            "runner_session_id": runner_id, "host_id": host_id,
+            "task_id": task_id, "agent_id": f"codex/{task_id}",
+            "alive": True, "stale": True, "status": "running",
+            "pid": 111, "runtime": "codex",
+            "metadata": {
+                "work_session_id": work_session["work_session_id"],
+                "wake_id": f"wake-{runner_id}",
+                "native_host_execution": True,
+                "lease_surrender": {"authority": "terminal_task"},
+            },
+        }]
 
     def fake_try(method, path, body=None):
-        calls.append((method, path, dict(body or {})))
+        renew_calls.append((method, path, dict(body or {})))
         return {"runner_session_id": (body or {}).get("runner_session_id"),
-                "status": (body or {}).get("status")}
+                "status": (body or {}).get("status") or "ok"}
 
+    agent_host._drain_runners = fake_drain
+    agent_host._try = fake_try
+    try:
+        renewed = agent_host.renew_live_direct_runners({"host_id": host_id})
+    finally:
+        agent_host._drain_runners, agent_host._try = original_drain, original_try
+    renew_posts = [body for method, path, body in renew_calls
+                   if method == "POST" and path == agent_host.P_HEARTBEAT_RUNNER
+                   and (body or {}).get("status") == "running"]
+    ok(not renew_posts and renewed == [],
+       "Agent Host refuses to renew a terminal-task due runner lease")
+
+    # Lease expiry remains the only kill authority.
+    expire_calls = []
+    original_supervisor = agent_host.supervisor_action
+    original_drop = agent_host._drop_host_bridge
+
+    def fake_supervisor(action, selected_runner, options=None):
+        expire_calls.append((action, selected_runner, dict(options or {})))
+        return {"alive": False, "status": "killed"}
+
+    agent_host._drain_runners = fake_drain
     agent_host.supervisor_action = fake_supervisor
+    agent_host._drop_host_bridge = lambda rid: expire_calls.append(("drop", rid))
+    agent_host._try = fake_try
+    try:
+        expired = agent_host.expire_runner_leases({"host_id": host_id}, now=10_000)
+    finally:
+        agent_host._drain_runners = original_drain
+        agent_host.supervisor_action = original_supervisor
+        agent_host._drop_host_bridge = original_drop
+        agent_host._try = original_try
+    ok(expired and expired[0].get("expired") is True
+       and any(c[:2] == ("kill", runner_id) for c in expire_calls),
+       "lease expiry kills the due runner after terminal-task surrender")
+
+    # Compatibility: host still refuses legacy kill directives.
+    refuse_calls = []
+    agent_host.supervisor_action = lambda action, selected_runner, options=None: (
+        refuse_calls.append((action, selected_runner, dict(options or {}))) or
+        ({"alive": True, "status": "running"} if action == "health"
+         else {"alive": False, "status": "killed"}))
     agent_host._try = fake_try
     try:
         outcomes = agent_host.converge_terminal_task_runners(
@@ -121,14 +192,11 @@ try:
                 "task_status": "Done", "reason": "legacy directive",
             }]}})
     finally:
-        agent_host.supervisor_action, agent_host._try = original_supervisor, original_try
-    terminal_posts = [body for method, path, body in calls
-                      if method == "POST" and path == agent_host.P_HEARTBEAT_RUNNER]
+        agent_host.supervisor_action = original_supervisor
+        agent_host._try = original_try
     ok(outcomes and not outcomes[0].get("killed")
        and outcomes[0].get("error") == "lease expiry is the only kill authority",
-       "the Agent Host refuses terminal-task automatic kill authority")
-    ok(not terminal_posts,
-       "terminal-task observation does not publish a false terminal runner state")
+       "legacy terminal-task kill directives stay refused")
 
     store.upsert_runner_session({
         "runner_session_id": runner_id, "host_id": host_id,
@@ -137,20 +205,11 @@ try:
                      "terminalized_by": "runner_lease_expiry",
                      "failure_reason": "runner heartbeat lease expired"},
     }, principal_id=principal_id, actor=host_id, project=P)
-    archived = store.get_work_session(work_session["work_session_id"], project=P)
-    ok(archived.get("status") == "archived" and archived.get("completed_at"),
-       "lease expiry archives the bound Work Session with terminal evidence")
-
-    store.upsert_runner_session({
-        "runner_session_id": runner_id, "host_id": host_id,
-        "task_id": task_id, "status": "completed",
-        "metadata": {"terminalized_by": "terminal_task"},
-    }, principal_id=principal_id, actor=host_id, project=P)
     final_heartbeat = store.heartbeat_host(
         host_id, active_sessions=0, principal_id=principal_id,
         actor=host_id, project=P)
-    ok("terminal_runner_cleanup" not in final_heartbeat,
-       "completed runner state does not revive the retired directive")
+    ok((final_heartbeat.get("terminal_runner_cleanup") or {}).get("session_count") == 0,
+       "terminalized runners disappear from the lease-due directive")
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
 
