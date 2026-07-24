@@ -1,0 +1,175 @@
+# Autopilot Breakdown Log
+
+**A living, append-only log of where autonomous execution actually breaks.**
+
+## How to use this file
+
+- **Append, don't rewrite.** Add new entries at the end of the relevant run section, or
+  open a new run section. Do not renumber or delete existing breakdowns — a fixed one
+  gets a `**STATUS: FIXED**` line and the PR/commit that fixed it, not a deletion.
+- **One breakdown per heading.** Give it a severity, the verbatim error/event evidence,
+  why it matters, and a suggested fix direction. Evidence beats narrative.
+- **Record the good path too.** "This worked hands-off" is data; it tells us what not to
+  re-litigate.
+- **Do not fix a breakdown just because you logged it.** These runs are observations.
+  If you repair something mid-run you destroy the evidence for everyone else.
+- File real defects as BUG tasks via `submit_bug` and cross-reference the id here.
+
+---
+
+
+**Run date:** 2026-07-25
+**Operator:** claude/DOGFOOD-19 (observer mode — no intervention after launch)
+**Host:** `host/steve-mbp-co16` (Steves-MacBook-14-PRO.local)
+**Tasks launched:** UI-63, CO-20, ADAPTER-27, CO-21 (all `runtime=codex`, `role=implementation`)
+**Deliverable under test:** `deliverable-coordinator-mediated-dispatch-t0-t1` (Autopilot MVP), milestone `m8-simplified-autopilot-acceptance`
+
+> Standing instruction for this run: **do not intervene**. Document breakdowns only.
+> Nothing below has been repaired.
+
+---
+
+## Step 0 — Preconditions (PASS)
+
+Recorded before launch, as required by the 2026-07-21 amendment.
+
+| Field | Value |
+|---|---|
+| host_id | `host/steve-mbp-co16` |
+| status | online, `stale=false`, heartbeat_ttl 60s |
+| agent_host_version | 0.3.999 |
+| enrollment_id | `hostenroll-b91248c4bfb4405f` (identity_generation 1) |
+| public_key_fingerprint | `sha256:c95655d511048ea525b7784e2dfd2dfbfa121e072af482aeff92211ca15fced1` |
+| runtime_profile hash | `sha256:d91aa4ef937a480748b6b04a1b938fac9ac5d71071954212bf404948684014bd` |
+| local_auth | `chatgpt_personal`, available, `acct-bb4e660b7a9319ed` |
+| runner_watch | true |
+| capacity at launch | max 16, active 0, **headroom 16** |
+| BUG-112 | Done (required precondition) |
+
+Headroom was real capacity, not the BUG-111 masking mode (zero active sessions).
+
+---
+
+## BREAKDOWN 1 — `start_task` refuses an unregistered operator identity
+
+**Severity:** low (UX / launcher ergonomics)
+**Observed:**
+```
+start_task(task_id=UI-63, agent_id=claude/DOGFOOD-19)
+-> error_code: start_refused
+   start_error: agent_not_registered
+   "agent_id is not currently registered/heartbeat-active."
+```
+**Why it matters:** the operator/launcher path is documented as "the same Connect door as the UI Start button," but it requires the caller to already be a live registered agent. An operator surface has no natural reason to be a heartbeat-active *worker*. Discoverability is poor — the error names the symptom, not the required flow.
+
+**Not a blocker.** Resolved by registering. Recorded because it is friction on the exact path autopilot/operators use.
+
+---
+
+## BREAKDOWN 2 — `start_task` requires the caller to be registered *against that same task*
+
+**Severity:** medium (operator/autopilot ergonomics)
+**Observed:** after registering as `claude/DOGFOOD-19` bound to task `DOGFOOD-19`, launching a *different* task fails:
+```
+start_task(task_id=UI-63, agent_id=claude/DOGFOOD-19)
+-> error_code: start_refused
+   start_error: agent_registered_on_different_task
+   "agent_id is live but not bound to this task."
+```
+**Consequence:** launching N tasks requires N `register_agent` calls, re-binding the operator identity to each task in turn. `prepare_agent_session(mode="launcher")` confirms this is the intended flow — its `first_calls` include a `register_agent` pinned to the target task before `start_task`.
+
+**Why it matters:** an operator arming a deliverable of 10 tasks must re-register 10 times, and the operator identity ends up bound to whichever task was armed last — which is misleading provenance. The launcher mode declares `allowed_actions: [start_task, get_task_execution]` and `forbidden_actions: [claim_task, claim_next]`, i.e. it *knows* the caller is not a worker, yet still demands worker-style per-task binding.
+
+**Suggested fix direction:** allow a launcher-mode principal to start any task in its project without per-task re-registration, or let `start_task` accept an explicit operator actor distinct from the worker `agent_id`.
+
+---
+
+## BREAKDOWN 3 — `start_task` dispatches a live runner for a task whose dependencies are unsatisfied ⚠️
+
+**Severity:** HIGH — wastes real capacity and real provider quota
+**Task:** CO-21
+
+**Observed:** CO-21 depends on CO-20 and ADAPTER-27, neither of which was complete at launch:
+```
+dependency_state: ready=False, satisfied=False
+  BLOCKING: CO-20      (In Review)
+  BLOCKING: ADAPTER-27 (In Progress)
+```
+Despite this, the whole dispatch chain succeeded:
+```
+start_task -> action=started, wake-f83f84cb7b794a48, queue_position 1
+board events: wake.requested -> wake.claimed -> direct_session.mcp_token_issued
+              -> runner.session_registered -> wake.completed -> side_effect.verified
+              -> work_session.created -> work_session.updated
+MISSING EVENT: task.claimed
+```
+Resulting state:
+```
+lifecycle_phase: running
+runner: run_90d2da81c3f6c349 on host/steve-mbp-co16, status=running
+active_claims: []
+board status: Not Started
+```
+
+**The defect:** dependency readiness is enforced at **claim** time, not at **dispatch** time. So Switchboard spawned a native Codex CLI process, issued it an MCP token, created a Work Session, and consumed a host slot — for a task the runner can never claim. The runner is live and idle-looping against unclaimable work, burning the operator's ChatGPT-personal quota.
+
+**Contrast:** `claim_task` gets this right and refuses. The gate exists; it is simply downstream of the expensive operation.
+
+**Suggested fix direction:** `start_task` should evaluate `dependency_state.satisfied` before requesting a wake and refuse with a typed error (`dependencies_unsatisfied`), consistent with how it already fails closed on capacity/runtime mismatch. Cheap check, expensive omission.
+
+**Watch item:** whether this orphaned runner self-terminates, times out, or leaks the host slot — the BUG-111 failure mode (terminal runners still heartbeating and masking zero headroom). Being observed, not repaired.
+
+---
+
+## BREAKDOWN 4 — Branch-prefix does not match the launched runtime
+
+**Severity:** low-medium (provenance / fleet attribution)
+**Observed:** all four tasks were launched with `runtime=codex`, but the branches created are:
+
+| Task | Branch | Expected prefix |
+|---|---|---|
+| UI-63 | `codex/UI-63-execution-readiness` | ✅ codex |
+| CO-20 | `claude/CO-20-hybrid-placement` | ❌ claude |
+| ADAPTER-27 | `claude/ADAPTER-27-workspace-materializer` | ❌ claude |
+
+The host advertises only `work_modules: {codex: adapters.codex_local_worker:run}` and `local_auth.runtime=codex`, so all three should have produced `codex/` branches.
+
+**Why it matters:** `pr_provenance_gate.py` decides fleet-vs-operator by branch prefix (`DEFAULT_FLEET_BRANCH_PREFIXES = ("cursor/", "codex/", "claude/", "agent/", "devin/")`). Both prefixes are in the fleet list so gating still works, but branch prefix is being used as a runtime/attribution signal and is now unreliable. Worth determining whether the worker self-names from something other than the dispatched runtime.
+
+---
+
+## OBSERVATION — the hands-off path does work
+
+Not a breakdown; recording it because it is the thing the proof is meant to establish.
+
+Within roughly five minutes of launch, with **zero operator interaction**:
+
+- **CO-20**: launched → implemented → branch pushed → **PR #863 opened** → board status **In Review**
+- **UI-63**: launched → implemented → branch pushed → **PR #864 opened**
+- **ADAPTER-27**: launched → branch pushed, In Progress
+
+Full event chain observed per task: `agent.registered` → `wake.requested` → `wake.claimed` → `direct_session.mcp_token_issued` → `runner.session_registered` → `work_session.created` → `task.claimed` → implementation → PR.
+
+Both PRs show `Switchboard / claim gate: SUCCESS` — the claim-gate binding is working end to end.
+
+---
+
+## OPEN AT TIME OF WRITING
+
+| PR | Task | VM gate | Playwright | Merge auth | Merge state |
+|---|---|---|---|---|---|
+| #863 | CO-20 | PENDING | PENDING | FAILURE | BLOCKED |
+| #864 | UI-63 | PENDING | PENDING | FAILURE | BLOCKED |
+
+`merge authorization: FAILURE` is **expected while CI is PENDING** (it fails closed on missing required contexts). The real test is whether it flips to SUCCESS once the VM gate and Playwright go green — that is the first genuine exercise of today's BUG-176/177 fix (`cdd6ec5d`, deployed to prod) in a fully hands-off run. **If it stays FAILURE after CI turns green, that is the next breakdown to capture.**
+
+---
+
+## PRIOR CONTEXT (fixed earlier today, for reviewer orientation)
+
+These were repaired before this run and are *not* open issues:
+
+1. **Fleet merge wedge** — since 2026-07-23 every agent PR was unmergeable while operator PRs were exempt (`Exempt: non-fleet (human/operator) PR`). Cause: `b21b9d2a` (#836) made `Switchboard / merge authorization` a required check, `956f0419` BUG-172 (#849) added `adversarial_self_review_forbidden` so a single agent could not produce a verdict, and merge_gate never resolved a Work Session by `task_id` while the CI gate supplies neither `work_session_id` nor `claim_id`.
+2. **Fixes landed:** #856 (self-review fence removed), #859 (task-scoped Work Session resolution + preflight repair text), #857 (de-flaked `test_task_open_latency.py`). All deployed to prod at `cdd6ec5d`.
+3. **BUG-177 as originally filed was wrong** — the preflight requirement is satisfiable via the BUG-159 `coordinator_unverifiable` path; the reporting agent had simply never run `preflight_work_session`. Corrected on the task and in the fix.
+4. **DOGFOOD-19 itself was stale-Blocked** with all five dependencies Done and `blocking: []`. A prior attempt had been killed (`runner.kill_requested` → `kill_completed`). Cleared to Not Started before this run.
