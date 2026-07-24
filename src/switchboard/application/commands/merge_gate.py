@@ -115,6 +115,10 @@ def get_work_session(*args: Any, **kwargs: Any) -> Any:
     return _store_facade().get_work_session(*args, **kwargs)
 
 
+def list_work_sessions(*args: Any, **kwargs: Any) -> Any:
+    return _store_facade().list_work_sessions(*args, **kwargs)
+
+
 def _work_session_row(*args: Any, **kwargs: Any) -> Any:
     return _store_facade()._work_session_row(*args, **kwargs)
 
@@ -204,6 +208,49 @@ def _merge_gate_status_contexts(*sources: Any) -> Dict[str, str]:
 
 def _merge_gate_context_passed(state: str) -> bool:
     return (state or "").strip().lower() in {"success", "passed", "pass", "ok", "neutral", "skipped"}
+
+
+# Work Session states that still count as real evidence of the work having happened.
+# A claim completing (In Review, awaiting merge) is the normal path into the merge gate,
+# so "completed" belongs here — mirrors PR_ACTIVE_SESSION_STATUSES in the repository.
+_MERGE_GATE_SESSION_STATUSES = frozenset({"proposed", "active", "completed"})
+
+
+def _task_scoped_work_session(task_id: str, project: str,
+                              head_sha: str = "") -> Optional[Dict[str, Any]]:
+    """Resolve the canonical Work Session bound to a task.
+
+    merge_gate previously found a session only from an explicit ``work_session_id`` or
+    the task's *active* claim. The branch-protection projection
+    (``Switchboard / merge authorization``) supplies neither, so once a claim completed
+    or its lease lapsed a code_strict task looked permanently sessionless and reported
+    ``work_session_required``/``missing_executed_test_run`` forever — unmergeable no
+    matter how healthy the session recorded against it was.
+
+    This is deliberately narrower than "any session for the task": it only considers
+    canonical sessions, and when a head is being gated it requires a session pinned to
+    that exact head, so a stale session can never authorize a newer commit.
+    """
+    if not task_id:
+        return None
+    try:
+        sessions = list_work_sessions(project, task_id=task_id, repo_role="canonical")
+    except Exception:
+        return None
+    usable = [
+        session for session in (sessions or [])
+        if str(session.get("status") or "").strip().lower() in _MERGE_GATE_SESSION_STATUSES
+    ]
+    if not usable:
+        return None
+    head = str(head_sha or "").strip().lower()
+    if not head:
+        return usable[0]
+    return next(
+        (session for session in usable
+         if str(session.get("head_sha") or "").strip().lower() == head),
+        None,
+    )
 
 
 def _merge_gate_required_contexts(topology: Dict[str, Any],
@@ -440,6 +487,20 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
                 (claim_id,),
             ).fetchone()
             session_hint = _work_session_row(row) if row else None
+    if session_hint is None and not work_session_id:
+        # Neither an explicit session id nor a live claim resolved one. That is the
+        # normal state for the branch-protection projection (it passes only PR facts)
+        # and for any task whose claim has completed, so fall back to the session bound
+        # to the task itself — pinned to the exact head being gated. An explicit but
+        # unknown work_session_id is left alone so work_session_not_found still fires.
+        session_hint = _task_scoped_work_session(
+            task_id,
+            project,
+            head_sha=str(
+                head_sha or merged_payload.get("head_sha")
+                or (task.get("git_state") or {}).get("head_sha") or ""
+            ).strip(),
+        )
     hint_hygiene = (session_hint or {}).get("hygiene") or {}
     declared_changed_files = (
         merged_payload.get("changed_files")
