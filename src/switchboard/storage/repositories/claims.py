@@ -29,6 +29,11 @@ from switchboard.domain.validation_policy import (
     classify_task,
     ui_playwright_evidence_gate,
 )
+from switchboard.connect.execution_assignment import (
+    ExecutionAssignmentError,
+    build_execution_assignment,
+    require_exact_execution_assignment,
+)
 from switchboard.storage.repositories.tasks import (
     _deps_done,
     _heal_dependency_blocked_tasks_in,
@@ -83,6 +88,109 @@ def _review_continuation_wake_for_claim_in(
                 "mode": continuation.get("mode") or "replacement_handoff",
             }
     return None
+
+
+def _repair_execution_for_claim_in(
+        c: sqlite3.Connection, task_id: str, agent_id: str,
+        principal_id: str, now: float) -> Optional[Dict[str, Any]]:
+    """Return the exact live coordination-repair execution authorizing a claim.
+
+    Ordinary implementation starts may not reopen an In Review task.  The only
+    exception is a server-admitted ``coordination_retry`` generation whose
+    immutable assignment requires a claim.  Every identity edge is checked
+    before the status gate is relaxed; claim attachment performs the same
+    binding again and persists the generation on the claim and Work Session.
+    """
+    if not str(principal_id or "").startswith("direct-session/"):
+        return None
+    runner_id = str(principal_id).split("/", 1)[1]
+    runner = c.execute(
+        "SELECT * FROM runner_sessions WHERE runner_session_id=? AND task_id=? "
+        "AND agent_id=? AND status IN ('starting','ready','running')",
+        (runner_id, task_id, agent_id),
+    ).fetchone()
+    if not runner:
+        return None
+    try:
+        metadata = json.loads(runner["metadata_json"] or "{}")
+        generation = int(metadata.get("execution_generation") or 0)
+        epoch = int(metadata.get("lease_epoch") or 0)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    wake_id = str(metadata.get("wake_id") or "")
+    execution_id = str(metadata.get("execution_id") or "")
+    role = str(metadata.get("execution_role") or "").strip().lower()
+    if not all((wake_id, execution_id, generation, role, epoch)):
+        return None
+    token = c.execute(
+        "SELECT 1 FROM direct_session_tokens WHERE runner_session_id=? "
+        "AND task_id=? AND agent_id=? AND wake_id=? AND revoked_at IS NULL "
+        "AND expires_at>? LIMIT 1",
+        (runner_id, task_id, agent_id, wake_id, now),
+    ).fetchone()
+    wake = c.execute(
+        "SELECT * FROM wake_intents WHERE wake_id=? AND task_id=? "
+        "AND status IN ('pending','claimed') AND archived_at IS NULL",
+        (wake_id, task_id),
+    ).fetchone()
+    lease = c.execute(
+        "SELECT * FROM resource_leases WHERE id=? AND task_id=? "
+        "AND resource_type='execution' AND released_at IS NULL",
+        (execution_id, task_id),
+    ).fetchone()
+    if not token or not wake or not lease:
+        return None
+    try:
+        selector = json.loads(wake["selector_json"] or "{}")
+        policy = json.loads(wake["policy_json"] or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return None
+    assignment = policy.get("assignment") or {}
+    lifecycle = policy.get("lifecycle") or {}
+    contract = policy.get("execution_assignment") or {}
+    expected_head = str(lifecycle.get("head_sha") or "")
+    if (
+        str(selector.get("task_id") or "") != task_id
+        or str(selector.get("agent_id") or "") != agent_id
+        or str(assignment.get("assignment_id") or "")
+        != str(metadata.get("assignment_id") or "")
+        or str(contract.get("route") or "") != "coordination_retry"
+        or contract.get("claim_expectations") != {
+            "required": True, "work_session_required": True, "role": role}
+        or str(contract.get("task_id") or "") != task_id
+        or str(contract.get("execution_id") or "") != execution_id
+        or int(contract.get("generation") or 0) != generation
+        or str(contract.get("desired_role") or "").lower() != role
+        or str(contract.get("exact_head_sha") or "") != expected_head
+        or str(metadata.get("execution_head_sha") or "") != expected_head
+        or str(lease["execution_role"] or "").lower() != role
+        or int(lease["execution_generation"] or 0) != generation
+        or int(lease["fence_epoch"] or 0) != epoch
+        or str(lease["wake_id"] or "") != wake_id
+        or str(lease["head_sha"] or "") != expected_head
+        or float(lease["claimed_at"]) + int(lease["ttl_seconds"]) <= now
+        or str(lease["lease_state"] or "active")
+        not in {"reserved", "starting", "active"}
+    ):
+        return None
+    try:
+        require_exact_execution_assignment(
+            contract,
+            build_execution_assignment(
+                task_id=task_id, assignment=assignment, lifecycle=lifecycle),
+        )
+    except (ExecutionAssignmentError, TypeError, ValueError):
+        return None
+    return {
+        "schema": "switchboard.repair_claim_authority.v1",
+        "wake_id": wake_id,
+        "execution_id": execution_id,
+        "generation": generation,
+        "role": role,
+        "head_sha": expected_head,
+        "assignment_id": contract["assignment_id"],
+        "route": contract["route"],
+    }
 
 
 def _record_mission_claim_completion(mission_project: str, deliverable_id: str,
@@ -734,9 +842,15 @@ def _claim_task_impl(task_id: str, agent_id: str,
             _review_continuation_wake_for_claim_in(c, task_id, agent_id)
             if task.get("status") == "In Review" else None
         )
+        repair_execution = (
+            _repair_execution_for_claim_in(
+                c, task_id, agent_id, principal_id, now)
+            if task.get("status") == "In Review" else None
+        )
         orphan_adoption = task.get("status") == "In Progress"
         if (task.get("status") not in READY_TASK_STATUSES
-                and not orphan_adoption and not review_continuation):
+                and not orphan_adoption and not review_continuation
+                and not repair_execution):
             response = {"claimed": False, "reason": "status_not_ready",
                         "task_id": task_id, "status": task.get("status")}
             _store_facade()._idem_store(c, "claim_task", idem_key, actor, payload, response)
@@ -803,13 +917,20 @@ def _claim_task_impl(task_id: str, agent_id: str,
             (lease_id, agent_id, principal_id or None, task_id, "task",
              json.dumps([task_id]), now, ttl),
         )
-        next_status = "In Review" if review_continuation else "In Progress"
+        next_status = (
+            "In Review"
+            if review_continuation or repair_execution
+            else "In Progress"
+        )
         c.execute("UPDATE tasks SET status=?, assignee=?, updated_at=? WHERE task_id=?",
                   (next_status, agent_id, now, task_id))
         dispatch_reason = {"policy": "exact.v1", "requested_task_id": task_id,
                            "dependency_checked": True}
         if review_continuation:
             dispatch_reason["review_continuation"] = review_continuation
+            dispatch_reason["workflow_status_preserved"] = "In Review"
+        if repair_execution:
+            dispatch_reason["repair_execution"] = repair_execution
             dispatch_reason["workflow_status_preserved"] = "In Review"
         if orphan_adoption:
             dispatch_reason["orphan_adopted"] = True

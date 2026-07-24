@@ -294,6 +294,12 @@ def enqueue_task(
         "pr_url": str((task.get("git_state") or {}).get("pr_url") or ""),
         "ttl_seconds": int(
             os.environ.get("PM_CONNECT_MAX_RUNTIME_SECONDS", "7200")),
+        "task_id": task_id,
+        "reason_code": str(reason_code or ""),
+        "acceptance_findings": list(acceptance_findings or []),
+        "route": str(route or ""),
+        "attempt": int(decision_attempt or 0),
+        "state_version": int(state_version or 0),
     }
     if (lifecycle["role"] in {"review_merge", "remediation"}
             and not lifecycle["head_sha"]):
@@ -303,15 +309,6 @@ def enqueue_task(
             "role": lifecycle["role"],
             "task_id": task_id,
         }
-    if lifecycle["role"] in {"review_merge", "remediation"}:
-        lifecycle.update({
-            "task_id": task_id,
-            "reason_code": str(reason_code or ""),
-            "acceptance_findings": list(acceptance_findings or []),
-            "route": str(route or ""),
-            "attempt": int(decision_attempt or 0),
-            "state_version": int(state_version or 0),
-        })
     policy = {
         "mode": CONNECT_WAKE_MODE,
         "assignment": {
