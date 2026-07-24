@@ -1,15 +1,9 @@
 from datetime import datetime
-from pathlib import Path
 import re
 
+from path_setup import ROOT
 
-MARKER = (
-    Path(__file__).resolve().parents[1]
-    / "docs"
-    / "evidence"
-    / "live"
-    / "simplify24-clean-a.md"
-)
+MARKER = ROOT / "docs" / "evidence" / "live" / "simplify24-clean-a.md"
 
 
 def test_live_proof_marker_has_structured_switchboard_evidence() -> None:
