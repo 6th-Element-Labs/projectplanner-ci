@@ -411,3 +411,54 @@ Concrete gaps this run exposed, ordered by leverage:
 5. **Emit a per-run economic summary** — runners spawned, quota consumed, commits pushed
    against unwinnable gates. This run burned three remediation runners on a problem no
    commit could fix; nothing surfaced that cost.
+
+---
+
+## BREAKDOWN 5 — ESCALATED: draft state is the single dominant blocker (3 of 4)
+
+**Severity: HIGH → this is the headline finding of the run.**
+
+The decisive case is **BUG-178 / PR #867** — the run that did everything right:
+autonomously filed, implemented with no operator involvement, produced a complete
+`switchboard.executed_test_run.v1` (5 commands, `exit_code: 0`, output hash, work-session
+bound), surrendered its lease with an explicit reason, terminalized cleanly via
+`runner_lease_expiry`. There is no evidence gap, no verdict gap, no CI gap.
+
+It is blocked anyway:
+```
+#867  draft=True   Switchboard CI / VM gate: SUCCESS
+      Switchboard / merge authorization: FAILURE
+      -> "Draft PRs cannot pass the merge gate."
+```
+
+Full picture across the mature agent PRs:
+
+| PR | Task | Draft | CI | Merge auth | Actual blocker |
+|---|---|---|---|---|---|
+| #863 | CO-20 | **yes** | SUCCESS | FAILURE | draft (4 commits pushed at it) |
+| #865 | ADAPTER-27 | **yes** | SUCCESS | FAILURE | draft |
+| #867 | BUG-178 | **yes** | SUCCESS | FAILURE | draft — *with flawless evidence* |
+| #864 | UI-63 | no | SUCCESS | FAILURE | missing exact-head verdict + evidence |
+| #868 | BUG-179 | no | pending | – | too new to judge |
+
+**Three of four mature PRs are stuck on one word.** Not code quality, not CI, not the
+BUG-176/177 merge-gate fix deployed earlier the same day (`cdd6ec5d`) — that fix works and
+was verified live. The workers open drafts and nothing ever marks them ready.
+
+**Why it compounds:** the gate returns a single undifferentiated `failure` to the worker,
+so "your PR is a draft" is indistinguishable from "your code is wrong." The worker's only
+lever is another commit. CO-20 pushed **4 commits across 4 head SHAs** plus consumed a
+dedicated remediation runner, against a gate no commit can ever satisfy. Every one of those
+pushes also invalidated its review verdict (BREAKDOWN 6), deepening the hole.
+
+**This is the cheapest high-leverage fix available.** Either:
+- the worker calls `gh pr ready` when it considers the work complete, or
+- the merge gate routes `draft` to a distinct "mark ready" action instead of generic
+  remediation.
+
+Either change unblocks 3 of 4 PRs in this run. Nothing else in the log has this
+leverage-to-cost ratio.
+
+**Corollary for BREAKDOWN 7:** BUG-178 proves the evidence machinery works end to end.
+Do not chase "workers cannot produce executed_test_run" as a general defect — scope it to
+the remediation path, where UI-63 failed.
