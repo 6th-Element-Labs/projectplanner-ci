@@ -222,6 +222,39 @@ def _finding_looks_empty_or_stale(finding: Dict[str, Any]) -> bool:
     return finding.get("evidence_quality") == "empty_or_stale"
 
 
+# GitHub folds the whole required-status roll-up into the single word `mergeable_state`,
+# and THIS function publishes one of those required statuses. So `blocked` / `unstable`
+# mean "some required check is not green" — a set that includes the very context we are
+# about to compute. Feeding that back into merge_gate makes the gate block on its own
+# not-yet-published result and the status can never go green.
+#
+# This was invisible for a long time only because the two call paths fetch PRs
+# differently: `--pr N` uses GET /pulls/{n}, which RETURNS mergeable_state, while the
+# `--once-open-prs` sweep uses GET /pulls, which OMITS it. The timer worked; the manual
+# single-PR path deadlocked. Normalize here so both paths agree.
+#
+# Only the two status-derived words are dropped. `mergeable` (the conflict boolean),
+# `dirty` (real conflicts) and `behind` (stale base) all describe the branch itself, not
+# our own check, so they keep blocking.
+_SELF_REFERENTIAL_MERGE_STATES = frozenset({"blocked", "unstable"})
+
+
+def _strip_self_referential_mergeability(pr: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop merge-state words that merely restate 'a required check is not green yet'."""
+    state = str(
+        pr.get("mergeable_state")
+        or pr.get("mergeStateStatus")
+        or pr.get("merge_state")
+        or ""
+    ).strip().lower()
+    if state not in _SELF_REFERENTIAL_MERGE_STATES:
+        return pr
+    scrubbed = dict(pr)
+    for key in ("mergeable_state", "mergeStateStatus", "merge_state"):
+        scrubbed.pop(key, None)
+    return scrubbed
+
+
 def run_merge_authorization_for_pr(
     pr: Dict[str, Any],
     *,
@@ -254,6 +287,7 @@ def run_merge_authorization_for_pr(
         blocked: List[Dict[str, Any]] = []
     else:
         resolved = list(provenance.get("resolved") or [])
+        gate_evidence_pr = _strip_self_referential_mergeability(pr)
         gate_results = []
         for item in resolved:
             task_id = str(item.get("task_id") or "")
@@ -266,7 +300,7 @@ def run_merge_authorization_for_pr(
                     "repo": repo,
                     "head_sha": pr_head_sha,
                     "evidence": {
-                        "github_pr": pr,
+                        "github_pr": gate_evidence_pr,
                         "changed_files": changed_paths,
                     },
                 },

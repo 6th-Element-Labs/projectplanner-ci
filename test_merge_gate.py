@@ -637,6 +637,84 @@ try:
            for f in other_head_gate.get("findings") or []),
        "claimless task: a session for a different head does not authorize this head")
 
+    # ---------------------------------------------------------------------------
+    # BUG-178: one PR legitimately closes several tasks, but the work happened in ONE
+    # workspace, so only the claim-owning task has a Work Session. Every co-resolved task
+    # used to wedge on work_session_required + missing_executed_test_run forever. Live
+    # case: BUG-176 on PR #859 had to be landed by operator bypass because of exactly
+    # this. The gate now borrows the canonical session that produced the same
+    # branch+head, and reports the borrow.
+    # ---------------------------------------------------------------------------
+    owner, owner_claim, owner_branch, owner_sha = ready_task(
+        "co-resolved PR: session owner", description="policy_profile:code_strict")
+    owner_session = store.get_work_session(owner_claim["work_session_id"], project=P)
+    owner_hygiene = dict(owner_session.get("hygiene") or {})
+    owner_hygiene["executed_test_run"] = executed_test_run(
+        owner["task_id"], owner_branch, owner_sha, owner_claim["work_session_id"])
+    store.update_work_session(
+        owner_claim["work_session_id"], {"hygiene": owner_hygiene},
+        actor="test", project=P)
+
+    # A second code_strict task fixed by the SAME commits, with no session of its own.
+    rider = task("co-resolved PR: rider task with no session of its own",
+                 description="policy_profile:code_strict")
+    store.mark_task_pr_opened(
+        rider["task_id"], 62, f"https://github.com/{REPO}/pull/62",
+        owner_branch, owner_sha, actor="test", project=P)
+    record_review(rider, owner_sha)
+    ok(not store.list_work_sessions(P, task_id=rider["task_id"]),
+       "co-resolved rider genuinely has no Work Session of its own")
+
+    rider_gate = store.merge_gate({
+        "task_id": rider["task_id"], "repo": REPO, "target_branch": "master",
+        "branch": owner_branch, "head_sha": owner_sha,
+        "pr_url": f"https://github.com/{REPO}/pull/62", "pr_number": 62,
+        "status_contexts": {CI_CONTEXT: "success"},
+        "github_pr": github_pr(rider["task_id"], owner_branch, owner_sha),
+    }, actor="test", project=P)
+    rider_codes = {f["code"] for f in rider_gate.get("findings") or []}
+    ok("work_session_required" not in rider_codes,
+       "co-resolved rider: borrows the session that produced this branch/head")
+    ok("missing_executed_test_run" not in rider_codes,
+       "co-resolved rider: the borrowed session's executed test run satisfies the gate")
+    ok(rider_gate.get("work_session_borrowed_from_task") == owner["task_id"],
+       "co-resolved rider: the borrow is reported, not silent")
+    owner_gate = store.merge_gate({
+        "task_id": owner["task_id"], "repo": REPO, "target_branch": "master",
+        "branch": owner_branch, "head_sha": owner_sha,
+        "pr_url": f"https://github.com/{REPO}/pull/62", "pr_number": 62,
+        "status_contexts": {CI_CONTEXT: "success"},
+        "github_pr": github_pr(owner["task_id"], owner_branch, owner_sha),
+    }, actor="test", project=P)
+    ok(owner_gate.get("work_session_borrowed_from_task") is None,
+       "co-resolved owner: a task with its own session reports no borrow")
+
+    # Fail closed: borrowing is pinned to the exact commit AND branch. A session from a
+    # different branch, or for a different head, must never authorize this one — otherwise
+    # any clean session anywhere would become a universal merge key.
+    foreign_head = "c" * 40
+    foreign_head_gate = store.merge_gate({
+        "task_id": rider["task_id"], "repo": REPO, "target_branch": "master",
+        "branch": owner_branch, "head_sha": foreign_head,
+        "pr_url": f"https://github.com/{REPO}/pull/62", "pr_number": 62,
+        "status_contexts": {CI_CONTEXT: "success"},
+        "github_pr": github_pr(rider["task_id"], owner_branch, foreign_head),
+    }, actor="test", project=P)
+    ok(any(f["code"] == "work_session_required"
+           for f in foreign_head_gate.get("findings") or []),
+       "co-resolved rider: a different head is not authorized by the borrow")
+
+    foreign_branch_gate = store.merge_gate({
+        "task_id": rider["task_id"], "repo": REPO, "target_branch": "master",
+        "branch": "codex/some-other-branch", "head_sha": owner_sha,
+        "pr_url": f"https://github.com/{REPO}/pull/62", "pr_number": 62,
+        "status_contexts": {CI_CONTEXT: "success"},
+        "github_pr": github_pr(rider["task_id"], "codex/some-other-branch", owner_sha),
+    }, actor="test", project=P)
+    ok(any(f["code"] == "work_session_required"
+           for f in foreign_branch_gate.get("findings") or []),
+       "co-resolved rider: a different branch is not authorized by the borrow")
+
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 

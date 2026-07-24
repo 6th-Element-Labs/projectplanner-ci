@@ -125,6 +125,71 @@ with tempfile.TemporaryDirectory(prefix="pptest-") as tmp:
     rc = restore_mod.main(["--from-dir", str(snap_dir), "--target-dir", str(tmp / "restored2")])
     check("restore detects corrupted snapshot (sha256 mismatch)", rc == 1, f"rc={rc}")
 
+# --------------------------------------------------------------------------------
+# Regression: snapshot_db must TERMINATE on a database that is being written the whole
+# time. The old implementation used the incremental online-backup API, which restarts
+# the copy from page 0 on every concurrent write; against the live 1.2 GB
+# switchboard.db it never converged and systemd killed the job at its 30-minute
+# timeout, silently stopping off-box backups for 13+ hours. A sustained writer is the
+# condition that reproduced it, so pin it.
+# --------------------------------------------------------------------------------
+with tempfile.TemporaryDirectory(prefix="pptest-hot-") as tmp:
+    tmp_path = Path(tmp)
+    hot = tmp_path / "hot.db"
+    conn = sqlite3.connect(hot)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("CREATE TABLE rows(id INTEGER PRIMARY KEY, blob TEXT)")
+    # Enough pages that a restart-on-write copy has a real window to be interrupted.
+    conn.executemany("INSERT INTO rows(blob) VALUES(?)",
+                     [("x" * 512,) for _ in range(20000)])
+    conn.commit()
+    conn.close()
+
+    stop = threading.Event()
+    writer_errors = []
+
+    def hammer():
+        try:
+            wconn = sqlite3.connect(hot, timeout=30)
+            wconn.execute("PRAGMA journal_mode=WAL")
+            while not stop.is_set():
+                wconn.execute("INSERT INTO rows(blob) VALUES(?)", ("y" * 512,))
+                wconn.commit()
+                time.sleep(0.001)
+            wconn.close()
+        except Exception as exc:  # surfaced below rather than silently ignored
+            writer_errors.append(repr(exc))
+
+    writer = threading.Thread(target=hammer, daemon=True)
+    writer.start()
+    time.sleep(0.2)  # let the writer actually get going before we snapshot
+    snap_dest = tmp_path / "hot-snapshot.db"
+    t0 = time.monotonic()
+    try:
+        backup_mod.snapshot_db(hot, snap_dest)
+        snap_error = None
+    except Exception as exc:
+        snap_error = repr(exc)
+    elapsed = time.monotonic() - t0
+    stop.set()
+    writer.join(timeout=10)
+
+    check("snapshot of a continuously-written DB completes", snap_error is None, snap_error or "")
+    check("snapshot under sustained writes finishes promptly (no restart livelock)",
+          elapsed < 30, f"took {elapsed:.1f}s")
+    check("concurrent writer was not blocked into an error", not writer_errors,
+          "; ".join(writer_errors))
+    if snap_error is None:
+        vconn = sqlite3.connect(snap_dest)
+        integrity = vconn.execute("PRAGMA integrity_check").fetchone()[0]
+        count = vconn.execute("SELECT COUNT(*) FROM rows").fetchone()[0]
+        vconn.close()
+        check("hot snapshot is internally consistent", integrity == "ok", str(integrity))
+        # The snapshot is a point-in-time read: it must contain at least the pre-existing
+        # rows. Anything less means we captured a torn prefix.
+        check("hot snapshot captured a complete point-in-time view", count >= 20000,
+              f"rows={count}")
+
 print()
 if failures:
     print(f"{len(failures)} FAILURE(S): {failures}")

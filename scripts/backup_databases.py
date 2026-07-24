@@ -40,20 +40,41 @@ from pathlib import Path
 CHUNK = 1024 * 1024
 
 
-def snapshot_db(src: Path, dest: Path) -> None:
-    """Copy a live SQLite DB to dest via the online-backup API and verify it."""
-    src_conn = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=60)
-    dst_conn = sqlite3.connect(dest)
+def _verify_snapshot(dest: Path, src_name: str) -> None:
+    conn = sqlite3.connect(dest)
     try:
-        # Small page batches with a sleep let live writers proceed between
-        # chunks instead of blocking them for the whole copy.
-        src_conn.backup(dst_conn, pages=512, sleep=0.05)
-        row = dst_conn.execute("PRAGMA quick_check").fetchone()
+        row = conn.execute("PRAGMA quick_check").fetchone()
         if not row or row[0] != "ok":
-            raise RuntimeError(f"quick_check failed on snapshot of {src.name}: {row}")
+            raise RuntimeError(f"quick_check failed on snapshot of {src_name}: {row}")
+    finally:
+        conn.close()
+
+
+def snapshot_db(src: Path, dest: Path) -> None:
+    """Copy a live SQLite DB to dest as a consistent snapshot, and verify it.
+
+    Uses ``VACUUM INTO`` rather than the incremental online-backup API. This is not a
+    style preference — the backup API **restarts the whole copy from page 0 every time a
+    writer touches the source mid-copy**. Against a continuously-written 1.2 GB
+    switchboard.db that never converges: the job burned ~4 min of CPU re-copying the same
+    prefix over and over until systemd's TimeoutStartSec=30min killed it, and off-box
+    backups silently stopped for 13+ hours. Throttling with small page batches and sleeps
+    made it strictly worse by widening the window for a writer to force another restart.
+
+    ``VACUUM INTO`` takes one read transaction and writes the snapshot in a single pass,
+    so it always terminates. In WAL mode readers do not block writers, so the fleet keeps
+    writing while it runs (the WAL just grows for the duration). It is read-only with
+    respect to the source, so a mode=ro connection is still correct.
+    """
+    if dest.exists():
+        # VACUUM INTO refuses to overwrite; make that an explicit precondition.
+        dest.unlink()
+    src_conn = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=60)
+    try:
+        src_conn.execute("VACUUM INTO ?", (str(dest),))
     finally:
         src_conn.close()
-        dst_conn.close()
+    _verify_snapshot(dest, src.name)
 
 
 def gzip_file(src: Path, dest: Path) -> str:

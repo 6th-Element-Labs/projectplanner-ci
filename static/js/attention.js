@@ -14,6 +14,12 @@
     let filter = 'all';
     let tracked = null;
     let delivering = false;
+    // The status line under the detail pane. renderDetail() rebuilds #needs-flash as an
+    // EMPTY div, so any message written before a re-render is silently wiped — which used
+    // to blank the operator's status on every 1.5s poll and, worse, leave a terminal
+    // (failed/expired/cancelled/orphaned) request explaining nothing at all. Hold the last
+    // message here so a re-render can restore it instead of going quiet.
+    let lastFlash = null;
 
     const SRC = {
         agent: ['#c0392b', 'ti-robot', 'Agent'],
@@ -38,6 +44,25 @@
             { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     }
     function el(id) { return document.getElementById(id); }
+
+    // Write the detail-pane status line and remember it. Every status message must go
+    // through here — writing #needs-flash directly does not survive the next renderDetail().
+    function setFlash(message, cls) {
+        lastFlash = message ? { message: message, cls: cls || 'text-secondary' } : null;
+        const node = el('needs-flash');
+        if (!node) return;
+        node.className = 'small ' + (lastFlash ? lastFlash.cls : 'text-secondary');
+        node.textContent = lastFlash ? lastFlash.message : '';
+    }
+
+    // Re-apply the remembered status line after a renderDetail() rebuilt the empty div.
+    function restoreFlash() {
+        if (!lastFlash) return;
+        const node = el('needs-flash');
+        if (!node) return;
+        node.className = 'small ' + lastFlash.cls;
+        node.textContent = lastFlash.message;
+    }
     function age(s) {
         if (s < 60) return s + 's';
         if (s < 3600) return Math.floor(s / 60) + 'm';
@@ -137,7 +162,13 @@
                     ${p.reason_code ? `<div class="small mt-1">${esc(p.reason_code)}</div>` : ''}
                 </div></div>`;
         }).join('');
-        list.querySelectorAll('[data-nid]').forEach((c) => c.addEventListener('click', () => { sel = c.dataset.nid; render(); }));
+        // Drop the remembered status line when switching items — it belongs to the request
+        // that produced it, and restoring it onto a different one would be a false signal.
+        list.querySelectorAll('[data-nid]').forEach((c) => c.addEventListener('click', () => {
+            if (sel !== c.dataset.nid) lastFlash = null;
+            sel = c.dataset.nid;
+            render();
+        }));
 
         const it = items.find((i) => i.attention_id === sel);
         if (!it) { detail.innerHTML = ''; return; }
@@ -243,7 +274,7 @@
             <div id="needs-flash" class="small text-secondary"></div>
             <div class="text-secondary small mt-3 pt-2 border-top">Decisions route to the store that owns the item — this queue adds no new write path.</div>`;
 
-        const flash = (m, cls) => { const f = el('needs-flash'); if (f) { f.className = 'small ' + (cls || 'text-secondary'); f.textContent = m; } };
+        const flash = setFlash;
         if (isAgent) {
             const send = async () => {
                 const resp = (el('needs-reply').value || '').trim();
@@ -362,7 +393,7 @@
                 tracked.payload.completion_wake = request.completion_wake || null;
                 tracked.payload.terminal_reason = request.terminal_reason;
                 const detail = el('needs-detail');
-                if (detail) renderDetail(detail, tracked);
+                if (detail) { renderDetail(detail, tracked); restoreFlash(); }
             }
             const receipt = request.delivery_receipt || {};
             const completionReceipt = (
@@ -379,8 +410,7 @@
                 delivering = false;
                 const detail = el('needs-detail');
                 if (detail && tracked) renderDetail(detail, tracked);
-                const flash = el('needs-flash');
-                if (flash) { flash.className = 'small text-green'; flash.textContent = 'Resumed — provider receipt verified.'; }
+                setFlash('Resumed — provider receipt verified.', 'text-green');
                 setTimeout(() => load(), 900);
             } else if (
                 request.status === 'resolved'
@@ -388,20 +418,27 @@
                 && receipt.effect === 'remain_blocked'
             ) {
                 delivering = false;
-                const flash = el('needs-flash');
-                if (flash) { flash.className = 'small text-secondary'; flash.textContent = 'Decision recorded — task remains blocked.'; }
+                setFlash('Decision recorded — task remains blocked.', 'text-secondary');
                 setTimeout(() => load(), 900);
             } else if (['failed', 'expired', 'cancelled', 'orphaned'].includes(request.status)) {
                 delivering = false;
                 const detail = el('needs-detail');
                 if (detail && tracked) renderDetail(detail, tracked);
+                // This branch used to render and then say NOTHING, so a request that died
+                // left the operator staring at a blank status line with no reason — the exact
+                // moment the UI most owes an explanation. Name the terminal state and the
+                // recorded reason instead of failing quietly.
+                setFlash(
+                    `Stopped — request ${request.status}`
+                    + (request.terminal_reason ? ': ' + request.terminal_reason : '.')
+                    + ' No further automatic retry; use Refresh recovery state to re-check.',
+                    'text-danger');
             } else {
                 setTimeout(() => pollRequest(requestId), 1500);
             }
         } catch (e) {
             delivering = false;
-            const flash = el('needs-flash');
-            if (flash) { flash.className = 'small text-danger'; flash.textContent = 'Recovery check failed: ' + e.message; }
+            setFlash('Recovery check failed: ' + e.message, 'text-danger');
         }
     }
 

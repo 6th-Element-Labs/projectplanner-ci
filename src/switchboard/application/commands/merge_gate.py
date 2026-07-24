@@ -253,6 +253,57 @@ def _task_scoped_work_session(task_id: str, project: str,
     )
 
 
+def _branch_scoped_work_session(project: str, branch: str, head_sha: str,
+                                repo: str = "") -> Optional[Dict[str, Any]]:
+    """Resolve the canonical Work Session that produced this exact commit, any task.
+
+    One PR legitimately closes several board tasks — ``evaluate_pr_provenance`` resolves
+    every task id referenced by the branch's commits, and merge_gate then runs once per
+    resolved task. But the work happened in ONE workspace on ONE branch, so only the
+    task that owned the claim has a Work Session. Every co-resolved task looked
+    permanently sessionless and wedged the PR on ``work_session_required`` +
+    ``missing_executed_test_run`` (BUG-176 on PR #859: its fix shipped in the BUG-177
+    branch's session, and #859 had to be landed by operator bypass because of it).
+
+    Demanding a separate session per task is not satisfiable and would not mean
+    anything: the sessions would be byte-identical descriptions of the same workspace.
+    A Work Session proves *workspace hygiene for a branch at a head* — clean tree, no
+    conflict markers, right branch and upstream, known base — and that is a property of
+    the commit, not of which task id the commit is filed under.
+
+    So this borrows the session that actually produced the head being gated. It stays
+    fail-closed on everything that makes the evidence meaningful:
+      * canonical repo role only,
+      * exact branch match,
+      * exact head match — a session for any other commit cannot authorize this one,
+      * usable lifecycle status,
+      * same repo when the session records one.
+    Per-task review verdicts are still required independently, so each task keeps its own
+    human/agent sign-off; only the workspace-hygiene evidence is shared.
+
+    The borrow is reported in the gate result (``work_session_borrowed_from_task``) so it
+    is auditable and never a silent fallback.
+    """
+    branch = str(branch or "").strip()
+    head = str(head_sha or "").strip().lower()
+    if not branch or not head:
+        return None
+    try:
+        sessions = list_work_sessions(
+            project, repo_role="canonical", branch=branch, head_sha=head)
+    except Exception:
+        return None
+    wanted_repo = str(repo or "").strip().lower()
+    for session in sessions or []:
+        if str(session.get("status") or "").strip().lower() not in _MERGE_GATE_SESSION_STATUSES:
+            continue
+        session_repo = str(session.get("repo") or "").strip().lower()
+        if wanted_repo and session_repo and session_repo != wanted_repo:
+            continue
+        return session
+    return None
+
+
 def _merge_gate_required_contexts(topology: Dict[str, Any],
                                   evidence: Dict[str, Any]) -> List[str]:
     roles = topology.get("roles") or {}
@@ -487,20 +538,33 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
                 (claim_id,),
             ).fetchone()
             session_hint = _work_session_row(row) if row else None
+    session_borrowed_from_task = ""
     if session_hint is None and not work_session_id:
         # Neither an explicit session id nor a live claim resolved one. That is the
         # normal state for the branch-protection projection (it passes only PR facts)
         # and for any task whose claim has completed, so fall back to the session bound
         # to the task itself — pinned to the exact head being gated. An explicit but
         # unknown work_session_id is left alone so work_session_not_found still fires.
+        resolved_head = str(
+            head_sha or merged_payload.get("head_sha")
+            or (task.get("git_state") or {}).get("head_sha") or ""
+        ).strip()
         session_hint = _task_scoped_work_session(
-            task_id,
-            project,
-            head_sha=str(
-                head_sha or merged_payload.get("head_sha")
-                or (task.get("git_state") or {}).get("head_sha") or ""
-            ).strip(),
-        )
+            task_id, project, head_sha=resolved_head)
+        if session_hint is None:
+            # The task has no session of its own. It may still be a co-resolved task on a
+            # PR whose work happened in another task's session on this same branch/head —
+            # see _branch_scoped_work_session. Borrow that one rather than declaring the
+            # PR unmergeable for work that demonstrably has clean workspace evidence.
+            resolved_branch = str(
+                merged_payload.get("branch")
+                or (task.get("git_state") or {}).get("branch") or ""
+            ).strip()
+            borrowed = _branch_scoped_work_session(
+                project, resolved_branch, resolved_head, repo=repo)
+            if borrowed is not None:
+                session_hint = borrowed
+                session_borrowed_from_task = str(borrowed.get("task_id") or "")
     hint_hygiene = (session_hint or {}).get("hygiene") or {}
     declared_changed_files = (
         merged_payload.get("changed_files")
@@ -718,6 +782,11 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
         "claim_id": claim_id or None,
         "agent_id": agent_id or None,
         "work_session_id": (session or {}).get("work_session_id") or work_session_id or None,
+        # Non-null when this task had no Work Session of its own and the gate used the
+        # session that produced the same branch/head under another co-resolved task.
+        # Surfaced deliberately: a borrowed session must be visible in the audit trail,
+        # not an invisible fallback.
+        "work_session_borrowed_from_task": session_borrowed_from_task or None,
         "pr_url": pr_url or None,
         "pr_number": pr_number or None,
         "head_sha": review_head_sha or None,

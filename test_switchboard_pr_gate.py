@@ -225,6 +225,37 @@ finally:
     gate.pr_provenance_gate.resolve_mode = original_mode
     gate.list_open_prs = original_open_prs
 
+# BUG-178: the merge-authorization projection must not consume GitHub's aggregate
+# mergeable_state, because that word folds in the required-status roll-up — which
+# includes the very context this script is about to publish. `--pr N` (GET /pulls/{n})
+# returns the field and used to self-deadlock: gate posts failure -> PR reads "blocked"
+# -> gate posts failure, forever. The `--once-open-prs` sweep (GET /pulls) omits the
+# field, which is the only reason the timer path ever worked.
+_strip = gate._strip_self_referential_mergeability
+
+for _state in ("blocked", "unstable"):
+    for _key in ("mergeable_state", "mergeStateStatus", "merge_state"):
+        _scrubbed = _strip({"number": 1, _key: _state, "mergeable": True})
+        ok(_key not in _scrubbed,
+           f"{_state!r} in {_key} is dropped so the gate cannot block on its own status")
+
+# Real branch problems still block — only the status-derived words are self-referential.
+for _state in ("dirty", "behind"):
+    _kept = _strip({"number": 1, "mergeable_state": _state})
+    ok(_kept.get("mergeable_state") == _state,
+       f"{_state!r} describes the branch, not our check, so it is preserved")
+
+# The conflict boolean is independent of the roll-up and must survive the scrub.
+ok(_strip({"number": 1, "mergeable_state": "blocked", "mergeable": False}).get(
+    "mergeable") is False,
+   "the mergeable conflict boolean survives when merge state is scrubbed")
+
+# Never mutate the caller's PR payload — provenance resolution still reads the original.
+_original = {"number": 1, "mergeable_state": "blocked"}
+_strip(_original)
+ok(_original.get("mergeable_state") == "blocked",
+   "scrubbing returns a copy and leaves the caller's PR payload intact")
+
 # main() returns 2 when no token is configured.
 _saved = os.environ.get("PM_GITHUB_TOKEN"), os.environ.get("GITHUB_TOKEN"), os.environ.get(
     "SWITCHBOARD_CI_GITHUB_TOKEN")
@@ -237,4 +268,4 @@ finally:
         if val is not None:
             os.environ[key] = val
 
-print("\n17 passed, 0 failed")
+print("\n26 passed, 0 failed")
