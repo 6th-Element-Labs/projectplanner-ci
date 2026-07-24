@@ -388,6 +388,18 @@ def get_project_execution_policy(ctx: Context, project: str = "maxwell") -> str:
     return services.dumps(store.get_project_execution_policy(project=project))
 
 
+def get_project_execution_readiness(ctx: Context, project: str = "maxwell") -> str:
+    """Return the authoritative project execution admission gate.
+
+    The ``switchboard.project_execution_readiness.v1`` response composes
+    topology, execution policy, provider/SCM authorization, persistent and
+    ephemeral capacity, and Autopilot policy with typed repair blockers.
+    """
+    services = _services()
+    services.require_read(ctx, project, ("read",))
+    return services.dumps(store.get_project_execution_readiness(project=project))
+
+
 def set_project_execution_policy(ctx: Context, project: str = "maxwell",
                                  policy_json: str = "") -> str:
     """Merge an execution-policy update for one project (write:system on that project).
@@ -468,7 +480,8 @@ PROJECT_TOOL_NAMES = (
     "create_project_purge_intent", "verify_project_purge_intent",
     "execute_project_purge", "record_project_cleanup_review",
     "create_project", "set_project_github_repo", "set_project_repo_topology",
-    "get_project_execution_policy", "set_project_execution_policy",
+    "get_project_execution_policy", "get_project_execution_readiness",
+    "set_project_execution_policy",
     "create_project_board", "get_project_board", "list_project_boards",
 )
 

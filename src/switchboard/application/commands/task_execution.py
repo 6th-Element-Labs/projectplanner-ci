@@ -606,8 +606,22 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
         }
     elif launcher is None:
         from switchboard.application.commands import connect_dispatch
+        from switchboard.storage.repositories.project_execution_readiness import (
+            get_project_execution_readiness,
+        )
 
         task = projection.get("task") or {}
+        readiness = get_project_execution_readiness(project)
+        if readiness.get("passed") is not True:
+            raise TaskExecutionError(
+                "start_refused",
+                str(readiness.get("message") or
+                    "Project execution readiness is blocked."),
+                task_id=task_id, project=project,
+                start_error=(readiness.get("reason_code")
+                             or "project_execution_not_ready"),
+                execution_readiness=readiness,
+                blockers=list(readiness.get("blockers") or []))
         predecessor = str(
             ((projection.get("last_dispatch_outcome") or {}).get("wake_id")) or "")
         result = connect_dispatch.enqueue_task(

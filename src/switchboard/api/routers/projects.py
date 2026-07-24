@@ -120,6 +120,11 @@ def create_router(*, resolve_project: ProjectResolver,
         """ACCESS-27: the runner authority plus its typed readiness gate."""
         return store.get_project_execution_policy(project=resolve_project(project))
 
+    @router.get("/api/projects/{project}/execution_readiness")
+    async def project_execution_readiness(project: str):
+        """UI-63: the authoritative admission gate used by Settings and Start."""
+        return store.get_project_execution_readiness(project=resolve_project(project))
+
     @router.post("/api/projects/{project}/execution_policy")
     async def set_project_execution_policy(request: Request, project: str,
                                            body: dict = Body(...)):

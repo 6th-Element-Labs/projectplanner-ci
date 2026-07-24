@@ -38,6 +38,7 @@ _EXPORT_MODULES: Tuple[str, ...] = (
     "switchboard.storage.repositories.publication",
     "switchboard.storage.repositories.projects",
     "switchboard.storage.repositories.project_execution_policy",
+    "switchboard.storage.repositories.project_execution_readiness",
     "switchboard.storage.repositories.kpis_economics",
     "switchboard.storage.repositories.review_verdicts",
     "switchboard.storage.repositories.review_remediations",

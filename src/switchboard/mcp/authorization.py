@@ -195,7 +195,7 @@ READ_TOOLS = frozenset({
     "list_review_findings", "list_review_remediations",
     "list_runner_control_requests", "list_runner_sessions", "list_session_health",
     "list_unacked_messages", "list_unblock_requests", "list_wake_intents",
-    "get_project_execution_policy",
+    "get_project_execution_policy", "get_project_execution_readiness",
     "list_work_sessions", "mission_status", "prepare_agent_session",
     "search_tasks",
 })

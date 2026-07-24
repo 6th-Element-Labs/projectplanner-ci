@@ -647,9 +647,18 @@
         }
         const reason = (data.last_dispatch_outcome && data.last_dispatch_outcome.message)
             || data.message || data.error || 'start refused';
+        const readiness = data.execution_readiness || {};
+        const blockers = Array.isArray(readiness.blockers)
+            ? readiness.blockers : (Array.isArray(data.blockers) ? data.blockers : []);
+        const repair = blockers.length
+            ? `<ul class="small mt-2 mb-2">${blockers.map((blocker) =>
+                `<li><strong>${this.esc(String(blocker.message || blocker.code || 'Blocked'))}</strong>`
+                + `${blocker.repair ? `<div>${this.esc(String(blocker.repair))}</div>` : ''}</li>`).join('')}</ul>`
+                + `<a class="btn btn-sm btn-outline-danger" href="#tab-settings/execution">Open execution readiness</a>`
+            : '';
         this._runnerPtyGate(
             `<span class="badge bg-red-lt me-1">${this.esc(String(data.start_error || data.error_code || 'start_failed'))}</span>`
-            + this.esc(String(reason)),
+            + this.esc(String(reason)) + repair,
             'danger');
         return true;
     },
