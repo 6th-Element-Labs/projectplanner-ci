@@ -19,10 +19,12 @@ os.environ["PM_DYNAMIC_PROJECTS_DIR"] = str(projects)
 os.environ["PM_AUTH_MODE"] = "dev-open"
 
 import store  # noqa: E402
+from execution_policy_fixture import install_ready_execution_policy  # noqa: E402
 from switchboard.application.commands import connect_dispatch  # noqa: E402
 
 P = "switchboard"
 store.init_db(P)
+install_ready_execution_policy(P)
 task = store.create_task({
     "task_id": "BUG-155-COALESCE",
     "workstream_id": "BUG",

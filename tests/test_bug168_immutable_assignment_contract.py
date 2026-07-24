@@ -19,6 +19,7 @@ os.environ["PM_DYNAMIC_PROJECTS_DIR"] = str(TMP)
 os.environ["PM_AUTH_MODE"] = "dev-open"
 
 import store  # noqa: E402
+from execution_policy_fixture import install_ready_execution_policy  # noqa: E402
 from switchboard.application.commands import connect_dispatch  # noqa: E402
 from switchboard.connect import (  # noqa: E402
     Ack, HostRuntimeConfig, LaunchRefused, LeaseState, build_launch_spec,
@@ -36,6 +37,7 @@ FINDINGS = [{
 
 try:
     store.init_db(P)
+    install_ready_execution_policy(P)
     task = store.create_task({
         "workstream_id": "BUG",
         "title": "SIMPLIFY-16 regression",
