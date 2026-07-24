@@ -354,9 +354,27 @@ def mark_task_merged(task_id: str, merged_sha: str, pr_number: Optional[int] = N
     # Retry the whole write on a transient sqlite lock so a busy DB never silently drops the
     # merge provenance event (dropped webhook -> task stuck In Review instead of Done).
     s = _store_facade()
-    return s._write_through(project, lambda: s._mark_task_merged_impl(
+    result = s._write_through(project, lambda: s._mark_task_merged_impl(
         task_id, merged_sha, pr_number, pr_url, branch, head_sha, actor, project,
         provenance_source, task_ids_found))
+    if result.get("status") == "Done":
+        try:
+            from switchboard.storage.repositories.review_remediations import (
+                resolve_cross_task_review_repair,
+            )
+            result["cross_task_review_repair"] = resolve_cross_task_review_repair(
+                task_id,
+                actor="github-webhook/cross-task-review-repair",
+                project=project,
+            )
+        except Exception as exc:  # noqa: BLE001 - merge truth must survive repair retry
+            result["cross_task_review_repair"] = {
+                "schema": "switchboard.cross_task_review_repair.v1",
+                "status": "retry_required",
+                "reason": "repair_reconcile_failed",
+                "message": str(exc),
+            }
+    return result
 
 
 def _mark_task_merged_impl(task_id: str, merged_sha: str, pr_number: Optional[int] = None,
@@ -1470,6 +1488,41 @@ def reconcile(project: str = DEFAULT_PROJECT, incremental: bool = False,
             "detail": f"completion_run recovery failed: {exc}",
             "failure_class": "failed_gate",
         })
+    cross_task_review_repairs: Dict[str, Any] = {
+        "schema": "switchboard.cross_task_review_repair_reconcile.v1",
+        "checked": 0,
+        "resolved": 0,
+        "blocked": 0,
+        "results": [],
+    }
+    try:
+        from switchboard.storage.repositories.review_remediations import (
+            reconcile_cross_task_review_repairs,
+        )
+        cross_task_review_repairs = reconcile_cross_task_review_repairs(
+            actor="reconcile/cross-task-review-repair",
+            project=project,
+            limit=task_limit,
+        )
+        for result in cross_task_review_repairs.get("results") or []:
+            if result.get("status") != "blocked":
+                continue
+            findings.append({
+                "severity": "medium",
+                "task_id": result.get("repair_task_id"),
+                "code": "cross_task_review_repair_blocked",
+                "detail": result.get("reason") or "Linked review repair cannot reconcile.",
+                "failure_class": "failed_gate",
+                "cross_task_review_repair": result,
+            })
+    except Exception as exc:  # noqa: BLE001 - provenance reconcile must keep running
+        findings.append({
+            "severity": "medium",
+            "task_id": "",
+            "code": "cross_task_review_repair_reconcile_failed",
+            "detail": f"Cross-task review repair reconcile failed: {exc}",
+            "failure_class": "failed_gate",
+        })
     previous_cursor = int(_store_facade().get_meta(_reconcile_cursor_key(), 0, project=project) or 0) if incremental else 0
     previous_task_cursor = str(_store_facade().get_meta(
         "reconcile.task_cursor", "", project=project) or "") if incremental else ""
@@ -1633,7 +1686,8 @@ def reconcile(project: str = DEFAULT_PROJECT, incremental: bool = False,
     return {"project": project, "ok": not findings, "findings": findings,
             "activity_cursor": cursor, "checked_at": now,
             "external_checks": external_checks, "backfilled": backfilled,
-            "completion_run_recovery": completion_run_recovery}
+            "completion_run_recovery": completion_run_recovery,
+            "cross_task_review_repairs": cross_task_review_repairs}
 
 
 def close_stale_reconcile_alert_inbox(project: str = DEFAULT_PROJECT,

@@ -41,6 +41,28 @@ def _deps():
     return store
 
 
+def _review_repair_link(payload: dict[str, Any], source_task: str) -> dict[str, Any]:
+    raw = payload.get("review_repair")
+    if raw is None:
+        raw = payload.get("review_repair_json")
+    parsed = _parse_jsonish(raw)
+    if not isinstance(parsed, dict) or not parsed:
+        return {}
+    finding_ids = sorted({
+        str(finding_id or "").strip()
+        for finding_id in (parsed.get("finding_ids") or [])
+        if str(finding_id or "").strip()
+    })
+    return {
+        "schema": "switchboard.cross_task_review_repair.v1",
+        "status": "linked",
+        "source_task_id": source_task,
+        "source_verdict_id": str(parsed.get("source_verdict_id") or "").strip(),
+        "remediation_id": str(parsed.get("remediation_id") or "").strip(),
+        "finding_ids": finding_ids,
+    }
+
+
 def execute(
         data: dict[str, Any],
         *,
@@ -101,6 +123,21 @@ def execute(
             "message": "failure_class is optional, but supplied values must match fail_fix_signal.v1.",
         }
     failure_detail = failure_class_detail(failure_class) if failure_class else None
+    review_repair = _review_repair_link(payload, source_task)
+    if review_repair:
+        missing_repair = sorted(
+            key for key in ("source_verdict_id", "remediation_id", "finding_ids")
+            if not review_repair.get(key)
+        )
+        if missing_repair:
+            return {
+                "error": "incomplete_review_repair_link",
+                "missing": missing_repair,
+                "message": (
+                    "review_repair requires the exact source verdict, remediation, "
+                    "and complete finding id set; no BUG task was created."
+                ),
+            }
 
     source = get_task(source_task, project=project)
     if not source:
@@ -156,6 +193,7 @@ def execute(
             ).get("expected_signal") or str(payload.get("expected_behavior") or "").strip(),
         },
         "duplicate_of": duplicate_of or None,
+        "review_repair": review_repair or None,
     }
     task = create_task({
         "workstream_id": "BUG",
@@ -174,6 +212,10 @@ def execute(
         return {"error": "bug_task_not_created", "message": "BUG task creation failed."}
 
     full_state = set_agent_state(task["task_id"], "bug_report", report, project=project)
+    if review_repair:
+        review_repair["repair_task_id"] = task["task_id"]
+        full_state = set_agent_state(
+            task["task_id"], "review_repair", review_repair, project=project)
     report_event = {
         "bug_task_id": task["task_id"],
         "source_task": source_task,
@@ -183,6 +225,7 @@ def execute(
         "failure_class": report["failure_class"],
         "duplicate_of": duplicate_of or None,
         "evidence": report["evidence"],
+        "review_repair": review_repair or None,
     }
     append_activity("bug.submitted", actor, report_event,
                     task_id=task["task_id"], project=project)
