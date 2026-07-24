@@ -1438,14 +1438,19 @@ def _stage_managed_completion_stop_in(
         c: sqlite3.Connection, claim: sqlite3.Row, work_session_gate: Dict[str, Any],
         evidence: Dict[str, Any], requested_status: str, actor: str,
         now: float) -> Optional[Dict[str, Any]]:
-    """Fence one durably-bound Connect implementation; ignore unmanaged claims."""
+    """Fence one durably-bound Connect completion; ignore unmanaged claims."""
     runner_id = str(claim["runner_session_id"] or "")
     generation = int(claim["execution_generation"] or 0)
     role = str(claim["execution_role"] or "").strip().lower()
     epoch = int(claim["lease_epoch"] or 0)
     if not any((runner_id, generation, role, epoch)):
         return None  # Backward-compatible unmanaged/legacy completion.
-    if not (runner_id and generation > 0 and role == "implementation" and epoch > 0):
+    if not (
+        runner_id
+        and generation > 0
+        and role in {"implementation", "remediation"}
+        and epoch > 0
+    ):
         return {"completed": False, "reason": "implementation_execution_binding_invalid",
                 "failure_class": "unbound_identity", "claim_id": claim["id"],
                 "task_id": claim["task_id"]}
