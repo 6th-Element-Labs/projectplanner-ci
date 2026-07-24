@@ -37,6 +37,18 @@ def _map(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+def _canonical_findings(value: Any) -> list[dict[str, Any]]:
+    """Return a deterministic finding set for effect identity."""
+    rows = [
+        _map(item) for item in (value or [])
+        if isinstance(item, Mapping)
+    ]
+    return sorted(
+        rows,
+        key=lambda row: json.dumps(row, sort_keys=True, separators=(",", ":"), default=str),
+    )
+
+
 def _effect_for(route: str, decision_effect: str,
                 snapshot: Mapping[str, Any]) -> str:
     if route == "none":
@@ -78,8 +90,10 @@ def _fence(snapshot: Mapping[str, Any], desired_role: str,
 
 
 def effect_key(run: Mapping[str, Any], snapshot: Mapping[str, Any],
-               route: str, desired_role: str) -> str:
-    """Stable for one decision; different for a new head, route, role, or attempt.
+               route: str, desired_role: str, *,
+               acceptance_findings: Any = None,
+               escalated_findings: Any = None) -> str:
+    """Stable for one repair contract; changes with findings or execution identity.
 
     Deliberately excludes every continuously changing liveness value (lease
     renewals, heartbeats, ``expires_at``), which would otherwise make each tick
@@ -94,6 +108,8 @@ def effect_key(run: Mapping[str, Any], snapshot: Mapping[str, Any],
         "route": _text(route),
         "desired_role": _text(desired_role),
         "attempt": int(run.get("attempt") or 0),
+        "acceptance_findings": _canonical_findings(acceptance_findings),
+        "escalated_findings": _canonical_findings(escalated_findings),
     }
     digest = hashlib.sha256(
         json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
@@ -109,6 +125,8 @@ def plan_effect(decision: Mapping[str, Any], snapshot: Mapping[str, Any],
     route = _text(decision.get("route"))
     desired_role = decision.get("desired_role") or ""
     head_sha = str(snapshot.get("head_sha") or "").strip()
+    acceptance_findings = list(decision.get("acceptance_findings") or [])
+    escalated_findings = list(decision.get("escalated_findings") or [])
 
     effect = _effect_for(route, _text(decision.get("effect")), snapshot)
     fence_required, generation = _fence(snapshot, desired_role, head_sha)
@@ -131,13 +149,22 @@ def plan_effect(decision: Mapping[str, Any], snapshot: Mapping[str, Any],
         "pr_number": snapshot.get("pr_number"),
         "head_sha": head_sha,
         "board_projection": decision.get("board_projection"),
+        "acceptance_findings": acceptance_findings,
+        "escalated_findings": escalated_findings,
         "fence_required": fence_required,
         "fence_generation": generation if fence_required else None,
         "queue_remediation_round": effect == "start_remediation",
         "reread_after": effect == "mark_ready",
         "once_only": effect in ONCE_ONLY_EFFECTS,
         "mutates": effect in MUTATING_EFFECTS,
-        "idem_key": effect_key(run, snapshot, route, desired_role),
+        "idem_key": effect_key(
+            run,
+            snapshot,
+            route,
+            desired_role,
+            acceptance_findings=acceptance_findings,
+            escalated_findings=escalated_findings,
+        ),
     }
 
 

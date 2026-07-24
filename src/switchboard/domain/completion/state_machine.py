@@ -182,6 +182,50 @@ def _finding_decision(findings: Sequence[Mapping[str, Any]]) -> dict[str, Any] |
     return None
 
 
+def _changes_requested_decision(
+    review: Mapping[str, Any],
+    head_sha: str,
+) -> dict[str, Any] | None:
+    """Classify actionable findings only when the verdict is for this PR head."""
+    review_state = _text(
+        review.get("status") or review.get("state") or review.get("verdict")
+    )
+    review_head = str(review.get("head_sha") or "").strip()
+    if review_state not in {"changes_requested", "changes"}:
+        return None
+    if not review_head or review_head != head_sha:
+        return None
+    if review.get("retry_exhausted"):
+        return _decision(
+            "blocked", "human", "review_retry_budget_exhausted", board="Blocked",
+        )
+
+    findings = [_map(item) for item in (review.get("findings") or [])]
+    automatic = [
+        item for item in findings
+        if _text(item.get("finding_class") or item.get("kind") or item.get("class"))
+        in {"automatic", "product", "code", "auto"}
+    ]
+    escalated = [item for item in findings if item not in automatic]
+    if automatic:
+        # A current-head repair contract is actionable even when a CI adapter
+        # has not hydrated its contexts yet. The next remediation generation
+        # can repair these findings while coordination separately heals CI.
+        decision = _decision(
+            "blocked", "remediation", "automatic_review_findings",
+            role="remediation", board="Blocked",
+        )
+        decision["acceptance_findings"] = automatic
+        decision["escalated_findings"] = escalated
+        return decision
+
+    decision = _decision(
+        "blocked", "human", "human_review_findings", board="Blocked",
+    )
+    decision["escalated_findings"] = escalated
+    return decision
+
+
 def classify_completion(
     current_run: Mapping[str, Any] | None,
     snapshot: Mapping[str, Any],
@@ -219,9 +263,17 @@ def classify_completion(
                          retry="bounded")
 
     queue_state = _text(queue.get("state") or queue.get("status"))
-    queue_failure = _text(queue.get("failure_attribution") or queue.get("failure_class"))
     if queue_state in {"merged", "complete", "completed"}:
         return _decision("reconciling", "reconcile", "merge_queue_merged")
+
+    # Exact-head changes requested are already a complete, actionable repair
+    # contract. They outrank nonterminal merge-queue and CI coordination state,
+    # but never canonical evidence that the queue has already merged the PR.
+    review_decision = _changes_requested_decision(review, head_sha)
+    if review_decision:
+        return review_decision
+
+    queue_failure = _text(queue.get("failure_attribution") or queue.get("failure_class"))
     if queue_state in _QUEUE_WAIT:
         if queue_state == "locked" and queue.get("retry_exhausted"):
             return _decision("blocked", "coordination_retry", "merge_queue_locked",
@@ -277,26 +329,6 @@ def classify_completion(
     review_head = str(review.get("head_sha") or "").strip()
     if review.get("retry_exhausted"):
         return _decision("blocked", "human", "review_retry_budget_exhausted", board="Blocked")
-    if review_state in {"changes_requested", "changes"}:
-        findings = [_map(item) for item in (review.get("findings") or [])]
-        automatic = [
-            item for item in findings
-            if _text(item.get("finding_class") or item.get("kind") or item.get("class"))
-            in {"automatic", "product", "code", "auto"}
-        ]
-        escalated = [item for item in findings if item not in automatic]
-        if automatic:
-            # Mixed findings dispatch the automatic repair AND keep the
-            # escalation. One judgment finding must not strand work a coder
-            # could have fixed (COORD-46 normalization requirement 3).
-            decision = _decision("blocked", "remediation", "automatic_review_findings",
-                                 role="remediation", board="Blocked")
-            decision["acceptance_findings"] = automatic
-            decision["escalated_findings"] = escalated
-            return decision
-        decision = _decision("blocked", "human", "human_review_findings", board="Blocked")
-        decision["escalated_findings"] = escalated
-        return decision
     review_passed = review_state in {"pass", "passed", "approved", "success"}
     if not review_passed or (review_head and review_head != head_sha):
         return _decision("assessing", "review_merge",
