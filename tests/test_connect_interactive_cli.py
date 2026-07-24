@@ -72,7 +72,8 @@ inventory = {"host_id": "host/interactive-test", "repo_root": str(ROOT),
              ]}
 
 cmd, mode = agent_host.launch_command(
-    connect_wake("codex"), inventory, runner_session_id="run_interactive")
+    connect_wake("codex"), inventory, runner_session_id="run_interactive",
+    workspace_path=str(ROOT))
 child = cmd[cmd.index("--") + 1:]
 ok(mode == "connect", "wake resolves to connect mode")
 ok(child[0] == "codex", f"codex launches the codex CLI (got {child[0]})")
@@ -87,14 +88,16 @@ ok("mcp_servers.taikun_plan.required=true" in child
    "codex Connect boots with required MCP and the via-Switchboard note")
 
 claude_cmd, _ = agent_host.launch_command(
-    connect_wake("claude-code"), inventory, runner_session_id="run_interactive2")
+    connect_wake("claude-code"), inventory, runner_session_id="run_interactive2",
+    workspace_path=str(ROOT))
 claude_child = claude_cmd[claude_cmd.index("--") + 1:]
 ok(claude_child[0] == "claude" and "-p" not in claude_child,
    "claude-code launches the interactive CLI, not print mode "
    f"(argv={claude_child[:3]})")
 
 cursor_cmd, _ = agent_host.launch_command(
-    connect_wake("cursor"), inventory, runner_session_id="run_interactive3")
+    connect_wake("cursor"), inventory, runner_session_id="run_interactive3",
+    workspace_path=str(ROOT))
 cursor_child = cursor_cmd[cursor_cmd.index("--") + 1:]
 ok(cursor_child[0] == "cursor-agent" and "-p" not in cursor_child,
    "cursor launches the interactive CLI, not print mode "

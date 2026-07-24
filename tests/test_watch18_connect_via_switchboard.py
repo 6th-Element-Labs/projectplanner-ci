@@ -136,7 +136,8 @@ saved_base = os.environ.get("PM_BASE")
 os.environ["PM_BASE"] = "https://plan.example.test"
 try:
     command, mode = agent_host.launch_command(
-        wake, inventory, runner_session_id="run_watch18")
+        wake, inventory, runner_session_id="run_watch18",
+        workspace_path=str(ROOT))
 finally:
     if saved_base is None:
         os.environ.pop("PM_BASE", None)

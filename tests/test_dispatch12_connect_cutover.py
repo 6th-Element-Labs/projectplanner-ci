@@ -225,7 +225,8 @@ for row in captured:
         }],
     }
     command, mode = agent_host.launch_command(
-        wake, inventory, runner_session_id="run-host-test")
+        wake, inventory, runner_session_id="run-host-test",
+        workspace_path=str(ROOT))
     note = next((part for part in reversed(command)
                  if isinstance(part, str) and "via Switchboard" in part), "")
     ok(mode == "connect" and "Do DISPATCH-12 in project" in note
