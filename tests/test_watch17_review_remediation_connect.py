@@ -9,6 +9,7 @@ from pathlib import Path
 
 import mission_coordinator
 from switchboard.application.commands import connect_dispatch, task_execution
+from execution_policy_fixture import ready_execution_context
 
 
 def load_host_eligibility():
@@ -43,6 +44,7 @@ captured: list[dict] = []
 saved_request = connect_dispatch.coordination_repo.request_wake
 saved_projection = task_execution._projection
 saved_live_executions = task_execution.runner_repo.task_live_executions
+saved_resolve = connect_dispatch.execution_context.resolve
 
 
 def request_wake(**kwargs):
@@ -52,6 +54,8 @@ def request_wake(**kwargs):
 
 try:
     connect_dispatch.coordination_repo.request_wake = request_wake
+    connect_dispatch.execution_context.resolve = lambda **kwargs: ready_execution_context(
+        kwargs["task_id"], runtime=kwargs["runtime"])
     task_execution.runner_repo.task_live_executions = lambda *_args, **_kwargs: []
     task_execution._projection = lambda *_args, **_kwargs: {
         "task": {
@@ -73,6 +77,7 @@ finally:
     connect_dispatch.coordination_repo.request_wake = saved_request
     task_execution._projection = saved_projection
     task_execution.runner_repo.task_live_executions = saved_live_executions
+    connect_dispatch.execution_context.resolve = saved_resolve
 
 
 assert role == "remediation"

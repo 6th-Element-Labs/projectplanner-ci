@@ -16,6 +16,7 @@ os.environ["PM_AUTH_MODE"] = "dev-open"
 from path_setup import ROOT  # noqa: E402,F401
 
 import store  # noqa: E402
+from execution_policy_fixture import install_ready_execution_policy  # noqa: E402
 from switchboard.application.commands import task_execution  # noqa: E402
 
 P = "switchboard"
@@ -37,6 +38,7 @@ def new_task(title):
 try:
     store.init_project_registry()
     store.init_db(P)
+    install_ready_execution_policy(P)
     store.register_host({
         "host_id": "host/full", "display_name": "Full Mac", "status": "online",
         "runtimes": [{"runtime": "codex", "available": True,

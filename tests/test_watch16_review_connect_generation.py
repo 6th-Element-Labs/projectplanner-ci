@@ -5,12 +5,14 @@ from __future__ import annotations
 from path_setup import ROOT  # noqa: F401
 
 from switchboard.application.commands import connect_dispatch, task_execution
+from execution_policy_fixture import ready_execution_context
 
 
 captured: list[dict] = []
 saved_request = connect_dispatch.coordination_repo.request_wake
 saved_projection = task_execution._projection
 saved_live_executions = task_execution.runner_repo.task_live_executions
+saved_resolve = connect_dispatch.execution_context.resolve
 
 
 def request_wake(**kwargs):
@@ -20,6 +22,8 @@ def request_wake(**kwargs):
 
 try:
     connect_dispatch.coordination_repo.request_wake = request_wake
+    connect_dispatch.execution_context.resolve = lambda **kwargs: ready_execution_context(
+        kwargs["task_id"], runtime=kwargs["runtime"])
     task_execution.runner_repo.task_live_executions = lambda *_args, **_kwargs: []
     task_execution._projection = lambda *_args, **_kwargs: {
         "task": {"task_id": "WATCH-16", "_wsId": "WATCH", "updated_at": 12.0},
@@ -46,13 +50,16 @@ finally:
     connect_dispatch.coordination_repo.request_wake = saved_request
     task_execution._projection = saved_projection
     task_execution.runner_repo.task_live_executions = saved_live_executions
+    connect_dispatch.execution_context.resolve = saved_resolve
 
 assert first["started"] is True and first["role"] == "review_merge", first
 assert retried["started"] is True, retried
 assert len(captured) == 4
 assert captured[0]["policy"]["mode"] == "connect"
-assert set(captured[0]["policy"]) == {
-    "mode", "assignment", "lifecycle", "effect_identity"}
+assert {
+    "mode", "assignment", "lifecycle", "effect_identity", "scheduler",
+    "placement", "execution_context",
+}.issubset(captured[0]["policy"])
 assert captured[0]["idem_key"] == captured[1]["idem_key"]
 assert captured[0]["policy"] == captured[1]["policy"]
 assert captured[2]["idem_key"] != captured[0]["idem_key"]

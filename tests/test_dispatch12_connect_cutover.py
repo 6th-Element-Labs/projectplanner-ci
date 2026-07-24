@@ -12,6 +12,7 @@ from path_setup import ROOT
 from switchboard.application.commands import connect_dispatch
 from switchboard.application.commands import task_execution
 from switchboard.connect.execution_assignment import build_execution_assignment
+from execution_policy_fixture import ready_execution_context
 
 
 passed = failed = 0
@@ -26,6 +27,7 @@ def ok(condition: bool, message: str) -> None:
 
 captured: list[dict] = []
 original_request_wake = connect_dispatch.coordination_repo.request_wake
+original_resolve = connect_dispatch.execution_context.resolve
 
 
 def fake_request_wake(**kwargs):
@@ -34,6 +36,8 @@ def fake_request_wake(**kwargs):
 
 
 connect_dispatch.coordination_repo.request_wake = fake_request_wake
+connect_dispatch.execution_context.resolve = lambda **kwargs: ready_execution_context(
+    kwargs["task_id"], runtime=kwargs["runtime"])
 try:
     for runtime in ("codex", "claude", "cursor"):
         result = connect_dispatch.enqueue_task(
@@ -50,6 +54,7 @@ try:
     )
 finally:
     connect_dispatch.coordination_repo.request_wake = original_request_wake
+    connect_dispatch.execution_context.resolve = original_resolve
 
 request_payload_fields = ("selector", "reason", "source", "policy", "task_id")
 ok(captured[0]["idem_key"] == captured[-1]["idem_key"]
@@ -62,9 +67,11 @@ for row in captured:
     policy = row["policy"]
     assignment = policy.get("assignment") or {}
     lifecycle = policy.get("lifecycle") or {}
-    ok(set(policy) == {"mode", "assignment", "lifecycle"}
-       and policy["mode"] == "connect",
-       "durable wake policy keeps lifecycle identity beside Assignment v1")
+    ok({"mode", "assignment", "lifecycle", "scheduler", "placement",
+        "execution_context"}.issubset(policy)
+       and policy["mode"] == "connect"
+       and policy["scheduler"]["mode"] == "hybrid",
+       "durable wake policy keeps lifecycle identity and hybrid placement")
     ok(set(assignment) == {
         "schema", "assignment_id", "principal_ref", "work_ref", "runtime",
         "provider", "workspace_ref", "limits", "queued_at",

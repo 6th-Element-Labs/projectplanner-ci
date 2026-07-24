@@ -25,12 +25,14 @@ if sys.version_info < (3, 10):
     dataclasses.dataclass = _compat_dataclass
 
 import store  # noqa: E402
+from execution_policy_fixture import install_ready_execution_policy  # noqa: E402
 from switchboard.application.commands import task_execution  # noqa: E402
 
 P = "switchboard"
 
 try:
     store.init_db(P)
+    install_ready_execution_policy(P)
     task = store.create_task({"workstream_id": "BUG", "title": "BUG-130 regression"},
                              actor="bug130-test", project=P)
     task_id = task["task_id"]
