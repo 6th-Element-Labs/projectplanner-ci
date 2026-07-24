@@ -111,6 +111,14 @@
         const sc = SRC[it.source] || ['#8b95a5', 'ti-point', ''];
         const isAgent = it.source === 'agent';
         const isInbox = it.source === 'inbox';
+        const isProvider = it.source === 'provider' && Array.isArray(it.payload && it.payload.choices) && it.payload.choices.length;
+        const choiceButtons = isProvider ? (it.payload.choices || []).map((c) => {
+            const id = (c && c.id) || c;
+            const label = (c && (c.label || c.id)) || String(c);
+            const primary = it.payload.recommended_default
+                && ((it.payload.recommended_default.id || it.payload.recommended_default) === id);
+            return `<button type="button" class="btn ${primary ? 'btn-primary' : 'btn-outline-secondary'}" data-choice="${esc(id)}">${esc(label)}</button>`;
+        }).join('') : '';
         detail.innerHTML = `
             <div class="d-flex align-items-start gap-2 mb-2">
                 <div class="flex-fill">
@@ -136,7 +144,10 @@
                     <button type="button" class="btn btn-primary" id="needs-confirm"><i class="ti ti-checks me-1"></i>Confirm — apply proposals</button>
                     <button type="button" class="btn btn-outline-secondary" id="needs-open"><i class="ti ti-list-details me-1"></i>Review in Action Queue</button>
                     <button type="button" class="btn btn-ghost-danger" id="needs-dismiss">Dismiss</button>
-                </div>` : `
+                </div>` : isProvider ? `
+                <div class="tk-eyebrow mb-2">Decide</div>
+                <div class="btn-list mb-2">${choiceButtons}</div>
+                <div class="text-secondary small mb-2">Resumed appears only after a delivery/execution receipt — not when the choice is recorded.</div>` : `
                 <div class="tk-eyebrow mb-2">Authoritative source</div>
                 <div class="card card-sm mb-2"><div class="card-body p-2">${datagrid(it.links)}</div></div>
                 <div class="text-secondary small">Resolve this item through its owning provider, mission, or plan-decision workflow.</div>`}
@@ -187,6 +198,25 @@
                 const t = document.querySelector('a[href="#tab-inbox"]');
                 if (t && window.bootstrap) window.bootstrap.Tab.getOrCreateInstance(t).show();
             });
+        } else if (isProvider) {
+            detail.querySelectorAll('[data-choice]').forEach((btn) => btn.addEventListener('click', async () => {
+                flash('Recording decision…');
+                try {
+                    const body = {
+                        expected_version: it.payload.version,
+                        choice: { id: btn.dataset.choice },
+                        idempotency_key: `operator-decide:${it.payload.request_id}:${btn.dataset.choice}`,
+                    };
+                    const res = await fetch(`${it.decide.path}?project=${encodeURIComponent(proj())}`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body),
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) throw new Error(data.detail || data.error || data.message || `HTTP ${res.status}`);
+                    flash('Decision recorded — Autopilot wakes to reassess. Resumed waits on a delivery receipt.', 'text-green');
+                    setTimeout(load, 600);
+                } catch (e) { flash('Decide failed: ' + e.message, 'text-danger'); }
+            }));
         }
     }
 

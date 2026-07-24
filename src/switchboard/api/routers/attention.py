@@ -165,28 +165,45 @@ def _inbox_item(it: Dict[str, Any]) -> Dict[str, Any]:
 def _provider_item(item: Dict[str, Any]) -> Dict[str, Any]:
     request_id = str(item.get("request_id") or "")
     task_id = str(item.get("task_id") or "")
-    context = item.get("context") or {}
+    context = item.get("context") if isinstance(item.get("context"), dict) else {}
+    provider = str(item.get("provider") or "")
+    recommended = item.get("recommended_default")
+    completion_human = provider.startswith("switchboard.completion")
+    kind = "completion_human" if completion_human else "provider_request"
     return {
         "attention_id": f"provider:{request_id}", "source_id": f"provider:{request_id}",
-        "source": "provider", "kind": "provider_request", "task_id": task_id,
+        "source": "provider", "kind": kind, "task_id": task_id,
         "title": str(item.get("prompt") or "")[:120],
-        "summary": str(item.get("prompt") or ""), "from": item.get("provider") or "",
+        "summary": str(item.get("prompt") or ""), "from": provider,
         "to": "", "age_s": _age_s(item.get("created_at")),
         "deadline": item.get("expires_at"), "delivery_impact": "blocking",
         "unfinished_downstream": int(context.get("unfinished_downstream") or 0),
         "payload": {
             "request_id": request_id, "version": item.get("version"),
-            "choices": item.get("choices"), "recommended_default": item.get("recommended_default"),
-            "evidence": context.get("evidence"), "blast_radius": context.get("blast_radius"),
+            "choices": item.get("choices"), "recommended_default": recommended,
+            "reason_code": context.get("reason_code") or context.get("unresolved_gate"),
+            "pr_number": context.get("pr_number"),
+            "head_sha": context.get("head_sha"),
+            "resume_condition": context.get("resume_condition"),
+            "next_automatic_action": context.get("next_automatic_action"),
+            "evidence": context.get("evidence") or context.get("evidence_refs"),
+            "blast_radius": context.get("blast_radius"),
         },
         "links": {
             "mission": context.get("mission_id") or context.get("deliverable_id"),
             "task": f"#task/{task_id}" if task_id else None,
-            "provider": item.get("provider"), "host": item.get("host_id"),
+            "provider": provider or None, "host": item.get("host_id"),
             "session": item.get("runner_session_id") or item.get("work_session_id"),
         },
-        "decide": {"method": "POST",
-                   "path": f"/api/attention/requests/{request_id}/decide"},
+        "decide": {
+            "method": "POST",
+            "path": f"/api/attention/requests/{request_id}/decide",
+            "body": {
+                "expected_version": item.get("version"),
+                "choice": recommended,
+                "idempotency_key": f"operator-decide:{request_id}",
+            },
+        },
     }
 
 
