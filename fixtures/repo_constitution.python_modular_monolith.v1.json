@@ -1,0 +1,30 @@
+{
+  "schema": "switchboard.repo_constitution.v1",
+  "profile_id": "python_modular_monolith",
+  "project_id": "switchboard",
+  "product_root": "src/switchboard/",
+  "test_root": "tests/",
+  "docs_front_door": "docs/INDEX.md",
+  "agent_front_door": "AGENTS.md",
+  "entrypoints": [
+    "src/switchboard/main.py",
+    "mcp_server.py",
+    "app.py"
+  ],
+  "forbid_new": [
+    "*.py"
+  ],
+  "shim_policy": "timed",
+  "required_files": [
+    "src/switchboard/__init__.py",
+    "tests/",
+    "docs/INDEX.md",
+    "AGENTS.md",
+    "docs/decisions/0007-application-shell-cleanup.md"
+  ],
+  "archive_roots": [
+    "archive/"
+  ],
+  "enforcement_mode": "warn",
+  "notes": "Reference profile for Switchboard/projectplanner aligned to ADR-0007 Decision 7 target tree. Root *.py forbid_new applies to new root modules; grandfathered shims remain under timed shim_policy. docs/INDEX.md and AGENTS.md are constitution front doors even when not yet present on disk."
+}
