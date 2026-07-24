@@ -52,17 +52,22 @@ def hydrate_completion_snapshot(
 ) -> dict[str, Any]:
     """Read the public production authorities for one exact-head assessment."""
     if store_mod is None:
-        import store as store_mod
+        from switchboard.storage.repositories import projects, tasks
+        get_task = tasks.get_task
+        get_repo = projects.get_project_github_repo
+    else:
+        get_task = store_mod.get_task
+        get_repo = store_mod.get_project_github_repo
     from switchboard.application.commands import merge_gate as merge_gate_command
     from switchboard.application.queries import task_session
     from switchboard.storage.repositories import provenance
 
     task_id = str(task_id or "").strip().upper()
-    task = store_mod.get_task(task_id, project=project) or {}
+    task = get_task(task_id, project=project) or {}
     git_state = _map(task.get("git_state"))
     pr_number = int(git_state.get("pr_number") or 0)
     pr_url = str(git_state.get("pr_url") or "")
-    repo = str(store_mod.get_project_github_repo(project) or "")
+    repo = str(get_repo(project) or "")
     token = provenance._github_token()
     github_pr = (
         provenance._github_pr(repo, pr_number, token)
@@ -120,11 +125,14 @@ def production_effect_adapters(
 ) -> CompletionEffectAdapters:
     """Bind the effect ports to existing Task Execution, GitHub, and reconcile."""
     if store_mod is None:
-        import store as store_mod
+        from switchboard.storage.repositories import projects
+        get_repo = projects.get_project_github_repo
+    else:
+        get_repo = store_mod.get_project_github_repo
     from switchboard.application.commands import task_execution
     from switchboard.storage.repositories import provenance
 
-    repo = str(store_mod.get_project_github_repo(project) or "")
+    repo = str(get_repo(project) or "")
     token = provenance._github_token()
 
     def start(plan: Mapping[str, Any]) -> dict[str, Any]:
