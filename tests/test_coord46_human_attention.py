@@ -28,6 +28,7 @@ from switchboard.storage.repositories import completion_runs
 from switchboard.storage.repositories import task_completion
 
 HEAD = "c" * 40
+PR_812 = "https://github.com/6th-Element-Labs/projectplanner/pull/812"
 
 
 def _pr812_snapshot(**extra):
@@ -35,11 +36,14 @@ def _pr812_snapshot(**extra):
         task={
             "task_id": "COORD-20",
             "status": "In Review",
-            "git_state": {"head_sha": HEAD, "pr_number": 812},
+            "git_state": {
+                "head_sha": HEAD, "pr_number": 812, "pr_url": PR_812,
+            },
             "deliverable": {"deliverable_id": "alerts", "milestone_id": "alerts-m3-ui"},
         },
         github_pr={
             "number": 812,
+            "url": PR_812,
             "state": "open",
             "draft": False,
             "mergeable": True,
@@ -51,7 +55,7 @@ def _pr812_snapshot(**extra):
             "name": "Switchboard CI / VM gate",
             "conclusion": "success",
         }],
-        review={"status": "passed", "head_sha": HEAD},
+        review={"status": "passed", "head_sha": HEAD, "pr_url": PR_812},
         merge_gate={
             "findings": [{
                 "code": "credentialed_live_proof_unavailable",
@@ -61,7 +65,16 @@ def _pr812_snapshot(**extra):
             }],
         },
         work_session={"work_session_id": "worksession-812", "status": "active"},
-        runner={"live": True, "role": "review_merge", "head_sha": HEAD, "generation": 4},
+        runner={
+            "live": True,
+            "runner_session_id": "runner-812",
+            "execution_id": "execution-812",
+            "execution_connection_id": "connection-812",
+            "generation": 4,
+            "fence_epoch": 7,
+            "role": "review_merge",
+            "head_sha": HEAD,
+        },
     )
     snap.update(extra)
     return snap
@@ -79,6 +92,12 @@ class HumanAttentionCloseout(unittest.TestCase):
             "CREATE TABLE task_git_state ("
             "task_id TEXT PRIMARY KEY, pr_number INTEGER, head_sha TEXT, "
             "branch TEXT, pr_url TEXT, merged_sha TEXT, evidence_json TEXT)")
+        self.db.execute(
+            "CREATE TABLE autopilot_scopes ("
+            "scope_id TEXT PRIMARY KEY, status TEXT, lease_id TEXT, "
+            "holder_agent_id TEXT, generation INTEGER, fence_epoch INTEGER, "
+            "expires_at REAL, scope_type TEXT, task_project TEXT, task_id TEXT, "
+            "deliverable_id TEXT)")
         for name, sql in migrations.DDL_MIGRATIONS:
             if name in {
                 "0074_task_execution_completion_phases",
@@ -173,7 +192,10 @@ class HumanAttentionCloseout(unittest.TestCase):
             "SELECT status FROM tasks WHERE task_id=?", ("COORD-20",)
         ).fetchone()["status"]
         self.assertEqual(board, "Blocked")
-        self.assertEqual(self.fenced, [4])
+        self.assertEqual(len(self.fenced), 1)
+        self.assertEqual(self.fenced[0]["runner_session_id"], "runner-812")
+        self.assertEqual(self.fenced[0]["generation"], 4)
+        self.assertEqual(self.fenced[0]["fence_epoch"], 7)
 
         request = first["attention"]["request"]
         ctx = request["context"]
@@ -221,18 +243,135 @@ class HumanAttentionCloseout(unittest.TestCase):
         )
         self.assertEqual(resume["status"], "decision_recorded")
         self.assertFalse(resume["resumed"])
-        self.assertEqual(len(self.wakes), 1)
+        self.assertEqual(len(self.wakes), 0)
+        self.assertEqual(decided["completion_wake"]["status"], "pending")
 
-        with_receipt = execute_effect.mark_human_resume_receipt(
+        def wake_owner(payload):
+            self.wakes.append(payload)
+            self.db.execute(
+                "INSERT INTO autopilot_scopes VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    "scope-812", "active", "lease-812", "owner-812", 1, 1,
+                    9_999_999_999.0, "task", "switchboard", "COORD-20",
+                    "alerts",
+                ),
+            )
+            return {"scope_id": "scope-812"}
+
+        accepted = attention_repo.attempt_completion_wake(
             request["request_id"],
-            expected_version=decided["request"]["version"],
-            host_id=request.get("host_id") or "operator",
+            wake_completion_owner=wake_owner,
             actor="completion-owner",
-            receipt={"execution_id": "exec-1", "schema": "switchboard.delivery_receipt.v1"},
             project="switchboard",
         )
-        self.assertTrue(with_receipt["resumed"])
+        self.assertEqual(accepted["status"], "accepted")
+        self.assertEqual(len(self.wakes), 1)
+
+        reassessment = self._tick()
+        reassessment_decision = classify_completion(None, _pr812_snapshot())
+        with_receipt = attention_repo.complete_completion_wake_for_tick(
+            "COORD-20",
+            tick={
+                "schema": "switchboard.completion_tick.v1",
+                "task_id": "COORD-20",
+                "snapshot": _pr812_snapshot(),
+                "decision": reassessment_decision,
+                "plan": reassessment["plan"],
+                "execution": reassessment,
+            },
+            scope_authority={
+                "schema": "switchboard.autopilot_scope_authority.v1",
+                "scope_id": "scope-812",
+                "lease_id": "lease-812",
+                "holder_agent_id": "owner-812",
+                "generation": 1,
+                "fence_epoch": 1,
+            },
+            actor="completion-owner",
+            project="switchboard",
+        )
         self.assertEqual(with_receipt["status"], "resolved")
+        self.assertTrue(with_receipt["completion_receipt"]["verified"])
+        self.assertIn("followup_attention", with_receipt)
+        counts = self.db.execute(
+            "SELECT COUNT(*) AS total, "
+            "SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending "
+            "FROM attention_requests WHERE task_id=?",
+            ("COORD-20",),
+        ).fetchone()
+        self.assertEqual((counts["total"], counts["pending"]), (2, 1))
+
+        # A second human loop must bind the new accepted wake, not replay the
+        # older resolved wake for the same task/head/scope.
+        followup = with_receipt["followup_attention"]["request"]
+        second_decision = attention_repo.default_attention_repository.record_decision(
+            followup["request_id"],
+            {
+                "expected_version": followup["version"],
+                "choice": {"id": "supply_credential"},
+                "idempotency_key": "decide-812-2",
+            },
+            actor="operator",
+            actor_principal_id="principal-1",
+            project="switchboard",
+        )
+        second_accepted = attention_repo.attempt_completion_wake(
+            followup["request_id"],
+            wake_completion_owner=lambda _payload: {"scope_id": "scope-812"},
+            actor="completion-owner",
+            project="switchboard",
+        )
+        self.assertEqual(second_accepted["status"], "accepted")
+        second_reassessment = self._tick()
+        second_decision_model = classify_completion(None, _pr812_snapshot())
+        second_receipt = attention_repo.complete_completion_wake_for_tick(
+            "COORD-20",
+            tick={
+                "schema": "switchboard.completion_tick.v1",
+                "task_id": "COORD-20",
+                "snapshot": _pr812_snapshot(),
+                "decision": second_decision_model,
+                "plan": second_reassessment["plan"],
+                "execution": second_reassessment,
+            },
+            scope_authority={
+                "schema": "switchboard.autopilot_scope_authority.v1",
+                "scope_id": "scope-812",
+                "lease_id": "lease-812",
+                "holder_agent_id": "owner-812",
+                "generation": 1,
+                "fence_epoch": 1,
+            },
+            actor="completion-owner",
+            project="switchboard",
+        )
+        self.assertEqual(second_receipt["status"], "resolved")
+        self.assertEqual(
+            second_receipt["wake_id"], second_accepted["wake_id"])
+        self.assertNotEqual(
+            second_receipt["wake_id"], with_receipt["wake_id"])
+        counts = self.db.execute(
+            "SELECT COUNT(*) AS total, "
+            "SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending "
+            "FROM attention_requests WHERE task_id=?",
+            ("COORD-20",),
+        ).fetchone()
+        self.assertEqual((counts["total"], counts["pending"]), (3, 1))
+
+        with self.assertRaises(attention_repo.AttentionStoreError) as arbitrary:
+            execute_effect.mark_human_resume_receipt(
+                request["request_id"],
+                expected_version=decided["request"]["version"],
+                host_id=request.get("host_id") or "operator",
+                actor="completion-owner",
+                receipt={
+                    "execution_id": "exec-forged",
+                    "schema": "switchboard.delivery_receipt.v1",
+                },
+                project="switchboard",
+            )
+        self.assertEqual(
+            arbitrary.exception.code, "attention_completion_owner_required")
 
         # Board stays Blocked until the completion owner reclassifies a new head.
         board = self.db.execute(
@@ -261,12 +400,12 @@ class HumanAttentionCloseout(unittest.TestCase):
         self.assertEqual(before["prompt"], after["prompt"])
         self.assertTrue(again["attention"]["idempotent_replay"])
 
-    def test_failed_attention_write_is_recovered_from_durable_human_run(self):
-        """The completion run is the outbox intent; the next tick repairs delivery."""
-        original = attention_repo.default_attention_repository.create_request
+    def test_failed_attention_write_rolls_back_human_projection_atomically(self):
+        """Blocked(route=human) never exists without its Needs-you authority."""
+        original = attention_repo.create_attention_request_in
         with patch.object(
-            attention_repo.default_attention_repository,
-            "create_request",
+            attention_repo,
+            "create_attention_request_in",
             side_effect=RuntimeError("injected attention write failure"),
         ):
             with self.assertRaisesRegex(RuntimeError, "injected"):
@@ -274,8 +413,13 @@ class HumanAttentionCloseout(unittest.TestCase):
 
         run = completion_runs.get_active_completion_run(
             "COORD-20", project="switchboard")
-        self.assertEqual(run["route"], "human")
-        self.assertEqual(run["board_status"], "Blocked")
+        self.assertIsNone(run)
+        self.assertEqual(
+            self.db.execute(
+                "SELECT status FROM tasks WHERE task_id='COORD-20'"
+            ).fetchone()["status"],
+            "In Review",
+        )
         self.assertEqual(
             self.db.execute(
                 "SELECT COUNT(*) AS n FROM attention_requests"
@@ -284,8 +428,8 @@ class HumanAttentionCloseout(unittest.TestCase):
         )
 
         with patch.object(
-            attention_repo.default_attention_repository,
-            "create_request",
+            attention_repo,
+            "create_attention_request_in",
             side_effect=original,
         ):
             repaired = self._tick()

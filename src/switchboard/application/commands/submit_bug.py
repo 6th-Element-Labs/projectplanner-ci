@@ -195,6 +195,17 @@ def execute(
         "duplicate_of": duplicate_of or None,
         "review_repair": review_repair or None,
     }
+    def initial_agent_state(task_id: str) -> dict[str, Any]:
+        bound_repair = dict(review_repair)
+        if bound_repair:
+            bound_repair["repair_task_id"] = task_id
+        bound_report = dict(report)
+        bound_report["review_repair"] = bound_repair or None
+        state = {"bug_report": bound_report}
+        if bound_repair:
+            state["review_repair"] = bound_repair
+        return state
+
     task = create_task({
         "workstream_id": "BUG",
         "workstream_name": "BUG",
@@ -207,15 +218,14 @@ def execute(
         "owner_person_or_role": "Bug Intake",
         "risk_level": BUG_SEVERITIES[severity],
         "depends_on": [],
-    }, actor=actor, project=project)
+    }, actor=actor, project=project,
+        initial_agent_state_factory=initial_agent_state)
     if not task:
         return {"error": "bug_task_not_created", "message": "BUG task creation failed."}
 
-    full_state = set_agent_state(task["task_id"], "bug_report", report, project=project)
-    if review_repair:
-        review_repair["repair_task_id"] = task["task_id"]
-        full_state = set_agent_state(
-            task["task_id"], "review_repair", review_repair, project=project)
+    full_state = dict(task.get("agent_state") or {})
+    report = dict(full_state.get("bug_report") or report)
+    review_repair = dict(full_state.get("review_repair") or {})
     report_event = {
         "bug_task_id": task["task_id"],
         "source_task": source_task,

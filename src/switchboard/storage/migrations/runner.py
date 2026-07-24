@@ -36,6 +36,7 @@ import time
 from typing import List, Tuple
 
 from switchboard.storage.migrations.attention import (
+    ATTENTION_COMPLETION_WAKES_SQL,
     ATTENTION_DECISIONS_SQL,
     ATTENTION_EVENTS_SQL,
     ATTENTION_INDEX_SQL,
@@ -227,7 +228,7 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
      "verdict_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, pr_url TEXT NOT NULL, "
      "head_sha TEXT NOT NULL, reviewer_principal TEXT NOT NULL, status TEXT NOT NULL, "
      "source TEXT NOT NULL DEFAULT 'review_command', created_at REAL NOT NULL, "
-     "recorded_at REAL NOT NULL, UNIQUE(task_id, head_sha))"),
+     "recorded_at REAL NOT NULL, UNIQUE(task_id, pr_url, head_sha))"),
     ("0034_review_findings",
      "CREATE TABLE IF NOT EXISTS review_findings ("
      "verdict_id TEXT NOT NULL, task_id TEXT NOT NULL, finding_id TEXT NOT NULL, "
@@ -435,6 +436,12 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
     ("0112_ux_completion_runs_task",
      "CREATE UNIQUE INDEX IF NOT EXISTS ux_completion_runs_task "
      "ON completion_runs(task_id)"),
+    # BUG-172 — transactional human-decision wake outbox and exact tick receipt.
+    ("0113_attention_completion_wakes", ATTENTION_COMPLETION_WAKES_SQL),
+    ("0114_ix_attention_completion_wakes_ready", ATTENTION_INDEX_SQL[4]),
+    ("0115_ix_attention_completion_wakes_task", ATTENTION_INDEX_SQL[5]),
+    # Custom transactional table rebuild runs after the generic DDL pass.
+    ("0116_review_verdict_exact_pr_identity", "SELECT 1"),
 ]
 
 
@@ -463,6 +470,56 @@ def _applied_migrations(c: sqlite3.Connection) -> set[str]:
 def _record(c: sqlite3.Connection, name: str) -> None:
     c.execute("INSERT OR IGNORE INTO schema_migrations(name, applied_at) VALUES (?, ?)",
               (name, time.time()))
+
+
+REVIEW_VERDICT_PR_IDENTITY_MIGRATION = "0116_review_verdict_exact_pr_identity"
+
+
+def _review_verdict_unique_columns(c: sqlite3.Connection) -> set[tuple[str, ...]]:
+    indexes = c.execute("PRAGMA index_list(review_verdicts)").fetchall()
+    result: set[tuple[str, ...]] = set()
+    for index in indexes:
+        if not int(index["unique"] or 0):
+            continue
+        name = str(index["name"])
+        columns = tuple(
+            str(row["name"])
+            for row in c.execute(f'PRAGMA index_info("{name}")').fetchall()
+        )
+        result.add(columns)
+    return result
+
+
+def _migrate_review_verdict_pr_identity(c: sqlite3.Connection) -> bool:
+    """Replace the legacy task/SHA key with immutable task/PR/SHA authority."""
+    if not _table_exists(c, "review_verdicts"):
+        return False
+    if ("task_id", "pr_url", "head_sha") in _review_verdict_unique_columns(c):
+        return False
+    c.execute(
+        "CREATE TABLE review_verdicts__0116 ("
+        "verdict_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, "
+        "pr_url TEXT NOT NULL, head_sha TEXT NOT NULL, "
+        "reviewer_principal TEXT NOT NULL, reviewer_principal_id TEXT, "
+        "review_mode TEXT NOT NULL DEFAULT 'standard', status TEXT NOT NULL, "
+        "source TEXT NOT NULL DEFAULT 'review_command', created_at REAL NOT NULL, "
+        "recorded_at REAL NOT NULL, UNIQUE(task_id, pr_url, head_sha))"
+    )
+    c.execute(
+        "INSERT INTO review_verdicts__0116("
+        "verdict_id,task_id,pr_url,head_sha,reviewer_principal,"
+        "reviewer_principal_id,review_mode,status,source,created_at,recorded_at) "
+        "SELECT verdict_id,task_id,pr_url,head_sha,reviewer_principal,"
+        "reviewer_principal_id,review_mode,status,source,created_at,recorded_at "
+        "FROM review_verdicts"
+    )
+    c.execute("DROP TABLE review_verdicts")
+    c.execute("ALTER TABLE review_verdicts__0116 RENAME TO review_verdicts")
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS ix_review_verdicts_task "
+        "ON review_verdicts(task_id, created_at)"
+    )
+    return True
 
 
 def run_additive_migrations(c: sqlite3.Connection) -> List[str]:
@@ -502,6 +559,10 @@ def run_additive_migrations(c: sqlite3.Connection) -> List[str]:
     for name, sql in DDL_MIGRATIONS:
         if name in applied:
             continue
+        if name == REVIEW_VERDICT_PR_IDENTITY_MIGRATION:
+            # This ledger entry is registered below only after the transactional
+            # rebuild (or its structural no-op) succeeds.
+            continue
         c.execute(sql)
         _record(c, name)
         newly.append(name)
@@ -517,6 +578,11 @@ def run_additive_migrations(c: sqlite3.Connection) -> List[str]:
                 raise
         _record(c, name)
         newly.append(name)
+
+    if REVIEW_VERDICT_PR_IDENTITY_MIGRATION not in applied:
+        _migrate_review_verdict_pr_identity(c)
+        _record(c, REVIEW_VERDICT_PR_IDENTITY_MIGRATION)
+        newly.append(REVIEW_VERDICT_PR_IDENTITY_MIGRATION)
 
     return newly
 

@@ -220,8 +220,9 @@ def list_active_completion_runs(
     return runs
 
 
-def transition_completion_run(data: Mapping[str, Any], *, actor: str,
-                              project: str = DEFAULT_PROJECT) -> dict[str, Any]:
+def transition_completion_run_in(
+        c: Any, data: Mapping[str, Any], *, actor: str) -> dict[str, Any]:
+    """Persist one completion transition on the caller's transaction."""
     task_id = str(data.get("task_id") or "").strip().upper()
     head_sha = str(data.get("head_sha") or "").strip().lower()
     state = str(data.get("state") or "").strip().lower()
@@ -246,96 +247,100 @@ def transition_completion_run(data: Mapping[str, Any], *, actor: str,
             "Done requires canonical provenance on the completion run")
 
     now = float(data.get("updated_at") or time.time())
+    existing = c.execute(
+        "SELECT * FROM completion_runs WHERE task_id=?", (task_id,)
+    ).fetchone()
+    current = _row(existing)
+    decision = {
+        "pr_number": pr_number,
+        "head_sha": head_sha,
+        "state": state,
+        "route": route,
+        "reason_code": reason_code,
+        "desired_role": desired_role,
+        "board_status": board_status,
+        "evidence_refs": evidence_refs,
+    }
+    if current and _decision_fingerprint(current) == _decision_fingerprint(decision):
+        return current
 
+    if current:
+        run_id = current["run_id"]
+        created_at = current["created_at"]
+        state_version = int(current["state_version"] or 1)
+        attempt = int(current["attempt"] or 1)
+        head_changed = current["head_sha"] != head_sha
+        route_or_state_changed = (
+            current["state"] != state or current["route"] != route
+            or current["reason_code"] != reason_code
+            or current["desired_role"] != desired_role
+        )
+        if head_changed or route_or_state_changed:
+            state_version += 1
+        if head_changed:
+            evidence_refs_final = _invalidate_stale_evidence(
+                evidence_refs, head_sha)
+            # Keep caller-supplied exact-head evidence after invalidation.
+            for key, value in evidence_refs.items():
+                if key in STALE_EVIDENCE_KEYS and isinstance(value, Mapping):
+                    if str(value.get("head_sha") or "").lower() == head_sha:
+                        evidence_refs_final[key] = value
+            attempt += 1
+        else:
+            evidence_refs_final = dict(evidence_refs)
+            if route_or_state_changed:
+                attempt += 1
+    else:
+        run_id = "completion-run-" + uuid.uuid4().hex[:16]
+        created_at = now
+        state_version = 1
+        attempt = 1
+        evidence_refs_final = dict(evidence_refs)
+
+    c.execute(
+        "INSERT INTO completion_runs("
+        "run_id, task_id, pr_number, head_sha, state, route, reason_code, "
+        "desired_role, attempt, state_version, next_retry_at, "
+        "evidence_refs_json, board_status, created_at, updated_at, actor) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(task_id) DO UPDATE SET "
+        "pr_number=excluded.pr_number, head_sha=excluded.head_sha, "
+        "state=excluded.state, route=excluded.route, "
+        "reason_code=excluded.reason_code, desired_role=excluded.desired_role, "
+        "attempt=excluded.attempt, state_version=excluded.state_version, "
+        "next_retry_at=excluded.next_retry_at, "
+        "evidence_refs_json=excluded.evidence_refs_json, "
+        "board_status=excluded.board_status, updated_at=excluded.updated_at, "
+        "actor=excluded.actor",
+        (run_id, task_id, pr_number, head_sha, state, route, reason_code,
+         desired_role, attempt, state_version, next_retry_at,
+         json.dumps(evidence_refs_final, sort_keys=True), board_status,
+         created_at, now, str(actor or "system")))
+
+    _append_history_in(c, {
+        **dict(data),
+        "task_id": task_id,
+        "pr_number": pr_number,
+        "head_sha": head_sha,
+        "evidence_refs": evidence_refs_final,
+        "transitioned_at": now,
+    }, actor=actor)
+
+    if board_status:
+        c.execute(
+            "UPDATE tasks SET status=?, updated_at=? WHERE task_id=?",
+            (board_status, now, task_id))
+
+    return _row(c.execute(
+        "SELECT * FROM completion_runs WHERE task_id=?", (task_id,)
+    ).fetchone())
+
+
+def transition_completion_run(data: Mapping[str, Any], *, actor: str,
+                              project: str = DEFAULT_PROJECT) -> dict[str, Any]:
     def write():
         with _conn(project) as c:
-            existing = c.execute(
-                "SELECT * FROM completion_runs WHERE task_id=?", (task_id,)
-            ).fetchone()
-            current = _row(existing)
-            decision = {
-                "pr_number": pr_number,
-                "head_sha": head_sha,
-                "state": state,
-                "route": route,
-                "reason_code": reason_code,
-                "desired_role": desired_role,
-                "board_status": board_status,
-                "evidence_refs": evidence_refs,
-            }
-            if current and _decision_fingerprint(current) == _decision_fingerprint(decision):
-                return current
-
-            if current:
-                run_id = current["run_id"]
-                created_at = current["created_at"]
-                state_version = int(current["state_version"] or 1)
-                attempt = int(current["attempt"] or 1)
-                head_changed = current["head_sha"] != head_sha
-                route_or_state_changed = (
-                    current["state"] != state or current["route"] != route
-                    or current["reason_code"] != reason_code
-                    or current["desired_role"] != desired_role
-                )
-                if head_changed or route_or_state_changed:
-                    state_version += 1
-                if head_changed:
-                    evidence_refs_final = _invalidate_stale_evidence(
-                        evidence_refs, head_sha)
-                    # Keep caller-supplied exact-head evidence after invalidation.
-                    for key, value in evidence_refs.items():
-                        if key in STALE_EVIDENCE_KEYS and isinstance(value, Mapping):
-                            if str(value.get("head_sha") or "").lower() == head_sha:
-                                evidence_refs_final[key] = value
-                    attempt += 1
-                else:
-                    evidence_refs_final = dict(evidence_refs)
-                    if route_or_state_changed:
-                        attempt += 1
-            else:
-                run_id = "completion-run-" + uuid.uuid4().hex[:16]
-                created_at = now
-                state_version = 1
-                attempt = 1
-                evidence_refs_final = dict(evidence_refs)
-
-            c.execute(
-                "INSERT INTO completion_runs("
-                "run_id, task_id, pr_number, head_sha, state, route, reason_code, "
-                "desired_role, attempt, state_version, next_retry_at, "
-                "evidence_refs_json, board_status, created_at, updated_at, actor) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
-                "ON CONFLICT(task_id) DO UPDATE SET "
-                "pr_number=excluded.pr_number, head_sha=excluded.head_sha, "
-                "state=excluded.state, route=excluded.route, "
-                "reason_code=excluded.reason_code, desired_role=excluded.desired_role, "
-                "attempt=excluded.attempt, state_version=excluded.state_version, "
-                "next_retry_at=excluded.next_retry_at, "
-                "evidence_refs_json=excluded.evidence_refs_json, "
-                "board_status=excluded.board_status, updated_at=excluded.updated_at, "
-                "actor=excluded.actor",
-                (run_id, task_id, pr_number, head_sha, state, route, reason_code,
-                 desired_role, attempt, state_version, next_retry_at,
-                 json.dumps(evidence_refs_final, sort_keys=True), board_status,
-                 created_at, now, str(actor or "system")))
-
-            _append_history_in(c, {
-                **dict(data),
-                "task_id": task_id,
-                "pr_number": pr_number,
-                "head_sha": head_sha,
-                "evidence_refs": evidence_refs_final,
-                "transitioned_at": now,
-            }, actor=actor)
-
-            if board_status:
-                c.execute(
-                    "UPDATE tasks SET status=?, updated_at=? WHERE task_id=?",
-                    (board_status, now, task_id))
-
-            return _row(c.execute(
-                "SELECT * FROM completion_runs WHERE task_id=?", (task_id,)
-            ).fetchone())
+            return transition_completion_run_in(c, data, actor=actor)
 
     return _write_through(project, write)
 
@@ -394,6 +399,7 @@ __all__ = [
     "TERMINAL_STATES",
     "CompletionRunError",
     "get_active_completion_run",
+    "transition_completion_run_in",
     "transition_completion_run",
     "recover_incomplete_runs",
 ]

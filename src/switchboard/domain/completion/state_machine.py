@@ -7,6 +7,10 @@ precedence-ordered route decision.
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timezone
+import json
+import math
+import re
 from typing import Any, Mapping, Sequence
 
 
@@ -40,6 +44,18 @@ _COORD_FINDINGS = {
     "missing_executed_test_run", "missing_ui_playwright_evidence",
 }
 
+# One snapshot can contain several independently blocking facts.  Their source
+# order is presentation detail, not authority.  Prefer concrete automatic work
+# first so it is not stranded behind a weaker wait/retry signal; retain human
+# blockers ahead of evidence-production and coordination repairs.
+_ROUTE_PRECEDENCE = {
+    "remediation": 0,
+    "human": 1,
+    "review_merge": 2,
+    "coordination_retry": 3,
+    "wait": 4,
+}
+
 
 def _map(value: Any) -> dict[str, Any]:
     return deepcopy(dict(value)) if isinstance(value, Mapping) else {}
@@ -54,6 +70,66 @@ def _head(record: Mapping[str, Any]) -> str:
     if isinstance(nested, Mapping):
         return str(nested.get("sha") or "").strip()
     return str(record.get("head_sha") or record.get("sha") or "").strip()
+
+
+def _pr_url(record: Mapping[str, Any]) -> str:
+    nested = _map(record.get("verdict"))
+    return str(
+        record.get("html_url")
+        or record.get("url")
+        or record.get("pr_url")
+        or nested.get("html_url")
+        or nested.get("pr_url")
+        or nested.get("url")
+        or ""
+    ).strip()
+
+
+def _pr_number(record: Mapping[str, Any]) -> int:
+    nested = _map(record.get("verdict"))
+    raw = (
+        record.get("number")
+        or record.get("pr_number")
+        or nested.get("number")
+        or nested.get("pr_number")
+    )
+    try:
+        number = int(raw or 0)
+    except (TypeError, ValueError):
+        number = 0
+    if number > 0:
+        return number
+    match = re.search(r"/pull/(\d+)(?:/|$)", _pr_url(record))
+    return int(match.group(1)) if match else 0
+
+
+def _pr_identity(record: Mapping[str, Any]) -> str:
+    url = _pr_url(record).rstrip("/").lower()
+    match = re.search(
+        r"^https?://([^/]+)/([^/]+)/([^/]+)/pull/(\d+)$", url,
+    )
+    if match:
+        return "/".join(match.groups())
+    api_match = re.search(
+        r"^https?://api\.github\.com/repos/([^/]+)/([^/]+)/pulls/(\d+)$",
+        url,
+    )
+    if api_match:
+        owner, repo, number = api_match.groups()
+        return f"github.com/{owner}/{repo}/{number}"
+    return url or (f"number:{_pr_number(record)}" if _pr_number(record) else "")
+
+
+def _review_matches_pr(
+    review: Mapping[str, Any], *, head_sha: str, pr_identity: str,
+) -> bool:
+    return bool(
+        head_sha
+        and pr_identity
+        and str(review.get("head_sha") or _map(review.get("verdict")).get(
+            "head_sha") or "").strip() == head_sha
+        and _pr_identity(review) == pr_identity
+    )
 
 
 def _check_rows(value: Any) -> list[dict[str, Any]]:
@@ -75,6 +151,74 @@ def _check_rows(value: Any) -> list[dict[str, Any]]:
             rows.extend(_check_rows(item))
         return rows
     return []
+
+
+_CHECK_TIMESTAMP_FIELDS = (
+    "completedAt", "completed_at",
+    "updatedAt", "updated_at",
+    "startedAt", "started_at",
+    "createdAt", "created_at",
+    "timestamp",
+)
+_CHECK_IDENTITY_FIELDS = {"name", "context", "check_name"}
+
+
+def _check_timestamp(row: Mapping[str, Any]) -> float:
+    """Return the newest valid timestamp carried by one CI observation."""
+    timestamps: list[float] = []
+    for field in _CHECK_TIMESTAMP_FIELDS:
+        value = row.get(field)
+        if value in (None, "") or isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            parsed = float(value)
+        else:
+            text = str(value).strip()
+            try:
+                parsed = float(text)
+            except ValueError:
+                try:
+                    parsed_dt = datetime.fromisoformat(
+                        text[:-1] + "+00:00" if text.endswith("Z") else text
+                    )
+                    if parsed_dt.tzinfo is None:
+                        parsed_dt = parsed_dt.replace(tzinfo=timezone.utc)
+                    parsed = parsed_dt.timestamp()
+                except (ValueError, OverflowError):
+                    continue
+        if math.isfinite(parsed):
+            timestamps.append(parsed)
+    return max(timestamps, default=float("-inf"))
+
+
+def _has_provenance(value: Any) -> bool:
+    if value in (None, "", [], {}):
+        return False
+    return True
+
+
+def _check_provenance_richness(row: Mapping[str, Any]) -> int:
+    """Count non-empty evidence fields, excluding interchangeable name fields."""
+    return sum(
+        1 for key, value in row.items()
+        if key not in _CHECK_IDENTITY_FIELDS and _has_provenance(value)
+    )
+
+
+def _check_selection_key(row: Mapping[str, Any]) -> tuple[float, int, str]:
+    """Total order for duplicate CI observations, independent of source order."""
+    canonical = json.dumps(
+        dict(row),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        default=str,
+    )
+    return (
+        _check_timestamp(row),
+        _check_provenance_richness(row),
+        canonical,
+    )
 
 
 def build_completion_snapshot(
@@ -100,7 +244,11 @@ def build_completion_snapshot(
     for source in sources:
         for row in _check_rows(source):
             name = str(row.get("name") or row.get("context") or row.get("check_name") or "").strip()
-            if name:
+            current = contexts.get(name)
+            if name and (
+                current is None
+                or _check_selection_key(row) > _check_selection_key(current)
+            ):
                 contexts[name] = row
     required = list(dict.fromkeys(
         str(item).strip() for item in
@@ -108,14 +256,30 @@ def build_completion_snapshot(
         if str(item).strip()
     ))
     board_git = _map(task_row.get("git_state"))
+    board_pr = {
+        "number": board_git.get("pr_number"),
+        "url": board_git.get("pr_url"),
+    }
+    current_pr_url = (
+        _pr_url(pr) or str(gate.get("pr_url") or "").strip()
+        or str(board_git.get("pr_url") or "").strip()
+    )
     snapshot = {
         "schema": COMPLETION_SNAPSHOT_SCHEMA,
         "task": task_row,
         "task_id": str(task_row.get("task_id") or gate.get("task_id") or "").strip().upper(),
         "board_status": str(task_row.get("status") or "").strip(),
         "board_head_sha": _head(board_git),
+        "board_pr_number": board_git.get("pr_number"),
+        "board_pr_url": board_git.get("pr_url"),
+        "board_pr_identity": _pr_identity(board_pr),
         "github_pr": pr,
         "pr_number": pr.get("number") or gate.get("pr_number"),
+        "pr_url": current_pr_url,
+        "pr_identity": _pr_identity({
+            "number": pr.get("number") or gate.get("pr_number"),
+            "url": current_pr_url,
+        }),
         "head_sha": _head(pr) or str(gate.get("head_sha") or "").strip(),
         "required_status_contexts": required,
         "status_contexts": contexts,
@@ -146,9 +310,28 @@ def _decision(state: str, route: str, reason: str, *, role: str | None = None,
     }
 
 
+def _select_decision(
+    candidates: Sequence[Mapping[str, Any]],
+) -> dict[str, Any] | None:
+    """Select one blocker without allowing source ordering to choose it."""
+    if not candidates:
+        return None
+    return dict(min(
+        candidates,
+        key=lambda item: (
+            _ROUTE_PRECEDENCE.get(_text(item.get("route")), 99),
+            _text(item.get("reason_code")),
+            _text(item.get("desired_role")),
+        ),
+    ))
+
+
 def _finding_decision(findings: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
     """Map merge_gate codes; never infer a route from aggregate PR findings."""
+    candidates: list[dict[str, Any]] = []
     for finding in findings:
+        if not isinstance(finding, Mapping):
+            continue
         if finding.get("blocking") is False:
             continue
         code = _text(finding.get("code"))
@@ -159,41 +342,118 @@ def _finding_decision(findings: Sequence[Mapping[str, Any]]) -> dict[str, Any] |
             # after substantive evidence; mergeability is decomposed below.
             continue
         if code in _HUMAN_FINDINGS or failure in {"absent_permission", "invalid_input"}:
-            return _decision("blocked", "human", code or failure, board="Blocked")
-        if code in _REVIEW_FINDINGS:
-            return _decision("assessing", "review_merge", code, role="review_merge")
-        if (
+            candidates.append(
+                _decision("blocked", "human", code or failure, board="Blocked")
+            )
+        elif code in _REVIEW_FINDINGS:
+            candidates.append(
+                _decision("assessing", "review_merge", code, role="review_merge")
+            )
+        elif (
             code in _REMEDIATION_FINDINGS
             or kind in {"automatic", "product", "code"}
             or failure == "hidden_fallback"
         ):
-            return _decision("blocked", "remediation", code or failure,
-                             role="remediation", board="Blocked")
-        if kind in {"judgment", "authority", "policy", "human"}:
-            return _decision("blocked", "human", code or kind, board="Blocked")
-        if code in _COORD_FINDINGS or failure in {
+            candidates.append(_decision(
+                "blocked", "remediation", code or failure,
+                role="remediation", board="Blocked",
+            ))
+        elif kind in {"judgment", "authority", "policy", "human"}:
+            candidates.append(
+                _decision("blocked", "human", code or kind, board="Blocked")
+            )
+        elif code in _COORD_FINDINGS or failure in {
             "broken_connection", "missing_data", "stale_branch", "unreachable_agent",
         }:
-            return _decision("blocked", "coordination_retry", code or failure,
-                             retry="bounded")
-        if failure == "failed_gate":
-            return _decision("blocked", "human", code or "unclassified_failed_gate",
-                             board="Blocked")
-    return None
+            candidates.append(_decision(
+                "blocked", "coordination_retry", code or failure,
+                retry="bounded",
+            ))
+        elif failure == "failed_gate":
+            candidates.append(_decision(
+                "blocked", "human", code or "unclassified_failed_gate",
+                board="Blocked",
+            ))
+    return _select_decision(candidates)
+
+
+def _required_ci_decision(snapshot: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Classify every required context, then select by explicit precedence."""
+    required = list(snapshot.get("required_status_contexts") or [])
+    contexts = _map(snapshot.get("status_contexts"))
+    candidates: list[dict[str, Any]] = []
+    for name in required:
+        row = _map(contexts.get(name))
+        state = _text(row.get("conclusion") or row.get("state") or row.get("status"))
+        attribution = _text(
+            row.get("failure_attribution") or row.get("failure_class") or "unknown"
+        )
+        if not row or not state:
+            reason = (
+                "required_ci_missing"
+                if snapshot.get("ci_dispatch_recent")
+                else "required_ci_hydration_missing"
+            )
+            route = "wait" if snapshot.get("ci_dispatch_recent") else "coordination_retry"
+            candidates.append(_decision(
+                "waiting" if route == "wait" else "blocked",
+                route,
+                reason,
+                retry="bounded",
+            ))
+        elif state in _PENDING:
+            candidates.append(_decision(
+                "waiting", "wait", "required_exact_head_ci_pending",
+                retry="bounded",
+            ))
+        elif state in _COORD_CI:
+            candidates.append(_decision(
+                "blocked", "coordination_retry",
+                f"required_ci_{state}", retry="bounded",
+            ))
+        elif state in {"failure", "failed", "error", "timed_out", "action_required"}:
+            if state == "action_required" or attribution in {"policy", "authority"}:
+                candidates.append(_decision(
+                    "blocked", "human", "required_ci_authority_failure",
+                    board="Blocked",
+                ))
+            elif attribution == "product":
+                candidates.append(_decision(
+                    "blocked", "remediation", "required_exact_head_ci_failed",
+                    role="remediation", board="Blocked",
+                ))
+            elif attribution == "infrastructure" or state == "timed_out":
+                candidates.append(_decision(
+                    "blocked", "coordination_retry",
+                    "required_ci_infrastructure_failure", retry="bounded",
+                ))
+            else:
+                candidates.append(_decision(
+                    "blocked", "human", "required_ci_failure_unknown",
+                    board="Blocked",
+                ))
+        elif state not in _POLICY_PASS:
+            candidates.append(_decision(
+                "blocked", "coordination_retry", "required_ci_state_unknown",
+                retry="bounded",
+            ))
+    return _select_decision(candidates)
 
 
 def _changes_requested_decision(
     review: Mapping[str, Any],
     head_sha: str,
+    pr_identity: str,
 ) -> dict[str, Any] | None:
-    """Classify actionable findings only when the verdict is for this PR head."""
+    """Classify findings only when the verdict is for this exact PR and head."""
     review_state = _text(
         review.get("status") or review.get("state") or review.get("verdict")
     )
-    review_head = str(review.get("head_sha") or "").strip()
     if review_state not in {"changes_requested", "changes"}:
         return None
-    if not review_head or review_head != head_sha:
+    if not _review_matches_pr(
+        review, head_sha=head_sha, pr_identity=pr_identity
+    ):
         return None
     if review.get("retry_exhausted"):
         return _decision(
@@ -241,6 +501,20 @@ def classify_completion(
     runner = _map(snap.get("runner"))
     head_sha = str(snap.get("head_sha") or _head(pr)).strip()
     board_head = str(snap.get("board_head_sha") or "").strip()
+    current_pr_identity = str(
+        snap.get("pr_identity")
+        or _pr_identity({
+            "number": snap.get("pr_number") or pr.get("number"),
+            "url": snap.get("pr_url") or _pr_url(pr),
+        })
+    ).strip()
+    board_pr_identity = str(
+        snap.get("board_pr_identity")
+        or _pr_identity({
+            "number": snap.get("board_pr_number"),
+            "url": snap.get("board_pr_url"),
+        })
+    ).strip()
 
     if task_status in _TERMINAL_BOARD and (
         task_status != "done" or provenance.get("merged_sha")
@@ -258,6 +532,16 @@ def classify_completion(
     if not pr or not head_sha:
         return _decision("blocked", "coordination_retry", "exact_head_pr_missing",
                          retry="bounded")
+    if not current_pr_identity:
+        return _decision(
+            "blocked", "coordination_retry", "exact_pr_identity_missing",
+            retry="bounded",
+        )
+    if board_pr_identity and board_pr_identity != current_pr_identity:
+        return _decision(
+            "blocked", "coordination_retry", "board_pr_identity_mismatch",
+            retry="bounded",
+        )
     if board_head and board_head != head_sha:
         return _decision("blocked", "coordination_retry", "board_pr_head_mismatch",
                          retry="bounded")
@@ -269,7 +553,8 @@ def classify_completion(
     # Exact-head changes requested are already a complete, actionable repair
     # contract. They outrank nonterminal merge-queue and CI coordination state,
     # but never canonical evidence that the queue has already merged the PR.
-    review_decision = _changes_requested_decision(review, head_sha)
+    review_decision = _changes_requested_decision(
+        review, head_sha, current_pr_identity)
     if review_decision:
         return review_decision
 
@@ -290,47 +575,21 @@ def classify_completion(
         return _decision("blocked", "coordination_retry", "merge_queue_infrastructure_failure",
                          retry="bounded")
 
-    required = list(snap.get("required_status_contexts") or [])
-    contexts = _map(snap.get("status_contexts"))
-    for name in required:
-        row = _map(contexts.get(name))
-        state = _text(row.get("conclusion") or row.get("state") or row.get("status"))
-        attribution = _text(row.get("failure_attribution") or row.get("failure_class") or "unknown")
-        if not row or not state:
-            reason = "required_ci_missing" if snap.get("ci_dispatch_recent") else "required_ci_hydration_missing"
-            route = "wait" if snap.get("ci_dispatch_recent") else "coordination_retry"
-            return _decision("waiting" if route == "wait" else "blocked", route, reason,
-                             retry="bounded")
-        if state in _PENDING:
-            return _decision("waiting", "wait", "required_exact_head_ci_pending",
-                             retry="bounded")
-        if state in _COORD_CI:
-            return _decision("blocked", "coordination_retry",
-                             f"required_ci_{state}", retry="bounded")
-        if state in {"failure", "failed", "error", "timed_out", "action_required"}:
-            if state == "action_required" or attribution in {"policy", "authority"}:
-                return _decision("blocked", "human", "required_ci_authority_failure",
-                                 board="Blocked")
-            if attribution == "product":
-                return _decision("blocked", "remediation", "required_exact_head_ci_failed",
-                                 role="remediation", board="Blocked")
-            if attribution == "infrastructure" or state == "timed_out":
-                return _decision("blocked", "coordination_retry",
-                                 "required_ci_infrastructure_failure", retry="bounded")
-            return _decision("blocked", "human", "required_ci_failure_unknown",
-                             board="Blocked")
-        if state not in _POLICY_PASS:
-            return _decision("blocked", "coordination_retry", "required_ci_state_unknown",
-                             retry="bounded")
+    ci_decision = _required_ci_decision(snap)
+    if ci_decision:
+        return ci_decision
 
     review_state = _text(
         review.get("status") or review.get("state") or review.get("verdict")
     )
-    review_head = str(review.get("head_sha") or "").strip()
     if review.get("retry_exhausted"):
         return _decision("blocked", "human", "review_retry_budget_exhausted", board="Blocked")
     review_passed = review_state in {"pass", "passed", "approved", "success"}
-    if not review_passed or (review_head and review_head != head_sha):
+    if (
+        not review_passed
+        or not _review_matches_pr(
+            review, head_sha=head_sha, pr_identity=current_pr_identity)
+    ):
         return _decision("assessing", "review_merge",
                          "review_verdict_stale" if review_passed else "review_required",
                          role="review_merge")

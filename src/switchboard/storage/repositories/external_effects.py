@@ -137,6 +137,60 @@ def claim_external_effect(effect_type: str, target: str, resource: str,
             principal_id=principal_id, project=project)
 
 
+def retry_external_effect(effect_key: str, *, expected_retry_count: int,
+                          actor: str = "system",
+                          project: str = DEFAULT_PROJECT,
+                          now: Optional[float] = None) -> Dict[str, Any]:
+    """Atomically reclaim one failed idempotent effect for a bounded retry.
+
+    A failed row is terminal to ordinary ``claim_external_effect`` callers.
+    Completion recovery uses this explicit compare-and-swap so concurrent ticks
+    cannot both reissue the same external mutation.
+    """
+    init_db(project)
+    at = time.time() if now is None else float(now)
+    with _conn(project) as c:
+        updated = c.execute(
+            "UPDATE external_side_effects SET status='claimed',claimed_by=?,"
+            "claimed_at=?,updated_at=? WHERE effect_key=? AND status='failed' "
+            "AND retry_count=?",
+            (actor, at, at, effect_key, int(expected_retry_count)),
+        )
+        row = c.execute(
+            "SELECT * FROM external_side_effects WHERE effect_key=?",
+            (effect_key,),
+        ).fetchone()
+        effect = _external_effect_row(row)
+        if updated.rowcount != 1:
+            return {
+                "claimed": False,
+                "effect_key": effect_key,
+                "effect": effect,
+                "reason": (
+                    f"effect already {effect.get('status')}"
+                    if effect else "effect_not_found"
+                ),
+            }
+        c.execute(
+            "INSERT INTO activity(task_id,actor,kind,payload,created_at) "
+            "VALUES (?,?,?,?,?)",
+            (
+                effect.get("task_id"), actor, "side_effect.retry_claimed",
+                json.dumps({
+                    "effect_key": effect_key,
+                    "retry_count": int(expected_retry_count),
+                }, sort_keys=True),
+                at,
+            ),
+        )
+        return {
+            "claimed": True,
+            "effect_key": effect_key,
+            "effect": effect,
+            "retry": True,
+        }
+
+
 def _update_external_effect_in(c: sqlite3.Connection, effect_key: str, status: str,
                                readback: Optional[Dict[str, Any]] = None,
                                last_error: str = "", actor: str = "system",
@@ -244,6 +298,9 @@ class StoreExternalEffectsRepository:
     def mark_external_effect_issued(self, *args, **kwargs):
         return mark_external_effect_issued(*args, **kwargs)
 
+    def retry_external_effect(self, *args, **kwargs):
+        return retry_external_effect(*args, **kwargs)
+
     def verify_external_effect(self, *args, **kwargs):
         return verify_external_effect(*args, **kwargs)
 
@@ -267,6 +324,7 @@ __all__ = [
     "_external_effect_row",
     "_claim_external_effect_in",
     "claim_external_effect",
+    "retry_external_effect",
     "_update_external_effect_in",
     "mark_external_effect_issued",
     "verify_external_effect",

@@ -9,6 +9,7 @@ from switchboard.storage.repositories.attention import (
     AttentionRepository,
     AttentionStoreError,
     default_attention_repository,
+    is_reserved_completion_provider,
 )
 
 
@@ -55,6 +56,12 @@ class AttentionService:
     def upsert_request(
         self, ctx: ProjectContext, data: Mapping[str, Any], *, actor: str,
     ) -> dict[str, Any]:
+        if is_reserved_completion_provider(data.get("provider")):
+            raise AttentionStoreError(
+                "attention_completion_owner_required",
+                "completion attention requests are created only by the "
+                "fenced completion owner",
+            )
         return self._repository.create_request(
             data, actor=actor, project=self._project(ctx))
 
@@ -66,10 +73,22 @@ class AttentionService:
         project = self._project(ctx)
         if request_id:
             request = self._repository.get_request(request_id, project=project)
+            if is_reserved_completion_provider(request.get("provider")):
+                raise AttentionStoreError(
+                    "attention_completion_owner_required",
+                    "completion decisions are delivered only by the fenced "
+                    "completion owner",
+                )
             self._assert_delivery_binding(
                 request, host_id=host_id, provider=provider,
                 runner_session_id=runner_session_id,
                 work_session_id=work_session_id)
+        elif is_reserved_completion_provider(provider):
+            raise AttentionStoreError(
+                "attention_completion_owner_required",
+                "completion decisions are delivered only by the fenced "
+                "completion owner",
+            )
         return self._repository.claim_decision(
             project=project, host_id=host_id, actor=actor,
             provider=provider, request_id=request_id,
@@ -106,6 +125,14 @@ class AttentionService:
     ) -> dict[str, Any]:
         project = self._project(ctx)
         request = self._repository.get_request(request_id, project=project)
+        if (
+            is_reserved_completion_provider(request.get("provider"))
+            or is_reserved_completion_provider(provider)
+        ):
+            raise AttentionStoreError(
+                "attention_completion_owner_required",
+                "completion receipts require an exact completion-owner tick",
+            )
         self._assert_delivery_binding(
             request, host_id=host_id, provider=provider,
             runner_session_id=runner_session_id,

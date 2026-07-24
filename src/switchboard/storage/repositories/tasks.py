@@ -14,7 +14,7 @@ import re
 import sqlite3
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 import narration_outbox
 from constants import *  # noqa: F401,F403
@@ -538,7 +538,11 @@ def get_task(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str,
         t["session_health"] = _store_facade()._task_session_health_in(
             c, t, project=project, active_claims=t["active_claims"], git_state=t["git_state"])
         t["review_verdict"] = review_verdict_summary_in(
-            c, task_id, str(t["git_state"].get("head_sha") or ""))
+            c,
+            task_id,
+            str(t["git_state"].get("head_sha") or ""),
+            str(t["git_state"].get("pr_url") or ""),
+        )
         t["review_remediation"] = review_remediation_summary_in(c, task_id)
         # COORD-18: this is code-review finding count, not Work Session hygiene.
         # Current-head counts remain separately exposed inside review_verdict so
@@ -849,7 +853,10 @@ def route_bug_for_implementation(
     }
 
 def _create_task_impl(data: Dict[str, Any], actor: str = "user",
-                      project: str = DEFAULT_PROJECT) -> Optional[str]:
+                      project: str = DEFAULT_PROJECT,
+                      initial_agent_state_factory: Optional[
+                          Callable[[str], Mapping[str, Any]]
+                      ] = None) -> Optional[str]:
     ws = (data.get("workstream_id") or "").strip()
     title = (data.get("title") or "").strip()
     if not ws or not title:
@@ -872,12 +879,19 @@ def _create_task_impl(data: Dict[str, Any], actor: str = "user",
         order = c.execute("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM tasks").fetchone()[0]
         normalized_dependencies = _normalize_depends_on(data.get("depends_on"))
         now = time.time()
+        if initial_agent_state_factory is not None:
+            initial_agent_state = dict(initial_agent_state_factory(tid) or {})
+        elif isinstance(data.get("agent_state"), Mapping):
+            initial_agent_state = dict(data["agent_state"])
+        else:
+            initial_agent_state = {}
         c.execute(
             """INSERT INTO tasks (task_id, workstream_id, workstream_name, title, description,
                  owner_org, owner_person_or_role, assignee, phase, status, effort_days, duration_days,
                  start_date, finish_date, start_day, depends_on, entry_criteria, exit_criteria,
-                 deliverable, risk_level, is_blocking, sort_order, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 deliverable, risk_level, is_blocking, sort_order, created_at, updated_at,
+                 agent_state)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (tid, ws, wsname, title, data.get("description"), data.get("owner_org"),
              data.get("owner_person_or_role"), data.get("assignee"), (data.get("phase") or "Build"),
              (data.get("status") or "Not Started"), data.get("effort_days"), data.get("duration_days"),
@@ -885,7 +899,8 @@ def _create_task_impl(data: Dict[str, Any], actor: str = "user",
              json.dumps(normalized_dependencies),
              data.get("entry_criteria"), data.get("exit_criteria"),
              data.get("deliverable"), (data.get("risk_level") or "Medium"),
-             1 if data.get("is_blocking") else 0, order, now, now))
+             1 if data.get("is_blocking") else 0, order, now, now,
+             json.dumps(initial_agent_state, sort_keys=True)))
         dependency_block = False
         if ((data.get("status") or "Not Started") == "Blocked"
                 and normalized_dependencies):
@@ -918,14 +933,19 @@ def _create_task_impl(data: Dict[str, Any], actor: str = "user",
     return tid
 
 def create_task(data: Dict[str, Any], actor: str = "user",
-                project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+                project: str = DEFAULT_PROJECT,
+                initial_agent_state_factory: Optional[
+                    Callable[[str], Mapping[str, Any]]
+                ] = None) -> Optional[Dict[str, Any]]:
     s = _store_facade()
     validation = classify_task(data, project=project)
     if not validation.get("ok"):
         return validation
     store_data = {key: value for key, value in data.items() if key != "ui_impact"}
     tid = s._write_through(project,
-        lambda: s._create_task_impl(store_data, actor=actor, project=project))
+        lambda: s._create_task_impl(
+            store_data, actor=actor, project=project,
+            initial_agent_state_factory=initial_agent_state_factory))
     if not tid:
         return None
     _persist_task_validation(tid, validation, actor=actor, project=project)
@@ -1504,8 +1524,13 @@ class StoreTaskRepository:
             self,
             data: dict[str, Any],
             actor: str = "user",
-            project: str = DEFAULT_PROJECT) -> Optional[dict[str, Any]]:
-        return create_task(data, actor=actor, project=project)
+            project: str = DEFAULT_PROJECT,
+            initial_agent_state_factory: Optional[
+                Callable[[str], Mapping[str, Any]]
+            ] = None) -> Optional[dict[str, Any]]:
+        return create_task(
+            data, actor=actor, project=project,
+            initial_agent_state_factory=initial_agent_state_factory)
 
     def update_task(
             self,

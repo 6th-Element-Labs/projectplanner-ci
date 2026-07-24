@@ -175,6 +175,17 @@ class CoordinatorDaemon:
             },
         }
 
+    def _drain_completion_wakes(self, project: str) -> Dict[str, Any]:
+        """Base daemon never admits completion work."""
+        return {
+            "schema": "switchboard.completion_wake_drain.v1",
+            "checked": 0,
+            "accepted": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "results": [],
+        }
+
     def _drive_scope(self, project: str, scope: Dict[str, Any]) -> Dict[str, Any]:
         """One scope's action for this tick.
 
@@ -487,6 +498,7 @@ class CoordinatorDaemon:
 
         receipts = []
         lifecycle = self._drain_lifecycle(project)
+        completion_wakes = self._drain_completion_wakes(project)
         decision_stream = list(lifecycle.get("decision_stream") or [])
         for scope in self._ordered_scopes(project, state):
             # Controls are re-read between effects so an operator pause is bounded
@@ -532,6 +544,12 @@ class CoordinatorDaemon:
              "instance_id": self.instance_id, "project": project,
              "status": status, "acting": self.config.act,
              "lifecycle_status": lifecycle.get("status"),
+             "completion_wakes": {
+                 "checked": completion_wakes.get("checked", 0),
+                 "accepted": completion_wakes.get("accepted", 0),
+                 "failed": completion_wakes.get("failed", 0),
+                 "cancelled": completion_wakes.get("cancelled", 0),
+             },
              "decision_stream": decision_stream,
              "receipt_count": len(receipts),
              "scope_ids": [row["scope_id"] for row in receipts],
@@ -542,6 +560,7 @@ class CoordinatorDaemon:
         return {"schema": RUN_SCHEMA, "project": project, "status": status,
                 "leader": True, "acting": self.config.act, "receipts": receipts,
                 "lifecycle": lifecycle, "decision_stream": decision_stream,
+                "completion_wakes": completion_wakes,
                 "state": state}
 
     def tick(self) -> Dict[str, Any]:

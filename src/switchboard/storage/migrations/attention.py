@@ -77,6 +77,37 @@ CREATE TABLE IF NOT EXISTS attention_events (
 )
 """
 
+ATTENTION_COMPLETION_WAKES_SQL = """
+CREATE TABLE IF NOT EXISTS attention_completion_wakes (
+    wake_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    request_id TEXT NOT NULL UNIQUE,
+    decision_id TEXT NOT NULL UNIQUE,
+    task_id TEXT NOT NULL,
+    deliverable_id TEXT NOT NULL DEFAULT '',
+    completion_run_id TEXT NOT NULL,
+    state_version INTEGER NOT NULL,
+    head_sha TEXT NOT NULL,
+    pr_number INTEGER,
+    choice_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    available_at REAL NOT NULL,
+    claimed_by TEXT,
+    lease_expires_at REAL,
+    wake_receipt_json TEXT,
+    completion_receipt_json TEXT,
+    last_error TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    CHECK (status IN (
+        'pending', 'claimed', 'accepted', 'failed', 'resolved', 'cancelled'
+    )),
+    FOREIGN KEY(request_id) REFERENCES attention_requests(request_id),
+    FOREIGN KEY(decision_id) REFERENCES attention_decisions(decision_id)
+)
+"""
+
 ATTENTION_INDEX_SQL = (
     "CREATE INDEX IF NOT EXISTS ix_attention_requests_queue "
     "ON attention_requests(project_id, status, expires_at, created_at)",
@@ -86,6 +117,10 @@ ATTENTION_INDEX_SQL = (
     "ON attention_decisions(request_id, created_at)",
     "CREATE INDEX IF NOT EXISTS ix_attention_events_request "
     "ON attention_events(request_id, sequence)",
+    "CREATE INDEX IF NOT EXISTS ix_attention_completion_wakes_ready "
+    "ON attention_completion_wakes(project_id, status, available_at, created_at)",
+    "CREATE INDEX IF NOT EXISTS ix_attention_completion_wakes_task "
+    "ON attention_completion_wakes(project_id, task_id, status, created_at)",
 )
 
 
@@ -94,12 +129,25 @@ def upgrade_attention_schema(connection: sqlite3.Connection) -> None:
     connection.execute(ATTENTION_REQUESTS_SQL)
     connection.execute(ATTENTION_DECISIONS_SQL)
     connection.execute(ATTENTION_EVENTS_SQL)
+    connection.execute(ATTENTION_COMPLETION_WAKES_SQL)
     for statement in ATTENTION_INDEX_SQL:
         connection.execute(statement)
 
 
 def downgrade_attention_schema(connection: sqlite3.Connection) -> None:
     """Reverse PROTO-7 in dependency order."""
+    connection.execute("DROP TABLE IF EXISTS attention_completion_wakes")
     connection.execute("DROP TABLE IF EXISTS attention_events")
     connection.execute("DROP TABLE IF EXISTS attention_decisions")
     connection.execute("DROP TABLE IF EXISTS attention_requests")
+
+
+__all__ = [
+    "ATTENTION_REQUESTS_SQL",
+    "ATTENTION_DECISIONS_SQL",
+    "ATTENTION_EVENTS_SQL",
+    "ATTENTION_COMPLETION_WAKES_SQL",
+    "ATTENTION_INDEX_SQL",
+    "upgrade_attention_schema",
+    "downgrade_attention_schema",
+]

@@ -11,6 +11,7 @@ Two production shapes never reach the classifier's contract on their own:
 """
 from __future__ import annotations
 
+from itertools import permutations
 import unittest
 from unittest import mock
 
@@ -23,6 +24,8 @@ from switchboard.domain.completion.state_machine import (  # noqa: E402
 )
 
 HEAD = "88624a605727fd44df98191d5b7dd99c73b75d9c"
+PR_810 = "https://github.com/6th-Element-Labs/projectplanner/pull/810"
+PR_812 = "https://github.com/6th-Element-Labs/projectplanner/pull/812"
 
 
 class _GitHubResponse:
@@ -119,6 +122,153 @@ class StatusContextAttribution(unittest.TestCase):
         self.assertIsNone(row.get("failure_attribution"))
 
 
+class DuplicateStatusContextHydration(unittest.TestCase):
+    """A lossy merge-gate map must not erase richer raw GitHub evidence."""
+
+    CONTEXT = "Switchboard CI / VM gate"
+    PR_URL = "https://github.com/6th-Element-Labs/projectplanner/pull/899"
+    RICH_FAILURE = {
+        "name": CONTEXT,
+        "state": "failure",
+        "description": "The self-hosted runner did not respond",
+        "target_url": "https://github.com/example/actions/runs/123",
+    }
+    BARE_FAILURE = {"name": CONTEXT, "state": "failure"}
+
+    def _snapshot(self, sources):
+        pr = {
+            "number": 899,
+            "url": self.PR_URL,
+            "state": "open",
+            "draft": False,
+            "mergeable": True,
+            "mergeStateStatus": "BLOCKED",
+            "head": {"sha": HEAD},
+            "status_contexts": sources[0],
+            "statusCheckRollup": sources[1],
+            "checks": sources[2],
+        }
+        gate_contexts = sources[3]
+        gate = {
+            "task_id": "BUG-172",
+            "pr_number": 899,
+            "pr_url": self.PR_URL,
+            "head_sha": HEAD,
+            "required_status_contexts": [self.CONTEXT],
+            "status_contexts": gate_contexts,
+        }
+        return build_completion_snapshot(
+            task={
+                "task_id": "BUG-172",
+                "status": "In Review",
+                "git_state": {
+                    "head_sha": HEAD,
+                    "pr_number": 899,
+                    "pr_url": self.PR_URL,
+                },
+            },
+            github_pr=pr,
+            required_status_contexts=[self.CONTEXT],
+            status_contexts=sources[4],
+            review={
+                "status": "passed",
+                "head_sha": HEAD,
+                "pr_url": self.PR_URL,
+            },
+            merge_gate=gate,
+        )
+
+    def test_rich_raw_row_wins_across_every_source_order(self):
+        # The five positions are the exact build_completion_snapshot sources:
+        # three PR fields, merge-gate projection, and the explicit argument.
+        for rich_at, bare_at in permutations(range(5), 2):
+            with self.subTest(rich_at=rich_at, bare_at=bare_at):
+                sources = [None] * 5
+                sources[rich_at] = [dict(self.RICH_FAILURE)]
+                sources[bare_at] = (
+                    {self.CONTEXT: "failure"}
+                    if bare_at == 3
+                    else [dict(self.BARE_FAILURE)]
+                )
+                snapshot = self._snapshot(sources)
+                selected = snapshot["status_contexts"][self.CONTEXT]
+                self.assertEqual(
+                    selected["description"],
+                    "The self-hosted runner did not respond",
+                )
+                normalized = normalize.normalize_snapshot(snapshot)
+                self.assertEqual(
+                    normalized["status_contexts"][self.CONTEXT][
+                        "failure_attribution"
+                    ],
+                    "infrastructure",
+                )
+                decision = classify_completion(None, normalized)
+                self.assertEqual(decision["route"], "coordination_retry")
+                self.assertEqual(
+                    decision["reason_code"],
+                    "required_ci_infrastructure_failure",
+                )
+
+    def test_rich_row_wins_both_orders_inside_one_source(self):
+        for rows in (
+            [self.RICH_FAILURE, self.BARE_FAILURE],
+            [self.BARE_FAILURE, self.RICH_FAILURE],
+        ):
+            with self.subTest(rows=rows):
+                snapshot = self._snapshot([None, None, None, None, rows])
+                self.assertIn(
+                    "description",
+                    snapshot["status_contexts"][self.CONTEXT],
+                )
+
+    def test_latest_valid_timestamp_precedes_richness(self):
+        older_rich = {
+            **self.RICH_FAILURE,
+            "completedAt": "2026-07-24T01:00:00Z",
+        }
+        newer_bare = {
+            **self.BARE_FAILURE,
+            "state": "success",
+            "completedAt": "2026-07-24T01:01:00Z",
+        }
+        snapshot = self._snapshot([
+            [older_rich], None, None, None, [newer_bare],
+        ])
+        self.assertEqual(
+            snapshot["status_contexts"][self.CONTEXT]["state"],
+            "success",
+        )
+
+    def test_equal_timestamp_prefers_richer_provenance(self):
+        timestamp = "2026-07-24T01:00:00Z"
+        rich = {**self.RICH_FAILURE, "completedAt": timestamp}
+        bare = {**self.BARE_FAILURE, "completedAt": timestamp}
+        snapshot = self._snapshot([[rich], None, None, None, [bare]])
+        self.assertEqual(
+            snapshot["status_contexts"][self.CONTEXT]["description"],
+            "The self-hosted runner did not respond",
+        )
+
+    def test_exact_rank_tie_is_deterministic_not_last_writer_wins(self):
+        first = {
+            "name": self.CONTEXT,
+            "state": "failure",
+            "description": "aaa",
+        }
+        second = {
+            "name": self.CONTEXT,
+            "state": "failure",
+            "description": "zzz",
+        }
+        forward = self._snapshot([[first, second], None, None, None, None])
+        reverse = self._snapshot([[second, first], None, None, None, None])
+        self.assertEqual(
+            forward["status_contexts"][self.CONTEXT],
+            reverse["status_contexts"][self.CONTEXT],
+        )
+
+
 class ReviewFindingNormalization(unittest.TestCase):
     def test_coord20_auto_class_becomes_automatic(self):
         out = normalize.normalize_review_findings([{"class": "auto", "code": "x"}])
@@ -148,8 +298,11 @@ class Pr810RawFixture(unittest.TestCase):
     def _snapshot(self):
         return build_completion_snapshot(
             task={"task_id": "COORD-41", "status": "In Review",
-                  "git_state": {"head_sha": HEAD}},
+                  "git_state": {
+                      "head_sha": HEAD, "pr_number": 810, "pr_url": PR_810,
+                  }},
             github_pr={"number": 810, "state": "open", "draft": True,
+                       "url": PR_810,
                        "mergeable": True, "mergeStateStatus": "BLOCKED",
                        "head": {"sha": HEAD}},
             required_status_contexts=["Switchboard CI / VM gate",
@@ -161,7 +314,7 @@ class Pr810RawFixture(unittest.TestCase):
                 {"name": "Switchboard CI / Playwright", "state": "FAILURE",
                  "description": "1 test failed"},
             ],
-            review={"status": "passed", "head_sha": HEAD},
+            review={"status": "passed", "head_sha": HEAD, "pr_url": PR_810},
             runner={"live": True, "role": "review_merge", "head_sha": HEAD,
                     "generation": 9},
         )
@@ -184,14 +337,18 @@ class Pr812RawFixture(unittest.TestCase):
     def _snapshot(self):
         return normalize.normalize_snapshot(build_completion_snapshot(
             task={"task_id": "ADAPTER-24", "status": "In Review",
-                  "git_state": {"head_sha": HEAD}},
+                  "git_state": {
+                      "head_sha": HEAD, "pr_number": 812, "pr_url": PR_812,
+                  }},
             github_pr={"number": 812, "state": "open", "draft": False,
+                       "url": PR_812,
                        "mergeable": True, "mergeStateStatus": "BLOCKED",
                        "head": {"sha": HEAD}},
             required_status_contexts=["Switchboard CI / VM gate"],
             status_contexts=[{"name": "Switchboard CI / VM gate",
                               "state": "success"}],
             review={"status": "changes_requested", "head_sha": HEAD,
+                    "pr_url": PR_812,
                     "findings": [
                         {"class": "auto", "code": "missing_test"},
                         {"class": "escalate", "code": "design_judgment"},
@@ -227,6 +384,7 @@ class Pr834RawFixture(unittest.TestCase):
     """BUG-169: current-head repair findings outrank absent CI hydration."""
 
     HEAD = "ae33752d11db4bf83797070ebf6dbab9b82120be"
+    PR_URL = "https://github.com/6th-Element-Labs/projectplanner/pull/834"
     FINDINGS = [
         {
             "class": "auto",
@@ -250,10 +408,15 @@ class Pr834RawFixture(unittest.TestCase):
             task={
                 "task_id": "SIMPLIFY-16",
                 "status": "In Review",
-                "git_state": {"head_sha": self.HEAD},
+                "git_state": {
+                    "head_sha": self.HEAD,
+                    "pr_number": 834,
+                    "pr_url": self.PR_URL,
+                },
             },
             github_pr={
                 "number": 834,
+                "url": self.PR_URL,
                 "state": "open",
                 "draft": True,
                 "mergeable": True,
@@ -270,6 +433,7 @@ class Pr834RawFixture(unittest.TestCase):
             review={
                 "status": "changes_requested",
                 "head_sha": self.HEAD,
+                "pr_url": self.PR_URL,
                 "findings": self.FINDINGS,
             },
             runner={
@@ -309,7 +473,11 @@ class Pr834RawFixture(unittest.TestCase):
 
     def test_missing_ci_without_actionable_findings_stays_coordination_retry(self):
         snapshot = self._snapshot()
-        snapshot["review"] = {"status": "passed", "head_sha": self.HEAD}
+        snapshot["review"] = {
+            "status": "passed",
+            "head_sha": self.HEAD,
+            "pr_url": self.PR_URL,
+        }
         decision = classify_completion(None, snapshot)
         self.assertEqual(decision["route"], "coordination_retry")
         self.assertEqual(decision["reason_code"], "required_ci_hydration_missing")

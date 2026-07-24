@@ -14,30 +14,48 @@ from switchboard.domain.completion.state_machine import build_completion_snapsho
 
 HEAD_810 = "88624a605727fd44df98191d5b7dd99c73b75d9c"
 HEAD_812 = "25951e34" + "0" * 32
+PR_810 = "https://github.com/6th-Element-Labs/projectplanner/pull/810"
+PR_812 = "https://github.com/6th-Element-Labs/projectplanner/pull/812"
+
+
+def managed_runner(head: str, generation: int, role: str) -> dict:
+    return {
+        "live": True,
+        "runner_session_id": f"runner-{generation}",
+        "execution_id": f"execution-{generation}",
+        "execution_connection_id": f"connection-{generation}",
+        "generation": generation,
+        "fence_epoch": generation,
+        "role": role,
+        "head_sha": head,
+    }
 
 
 def pr810():
     return build_completion_snapshot(
         task={"task_id": "COORD-41", "status": "In Review",
-              "git_state": {"head_sha": HEAD_810, "pr_number": 810}},
+              "git_state": {"head_sha": HEAD_810, "pr_number": 810,
+                            "pr_url": PR_810}},
         github_pr={"number": 810, "state": "open", "draft": True,
+                   "url": PR_810,
                    "mergeable": True, "mergeStateStatus": "BLOCKED",
                    "head": {"sha": HEAD_810}},
         required_status_contexts=["Switchboard CI / VM gate"],
         status_contexts=[{"name": "Switchboard CI / VM gate",
                           "conclusion": "failure",
                           "failure_attribution": "product"}],
-        review={"status": "passed", "head_sha": HEAD_810},
-        runner={"live": True, "role": "review_merge",
-                "head_sha": HEAD_810, "generation": 9},
+        review={"status": "passed", "head_sha": HEAD_810, "pr_url": PR_810},
+        runner=managed_runner(HEAD_810, 9, "review_merge"),
     )
 
 
 def pr812():
     return build_completion_snapshot(
         task={"task_id": "ADAPTER-25", "status": "In Review",
-              "git_state": {"head_sha": HEAD_812, "pr_number": 812}},
+              "git_state": {"head_sha": HEAD_812, "pr_number": 812,
+                            "pr_url": PR_812}},
         github_pr={"number": 812, "state": "open", "draft": False,
+                   "url": PR_812,
                    "mergeable": True, "mergeStateStatus": "BLOCKED",
                    "head": {"sha": HEAD_812}},
         required_status_contexts=["Switchboard CI / VM gate"],
@@ -46,6 +64,7 @@ def pr812():
         review={
             "status": "changes_requested",
             "head_sha": HEAD_812,
+            "pr_url": PR_812,
             "findings": [
                 {"id": "pin", "class": "auto"},
                 {"id": "credential", "class": "escalate"},
@@ -65,11 +84,12 @@ class CompletionDriver(unittest.TestCase):
                     "task_id": "COORD-41", "status": "In Review",
                     "git_state": {
                         "head_sha": HEAD_810, "pr_number": 810,
-                        "pr_url": "https://example.test/pull/810",
+                        "pr_url": PR_810,
                     },
                     "review_verdict": {
                         "current_verdict": {
                             "status": "passed", "head_sha": HEAD_810,
+                            "pr_url": PR_810,
                         },
                     },
                     "session_health": {"latest_sessions": []},
@@ -83,6 +103,7 @@ class CompletionDriver(unittest.TestCase):
         github_pr = {
             "number": 810, "state": "open", "draft": True,
             "mergeable": True, "head": {"sha": HEAD_810},
+            "url": PR_810,
         }
         gate = {
             "task_id": "COORD-41", "pr_number": 810,
@@ -145,8 +166,9 @@ class CompletionDriver(unittest.TestCase):
                 return_value={"effect_key": "effect-810"},
             ),
             patch(
-                "switchboard.application.commands.task_execution.stop_task",
-                return_value={"stopped": True},
+                "switchboard.application.commands.task_execution."
+                "fence_task_generation",
+                return_value={"fenced": True},
             ) as stop,
         ):
             result = completion_driver.run_completion_tick(
@@ -260,8 +282,9 @@ class CompletionDriver(unittest.TestCase):
                 return_value={"effect_key": "effect-810"},
             ) as issued,
             patch(
-                "switchboard.application.commands.task_execution.stop_task",
-                return_value={"stopped": True},
+                "switchboard.application.commands.task_execution."
+                "fence_task_generation",
+                return_value={"fenced": True},
             ),
         ):
             result = completion_driver.run_completion_tick(

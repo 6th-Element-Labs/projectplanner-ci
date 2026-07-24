@@ -94,7 +94,8 @@ def _finding_from_row(row: sqlite3.Row) -> dict[str, Any]:
 
 
 def _verdict_from_row(c: sqlite3.Connection, row: sqlite3.Row,
-                      current_head_sha: str = "") -> dict[str, Any]:
+                      current_head_sha: str = "",
+                      current_pr_url: str = "") -> dict[str, Any]:
     findings = [
         _finding_from_row(finding)
         for finding in c.execute(
@@ -103,7 +104,11 @@ def _verdict_from_row(c: sqlite3.Connection, row: sqlite3.Row,
         ).fetchall()
     ]
     current = str(current_head_sha or "").strip()
-    valid = not current or current == row["head_sha"]
+    current_pr = str(current_pr_url or "").strip()
+    valid = bool(
+        (not current or current == row["head_sha"])
+        and (not current_pr or current_pr == row["pr_url"])
+    )
     return {
         "schema": REVIEW_VERDICT_SCHEMA,
         "verdict_id": row["verdict_id"],
@@ -119,7 +124,12 @@ def _verdict_from_row(c: sqlite3.Connection, row: sqlite3.Row,
         "finding_count": len(findings),
         "open_finding_count": sum(1 for item in findings if item["state"] == "open"),
         "valid_for_current_head": valid,
-        "invalidated_by_head_sha": current if current and not valid else None,
+        "invalidated_by_head_sha": (
+            current if current and current != row["head_sha"] else None
+        ),
+        "invalidated_by_pr_url": (
+            current_pr if current_pr and current_pr != row["pr_url"] else None
+        ),
         "source": row["source"],
     }
 
@@ -157,7 +167,10 @@ def _canonical_verdict(verdict: Mapping[str, Any]) -> str:
 def _insert_verdict_row_in(c: sqlite3.Connection, data: Mapping[str, Any], *,
                            source: str, created_at: float, recorded_at: float) -> str:
     digest = hashlib.sha256(
-        f"{data['task_id']}\x1f{data['head_sha']}".encode("utf-8")
+        (
+            f"{data['task_id']}\x1f{data['pr_url']}\x1f"
+            f"{data['head_sha']}"
+        ).encode("utf-8")
     ).hexdigest()[:16]
     verdict_id = str(data.get("verdict_id") or f"reviewverdict-{digest}")
     c.execute(
@@ -195,6 +208,48 @@ def _insert_findings_in(c: sqlite3.Connection, verdict_id: str,
                 finding.get("resolved_reason"), finding.get("resolved_sha"),
                 finding.get("resolved_at"), created_at, recorded_at,
             ),
+        )
+
+
+def _assert_adversarial_reviewer_independence_in(
+        c: sqlite3.Connection, task_id: str, reviewer: str) -> None:
+    """Require a different recorded agent for an adversarial verdict.
+
+    Fleet authentication may still share one service principal, so the
+    server-resolved actor is the useful identity here. Claims and Work Sessions
+    retain the implementation/remediation actor even after the lease ends.
+    Merely labeling a self-review "adversarial" must never authorize merge.
+    """
+    rows = c.execute(
+        "SELECT agent_id, COALESCE(NULLIF(execution_role,''),'implementation') AS role "
+        "FROM task_claims WHERE task_id=? "
+        "UNION ALL "
+        "SELECT agent_id, COALESCE(NULLIF(execution_role,''),'implementation') AS role "
+        "FROM work_sessions WHERE task_id=?",
+        (task_id, task_id),
+    ).fetchall()
+    implementers = sorted({
+        str(row["agent_id"] or "").strip()
+        for row in rows
+        if str(row["role"] or "").strip().lower()
+        in {"implementation", "remediation"}
+        and str(row["agent_id"] or "").strip()
+    })
+    if not implementers:
+        raise ReviewVerdictError(
+            "adversarial_review_independence_unverifiable",
+            "adversarial review requires a recorded implementation identity",
+            status_code=409,
+            details={"task_id": task_id},
+        )
+    if reviewer.strip().lower() in {
+        item.strip().lower() for item in implementers
+    }:
+        raise ReviewVerdictError(
+            "adversarial_self_review_forbidden",
+            "the implementing or remediating agent cannot author the adversarial verdict",
+            status_code=403,
+            details={"task_id": task_id, "implementing_agents": implementers},
         )
 
 
@@ -250,7 +305,8 @@ class ReviewVerdictRepository:
             from switchboard.storage.repositories.review_remediations import (
                 required_review_mode_in,
             )
-            review_requirement = required_review_mode_in(c, task_id, current_head)
+            review_requirement = required_review_mode_in(
+                c, task_id, current_head, git_state["pr_url"])
             if (review_requirement.get("required")
                     and payload.get("review_mode", "standard")
                     != review_requirement.get("mode")):
@@ -261,7 +317,13 @@ class ReviewVerdictRepository:
                     details={"review_requirement": review_requirement},
                 )
             current_pr = git_state["pr_url"]
-            if current_pr and payload.get("pr_url") != current_pr:
+            if not current_pr:
+                raise ReviewVerdictError(
+                    "review_pr_unbound",
+                    "task has no recorded PR URL; review cannot be fenced",
+                    status_code=409,
+                )
+            if payload.get("pr_url") != current_pr:
                 raise ReviewVerdictError(
                     "review_pr_mismatch",
                     "review pr_url does not match the task's current PR",
@@ -282,8 +344,13 @@ class ReviewVerdictRepository:
                     "review requires an authenticated principal ID",
                     status_code=403,
                 )
+            if str(payload.get("review_mode") or "standard") == "adversarial":
+                _assert_adversarial_reviewer_independence_in(
+                    c, task_id, reviewer,
+                )
             existing_result = self._existing_result_in(
-                c, payload, task_id=task_id, head_sha=current_head)
+                c, payload, task_id=task_id, pr_url=current_pr,
+                head_sha=current_head)
             if existing_result is not None:
                 return existing_result
             now = time.time()
@@ -294,7 +361,8 @@ class ReviewVerdictRepository:
                 # Defense in depth for another process winning the unique task/head race.
                 # The normal same-process path is serialized by _write_through above.
                 existing_result = self._existing_result_in(
-                    c, payload, task_id=task_id, head_sha=current_head)
+                    c, payload, task_id=task_id, pr_url=current_pr,
+                    head_sha=current_head)
                 if existing_result is None:
                     raise
                 return existing_result
@@ -322,39 +390,61 @@ class ReviewVerdictRepository:
                 "SELECT * FROM review_verdicts WHERE verdict_id=?", (verdict_id,)
             ).fetchone()
             return {"created": True, "idempotent_replay": False,
-                    "verdict": _verdict_from_row(c, row, current_head)}
+                    "verdict": _verdict_from_row(
+                        c, row, current_head, current_pr)}
 
     @staticmethod
     def _existing_result_in(c: sqlite3.Connection, payload: Mapping[str, Any], *,
-                            task_id: str, head_sha: str) -> Optional[dict[str, Any]]:
+                            task_id: str, pr_url: str,
+                            head_sha: str) -> Optional[dict[str, Any]]:
         existing = c.execute(
-            "SELECT * FROM review_verdicts WHERE task_id=? AND head_sha=?",
-            (task_id, head_sha),
+            "SELECT * FROM review_verdicts "
+            "WHERE task_id=? AND pr_url=? AND head_sha=?",
+            (task_id, pr_url, head_sha),
         ).fetchone()
         if not existing:
             return None
-        verdict = _verdict_from_row(c, existing, head_sha)
+        verdict = _verdict_from_row(c, existing, head_sha, pr_url)
         if _canonical_verdict(verdict) == _canonical_command(payload):
             return {"created": False, "idempotent_replay": True, "verdict": verdict}
         raise ReviewVerdictError(
             "review_verdict_conflict",
-            "a different review verdict already exists for this task head_sha",
+            "a different review verdict already exists for this task PR/head",
             status_code=409,
             details={"verdict_id": existing["verdict_id"]},
         )
 
-    def get(self, task_id: str, *, head_sha: str = "",
+    def get(self, task_id: str, *, head_sha: str = "", pr_url: str = "",
             project: str = DEFAULT_PROJECT) -> Optional[dict[str, Any]]:
         with _conn(project) as c:
-            current_head = _current_git_state_in(c, task_id)["head_sha"]
+            git_state = _current_git_state_in(c, task_id)
+            current_head = git_state["head_sha"]
+            current_pr = git_state["pr_url"]
             selected_head = str(head_sha or current_head).strip()
+            selected_pr = str(
+                pr_url or (current_pr if selected_head == current_head else "")
+            ).strip()
             if not selected_head:
                 return None
-            row = c.execute(
-                "SELECT * FROM review_verdicts WHERE task_id=? AND head_sha=?",
-                (task_id, selected_head),
-            ).fetchone()
-            return _verdict_from_row(c, row, current_head) if row else None
+            if selected_pr:
+                row = c.execute(
+                    "SELECT * FROM review_verdicts "
+                    "WHERE task_id=? AND pr_url=? AND head_sha=?",
+                    (task_id, selected_pr, selected_head),
+                ).fetchone()
+            else:
+                rows = c.execute(
+                    "SELECT * FROM review_verdicts "
+                    "WHERE task_id=? AND head_sha=? ORDER BY created_at",
+                    (task_id, selected_head),
+                ).fetchall()
+                # A legacy historical lookup is safe only while the SHA maps
+                # to exactly one PR. Replacement-PR ambiguity fails closed.
+                row = rows[0] if len(rows) == 1 else None
+            return (
+                _verdict_from_row(c, row, current_head, current_pr)
+                if row else None
+            )
 
     def resolve_finding(self, data: Mapping[str, Any], *, actor: str,
                         principal_id: str = "", authorized: bool = False,
@@ -414,7 +504,9 @@ class ReviewVerdictRepository:
                     "review_task_not_found", "review task does not exist", status_code=404,
                     details={"task_id": task_id},
                 )
-            current_head = _current_git_state_in(c, task_id)["head_sha"]
+            git_state = _current_git_state_in(c, task_id)
+            current_head = git_state["head_sha"]
+            current_pr = git_state["pr_url"]
             if not current_head:
                 raise ReviewVerdictError(
                     "review_head_unbound",
@@ -428,9 +520,16 @@ class ReviewVerdictRepository:
                     status_code=409,
                     details={"expected_head_sha": current_head},
                 )
+            if not current_pr:
+                raise ReviewVerdictError(
+                    "review_pr_unbound",
+                    "task has no recorded PR URL; finding resolution cannot be fenced",
+                    status_code=409,
+                )
             verdict_row = c.execute(
-                "SELECT * FROM review_verdicts WHERE task_id=? AND head_sha=?",
-                (task_id, current_head),
+                "SELECT * FROM review_verdicts "
+                "WHERE task_id=? AND pr_url=? AND head_sha=?",
+                (task_id, current_pr, current_head),
             ).fetchone()
             if not verdict_row:
                 raise ReviewVerdictError(
@@ -462,7 +561,8 @@ class ReviewVerdictRepository:
                         "resolved": False,
                         "idempotent_replay": True,
                         "finding": existing,
-                        "verdict": _verdict_from_row(c, verdict_row, current_head),
+                        "verdict": _verdict_from_row(
+                            c, verdict_row, current_head, current_pr),
                     }
                 raise ReviewVerdictError(
                     "review_finding_not_open",
@@ -526,7 +626,8 @@ class ReviewVerdictRepository:
                 "resolved": True,
                 "idempotent_replay": False,
                 "finding": _finding_from_row(updated_finding),
-                "verdict": _verdict_from_row(c, updated_verdict, current_head),
+                "verdict": _verdict_from_row(
+                    c, updated_verdict, current_head, current_pr),
                 "audit": event,
             }
 
@@ -552,14 +653,19 @@ class ReviewVerdictRepository:
             where.append("LOWER(f.severity)=?")
             params.append(severity.lower())
         with _conn(project) as c:
-            current_heads: dict[str, str] = {}
+            current_git: dict[str, dict[str, Any]] = {}
             if task_id:
-                current_heads[task_id] = _current_git_state_in(c, task_id)["head_sha"]
+                current_git[task_id] = _current_git_state_in(c, task_id)
                 if current_head_only:
-                    if not current_heads[task_id]:
+                    if (
+                        not current_git[task_id]["head_sha"]
+                        or not current_git[task_id]["pr_url"]
+                    ):
                         return []
                     where.append("v.head_sha=?")
-                    params.append(current_heads[task_id])
+                    params.append(current_git[task_id]["head_sha"])
+                    where.append("v.pr_url=?")
+                    params.append(current_git[task_id]["pr_url"])
             rows = c.execute(
                 "SELECT f.*, v.pr_url, v.head_sha, v.reviewer_principal, "
                 "v.reviewer_principal_id, "
@@ -572,10 +678,12 @@ class ReviewVerdictRepository:
             results = []
             for row in rows:
                 item = _finding_from_row(row)
-                current = current_heads.get(row["task_id"])
-                if current is None:
-                    current = _current_git_state_in(c, row["task_id"])["head_sha"]
-                    current_heads[row["task_id"]] = current
+                git_state = current_git.get(row["task_id"])
+                if git_state is None:
+                    git_state = _current_git_state_in(c, row["task_id"])
+                    current_git[row["task_id"]] = git_state
+                current = git_state["head_sha"]
+                current_pr = git_state["pr_url"]
                 item.update({
                     "verdict_id": row["verdict_id"],
                     "task_id": row["task_id"],
@@ -585,9 +693,19 @@ class ReviewVerdictRepository:
                     "reviewer_principal_id": row["reviewer_principal_id"],
                     "verdict_status": row["verdict_status"],
                     "verdict_created_at": row["verdict_created_at"],
-                    "valid_for_current_head": bool(current and current == row["head_sha"]),
+                    "valid_for_current_head": bool(
+                        current
+                        and current_pr
+                        and current == row["head_sha"]
+                        and current_pr == row["pr_url"]
+                    ),
                     "invalidated_by_head_sha": (
                         current if current and current != row["head_sha"] else None
+                    ),
+                    "invalidated_by_pr_url": (
+                        current_pr
+                        if current_pr and current_pr != row["pr_url"]
+                        else None
                     ),
                 })
                 results.append(item)
@@ -595,12 +713,14 @@ class ReviewVerdictRepository:
 
     def summary(self, task_id: str, *, project: str = DEFAULT_PROJECT) -> dict[str, Any]:
         with _conn(project) as c:
-            current_head = _current_git_state_in(c, task_id)["head_sha"]
-            return review_verdict_summary_in(c, task_id, current_head)
+            git_state = _current_git_state_in(c, task_id)
+            return review_verdict_summary_in(
+                c, task_id, git_state["head_sha"], git_state["pr_url"])
 
 
 def review_verdict_summary_in(c: sqlite3.Connection, task_id: str,
-                              current_head_sha: str = "") -> dict[str, Any]:
+                              current_head_sha: str = "",
+                              current_pr_url: str = "") -> dict[str, Any]:
     counts = c.execute(
         "SELECT COUNT(*) AS finding_count, "
         "SUM(CASE WHEN state='open' THEN 1 ELSE 0 END) AS open_count "
@@ -610,13 +730,16 @@ def review_verdict_summary_in(c: sqlite3.Connection, task_id: str,
     total = int(counts["finding_count"] or 0)
     total_open = int(counts["open_count"] or 0)
     current_row = None
-    if current_head_sha:
+    if current_head_sha and current_pr_url:
         current_row = c.execute(
-            "SELECT * FROM review_verdicts WHERE task_id=? AND head_sha=?",
-            (task_id, current_head_sha),
+            "SELECT * FROM review_verdicts "
+            "WHERE task_id=? AND pr_url=? AND head_sha=?",
+            (task_id, current_pr_url, current_head_sha),
         ).fetchone()
     current_verdict = (
-        _verdict_from_row(c, current_row, current_head_sha) if current_row else None
+        _verdict_from_row(
+            c, current_row, current_head_sha, current_pr_url)
+        if current_row else None
     )
     verdict_count = int(c.execute(
         "SELECT COUNT(*) FROM review_verdicts WHERE task_id=?", (task_id,)
@@ -626,6 +749,7 @@ def review_verdict_summary_in(c: sqlite3.Connection, task_id: str,
         "schema": REVIEW_SUMMARY_SCHEMA,
         "task_id": task_id,
         "current_head_sha": current_head_sha or None,
+        "current_pr_url": current_pr_url or None,
         "current_verdict": current_verdict,
         "current_verdict_status": (current_verdict or {}).get("status") or "missing",
         "finding_count": total,
@@ -653,14 +777,20 @@ def review_merge_gate(task_id: str, head_sha: str, *,
     with _conn(project) as c:
         git_state = _current_git_state_in(c, task_id)
         current_head = git_state["head_sha"]
-        summary = review_verdict_summary_in(c, task_id, current_head)
+        current_pr = git_state["pr_url"]
+        summary = review_verdict_summary_in(
+            c, task_id, current_head, current_pr)
         row = None
-        if requested_head:
+        if requested_head and current_pr:
             row = c.execute(
-                "SELECT * FROM review_verdicts WHERE task_id=? AND head_sha=?",
-                (task_id, requested_head),
+                "SELECT * FROM review_verdicts "
+                "WHERE task_id=? AND pr_url=? AND head_sha=?",
+                (task_id, current_pr, requested_head),
             ).fetchone()
-        verdict = _verdict_from_row(c, row, current_head) if row else None
+        verdict = (
+            _verdict_from_row(c, row, current_head, current_pr)
+            if row else None
+        )
 
     code = ""
     message = ""
@@ -670,6 +800,9 @@ def review_merge_gate(task_id: str, head_sha: str, *,
     elif not current_head:
         code = "review_head_sha_required"
         message = "Review required, but the task has no current recorded PR head_sha."
+    elif not current_pr:
+        code = "review_pr_identity_required"
+        message = "Review required, but the task has no current recorded PR URL."
     elif current_head and requested_head != current_head:
         code = "stale_review_verdict"
         message = (
@@ -723,6 +856,7 @@ def review_merge_gate(task_id: str, head_sha: str, *,
         "task_id": task_id,
         "head_sha": requested_head or None,
         "current_head_sha": current_head or None,
+        "current_pr_url": current_pr or None,
         "required": True,
         "ok": ok,
         "status": "passed" if ok else "blocked",
@@ -765,7 +899,9 @@ def review_merge_gate_findings(task_id: str, head_sha: str, *,
         "code": code,
         "message": str(gate.get("message") or "Review required before merge."),
         "failure_class": (
-            "missing_data" if code == "review_head_sha_required" else "failed_gate"
+            "missing_data"
+            if code in {"review_head_sha_required", "review_pr_identity_required"}
+            else "failed_gate"
         ),
         "severity": "high",
         "blocking": True,
@@ -904,10 +1040,10 @@ def record_review_verdict(data: Mapping[str, Any], *, actor: str, principal_id: 
         data, actor=actor, principal_id=principal_id, project=project)
 
 
-def get_review_verdict(task_id: str, *, head_sha: str = "",
+def get_review_verdict(task_id: str, *, head_sha: str = "", pr_url: str = "",
                        project: str = DEFAULT_PROJECT) -> Optional[dict[str, Any]]:
     return default_review_verdict_repository.get(
-        task_id, head_sha=head_sha, project=project)
+        task_id, head_sha=head_sha, pr_url=pr_url, project=project)
 
 
 def list_review_findings(*, task_id: str = "", head_sha: str = "", state: str = "",
