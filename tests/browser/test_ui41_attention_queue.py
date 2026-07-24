@@ -37,11 +37,19 @@ import store  # noqa: E402
 from switchboard.storage.repositories.attention import (  # noqa: E402
     default_attention_repository,
 )
+from db.connection import _conn  # noqa: E402
+from switchboard.storage.repositories.provenance import _upsert_git_state  # noqa: E402
 
 store.init_project_registry()
 store.init_db("switchboard")
+task = store.create_task(
+    {"workstream_id": "COORD", "title": "UI-41 exact-head browser fixture"},
+    actor="ui41-browser", project="switchboard")
+task_id = task["task_id"]
+with _conn("switchboard") as connection:
+    _upsert_git_state(connection, task_id, {"head_sha": "c" * 40})
 created = default_attention_repository.create_request({
-    "task_id": "COORD-20",
+    "task_id": task_id,
     "provider": "switchboard.completion",
     "provider_request_id": "completion-run-812:7",
     "schema_version": "switchboard.completion_human_closeout.v1",
@@ -56,7 +64,7 @@ created = default_attention_repository.create_request({
     "host_id": "host/ui41",
     "runner_session_id": "run-ui41",
     "context": {
-        "task_id": "COORD-20", "deliverable_id": "alerts",
+        "task_id": task_id, "deliverable_id": "alerts",
         "completion_run_id": "completion-run-812", "state_version": 7,
         "pr_number": 812, "head_sha": "c" * 40,
         "completed_work_summary": "Implementation and review are complete at PR #812.",
@@ -130,11 +138,14 @@ try:
         claimed = post("/ixp/v1/attention/decisions/claim", {
             "project": "switchboard", "host_id": "host/ui41",
             "provider": "switchboard.completion", "request_id": request_id,
+            "runner_session_id": "run-ui41",
         })
         assert claimed["claimed"]
         version = claimed["delivery"]["request"]["version"]
         post(f"/ixp/v1/attention/requests/{request_id}/delivery", {
             "project": "switchboard", "host_id": "host/ui41",
+            "provider": "switchboard.completion",
+            "runner_session_id": "run-ui41",
             "expected_version": version,
             "receipt": {"execution_id": "exec-ui41", "provider_ack": "verified"},
         })

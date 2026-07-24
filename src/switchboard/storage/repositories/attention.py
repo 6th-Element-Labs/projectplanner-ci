@@ -137,6 +137,11 @@ def create_attention_request_in(
         "recommended_default": payload.get("recommended_default"),
         "expires_at": payload.get("expires_at"),
     }
+    context = frozen["context"]
+    if payload.get("auto_proceed") is True or context.get("auto_proceed") is True:
+        raise AttentionStoreError(
+            "attention_auto_proceed_forbidden",
+            "attention requests require an explicit operator decision")
     request_hash = _hash_payload(frozen)
     existing = c.execute(
         "SELECT * FROM attention_requests WHERE project_id=? AND idempotency_key=?",
@@ -212,6 +217,67 @@ def record_attention_decision_in(
     ).fetchone()
     if not request:
         raise AttentionStoreError("attention_request_not_found", "request does not exist")
+    now_value = float(now if now is not None else time.time())
+    if request["expires_at"] is not None and request["expires_at"] <= now_value:
+        if request["status"] == "pending":
+            transition_attention_request_in(
+                c, request_id, expected_version=request["version"],
+                target_status="expired", actor=actor,
+                reason="decision_rejected_after_expiry", project=project,
+                now=now_value,
+            )
+        raise AttentionStoreError(
+            "attention_request_expired",
+            "request expired before the operator decision was recorded",
+            details={"current_status": "expired",
+                     "current_version": request["version"] + 1},
+        )
+    context = _decode(request["context_json"], {})
+    frozen_head = str(context.get("head_sha") or "").strip()
+    if request["task_id"] and frozen_head:
+        try:
+            current = c.execute(
+                "SELECT head_sha FROM task_git_state WHERE task_id=?",
+                (request["task_id"],),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            current = None
+        current_head = str(current["head_sha"] or "").strip() if current else ""
+        if not current_head:
+            raise AttentionStoreError(
+                "attention_head_unverifiable",
+                "current task head is unavailable; decision remains pending",
+                details={"frozen_head_sha": frozen_head})
+        if current_head != frozen_head:
+            if request["status"] == "pending":
+                transition_attention_request_in(
+                    c, request_id, expected_version=request["version"],
+                    target_status="cancelled", actor=actor,
+                    reason="exact_head_binding_changed", project=project,
+                    now=now_value,
+                )
+            raise AttentionStoreError(
+                "stale_attention_head",
+                "request is bound to a different task head",
+                details={"frozen_head_sha": frozen_head,
+                         "current_head_sha": current_head},
+            )
+    choices = _decode(request["choices_json"], [])
+    selected = payload.get("choice")
+    selected_id = (
+        str(selected.get("id") or "") if isinstance(selected, Mapping)
+        else str(selected)
+    )
+    allowed_ids = {
+        (str(choice.get("id") or "") if isinstance(choice, Mapping) else str(choice))
+        for choice in choices
+    }
+    if allowed_ids and selected_id not in allowed_ids:
+        raise AttentionStoreError(
+            "attention_choice_not_allowed",
+            "decision must select one of the frozen request choices",
+            details={"allowed_choice_ids": sorted(allowed_ids)},
+        )
     decision_frozen = {
         "request_id": request_id,
         "expected_version": payload["expected_version"],
@@ -240,7 +306,6 @@ def record_attention_decision_in(
             details={"current_status": request["status"],
                      "current_version": request["version"]},
         )
-    now_value = float(now if now is not None else time.time())
     next_version = request["version"] + 1
     updated = c.execute(
         "UPDATE attention_requests SET status='decision_recorded', version=?, "
@@ -375,6 +440,37 @@ def reconstruct_attention_audit_in(
             "decisions": decisions, "events": events}
 
 
+def reconcile_attention_lifecycle_in(
+    c: sqlite3.Connection, *, project: str, now: Optional[float] = None,
+    delivery_timeout_s: float = 300.0,
+) -> dict[str, int]:
+    """Materialize expiry and abandoned delivery as audited terminal states."""
+    now_value = float(now if now is not None else time.time())
+    expired = c.execute(
+        "SELECT request_id, version FROM attention_requests "
+        "WHERE project_id=? AND status IN ('pending','decision_recorded') "
+        "AND expires_at IS NOT NULL AND expires_at<=?",
+        (project, now_value),
+    ).fetchall()
+    for row in expired:
+        transition_attention_request_in(
+            c, row["request_id"], expected_version=row["version"],
+            target_status="expired", actor="attention-reconcile",
+            reason="request_expiry_elapsed", project=project, now=now_value)
+    abandoned = c.execute(
+        "SELECT request_id, version FROM attention_requests "
+        "WHERE project_id=? AND status='delivering' "
+        "AND delivery_started_at IS NOT NULL AND delivery_started_at<=?",
+        (project, now_value - max(1.0, float(delivery_timeout_s))),
+    ).fetchall()
+    for row in abandoned:
+        transition_attention_request_in(
+            c, row["request_id"], expected_version=row["version"],
+            target_status="orphaned", actor="attention-reconcile",
+            reason="delivery_claim_timeout", project=project, now=now_value)
+    return {"expired": len(expired), "orphaned": len(abandoned)}
+
+
 def _operator_queue_clause(now: float) -> tuple[str, Sequence[Any]]:
     """Single predicate shared by the operator queue and bell count."""
     return (
@@ -389,6 +485,7 @@ def list_attention_requests_in(
     limit: int = 100, offset: int = 0,
 ) -> list[dict[str, Any]]:
     now_value = float(now if now is not None else time.time())
+    reconcile_attention_lifecycle_in(c, project=project, now=now_value)
     clause, tail = _operator_queue_clause(now_value)
     rows = c.execute(
         f"SELECT * FROM attention_requests WHERE {clause} "
@@ -402,6 +499,7 @@ def count_attention_requests_in(
     c: sqlite3.Connection, *, project: str, now: Optional[float] = None,
 ) -> int:
     now_value = float(now if now is not None else time.time())
+    reconcile_attention_lifecycle_in(c, project=project, now=now_value)
     clause, tail = _operator_queue_clause(now_value)
     return int(c.execute(
         f"SELECT COUNT(*) FROM attention_requests WHERE {clause}",
@@ -423,17 +521,25 @@ def get_attention_request_in(
 
 def claim_attention_decision_in(
     c: sqlite3.Connection, *, project: str, host_id: str, actor: str,
-    provider: str = "", request_id: str = "", now: Optional[float] = None,
+    provider: str = "", request_id: str = "", runner_session_id: str = "",
+    work_session_id: str = "", now: Optional[float] = None,
 ) -> Optional[dict[str, Any]]:
     """Atomically claim the oldest matching recorded decision for one Agent Host."""
+    now_value = float(now if now is not None else time.time())
+    reconcile_attention_lifecycle_in(c, project=project, now=now_value)
     filters = ["project_id=?", "status='decision_recorded'", "host_id=?"]
     values: list[Any] = [project, host_id]
-    if provider:
-        filters.append("provider=?")
-        values.append(provider)
+    filters.append("provider=?")
+    values.append(provider)
     if request_id:
         filters.append("request_id=?")
         values.append(request_id)
+    filters.append("COALESCE(runner_session_id, '')=?")
+    values.append(runner_session_id)
+    filters.append("COALESCE(work_session_id, '')=?")
+    values.append(work_session_id)
+    filters.append("(expires_at IS NULL OR expires_at>?)")
+    values.append(now_value)
     row = c.execute(
         "SELECT * FROM attention_requests WHERE "
         + " AND ".join(filters)
@@ -445,7 +551,7 @@ def claim_attention_decision_in(
     request = transition_attention_request_in(
         c, row["request_id"], expected_version=row["version"],
         target_status="delivering", actor=actor, delivery_claimed_by=host_id,
-        project=project, now=now,
+        project=project, now=now_value,
     )
     decision = c.execute(
         "SELECT * FROM attention_decisions WHERE request_id=? "
@@ -481,9 +587,16 @@ class AttentionRepository:
     def _record_decision(request_id: str, data: Mapping[str, Any], *, actor: str,
                          actor_principal_id: str, project: str) -> dict[str, Any]:
         with _conn(project) as c:
-            return record_attention_decision_in(
-                c, request_id, data, actor=actor,
-                actor_principal_id=actor_principal_id, project=project)
+            try:
+                return record_attention_decision_in(
+                    c, request_id, data, actor=actor,
+                    actor_principal_id=actor_principal_id, project=project)
+            except AttentionStoreError as exc:
+                # Late decisions terminalize the request before reporting the
+                # conflict. Preserve that audit write across the raised 409.
+                if exc.code in {"attention_request_expired", "stale_attention_head"}:
+                    c.commit()
+                raise
 
     def transition(self, request_id: str, *, expected_version: int,
                    target_status: str, actor: str, reason: str = "",
@@ -531,20 +644,25 @@ class AttentionRepository:
 
     def claim_decision(self, *, project: str, host_id: str, actor: str,
                        provider: str = "", request_id: str = "",
+                       runner_session_id: str = "", work_session_id: str = "",
                        now: Optional[float] = None) -> Optional[dict[str, Any]]:
         return _write_through(
             project, lambda: self._claim_decision(
                 project=project, host_id=host_id, actor=actor, provider=provider,
-                request_id=request_id, now=now))
+                request_id=request_id, runner_session_id=runner_session_id,
+                work_session_id=work_session_id, now=now))
 
     @staticmethod
     def _claim_decision(*, project: str, host_id: str, actor: str,
                         provider: str, request_id: str,
+                        runner_session_id: str, work_session_id: str,
                         now: Optional[float]) -> Optional[dict[str, Any]]:
         with _conn(project) as c:
             return claim_attention_decision_in(
                 c, project=project, host_id=host_id, actor=actor,
-                provider=provider, request_id=request_id, now=now)
+                provider=provider, request_id=request_id,
+                runner_session_id=runner_session_id,
+                work_session_id=work_session_id, now=now)
 
 
 default_attention_repository = AttentionRepository()
@@ -562,6 +680,7 @@ __all__ = [
     "get_attention_request_in",
     "list_attention_requests_in",
     "record_attention_decision_in",
+    "reconcile_attention_lifecycle_in",
     "reconstruct_attention_audit_in",
     "transition_attention_request_in",
 ]

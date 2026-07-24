@@ -219,6 +219,8 @@ class ClaudeQuestionAdapter:
             "host_id": self.binding["host_id"],
             "provider": PROVIDER,
             "request_id": entry["request_id"],
+            "runner_session_id": self.binding["runner_session_id"],
+            "work_session_id": self.binding["work_session_id"],
         })
         delivery = claimed.get("delivery") if claimed.get("claimed") else None
         if delivery is None:
@@ -270,6 +272,9 @@ class ClaudeQuestionAdapter:
                 {
                     "project": self.binding["project"],
                     "host_id": self.binding["host_id"],
+                    "provider": PROVIDER,
+                    "runner_session_id": self.binding["runner_session_id"],
+                    "work_session_id": self.binding["work_session_id"],
                     "expected_version": entry["expected_version"],
                     "receipt": receipt,
                 },

@@ -45,6 +45,14 @@
         return Math.floor(s / 86400) + 'd';
     }
     function proj() { return window.PM_PROJECT || 'maxwell'; }
+    function apiError(data, status) {
+        const detail = data && data.detail;
+        if (typeof detail === 'string') return detail;
+        if (detail && typeof detail === 'object') {
+            return detail.message || detail.error || JSON.stringify(detail);
+        }
+        return (data && (data.message || data.error)) || `HTTP ${status}`;
+    }
 
     function setCount(n) {
         const count = Number(n) || 0;
@@ -65,7 +73,7 @@
         try {
             const res = await fetch(`api/attention?project=${encodeURIComponent(proj())}`, { cache: 'no-store' });
             const data = await res.json();
-            if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+            if (!res.ok) throw new Error(apiError(data, res.status));
             items = data.items || [];
             setCount(data.count);
         } catch (e) {
@@ -220,8 +228,7 @@
                 </div>` : isProvider ? `
                 <div class="tk-eyebrow mb-2">Decide</div>
                 <div class="btn-list mb-2">${choiceButtons}</div>
-                <label class="form-label small mt-2" for="needs-custom">Safe custom response</label>
-                <div class="d-flex gap-2 mb-2"><input class="form-control" id="needs-custom" placeholder="Optional response within the frozen decision scope" ${delivering ? 'disabled' : ''}/><button type="button" class="btn btn-outline-secondary" id="needs-custom-send" ${delivering ? 'disabled' : ''}>Submit</button></div>
+                <div class="text-secondary small mb-2">Only the frozen choices above are authorized. Policy, permission, and blast-radius changes require a new audited request.</div>
                 <div class="text-secondary small mb-2">Resuming means the decision was accepted. Resumed appears only after a bound delivery/execution receipt.</div>
                 ${['failed', 'expired', 'cancelled', 'orphaned'].includes(p.status) ? '<button type="button" class="btn btn-outline-danger" id="needs-recover"><i class="ti ti-refresh me-1"></i>Refresh recovery state</button>' : ''}` : `
                 <div class="tk-eyebrow mb-2">Authoritative source</div>
@@ -278,7 +285,7 @@
             const decide = async (choice) => {
                 if (delivering) return;
                 delivering = true;
-                detail.querySelectorAll('[data-choice], #needs-custom, #needs-custom-send').forEach((node) => { node.disabled = true; });
+                detail.querySelectorAll('[data-choice]').forEach((node) => { node.disabled = true; });
                 flash('Delivering decision…');
                 try {
                     const body = {
@@ -291,7 +298,7 @@
                         body: JSON.stringify(body),
                     });
                     const data = await res.json().catch(() => ({}));
-                    if (!res.ok) throw new Error(data.detail || data.error || data.message || `HTTP ${res.status}`);
+                    if (!res.ok) throw new Error(apiError(data, res.status));
                     tracked = Object.assign({}, it, {
                         payload: Object.assign({}, it.payload, {
                             status: (data.request && data.request.status) || data.status || 'decision_recorded',
@@ -309,12 +316,6 @@
                 }
             };
             detail.querySelectorAll('[data-choice]').forEach((btn) => btn.addEventListener('click', () => decide({ id: btn.dataset.choice })));
-            const custom = el('needs-custom-send');
-            if (custom) custom.addEventListener('click', () => {
-                const response = (el('needs-custom').value || '').trim();
-                if (!response) { flash('Enter a scoped response first.', 'text-danger'); return; }
-                decide({ id: 'custom', response });
-            });
             const recover = el('needs-recover');
             if (recover) recover.addEventListener('click', () => pollRequest(p.request_id));
         }

@@ -19,7 +19,7 @@ ATTENTION_TRANSITIONS = {
         "decision_recorded", "failed", "expired", "cancelled", "orphaned",
     }),
     "decision_recorded": frozenset({
-        "delivering", "failed", "cancelled", "orphaned",
+        "delivering", "failed", "expired", "cancelled", "orphaned",
     }),
     "delivering": frozenset({"resolved", "failed", "orphaned"}),
 }

@@ -127,10 +127,12 @@ try:
     claimed = client.post("/ixp/v1/attention/decisions/claim", json={
         "project": "switchboard", "host_id": "host/proto8",
         "provider": "provider-neutral",
+        "runner_session_id": "run-proto8",
     }).json()
     duplicate = client.post("/ixp/v1/attention/decisions/claim", json={
         "project": "switchboard", "host_id": "host/proto8",
         "provider": "provider-neutral",
+        "runner_session_id": "run-proto8",
     }).json()
     ok(claimed["claimed"] is True and duplicate["claimed"] is False
        and claimed["delivery"]["request"]["status"] == "delivering",
@@ -145,6 +147,7 @@ try:
     completed = client.post(
         f"/ixp/v1/attention/requests/{request_id}/delivery",
         json={"project": "switchboard", "host_id": "host/proto8",
+              "provider": "provider-neutral", "runner_session_id": "run-proto8",
               "expected_version": 3, "receipt": {"provider_ack": "ack-1"}},
     ).json()
     ok(completed["status"] == "resolved"
@@ -166,7 +169,8 @@ try:
     def race_claim():
         return default_attention_service.claim_decision(
             ctx, host_id="host/proto8", provider="provider-neutral",
-            actor="host/proto8", request_id=race_id)
+            actor="host/proto8", request_id=race_id,
+            runner_session_id="run-proto8")
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(lambda _index: race_claim(), range(8)))
