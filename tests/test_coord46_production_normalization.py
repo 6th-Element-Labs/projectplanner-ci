@@ -12,15 +12,61 @@ Two production shapes never reach the classifier's contract on their own:
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 from path_setup import ROOT  # noqa: F401
 
 from switchboard.domain.completion import effects, normalize  # noqa: E402
+from switchboard.application.commands import merge_gate as merge_gate_command  # noqa: E402
 from switchboard.domain.completion.state_machine import (  # noqa: E402
     build_completion_snapshot, classify_completion,
 )
 
 HEAD = "88624a605727fd44df98191d5b7dd99c73b75d9c"
+
+
+class _GitHubResponse:
+    def __init__(self, payload):
+        import json
+        self._body = json.dumps(payload).encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self):
+        return self._body
+
+
+class MergeGateStatusHydration(unittest.TestCase):
+    def test_pull_rest_payload_hydrates_exact_head_commit_statuses(self):
+        pull = {
+            "number": 840,
+            "head": {"sha": HEAD, "ref": "codex/SIMPLIFY-25"},
+            "base": {"ref": "master"},
+        }
+        statuses = {
+            "statuses": [{
+                "context": "Switchboard CI / VM gate",
+                "state": "success",
+            }],
+        }
+        with (
+            mock.patch.object(merge_gate_command, "_github_pr",
+                              return_value=pull),
+            mock.patch.object(merge_gate_command.urllib.request, "urlopen",
+                              return_value=_GitHubResponse(statuses)),
+        ):
+            hydrated, source = merge_gate_command._merge_gate_pr_evidence(
+                "", 840, {}, "6th-Element-Labs/projectplanner")
+
+        self.assertEqual(source, {"source": "github_api"})
+        self.assertEqual(
+            hydrated["status_contexts"][0]["context"],
+            "Switchboard CI / VM gate",
+        )
 
 
 class StatusContextAttribution(unittest.TestCase):
