@@ -17,6 +17,7 @@ from typing import Any
 from switchboard.application.session_boot import ADVERTISED_LAUNCH_RUNTIMES
 from switchboard.connect import Assignment, ResourceLimits
 from switchboard.storage.repositories import coordination as coordination_repo
+from switchboard.application.commands import execution_context
 
 
 CONNECT_WAKE_MODE = "connect"
@@ -237,6 +238,20 @@ def enqueue_task(
     lane = str(task.get("_wsId") or task.get("workstream") or "").strip()
     generation = generation_ref or str(predecessor_wake_id or "")
     assignment_id = _assignment_id(project, task_id, runtime_name, generation)
+    # COORD-47 introduces the project-derived path without prematurely removing
+    # the legacy unconfigured-project path; that subtraction is a later
+    # deliverable milestone. Once a project opts into execution policy, however,
+    # every field is mandatory and resolution fails closed.
+    import store
+    configured_policy = store.get_project_execution_policy(project)
+    context: dict[str, Any] = {}
+    if configured_policy.get("configured"):
+        try:
+            context = execution_context.resolve(
+                project=project, task_id=task_id, runtime=runtime_name)
+        except execution_context.ExecutionContextError as exc:
+            return {"dispatched": False, **exc.as_dict(),
+                    "task_id": task_id, "project": project}
     execution_agent_id = str(caller_agent_id or "").strip()
     assignment = Assignment(
         assignment_id=assignment_id,
@@ -245,7 +260,9 @@ def enqueue_task(
         work_ref=f"task:{project}:{task_id}",
         runtime=runtime_name,
         provider=provider,
-        workspace_ref="repo:canonical",
+        workspace_ref=(
+            f"repo:{context['repo_role']}:{context['repository']}@"
+            f"{context['base_sha']}" if context else "repo:canonical"),
         limits=ResourceLimits(
             max_runtime_seconds=int(os.environ.get("PM_CONNECT_MAX_RUNTIME_SECONDS", "7200")),
             spend_limit_microunits=int(
@@ -304,6 +321,8 @@ def enqueue_task(
         # decode the Assignment byte-for-byte.
         "lifecycle": lifecycle,
     }
+    if context:
+        policy["execution_context"] = context
     # The external effect represents one durable completion decision, not the
     # coordinator/lease that happened to request it. Generation and fence are
     # allocated atomically below and intentionally do not participate either.

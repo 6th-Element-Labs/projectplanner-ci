@@ -626,6 +626,11 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
                     "fence_epoch": execution_lease["fence_epoch"],
                     "ttl_seconds": execution_lease["ttl_seconds"],
                 }
+                context = dict(policy.get("execution_context") or {})
+                if context:
+                    from switchboard.application.commands import execution_context
+                    policy["execution_context"] = execution_context.with_generation(
+                        context, execution_lease["execution_generation"])
                 # Mint the contract only after the server owns the execution
                 # lease identity and generation. A caller cannot provide or
                 # override this admitted contract.
@@ -1835,6 +1840,19 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
                 return {"claimed": False, "error": "wake not found", "wake_id": wake_id}
             wake = _wake_row(wake_row)
             policy = dict(wake.get("policy") or {})
+            context = dict(policy.get("execution_context") or {})
+            if context:
+                from switchboard.application.commands import execution_context
+                try:
+                    execution_context.require_current(context)
+                except execution_context.ExecutionContextError as exc:
+                    return {
+                        "claimed": False,
+                        "reason": exc.code,
+                        "reason_codes": [exc.code],
+                        "failure_class": "stale_branch",
+                        "wake_id": wake_id,
+                    }
             binding = dict(policy.get("account_binding") or {})
             ownership = dict(policy.get("ownership") or {})
             if ownership:

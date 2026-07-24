@@ -950,6 +950,19 @@ def launch_command(wake, inventory, runner_session_id=""):
         lifecycle = dict(connect_policy.get("lifecycle") or {})
         execution_assignment = dict(
             connect_policy.get("execution_assignment") or {})
+        execution_context = dict(connect_policy.get("execution_context") or {})
+        if (execution_context
+                and execution_context.get("schema")
+                != "switchboard.execution_context.v1"):
+            raise ValueError("connect execution context contract is invalid")
+        if execution_context and int(execution_context.get("generation") or 0) != int(
+                execution_assignment.get("generation") or 0):
+            raise ValueError("connect execution context generation mismatch")
+        context_runtime = str(
+            (execution_context.get("runtime") or {}).get("registry_name") or "")
+        if execution_context and context_runtime not in {
+                runtime, "claude_code" if runtime == "claude-code" else runtime}:
+            raise ValueError("connect execution context runtime mismatch")
         if not execution_assignment:
             raise ValueError("connect execution assignment contract is missing")
         from switchboard.connect.execution_assignment import (
@@ -982,7 +995,9 @@ def launch_command(wake, inventory, runner_session_id=""):
                 last_heartbeat_at=now,
             ),
             config,
-            workspace_path=str(inventory.get("repo_root") or _git_root()),
+            workspace_path=str(
+                (execution_context.get("workspace") or {}).get("path")
+                or inventory.get("repo_root") or _git_root()),
             completion_contract=execution_assignment,
         )
         child = list(spec.argv)
@@ -1056,6 +1071,8 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
             assignment = dict((wake.get("policy") or {}).get("assignment") or {})
             execution_assignment = dict(
                 (wake.get("policy") or {}).get("execution_assignment") or {})
+            execution_context = dict(
+                (wake.get("policy") or {}).get("execution_context") or {})
             env.update({
                 "SWITCHBOARD_CONNECT_ASSIGNMENT_ID": str(
                     assignment.get("assignment_id") or ""),
@@ -1071,6 +1088,8 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
                 execution_assignment, sort_keys=True, separators=(",", ":"))
             env["SWITCHBOARD_EXECUTION_ASSIGNMENT_JSON"] = encoded_assignment
             env["SWITCHBOARD_COMPLETION_CONTRACT_JSON"] = encoded_assignment
+            env["SWITCHBOARD_EXECUTION_CONTEXT_JSON"] = json.dumps(
+                execution_context, sort_keys=True, separators=(",", ":"))
             # Never expose the enrolled host bearer to the child.  It only has
             # host-management authority; the session receives an exact,
             # short-lived task principal minted after claim_wake.  The session's
@@ -1196,6 +1215,7 @@ def register_runner_session(rec, wake, inventory):
     execution = policy.get("execution_binding") or {}
     assignment = policy.get("assignment") or {}
     lifecycle = policy.get("lifecycle") or {}
+    execution_context = policy.get("execution_context") or {}
     connect_assignment = (
         assignment.get("schema") == "switchboard.connect.assignment.v1")
     metadata = {
@@ -1224,6 +1244,12 @@ def register_runner_session(rec, wake, inventory):
             "execution_role": lifecycle.get("role"),
             "execution_head_sha": lifecycle.get("head_sha"),
             "lease_epoch": lifecycle.get("fence_epoch"),
+            "execution_context_digest": execution_context.get("digest"),
+            "execution_context_authority_digest": execution_context.get(
+                "authority_digest"),
+            "execution_repository": execution_context.get("repository"),
+            "execution_default_branch": execution_context.get("default_branch"),
+            "execution_base_sha": execution_context.get("base_sha"),
         } if connect_assignment else {
             "role": assignment.get("role") or lifecycle.get("role") or "implementation",
             "lifecycle_role": assignment.get("role") or lifecycle.get("role") or "implementation",
