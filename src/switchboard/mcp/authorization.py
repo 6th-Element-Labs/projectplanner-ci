@@ -124,6 +124,12 @@ def authorize_project_context(
         authorized_projects=visible,
         environment_operator=bool(authorized.get("environment_operator")),
         dev_open=bool(authorized.get("dev_open")),
+        bound_task_id=str(authorized.get("bound_task_id") or ""),
+        bound_agent_id=str(authorized.get("bound_agent_id") or ""),
+        bound_host_id=str(authorized.get("bound_host_id") or ""),
+        bound_wake_id=str(authorized.get("bound_wake_id") or ""),
+        bound_runner_session_id=str(
+            authorized.get("bound_runner_session_id") or ""),
     )
     if cache is not None:
         cache[cache_key] = context
