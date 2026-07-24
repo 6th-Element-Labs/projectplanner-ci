@@ -284,11 +284,99 @@ def _maybe_trigger_ci(repo: str, pr_number: Any, head_sha: str, project: str = "
     }
 
 
+def _merge_group_pr_number(head_ref: str) -> Any:
+    """Extract originating PR number from a merge-queue head_ref.
+
+    GitHub uses ``refs/heads/gh-readonly-queue/<base>/pr-<N>-<sha>``.
+    """
+    match = re.search(r"/pr-(\d+)(?:-|/|$)", str(head_ref or ""))
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
+def _maybe_publish_merge_group_authorization(
+    repo: str,
+    head_sha: str,
+    head_ref: str,
+    project: str = "",
+) -> Dict[str, Any]:
+    """Evaluate merge authorization for the originating PR and post it on the
+    temporary merge-group SHA (required for native merge-queue ALLGREEN)."""
+    pr_number = _merge_group_pr_number(head_ref)
+    if pr_number is None:
+        return {
+            "published": False,
+            "skip_reason": "merge_group_pr_number_unresolved",
+            "head_ref": head_ref,
+            "sha": head_sha,
+        }
+    if not head_sha:
+        return {"published": False, "skip_reason": "missing_merge_group_head_sha"}
+
+    try:
+        import importlib.util
+
+        script = Path(__file__).resolve().parent / "scripts" / "switchboard_pr_gate.py"
+        spec = importlib.util.spec_from_file_location(
+            "switchboard_pr_gate_merge_group", script)
+        if spec is None or spec.loader is None:
+            return {
+                "published": False,
+                "skip_reason": "merge_authorization_module_unavailable",
+                "pr": pr_number,
+                "sha": head_sha,
+            }
+        pr_gate = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pr_gate)
+        token = pr_gate._token()
+        if not token:
+            return {
+                "published": False,
+                "skip_reason": "missing_github_token",
+                "pr": pr_number,
+                "sha": head_sha,
+            }
+        pr = pr_gate.get_pr(repo, int(pr_number), token=token)
+        result = pr_gate.run_merge_authorization_for_pr(
+            pr,
+            repo=repo,
+            token=token,
+            status_sha=head_sha,
+        )
+        return {
+            "published": bool(
+                (result.get("publish") or {}).get("published")
+                or result.get("state") in {"success", "failure"}
+                or result.get("skipped")
+            ),
+            "pr": pr_number,
+            "sha": head_sha,
+            "state": result.get("state"),
+            "reason": result.get("reason"),
+            "context": result.get("context"),
+            "project": project,
+            "result": result,
+        }
+    except Exception as exc:
+        return {
+            "published": False,
+            "pr": pr_number,
+            "sha": head_sha,
+            "error": str(exc),
+            "skip_reason": "merge_authorization_publish_failed",
+        }
+
+
 def handle_merge_group(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
     """Native merge-queue support: when GitHub forms a merge group it runs required checks on
     the *temporary merge commit* and needs the required status reported on THAT SHA (not any
     PR head), or the queue hangs. We mirror the merge-group head SHA to the scratchpad exactly
-    like a PR head; verify.yml then posts ``Switchboard CI / VM gate`` on it.
+    like a PR head; verify.yml then posts ``Switchboard CI / VM gate`` on it. We also project
+    ``Switchboard / merge authorization`` onto the same temporary SHA (BUG-173).
 
     Dormant until the merge-queue ruleset is enabled — no ``merge_group`` events arrive until
     then — so this is safe to ship ahead of the toggle. Provenance/Done stays with the PR-merge
@@ -318,6 +406,9 @@ def handle_merge_group(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
     dispatched = bool(ensure.get("dispatched") or (
         result.get("ensured") and not result.get("error")
         and result.get("status") in {"pending", "green", "red"}))
+    merge_authorization = _maybe_publish_merge_group_authorization(
+        repo, head_sha, head_ref, project=project,
+    )
     return {
         "action": ("merge_group_ci_dispatched" if dispatched
                    else "merge_group_ci_skipped"),
@@ -328,6 +419,7 @@ def handle_merge_group(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
         "scratchpad_skip_reason": ensure.get("skip_reason") or result.get("error"),
         "scratchpad_run_id": result.get("run_id") or ensure.get("run_id"),
         "verify": result,
+        "merge_authorization": merge_authorization,
     }
 
 
