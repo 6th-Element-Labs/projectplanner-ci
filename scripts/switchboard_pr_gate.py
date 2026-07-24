@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Switchboard claim gate — SESSION-12 provenance commit statuses.
+"""Switchboard PR gates — claim provenance and merge authorization statuses.
 
 VM verification (`Switchboard CI / VM gate`) runs on projectplanner-ci via the
-pull-model verify workflow. This runner is claim-gate-only: it reads the production
-board and posts `Switchboard / claim gate` on each open fleet PR head SHA. No git,
-worktrees, venvs, or external_ci_mirror calls live here (CI-7).
+pull-model verify workflow. This runner reads the production board and posts both
+`Switchboard / claim gate` and `Switchboard / merge authorization` on each open
+fleet PR head SHA. No git, worktrees, venvs, or external_ci_mirror calls live here.
 """
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ import store  # noqa: E402
 
 DEFAULT_REPO = "6th-Element-Labs/projectplanner"
 DEFAULT_CLAIM_CONTEXT = "Switchboard / claim gate"
+DEFAULT_MERGE_CONTEXT = "Switchboard / merge authorization"
 
 
 class GateError(RuntimeError):
@@ -147,6 +148,96 @@ def run_claim_gate_for_pr(pr: Dict[str, Any], *, repo: str, token: str,
             "would_block": verdict.get("would_block"), "mode": mode}
 
 
+def run_merge_authorization_for_pr(
+    pr: Dict[str, Any],
+    *,
+    repo: str,
+    token: str,
+    context: str = DEFAULT_MERGE_CONTEXT,
+) -> Dict[str, Any]:
+    """Post the branch-protection projection of Switchboard's real merge gate."""
+    number = int(pr["number"])
+    sha = str((pr.get("head") or {}).get("sha") or "")
+    pr_url = str(pr.get("html_url") or f"https://github.com/{repo}/pull/{number}")
+    changed_paths = list_pr_files(repo, number, token=token)
+    provenance = pr_provenance_gate.evaluate_pr_provenance(
+        pr, repo=repo, mode="enforce", changed_paths=changed_paths,
+    )
+
+    if provenance.get("exempt"):
+        state = "success"
+        reason = str(provenance.get("reason") or "exempt")
+        description = str(
+            provenance.get("context_description") or "Exempt from fleet merge authorization"
+        )
+        gate_results: List[Dict[str, Any]] = []
+    else:
+        resolved = list(provenance.get("resolved") or [])
+        gate_results = []
+        for item in resolved:
+            task_id = str(item.get("task_id") or "")
+            project = str(item.get("project") or "")
+            gate_results.append(store.merge_gate(
+                {
+                    "task_id": task_id,
+                    "pr_number": number,
+                    "pr_url": pr_url,
+                    "repo": repo,
+                    "head_sha": sha,
+                    "evidence": {
+                        "github_pr": pr,
+                        "changed_files": changed_paths,
+                    },
+                },
+                actor="switchboard-ci/merge-authorization",
+                project=project,
+            ))
+
+        blocked = [
+            finding
+            for gate_result in gate_results
+            for finding in (gate_result.get("findings") or [])
+            if finding.get("blocking")
+        ]
+        if not resolved:
+            state = "failure"
+            reason = str(provenance.get("reason") or "task_not_resolved")
+            description = str(
+                provenance.get("context_description")
+                or "PR is not bound to a Switchboard task"
+            )
+        elif blocked:
+            state = "failure"
+            reason = str(blocked[0].get("code") or "merge_gate_blocked")
+            description = str(
+                blocked[0].get("message") or "Switchboard merge gate blocked"
+            )
+        else:
+            state = "success"
+            reason = "exact_head_merge_gate_passed"
+            description = "Exact-head CI, review, and merge gate passed"
+
+    post_status(
+        repo,
+        sha,
+        state,
+        context=context,
+        description=description,
+        target_url=pr_url,
+        token=token,
+    )
+    return {
+        "repo": repo,
+        "pr": number,
+        "sha": sha,
+        "context": context,
+        "state": state,
+        "reason": reason,
+        "task_ids": [item.get("task_id") for item in provenance.get("resolved") or []],
+        "gate_count": len(gate_results),
+    }
+
+
 def _claim_gate_targets(args: argparse.Namespace, primary_repo: str, token: str):
     """Yield (repo, pr, mode) to claim-gate. For an explicit --pr set, only the named
     PRs on the primary repo. Otherwise every project's canonical repo (registry-driven)."""
@@ -171,8 +262,6 @@ def _claim_gate_targets(args: argparse.Namespace, primary_repo: str, token: str)
             continue
         seen.add(repo)
         mode = pr_provenance_gate.resolve_mode(repo, primary_repo)
-        if mode == "off":
-            continue
         try:
             prs = list_open_prs(repo, token=token)
         except GateError as exc:
@@ -199,12 +288,18 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Commit-status context for the SESSION-12 provenance/claim gate. "
                              "Per-repo mode comes from project repo_topology.roles.canonical.claim_gate "
                              "(off|warn|enforce; default warn).")
+    parser.add_argument("--merge-context",
+                        default=os.environ.get(
+                            "SWITCHBOARD_MERGE_STATUS_CONTEXT",
+                            DEFAULT_MERGE_CONTEXT,
+                        ),
+                        help="Required commit-status context backed by merge_gate.")
     parser.add_argument("--no-claim-gate", action="store_true",
                         default=os.environ.get("SWITCHBOARD_CI_NO_CLAIM_GATE", "").lower()
                         in ("1", "true", "yes"),
-                        help="No-op (claim gate is the only pass; kept for compatibility).")
+                        help="Disable only the legacy claim status; merge authorization remains active.")
     parser.add_argument("--fail-on-red", action="store_true",
-                        help="Return nonzero when any claim gate posts failure. Manual use only; "
+                        help="Return nonzero when any PR gate posts failure. Manual use only; "
                              "systemd timers should stay green when they successfully post red statuses.")
     args = parser.parse_args(argv)
 
@@ -214,20 +309,27 @@ def main(argv: Optional[List[str]] = None) -> int:
               file=sys.stderr)
         return 2
 
-    if args.no_claim_gate:
-        print(json.dumps({"claim_gate": "skipped"}, sort_keys=True))
-        return 0
-
     results = []
     for repo, pr, mode in _claim_gate_targets(args, args.repo, token):
+        if not args.no_claim_gate:
+            try:
+                claim_result = run_claim_gate_for_pr(
+                    pr, repo=repo, token=token, context=args.claim_context, mode=mode)
+                if claim_result:
+                    print(json.dumps(claim_result, sort_keys=True))
+                    results.append(claim_result)
+            except Exception as exc:  # pragma: no cover - defensive
+                err = {"repo": repo, "pr": pr.get("number"), "context": args.claim_context,
+                       "state": "error", "error": str(exc)}
+                print(json.dumps(err, sort_keys=True))
+                results.append(err)
         try:
-            claim_result = run_claim_gate_for_pr(
-                pr, repo=repo, token=token, context=args.claim_context, mode=mode)
-            if claim_result:
-                print(json.dumps(claim_result, sort_keys=True))
-                results.append(claim_result)
+            merge_result = run_merge_authorization_for_pr(
+                pr, repo=repo, token=token, context=args.merge_context)
+            print(json.dumps(merge_result, sort_keys=True))
+            results.append(merge_result)
         except Exception as exc:  # pragma: no cover - defensive
-            err = {"repo": repo, "pr": pr.get("number"), "context": args.claim_context,
+            err = {"repo": repo, "pr": pr.get("number"), "context": args.merge_context,
                    "state": "error", "error": str(exc)}
             print(json.dumps(err, sort_keys=True))
             results.append(err)

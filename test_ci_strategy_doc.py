@@ -34,8 +34,8 @@ ok("push_triggered=True" in doc and "Rollback bridge" in doc and "Heartbeat" in 
    "trigger decision records push-primary, rollback bridge, and heartbeat")
 ok("bare mirror" not in doc.lower() or "retired" in doc.lower(),
    "push-path/bare-mirror is retired narrative, not active instructions")
-ok("switchboard_pr_gate.py` is claim-gate-only" in doc or "claim-gate-only" in doc,
-   "box gate retired; claim gate only on Plan VM")
+ok("Switchboard / merge authorization" in doc,
+   "Plan VM projects the exact-head merge gate as a PR status")
 ok("external_ci_mirror` (Helm" in doc or "A-push" in doc,
    "push-path engine retained for Helm")
 ok("SWITCHBOARD_CI_PULL_MODEL` is no longer the primary route" in doc,

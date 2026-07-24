@@ -132,7 +132,8 @@ projectplanner-ci `verify` workflow run and the corresponding Switchboard `exter
 do not treat a missing status as a pass. Re-open or synchronize the PR to request a fresh
 exact-SHA scratchpad branch through the Plan VM webhook.
 
-The Plan VM posts only the SESSION-12 **`Switchboard / claim gate`** via
+The Plan VM posts SESSION-12 **`Switchboard / claim gate`** and the required
+**`Switchboard / merge authorization`** exact-head projection via
 `projectplanner-claim-gate.timer`:
 
 ```bash

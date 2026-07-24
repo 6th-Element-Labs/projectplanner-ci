@@ -291,10 +291,10 @@ def coordinator_audit():
 
 
 def claim_gate_prs():
-    """Post SESSION-12 claim-gate commit statuses for open fleet PRs (CI-7).
+    """Post claim and merge-authorization statuses for open fleet PRs.
 
     VM verification (`Switchboard CI / VM gate`) runs on projectplanner-ci via the
-    scratchpad verify workflow; this job is claim-gate-only (no git/checkout).
+    scratchpad verify workflow. This job performs no git checkout.
     """
     cmd = [sys.executable, str(Path(__file__).parent / "scripts" / "switchboard_pr_gate.py"),
            "--once-open-prs"]
