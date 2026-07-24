@@ -632,4 +632,84 @@ def run_registry_migrations(c: sqlite3.Connection) -> List[str]:
         _record(c, scm_connection_migration)
         newly.append(scm_connection_migration)
 
+    scm_lease_migration = "enforce13_scm_leases"
+    if scm_lease_migration not in done:
+        # Short-lived, exact-binding leases for repository operations (ENFORCE-13).
+        # The lease references its SCM connection by id and pins the installation
+        # version; it never stores an installation ref or a materialized token.
+        c.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS scm_leases (
+                lease_id TEXT PRIMARY KEY,
+                connection_id TEXT NOT NULL,
+                installation_version INTEGER NOT NULL,
+                org_id TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                generation TEXT NOT NULL,
+                context_digest TEXT NOT NULL,
+                host_id TEXT NOT NULL,
+                runner_session_id TEXT NOT NULL,
+                work_session_id TEXT NOT NULL,
+                claim_id TEXT NOT NULL,
+                wake_id TEXT NOT NULL,
+                repository TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                operations_json TEXT NOT NULL,
+                state TEXT NOT NULL,
+                acquired_at REAL NOT NULL,
+                acquired_by TEXT NOT NULL,
+                acquiring_principal_id TEXT NOT NULL,
+                acquiring_principal_kind TEXT NOT NULL,
+                acquiring_principal_scopes_json TEXT NOT NULL DEFAULT '[]',
+                acquiring_principal_admin INTEGER NOT NULL DEFAULT 0,
+                expires_at REAL NOT NULL,
+                materializing_at REAL,
+                activated_at REAL,
+                released_at REAL,
+                released_by TEXT,
+                release_reason TEXT,
+                FOREIGN KEY(connection_id) REFERENCES scm_connections(connection_id)
+            );
+            CREATE INDEX IF NOT EXISTS ix_scm_leases_binding
+                ON scm_leases(
+                    connection_id, project_id, task_id, generation, host_id,
+                    runner_session_id, work_session_id, claim_id, wake_id,
+                    repository, phase, state
+                );
+            CREATE INDEX IF NOT EXISTS ix_scm_leases_state
+                ON scm_leases(state, expires_at, connection_id);
+
+            CREATE TABLE IF NOT EXISTS scm_lease_events (
+                event_id TEXT PRIMARY KEY,
+                lease_id TEXT NOT NULL,
+                connection_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                org_id TEXT,
+                project_id TEXT,
+                task_id TEXT,
+                generation TEXT,
+                host_id TEXT,
+                runner_session_id TEXT,
+                work_session_id TEXT,
+                claim_id TEXT,
+                wake_id TEXT,
+                repository TEXT,
+                phase TEXT,
+                operation TEXT,
+                reason_code TEXT,
+                details_json TEXT NOT NULL DEFAULT '{}',
+                created_at REAL NOT NULL,
+                FOREIGN KEY(lease_id) REFERENCES scm_leases(lease_id)
+            );
+            CREATE INDEX IF NOT EXISTS ix_scm_lease_events_lease
+                ON scm_lease_events(lease_id, created_at, event_id);
+            CREATE INDEX IF NOT EXISTS ix_scm_lease_events_connection
+                ON scm_lease_events(connection_id, created_at, event_id);
+            """
+        )
+        _record(c, scm_lease_migration)
+        newly.append(scm_lease_migration)
+
     return newly
