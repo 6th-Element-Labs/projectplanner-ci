@@ -6,6 +6,10 @@ from .impact import (
     ProjectImpactReceipt,
     build_impact_receipt,
 )
+from .repo_constitution import (
+    REPO_CONSTITUTION_SCHEMA,
+    RepoConstitution,
+)
 from .consolidation import (
     PROJECT_CONSOLIDATION_APPLY_COMMAND_SCHEMA,
     PROJECT_CONSOLIDATION_PLAN_COMMAND_SCHEMA,
@@ -52,6 +56,7 @@ __all__ = [
     "PROJECT_IMPACT_RECEIPT_SCHEMA",
     "PROJECT_RECORD_SCHEMA",
     "PROJECT_UPDATE_COMMAND_SCHEMA",
+    "REPO_CONSTITUTION_SCHEMA",
     "RESTORE_PROJECT_COMMAND_SCHEMA",
     "CLEANUP_REVIEW_COMMAND_SCHEMA",
     "PURGE_EXECUTE_COMMAND_SCHEMA",
@@ -65,6 +70,7 @@ __all__ = [
     "ProjectImpactReceipt",
     "ProjectRecord",
     "ProjectUpdateCommand",
+    "RepoConstitution",
     "RestoreProjectCommand",
     "CreatePurgeIntentCommand",
     "ExecutePurgeCommand",

@@ -1,5 +1,5 @@
 {
-  "count": 58,
+  "count": 59,
   "schema": "switchboard.schema_manifest.v1",
   "schemas": [
     {
@@ -181,6 +181,10 @@
     {
       "$id": "switchboard.provider_credential.release_lease_command.v1",
       "path": "switchboard.provider_credential.release_lease_command.v1.json"
+    },
+    {
+      "$id": "switchboard.repo_constitution.v1",
+      "path": "switchboard.repo_constitution.v1.json"
     },
     {
       "$id": "switchboard.review_finding.list_query.v1",
