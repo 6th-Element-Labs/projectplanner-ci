@@ -1,0 +1,111 @@
+{
+  "$id": "switchboard.repo_constitution.v1",
+  "additionalProperties": false,
+  "description": "Frozen layout contract for one project's canonical checkout shape.",
+  "properties": {
+    "agent_front_door": {
+      "description": "Agent operating-entry path (e.g. AGENTS.md).",
+      "title": "Agent Front Door",
+      "type": "string"
+    },
+    "archive_roots": {
+      "description": "Roots reserved for archived/retired code.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Archive Roots",
+      "type": "array"
+    },
+    "docs_front_door": {
+      "description": "Human docs entry path (e.g. docs/INDEX.md).",
+      "title": "Docs Front Door",
+      "type": "string"
+    },
+    "enforcement_mode": {
+      "description": "off | warn | enforce — how constitution drift is gated.",
+      "enum": [
+        "off",
+        "warn",
+        "enforce"
+      ],
+      "title": "Enforcement Mode",
+      "type": "string"
+    },
+    "entrypoints": {
+      "description": "Declared process/module entrypoints relative to repo root.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Entrypoints",
+      "type": "array"
+    },
+    "forbid_new": {
+      "description": "Globs/paths where new files are forbidden (e.g. root *.py).",
+      "items": {
+        "type": "string"
+      },
+      "title": "Forbid New",
+      "type": "array"
+    },
+    "notes": {
+      "default": "",
+      "description": "Optional human notes; not used for enforcement.",
+      "title": "Notes",
+      "type": "string"
+    },
+    "product_root": {
+      "description": "Root directory for product code (e.g. src/switchboard/).",
+      "title": "Product Root",
+      "type": "string"
+    },
+    "profile_id": {
+      "description": "Named layout profile, e.g. python_modular_monolith.",
+      "title": "Profile Id",
+      "type": "string"
+    },
+    "project_id": {
+      "description": "Switchboard project this constitution binds to.",
+      "title": "Project Id",
+      "type": "string"
+    },
+    "required_files": {
+      "description": "Paths that must exist for the profile to be considered present.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Required Files",
+      "type": "array"
+    },
+    "schema": {
+      "default": "switchboard.repo_constitution.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "shim_policy": {
+      "description": "Root shim policy: timed (sunset required) or none.",
+      "enum": [
+        "timed",
+        "none"
+      ],
+      "title": "Shim Policy",
+      "type": "string"
+    },
+    "test_root": {
+      "description": "Root directory for tests (e.g. tests/).",
+      "title": "Test Root",
+      "type": "string"
+    }
+  },
+  "required": [
+    "profile_id",
+    "project_id",
+    "product_root",
+    "test_root",
+    "docs_front_door",
+    "agent_front_door",
+    "shim_policy",
+    "enforcement_mode"
+  ],
+  "title": "RepoConstitution",
+  "type": "object"
+}
