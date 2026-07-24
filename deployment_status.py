@@ -15,7 +15,9 @@ import store
 
 
 SCHEMA = "switchboard.deployments.v1"
-CACHE_SECONDS = 15
+# Match open_prs: the Fleet dock polls ~10s; GitHub pulls/commits are expensive
+# on cache miss and must not contend with interactive get_task.
+CACHE_SECONDS = 60
 TERMINAL_STATUSES = {"Done", "Cancelled"}
 
 

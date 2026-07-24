@@ -758,18 +758,23 @@ def get_project_context(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
 
 
 def _enrich_task_project_context(task: Dict[str, Any], project: str = DEFAULT_PROJECT) -> None:
-    ctx = get_project_context(project)
+    """Attach the per-task project_context the modal actually renders.
+
+    Avoid ``get_project_context()`` here: that rebuilds boards + session-policy
+    profiles (~15KB) on every get_task and is already served by
+    ``/api/projects/{id}/context``. Task detail only needs hierarchy, repo
+    role guide, and deliverable links.
+    """
+    topology = get_project_repo_topology(project)
+    hierarchy = topology.get("project_hierarchy") or _project_hierarchy_contract(project)
     links = list_task_deliverable_links(task.get("task_id") or "", project=project)
     task["project_context"] = {
         "project": project,
-        "project_hierarchy": ctx.get("project_hierarchy"),
+        "project_hierarchy": hierarchy,
         "hierarchy_breadcrumb": _task_hierarchy_breadcrumb(task, project, links=links),
-        "repo_topology": ctx.get("repo_topology"),
-        "repo_role_guide": ctx.get("repo_role_guide"),
-        "session_policy_profiles": ctx.get("session_policy_profiles"),
-        "boards_missions": ctx.get("boards_missions"),
+        "repo_role_guide": repo_topology_role_guide(project),
         "deliverable_links": links,
-        "code_repo_gate": ctx.get("code_repo_gate"),
+        "code_repo_gate": topology.get("code_repo_gate"),
     }
 
 

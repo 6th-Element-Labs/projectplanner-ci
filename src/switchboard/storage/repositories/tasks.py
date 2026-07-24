@@ -524,9 +524,17 @@ def get_task(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str,
                 return None
             return get_task(row["task_id"], project=project)
         t = _task_row(r)
-        t["activity"] = [dict(a) | {"payload": _json_payload(a["payload"])}
-                         for a in c.execute(
-                             "SELECT * FROM activity WHERE task_id=? ORDER BY id", (task_id,)).fetchall()]
+        # Modal/Activity tab only needs recent history. Unbounded activity reads
+        # grow with every agent edit and inflate get_task latency/payload.
+        activity_limit = 50
+        activity_rows = c.execute(
+            "SELECT * FROM activity WHERE task_id=? ORDER BY id DESC LIMIT ?",
+            (task_id, activity_limit),
+        ).fetchall()
+        t["activity"] = [
+            dict(a) | {"payload": _json_payload(a["payload"])}
+            for a in reversed(activity_rows)
+        ]
         t["git_state"] = _store_facade()._load_git_state(c, task_id)
         t["provenance"] = _provenance_summary(t["git_state"])
         t["active_claims"] = _store_facade()._active_task_claims_in(c, task_id)
