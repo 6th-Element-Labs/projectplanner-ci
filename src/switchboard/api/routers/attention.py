@@ -44,6 +44,7 @@ ListInboxFn = Callable[..., List[Dict[str, Any]]]
 ListDeliverablesFn = Callable[..., List[Dict[str, Any]]]
 GetMissionStatusFn = Callable[..., Dict[str, Any]]
 ListDecisionsFn = Callable[..., List[Dict[str, Any]]]
+DecisionRecordedFn = Callable[[Dict[str, Any], str, str], Dict[str, Any]]
 
 ATTENTION_PROJECTION_SCHEMA = "switchboard.attention_projection.v1"
 _IMPACT_RANK = {"blocking": 0, "at_risk": 1, "none": 2}
@@ -313,6 +314,7 @@ def create_router(*, resolve_project: ProjectResolver,
                   list_deliverables: Optional[ListDeliverablesFn] = None,
                   get_mission_status: Optional[GetMissionStatusFn] = None,
                   list_decisions: Optional[ListDecisionsFn] = None,
+                  on_decision_recorded: Optional[DecisionRecordedFn] = None,
                   service: AttentionService = default_attention_service) -> APIRouter:
     """Mount legacy feed plus durable operator and Agent Host attention contracts."""
     router = APIRouter()
@@ -395,9 +397,20 @@ def create_router(*, resolve_project: ProjectResolver,
         principal = resolve_principal(
             request, project_id, ("write:ixp",), dev_actor="attention-operator")
         try:
-            return service.decide(
+            decided = service.decide(
                 _context(project_id, principal, source="query"), request_id,
                 body.model_dump(), actor=auth.actor(principal))
+            if on_decision_recorded is not None:
+                try:
+                    decided["completion_wake"] = on_decision_recorded(
+                        decided, project_id, auth.actor(principal))
+                except Exception as exc:  # the decision remains authoritative
+                    decided["completion_wake"] = {
+                        "error": type(exc).__name__,
+                        "reason": str(exc),
+                        "retryable": True,
+                    }
+            return decided
         except AttentionStoreError as exc:
             _raise_attention_error(exc)
 

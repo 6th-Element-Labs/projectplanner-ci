@@ -261,6 +261,70 @@ class HumanAttentionCloseout(unittest.TestCase):
         self.assertEqual(before["prompt"], after["prompt"])
         self.assertTrue(again["attention"]["idempotent_replay"])
 
+    def test_failed_attention_write_is_recovered_from_durable_human_run(self):
+        """The completion run is the outbox intent; the next tick repairs delivery."""
+        original = attention_repo.default_attention_repository.create_request
+        with patch.object(
+            attention_repo.default_attention_repository,
+            "create_request",
+            side_effect=RuntimeError("injected attention write failure"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "injected"):
+                self._tick()
+
+        run = completion_runs.get_active_completion_run(
+            "COORD-20", project="switchboard")
+        self.assertEqual(run["route"], "human")
+        self.assertEqual(run["board_status"], "Blocked")
+        self.assertEqual(
+            self.db.execute(
+                "SELECT COUNT(*) AS n FROM attention_requests"
+            ).fetchone()["n"],
+            0,
+        )
+
+        with patch.object(
+            attention_repo.default_attention_repository,
+            "create_request",
+            side_effect=original,
+        ):
+            repaired = self._tick()
+        self.assertTrue(repaired["attention"]["created"])
+        self.assertEqual(
+            self.db.execute(
+                "SELECT COUNT(*) AS n FROM attention_requests"
+            ).fetchone()["n"],
+            1,
+        )
+
+    def test_noncredential_human_reasons_offer_truthful_choices(self):
+        cases = {
+            "wrong_target_branch": "correct_target_branch",
+            "canonical_repo_missing": "configure_canonical_repo",
+            "pr_closed_unmerged": "reopen_pull_request",
+            "review_retry_budget_exhausted": "resolve_finding",
+            "human_review_findings": "resolve_finding",
+        }
+        from switchboard.domain.completion.human_closeout import (
+            build_human_closeout_request,
+        )
+        for reason, expected_choice in cases.items():
+            with self.subTest(reason=reason):
+                request = build_human_closeout_request(
+                    plan={
+                        "task_id": "COORD-20", "pr_number": 812,
+                        "head_sha": HEAD, "idem_key": f"human:{reason}",
+                        "reason_code": reason,
+                    },
+                    decision={"reason_code": reason},
+                    snapshot=_pr812_snapshot(),
+                    run={"run_id": "run", "state_version": 1},
+                )
+                self.assertEqual(request["choices"][0]["id"], expected_choice)
+                if "credential" not in reason:
+                    self.assertNotEqual(
+                        request["choices"][0]["id"], "supply_credential")
+
     def test_completion_closeout_projects_as_blocking_provider_item(self):
         item = _provider_item({
             "request_id": "attention-x",

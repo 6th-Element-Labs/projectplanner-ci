@@ -248,7 +248,8 @@ def _merge_gate_bool(value: Any, default: Optional[bool] = None) -> Optional[boo
 
 
 def merge_gate(payload: Dict[str, Any], actor: str = "system",
-               principal_id: str = "", project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+               principal_id: str = "", project: str = DEFAULT_PROJECT,
+               record: bool = True) -> Dict[str, Any]:
     """Evaluate whether an agent may safely request/perform a PR merge.
 
     This is a gate, not a merge executor. It never marks a task Done; GitHub webhooks or
@@ -620,16 +621,17 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
         "done_controlled_by_merge_provenance": True,
         "checked_at": now,
     }
-    if not ok and task_id and review_head_sha:
+    if record and not ok and task_id and review_head_sha:
         result["review_remediation_save"] = record_review_save(
             task_id, review_head_sha, result, actor=actor, project=project)
-    append_activity(
-        "merge.gate",
-        actor,
-        {k: v for k, v in result.items() if k not in {"external_ci"}},
-        task_id=task_id or None,
-        project=project,
-    )
+    if record:
+        append_activity(
+            "merge.gate",
+            actor,
+            {k: v for k, v in result.items() if k not in {"external_ci"}},
+            task_id=task_id or None,
+            project=project,
+        )
     return result
 
 
