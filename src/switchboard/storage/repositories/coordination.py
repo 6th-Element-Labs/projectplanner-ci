@@ -3465,6 +3465,15 @@ def heartbeat_host(host_id: str, active_sessions: Optional[int] = None,
         host_id, principal_id, project=project)
     if not identity.get("allowed"):
         return identity
+    terminal_cleanup = {
+        "schema": "switchboard.terminal_runner_cleanup.v1",
+        "host_id": host_id,
+        "sessions": [],
+        "session_count": 0,
+        "closed_work_session_count": 0,
+        "released_resource_lease_count": 0,
+        "released_file_lease_count": 0,
+    }
     try:
         with _control_plane_conn(project) as c:
             row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
@@ -3494,6 +3503,9 @@ def heartbeat_host(host_id: str, active_sessions: Optional[int] = None,
                 (now, json.dumps(current, sort_keys=True), status or "online",
                  last_error or None, reported_host_version, reported_host_version, host_id),
             )
+            from .runner import terminal_task_cleanup_for_host_in
+            terminal_cleanup = terminal_task_cleanup_for_host_in(
+                c, host_id, actor, now)
             c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                       (None, actor, "agent_host.heartbeat",
                        json.dumps({"host_id": host_id, "capacity": current,
@@ -3504,6 +3516,7 @@ def heartbeat_host(host_id: str, active_sessions: Optional[int] = None,
             return _control_plane_unavailable("heartbeat_host", project, started_at, exc)
         raise
     result = _host_row(row, now=now)
+    result["terminal_runner_cleanup"] = terminal_cleanup
     if identity.get("required"):
         result["authoritative_execution_policy"] = dict(
             identity.get("execution_policy") or {})

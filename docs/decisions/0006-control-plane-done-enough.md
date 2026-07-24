@@ -153,11 +153,15 @@ The horizons, so this document is also the master plan of record:
 ### SIMPLIFY-17 accounting — one execution clock
 
 Phase 1 removes three autonomous stop authorities: the Agent Host claim/idle reaper, the
-review-steward acknowledgement-timeout replacement, and terminal-task cleanup. One authority
+review-steward acknowledgement-timeout replacement, and terminal-task process kill. One authority
 replaces them: expiry of the renewable runner heartbeat lease. Wake intents use the same model
 and always receive a deadline. Lease enforcement now defaults on.
 Lease enforcement is unconditional after the SIMPLIFY-16 observation proof;
 SIMPLIFY-11 deleted the rollout flag and final compatibility branch.
+
+BUG-175 refinement: terminal task status (`Done` / `Cancelled`) is an automatic *lease-due*
+capacity event (force-stale + fence). It does not regain process-kill authority;
+`expire_runner_leases` remains the sole automatic kill, and hosts refuse to renew due leases.
 
 - Kill mechanisms deleted: **3**
 - Kill mechanisms added: **1**

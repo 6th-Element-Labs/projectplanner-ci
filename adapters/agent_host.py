@@ -1970,18 +1970,29 @@ def expire_runner_leases(inventory, *, now=None):
     host_id = str((inventory or {}).get("host_id") or "")
     outcomes = _drain_pending_stop_receipts(host_id)
     for session in _drain_runners(host_id):
-        if session.get("alive") is not True or not session.get("stale"):
+        metadata = dict(session.get("metadata") or {})
+        surrendered = bool(metadata.get("lease_surrender"))
+        # BUG-175: terminal-task / complete_claim surrender makes the lease due
+        # even if a concurrent renew refreshed heartbeat_at before the fence
+        # landed. Kill on surrender or staleness — never wait a full TTL.
+        if session.get("alive") is not True or not (
+                session.get("stale") or surrendered):
             continue
         runner_id = str(session.get("runner_session_id") or "")
         task_id = str(session.get("task_id") or "")
+        reason = ("runner_lease_surrendered" if surrendered and not session.get("stale")
+                  else "runner_lease_expired")
         outcome = {"runner_session_id": runner_id, "task_id": task_id,
-                   "reason": "runner_lease_expired"}
+                   "reason": reason}
+        stop_reason = (
+            "runner lease surrendered"
+            if reason == "runner_lease_surrendered"
+            else "runner heartbeat lease expired")
         stopped = supervisor_action("kill", runner_id, {
-            "reason": "runner heartbeat lease expired", "task_id": task_id})
+            "reason": stop_reason, "task_id": task_id})
         ok = bool(stopped and not stopped.get("error") and stopped.get("alive") is not True)
         if ok:
             _drop_host_bridge(runner_id)
-            metadata = dict(session.get("metadata") or {})
             receipt = {
                 "project": PROJECT, "runner_session_id": runner_id,
                 "host_id": host_id, "task_id": task_id,
@@ -1990,7 +2001,7 @@ def expire_runner_leases(inventory, *, now=None):
                 "status": "expired",
                 "metadata": {**metadata, "terminalized_by": "runner_lease_expiry",
                              "lease_expired_at": now,
-                             "failure_reason": "runner heartbeat lease expired"},
+                             "failure_reason": stop_reason},
             }
             # The process death and central acknowledgement are separate durable
             # steps.  Persist first so a network loss or daemon restart cannot
@@ -2230,6 +2241,11 @@ def renew_live_direct_runners(inventory):
             continue
         if (not native_transport or session.get("alive") is not True
                 or str(session.get("status") or "").lower() != "running"):
+            continue
+        # BUG-175: a due/fenced lease must not be renewed. Terminal-task
+        # cleanup (and complete_claim) make the lease due; renewing it was the
+        # zombie amplifier that kept Done-task PTYs alive for hours.
+        if session.get("stale") is True or metadata.get("lease_surrender"):
             continue
         if not wake_id or not task_id:
             continue
