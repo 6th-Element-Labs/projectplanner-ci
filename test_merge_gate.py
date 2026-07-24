@@ -32,11 +32,12 @@ def ok(condition, message):
     failed += 0 if condition else 1
 
 
-def task(title):
+def task(title, description=""):
     return store.create_task(
         {
             "workstream_id": "SESSION",
             "title": title,
+            "description": description,
             "exit_criteria": "merge gate required before merge",
         },
         actor="test",
@@ -141,8 +142,8 @@ def record_review(created, head_sha, *, status="pass", findings=None):
 
 
 def ready_task(title, head_sha="feedfacefeedfacefeedfacefeedfacefeedface",
-               record_passing_review=True):
-    created = task(title)
+               record_passing_review=True, description=""):
+    created = task(title, description=description)
     branch = f"codex/{created['task_id']}-safe-merge"
     claim = store.claim_task(
         created["task_id"],
@@ -517,6 +518,57 @@ try:
     ok(unbacked_gate.get("backed") is False and not unbacked_gate.get("ok") and
        any(f["code"] == "task_not_backed" for f in unbacked_gate["findings"]),
        "merge_gate blocks a task with no board backing (shared pr_backed_by_process)")
+
+    # The branch-protection poster (`Switchboard / merge authorization`) calls merge_gate
+    # with only the PR facts — no claim_id and no work_session_id. merge_gate used to
+    # resolve a session ONLY from an explicit work_session_id or the task's *active*
+    # claim, so a code_strict task whose claim had already completed looked sessionless
+    # forever: work_session_required + missing_executed_test_run, permanently, no matter
+    # how healthy the Work Session recorded against the task was.
+    orphan, orphan_claim, orphan_branch, orphan_sha = ready_task(
+        "claimless task still resolves its Work Session",
+        description="policy_profile:code_strict")
+    orphan_session = store.get_work_session(
+        orphan_claim["work_session_id"], project=P)
+    orphan_hygiene = dict(orphan_session.get("hygiene") or {})
+    orphan_hygiene["executed_test_run"] = executed_test_run(
+        orphan["task_id"], orphan_branch, orphan_sha,
+        orphan_claim["work_session_id"])
+    store.update_work_session(
+        orphan_claim["work_session_id"], {"hygiene": orphan_hygiene},
+        actor="test", project=P)
+    ok(not store.get_task(orphan["task_id"], project=P).get("active_claims"),
+       "claimless task: the completed claim is no longer active")
+    poster_gate = store.merge_gate({
+        "task_id": orphan["task_id"], "repo": REPO,
+        "target_branch": "master",
+        "branch": orphan_branch, "head_sha": orphan_sha,
+        "pr_url": f"https://github.com/{REPO}/pull/61", "pr_number": 61,
+        "status_contexts": {CI_CONTEXT: "success"},
+        "github_pr": github_pr(orphan["task_id"], orphan_branch, orphan_sha),
+    }, actor="test", project=P)
+    poster_codes = {f["code"] for f in poster_gate.get("findings") or []}
+    ok(poster_gate.get("work_session_id") == orphan_claim["work_session_id"],
+       "claimless task: merge_gate resolves the Work Session bound to the task")
+    ok("work_session_required" not in poster_codes,
+       "claimless task: no spurious work_session_required for the poster payload")
+    ok("missing_executed_test_run" not in poster_codes,
+       "claimless task: the session's executed test run satisfies the tests gate")
+
+    # Fail closed: the task-scoped fallback must never authorize a head the Work Session
+    # was not recorded against, or an expired claim would become a way to merge anything.
+    other_head = "b" * 40
+    other_head_gate = store.merge_gate({
+        "task_id": orphan["task_id"], "repo": REPO,
+        "target_branch": "master",
+        "branch": orphan_branch, "head_sha": other_head,
+        "pr_url": f"https://github.com/{REPO}/pull/61", "pr_number": 61,
+        "status_contexts": {CI_CONTEXT: "success"},
+        "github_pr": github_pr(orphan["task_id"], orphan_branch, other_head),
+    }, actor="test", project=P)
+    ok(any(f["code"] == "work_session_required"
+           for f in other_head_gate.get("findings") or []),
+       "claimless task: a session for a different head does not authorize this head")
 
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
