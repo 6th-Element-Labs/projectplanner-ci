@@ -411,13 +411,17 @@ const TeepPlan = {
         setTimeout(() => this._pollMsgStatus(messageId, tries + 1), 3000);
     },
 
-    // Ack inbox (top-bar bell): required messages the operator is party to, still unacked.
+    // The top-bar bell and Needs-you list share one authoritative projection.
     openAckInbox() {
         window.bootstrap.Modal.getOrCreateInstance(document.getElementById('ack-inbox-modal')).show();
         this.loadAckInbox(true);
     },
 
     async loadAckInbox(renderBody) {
+        if (window.PMAttention) {
+            await window.PMAttention.load({ render: Boolean(renderBody) });
+            return;
+        }
         try {
             const proj = encodeURIComponent(window.PM_PROJECT || 'maxwell');
             const data = await (await fetch(`api/agent_messages/pending?project=${proj}`)).json();
@@ -4586,9 +4590,16 @@ const TeepPlan = {
             if (t && window.bootstrap) window.bootstrap.Tab.getOrCreateInstance(t).show();
             else this.openAckInbox();
         });
+        if (!this._attentionSessionWire) {
+            this._attentionSessionWire = true;
+            window.addEventListener('switchboard:open-session', (event) => {
+                const taskId = event.detail && event.detail.task_id;
+                if (taskId) this.openRunnerSessionPanel(taskId, { includeStale: true });
+            });
+        }
         const ackRefresh = document.getElementById('ack-inbox-refresh');
         if (ackRefresh) ackRefresh.addEventListener('click', () => this.loadAckInbox(true));
-        // Prime the bell badge and keep it fresh (unacked required messages the operator sent).
+        // Prime the authoritative Needs-you badge and keep it fresh.
         this.loadAckInbox();
         // Keep the bell fresh even in a backgrounded tab (throttled for hidden tabs via
         // _pollDueWhileHidden; 30s interval already >= the hidden gap, so it effectively stays 30s);

@@ -80,6 +80,10 @@
         .nav-tabs{flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:none}
         .nav-tabs::-webkit-scrollbar{display:none}
         .nav-tabs .nav-link{white-space:nowrap;padding-left:.6rem;padding-right:.6rem}
+        body:has(#tab-needs.active) .navbar-vertical{display:none}
+        body:has(#tab-needs.active) .page-wrapper{margin-left:0!important;width:100%!important}
+        #tab-needs .container-xl{max-width:100%}
+        #tab-needs .btn-list{flex-wrap:wrap}
       }
       /* UI-18 Settings shell: group headings inside the category list-group. Not
          list items — they label the run of sections beneath them. */
@@ -177,7 +181,7 @@
                                 <label class="form-check form-switch m-0"><input id="f-hidedone" class="form-check-input" type="checkbox" checked/><span class="form-check-label">Hide done</span></label>
                             </div>
                         </div>
-                        <button id="btn-ack-inbox" class="btn btn-sm btn-outline-secondary position-relative" type="button" title="Agent ack inbox" aria-label="Agent ack inbox"><i class="ti ti-bell"></i><span id="ack-inbox-count" class="badge bg-red position-absolute top-0 start-100 translate-middle" style="display:none;font-size:10px"></span></button>
+                        <button id="btn-ack-inbox" class="btn btn-sm btn-outline-secondary position-relative" type="button" title="Needs you" aria-label="Open Needs-you queue"><i class="ti ti-bell"></i><span id="ack-inbox-count" class="badge bg-red position-absolute top-0 start-100 translate-middle" style="display:none;font-size:10px"></span></button>
                         <button id="btn-new-task" class="btn btn-sm btn-primary"><i class="ti ti-plus me-1"></i>New task</button>
                         <div class="dropdown">
                             <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" title="Export"><i class="ti ti-download"></i></button>
@@ -918,7 +922,7 @@
     <script src="js/project-admin.js?v=1"></script>
     <script src="js/settings.js?v=2"></script>
     <script src="js/scope.js?v=1"></script>
-    <script src="js/attention.js?v=1"></script>
+    <script src="js/attention.js?v=2"></script>
     <script src="app.js?v=58"></script>
     <script src="taikun-ui.js?v=9"></script>
     <script src="saturation-panel.js?v=1"></script>
