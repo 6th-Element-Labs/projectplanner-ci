@@ -22,13 +22,17 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import auth  # noqa: E402
 import store  # noqa: E402
-from execution_policy_fixture import install_ready_execution_policy  # noqa: E402
+from execution_policy_fixture import (  # noqa: E402
+    install_ready_execution_policy, ready_execution_context, ready_host_placement,
+)
 from app import app  # noqa: E402
 from db.connection import _conn  # noqa: E402
 from switchboard.application.commands import connect_dispatch  # noqa: E402
 
 
 P = "switchboard"
+connect_dispatch.execution_context.resolve = lambda **kwargs: ready_execution_context(
+    kwargs["task_id"], runtime=kwargs["runtime"])
 HOST = "host/bug128-native"
 PRINCIPAL = "principal/bug128-native"
 TOKEN = "bug128-narrow-host-token"
@@ -63,7 +67,10 @@ try:
             "policy": {"allow_work": True, "lane_mode": "all_project_lanes"},
         }],
         "limits": {"max_sessions": 2},
-        "capacity": {"active_sessions": 0, "allow_work": True},
+        "capacity": {
+            "active_sessions": 0, "allow_work": True,
+            "placement": ready_host_placement(P),
+        },
         "heartbeat_ttl_s": 60,
     }, principal_id=PRINCIPAL, actor=HOST, project=P)
     with _conn(P) as connection:

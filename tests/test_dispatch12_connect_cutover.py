@@ -114,9 +114,11 @@ ok("connect_dispatch.enqueue_task" in task_execution_source
 saved_projection = task_execution._projection
 saved_ticket = task_execution.runner_pty_command.mint_ticket_for_session
 saved_enqueue = connect_dispatch.enqueue_task
+saved_live_executions = task_execution.runner_repo.task_live_executions
 unexpected_launches: list[dict] = []
 try:
     task_execution.runner_pty_command.mint_ticket_for_session = lambda **_kwargs: {}
+    task_execution.runner_repo.task_live_executions = lambda *_args, **_kwargs: []
     connect_dispatch.enqueue_task = (
         lambda *args, **kwargs: unexpected_launches.append(kwargs) or {
             "dispatched": True, "wake_id": "wake-unexpected"})
@@ -144,6 +146,7 @@ finally:
     task_execution._projection = saved_projection
     task_execution.runner_pty_command.mint_ticket_for_session = saved_ticket
     connect_dispatch.enqueue_task = saved_enqueue
+    task_execution.runner_repo.task_live_executions = saved_live_executions
 
 saved_projection = task_execution._projection
 saved_cancel = task_execution.coordination_repo.cancel_wake
@@ -217,6 +220,7 @@ for row in captured:
         assignment=host_policy["assignment"],
         lifecycle=host_policy["lifecycle"],
     )
+    host_policy["execution_context"]["generation"] = 1
     wake = {
         "wake_id": "wake-host-test", "task_id": "DISPATCH-12",
         "selector": row["selector"], "policy": host_policy,
