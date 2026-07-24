@@ -12,6 +12,7 @@ from dataclasses import asdict
 import hashlib
 import json
 import os
+import re
 from typing import Any
 
 from switchboard.application.session_boot import ADVERTISED_LAUNCH_RUNTIMES
@@ -33,6 +34,10 @@ _UNSUPPORTED_RUNTIME_REPAIR = (
     "Call start_task with a supported runtime; do not use runtime=cli. "
     "Connect boots the CLI worker. From a launcher session do not claim_task."
 )
+_SESSION_POLICY_RE = re.compile(
+    r"(?:policy_profile|session_profile)\s*[:=]\s*([a-zA-Z0-9_-]+)",
+    re.IGNORECASE,
+)
 
 
 def _runtime(value: str) -> tuple[str, str]:
@@ -52,6 +57,75 @@ def unsupported_runtime_payload(requested_runtime: str) -> dict[str, Any]:
         "reason": _UNSUPPORTED_RUNTIME_REPAIR,
         "repair": _UNSUPPORTED_RUNTIME_REPAIR,
         "message": _UNSUPPORTED_RUNTIME_REPAIR,
+    }
+
+
+def _session_policy(task: dict[str, Any]) -> str:
+    state = task.get("agent_state") if isinstance(task.get("agent_state"), dict) else {}
+    session = state.get("session_policy") if isinstance(
+        state.get("session_policy"), dict) else {}
+    explicit = str(
+        session.get("profile") or task.get("policy_profile")
+        or task.get("session_policy_profile") or ""
+    ).strip()
+    if explicit:
+        return explicit
+    match = _SESSION_POLICY_RE.search(str(task.get("description") or ""))
+    return match.group(1) if match else "docs_review"
+
+
+def _hybrid_policy(
+    context: dict[str, Any], task: dict[str, Any], runtime_name: str,
+) -> dict[str, Any]:
+    """Translate immutable execution authority into CO-9 placement input."""
+    configured = dict(context.get("placement") or {})
+    policy_host_classes = {
+        str(item).strip() for item in configured.get("host_classes") or []
+        if str(item).strip()
+    }
+    scheduler_host_classes = {
+        "persistent" if item in {"personal", "shared"} else item
+        for item in policy_host_classes
+    }
+    burst = dict(configured.get("burst") or {})
+    provider = dict(context.get("provider") or {})
+    workspace = dict(context.get("workspace") or {})
+    runtime_binary = "claude" if runtime_name == "claude-code" else runtime_name
+    return {
+        "scheduler": {
+            "mode": "hybrid",
+            "prefer_persistent": True,
+            "allow_persistent": "persistent" in scheduler_host_classes,
+            "allow_ephemeral": "ephemeral" in scheduler_host_classes,
+            "burst_enabled": burst.get("enabled") is True,
+            "max_concurrent_ephemeral": int(
+                burst.get("max_concurrent_ephemeral") or 0),
+            "fair_share_key": f"project:{context['project_id']}",
+        },
+        "placement": {
+            "canonical_repo": context["repository"],
+            "repo_role": context["repo_role"],
+            "host_classes": sorted(scheduler_host_classes),
+            "trust_zones": sorted({
+                str(item).strip() for item in configured.get("trust_zones") or []
+                if str(item).strip()
+            }),
+            "session_policy": _session_policy(task),
+            "isolation": (
+                "task_worktree" if workspace.get("isolation") == "worktree"
+                else str(workspace.get("isolation") or "")
+            ),
+            "workspace_backend": str(workspace.get("isolation") or ""),
+            "runtime_binaries": [runtime_binary, "git"],
+            "provider": str(provider.get("provider") or ""),
+            "account_affinity_id": str(
+                provider.get("account_affinity_id") or ""),
+            "scm_provider": str((context.get("scm") or {}).get("provider") or ""),
+        },
+        # A bounded pending wake is the only permitted no-host outcome.
+        "no_eligible_host": "wait",
+        "deadline_seconds": int(
+            os.environ.get("PM_CONNECT_PLACEMENT_DEADLINE_SECONDS", "900")),
     }
 
 
@@ -238,22 +312,23 @@ def enqueue_task(
     lane = str(task.get("_wsId") or task.get("workstream") or "").strip()
     generation = generation_ref or str(predecessor_wake_id or "")
     assignment_id = _assignment_id(project, task_id, runtime_name, generation)
-    # COORD-47 introduces the project-derived path without prematurely removing
-    # the legacy unconfigured-project path; that subtraction is a later
-    # deliverable milestone. Once a project opts into execution policy, however,
-    # every field is mandatory and resolution fails closed.
-    from switchboard.storage.repositories.project_execution_policy import (
-        get_project_execution_policy,
-    )
-    configured_policy = get_project_execution_policy(project)
-    context: dict[str, Any] = {}
-    if configured_policy.get("configured"):
-        try:
-            context = execution_context.resolve(
-                project=project, task_id=task_id, runtime=runtime_name)
-        except execution_context.ExecutionContextError as exc:
-            return {"dispatched": False, **exc.as_dict(),
-                    "task_id": task_id, "project": project}
+    # CO-20: every task-bound Connect generation is project-derived. An absent,
+    # incomplete, or stale policy is an admission failure, never legacy placement.
+    try:
+        context = execution_context.resolve(
+            project=project, task_id=task_id, runtime=runtime_name)
+    except execution_context.ExecutionContextError as exc:
+        return {"dispatched": False, **exc.as_dict(),
+                "task_id": task_id, "project": project}
+    except Exception as exc:
+        return {
+            "dispatched": False,
+            "error": "execution_context_unavailable",
+            "reason": str(exc),
+            "failure_class": "broken_connection",
+            "task_id": task_id,
+            "project": project,
+        }
     execution_agent_id = str(caller_agent_id or "").strip()
     assignment = Assignment(
         assignment_id=assignment_id,
@@ -314,6 +389,7 @@ def enqueue_task(
         })
     policy = {
         "mode": CONNECT_WAKE_MODE,
+        **_hybrid_policy(context, task, runtime_name),
         "assignment": {
             "schema": "switchboard.connect.assignment.v1",
             **asdict(assignment),
@@ -323,8 +399,7 @@ def enqueue_task(
         # decode the Assignment byte-for-byte.
         "lifecycle": lifecycle,
     }
-    if context:
-        policy["execution_context"] = context
+    policy["execution_context"] = context
     # The external effect represents one durable completion decision, not the
     # coordinator/lease that happened to request it. Generation and fence are
     # allocated atomically below and intentionally do not participate either.
@@ -374,6 +449,22 @@ def enqueue_task(
             "error": wake.get("error") or wake.get("reason") or "wake_not_created",
             "task_id": task_id,
             "project": project,
+        }
+    if str(wake.get("status") or "") == "failed":
+        placement = dict(wake.get("placement") or {})
+        result = dict(wake.get("result") or {})
+        return {
+            "dispatched": False,
+            "error": str(
+                placement.get("reason_code")
+                or result.get("reason")
+                or "hybrid_placement_denied"),
+            "failure_class": "failed_gate",
+            "task_id": task_id,
+            "project": project,
+            "wake_id": wake["wake_id"],
+            "wake_status": "failed",
+            "placement": placement,
         }
     capacity = capacity_readback(
         wake, project=project, runtime=runtime_name, lane=lane)

@@ -327,6 +327,12 @@ def placement_inventory(repo, runtime, policy):
         auth_host_classes = ["trusted_private_worker", "user_owned_persistent"]
     else:
         auth_host_classes = ["managed_or_user_owned_worker"]
+    default_trust_zone = (
+        "cloud_ephemeral" if scheduler_class == "ephemeral" else "org_shared")
+    isolation_modes = _csv(os.environ.get("PM_HOST_ISOLATION", "task_worktree"))
+    workspace_backends = _csv(os.environ.get(
+        "PM_HOST_WORKSPACE_BACKENDS",
+        "worktree" if "task_worktree" in isolation_modes else ",".join(isolation_modes)))
     return {
         "schema": "switchboard.agent_host_placement.v1",
         "host_class": scheduler_class,
@@ -349,6 +355,7 @@ def placement_inventory(repo, runtime, policy):
             + _csv(os.environ.get("PM_HOST_OWNER_USER_ID", ""))
         )),
         "projects": _csv(os.environ.get("PM_HOST_PROJECTS", PROJECT)),
+        "trust_zone": os.environ.get("PM_HOST_TRUST_ZONE", default_trust_zone),
         "providers": _csv(os.environ.get("PM_HOST_PROVIDERS", "")),
         "account_affinity_ids": sorted(set(
             _csv(os.environ.get("PM_HOST_ACCOUNT_AFFINITIES", ""))
@@ -357,8 +364,14 @@ def placement_inventory(repo, runtime, policy):
         "supports_credential_leases": supports_leases,
         "repositories": _csv(os.environ.get(
             "PM_HOST_REPOSITORIES", "6th-Element-Labs/projectplanner")),
+        "supports_scm_materialization": (
+            _truthy(os.environ.get("PM_HOST_SUPPORTS_SCM_MATERIALIZATION", "1"))
+            and "git" in binaries
+        ),
+        "scm_providers": _csv(os.environ.get("PM_HOST_SCM_PROVIDERS", "github_app,github")),
         "session_policies": _csv(os.environ.get("PM_HOST_SESSION_POLICIES", "code_strict")),
-        "isolation_modes": _csv(os.environ.get("PM_HOST_ISOLATION", "task_worktree")),
+        "isolation_modes": isolation_modes,
+        "workspace_backends": workspace_backends,
         "runtime_binaries": binaries,
         "provider_capacity_mode": "external_account_admission",
         "resources": {

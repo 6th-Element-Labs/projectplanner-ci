@@ -41,6 +41,15 @@ def _number(value: Any) -> float | None:
         return None
 
 
+def _provider_key(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if raw in {"openai", "codex", "chatgpt", "openai-codex"}:
+        return "openai-codex"
+    if raw in {"anthropic", "claude", "claude-code", "anthropic-claude"}:
+        return "anthropic-claude"
+    return raw
+
+
 def _digest(value: Any) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()
@@ -175,6 +184,9 @@ def evaluate_host(
             reasons.append("persistent_capacity_disabled")
         if kind == "ephemeral" and scheduler.get("allow_ephemeral", True) is not True:
             reasons.append("ephemeral_capacity_disabled")
+        allowed_host_classes = _strings(request.get("host_classes"))
+        if allowed_host_classes and kind not in allowed_host_classes:
+            reasons.append("host_class_not_allowed")
         # Provisioned fleet hosts are single-wake resources.  General placement
         # must not reuse them, while claim-time evaluation must still allow the
         # exact wake that caused the host to be provisioned.
@@ -187,6 +199,9 @@ def evaluate_host(
         projects = _strings(placement.get("projects"))
         if project not in projects:
             reasons.append("project_not_allowed")
+        trust_zones = _strings(request.get("trust_zones"))
+        if trust_zones and str(placement.get("trust_zone") or "") not in trust_zones:
+            reasons.append("trust_zone_not_allowed")
 
         binding = dict(policy.get("account_binding") or {})
         tenant_id = str(binding.get("tenant_id") or "")
@@ -194,7 +209,10 @@ def evaluate_host(
         affinity = str(binding.get("account_affinity_id") or "")
         if tenant_id and tenant_id not in _strings(placement.get("tenant_ids")):
             reasons.append("tenant_not_allowed")
-        if provider and provider not in _strings(placement.get("providers")):
+        advertised_providers = {
+            _provider_key(item) for item in _strings(placement.get("providers"))
+        }
+        if provider and _provider_key(provider) not in advertised_providers:
             reasons.append("provider_not_allowed")
         if affinity and affinity not in _strings(placement.get("account_affinity_ids")):
             reasons.append("provider_account_affinity_mismatch")
@@ -203,14 +221,36 @@ def evaluate_host(
                 reasons.append("credential_lease_not_supported")
 
         repository = str(request.get("canonical_repo") or selector.get("canonical_repo") or "")
-        if repository and repository not in _strings(placement.get("repositories")):
+        materializes_scm = placement.get("supports_scm_materialization") is True
+        requested_scm = str(request.get("scm_provider") or "")
+        advertised_scm = _strings(placement.get("scm_providers"))
+        scm_capable = (
+            materializes_scm
+            and (not requested_scm or requested_scm in advertised_scm)
+        )
+        if (repository
+                and repository not in _strings(placement.get("repositories"))
+                and not scm_capable):
             reasons.append("repository_not_available")
+        requested_provider = str(request.get("provider") or "")
+        if (requested_provider
+                and _provider_key(requested_provider) not in advertised_providers):
+            reasons.append("provider_not_allowed")
+        requested_affinity = str(request.get("account_affinity_id") or "")
+        if (requested_affinity
+                and requested_affinity not in _strings(
+                    placement.get("account_affinity_ids"))):
+            reasons.append("provider_account_affinity_mismatch")
         session_policy = str(request.get("session_policy") or "")
         if session_policy and session_policy not in _strings(placement.get("session_policies")):
             reasons.append("session_policy_not_supported")
         isolation = str(request.get("isolation") or "")
         if isolation and isolation not in _strings(placement.get("isolation_modes")):
             reasons.append("isolation_policy_not_supported")
+        workspace_backend = str(request.get("workspace_backend") or "")
+        advertised_backends = _strings(placement.get("workspace_backends"))
+        if workspace_backend and workspace_backend not in advertised_backends:
+            reasons.append("workspace_backend_not_supported")
         missing_binaries = _strings(request.get("runtime_binaries")) \
             - _strings(placement.get("runtime_binaries"))
         if missing_binaries:
@@ -321,7 +361,7 @@ def plan_hybrid_placement(
         reason_code = f"{chosen['host_class']}_capacity_available"
     elif (hybrid and scheduler.get("allow_ephemeral", True) is True
           and scheduler.get("burst_enabled", True) is True
-          and str(policy.get("mode") or "") == "co_fleet"):
+          and str(policy.get("mode") or "") in {"co_fleet", "connect"}):
         action = "provision_ephemeral"
         persistent = [item for item in candidates if item["host_class"] == "persistent"]
         saturated = bool(persistent) and all(
