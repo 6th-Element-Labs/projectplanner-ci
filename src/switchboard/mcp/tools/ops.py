@@ -40,7 +40,8 @@ def submit_bug(source_task: str, observed_behavior: str, expected_behavior: str,
                repro_steps: str, evidence: str, severity_hint: str,
                affected_surface: str, ctx: Context, project: str = "maxwell",
                source_agent: str = "", failure_class: str = "",
-               duplicate_of: str = "", title: str = "") -> str:
+               duplicate_of: str = "", title: str = "",
+               review_repair_json: str = "") -> str:
     """Submit an agent-discovered bug through the dedicated BUG intake path.
 
     Requires write:bug_intake. Creates exactly one BUG task with structured report
@@ -64,6 +65,7 @@ def submit_bug(source_task: str, observed_behavior: str, expected_behavior: str,
         "failure_class": failure_class,
         "duplicate_of": duplicate_of,
         "title": title,
+        "review_repair_json": review_repair_json,
     }, actor=actor_name, principal_id=str(principal.get("id") or ""), project=project)
     return services.dumps(result)
 
