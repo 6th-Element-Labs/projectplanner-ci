@@ -178,8 +178,16 @@ def test_host_constraints_fail_closed_independently():
         assert reason in result["reason_codes"], label
 
 
+def test_remediation_claims_use_the_fenced_completion_handoff():
+    source = (
+        ROOT / "src" / "switchboard" / "storage" / "repositories" / "claims.py"
+    ).read_text(encoding="utf-8")
+    assert 'role in {"implementation", "remediation"}' in source
+
+
 if __name__ == "__main__":
     test_enqueue_requires_execution_context_and_persists_hybrid_policy()
     test_missing_execution_policy_never_creates_legacy_wake()
     test_host_constraints_fail_closed_independently()
-    print("CO-20 mandatory hybrid placement: 3 passed")
+    test_remediation_claims_use_the_fenced_completion_handoff()
+    print("CO-20 mandatory hybrid placement: 4 passed")

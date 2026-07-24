@@ -1446,6 +1446,8 @@ def _stage_managed_completion_stop_in(
     epoch = int(claim["lease_epoch"] or 0)
     if not any((runner_id, generation, role, epoch)):
         return None  # Backward-compatible unmanaged/legacy completion.
+    # Connect remediation is claim-bound code work too. It must use the same
+    # fenced completion handoff as the initial implementation generation.
     if not (
         runner_id
         and generation > 0
