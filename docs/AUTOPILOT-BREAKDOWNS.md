@@ -173,3 +173,121 @@ These were repaired before this run and are *not* open issues:
 2. **Fixes landed:** #856 (self-review fence removed), #859 (task-scoped Work Session resolution + preflight repair text), #857 (de-flaked `test_task_open_latency.py`). All deployed to prod at `cdd6ec5d`.
 3. **BUG-177 as originally filed was wrong** — the preflight requirement is satisfiable via the BUG-159 `coordinator_unverifiable` path; the reporting agent had simply never run `preflight_work_session`. Corrected on the task and in the fix.
 4. **DOGFOOD-19 itself was stale-Blocked** with all five dependencies Done and `blocking: []`. A prior attempt had been killed (`runner.kill_requested` → `kill_completed`). Cleared to Not Started before this run.
+
+---
+
+## BREAKDOWN 5 — Runners open **draft** PRs, which can never pass the merge gate ⚠️
+
+**Severity:** HIGH — hard dead-end for hands-off completion
+**Observed on:** CO-20 (#863), ADAPTER-27 (#865). UI-63 (#864) was not draft.
+
+Merge-authorization status on both draft PRs, at a head whose CI is fully green:
+```
+Switchboard CI / VM gate:        SUCCESS
+Switchboard UI / Playwright:     SUCCESS
+Switchboard / claim gate:        SUCCESS
+Switchboard / merge authorization: FAILURE -> "Draft PRs cannot pass the merge gate."
+```
+```
+#865 draft=True  commits=2  claude/ADAPTER-27-workspace-materializer
+#863 draft=True  commits=4  claude/CO-20-hybrid-placement
+```
+
+**The defect:** the worker opens its PR as a draft and nothing in the loop ever marks it
+ready-for-review. The merge gate refuses drafts by design, so the PR is permanently
+unmergeable. The agent responds by pushing *more commits* — CO-20 reached 4 commits
+across 4 distinct head SHAs (`259812aa` → `6e70a520` → `0738fc94` → `8a79c572`) — because
+the failing gate reads as "work not finished." It is not a code problem and more commits
+can never fix it.
+
+**Net effect:** an infinite remediation loop that burns provider quota and host slots
+while the PR sits in a state the gate will never accept. This alone prevents the
+Autopilot MVP acceptance from ever completing hands-off.
+
+**Suggested fix direction:** either the worker marks the PR ready when it believes the
+work is complete (`gh pr ready`), or the merge gate treats "draft" as a distinct,
+*actionable* terminal signal that routes to a "mark ready" step rather than to generic
+remediation. Today the agent cannot tell "your PR is a draft" apart from "your code is
+wrong" — the retry policy is identical for both.
+
+---
+
+## BREAKDOWN 6 — Every remediation push invalidates the review verdict, and the worker never records a new one
+
+**Severity:** HIGH
+**Observed on:** UI-63 (#864), the one non-draft PR.
+```
+failure -> "Review required for current head 915c2ee2a92015e023ee381621918c35f511596a."
+```
+Review verdicts are exact-head bound (correctly — that is the anti-stale-proof property).
+But each remediation push creates a new head, invalidating the prior verdict, and the
+worker does not record a verdict for the new head. So the loop is:
+
+> push → verdict invalid for new head → gate fails "review required" → agent treats it as
+> a code problem → push again → …
+
+**Suggested fix direction:** the completion loop must record an exact-head verdict as part
+of *each* push cycle, or the gate must distinguish "no verdict yet for this head" (an
+actionable step the worker can take) from "review found problems" (which needs code
+changes). These are currently the same signal to the worker.
+
+---
+
+## BREAKDOWN 7 — Workers do not attach `executed_test_run` in completion-evidence form
+
+**Severity:** MEDIUM-HIGH
+**Observed on:** UI-63 (#864).
+```
+failure -> "Merge gate requires a passing executed test run with output/log hash."
+```
+The worker ran CI (the VM gate is SUCCESS off-box) but never recorded a
+`switchboard.executed_test_run.v1` object with commands, completion timestamp and an
+output hash where the gate reads it.
+
+**Same failure class the coordinator-autopilot hit on COORD-47 earlier the same day** —
+its own receipt read `reason_code: missing_executed_test_run`, `route: coordination_retry`,
+`effect: none`, looping at generation 5. So this is not specific to these four tasks; it is
+the standard way autopilot stalls.
+
+**Note:** `merge_gate(evidence_json=...)` accepts the object directly, and
+`update_work_session` silently drops an `executed_test_run` field (`updated:false`) — a
+worker writing it to the Work Session would believe it succeeded while the gate still
+sees nothing.
+
+---
+
+## BREAKDOWN 8 — Runner sessions accumulate on the host
+
+**Severity:** MEDIUM (capacity leak; BUG-111 adjacent)
+**Observed:** 4 tasks were launched. Host session count over the run:
+```
+at launch:      active_sessions=0  -> 4 after the four start_task calls
+~30 min later:  active_sessions=6, available=10 (max 16)
+```
+Session count grew to 6 with no additional tasks started, and nothing has reached a
+terminal state. Combined with BREAKDOWN 3 (CO-21's runner running against an unclaimable
+task), this is the BUG-111 shape: terminal or useless runners continuing to heartbeat and
+consuming headroom. Not yet at zero headroom, so not fatal in this run — recorded because
+it trends the wrong way and the 2026-07-21 amendment requires the host slot to be
+recovered without manual database repair.
+
+---
+
+## RUN SUMMARY (as of this entry)
+
+**What worked, hands-off and unaided:** launch → claim → isolated worktree → implement →
+push → PR open → **full CI green** (VM gate + Playwright SUCCESS on all three) → claim gate
+SUCCESS. That is most of the lifecycle, working with zero operator input.
+
+**Where it dead-ends:** every one of the three PRs is stuck at merge authorization, for
+three *different* reasons — draft state (×2), missing exact-head verdict, missing executed
+test-run evidence. None of them is a code-quality problem, and in every case the worker's
+response is to push more commits, which cannot help.
+
+**The common root:** the merge gate returns a single undifferentiated "failure" to the
+worker, so process-state problems (draft PR, missing verdict, missing evidence) are
+indistinguishable from "your code is broken." The worker's only lever is another commit.
+Until the gate's typed reason codes are routed to distinct worker actions, hands-off
+completion cannot close, no matter how good the implementation is.
+
+**Not repaired.** Left in place for review, per the run's observer protocol.
