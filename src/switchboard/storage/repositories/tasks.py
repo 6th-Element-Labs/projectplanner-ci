@@ -1436,6 +1436,13 @@ def _build_board_payload(project: str, lite: bool, cards: bool = False) -> Dict[
     # The lite path uses the batched, enrichment-free loader (HARDEN-34); rollups
     # read only base fields (status/workstream/effort), so slim rows are enough.
     tasks = list_tasks_for_board(project) if lite else list_tasks(project=project)
+    # UI-62: completion_runs is the shared completion authority. Attach it in one
+    # query before card trimming so board, modal, and PR dock see the same route.
+    try:
+        from switchboard.application.queries import completion_projection
+        completion_projection.attach_many(tasks, project=project)
+    except Exception:
+        pass
     # SIMPLIFY-3: attach honest_display only for In Progress corpses — keeps the
     # HARDEN-34 budget for the rest of the board while fixing the SEG-5 lie.
     try:

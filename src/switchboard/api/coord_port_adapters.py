@@ -57,6 +57,13 @@ class RepositoryCoordQueries:
 
     def _build_board(self, project: str, *, cards: bool) -> dict[str, Any]:
         tasks = tasks_repo.list_tasks_for_board(project=project)
+        # UI-62: the standalone Coord service must expose the same completion
+        # projection as the monolith board route.
+        try:
+            from switchboard.application.queries import completion_projection
+            completion_projection.attach_many(tasks, project=project)
+        except Exception:
+            pass
         payload = {
             key: activity_repo.get_meta(key, project=project)
             for key in META_SECTIONS

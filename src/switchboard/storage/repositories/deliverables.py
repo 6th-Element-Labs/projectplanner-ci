@@ -2081,6 +2081,13 @@ def _batch_enrich_mission_links(links: List[Dict[str, Any]]) -> List[Dict[str, A
             "completion_run": runs_by_key.get(
                 (proj, str(task["task_id"]).strip().upper())) or None,
         }
+        try:
+            from switchboard.application.queries import completion_projection
+            completion_projection.attach_completion_projection(
+                enriched["task_detail"], project=proj,
+                run=enriched["task_detail"]["completion_run"])
+        except Exception:
+            pass
         out.append(enriched)
     return out
 

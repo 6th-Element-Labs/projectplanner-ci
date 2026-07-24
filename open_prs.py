@@ -140,12 +140,13 @@ def classify(row: Mapping[str, Any]) -> Dict[str, Any]:
 
     Red CI, merge conflicts, or a PR whose checks are green yet GitHub still
     reports the merge blocked (missing required review / stuck) all count.
-    Draft PRs never block — they aren't trying to merge yet.
+    Draft is presentation state, not a mask: red exact-head CI and an active
+    remediation route still block completion while the PR remains draft.
     """
-    if row.get("draft"):
-        return {"blocked": False, "blocked_reason": ""}
     ci = str(row.get("ci_state") or "none")
     mergeable = str(row.get("mergeable_state") or "")
+    projection = row.get("completion_projection")
+    projection = projection if isinstance(projection, Mapping) else {}
     if ci == "failure":
         failing = row.get("ci_failing") or []
         return {"blocked": True,
@@ -154,6 +155,9 @@ def classify(row: Mapping[str, Any]) -> Dict[str, Any]:
         return {"blocked": True, "blocked_reason": "merge conflicts"}
     if mergeable == "blocked" and ci == "success":
         return {"blocked": True, "blocked_reason": "green but blocked"}
+    if projection.get("route") in {"remediation", "human"}:
+        return {"blocked": True,
+                "blocked_reason": str(projection.get("reason_code") or projection.get("route"))}
     return {"blocked": False, "blocked_reason": ""}
 
 
@@ -162,15 +166,33 @@ def _board_join(pr: Mapping[str, Any], project: str,
                 ) -> Dict[str, Any]:
     """Join a PR to its board task(s) via branch/title parsing (same parser the
     merge webhook uses, so the dock and Done-stamping agree on ownership)."""
-    tasks: List[Dict[str, str]] = []
+    tasks: List[Dict[str, Any]] = []
+    selected_projection: Optional[Mapping[str, Any]] = None
     for task_id in task_id_parser.task_ids_for_pr(dict(pr)):
         try:
             task = get_task_fn(task_id, project=project)
         except Exception:
             task = None
         if task:
-            tasks.append({"task_id": task_id, "status": str(task.get("status") or "")})
-    return {"tasks": tasks, "orphan": not tasks}
+            try:
+                from switchboard.application.queries import completion_projection
+                completion_projection.attach_completion_projection(
+                    task, project=project)
+            except Exception:
+                pass
+            projection = task.get("completion_projection")
+            tasks.append({
+                "task_id": task_id,
+                "status": str(task.get("status") or ""),
+                "completion_projection": projection,
+            })
+            if selected_projection is None and isinstance(projection, Mapping):
+                selected_projection = projection
+    return {
+        "tasks": tasks,
+        "orphan": not tasks,
+        "completion_projection": selected_projection,
+    }
 
 
 def build_open_prs(project: str, *,

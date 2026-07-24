@@ -175,6 +175,7 @@
         const honestBadge = honest.lifecycle_phase === 'start_failed_retry'
             ? `<span class="badge bg-orange-lt text-orange" title="${this.esc(honest.reason || honest.message || displayLabel)}">${this.esc(displayLabel)}</span>`
             : '';
+        const completionBadge = this.completionProjectionHtml(t, true);
         return `
             <a href="#" class="d-block text-reset" data-task="${this.esc(t.task_id)}">
                 <div class="card card-sm mb-2"${done ? ' style="opacity:.55"' : ''}>
@@ -186,7 +187,7 @@
                             <span class="ms-auto text-secondary small font-monospace">${this.esc(t.task_id)}</span>
                         </div>
                         <div class="fw-semibold lh-sm ${done ? 'text-decoration-line-through text-secondary' : 'text-body'}">${this.esc(t.title)}</div>
-                        ${honestBadge ? `<div class="mt-1">${honestBadge}</div>` : ''}
+                        ${(honestBadge || completionBadge) ? `<div class="mt-1 d-flex gap-1">${honestBadge}${completionBadge}</div>` : ''}
                         <div class="d-flex align-items-center gap-2 mt-2 text-secondary small">
                             <span>${meta.join(' · ')}</span>
                             ${t.risk_level === 'High' ? '<span class="badge badge-outline text-red">High risk</span>' : ''}

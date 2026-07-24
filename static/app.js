@@ -762,6 +762,9 @@ const TeepPlan = {
             x.number || 0, x.ci_state || '', x.mergeable_state || '',
             x.queue_position || 0, x.blocked ? 1 : 0, x.updated_at || 0,
             x.draft ? 1 : 0, x.stalled ? 1 : 0, x.auto_merge ? 1 : 0, (x.ci_failing || [])[0] || '',
+            (x.completion_projection || {}).route || '',
+            (x.completion_projection || {}).reason_code || '',
+            (x.completion_projection || {}).state_version || 0,
         ]).sort((a, b) => Number(a[0]) - Number(b[0]));
         const d = ((deployments || {}).deployments || []).map((x) => [
             x.number || 0, x.status || '', x.merge_sha || '',
@@ -834,7 +837,10 @@ const TeepPlan = {
     // and freshly-opened tabs without hooking every tab-activation path.
     _boardSignature() {
         return (this.tasks || []).map((t) =>
-            [t.task_id, t.status, t.phase, t.is_blocking ? 1 : 0, t.assignee || '', t.effort_days || 0, t.risk_level || ''].join(':')
+            [t.task_id, t.status, t.phase, t.is_blocking ? 1 : 0, t.assignee || '', t.effort_days || 0, t.risk_level || '',
+             (t.completion_projection || {}).state || '', (t.completion_projection || {}).route || '',
+             (t.completion_projection || {}).reason_code || '', (t.completion_projection || {}).current_effect || '',
+             (t.completion_projection || {}).state_version || 0].join(':')
         ).sort().join('|');
     },
     async _boardLiveTick() {
@@ -928,6 +934,40 @@ const TeepPlan = {
             <div class="small">${this.esc(why)} Routine implementation, testing, review, merge, and reconciliation do not require approval.</div>
         </div>`;
     },
+    completionProjectionHtml(t, compact) {
+        const p = (t && t.completion_projection) || {};
+        if (!p.schema) return '';
+        const tones = {
+            remediation: 'red', human: 'orange', coordination_retry: 'yellow',
+            review_merge: 'azure', reconcile: 'purple', wait: 'secondary', none: 'green',
+        };
+        const tone = tones[p.route] || 'secondary';
+        const roleHead = [p.desired_role, p.desired_head ? String(p.desired_head).slice(0, 7) : ''].filter(Boolean).join(' @ ');
+        const retry = p.retry_deadline
+            ? new Date(Number(p.retry_deadline) * 1000).toLocaleString()
+            : '';
+        const summary = [
+            p.reason_code,
+            p.route_owner ? `owner: ${p.route_owner}` : '',
+            roleHead,
+            p.current_effect ? `effect: ${p.current_effect}` : '',
+            retry ? `retry: ${retry}` : '',
+        ].filter(Boolean);
+        if (compact) {
+            const routeLabel = p.terminal ? 'done provenance'
+                : String(p.route || 'completion').replaceAll('_', ' ');
+            return `<span class="badge bg-${tone}-lt text-${tone}" title="${this.esc(summary.join(' · '))}">`
+                + `${this.esc(routeLabel)}</span>`;
+        }
+        return `<div class="alert alert-${tone} py-2 px-3 mb-3" role="status" data-completion-route="${this.esc(p.route || '')}">
+            <div class="d-flex align-items-center gap-2">
+                <strong>Autopilot completion</strong>
+                <span class="badge bg-${tone}-lt">${this.esc(String(p.route || 'none').replaceAll('_', ' '))}</span>
+                <span class="ms-auto text-secondary small">${this.esc(p.board_status || '')}</span>
+            </div>
+            <div class="small mt-1">${this.esc(summary.join(' · ') || 'Awaiting completion assessment')}</div>
+        </div>`;
+    },
     // Fleet dock v2 (spec 2026-07-23): a two-tab operator console. Runners tab is a
     // narrow port of the Fleet page's Live runners table (same endpoint, same control
     // actions: Watch / Logs / On disk / Kill — "On disk" is the snapshot action, the
@@ -993,6 +1033,7 @@ const TeepPlan = {
     // still a broken build, and burying it under "Draft" is what made the old strip unscannable.
     _prConditions(x) {
         const out = [];
+        const p = x.completion_projection || {};
         // GitHub check names are often workflow-qualified ("Switchboard CI / VM gate"); the job name
         // is the part that identifies the failure, and the full name stays in the chip's tooltip.
         const failing = String((x.ci_failing || [])[0] || '').split(' / ').pop().trim();
@@ -1000,6 +1041,11 @@ const TeepPlan = {
             out.push({ key: 'ci_failed', label: failing ? `${failing} failed` : 'CI failed',
                        tone: 'red', icon: 'x', title: (x.ci_failing || [])[0] || '' });
         }
+        if (p.route === 'remediation') out.push({ key: 'remediation', label: 'Remediation owner', tone: 'red', icon: 'tool' });
+        else if (p.route === 'coordination_retry') out.push({ key: 'coordination_retry', label: 'Coordination retry', tone: 'yellow', icon: 'refresh' });
+        else if (p.route === 'review_merge') out.push({ key: 'review_merge', label: 'Review / merge', tone: 'azure', icon: 'git-merge' });
+        else if (p.route === 'human') out.push({ key: 'human', label: 'Needs you', tone: 'orange', icon: 'user-exclamation' });
+        else if (p.route === 'reconcile') out.push({ key: 'reconcile', label: 'Reconciling', tone: 'purple', icon: 'refresh' });
         if (x.mergeable_state === 'dirty') out.push({ key: 'conflicts', label: 'Conflicts', tone: 'yellow', icon: 'git-merge' });
         if (x.mergeable_state === 'blocked') out.push({ key: 'merge_blocked', label: 'Merge blocked', tone: 'yellow', icon: 'lock' });
         if (x.ci_state === 'pending') out.push({ key: 'checks_running', label: 'Checks running', tone: 'yellow', icon: 'loader' });
@@ -2504,6 +2550,7 @@ const TeepPlan = {
             <div class="tab-content mt-3">
                 <div class="tab-pane fade show active" id="m-details" role="tabpanel">
                     ${this.taskAutopilotExceptionHtml(t)}
+                    ${this.completionProjectionHtml(t, false)}
                     <div class="progress progress-sm mb-3"><div class="progress-bar bg-${sc}" style="width:${pct}%"></div></div>
                     <div class="text-secondary small mb-3 d-flex align-items-center"><span class="status-dot bg-${sc} me-2"></span>${this.esc(displayLabel || '—')}${honest.lifecycle_phase === 'start_failed_retry' ? '' : ` · ${pct}% complete`}</div>
                     ${honestLine}
