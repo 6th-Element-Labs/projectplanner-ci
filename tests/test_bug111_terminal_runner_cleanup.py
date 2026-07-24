@@ -154,7 +154,9 @@ try:
     ok(not renew_posts and renewed == [],
        "Agent Host refuses to renew a terminal-task due runner lease")
 
-    # Lease expiry remains the only kill authority.
+    # Lease expiry remains the only kill authority. A concurrent renew can
+    # refresh heartbeat_at after surrender is stamped, so the reaper must kill
+    # on lease_surrender even when the row is not yet stale.
     expire_calls = []
     original_supervisor = agent_host.supervisor_action
     original_drop = agent_host._drop_host_bridge
@@ -163,7 +165,21 @@ try:
         expire_calls.append((action, selected_runner, dict(options or {})))
         return {"alive": False, "status": "killed"}
 
-    agent_host._drain_runners = fake_drain
+    def fake_drain_surrendered_fresh(_host_id, recover_stale_local=True):
+        return [{
+            "runner_session_id": runner_id, "host_id": host_id,
+            "task_id": task_id, "agent_id": f"codex/{task_id}",
+            "alive": True, "stale": False, "status": "running",
+            "pid": 111, "runtime": "codex",
+            "metadata": {
+                "work_session_id": work_session["work_session_id"],
+                "wake_id": f"wake-{runner_id}",
+                "native_host_execution": True,
+                "lease_surrender": {"authority": "terminal_task"},
+            },
+        }]
+
+    agent_host._drain_runners = fake_drain_surrendered_fresh
     agent_host.supervisor_action = fake_supervisor
     agent_host._drop_host_bridge = lambda rid: expire_calls.append(("drop", rid))
     agent_host._try = fake_try
@@ -176,7 +192,7 @@ try:
         agent_host._try = original_try
     ok(expired and expired[0].get("expired") is True
        and any(c[:2] == ("kill", runner_id) for c in expire_calls),
-       "lease expiry kills the due runner after terminal-task surrender")
+       "lease expiry kills a surrendered runner even when heartbeat is still fresh")
 
     # Compatibility: host still refuses legacy kill directives.
     refuse_calls = []
