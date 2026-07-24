@@ -211,48 +211,6 @@ def _insert_findings_in(c: sqlite3.Connection, verdict_id: str,
         )
 
 
-def _assert_adversarial_reviewer_independence_in(
-        c: sqlite3.Connection, task_id: str, reviewer: str) -> None:
-    """Require a different recorded agent for an adversarial verdict.
-
-    Fleet authentication may still share one service principal, so the
-    server-resolved actor is the useful identity here. Claims and Work Sessions
-    retain the implementation/remediation actor even after the lease ends.
-    Merely labeling a self-review "adversarial" must never authorize merge.
-    """
-    rows = c.execute(
-        "SELECT agent_id, COALESCE(NULLIF(execution_role,''),'implementation') AS role "
-        "FROM task_claims WHERE task_id=? "
-        "UNION ALL "
-        "SELECT agent_id, COALESCE(NULLIF(execution_role,''),'implementation') AS role "
-        "FROM work_sessions WHERE task_id=?",
-        (task_id, task_id),
-    ).fetchall()
-    implementers = sorted({
-        str(row["agent_id"] or "").strip()
-        for row in rows
-        if str(row["role"] or "").strip().lower()
-        in {"implementation", "remediation"}
-        and str(row["agent_id"] or "").strip()
-    })
-    if not implementers:
-        raise ReviewVerdictError(
-            "adversarial_review_independence_unverifiable",
-            "adversarial review requires a recorded implementation identity",
-            status_code=409,
-            details={"task_id": task_id},
-        )
-    if reviewer.strip().lower() in {
-        item.strip().lower() for item in implementers
-    }:
-        raise ReviewVerdictError(
-            "adversarial_self_review_forbidden",
-            "the implementing or remediating agent cannot author the adversarial verdict",
-            status_code=403,
-            details={"task_id": task_id, "implementing_agents": implementers},
-        )
-
-
 class ReviewVerdictRepository:
     """Project-scoped persistence and exact-head review fencing."""
 
@@ -338,15 +296,23 @@ class ReviewVerdictRepository:
             # path forward. It bought no real independence (one identity cannot be compared
             # against itself); it only blocked. Do NOT re-add it without genuine per-agent
             # principals to compare. Authentication is still required, below.
+            #
+            # REMOVED A SECOND TIME (2026-07-25, owner decision). BUG-172 (#849) re-added an
+            # agent_id-based variant of this fence — `adversarial_self_review_forbidden` — for
+            # review_mode="adversarial", directly above this warning and without the
+            # "separately approved authority model" that docs/AUTOPILOT-COMPLETION-STATE-MACHINE.md
+            # requires before any independence fence lands. It blocked the implementing agent
+            # from recording its own adversarial verdict, which stalls single-agent completion
+            # with no in-band path forward (the fleet cannot always supply a second agent).
+            # The working agreement permits self-review; merge authority still rests on the
+            # exact-head verdict, the CI/VM + Playwright contexts, and canonical merge
+            # provenance. Do NOT re-add any reviewer-independence fence without that approved
+            # authority model AND per-agent principals.
             if not reviewer_principal_id:
                 raise ReviewVerdictError(
                     "reviewer_principal_unbound",
                     "review requires an authenticated principal ID",
                     status_code=403,
-                )
-            if str(payload.get("review_mode") or "standard") == "adversarial":
-                _assert_adversarial_reviewer_independence_in(
-                    c, task_id, reviewer,
                 )
             existing_result = self._existing_result_in(
                 c, payload, task_id=task_id, pr_url=current_pr,
