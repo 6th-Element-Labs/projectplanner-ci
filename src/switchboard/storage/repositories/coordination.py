@@ -3506,9 +3506,24 @@ def heartbeat_host(host_id: str, active_sessions: Optional[int] = None,
             from .runner import terminal_task_cleanup_for_host_in
             terminal_cleanup = terminal_task_cleanup_for_host_in(
                 c, host_id, actor, now)
+            # Log liveness only. The full `current` capacity struct is ~2.3KB and was
+            # being appended here on EVERY heartbeat: 230k rows / 201MB in 26 days, of
+            # which ~97% was this one field, and nothing ever read it back (every reader
+            # of `activity` is kind- or task-scoped, and no reader selects this kind).
+            # Capacity is live state, not history — the authoritative copy is written to
+            # agent_hosts.capacity_json by the UPDATE directly above, and that is what
+            # host_status/list_agent_hosts serve. Keep the small summary counters so the
+            # log still answers "was this host accepting work?" without carrying the
+            # whole inventory.
+            capacity_summary = {
+                key: current.get(key)
+                for key in ("active_sessions", "max_sessions", "allow_work", "drain_state")
+                if current.get(key) is not None
+            }
             c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                       (None, actor, "agent_host.heartbeat",
-                       json.dumps({"host_id": host_id, "capacity": current,
+                       json.dumps({"host_id": host_id,
+                                   "capacity_summary": capacity_summary,
                                    "status": status or "online"}, sort_keys=True), now))
             row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
     except sqlite3.OperationalError as exc:
