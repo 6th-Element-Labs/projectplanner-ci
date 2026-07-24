@@ -45,6 +45,7 @@ REVIEWER_PRINCIPAL_ID = "principal-reviewer"
 HEAD_1 = "a" * 40
 HEAD_2 = "b" * 40
 HEAD_RACE = "c" * 40
+HEAD_SELF = "d" * 40
 PR_URL = "https://github.com/6th-Element-Labs/projectplanner/pull/518"
 passed = failed = 0
 
@@ -187,23 +188,6 @@ try:
         task_id, project=PROJECT, current_head_only=True) == [],
        "current-head finding query never leaks findings from stale code")
 
-    self_review = commands.execute_mapping(
-        {
-            **verdict(
-                task_id, head=HEAD_2, status="pass", findings=[],
-                reviewer=WORKER,
-            ),
-            "review_mode": "adversarial",
-        },
-        actor=WORKER,
-        principal_id=WORKER_PRINCIPAL_ID,
-        project=PROJECT,
-    )
-    ok(
-        self_review.get("error_code") == "adversarial_self_review_forbidden",
-        "an implementation actor cannot authorize its own adversarial review",
-    )
-
     pass_result = commands.execute_mapping(
         {**verdict(task_id, head=HEAD_2, status="pass", findings=[]),
          "review_mode": "adversarial"},
@@ -228,6 +212,45 @@ try:
         actor=REVIEWER, principal_id=REVIEWER_PRINCIPAL_ID, project=PROJECT)
     ok(malformed.get("error_code") == "invalid_review_verdict",
        "malformed file locations fail before persistence")
+
+    # Self-review is permitted by the working agreement. A reviewer-independence fence was
+    # added in COORD-18, removed (unsatisfiable under one shared principal), re-added by
+    # BUG-172 as adversarial_self_review_forbidden, and removed again by owner decision.
+    # Authentication is still required; merge authority still rests on the exact-head
+    # verdict plus CI contexts and canonical merge provenance.
+    store.mark_task_pr_opened(
+        task_id, 518, PR_URL, branch=f"codex/{task_id}-fixture", head_sha=HEAD_SELF,
+        actor="coord18-test", project=PROJECT)
+    self_review = commands.execute_mapping(
+        {
+            **verdict(
+                task_id, head=HEAD_SELF, status="pass", findings=[],
+                reviewer=WORKER,
+            ),
+            "review_mode": "adversarial",
+        },
+        actor=WORKER,
+        principal_id=WORKER_PRINCIPAL_ID,
+        project=PROJECT,
+    )
+    ok(self_review.get("created") is True
+       and self_review.get("verdict", {}).get("status") == "pass"
+       and self_review.get("verdict", {}).get("review_mode") == "adversarial",
+       "the implementing actor may author its own adversarial verdict")
+    unauthenticated_self_review = commands.execute_mapping(
+        {
+            **verdict(
+                task_id, head=HEAD_SELF, status="pass", findings=[],
+                reviewer=WORKER,
+            ),
+            "review_mode": "adversarial",
+        },
+        actor=WORKER,
+        principal_id="",
+        project=PROJECT,
+    )
+    ok(unauthenticated_self_review.get("error_code") == "reviewer_principal_unbound",
+       "self-review still requires an authenticated principal")
 
     # The complete verdict command is one writer transaction. Simultaneous identical
     # calls must converge on one creation and deterministic replays, never leak raw
