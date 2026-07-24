@@ -4,11 +4,13 @@ The legacy ``GET /api/attention`` unions stores that hold human-blocking work
 into one normalized, ranked feed:
 
   * ``agent_messages``  — unacked required messages (an agent is parked on you)
+  * ``attention_requests`` — first-class PROTO-7/8 Needs-you rows (completion
+    human closeout and provider questions)
   * ``inbox``           — pending triaged inbound (plan@taikunai.com, uploads)
 
-That legacy feed remains read-only: deciding an item routes to endpoints that own
-each store's writes (``/api/agent_messages/ack``, ``/api/inbox/{id}/confirm`` /
-``/dismiss``).
+Deciding an item routes to the endpoint that owns that store's writes
+(``/api/agent_messages/ack``, ``/api/attention/requests/{id}/decide``,
+``/api/inbox/{id}/confirm`` / ``/dismiss``).
 
 PROTO-8 adds project-scoped durable request, decision, claim, and delivery
 contracts below it. Those handlers are thin adapters over ``AttentionService``;
@@ -141,10 +143,49 @@ def _inbox_item(it: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _request_item(req: Dict[str, Any]) -> Dict[str, Any]:
+    """A first-class PROTO-7/8 attention_request awaiting an operator decision."""
+    context = req.get("context") if isinstance(req.get("context"), dict) else {}
+    request_id = str(req.get("request_id") or "")
+    recommended = req.get("recommended_default")
+    return {
+        "attention_id": f"attention:{request_id}",
+        "source": "attention",
+        "kind": "completion_human" if str(req.get("provider") or "").startswith(
+            "switchboard.completion") else "attention_request",
+        "task_id": req.get("task_id") or context.get("task_id") or "",
+        "title": (req.get("prompt") or "")[:120],
+        "summary": req.get("prompt") or "",
+        "from": req.get("provider") or "completion",
+        "age_s": _age_s(req.get("created_at")),
+        "deadline": req.get("expires_at"),
+        "payload": {
+            "request_id": request_id,
+            "version": req.get("version"),
+            "reason_code": context.get("reason_code") or context.get("unresolved_gate"),
+            "pr_number": context.get("pr_number"),
+            "head_sha": context.get("head_sha"),
+            "resume_condition": context.get("resume_condition"),
+            "next_automatic_action": context.get("next_automatic_action"),
+            "choices": req.get("choices") or [],
+            "recommended_default": recommended,
+        },
+        "decide": {
+            "method": "POST",
+            "path": f"/api/attention/requests/{request_id}/decide",
+            "body": {
+                "expected_version": req.get("version"),
+                "choice": recommended,
+                "idempotency_key": f"operator-decide:{request_id}",
+            },
+        },
+    }
+
+
 def _rank(item: Dict[str, Any]) -> tuple:
     """Heuristic until mission_graph blast radius lands: agents first (a lease is
-    parked), deadline-bearing items next, then breadth of proposed change, then age."""
-    src_w = 0 if item["source"] == "agent" else 1
+    parked), durable completion Needs-you next, then inbox breadth, then age."""
+    src_w = {"agent": 0, "attention": 1, "inbox": 2}.get(item.get("source"), 3)
     dl = 0 if item.get("deadline") else 1
     breadth = -(item.get("payload", {}).get("proposals") or 0)
     return (src_w, dl, breadth, -item.get("age_s", 0))
@@ -195,12 +236,16 @@ def create_router(*, resolve_project: ProjectResolver,
         items: List[Dict[str, Any]] = []
         for msg in list_pending_acks(agent_id=me, project=proj):
             items.append(_agent_item(msg))
+        for req in service.list_operator_queue(
+                _context(proj, principal, source="query")).get("items") or []:
+            items.append(_request_item(req))
         for it in list_inbox("pending", project=proj):
             items.append(_inbox_item(it))
 
         items.sort(key=_rank)
         return {"project": proj, "count": len(items), "items": items,
                 "sources": {"agent": sum(1 for i in items if i["source"] == "agent"),
+                            "attention": sum(1 for i in items if i["source"] == "attention"),
                             "inbox": sum(1 for i in items if i["source"] == "inbox")}}
 
     @router.get("/api/attention/requests")

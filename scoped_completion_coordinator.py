@@ -77,10 +77,33 @@ class ScopedCompletionCoordinator(CoordinatorDaemon):
 
         role = mission_coordinator._lifecycle_role(
             self.store, task_project, task_id)
+        from switchboard.domain.completion.routing import route_allows_dispatch
         from switchboard.storage.repositories import completion_runs
         completion_run = (
             completion_runs.get_active_completion_run(
                 task_id, project=task_project) or {})
+        route = str(completion_run.get("route") or "").strip().lower()
+        # Sticky human blockers stay on the attention_request authority path.
+        # Never dispatch another coder from a route=human completion decision.
+        if route == "human":
+            result = {
+                "status": "human_blocked",
+                "scope_id": scope.get("scope_id"),
+                "task_id": task_id,
+                "task_project": task_project,
+                "route": "human",
+                "reason_code": completion_run.get("reason_code"),
+                "board_status": detail.get("status"),
+                "receipts": [{
+                    "action": "await_attention_decision",
+                    "completion_run_id": completion_run.get("run_id"),
+                    "state_version": completion_run.get("state_version"),
+                }],
+            }
+            self.store.update_autopilot_scope(
+                scope["scope_id"], project=project, last_result=result,
+                ticked_at=float(self.clock()))
+            return result
         reason_code = str(
             completion_run.get("reason_code")
             or ("current_head_remediation_required"
@@ -95,6 +118,11 @@ class ScopedCompletionCoordinator(CoordinatorDaemon):
             return {"status": "dispatch_blocked", "scope_id": scope.get("scope_id"),
                     "task_id": task_id, "role": role,
                     "error": "review_head_sha_required"}
+        if route and not route_allows_dispatch(route) and role in {
+                "review_merge", "remediation", "implementation"}:
+            return {"status": "dispatch_blocked", "scope_id": scope.get("scope_id"),
+                    "task_id": task_id, "role": role, "route": route,
+                    "error": "route_not_dispatchable"}
 
         from switchboard.application.commands import task_execution
         try:

@@ -16,6 +16,7 @@
 
     const SRC = {
         agent: ['#c0392b', 'ti-robot', 'Agent'],
+        attention: ['#b7791f', 'ti-alert-triangle', 'Needs-you'],
         inbox: ['#4299e1', 'ti-mail', 'Inbound'],
     };
 
@@ -108,6 +109,14 @@
     function renderDetail(detail, it) {
         const sc = SRC[it.source] || ['#8b95a5', 'ti-point', ''];
         const isAgent = it.source === 'agent';
+        const isAttention = it.source === 'attention';
+        const choiceButtons = (it.payload.choices || []).map((c) => {
+            const id = (c && c.id) || c;
+            const label = (c && (c.label || c.id)) || String(c);
+            const primary = it.payload.recommended_default
+                && ((it.payload.recommended_default.id || it.payload.recommended_default) === id);
+            return `<button type="button" class="btn ${primary ? 'btn-primary' : 'btn-outline-secondary'}" data-choice="${esc(id)}">${esc(label)}</button>`;
+        }).join('');
         detail.innerHTML = `
             <div class="d-flex align-items-start gap-2 mb-2">
                 <div class="flex-fill">
@@ -127,7 +136,10 @@
                 <div class="d-flex gap-2 mb-2">
                     <input class="form-control" id="needs-reply" placeholder="Answer — recorded as the ack response; the sender's monitor resolves"/>
                     <button type="button" class="btn btn-primary" id="needs-ack"><i class="ti ti-send me-1"></i>Answer &amp; ack</button>
-                </div>` : `
+                </div>` : isAttention ? `
+                <div class="tk-eyebrow mb-2">Decide</div>
+                <div class="btn-list mb-2">${choiceButtons || '<span class="text-secondary small">No choices on this request</span>'}</div>
+                <div class="text-secondary small mb-2">Resumed appears only after a delivery/execution receipt — not when the choice is recorded.</div>` : `
                 <div class="tk-eyebrow mb-2">Decide</div>
                 <div class="btn-list mb-2">
                     <button type="button" class="btn btn-primary" id="needs-confirm"><i class="ti ti-checks me-1"></i>Confirm — apply proposals</button>
@@ -155,6 +167,25 @@
             };
             el('needs-ack').addEventListener('click', send);
             el('needs-reply').addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
+        } else if (isAttention) {
+            detail.querySelectorAll('[data-choice]').forEach((btn) => btn.addEventListener('click', async () => {
+                flash('Recording decision…');
+                try {
+                    const body = {
+                        expected_version: it.payload.version,
+                        choice: { id: btn.dataset.choice },
+                        idempotency_key: `operator-decide:${it.payload.request_id}:${btn.dataset.choice}`,
+                    };
+                    const res = await fetch(`${it.decide.path}?project=${encodeURIComponent(proj())}`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body),
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) throw new Error(data.detail || data.error || data.message || `HTTP ${res.status}`);
+                    flash('Decision recorded — Autopilot wakes to reassess. Resumed waits on a delivery receipt.', 'text-green');
+                    setTimeout(load, 600);
+                } catch (e) { flash('Decide failed: ' + e.message, 'text-danger'); }
+            }));
         } else {
             el('needs-confirm').addEventListener('click', async () => {
                 flash('Applying…');
