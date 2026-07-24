@@ -268,6 +268,13 @@ class Pr834RawFixture(unittest.TestCase):
         self.assertEqual(decision["route"], "coordination_retry")
         self.assertEqual(decision["reason_code"], "required_ci_hydration_missing")
 
+    def test_terminal_merge_queue_truth_outranks_review_remediation(self):
+        snapshot = self._snapshot()
+        snapshot["merge_queue"] = {"state": "merged"}
+        decision = classify_completion(None, snapshot)
+        self.assertEqual(decision["route"], "reconcile")
+        self.assertEqual(decision["reason_code"], "merge_queue_merged")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -262,16 +262,18 @@ def classify_completion(
         return _decision("blocked", "coordination_retry", "board_pr_head_mismatch",
                          retry="bounded")
 
+    queue_state = _text(queue.get("state") or queue.get("status"))
+    if queue_state in {"merged", "complete", "completed"}:
+        return _decision("reconciling", "reconcile", "merge_queue_merged")
+
     # Exact-head changes requested are already a complete, actionable repair
-    # contract. They outrank merge-queue and CI-hydration coordination state.
+    # contract. They outrank nonterminal merge-queue and CI coordination state,
+    # but never canonical evidence that the queue has already merged the PR.
     review_decision = _changes_requested_decision(review, head_sha)
     if review_decision:
         return review_decision
 
-    queue_state = _text(queue.get("state") or queue.get("status"))
     queue_failure = _text(queue.get("failure_attribution") or queue.get("failure_class"))
-    if queue_state in {"merged", "complete", "completed"}:
-        return _decision("reconciling", "reconcile", "merge_queue_merged")
     if queue_state in _QUEUE_WAIT:
         if queue_state == "locked" and queue.get("retry_exhausted"):
             return _decision("blocked", "coordination_retry", "merge_queue_locked",
