@@ -11,7 +11,9 @@ verbatim from the shell residual; no redesign in this move.
 from __future__ import annotations
 
 import copy
+import json
 import time
+import urllib.request
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from constants import DEFAULT_PROJECT, GITHUB_PR_URL_RE, MERGE_GATE_SCHEMA
@@ -223,10 +225,38 @@ def _merge_gate_pr_evidence(pr_url: str, pr_number: int,
         return copy.deepcopy(supplied), {"source": "supplied_evidence"}
     if not repo or not pr_number:
         return {}, {"source": "missing", "reason": "pr_url_or_number_missing"}
-    pr = _github_pr(repo, pr_number, _github_token())
+    token = _github_token()
+    pr = _github_pr(repo, pr_number, token)
     if pr:
+        head_sha = _merge_gate_pr_ref(pr, "head", "sha")
+        if head_sha and not _merge_gate_status_contexts(
+                pr.get("status_contexts"),
+                pr.get("statusCheckRollup"),
+                pr.get("checks")):
+            statuses = _github_commit_statuses(repo, head_sha, token)
+            if statuses:
+                pr["status_contexts"] = statuses
         return pr, {"source": "github_api"}
     return {}, {"source": "github_api", "reason": "unavailable"}
+
+
+def _github_commit_statuses(repo: str, head_sha: str,
+                            token: str = "") -> List[Dict[str, Any]]:
+    """Hydrate exact-head commit statuses omitted by GitHub's Pulls REST API."""
+    if not repo or not head_sha:
+        return []
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{repo}/commits/{head_sha}/status")
+    request.add_header("Accept", "application/vnd.github+json")
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(request, timeout=8) as response:
+            payload = json.loads(response.read().decode())
+    except Exception:
+        return []
+    statuses = payload.get("statuses") if isinstance(payload, dict) else None
+    return statuses if isinstance(statuses, list) else []
 
 
 def _merge_gate_pr_ref(pr: Dict[str, Any], side: str, field: str) -> str:
