@@ -1,3 +1,4 @@
+from path_setup import ROOT  # noqa: F401
 from switchboard.live_acceptance.simplify_28 import normalize_scope
 
 
