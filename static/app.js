@@ -2485,11 +2485,29 @@ const TeepPlan = {
         let t = this.tasks.find((x) => x.task_id === id);
         if (!t && !project) return;
         const proj = (project || window.PM_PROJECT || 'maxwell').trim();
+        // Paint from the board cache first so a click never waits on get_task.
+        // Production get_task is a heavy detail read (~1–4s) and must not gate
+        // the modal; refresh in place once the network returns.
+        const seq = (this._taskModalSeq = (this._taskModalSeq || 0) + 1);
+        if (t) this._renderTaskModal(t);
+        let gotFresh = false;
         try {
             const fresh = await (await fetch(`api/tasks/${encodeURIComponent(id)}?project=${encodeURIComponent(proj)}`)).json();
-            if (fresh && fresh.task_id) t = Object.assign({}, t || {}, fresh);
+            if (fresh && fresh.task_id) {
+                t = Object.assign({}, t || {}, fresh);
+                const i = this.tasks.findIndex((x) => x.task_id === id);
+                if (i >= 0) this.tasks[i] = Object.assign({}, this.tasks[i], t);
+                gotFresh = true;
+            }
         } catch (e) { /* fall back to in-memory task */ }
-        if (!t) return;
+        if (!t || seq !== this._taskModalSeq) return;
+        // Re-paint only when detail arrived, or when we had no cache to paint from.
+        if (gotFresh || !document.getElementById('task-modal')?.classList.contains('show')) {
+            this._renderTaskModal(t);
+        }
+    },
+
+    _renderTaskModal(t) {
         // UI-24: evacuate a docked PTY panel before the innerHTML rewrite
         // below destroys it - covers both a fresh open and a refresh of an
         // already-open modal (e.g. revokeClaim()), which never fires
@@ -4238,7 +4256,9 @@ const TeepPlan = {
 
     async _reloadBoardData() {
         try {
-            this.plan = await (await fetch('api/board')).json();
+            // Always use the cards view — full /api/board is ~1.6MB on switchboard
+            // and will stall the UI under ordinary NZ/AU latency.
+            this.plan = await (await fetch('api/board?view=cards', { cache: 'no-cache' })).json();
             this.projectContext = await this.fetchProjectContext();
             this.flatten();
             this.renderBoard();
