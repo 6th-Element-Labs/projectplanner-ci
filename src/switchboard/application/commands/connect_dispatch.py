@@ -294,13 +294,19 @@ def enqueue_task(
         "pr_url": str((task.get("git_state") or {}).get("pr_url") or ""),
         "ttl_seconds": int(
             os.environ.get("PM_CONNECT_MAX_RUNTIME_SECONDS", "7200")),
-        "task_id": task_id,
-        "reason_code": str(reason_code or ""),
-        "acceptance_findings": list(acceptance_findings or []),
-        "route": str(route or ""),
-        "attempt": int(decision_attempt or 0),
-        "state_version": int(state_version or 0),
     }
+    # DISPATCH-12: ordinary implementation Starts leave identity allocation to
+    # the server. Extra lifecycle fields are only for review/remediation or an
+    # explicit coordination route (BUG-174 repair claims need route/task_id).
+    if lifecycle["role"] in {"review_merge", "remediation"} or route:
+        lifecycle.update({
+            "task_id": task_id,
+            "reason_code": str(reason_code or ""),
+            "acceptance_findings": list(acceptance_findings or []),
+            "route": str(route or ""),
+            "attempt": int(decision_attempt or 0),
+            "state_version": int(state_version or 0),
+        })
     if (lifecycle["role"] in {"review_merge", "remediation"}
             and not lifecycle["head_sha"]):
         return {
