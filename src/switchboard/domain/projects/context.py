@@ -53,6 +53,11 @@ class ProjectContext:
     authorized_projects: tuple[str, ...] = ()
     environment_operator: bool = False
     dev_open: bool = False
+    bound_task_id: str = ""
+    bound_agent_id: str = ""
+    bound_host_id: str = ""
+    bound_wake_id: str = ""
+    bound_runner_session_id: str = ""
 
     def __post_init__(self) -> None:
         if not (self.project_id or "").strip():
@@ -88,4 +93,9 @@ class ProjectContext:
             ],
             "environment_operator": self.environment_operator,
             "dev_open": self.dev_open,
+            "bound_task_id": self.bound_task_id,
+            "bound_agent_id": self.bound_agent_id,
+            "bound_host_id": self.bound_host_id,
+            "bound_wake_id": self.bound_wake_id,
+            "bound_runner_session_id": self.bound_runner_session_id,
         }
