@@ -1,0 +1,19 @@
+{
+  "_comment": "Perf budgets. Suite fails (exit 1) on any breach. Tighten as fixes land; never loosen silently. Timing budgets apply to the median of N cold runs.",
+  "cold": {
+    "lcp_ms": 2000,
+    "load_ms": 4000,
+    "tbt_ms": 300,
+    "transfer_kb": 300,
+    "request_count": 30
+  },
+  "throttled": {
+    "lcp_ms": 4000,
+    "load_ms": 8000
+  },
+  "assets": {
+    "max_single_asset_kb": 150,
+    "allow_uncompressed_text": false,
+    "icon_waste_ratio_max": 0.5
+  }
+}
