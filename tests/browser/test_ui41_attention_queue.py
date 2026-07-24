@@ -184,7 +184,17 @@ try:
             page.locator('[data-choice="supply_credential"]').click()
         decision_response = response_info.value
         assert decision_response.ok, decision_response.text()
-        page.wait_for_selector("#needs-flash")
+        # Wait for the status line to actually SAY something, not merely exist.
+        # `wait_for_selector("#needs-flash")` defaults to state="visible", and the div is
+        # rendered empty — a zero-height empty div is never "visible", so this passed only
+        # when a message happened to be set at that instant and timed out otherwise. The
+        # underlying UI bug (renderDetail wiping the message, terminal states restoring
+        # nothing) is fixed in static/js/attention.js; this waits on the real signal so a
+        # regression there fails loudly here instead of flaking.
+        page.wait_for_function(
+            "() => { const n = document.querySelector('#needs-flash');"
+            " return !!n && n.textContent.trim().length > 0; }"
+        )
         # The reserved completion provider cannot use the generic Agent Host
         # claim/delivery endpoints. The API callback must create and accept a
         # fenced Autopilot wake, while the UI remains Resuming until the

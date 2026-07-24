@@ -831,7 +831,8 @@ def get_principal_by_work_session_token_any_project(
 
 def list_work_sessions(project: str = DEFAULT_PROJECT, task_id: str = "",
                        agent_id: str = "", status: str = "",
-                       repo_role: str = "", include_expired: bool = True) -> List[Dict[str, Any]]:
+                       repo_role: str = "", include_expired: bool = True,
+                       branch: str = "", head_sha: str = "") -> List[Dict[str, Any]]:
     if not has_project(project):
         return []
     where = ["1=1"]
@@ -848,6 +849,16 @@ def list_work_sessions(project: str = DEFAULT_PROJECT, task_id: str = "",
     if repo_role:
         where.append("repo_role=?")
         params.append(repo_role.strip())
+    # branch/head_sha let a caller ask "which session produced this exact commit?" in SQL
+    # instead of listing every canonical session and filtering in Python. head_sha is
+    # compared case-insensitively because callers hand us SHAs from both git and the
+    # GitHub API. Used by merge_gate to resolve the session behind a PR head.
+    if branch:
+        where.append("branch=?")
+        params.append(branch.strip())
+    if head_sha:
+        where.append("LOWER(head_sha)=?")
+        params.append(head_sha.strip().lower())
     if not include_expired:
         now = time.time()
         where.append("(expires_at IS NULL OR expires_at>?)")
