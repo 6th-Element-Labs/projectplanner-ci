@@ -34,11 +34,13 @@ from switchboard.domain.scm_leases import (
 )
 
 SCM_LEASE_SCHEMA = "switchboard.scm_lease.v1"
-SCM_LEASE_ADMISSION_SCHEMA = "switchboard.scm_lease_admission.v1"
-SCM_LEASE_EVENT_SCHEMA = "switchboard.scm_lease_event.v1"
-SCM_LEASE_MATERIALIZATION_SCHEMA = "switchboard.scm_lease_materialization.v1"
 
 LIVE_LEASE_STATES = ("issued", "materializing", "active")
+
+# A lease is short-lived by design: a caller can request less, never more.
+MAX_LEASE_TTL_SECONDS = 3600
+# Cap caller-supplied free-text so a lifecycle reason can never carry a large blob.
+_MAX_REASON_LENGTH = 256
 
 # The exact binding a lease is issued against. All must be present — an empty field
 # means no exact host/wake/runner/claim bind exists yet, so no lease may be issued.
@@ -64,6 +66,11 @@ def _json_list(value: Any) -> list[str]:
     except (TypeError, json.JSONDecodeError):
         return []
     return [str(item) for item in parsed] if isinstance(parsed, list) else []
+
+
+def _clip_reason(reason: Any) -> str:
+    """Bound a caller-supplied lifecycle reason before it is stored or echoed."""
+    return str(reason or "")[:_MAX_REASON_LENGTH]
 
 
 def _safe_event_details(value: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -250,7 +257,8 @@ class SCMLeaseRepository:
 
         now = time.time()
         lease_id = f"scm-lease-{uuid.uuid4().hex[:20]}"
-        expires_at = now + int(ttl_seconds)
+        # Short-lived by design: honor a shorter caller request, never a longer one.
+        expires_at = now + min(int(ttl_seconds), MAX_LEASE_TTL_SECONDS)
         with _registry_conn() as c:
             c.execute("BEGIN IMMEDIATE")
             self._expire_leases_in(c, now)
@@ -386,13 +394,20 @@ class SCMLeaseRepository:
                 "scm_operation_not_leased",
                 "operation is not within this lease's granted phase", status_code=403)
 
-        # Re-authorize live against the ACCESS-28 connection before minting. This is the
-        # load-bearing revocation check: a revoked or de-authorized connection fails here.
+        # Full re-authorization against the ACCESS-28 connection (allowlists, topology,
+        # operation scope). The authoritative revocation/rotation check happens again
+        # in-transaction below, closing the window between this call and the lock.
         decision = self._authorize(
             preview["connection_id"], project=expected["project_id"],
             repository=expected["repository"], operation=op, actor=actor)
 
         now = time.time()
+        # Phase 1 — claim the lease under the write lock. Re-read the connection row
+        # in-transaction (authoritative revocation/drift fence, TOCTOU-safe), then move
+        # issued -> materializing exactly once and COMMIT before leaving the lock. Once
+        # committed as materializing, a later mint failure can only fence the lease, never
+        # resurrect it to issued — so a lost-response mint cannot be retried into a second
+        # token.
         with _registry_conn() as c:
             c.execute("BEGIN IMMEDIATE")
             self._expire_leases_in(c, now)
@@ -420,7 +435,22 @@ class SCMLeaseRepository:
                     "SCM connection no longer authorizes this repository operation",
                     status_code=409,
                 )
-            if int(decision.get("installation_version") or 0) != int(lease["installation_version"] or 0):
+            connection = c.execute(
+                "SELECT lifecycle_state, installation_version, installation_ref "
+                "FROM scm_connections WHERE connection_id=?",
+                (lease["connection_id"],),
+            ).fetchone()
+            if not connection or str(connection["lifecycle_state"] or "") != "active":
+                self._fence_lease_in(
+                    c, lease, actor="switchboard/scm-lease",
+                    reason="scm_connection_revoked", now=now)
+                c.commit()
+                raise SCMLeaseError(
+                    "scm_connection_not_authorized",
+                    "SCM connection no longer authorizes this repository operation",
+                    status_code=409,
+                )
+            if int(connection["installation_version"] or 0) != int(lease["installation_version"] or 0):
                 self._fence_lease_in(
                     c, lease, actor="switchboard/scm-lease",
                     reason="scm_installation_drift", now=now)
@@ -437,28 +467,54 @@ class SCMLeaseRepository:
                 raise SCMLeaseError(
                     "scm_lease_already_consumed",
                     "SCM lease cannot be materialized again", status_code=409)
-            active_minter = minter or self._minter
-            try:
-                minted = active_minter.mint(
-                    installation_ref=str(decision.get("installation_ref") or ""),
-                    repository=expected["repository"], phase=str(lease["phase"] or ""),
-                    operations=tuple(_json_list(lease["operations_json"])),
-                    ttl_seconds=max(1, int(float(lease["expires_at"]) - now)),
-                )
-            except SCMLeaseError as exc:
-                self._fence_lease_in(
-                    c, lease, actor="switchboard/scm-lease",
-                    reason="materialization_failed", now=now)
-                # Persist the fail-closed fence before surfacing the error; a rolled-back
-                # fence would leave the lease materializable again.
-                c.commit()
+            lease_id_str = str(lease["lease_id"])
+            installation_ref = str(connection["installation_ref"] or "")
+            phase = str(lease["phase"] or "")
+            operations = tuple(_json_list(lease["operations_json"]))
+            token_ttl = max(1, min(int(float(lease["expires_at"]) - now), MAX_LEASE_TTL_SECONDS))
+
+        # Phase 2 — mint OUTSIDE the write lock. The mint is a network exchange; holding
+        # the single-writer registry lock across it would stall every other control-plane
+        # write. Fail closed on ANY exception: fence the still-"materializing" lease in its
+        # own short transaction and surface a stable error.
+        active_minter = minter or self._minter
+        try:
+            minted = active_minter.mint(
+                installation_ref=installation_ref, repository=expected["repository"],
+                phase=phase, operations=operations, ttl_seconds=token_ttl)
+        except Exception as exc:  # noqa: BLE001 — a mint failure must never leave the lease reusable
+            with _registry_conn() as c:
+                c.execute("BEGIN IMMEDIATE")
+                failed = c.execute(
+                    "SELECT * FROM scm_leases WHERE lease_id=?", (lease_id_str,),
+                ).fetchone()
+                if failed:
+                    self._fence_lease_in(
+                        c, failed, actor="switchboard/scm-lease",
+                        reason="materialization_failed", now=time.time())
+            if isinstance(exc, SCMLeaseError):
                 raise SCMLeaseError(exc.code, exc.message, status_code=exc.status_code) from exc
+            raise SCMLeaseError(
+                "scm_materialization_failed",
+                "SCM token materialization failed", status_code=503) from exc
+
+        # Phase 3 — record the single materialization. If the lease was fenced or expired
+        # while minting, do NOT return the token (its own short TTL bounds the exposure).
+        with _registry_conn() as c:
+            c.execute("BEGIN IMMEDIATE")
+            current = c.execute(
+                "SELECT * FROM scm_leases WHERE lease_id=?", (lease_id_str,),
+            ).fetchone()
+            if not current or current["state"] != "materializing":
+                raise SCMLeaseError(
+                    "scm_lease_already_consumed",
+                    "SCM lease was fenced during materialization", status_code=409)
             self._event_in(
-                c, lease, "materialized", actor=actor, operation=op,
-                details={"installation_version": int(lease["installation_version"] or 0),
-                         "phase": lease["phase"], "operation": op,
-                         "token_returned_once": True}, now=now)
-            return minted
+                c, current, "materialized", actor=actor, operation=op,
+                details={"installation_version": int(current["installation_version"] or 0),
+                         "phase": current["phase"], "operation": op,
+                         "token_returned_once": True}, now=time.time())
+        return minted
 
     def activate_materialized_lease(self, lease_id: str, *, actor: str,
                                     principal: SCMLeasePrincipal) -> dict[str, Any]:
@@ -500,6 +556,7 @@ class SCMLeaseRepository:
     def release_lease(self, lease_id: str, *, project: str, actor: str, reason: str,
                       principal: SCMLeasePrincipal) -> dict[str, Any]:
         self._prepare()
+        reason = _clip_reason(reason)
         now = time.time()
         with _registry_conn() as c:
             c.execute("BEGIN IMMEDIATE")
@@ -582,9 +639,7 @@ class SCMLeaseRepository:
 default_scm_lease_repository = SCMLeaseRepository()
 
 __all__ = [
-    "SCM_LEASE_ADMISSION_SCHEMA",
-    "SCM_LEASE_EVENT_SCHEMA",
-    "SCM_LEASE_MATERIALIZATION_SCHEMA",
+    "MAX_LEASE_TTL_SECONDS",
     "SCM_LEASE_SCHEMA",
     "SCMLeaseRepository",
     "default_scm_lease_repository",

@@ -684,6 +684,156 @@ def test_rest_acquire_unknown_connection_denied_and_get_404():
     ok(missing.status_code == 404, "REST get of a missing lease returns 404")
 
 
+# ---------------------------------------------------------------------------
+# 8. hardening from adversarial review — no double-mint, TTL clamp, coverage
+# ---------------------------------------------------------------------------
+
+class _FlakyNetworkMinter:
+    """A network minter whose first attempt times out AFTER the provider issued a token."""
+
+    def __init__(self):
+        self.calls = 0
+        self.provider_tokens_created = 0
+
+    def mint(self, *, installation_ref, repository, phase, operations, ttl_seconds):
+        self.calls += 1
+        self.provider_tokens_created += 1  # provider minted; response is about to be lost
+        import time as _t
+        from switchboard.domain.scm_leases import MintedSCMToken
+        if self.calls == 1:
+            raise TimeoutError("provider response lost after token was issued")
+        return MintedSCMToken(token=f"ghs_SECOND_{self.calls}", expires_at=_t.time() + ttl_seconds)
+
+
+def test_materialize_fences_on_network_minter_failure_no_double_mint():
+    from switchboard.domain.scm_leases import SCMLeaseError
+    minter = _FlakyNetworkMinter()
+    scm = _scm_repo()
+    conn = _make_connection(scm)
+    broker = _broker_with_minter(scm, minter)
+    lease = _acquire(broker, conn["connection_id"], operations=["clone"])
+    try:
+        _materialize(broker, lease, operation="clone")
+        ok(False, "a network mint failure must not silently succeed")
+    except SCMLeaseError as exc:
+        ok(exc.code in ("scm_materialization_failed", "scm_minter_unavailable"),
+           f"non-SCMLeaseError mint failure -> stable SCMLeaseError ({exc.code})")
+    except TimeoutError:
+        ok(False, "a raw network exception must never escape the trusted bridge")
+    reloaded = broker.get_lease(lease["lease_id"], project="switchboard")
+    ok(reloaded["state"] == "fenced",
+       "a lease whose network mint failed is fenced, not left issued")
+    try:
+        _materialize(broker, lease, operation="clone")
+        ok(False, "a fenced lease cannot be retried into a second token")
+    except SCMLeaseError as exc:
+        ok(exc.code == "scm_lease_already_consumed",
+           "retry after a lost-response mint -> already_consumed (no double mint)")
+    ok(minter.calls == 1, "the minter is invoked exactly once — no double mint on retry")
+
+
+def test_acquire_clamps_ttl_to_server_maximum():
+    import time as _t
+    scm = _scm_repo()
+    conn = _make_connection(scm)
+    broker = _broker(scm)
+    lease = _acquire(broker, conn["connection_id"], operations=["clone"],
+                     ttl_seconds=10 * 365 * 24 * 3600)  # ten years
+    remaining = float(lease["expires_at"]) - _t.time()
+    ok(remaining <= 3600 + 5, "an over-long lease TTL is clamped to the server maximum (<=1h)")
+    ok(remaining > 3000, "the clamp lands at the full server maximum, not zero")
+
+
+def test_activate_materialized_lease():
+    from switchboard.domain.scm_leases import SCMLeaseError
+    minter = _FakeMinter()
+    scm = _scm_repo()
+    conn = _make_connection(scm)
+    broker = _broker_with_minter(scm, minter)
+    lease = _acquire(broker, conn["connection_id"], operations=["clone"])
+    _materialize(broker, lease, operation="clone")
+    active = broker.activate_materialized_lease(
+        lease["lease_id"], actor="agent/codex", principal=_principal())
+    ok(active["state"] == "active", "a materialized lease activates once the process starts")
+    try:
+        broker.activate_materialized_lease(
+            lease["lease_id"], actor="agent/codex", principal=_principal())
+        ok(False, "a lease cannot be activated twice")
+    except SCMLeaseError as exc:
+        ok(exc.code == "scm_lease_activation_denied", "re-activation is denied")
+
+
+def test_fence_for_execution_supports_cancellation():
+    scm = _scm_repo()
+    conn = _make_connection(scm)
+    broker = _broker(scm)
+    lease = _acquire(broker, conn["connection_id"], operations=["push"],
+                     claim_id="cx", wake_id="wx", runner_session_id="rx")
+    n = broker.fence_leases_for_execution(
+        project="switchboard", task_id="ENFORCE-13", generation="gen-1",
+        host_id="host/steve", runner_session_id="rx", claim_id="cx", wake_id="wx",
+        actor="switchboard/cancel", reason="cancelled")
+    ok(n == 1, "cancellation fences the cancelled execution's lease")
+    ok(broker.get_lease(lease["lease_id"], project="switchboard")["state"] == "fenced",
+       "a cancelled execution's lease is fenced")
+
+
+def test_release_reason_is_length_capped():
+    scm = _scm_repo()
+    conn = _make_connection(scm)
+    broker = _broker(scm)
+    lease = _acquire(broker, conn["connection_id"], operations=["clone"])
+    released = broker.release_lease(
+        lease["lease_id"], project="switchboard", actor="agent/codex",
+        reason="Z" * 10000, principal=_principal())
+    ok(len(str(released["release_reason"] or "")) <= 256,
+       "a caller-supplied release reason is length-capped")
+
+
+def test_release_by_non_owner_is_denied():
+    from switchboard.domain.scm_leases import SCMLeaseError
+    scm = _scm_repo()
+    conn = _make_connection(scm)
+    broker = _broker(scm)
+    _acquire(broker, conn["connection_id"], operations=["clone"],
+             principal=_principal(pid="agent/owner"))
+    lease = broker.get_lease  # noqa: F841
+    # Re-acquire returns the same lease id for the owner; fetch it for the release attempt.
+    owned = _acquire(broker, conn["connection_id"], operations=["clone"],
+                     principal=_principal(pid="agent/owner"))
+    try:
+        broker.release_lease(owned["lease_id"], project="switchboard", actor="x",
+                             reason="steal", principal=_principal(pid="agent/intruder"))
+        ok(False, "a non-owner cannot release someone else's lease")
+    except SCMLeaseError as exc:
+        ok(exc.code == "scm_lease_release_denied", "non-owner release -> denied")
+
+
+def test_get_lease_wrong_project_is_denied():
+    from switchboard.domain.scm_leases import SCMLeaseError
+    scm = _scm_repo()
+    conn = _make_connection(scm)
+    broker = _broker(scm)
+    lease = _acquire(broker, conn["connection_id"], operations=["clone"])
+    try:
+        broker.get_lease(lease["lease_id"], project="maxwell")
+        ok(False, "a lease cannot be read through the wrong project")
+    except SCMLeaseError as exc:
+        ok(exc.code == "scm_lease_not_available", "cross-project get -> not_available")
+
+
+def test_acquire_rejects_empty_operations():
+    from switchboard.domain.scm_leases import SCMLeaseError
+    scm = _scm_repo()
+    conn = _make_connection(scm)
+    broker = _broker(scm)
+    try:
+        _acquire(broker, conn["connection_id"], operations=[])
+        ok(False, "an empty operation set is rejected")
+    except SCMLeaseError as exc:
+        ok(exc.code == "scm_operations_required", "empty operations -> scm_operations_required")
+
+
 def main() -> int:
     _isolate_registry()
     print("ENFORCE-13 SCM lease broker")
@@ -716,6 +866,14 @@ def main() -> int:
     test_materialize_denied_after_connection_deleted()
     test_rest_routes_present_and_no_materialize_endpoint()
     test_rest_acquire_unknown_connection_denied_and_get_404()
+    test_materialize_fences_on_network_minter_failure_no_double_mint()
+    test_acquire_clamps_ttl_to_server_maximum()
+    test_activate_materialized_lease()
+    test_fence_for_execution_supports_cancellation()
+    test_release_reason_is_length_capped()
+    test_release_by_non_owner_is_denied()
+    test_get_lease_wrong_project_is_denied()
+    test_acquire_rejects_empty_operations()
     print(f"\nENFORCE-13 SCM lease broker: {passed} passed, {failed} failed")
     return 1 if failed else 0
 
