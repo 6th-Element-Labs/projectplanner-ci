@@ -15,7 +15,7 @@ import unittest
 
 from path_setup import ROOT  # noqa: F401
 
-from switchboard.domain.completion import normalize  # noqa: E402
+from switchboard.domain.completion import effects, normalize  # noqa: E402
 from switchboard.domain.completion.state_machine import (  # noqa: E402
     build_completion_snapshot, classify_completion,
 )
@@ -175,6 +175,98 @@ class Pr812RawFixture(unittest.TestCase):
         snap["review"]["findings"] = [{"class": "escalate", "code": "j",
                                        "finding_class": "judgment"}]
         self.assertEqual(classify_completion(None, snap)["route"], "human")
+
+
+class Pr834RawFixture(unittest.TestCase):
+    """BUG-169: current-head repair findings outrank absent CI hydration."""
+
+    HEAD = "ae33752d11db4bf83797070ebf6dbab9b82120be"
+    FINDINGS = [
+        {
+            "class": "auto",
+            "id": "S16-CENSUS-2",
+            "summary": "Unconditional zero census is not instrumentation",
+        },
+        {
+            "class": "auto",
+            "id": "S16-LIVE-3",
+            "summary": "A fabricated fixture cannot prove the live run",
+        },
+        {
+            "class": "auto",
+            "id": "S16-LIVE-4",
+            "summary": "The test only asserts self-authored JSON",
+        },
+    ]
+
+    def _snapshot(self):
+        return normalize.normalize_snapshot(build_completion_snapshot(
+            task={
+                "task_id": "SIMPLIFY-16",
+                "status": "In Review",
+                "git_state": {"head_sha": self.HEAD},
+            },
+            github_pr={
+                "number": 834,
+                "state": "open",
+                "draft": True,
+                "mergeable": True,
+                "mergeStateStatus": "BLOCKED",
+                "head": {"sha": self.HEAD},
+            },
+            required_status_contexts=[
+                "Switchboard CI / VM gate",
+                "Switchboard CI / Playwright",
+            ],
+            # This is the observed hydration defect: GitHub is green, while
+            # the completion snapshot has no persisted context rows.
+            status_contexts=[],
+            review={
+                "status": "changes_requested",
+                "head_sha": self.HEAD,
+                "findings": self.FINDINGS,
+            },
+            runner={
+                "live": True,
+                "role": "review_merge",
+                "head_sha": self.HEAD,
+                "generation": 4,
+            },
+        ))
+
+    def test_exact_head_findings_route_remediation_before_ci_hydration(self):
+        decision = classify_completion(None, self._snapshot())
+        self.assertEqual(decision["route"], "remediation")
+        self.assertEqual(decision["reason_code"], "automatic_review_findings")
+        self.assertEqual(decision["desired_role"], "remediation")
+        self.assertEqual(
+            [row["id"] for row in decision["acceptance_findings"]],
+            ["S16-CENSUS-2", "S16-LIVE-3", "S16-LIVE-4"],
+        )
+
+    def test_planner_fences_review_and_issues_a_new_complete_contract(self):
+        snapshot = self._snapshot()
+        decision = classify_completion(None, snapshot)
+        plan = effects.plan_effect(
+            decision,
+            snapshot,
+            {"run_id": "run-834", "state_version": 4, "attempt": 2},
+        )
+        self.assertEqual(plan["effect"], "start_remediation")
+        self.assertTrue(plan["fence_required"])
+        self.assertEqual(plan["fence_generation"], 4)
+        self.assertEqual(plan["head_sha"], self.HEAD)
+        self.assertEqual(
+            [row["id"] for row in plan["acceptance_findings"]],
+            ["S16-CENSUS-2", "S16-LIVE-3", "S16-LIVE-4"],
+        )
+
+    def test_missing_ci_without_actionable_findings_stays_coordination_retry(self):
+        snapshot = self._snapshot()
+        snapshot["review"] = {"status": "passed", "head_sha": self.HEAD}
+        decision = classify_completion(None, snapshot)
+        self.assertEqual(decision["route"], "coordination_retry")
+        self.assertEqual(decision["reason_code"], "required_ci_hydration_missing")
 
 
 if __name__ == "__main__":

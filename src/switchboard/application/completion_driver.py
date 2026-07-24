@@ -210,12 +210,6 @@ def run_completion_tick(
     ) or {}
     decision = classify_completion(current, snapshot)
     plan = plan_effect(decision, snapshot, current)
-    # The finding subsets are part of the effect contract, not transient
-    # classifier-only state.
-    plan["acceptance_findings"] = list(
-        decision.get("acceptance_findings") or [])
-    plan["escalated_findings"] = list(
-        decision.get("escalated_findings") or [])
 
     def fence(_: Any) -> Any:
         try:

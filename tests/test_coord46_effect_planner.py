@@ -34,9 +34,12 @@ def _run(**kw):
 
 
 def _plan(route, *, effect="none", role=None, snapshot=None, run=None,
-          runner=None, state="blocked"):
+          runner=None, state="blocked", acceptance_findings=None,
+          escalated_findings=None):
     decision = {"state": state, "route": route, "reason_code": "r",
-                "desired_role": role, "effect": effect}
+                "desired_role": role, "effect": effect,
+                "acceptance_findings": list(acceptance_findings or []),
+                "escalated_findings": list(escalated_findings or [])}
     snap = dict(snapshot or _snap())
     if runner is not None:
         snap["runner"] = runner
@@ -172,6 +175,41 @@ class Idempotency(unittest.TestCase):
                               "heartbeat_at": 999, "expires_at": 1000,
                               "lease_renewed_at": 1001})
         self.assertEqual(quiet["idem_key"], noisy["idem_key"])
+
+    def test_a_changed_repair_contract_yields_a_new_key(self):
+        first = _plan(
+            "remediation", role="remediation",
+            acceptance_findings=[{"id": "S16-CENSUS-2", "summary": "old"}],
+        )
+        changed = _plan(
+            "remediation", role="remediation",
+            acceptance_findings=[{"id": "S16-CENSUS-2", "summary": "new"}],
+        )
+        self.assertNotEqual(first["idem_key"], changed["idem_key"])
+
+    def test_finding_order_does_not_change_effect_identity(self):
+        one = {"id": "one", "blocking": True}
+        two = {"id": "two", "blocking": True}
+        first = _plan(
+            "remediation", role="remediation",
+            acceptance_findings=[one, two],
+        )
+        reordered = _plan(
+            "remediation", role="remediation",
+            acceptance_findings=[two, one],
+        )
+        self.assertEqual(first["idem_key"], reordered["idem_key"])
+
+    def test_plan_carries_the_complete_repair_contract(self):
+        automatic = [{"id": "automatic"}]
+        escalated = [{"id": "human"}]
+        plan = _plan(
+            "remediation", role="remediation",
+            acceptance_findings=automatic,
+            escalated_findings=escalated,
+        )
+        self.assertEqual(plan["acceptance_findings"], automatic)
+        self.assertEqual(plan["escalated_findings"], escalated)
 
 
 class EndToEndFixtures(unittest.TestCase):
