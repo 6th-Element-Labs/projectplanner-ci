@@ -78,6 +78,28 @@ def ready_execution_context(
     }
 
 
+def ready_host_placement(project: str = "switchboard") -> dict:
+    return {
+        "schema": "switchboard.agent_host_placement.v1",
+        "host_class": "persistent",
+        "cost_class": "already_paid",
+        "wakeable": True,
+        "drain_state": "accepting",
+        "projects": [project],
+        "trust_zone": "personal",
+        "providers": ["openai-codex"],
+        "account_affinity_ids": ["test-affinity"],
+        "repositories": ["6th-Element-Labs/projectplanner"],
+        "supports_scm_materialization": True,
+        "scm_providers": ["github_app"],
+        "session_policies": ["docs_review", "code_strict"],
+        "isolation_modes": ["task_worktree"],
+        "workspace_backends": ["worktree"],
+        "runtime_binaries": ["codex", "git"],
+        "resources": {},
+    }
+
+
 def install_ready_execution_policy(project: str) -> None:
     store.set_meta("canonical_main_sha", "a" * 40, project=project)
     result = store.set_project_execution_policy(

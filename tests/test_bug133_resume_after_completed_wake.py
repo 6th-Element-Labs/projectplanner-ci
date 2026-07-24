@@ -39,10 +39,15 @@ if sys.version_info < (3, 10):
     dataclasses.dataclass = _compat_dataclass
 
 import store  # noqa: E402
-from execution_policy_fixture import install_ready_execution_policy  # noqa: E402
+from execution_policy_fixture import (  # noqa: E402
+    install_ready_execution_policy, ready_execution_context,
+)
+from switchboard.application.commands import connect_dispatch  # noqa: E402
 from switchboard.application.commands import task_execution  # noqa: E402
 
 P = "switchboard"
+connect_dispatch.execution_context.resolve = lambda **kwargs: ready_execution_context(
+    kwargs["task_id"], runtime=kwargs["runtime"])
 
 passed = failed = 0
 

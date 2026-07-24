@@ -27,7 +27,10 @@ env.update({
     "PM_PROJECT_REGISTRY_DB_PATH": str(tmp / "registry.db"),
     "PM_DYNAMIC_PROJECTS_DIR": str(tmp / "projects"),
     "PM_AUTH_MODE": "dev-open",
-    "PYTHONPATH": f"{ROOT}:{ROOT / 'src'}",
+    "PYTHONPATH": (
+        f"{ROOT / 'tests' / 'browser' / 'ui27_pythonpath'}:"
+        f"{ROOT}:{ROOT / 'src'}"
+    ),
 })
 os.environ.update({key: value for key, value in env.items() if key.startswith("PM_")})
 (tmp / "projects").mkdir(parents=True)
@@ -37,6 +40,11 @@ from execution_policy_fixture import install_ready_execution_policy  # noqa: E40
 
 store.init_project_registry()
 store.init_db("maxwell")
+store.set_project_repo_topology(
+    project="maxwell",
+    canonical_repo="6th-Element-Labs/projectplanner",
+    canonical_default_branch="master",
+)
 install_ready_execution_policy("maxwell")
 store.create_task({"workstream_id": "AUTO", "title": "First ready task"},
                   actor="test", project="maxwell")
@@ -121,7 +129,8 @@ try:
             ) as response_info:
                 page.locator('#dl-node-autopilot [data-autopilot-action="start"]').click()
             response = response_info.value
-            assert response.ok and response.json().get("task_id") == task_id
+            assert response.ok and response.json().get("task_id") == task_id, (
+                response.status, response.text())
             # Reload the cockpit between task starts. This proves the scope is
             # durable across navigation and avoids coupling the contract test to
             # Bootstrap's non-contractual fade timing.

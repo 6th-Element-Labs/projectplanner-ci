@@ -19,7 +19,9 @@ os.environ["PM_DYNAMIC_PROJECTS_DIR"] = str(TMP)
 os.environ["PM_AUTH_MODE"] = "dev-open"
 
 import store  # noqa: E402
-from execution_policy_fixture import install_ready_execution_policy  # noqa: E402
+from execution_policy_fixture import (  # noqa: E402
+    install_ready_execution_policy, ready_execution_context,
+)
 from switchboard.application.commands import connect_dispatch  # noqa: E402
 from switchboard.connect import (  # noqa: E402
     Ack, HostRuntimeConfig, LaunchRefused, LeaseState, build_launch_spec,
@@ -28,6 +30,8 @@ import adapters.agent_host as agent_host  # noqa: E402
 
 
 P = "switchboard"
+connect_dispatch.execution_context.resolve = lambda **kwargs: ready_execution_context(
+    kwargs["task_id"], runtime=kwargs["runtime"])
 HEAD = "1af20970ba52ed4cb862c3ae08d44b6b9ccdcde0"
 FINDINGS = [{
     "id": "reviewremediation-de1aaf65367940b9",
