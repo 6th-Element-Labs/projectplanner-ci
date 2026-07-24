@@ -295,15 +295,10 @@ def enqueue_task(
         "ttl_seconds": int(
             os.environ.get("PM_CONNECT_MAX_RUNTIME_SECONDS", "7200")),
     }
-    if (lifecycle["role"] in {"review_merge", "remediation"}
-            and not lifecycle["head_sha"]):
-        return {
-            "dispatched": False,
-            "error": "exact_head_required",
-            "role": lifecycle["role"],
-            "task_id": task_id,
-        }
-    if lifecycle["role"] in {"review_merge", "remediation"}:
+    # DISPATCH-12: ordinary implementation Starts leave identity allocation to
+    # the server. Extra lifecycle fields are only for review/remediation or an
+    # explicit coordination route (BUG-174 repair claims need route/task_id).
+    if lifecycle["role"] in {"review_merge", "remediation"} or route:
         lifecycle.update({
             "task_id": task_id,
             "reason_code": str(reason_code or ""),
@@ -312,6 +307,14 @@ def enqueue_task(
             "attempt": int(decision_attempt or 0),
             "state_version": int(state_version or 0),
         })
+    if (lifecycle["role"] in {"review_merge", "remediation"}
+            and not lifecycle["head_sha"]):
+        return {
+            "dispatched": False,
+            "error": "exact_head_required",
+            "role": lifecycle["role"],
+            "task_id": task_id,
+        }
     policy = {
         "mode": CONNECT_WAKE_MODE,
         "assignment": {
