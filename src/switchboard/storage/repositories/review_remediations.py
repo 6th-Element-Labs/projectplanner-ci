@@ -443,10 +443,16 @@ def _resolve_cross_task_repair_impl(
             "WHERE remediation_id=?",
             (repair_head, now, now, link["remediation_id"]),
         )
-        c.execute(
-            "UPDATE tasks SET exit_criteria=?, updated_at=? WHERE task_id=?",
-            (remediation["original_exit_criteria"], now, link["source_task_id"]),
-        )
+        source_acceptance = _json_object(source_task["exit_criteria"])
+        if (
+            source_acceptance.get("schema") == ACCEPTANCE_SCHEMA
+            and str(source_acceptance.get("verdict_id") or "").strip()
+            == link["source_verdict_id"]
+        ):
+            c.execute(
+                "UPDATE tasks SET exit_criteria=?, updated_at=? WHERE task_id=?",
+                (remediation["original_exit_criteria"], now, link["source_task_id"]),
+            )
         repair_state["review_repair"] = resolution
         c.execute(
             "UPDATE tasks SET agent_state=?, updated_at=? WHERE task_id=?",

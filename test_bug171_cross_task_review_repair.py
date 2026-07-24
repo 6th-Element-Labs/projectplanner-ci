@@ -2,6 +2,7 @@
 """BUG-171: a canonical repair task closes only its explicitly linked findings."""
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import shutil
@@ -204,6 +205,35 @@ try:
         replay.get("status") == "resolved"
         and replay.get("idempotent_replay") is True,
         "resolution replay is idempotent",
+    )
+
+    advanced_source, advanced_verdict, advanced_remediation = create_source()
+    advanced_repair = create_repair(
+        advanced_source, advanced_verdict, advanced_remediation, ["FIX-1", "FIX-2"])
+    newer_acceptance = json.dumps(
+        {
+            "schema": "switchboard.review_remediation_acceptance.v1",
+            "verdict_id": "reviewverdict-newer-round",
+            "acceptance_criteria": [{"id": "NEW-FIX"}],
+        },
+        sort_keys=True,
+    )
+    with store._conn(PROJECT) as c:
+        c.execute(
+            "UPDATE tasks SET exit_criteria=? WHERE task_id=?",
+            (newer_acceptance, advanced_source),
+        )
+    store.mark_task_merged(
+        advanced_repair, "5" * 40, pr_number=903,
+        pr_url="https://example.test/pull/903",
+        branch=f"codex/{advanced_repair}", head_sha=REPAIR_HEAD,
+        actor="bug171-test", project=PROJECT,
+        provenance_source="github_pr_merged",
+    )
+    advanced_detail = store.get_task(advanced_source, project=PROJECT)
+    ok(
+        advanced_detail["exit_criteria"] == newer_acceptance,
+        "an older repair cannot overwrite a newer source acceptance contract",
     )
 
     bad_source, bad_verdict, bad_remediation = create_source()
