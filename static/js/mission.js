@@ -979,14 +979,15 @@
             const dtl = link.task_detail || link.task || {};
             const provenance = dtl.provenance || {};
             const proof = provenance.label || (dtl.status === 'Done' ? 'Done — proof missing' : '—');
+            const completion = this.completionProjectionHtml(dtl, true) || '<span class="text-secondary">—</span>';
             const activeWork = activeWorkByTask.get(`${link.project_id || ''}:${String(link.task_id || '').toUpperCase()}`);
             const action = dtl.status === 'Done'
                 ? '<span class="text-secondary small">Done</span>'
                 : this._taskLedgerActionHtml(link, activeWork);
             const activeRow = activeWork && activeWork.active_runner ? ' class="table-primary" data-mission-task-active="true"' : '';
-            return `<tr data-mission-task-row="${this.esc(link.task_id)}" data-task-status="${this.esc(dtl.status || 'missing')}"${activeRow}><td>${this.esc(link.project_id || '')}</td><td><a href="#" data-linked-task="${this.esc(link.task_id)}" data-linked-project="${this.esc(link.project_id)}">${this.esc(link.task_id)}</a></td><td>${this.esc(dtl.title || dtl.error || '')}</td><td>${this._missionBadge(dtl.status || 'missing', this.STATUS_COLOR)}</td><td>${this.esc(link.milestone_id || '—')}</td><td>${this.esc(link.role || '—')}</td><td>${this.esc(proof)}</td><td class="text-end">${action}</td></tr>`;
-        }).join('') || '<tr><td colspan="8" class="text-secondary">No linked tasks</td></tr>';
-        const workLedger = `<div class="card mb-4" data-mission-work-ledger="all-linked-tasks"><div class="card-header"><div><h3 class="card-title">Work ledger — all linked tasks</h3><div class="text-secondary small">Lifecycle transitions update these rows in place. Completed work remains visible with its proof.</div></div></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Project</th><th>Task</th><th>Title</th><th>Status</th><th>Milestone</th><th>Role</th><th>Proof</th><th class="text-end">Autopilot</th></tr></thead><tbody>${ledgerRows}</tbody></table></div></div>`;
+            return `<tr data-mission-task-row="${this.esc(link.task_id)}" data-task-status="${this.esc(dtl.status || 'missing')}"${activeRow}><td>${this.esc(link.project_id || '')}</td><td><a href="#" data-linked-task="${this.esc(link.task_id)}" data-linked-project="${this.esc(link.project_id)}">${this.esc(link.task_id)}</a></td><td>${this.esc(dtl.title || dtl.error || '')}</td><td>${this._missionBadge(dtl.status || 'missing', this.STATUS_COLOR)}</td><td>${completion}</td><td>${this.esc(link.milestone_id || '—')}</td><td>${this.esc(link.role || '—')}</td><td>${this.esc(proof)}</td><td class="text-end">${action}</td></tr>`;
+        }).join('') || '<tr><td colspan="9" class="text-secondary">No linked tasks</td></tr>';
+        const workLedger = `<div class="card mb-4" data-mission-work-ledger="all-linked-tasks"><div class="card-header"><div><h3 class="card-title">Work ledger — all linked tasks</h3><div class="text-secondary small">Lifecycle transitions update these rows in place. Completed work remains visible with its proof.</div></div></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Project</th><th>Task</th><th>Title</th><th>Status</th><th>Completion</th><th>Milestone</th><th>Role</th><th>Proof</th><th class="text-end">Autopilot</th></tr></thead><tbody>${ledgerRows}</tbody></table></div></div>`;
         // Blockers box removed — it dumped raw kinds like "dependency_unsatisfied". The
         // dependency map already outlines blockers with a thick dark border.
         const blockerHtml = '';

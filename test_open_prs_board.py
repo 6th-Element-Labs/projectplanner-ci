@@ -98,13 +98,14 @@ ok(rows[3]["blocked"] and rows[3]["blocked_reason"] == "merge conflicts",
    "dirty mergeable_state -> conflicts")
 ok(rows[4]["blocked"] and rows[4]["blocked_reason"] == "green but blocked",
    "green checks + blocked merge -> stuck (rule C)")
-ok(not rows[5]["blocked"], "draft with red CI does not block (not trying to merge)")
-ok(out["blocked_count"] == 3, f"blocked_count=3 (got {out['blocked_count']})")
+ok(rows[5]["blocked"], "draft does not mask red exact-head CI")
+ok(out["blocked_count"] == 4, f"blocked_count=4 (got {out['blocked_count']})")
 ok([r["number"] for r in out["prs"]][:3] == [2, 3, 4] or out["prs"][0]["blocked"],
    "blocked PRs sort first")
 
 print("== board join ==")
-ok(rows[1]["tasks"] == [{"task_id": "WATCH-13", "status": "In Review"}] and not rows[1]["orphan"],
+ok(rows[1]["tasks"] == [{"task_id": "WATCH-13", "status": "In Review",
+                         "completion_projection": None}] and not rows[1]["orphan"],
    "branch-parsed task id joined with board status")
 ok(rows[3]["orphan"] and rows[3]["tasks"] == [],
    "PR with no recognizable task id -> orphan (the 'no board task' badge)")

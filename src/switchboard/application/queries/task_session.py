@@ -16,6 +16,7 @@ from switchboard.storage.repositories import task_completion as completion_repo
 
 
 from switchboard.domain import execution_liveness
+from switchboard.application.queries import completion_projection
 
 SCHEMA = "switchboard.task_session.v1"
 DISPLAY_SCHEMA = "switchboard.task_honest_display.v1"
@@ -228,6 +229,7 @@ def execute_for(task_id: str, *, project: str,
     latest_wake = wakes[0] if wakes else None
     attempt = _attempt(latest_wake, sessions)
     outcome = runner_repo.latest_dispatch_outcome(task_id, project=project)
+    completion_projection.attach_completion_projection(task, project=project)
 
     # A claimed wake plus an already-terminal runner is not "dispatching".  The
     # host has supplied the stronger fact, so preserve its own reason and expose
@@ -278,6 +280,7 @@ def execute_for(task_id: str, *, project: str,
         "active_runner": active_runner,
         "last_dispatch_outcome": outcome or None,
         "completion": completion,
+        "completion_projection": task.get("completion_projection"),
         "completion_phase": (completion or {}).get("phase"),
         "pr_head": ({"branch": git.get("branch"), "head_sha": git.get("head_sha"),
                      "pr_url": git.get("pr_url"), "pr_number": git.get("pr_number")}
