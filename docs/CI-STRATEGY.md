@@ -79,7 +79,7 @@ Flow:
 1. Canonical PR `opened` / `reopened` / `ready_for_review` / `synchronize` webhook → [`github_sync.py`](../github_sync.py) → `external_ci_mirror.request_external_ci_mirror_run(..., push_triggered=True)`.
 2. The runner fetches `refs/pull/<n>/head`, verifies the exact webhook head SHA, and pushes that commit to a deterministic disposable `ci/<task>/<sha>` branch on `6th-Element-Labs/projectplanner-ci`.
 3. The branch push starts **`verify.yml`**. It checks out the public scratchpad directly, runs `scripts/switchboard_ci.sh`, and posts required context **`Switchboard CI / VM gate`** on the identical canonical SHA. `PRIVATE_READ_TOKEN` is used only for that status callback, not checkout.
-4. Plan VM **`switchboard_pr_gate.py` is claim-gate-only** (SESSION-12 `Switchboard / claim gate`); it never runs the suite or mirrors source (CI-7).
+4. Plan VM **`switchboard_pr_gate.py` posts board-backed PR authorization statuses**: SESSION-12 `Switchboard / claim gate` plus `Switchboard / merge authorization`, the branch-protection projection of the exact-head merge gate. It never runs the suite or mirrors source.
 
 **Trigger decision (projectplanner):**
 
@@ -124,7 +124,7 @@ Helm routing is **unchanged**. projectplanner now uses the same push mirror engi
 **Built + shipped:**
 - `repo_topology` schema — roles, authority, `required_status_contexts`, `claim_gate`; MCP tools (`set_project_repo_topology`, …); agent session-prompt guidance ("public_ci = verification evidence only").
 - **`external_ci_mirror` engine** — push/dispatch/poll/record for Route A-push (Helm and MCP-driven mirrors).
-- **Scratchpad verification (CI-10…CI-14):** push-triggered `verify.yml` on `projectplanner-ci`; webhook routing through `external_ci_mirror`; exact-SHA status evidence; Plan VM claim-gate-only [`switchboard_pr_gate.py`](../scripts/switchboard_pr_gate.py). The CI-6 pull relay remains only as a manual rollback bridge.
+- **Scratchpad verification (CI-10…CI-14):** push-triggered `verify.yml` on `projectplanner-ci`; webhook routing through `external_ci_mirror`; exact-SHA status evidence; Plan VM claim and merge-authorization [`switchboard_pr_gate.py`](../scripts/switchboard_pr_gate.py). The CI-6 pull relay remains only as a manual rollback bridge.
 - **Off-box uptime probe (HARDEN-44):** [`UPTIME-MONITORING.md`](UPTIME-MONITORING.md) on `projectplanner-ci`.
 
 **To build (turns the capability into a one-click product):**

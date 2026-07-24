@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Claim-gate tests for scripts/switchboard_pr_gate.py (CI-7 claim-only runner)."""
+"""Claim and merge-authorization tests for scripts/switchboard_pr_gate.py."""
 import importlib.util
 import os
 from pathlib import Path
@@ -104,6 +104,67 @@ try:
 finally:
     gate._github_request = _orig_req
 
+# BUG-170: the timer projects the real merge gate as a required PR-head status,
+# so a CLI cannot bypass a missing exact-head review verdict.
+merge_posts = []
+original_post_status = gate.post_status
+original_list_files = gate.list_pr_files
+original_evaluate = gate.pr_provenance_gate.evaluate_pr_provenance
+original_merge_gate = gate.store.merge_gate
+try:
+    gate.list_pr_files = lambda *_args, **_kwargs: ["src/example.py"]
+    gate.pr_provenance_gate.evaluate_pr_provenance = lambda *_args, **_kwargs: {
+        "exempt": False,
+        "resolved": [{"task_id": "BUG-170", "project": "switchboard"}],
+    }
+    gate.store.merge_gate = lambda *_args, **_kwargs: {
+        "ok": False,
+        "findings": [{
+            "code": "review_required",
+            "message": "Review required for current head exact-head.",
+            "blocking": True,
+        }],
+    }
+    gate.post_status = lambda repo, sha, state, **kwargs: merge_posts.append({
+        "repo": repo, "sha": sha, "state": state, **kwargs,
+    })
+    blocked = gate.run_merge_authorization_for_pr(
+        {
+            "number": 831,
+            "html_url": "https://github.com/6th-Element-Labs/projectplanner/pull/831",
+            "head": {"sha": "exact-head", "ref": "codex/SIMPLIFY-16"},
+        },
+        repo="6th-Element-Labs/projectplanner",
+        token="token-value",
+    )
+    ok(blocked["state"] == "failure",
+       "missing exact-head verdict posts a failing merge-authorization status")
+    ok(blocked["reason"] == "review_required",
+       "merge-authorization status preserves the blocking gate reason")
+    ok(merge_posts[-1]["context"] == gate.DEFAULT_MERGE_CONTEXT,
+       "merge-authorization uses the branch-protection context")
+
+    gate.store.merge_gate = lambda *_args, **_kwargs: {
+        "ok": True,
+        "findings": [],
+    }
+    passed_gate = gate.run_merge_authorization_for_pr(
+        {
+            "number": 832,
+            "html_url": "https://github.com/6th-Element-Labs/projectplanner/pull/832",
+            "head": {"sha": "reviewed-head", "ref": "codex/BUG-170"},
+        },
+        repo="6th-Element-Labs/projectplanner",
+        token="token-value",
+    )
+    ok(passed_gate["state"] == "success",
+       "a clean exact-head merge gate posts success")
+finally:
+    gate.post_status = original_post_status
+    gate.list_pr_files = original_list_files
+    gate.pr_provenance_gate.evaluate_pr_provenance = original_evaluate
+    gate.store.merge_gate = original_merge_gate
+
 # A mixed good/bad --pr set skips only the bad one (404 must not abort the pass).
 class _Args:
     pr = [111, 999]
@@ -125,6 +186,31 @@ try:
 finally:
     gate._github_request = _orig_req
 
+# Merge authorization remains live even when a repo disables the older claim
+# gate; the new branch-protection control must not inherit that rollout switch.
+class _AllArgs:
+    pr = []
+
+
+original_repos = gate.store.list_canonical_repos
+original_mode = gate.pr_provenance_gate.resolve_mode
+original_open_prs = gate.list_open_prs
+try:
+    gate.store.list_canonical_repos = lambda: ["o/r"]
+    gate.pr_provenance_gate.resolve_mode = lambda *_args: "off"
+    gate.list_open_prs = lambda *_args, **_kwargs: [{
+        "number": 170,
+        "draft": False,
+        "head": {"sha": "head-170"},
+    }]
+    targets = list(gate._claim_gate_targets(_AllArgs(), "o/r", "t"))
+    ok(len(targets) == 1 and targets[0][2] == "off",
+       "claim-gate off does not suppress merge-authorization polling")
+finally:
+    gate.store.list_canonical_repos = original_repos
+    gate.pr_provenance_gate.resolve_mode = original_mode
+    gate.list_open_prs = original_open_prs
+
 # main() returns 2 when no token is configured.
 _saved = os.environ.get("PM_GITHUB_TOKEN"), os.environ.get("GITHUB_TOKEN"), os.environ.get(
     "SWITCHBOARD_CI_GITHUB_TOKEN")
@@ -137,4 +223,4 @@ finally:
         if val is not None:
             os.environ[key] = val
 
-print("\n12 passed, 0 failed")
+print("\n17 passed, 0 failed")

@@ -368,7 +368,8 @@ After scratchpad verification holds, retire the old on-box VM gate with
 ## PR claim-gate timer (CI-7)
 
 VM verification (`Switchboard CI / VM gate`) runs on projectplanner-ci via the scratchpad
-`verify.yml` workflow. The Plan VM posts only the SESSION-12 claim gate separately:
+`verify.yml` workflow. The Plan VM separately posts the SESSION-12 claim gate
+and the exact-head merge-authorization status:
 
 ```bash
 /opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py claim_gate_prs

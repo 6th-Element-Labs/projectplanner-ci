@@ -3,8 +3,8 @@
 
 VM verification (`Switchboard CI / VM gate`) runs on projectplanner-ci via the
 scratchpad push workflow (CI-12/CI-14) by default. Pull-model dispatch remains as
-fallback when ``SWITCHBOARD_CI_SCRATCHPAD=0``. The Plan VM posts only the SESSION-12
-claim gate.
+fallback when ``SWITCHBOARD_CI_SCRATCHPAD=0``. The Plan VM posts the claim gate
+and the non-bypassable merge-authorization projection.
 """
 from pathlib import Path
 
@@ -52,8 +52,10 @@ ok("Switchboard CI / VM gate" in _verify
    "scratchpad workflow posts the required context with legible failure classes")
 ok('DEFAULT_CLAIM_CONTEXT = "Switchboard / claim gate"' in pr_gate,
    "claim gate posts a stable PR-visible commit status context")
+ok('DEFAULT_MERGE_CONTEXT = "Switchboard / merge authorization"' in pr_gate,
+   "merge authorization posts a stable PR-visible commit status context")
 ok("import subprocess" not in pr_gate and "import external_ci_mirror" not in pr_gate,
-   "switchboard_pr_gate.py is claim-only (no git/subprocess/external_ci_mirror imports)")
+   "switchboard_pr_gate.py has no git/subprocess/external_ci_mirror imports")
 ok("projectplanner-claim-gate.timer" in provision and "switchboard_ci.sh" in provision,
    "Provisioning docs install the claim-gate timer and strict local suite")
 ok("Switchboard CI / VM gate" in runbook

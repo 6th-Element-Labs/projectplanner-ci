@@ -495,6 +495,12 @@ Build one exact-head snapshot from:
 The merge gate, coordinator, PR dock, and UI consume this same snapshot or its
 projection.
 
+The canonical repository also requires the PR-head commit status
+`Switchboard / merge authorization`. The Plan VM refreshes that status from the
+same `merge_gate` result. This is the enforcement boundary for repo-authorized
+CLI clients: a direct `gh pr merge` cannot bypass a missing exact-head verdict,
+open finding, Work Session gate, or other Switchboard merge finding.
+
 ### 3. Pure classifier
 
 Implement a side-effect-free function:
