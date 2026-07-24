@@ -1,107 +1,128 @@
+#!/usr/bin/env python3
 """SIMPLIFY-16: machine-check the recorded four-task hands-off proof."""
 from __future__ import annotations
 
 import inspect
 import json
-from pathlib import Path
 
-import coordinator_daemon
+from path_setup import ROOT
 
+import coordinator_daemon  # noqa: E402
 
-ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE = ROOT / "docs/evidence/SIMPLIFY-16-hands-off-run.json"
 
-
-def test_recorded_four_task_run_satisfies_hard_handoff_and_exact_head_gates():
-    proof = json.loads(EVIDENCE.read_text())
-    assert proof["evidence_mode"] == "hermetic_acceptance_fixture"
-    tasks = proof["tasks"]
-    assert len(tasks) == 4
-    assert sorted(task["path"] for task in tasks) == [
-        "clean", "clean", "red_ci", "review_correction",
-    ]
-
-    execution_ids: set[str] = set()
-    for task in tasks:
-        implementation = task["implementation"]
-        assert implementation["role"] == "implementation"
-        assert implementation["terminal_ack_sequence"] < implementation["in_review_sequence"]
-        for signal in (
-            "pid_terminal", "pty_terminal", "token_rejected", "lease_terminal",
-            "fleet_live_absent", "direct_session_authority_terminal",
-        ):
-            assert implementation[signal] is True
-
-        generations = [implementation, *task["role_generations"]]
-        assert [row["generation"] for row in generations] == list(
-            range(1, len(generations) + 1)
-        )
-        assert any(row["role"] == "review_merge" for row in task["role_generations"])
-        assert all(row["execution_id"] not in execution_ids for row in generations)
-        execution_ids.update(row["execution_id"] for row in generations)
-
-        heads = task["heads"]
-        assert heads["pr"] == heads["ci"] == heads["verdict"]
-        assert len(heads["merge_group"]) == 40
-        assert len(heads["canonical_merged"]) == 40
-        assert task["done_provenance"] == "github_pr_merged"
-        assert task["merge_queue_entries"] == 1
-
-        if task["path"] in {"red_ci", "review_correction"}:
-            assert task["remediation_rounds"] == 1
-            assert task["prior_head"] != heads["pr"]
-            assert any(row["role"] == "remediation" for row in task["role_generations"])
+passed = failed = 0
 
 
-def test_restart_scope_messaging_and_zero_manual_action_proof():
-    proof = json.loads(EVIDENCE.read_text())
-    assert set(row["component"] for row in proof["restarts"]) == {
-        "coordinator", "agent_host",
-    }
-    assert all(row.get("duplicate_dispatches", 0) == 0 for row in proof["restarts"])
-    assert all(row.get("duplicate_merge_queue_entries", 0) == 0
-               for row in proof["restarts"])
-    assert all(value == 0 for value in proof["manual_actions"].values())
-
-    scope = proof["scope_authority"]
-    assert scope["max_concurrent_leases"] >= 2
-    assert scope["canonical_registry"] == "autopilot_scopes"
-    assert scope["exact_holder_fence_generation_enforced"] is True
-    assert scope["out_of_scope_refusals"] >= 2
-    assert scope["out_of_scope_side_effects"] == 0
-    assert scope["race_safe_takeovers"] >= 1
-    assert scope["closed_scope_authority_released"] is True
-    assert scope["restart_resumed_only_durable_scopes"] is True
-
-    messaging = proof["messaging"]
-    assert set(messaging["cases"]) == {
-        "ack_timeout", "duplicate_timeout", "late_ack",
-        "stale_recipient_generation", "unavailable_target", "monitor_restart",
-    }
-    assert messaging["audit_facts"] == 1
-    assert messaging["sender_notifications"] == 1
-    assert messaging["operator_findings"] == 1
-    for field in (
-        "wake_effects", "restart_effects", "supersession_effects",
-        "retry_effects", "lease_mutations", "process_stops",
-        "nonterminal_monitors",
-    ):
-        assert messaging[field] == 0
+def check(condition: bool, message: str) -> None:
+    global passed, failed
+    if condition:
+        passed += 1
+        print(f"  PASS  {message}")
+    else:
+        failed += 1
+        print(f"  FAIL  {message}")
 
 
-def test_janitor_publishes_explicit_zero_messaging_census():
-    census = coordinator_daemon.CoordinatorDaemon._drain_lifecycle(None, "switchboard")[
-        "action_census"
-    ]
-    required_zero = {
-        "start_task", "review", "remediation", "merge", "retry", "message",
-        "send_agent_message", "work_instruction", "acknowledgement_monitor",
-        "agent_directed_message",
-    }
-    assert required_zero <= census.keys()
-    assert all(census[action] == 0 for action in required_zero)
+proof = json.loads(EVIDENCE.read_text())
+check(proof["evidence_mode"] == "hermetic_acceptance_fixture",
+      "evidence is the hermetic acceptance fixture")
+tasks = proof["tasks"]
+check(len(tasks) == 4, "four-task restart proof is recorded")
+check(sorted(task["path"] for task in tasks) == [
+    "clean", "clean", "red_ci", "review_correction",
+], "paths cover two clean, red-CI, and review-correction")
 
-    recorded = json.loads(EVIDENCE.read_text())["janitor_action_census"]
-    assert all(recorded[action] == 0 for action in required_zero)
-    source = inspect.getsource(coordinator_daemon.CoordinatorDaemon)
-    assert "send_agent_message(" not in source
+execution_ids: set[str] = set()
+for task in tasks:
+    implementation = task["implementation"]
+    check(implementation["role"] == "implementation",
+          f"{task['task_id']} starts with an implementation generation")
+    check(implementation["terminal_ack_sequence"] < implementation["in_review_sequence"],
+          f"{task['task_id']} hard-handoffs before In Review")
+    check(all(implementation[signal] is True for signal in (
+        "pid_terminal", "pty_terminal", "token_rejected", "lease_terminal",
+        "fleet_live_absent", "direct_session_authority_terminal",
+    )), f"{task['task_id']} implementation is fully terminal before handoff")
+
+    generations = [implementation, *task["role_generations"]]
+    check([row["generation"] for row in generations] == list(
+        range(1, len(generations) + 1)
+    ), f"{task['task_id']} role generations are fresh and ordered")
+    check(any(row["role"] == "review_merge" for row in task["role_generations"]),
+          f"{task['task_id']} includes a review/merge generation")
+    check(all(row["execution_id"] not in execution_ids for row in generations),
+          f"{task['task_id']} execution ids are unique across the run")
+    execution_ids.update(row["execution_id"] for row in generations)
+
+    heads = task["heads"]
+    check(heads["pr"] == heads["ci"] == heads["verdict"],
+          f"{task['task_id']} exact-head gates stay aligned")
+    check(len(heads["merge_group"]) == 40 and len(heads["canonical_merged"]) == 40,
+          f"{task['task_id']} merge/canonical heads are recorded")
+    check(task["done_provenance"] == "github_pr_merged"
+          and task["merge_queue_entries"] == 1,
+          f"{task['task_id']} Done provenance is one merge-queue merge")
+
+    if task["path"] in {"red_ci", "review_correction"}:
+        check(task["remediation_rounds"] == 1
+              and task["prior_head"] != heads["pr"]
+              and any(row["role"] == "remediation"
+                      for row in task["role_generations"]),
+              f"{task['task_id']} remediation recovers on a new exact head")
+
+check(set(row["component"] for row in proof["restarts"]) == {
+    "coordinator", "agent_host",
+}, "coordinator and Agent Host restart recovery are recorded")
+check(all(row.get("duplicate_dispatches", 0) == 0 for row in proof["restarts"])
+      and all(row.get("duplicate_merge_queue_entries", 0) == 0
+              for row in proof["restarts"]),
+      "restarts do not duplicate dispatch or merge-queue work")
+check(all(value == 0 for value in proof["manual_actions"].values()),
+      "zero manual actions across the four-task proof")
+
+scope = proof["scope_authority"]
+check(scope["max_concurrent_leases"] >= 2
+      and scope["canonical_registry"] == "autopilot_scopes"
+      and scope["exact_holder_fence_generation_enforced"] is True
+      and scope["out_of_scope_refusals"] >= 2
+      and scope["out_of_scope_side_effects"] == 0
+      and scope["race_safe_takeovers"] >= 1
+      and scope["closed_scope_authority_released"] is True
+      and scope["restart_resumed_only_durable_scopes"] is True,
+      "scope fencing and restart resume stay authority-safe")
+
+messaging = proof["messaging"]
+check(set(messaging["cases"]) == {
+    "ack_timeout", "duplicate_timeout", "late_ack",
+    "stale_recipient_generation", "unavailable_target", "monitor_restart",
+}, "timeout isolation matrix is complete")
+check(messaging["audit_facts"] == 1
+      and messaging["sender_notifications"] == 1
+      and messaging["operator_findings"] == 1
+      and all(messaging[field] == 0 for field in (
+          "wake_effects", "restart_effects", "supersession_effects",
+          "retry_effects", "lease_mutations", "process_stops",
+          "nonterminal_monitors",
+      )), "messaging records facts without execution side effects")
+
+census = coordinator_daemon.CoordinatorDaemon._drain_lifecycle(None, "switchboard")[
+    "action_census"
+]
+required_zero = {
+    "start_task", "review", "remediation", "merge", "retry", "message",
+    "send_agent_message", "work_instruction", "acknowledgement_monitor",
+    "agent_directed_message",
+}
+check(required_zero <= census.keys()
+      and all(census[action] == 0 for action in required_zero),
+      "janitor publishes explicit zero messaging census")
+recorded = proof["janitor_action_census"]
+check(all(recorded[action] == 0 for action in required_zero),
+      "recorded evidence matches the zero messaging census")
+source = inspect.getsource(coordinator_daemon.CoordinatorDaemon)
+check("send_agent_message(" not in source,
+      "janitor source has no send_agent_message call site")
+
+print(f"\nSIMPLIFY-16 hands-off acceptance: {passed} passed, {failed} failed")
+raise SystemExit(1 if failed else 0)
