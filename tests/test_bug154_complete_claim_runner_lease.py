@@ -150,9 +150,22 @@ other = register("run-bug154-other", other_task["task_id"], "")
 other = register("run-bug154-other", other_task["task_id"], "claim-unrelated")
 assert not bound.get("stale") and not review.get("stale") and not other.get("stale")
 
+# A fast GitHub webhook may arrive before complete_claim.  It records the exact
+# provider head but cannot expose In Review while this implementation
+# generation still owns the claim and Work Session.
+opened = store.mark_task_pr_opened(
+    task["task_id"], pr_number=154,
+    pr_url="https://github.com/example/projectplanner/pull/154",
+    branch=work_session["branch"], head_sha=HEAD,
+    actor="github-webhook", project=P,
+)
+assert opened["review_transition_deferred"] is True, opened
+assert store.get_task(task["task_id"], project=P)["status"] == "In Progress"
+
 completed = store.complete_claim(
     claim["claim_id"], evidence={
         "branch": work_session["branch"], "head_sha": HEAD,
+        "pr_number": 154,
         "pr_url": "https://github.com/example/projectplanner/pull/154",
         "executed_test_run": {
             "schema": "switchboard.executed_test_run.v1",

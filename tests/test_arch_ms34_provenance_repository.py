@@ -93,6 +93,37 @@ try:
     ok(int(git_state.get("pr_number") or 0) == 425,
        "mark_task_pr_opened persists task_git_state.pr_number")
 
+    active = store.create_task(
+        {"workstream_id": "ARCH-MS", "title": "active claim PR proof",
+         "description": "PR evidence must not cross the hard handoff boundary"},
+        actor="arch-ms34",
+        project="switchboard",
+    )
+    active_tid = active["task_id"]
+    claim = store.claim_task(
+        active_tid, "codex/ARCH-MS-active-pr", actor="arch-ms34",
+        project="switchboard",
+    )
+    ok(bool(claim and claim.get("claimed")),
+       "active PR proof has an implementation claim")
+    active_opened = store.mark_task_pr_opened(
+        active_tid, pr_number=426,
+        pr_url="https://github.com/6th-Element-Labs/projectplanner/pull/426",
+        branch="codex/ARCH-MS-active-pr",
+        head_sha="cccccccccccccccccccccccccccccccccccccccc",
+        project="switchboard",
+    )
+    active_after_open = store.get_task(active_tid, project="switchboard")
+    ok(
+        bool(active_opened)
+        and active_opened.get("review_transition_deferred") is True
+        and (active_after_open or {}).get("status") == "In Progress",
+        "mark_task_pr_opened records provenance without exposing review during active ownership",
+    )
+    active_git = (active_after_open or {}).get("git_state") or {}
+    ok(int(active_git.get("pr_number") or 0) == 426,
+       "deferred review transition still persists PR provenance")
+
     merged = store.mark_task_merged(
         tid, merged_sha="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         pr_number=425,

@@ -1525,6 +1525,9 @@ def _release_terminal_runner_ownership_in(
     task_status = str(task["status"] or "") if task else ""
     review_handoff_recovery = task_status == "In Review"
     execution_role = str(
+        metadata.get("execution_role") or metadata.get("role") or ""
+    ).strip().lower()
+    execution_role = str(
         metadata.get("execution_role") or metadata.get("role")
         or metadata.get("lifecycle_role") or "implementation"
     ).strip().lower()
@@ -1533,6 +1536,8 @@ def _release_terminal_runner_ownership_in(
     # at that point a terminal implementation must never retain ownership and
     # block the next exact-head remediation generation.
     if (review_handoff_recovery and execution_role != "implementation"):
+        return None
+    if review_handoff_recovery and execution_role != "implementation":
         return None
     if (not review_handoff_recovery
             and (status not in RUNNER_FAILURE_TERMINAL_STATUSES

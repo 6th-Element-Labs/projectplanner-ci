@@ -134,6 +134,19 @@ assert runner._release_terminal_runner_ownership_in(
 assert review_personal_db.execute(
     "SELECT count(*) FROM task_claims WHERE status='active'").fetchone()[0] == 1
 
+# A terminal review/merge generation must not be mistaken for the stale
+# implementation generation and complete its claim through this fallback.
+review_role, review_role_metadata = terminal_record()
+review_role["status"] = "killed"
+review_role_metadata["execution_connection_id"] = "exec-review"
+review_role_metadata["role"] = "review_merge"
+review_role_db = database("In Review")
+assert runner._release_terminal_runner_ownership_in(
+    review_role_db, review_role, review_role_metadata,
+    "run-dead", "test", 100.0) is None
+assert review_role_db.execute(
+    "SELECT status FROM task_claims").fetchone()[0] == "active"
+
 session = {
     "runner_session_id": "run-live", "task_id": "COORD-42", "claim_id": "claim-2",
     "host_id": "host/mac", "status": "running", "stale": False,
