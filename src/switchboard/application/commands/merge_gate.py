@@ -220,24 +220,40 @@ def _merge_gate_required_contexts(topology: Dict[str, Any],
 def _merge_gate_pr_evidence(pr_url: str, pr_number: int,
                             evidence: Dict[str, Any],
                             repo: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Resolve PR evidence, always hydrating exact-head commit statuses when missing.
+
+    Callers such as ``run_merge_authorization_for_pr`` supply a Pulls REST payload that
+    never includes ``status_contexts``. Returning that payload untouched made merge
+    authorization fail closed on empty contexts and overwrite a previously valid
+    ``Switchboard / merge authorization`` status (BUG-173).
+    """
     supplied = evidence.get("github_pr") or evidence.get("pr_state") or evidence.get("pr") or {}
-    if isinstance(supplied, dict) and supplied:
-        return copy.deepcopy(supplied), {"source": "supplied_evidence"}
-    if not repo or not pr_number:
-        return {}, {"source": "missing", "reason": "pr_url_or_number_missing"}
     token = _github_token()
-    pr = _github_pr(repo, pr_number, token)
-    if pr:
-        head_sha = _merge_gate_pr_ref(pr, "head", "sha")
-        if head_sha and not _merge_gate_status_contexts(
-                pr.get("status_contexts"),
-                pr.get("statusCheckRollup"),
-                pr.get("checks")):
-            statuses = _github_commit_statuses(repo, head_sha, token)
-            if statuses:
-                pr["status_contexts"] = statuses
-        return pr, {"source": "github_api"}
-    return {}, {"source": "github_api", "reason": "unavailable"}
+    if isinstance(supplied, dict) and supplied:
+        pr = copy.deepcopy(supplied)
+        source: Dict[str, Any] = {"source": "supplied_evidence"}
+    elif not repo or not pr_number:
+        return {}, {"source": "missing", "reason": "pr_url_or_number_missing"}
+    else:
+        pr = _github_pr(repo, pr_number, token)
+        if not pr:
+            return {}, {"source": "github_api", "reason": "unavailable"}
+        source = {"source": "github_api"}
+
+    head_sha = str(
+        evidence.get("head_sha")
+        or _merge_gate_pr_ref(pr, "head", "sha")
+        or ""
+    ).strip()
+    if head_sha and not _merge_gate_status_contexts(
+            pr.get("status_contexts"),
+            pr.get("statusCheckRollup"),
+            pr.get("checks")):
+        statuses = _github_commit_statuses(repo, head_sha, token)
+        if statuses:
+            pr["status_contexts"] = statuses
+            source["hydrated_status_contexts"] = True
+    return pr, source
 
 
 def _github_commit_statuses(repo: str, head_sha: str,

@@ -20,12 +20,19 @@ def ok(condition, message):
 
 
 calls = []
+_posted_statuses = []
 
 
 def fake_request(method, path, *, token, body=None):
     calls.append({"method": method, "path": path, "token": token, "body": body})
     if method == "GET" and "/statuses" in path:
-        return []
+        return list(_posted_statuses)
+    if method == "POST" and body:
+        _posted_statuses[:] = [{
+            "context": body.get("context"),
+            "state": body.get("state"),
+            "description": body.get("description"),
+        }]
     return {"ok": True}
 
 
@@ -77,9 +84,16 @@ def _idem_request(rows):
     def _req(method, path, *, token, body=None):
         _req.calls.append((method, path, body))
         if method == "GET" and "/statuses" in path:
-            return rows
+            return list(_req.rows)
+        if method == "POST" and body:
+            _req.rows[:] = [{
+                "context": body.get("context"),
+                "state": body.get("state"),
+                "description": body.get("description"),
+            }]
         return {"ok": True}
     _req.calls = []
+    _req.rows = list(rows)
     return _req
 
 

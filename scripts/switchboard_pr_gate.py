@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -91,14 +92,21 @@ def latest_status(repo: str, sha: str, context: str, *, token: str) -> Optional[
 
 
 def post_status(repo: str, sha: str, state: str, *, context: str, description: str,
-                target_url: str = "", token: str) -> Any:
+                target_url: str = "", token: str, retries: int = 3,
+                readback: bool = True, retry_sleep_s: float = 0.0) -> Any:
+    """Publish a commit status, retry transient failures, and confirm via readback.
+
+    Credential failures (HTTP 401/403) fail closed immediately. Unchanged re-posts
+    are skipped to stay under GitHub's 1000-status-per-context cap.
+    """
     if not token:
         raise GateError("A GitHub token is required to post PR gate status.")
     desc = _status_description(description)
     # GitHub caps a (commit, context) at 1000 statuses; skip unchanged re-posts.
     current = latest_status(repo, sha, context, token=token)
     if current and (current.get("state") or "") == state and (current.get("description") or "") == desc:
-        return {"skipped": "unchanged", "state": state, "context": context, "sha": sha}
+        return {"skipped": "unchanged", "state": state, "context": context, "sha": sha,
+                "published": True}
     payload: Dict[str, Any] = {
         "state": state,
         "context": context,
@@ -106,7 +114,54 @@ def post_status(repo: str, sha: str, state: str, *, context: str, description: s
     }
     if target_url:
         payload["target_url"] = target_url
-    return _github_request("POST", f"repos/{repo}/statuses/{sha}", token=token, body=payload)
+
+    attempts = max(1, int(retries or 1))
+    last_error: Optional[Exception] = None
+    last_result: Any = None
+    for attempt in range(1, attempts + 1):
+        try:
+            last_result = _github_request(
+                "POST", f"repos/{repo}/statuses/{sha}", token=token, body=payload)
+        except GateError as exc:
+            last_error = exc
+            detail = str(exc)
+            if "HTTP 401" in detail or "HTTP 403" in detail:
+                raise
+            if attempt >= attempts:
+                raise
+            if retry_sleep_s > 0:
+                time.sleep(retry_sleep_s)
+            continue
+
+        if not readback:
+            if isinstance(last_result, dict):
+                last_result = {**last_result, "published": True, "attempts": attempt}
+            return last_result
+
+        confirmed = latest_status(repo, sha, context, token=token)
+        if (
+            confirmed
+            and (confirmed.get("state") or "") == state
+            and (confirmed.get("description") or "") == desc
+        ):
+            if isinstance(last_result, dict):
+                return {**last_result, "published": True, "attempts": attempt,
+                        "readback": "confirmed"}
+            return {"published": True, "attempts": attempt, "state": state,
+                    "context": context, "sha": sha, "readback": "confirmed"}
+
+        last_error = GateError(
+            f"status readback mismatch for {context} on {sha} "
+            f"(wanted state={state!r} description={desc!r}, saw {confirmed!r})"
+        )
+        if attempt >= attempts:
+            break
+        if retry_sleep_s > 0:
+            time.sleep(retry_sleep_s)
+
+    if last_error is not None:
+        raise GateError(str(last_error)) from last_error
+    return last_result
 
 
 def list_open_prs(repo: str, *, token: str) -> List[Dict[str, Any]]:
@@ -148,16 +203,41 @@ def run_claim_gate_for_pr(pr: Dict[str, Any], *, repo: str, token: str,
             "would_block": verdict.get("would_block"), "mode": mode}
 
 
+_EMPTY_STALE_FAILURE_CODES = frozenset({
+    "missing_required_status_contexts",
+    "missing_ui_playwright_evidence",
+})
+
+
+def _finding_looks_empty_or_stale(finding: Dict[str, Any]) -> bool:
+    code = str(finding.get("code") or "")
+    if code not in _EMPTY_STALE_FAILURE_CODES:
+        return False
+    details = finding.get("details") if isinstance(finding.get("details"), dict) else {}
+    contexts = details.get("status_contexts")
+    if contexts in ({}, None, [], ""):
+        return True
+    if isinstance(contexts, dict) and not contexts:
+        return True
+    return finding.get("evidence_quality") == "empty_or_stale"
+
+
 def run_merge_authorization_for_pr(
     pr: Dict[str, Any],
     *,
     repo: str,
     token: str,
     context: str = DEFAULT_MERGE_CONTEXT,
+    status_sha: str = "",
 ) -> Dict[str, Any]:
-    """Post the branch-protection projection of Switchboard's real merge gate."""
+    """Post the branch-protection projection of Switchboard's real merge gate.
+
+    ``status_sha`` overrides where the status is written (PR head by default, or a
+    temporary merge-group SHA when the merge queue requests checks).
+    """
     number = int(pr["number"])
-    sha = str((pr.get("head") or {}).get("sha") or "")
+    pr_head_sha = str((pr.get("head") or {}).get("sha") or "")
+    sha = str(status_sha or pr_head_sha or "").strip()
     pr_url = str(pr.get("html_url") or f"https://github.com/{repo}/pull/{number}")
     changed_paths = list_pr_files(repo, number, token=token)
     provenance = pr_provenance_gate.evaluate_pr_provenance(
@@ -171,6 +251,7 @@ def run_merge_authorization_for_pr(
             provenance.get("context_description") or "Exempt from fleet merge authorization"
         )
         gate_results: List[Dict[str, Any]] = []
+        blocked: List[Dict[str, Any]] = []
     else:
         resolved = list(provenance.get("resolved") or [])
         gate_results = []
@@ -183,7 +264,7 @@ def run_merge_authorization_for_pr(
                     "pr_number": number,
                     "pr_url": pr_url,
                     "repo": repo,
-                    "head_sha": sha,
+                    "head_sha": pr_head_sha,
                     "evidence": {
                         "github_pr": pr,
                         "changed_files": changed_paths,
@@ -217,7 +298,24 @@ def run_merge_authorization_for_pr(
             reason = "exact_head_merge_gate_passed"
             description = "Exact-head CI, review, and merge gate passed"
 
-    post_status(
+    # Defense in depth: an empty/stale supplied-evidence failure must not clobber a
+    # previously published valid authorization (BUG-173 queue-time overwrite).
+    if state == "failure" and blocked and all(_finding_looks_empty_or_stale(f) for f in blocked):
+        prior = latest_status(repo, sha, context, token=token)
+        if prior and (prior.get("state") or "") == "success":
+            return {
+                "repo": repo,
+                "pr": number,
+                "sha": sha,
+                "context": context,
+                "state": "success",
+                "reason": "exact_head_merge_gate_passed",
+                "skipped": "preserve_valid_authorization",
+                "task_ids": [item.get("task_id") for item in provenance.get("resolved") or []],
+                "gate_count": len(gate_results),
+            }
+
+    publish = post_status(
         repo,
         sha,
         state,
@@ -235,6 +333,7 @@ def run_merge_authorization_for_pr(
         "reason": reason,
         "task_ids": [item.get("task_id") for item in provenance.get("resolved") or []],
         "gate_count": len(gate_results),
+        "publish": publish if isinstance(publish, dict) else {"result": publish},
     }
 
 
