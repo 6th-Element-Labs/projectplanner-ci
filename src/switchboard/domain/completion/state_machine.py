@@ -270,15 +270,25 @@ def classify_completion(
     if review.get("retry_exhausted"):
         return _decision("blocked", "human", "review_retry_budget_exhausted", board="Blocked")
     if review_state in {"changes_requested", "changes"}:
-        findings = review.get("findings") or []
-        automatic = findings and all(
-            _text(_map(item).get("finding_class") or _map(item).get("kind")) in
-            {"automatic", "product", "code"} for item in findings
-        )
+        findings = [_map(item) for item in (review.get("findings") or [])]
+        automatic = [
+            item for item in findings
+            if _text(item.get("finding_class") or item.get("kind") or item.get("class"))
+            in {"automatic", "product", "code", "auto"}
+        ]
+        escalated = [item for item in findings if item not in automatic]
         if automatic:
-            return _decision("blocked", "remediation", "automatic_review_findings",
-                             role="remediation", board="Blocked")
-        return _decision("blocked", "human", "human_review_findings", board="Blocked")
+            # Mixed findings dispatch the automatic repair AND keep the
+            # escalation. One judgment finding must not strand work a coder
+            # could have fixed (COORD-46 normalization requirement 3).
+            decision = _decision("blocked", "remediation", "automatic_review_findings",
+                                 role="remediation", board="Blocked")
+            decision["acceptance_findings"] = automatic
+            decision["escalated_findings"] = escalated
+            return decision
+        decision = _decision("blocked", "human", "human_review_findings", board="Blocked")
+        decision["escalated_findings"] = escalated
+        return decision
     review_passed = review_state in {"pass", "passed", "approved", "success"}
     if not review_passed or (review_head and review_head != head_sha):
         return _decision("assessing", "review_merge",
