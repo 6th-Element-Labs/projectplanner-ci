@@ -69,13 +69,14 @@ store.add_org_member(store.DEFAULT_ORG_ID, USER_ID, role="member", created_by="c
 
 matrix = list_provider_auth_capabilities(now=time.time())
 records = {row["capability_id"]: row for row in matrix["capabilities"]}
-ok(matrix["fail_closed"] is True and len(records) == 7,
+ok(matrix["fail_closed"] is True and len(records) == 8,
    "one versioned server matrix contains every supported and denied auth path")
 ok(records["codex-chatgpt-capsule-trusted-private"]["state"] == "supported"
    and records["claude-subscription-switchboard"]["state"]
    == "vendor_confirmation_required"
    and records["cursor-browser-login-user-host"]["state"] == "supported_host_bound"
-   and records["cursor-personal-portable-worker"]["state"] == "unavailable",
+   and records["cursor-personal-portable-worker"]["state"] == "unavailable"
+   and records["claude-host-bound-native-cli"]["state"] == "supported_host_bound",
    "Codex, Claude, and Cursor personal modes have the required authoritative states")
 ok(matrix["personal_subscription_broker"]["litellm"] is False
    and not any(row["litellm"]["eligible"] for row in records.values()
@@ -90,6 +91,22 @@ ok(cursor_host["allowed"] is True and cursor_host["state"] == "supported_host_bo
    and cursor_unbound["allowed"] is False
    and cursor_unbound["reason_code"] == "provider_auth_host_binding_required",
    "Cursor browser auth requires the exact persistent user-owned host binding")
+# CO-22: Claude host-bound personal login mirrors the Cursor host-bound posture.
+claude_host = provider_auth_decision(
+    "claude", "oauth_personal", host_class="user_owned_persistent",
+    operation="launch")
+claude_unbound = provider_auth_decision(
+    "claude", "oauth_personal", operation="launch")
+claude_portable = provider_auth_decision(
+    "claude", "setup_token_oauth", operation="launch")
+ok(claude_host["allowed"] is True
+   and claude_host["state"] == "supported_host_bound"
+   and claude_host["host_class"] == "user_owned_persistent"
+   and claude_unbound["allowed"] is False
+   and claude_unbound["reason_code"] == "provider_auth_host_binding_required"
+   and claude_portable["allowed"] is False,
+   "CO-22: Claude host-bound login is allowed only on a persistent host; unbound "
+   "use and the portable setup-token path stay denied")
 codex_no_host = provider_auth_decision(
     "codex", "oauth_capsule", operation="launch")
 codex_ephemeral = provider_auth_decision(
