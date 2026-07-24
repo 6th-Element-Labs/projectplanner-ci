@@ -42,6 +42,9 @@ def _auth_exempt_path(path: str) -> bool:
         path == "/health/saturation" or
         path == "/api/github/webhook" or
         path == "/api/cleanup/apply" or
+        # format.taikunai.com self-serve tools (public drop-a-file; no login).
+        path == "/api/rebrand" or
+        path == "/api/ocr" or
         path.startswith("/api/auth/")
     )
 
