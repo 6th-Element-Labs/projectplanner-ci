@@ -28,6 +28,16 @@ window.bootstrap = { Modal: { getOrCreateInstance(el) {
   return { show() { el.classList.add('show'); } };
 }}};
 window.PM_PROJECT = 'switchboard';
+// This audit drives TeepPlan directly (it seeds tasks and overrides _renderTaskModal),
+// so app.js's DOMContentLoaded -> TeepPlan.init() bootstrap is unwanted: init() calls
+// loadDeliverables(), which these stubs deliberately omit, and the resulting rejection
+// raced the post-domcontentloaded error check — failing this file only under parallel
+// CI load. Suppress the bootstrap listener instead of stubbing all of init()'s fetches.
+(() => {
+  const add = document.addEventListener.bind(document);
+  document.addEventListener = (type, fn, ...rest) =>
+    type === 'DOMContentLoaded' ? undefined : add(type, fn, ...rest);
+})();
 """
 
 
