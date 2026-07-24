@@ -242,8 +242,10 @@ def enqueue_task(
     # the legacy unconfigured-project path; that subtraction is a later
     # deliverable milestone. Once a project opts into execution policy, however,
     # every field is mandatory and resolution fails closed.
-    import store
-    configured_policy = store.get_project_execution_policy(project)
+    from switchboard.storage.repositories.project_execution_policy import (
+        get_project_execution_policy,
+    )
+    configured_policy = get_project_execution_policy(project)
     context: dict[str, Any] = {}
     if configured_policy.get("configured"):
         try:

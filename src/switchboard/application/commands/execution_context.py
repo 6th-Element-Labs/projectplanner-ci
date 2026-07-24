@@ -91,8 +91,8 @@ def _scm_metadata(reference: str) -> dict[str, Any]:
 
 
 def _canonical_base_sha(project: str) -> str:
-    import store
-    return str(store.get_meta("canonical_main_sha", "", project=project) or "")
+    from switchboard.storage.repositories.activity import get_meta
+    return str(get_meta("canonical_main_sha", "", project=project) or "")
 
 
 def _safe_provider(value: Mapping[str, Any], reference: str,
@@ -161,9 +161,12 @@ def resolve(
     base_sha_provider: Callable[[str], str] | None = None,
 ) -> dict[str, Any]:
     """Resolve and validate one exact execution authority snapshot."""
-    import store
-    topology = dict((topology_provider or store.get_project_repo_topology)(project) or {})
-    policy = dict((policy_provider or store.get_project_execution_policy)(project) or {})
+    from switchboard.storage.repositories.project_execution_policy import (
+        get_project_execution_policy,
+    )
+    from switchboard.storage.repositories.projects import get_project_repo_topology
+    topology = dict((topology_provider or get_project_repo_topology)(project) or {})
+    policy = dict((policy_provider or get_project_execution_policy)(project) or {})
     readiness = dict(policy.get("readiness") or {})
     if not topology.get("valid"):
         raise ExecutionContextError(
