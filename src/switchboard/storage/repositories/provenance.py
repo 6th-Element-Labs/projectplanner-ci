@@ -297,9 +297,23 @@ def _mark_task_pr_opened_impl(task_id: str, pr_number: int, pr_url: str = "",
         if row["status"] == "Done":
             return {"task_id": task_id, "status": "Done", "git_state": current,
                     "skipped": True, "reason": "task_already_done"}
-        c.execute("UPDATE tasks SET status='In Review', updated_at=? WHERE task_id=? "
-                  "AND status NOT IN ('Done', 'Cancelled', 'Canceled')",
-                  (now, task_id))
+        active_claim = c.execute(
+            "SELECT id, agent_id FROM task_claims "
+            "WHERE task_id=? AND status='active' ORDER BY claimed_at DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        # Opening a PR records provider provenance, but it is not the
+        # implementation -> review phase boundary.  A managed implementation
+        # must first surrender its lease and receive the exact host terminal
+        # acknowledgement; complete_claim owns the atomic transition after that
+        # acknowledgement.  Otherwise a fast PR webhook can expose In Review
+        # while the implementation claim and Work Session are still active,
+        # which blocks the fresh review/remediation generation.
+        review_transition_deferred = active_claim is not None
+        if not review_transition_deferred:
+            c.execute("UPDATE tasks SET status='In Review', updated_at=? WHERE task_id=? "
+                      "AND status NOT IN ('Done', 'Cancelled', 'Canceled')",
+                      (now, task_id))
         git_state = _upsert_git_state(c, task_id, {
             "branch": branch or None,
             "head_sha": head_sha or None,
@@ -312,8 +326,23 @@ def _mark_task_pr_opened_impl(task_id: str, pr_number: int, pr_url: str = "",
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (task_id, actor, "git.pr_opened",
                    json.dumps({"pr_number": pr_number, "pr_url": pr_url,
-                               "branch": branch, "head_sha": head_sha}, sort_keys=True), now))
-    return {"task_id": task_id, "status": "In Review", "git_state": git_state}
+                               "branch": branch, "head_sha": head_sha,
+                               "review_transition_deferred": review_transition_deferred,
+                               "active_claim_id": (
+                                   active_claim["id"] if active_claim else None),
+                               "active_agent_id": (
+                                   active_claim["agent_id"] if active_claim else None)},
+                              sort_keys=True), now))
+        status_row = c.execute(
+            "SELECT status FROM tasks WHERE task_id=?", (task_id,),
+        ).fetchone()
+        status = str(status_row["status"] or "") if status_row else ""
+    return {
+        "task_id": task_id,
+        "status": status,
+        "git_state": git_state,
+        "review_transition_deferred": review_transition_deferred,
+    }
 
 
 def mark_task_merged(task_id: str, merged_sha: str, pr_number: Optional[int] = None,

@@ -71,8 +71,10 @@ def test_terminal_release(status: str, expected: str) -> None:
     assert handoff and handoff["previous_runner_session_id"] == "run-dead"
     assert handoff["branch"] == "codex/COORD-42-existing"
     assert handoff["head_sha"] == "a" * 40
-    assert c.execute("SELECT status FROM task_claims").fetchone()[0] == "abandoned"
+    expected_claim = "completed" if status == "In Review" else "abandoned"
+    assert c.execute("SELECT status FROM task_claims").fetchone()[0] == expected_claim
     assert c.execute("SELECT released_at FROM resource_leases").fetchone()[0] == 100.0
+    assert c.execute("SELECT status FROM work_sessions").fetchone()[0] == "expired"
     task = c.execute("SELECT status, assignee, agent_state FROM tasks").fetchone()
     assert task[0] == expected
     assert task[1] is None
@@ -101,6 +103,49 @@ assert runner._release_terminal_runner_ownership_in(
     personal_db, personal, personal_metadata,
     "run-dead", "test", 100.0) is None
 assert personal_db.execute("SELECT status FROM task_claims").fetchone()[0] == "active"
+
+# BUG-167: a hard-killed connected implementation may be terminal after another
+# path has already projected review.  Exact terminal recovery must close the old
+# claim and Work Session so one fresh remediation claim can be admitted.
+review_personal, review_personal_metadata = terminal_record()
+review_personal["status"] = "killed"
+review_personal_metadata["execution_connection_id"] = "exec-personal"
+review_personal_db = database("In Review")
+review_personal_db.execute(
+    "UPDATE work_sessions SET status='active' WHERE work_session_id='ws-1'")
+recovered = runner._release_terminal_runner_ownership_in(
+    review_personal_db, review_personal, review_personal_metadata,
+    "run-dead", "test", 100.0)
+assert recovered
+assert review_personal_db.execute(
+    "SELECT status FROM task_claims").fetchone()[0] == "completed"
+assert review_personal_db.execute(
+    "SELECT status FROM work_sessions").fetchone()[0] == "completed"
+assert review_personal_db.execute(
+    "SELECT released_at FROM resource_leases").fetchone()[0] == 100.0
+review_personal_db.execute(
+    "INSERT INTO task_claims VALUES (?,?,?,?,?)",
+    ("claim-2", "COORD-42", "codex/COORD-42-remediation", "active", None))
+assert review_personal_db.execute(
+    "SELECT count(*) FROM task_claims WHERE status='active'").fetchone()[0] == 1
+assert runner._release_terminal_runner_ownership_in(
+    review_personal_db, review_personal, review_personal_metadata,
+    "run-dead", "test", 101.0) is None
+assert review_personal_db.execute(
+    "SELECT count(*) FROM task_claims WHERE status='active'").fetchone()[0] == 1
+
+# A terminal review/merge generation must not be mistaken for the stale
+# implementation generation and complete its claim through this fallback.
+review_role, review_role_metadata = terminal_record()
+review_role["status"] = "killed"
+review_role_metadata["execution_connection_id"] = "exec-review"
+review_role_metadata["role"] = "review_merge"
+review_role_db = database("In Review")
+assert runner._release_terminal_runner_ownership_in(
+    review_role_db, review_role, review_role_metadata,
+    "run-dead", "test", 100.0) is None
+assert review_role_db.execute(
+    "SELECT status FROM task_claims").fetchone()[0] == "active"
 
 session = {
     "runner_session_id": "run-live", "task_id": "COORD-42", "claim_id": "claim-2",

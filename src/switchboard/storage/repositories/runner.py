@@ -1506,8 +1506,7 @@ def _release_terminal_runner_ownership_in(
     task_id = str(record.get("task_id") or "").strip()
     claim_id = str(record.get("claim_id") or "").strip()
     agent_id = str(record.get("agent_id") or "").strip()
-    if (status not in RUNNER_FAILURE_TERMINAL_STATUSES
-            or metadata.get("execution_connection_id")
+    if (status not in RUNNER_TERMINAL_STATUSES
             or not (task_id and claim_id and agent_id)):
         return None
 
@@ -1523,6 +1522,27 @@ def _release_terminal_runner_ownership_in(
         "SELECT status, assignee, deliverable, agent_state FROM tasks WHERE task_id=?",
         (task_id,),
     ).fetchone()
+    task_status = str(task["status"] or "") if task else ""
+    review_handoff_recovery = task_status == "In Review"
+    execution_role = str(
+        metadata.get("execution_role") or metadata.get("role") or ""
+    ).strip().lower()
+    execution_role = str(
+        metadata.get("execution_role") or metadata.get("role")
+        or metadata.get("lifecycle_role") or "implementation"
+    ).strip().lower()
+    # Successful executions and personal/direct connections normally own their
+    # cleanup handshake.  The exception is a task already exposed as In Review:
+    # at that point a terminal implementation must never retain ownership and
+    # block the next exact-head remediation generation.
+    if (review_handoff_recovery and execution_role != "implementation"):
+        return None
+    if review_handoff_recovery and execution_role != "implementation":
+        return None
+    if (not review_handoff_recovery
+            and (status not in RUNNER_FAILURE_TERMINAL_STATUSES
+                 or metadata.get("execution_connection_id"))):
+        return None
     work_session_id = str(metadata.get("work_session_id") or "").strip()
     work_session = c.execute(
         "SELECT * FROM work_sessions WHERE work_session_id=?",
@@ -1567,10 +1587,11 @@ def _release_terminal_runner_ownership_in(
     task_state["switchboard/recovery_handoff"] = handoff
 
     reason = f"terminal_runner:{runner_session_id}:{status}"
+    claim_status = "completed" if review_handoff_recovery else "abandoned"
     c.execute(
-        "UPDATE task_claims SET status='abandoned', abandon_reason=? "
+        "UPDATE task_claims SET status=?, abandon_reason=? "
         "WHERE id=? AND status='active'",
-        (reason, claim_id),
+        (claim_status, reason, claim_id),
     )
     c.execute(
         "UPDATE resource_leases SET released_at=? WHERE resource_type='task' "
@@ -1586,9 +1607,18 @@ def _release_terminal_runner_ownership_in(
             "WHERE task_id=?",
             (next_status, json.dumps(task_state, sort_keys=True), agent_id, now, task_id),
         )
+    if review_handoff_recovery and work_session_id:
+        c.execute(
+            "UPDATE work_sessions SET status='completed' "
+            "WHERE work_session_id=? AND status IN ('active','proposed','blocked')",
+            (work_session_id,),
+        )
     c.execute(
         "INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
-        (task_id, actor, "task.claim.released_by_terminal_runner",
+        (task_id, actor, (
+            "task.claim.completed_by_terminal_review_recovery"
+            if review_handoff_recovery
+            else "task.claim.released_by_terminal_runner"),
          json.dumps({"claim_id": claim_id, "runner_session_id": runner_session_id,
                      "runner_status": status, "recovery_handoff": handoff},
                     sort_keys=True), now),
