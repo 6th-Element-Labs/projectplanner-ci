@@ -779,6 +779,71 @@ moves is **open and unmeasured** — `stale_verdict_count` is the number to watc
 
 ---
 
+---
+
+## BREAKDOWN 17 — the Fleet dock freezes on a non-JSON error body and never recovers ⚠️
+
+**Severity: MEDIUM. STATUS: LIVE — BUG-188.**
+
+Found because the operator reported the dock saying it could not see GitHub while GitHub was
+demonstrably fine. Backend checked at the same moment: `build_open_prs` returned
+`unavailable: None` with 5 PRs, token at 4975/5000 core and 4745/5000 graphql. Thirty
+minutes of real browser traffic:
+
+```
+GET /ixp/v1/open_prs     150 x 200,  1 x 401
+GET /ixp/v1/deployments  150 x 200,  1 x 401
+```
+
+**One failure out of 151, and the dock was still showing it.**
+
+`_loadFleetDock` parses both responses *before* it inspects `.ok`, and the whole block ends:
+
+```js
+prPayload = await pRes.json();
+deploymentPayload = await dRes.json();
+...
+} catch (e) { this._fleetLoadBusy = false; return; }
+```
+
+The early return skips **both** the `_dockPrUnavailable` update and `_renderFleetDock`, so the
+dock keeps whatever it last drew. The signature is never recomputed on the throw path, which
+is precisely why no number of subsequent successes clears it.
+
+The inline comment states the assumption that fails: *"401/5xx bodies are `{detail: …}` with
+no `prs`/`unavailable`."* True for the app's own errors. **Not** true for a Caddy-level 502/503,
+which returns HTML — and those happen routinely, because every merge to `master` hard-restarts
+the fleet with no drain. Six PRs merged during this run; the single 401 is consistent with an
+in-flight request dropped by one of those restarts.
+
+**Do not conflate with two fixes that already landed and are correct:** #881 added the
+unavailable flags to `_fleetSignature` so a message-only transition re-renders, and #886
+replaced the blanket "GitHub is unreachable right now" with the server's real reason. This is
+the remaining path where *neither* runs, because the function returned before reaching them.
+
+**Fix direction:** treat a parse failure as an unavailable reason like any other rather than
+aborting the render, and distinguish "response was unreadable" from "you are not authenticated."
+A transient error should cost at most one wrong frame.
+
+---
+
+## OBSERVATION — a week-cached asset made a deleted bug look live
+
+The operator was seeing wording that **no longer exists anywhere in `master`**: #886 removed
+the string "GitHub is unreachable right now" that same evening, and a grep of the current tree
+returns zero hits. Prod was serving `app.js?v=61`; the browser was still running the cached
+`v=60`.
+
+Static assets are `Cache-Control: public, max-age=604800` **keyed on the `?v=` query**, so a
+returning browser runs week-old JavaScript until the pin changes *and* the page is hard-
+refreshed. Both #881 and #886 bumped the pin correctly. The gap is that a user with the old
+file cached keeps the old behaviour, including old copy for bugs that are already fixed.
+
+**Why this belongs in a breakdown log:** it cost real diagnosis time and it is a trap that will
+recur. When a UI defect is reported, **check whether the reported string still exists in the
+tree before investigating the behaviour.** If it does not, the report is about cached code and
+the first move is a hard refresh, not a bug hunt.
+
 ## RUN 2 SUMMARY
 
 | # | Breakdown | Severity | Status |
@@ -789,6 +854,7 @@ moves is **open and unmeasured** — `stale_verdict_count` is the number to watc
 | 14 | Coordinator receipt discards exception message | MEDIUM | LIVE |
 | 15 | Manual CI recovery posts 1 of 2 required contexts | HIGH | LIVE |
 | 16 | Shared GitHub rate-limit budget | MEDIUM | LIVE |
+| 17 | Fleet dock freezes on a non-JSON error body | MEDIUM | LIVE — BUG-188 |
 | 6 | Review verdict invalidated by every push | HIGH | LIVE (unchanged) |
 | 9 | Reason codes never aggregated | HIGH | Partially fixed (COORD-50) |
 
