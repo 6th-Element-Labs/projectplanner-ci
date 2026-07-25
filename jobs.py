@@ -381,7 +381,29 @@ def background_job(job_name: str = "", project: str = ""):
     return result
 
 
+def retention_sweep():
+    """Age out operational scratch (idempotency_keys, webhook_inbox) across projects.
+
+    These are the machinery's short-term memory, not business truth, and neither had any
+    expiry — together they reached 261 MB, ~30% of a database already larger than the
+    box's RAM. Windows and their justification live in
+    src/switchboard/storage/repositories/operational_retention.py.
+
+    Set PM_RETENTION_DRY_RUN=1 to report without deleting.
+    """
+    dry_run = str(os.environ.get("PM_RETENTION_DRY_RUN") or "").strip().lower() in (
+        "1", "true", "yes", "on")
+    projects = _configured_projects("PM_RETENTION_PROJECTS", "all")
+    for project_id in projects:
+        report = store.prune_operational_tables(
+            project=project_id, dry_run=dry_run, actor="jobs/retention_sweep")
+        # Print real numbers rather than a bare success line: a sweep that silently
+        # deletes nothing for weeks should be visible in the journal.
+        print(json.dumps(report, sort_keys=True), flush=True)
+
+
 JOBS = {"weekly_digest": weekly_digest, "poll_inbox": poll_inbox,
+        "retention_sweep": retention_sweep,
         "summarize_pending": summarize_pending, "narrate_pending": narrate_pending,
         "narrate_events": narrate_events,
         "sweep_monitors": sweep_monitors,

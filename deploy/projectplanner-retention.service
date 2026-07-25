@@ -1,0 +1,40 @@
+# /etc/systemd/system/projectplanner-retention.service
+# One-shot service: age out operational scratch tables (idempotency_keys,
+# webhook_inbox) so they stop growing without bound. Business history is never in
+# scope. Triggered by projectplanner-retention.timer.
+[Unit]
+Description=ProjectPlanner operational retention sweep
+After=network.target
+
+[Service]
+Slice=projectplanner-batch.slice
+Type=oneshot
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=512M
+# HARDEN-55: dedicated non-login service account (not the general `ubuntu` login).
+User=projectplanner
+Group=projectplanner
+WorkingDirectory=/opt/projectplanner
+EnvironmentFile=/opt/projectplanner/.env
+# Sequential DELETE over large tables under a batch cgroup cap: disable mmap for the
+# same reason reconcile does, so per-connection maps do not accumulate here.
+Environment=PM_SQLITE_MMAP_BYTES=0
+Environment=PYTHONDONTWRITEBYTECODE=1
+RuntimeDirectory=projectplanner
+ExecStart=/usr/bin/flock -n /run/projectplanner/retention.lock /opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py retention_sweep
+StandardOutput=journal
+StandardError=journal
+# HARDEN-55: runtime least-privilege sandbox.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths=/var/lib/projectplanner

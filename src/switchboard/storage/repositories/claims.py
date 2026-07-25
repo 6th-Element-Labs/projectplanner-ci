@@ -17,6 +17,7 @@ import sqlite3
 import time
 import uuid
 from contextlib import nullcontext
+from collections.abc import Mapping
 from typing import Any, Dict, List, Optional, Tuple
 
 import evidence_claims
@@ -2069,12 +2070,48 @@ def _task_required_capabilities(task: Dict[str, Any]) -> List[str]:
     return sorted({c.strip().lower() for c in caps if c and c.strip()})
 
 
+# Fields an evidence object may use to state its own verdict. Checked in order; the first
+# one present decides. `ok`/`clean`/`passed` are affirmative, so their value is used as-is.
+_EVIDENCE_VERDICT_FIELDS = ("ok", "clean", "passed", "status", "result", "verdict")
+# `dirty`/`failed` mean the opposite, so a truthy value there is a NEGATIVE verdict.
+_EVIDENCE_NEGATIVE_FIELDS = ("dirty", "failed", "error")
+_EVIDENCE_TRUTHY_WORDS = {"1", "true", "yes", "y", "ok", "pass", "passed", "clean"}
+
+
 def _evidence_truthy(value: Any) -> bool:
+    """Is this piece of completion evidence asserting a clean/passing result?
+
+    Accepts a structured object as well as a scalar. It used to be scalar-only, so an
+    agent that recorded the richer, more useful form —
+    ``{"schema": ..., "ok": true, "exit_code": 0}`` — had it stringified into something
+    matching nothing and silently read as FALSE. Completion then failed with
+    `missing_diff_check` and no hint that the *shape*, not the result, was the problem.
+    Producing better evidence should not be punished, and this sits on the path of every
+    code_strict completion.
+
+    A mapping is judged by its own verdict field rather than by being non-empty, so
+    ``{"ok": false}`` and ``{"dirty": true}`` stay false — an object that says it failed
+    must never read as a pass.
+    """
     if isinstance(value, bool):
         return value
     if value is None:
         return False
-    return str(value).strip().lower() in {"1", "true", "yes", "y", "ok", "pass", "passed", "clean"}
+    if isinstance(value, Mapping):
+        for field in _EVIDENCE_NEGATIVE_FIELDS:
+            if field in value:
+                # e.g. {"dirty": true} -> not clean; {"dirty": false} keeps looking.
+                if _evidence_truthy(value.get(field)):
+                    return False
+        for field in _EVIDENCE_VERDICT_FIELDS:
+            if field in value:
+                return _evidence_truthy(value.get(field))
+        # No verdict field at all: refuse rather than assume. Silently passing an
+        # unrecognized object is how this class of bug starts.
+        return False
+    if isinstance(value, (list, tuple, set)):
+        return bool(value) and all(_evidence_truthy(item) for item in value)
+    return str(value).strip().lower() in _EVIDENCE_TRUTHY_WORDS
 
 
 def _evidence_sequence(value: Any) -> List[Any]:

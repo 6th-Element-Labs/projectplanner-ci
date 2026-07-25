@@ -1,0 +1,21 @@
+# /etc/systemd/system/projectplanner-retention.timer
+# Ages out operational scratch daily. Retention windows are days, so there is nothing
+# to gain from running this often — and a daily off-peak sweep keeps the DELETE work
+# away from the fleet's busy periods on a 2-vCPU box.
+# To enable:
+#   sudo cp projectplanner-retention.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now projectplanner-retention.timer
+[Unit]
+Description=ProjectPlanner operational retention sweep (daily)
+
+[Timer]
+OnCalendar=*-*-* 04:20:00
+RandomizedDelaySec=20m
+# Survive downtime: if the box was off at 04:20, sweep on the next boot rather than
+# skipping a day and letting the tables drift further.
+Persistent=true
+AccuracySec=1m
+
+[Install]
+WantedBy=timers.target

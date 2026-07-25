@@ -28,6 +28,10 @@ os.environ["PM_SWITCHBOARD_DB_PATH"] = str(TMP / "switchboard.db")
 os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = str(TMP / "project_registry.db")
 os.environ["PM_DYNAMIC_PROJECTS_DIR"] = str(TMP)
 os.environ["PM_AUTH_MODE"] = "dev-open"
+# This suite patches _execute_run rather than injecting a CommandRunner, so it never
+# shells out to git. Satisfy the credential pre-flight explicitly — the thing under test
+# here is terminal-state retry, not authentication.
+os.environ["PM_GITHUB_TOKEN"] = "test-token-not-used"
 
 import store  # noqa: E402
 import external_ci_mirror  # noqa: E402

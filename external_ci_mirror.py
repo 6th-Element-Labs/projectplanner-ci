@@ -35,6 +35,39 @@ def _truthy(value: Any) -> bool:
         "1", "true", "yes", "on"}
 
 
+# Env vars any of which give git/gh a usable credential for the canonical repo.
+GITHUB_CREDENTIAL_ENV_VARS = (
+    "PM_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN",
+    "SWITCHBOARD_CI_GITHUB_TOKEN", "SWITCHBOARD_CI_DISPATCH_TOKEN",
+    "PRIVATE_READ_TOKEN",
+)
+
+
+def _github_credential_error() -> str:
+    """Return a human-actionable message if no GitHub credential is visible, else ''.
+
+    Cheap pre-flight so a credential-less caller is refused before any run state is
+    created. Deliberately env-only: it must not shell out or hit the network on the hot
+    path, and every real dispatcher gets its token from the service EnvironmentFile.
+    """
+    if any(str(os.environ.get(name) or "").strip()
+           for name in GITHUB_CREDENTIAL_ENV_VARS):
+        return ""
+    import getpass
+    try:
+        user = getpass.getuser()
+    except Exception:  # pragma: no cover - getpass is environment-dependent
+        user = "unknown"
+    return (
+        "no GitHub credential in the environment "
+        f"(checked {', '.join(GITHUB_CREDENTIAL_ENV_VARS)}); running as user {user!r}. "
+        "The mirror push would fail with \"could not read Username for "
+        "'https://github.com'\". Run as the service account with its EnvironmentFile "
+        "loaded — e.g. sudo -u projectplanner with /opt/projectplanner/.env sourced — "
+        "not as root."
+    )
+
+
 class ExternalCiError(Exception):
     def __init__(self, failure_class: str, message: str, result: Optional[Dict[str, Any]] = None):
         super().__init__(message)
@@ -263,6 +296,21 @@ def request_external_ci_mirror_run(request: Dict[str, Any], source_path: str,
     if not source_path or not os.path.isdir(source_path):
         return {"error": "source_path must be an existing local git checkout",
                 "failure_class": "mirror_sync_failed"}
+    # Only meaningful when we are about to shell out to the real git/gh. A caller that
+    # injected its own CommandRunner has replaced that layer outright, so an environment
+    # credential check says nothing about whether ITS commands can authenticate.
+    credential_error = "" if runner is not None else _github_credential_error()
+    if credential_error:
+        # Fail BEFORE creating/claiming a run. Discovering this mid-push is what left a
+        # run in `error`, and until BUG-180 that permanently poisoned the SHA. The
+        # classic trigger is running this by hand as root (`sudo`) instead of as the
+        # service account: the daemon has git credentials, root does not, so the push
+        # dies with "could not read Username for 'https://github.com'". Refusing up
+        # front costs nothing and leaves no wreckage to clean up.
+        return {"error": credential_error,
+                "failure_class": "mirror_sync_failed",
+                "skip_reason": "github_credentials_unavailable",
+                "dispatched": False, "ok": False}
     request = dict(request or {})
     # The execution owner is server-owned identity. The REST route forwards the
     # caller's raw body, so accepting an owner from it would let a caller choose
