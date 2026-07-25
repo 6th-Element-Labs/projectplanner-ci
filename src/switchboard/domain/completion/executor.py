@@ -228,12 +228,66 @@ def _escalate_human(
     }
 
 
+#: Wake states that mean the dispatch this effect points at is over and did not
+#: deliver a runner.  Anything else (pending/claimed/completed) is still viable.
+_DEAD_WAKE_STATES = frozenset({"failed", "cancelled", "expired"})
+
+
+def _dead_wake(result: Any) -> str:
+    """Return a reason when the readback's wake is terminal-without-a-runner.
+
+    BUG-189: ``start_task`` reports ``started: true`` when it binds to an already
+    requested generation, and its capacity readback carries that wake's real
+    status.  A dispatch that attaches to a dead wake therefore looked like a
+    success, verified in the external-effect ledger, and left the task pointing
+    at a wake that would never produce a runner.  The wake row records why it
+    died (``result_json.failure_class`` / ``reason``); surface that rather than
+    inventing a generic message.
+    """
+    row = _map(result)
+    capacity = _map(row.get("capacity"))
+    status = str(capacity.get("wake_status") or row.get("wake_status") or "").strip().lower()
+    if status not in _DEAD_WAKE_STATES:
+        return ""
+    wake_id = str(capacity.get("wake_id") or row.get("wake_id") or "") or "(unknown)"
+    detail = str(capacity.get("wake_failure_reason")
+                 or capacity.get("failure_class") or "").strip()
+    return (f"dispatch bound to wake {wake_id} which is {status}"
+            + (f": {detail}" if detail else ""))
+
+
+def _effect_diagnostics(existing_effect: Mapping[str, Any]) -> dict[str, Any]:
+    """The ledger's own account of why a suppressed effect is not progressing.
+
+    BUG-189: every early return below already holds the ledger row, which
+    carries ``last_error``, ``retry_count`` and ``resource``.  Dropping them
+    turned "start_task refused: Project execution readiness is blocked." into a
+    contentless ``effect_retry_backoff`` on every tick for eight hours, and cost
+    a full day of rediscovering a string the system had the whole time.  A
+    suppressed effect must always say what it is suppressed *by*.
+    """
+    row = _map(existing_effect)
+    out: dict[str, Any] = {}
+    if row.get("last_error"):
+        out["last_error"] = str(row.get("last_error"))
+    if row.get("resource"):
+        out["resource"] = str(row.get("resource"))
+    try:
+        out["retry_count"] = int(row.get("retry_count") or 0)
+    except (TypeError, ValueError):
+        out["retry_count"] = 0
+    return out
+
+
 def _effect_failed(result: Any) -> str:
     row = _map(result)
     if row.get("error") or row.get("refused"):
         return str(row.get("error") or row.get("reason") or "effect refused")
     if row.get("action") == "refused":
         return str(row.get("reason") or "effect refused")
+    dead = _dead_wake(row)
+    if dead:
+        return dead
     try:
         if int(row.get("returncode") or 0) != 0:
             return str(row.get("stderr") or f"returncode={row['returncode']}")
@@ -330,6 +384,7 @@ def _execute_mutating_effect(
                 "pending": True,
                 "idempotent_replay": True,
                 "reason": "effect_issued_awaiting_readback",
+                **_effect_diagnostics(existing_effect),
             },
         }
     if (
@@ -354,6 +409,7 @@ def _execute_mutating_effect(
                 "pending": True,
                 "idempotent_replay": True,
                 "reason": "effect_claim_in_flight",
+                **_effect_diagnostics(existing_effect),
             },
         }
     if not ledger.get("claimed") and existing_effect.get("status") == "failed":
@@ -378,6 +434,7 @@ def _execute_mutating_effect(
                     "idempotent_replay": True,
                     "reason": "effect_retry_backoff",
                     "retry_after_seconds": retry_after - age,
+                    **_effect_diagnostics(existing_effect),
                 },
             }
         ledger = external_effects.retry_external_effect(
@@ -402,6 +459,7 @@ def _execute_mutating_effect(
                     "pending": True,
                     "idempotent_replay": True,
                     "reason": "effect_retry_claim_lost",
+                **_effect_diagnostics(existing_effect),
                 },
             }
     elif (

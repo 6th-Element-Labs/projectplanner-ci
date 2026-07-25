@@ -114,8 +114,48 @@ def attach_completion_projection(
     if run:
         task["completion_run"] = dict(run)
     if projection:
+        _attach_blocked_reason(projection, task_id, project=project)
         task["completion_projection"] = projection
     return task
+
+
+def _attach_blocked_reason(
+        projection: dict[str, Any], task_id: str, *, project: str) -> None:
+    """Name the effect-level failure the run is stalled on, if there is one.
+
+    BUG-189: ``retry_deadline`` said *when* the next attempt was due and nothing
+    said *why* the last one failed, so a completion stuck on a config-level
+    refusal was indistinguishable from one merely waiting. The external-effect
+    ledger holds ``last_error`` the whole time; surface it next to the deadline.
+
+    Best-effort by construction: this is an additive read on a projection that
+    several surfaces poll, so any failure leaves the projection exactly as it
+    was rather than degrading task retrieval.
+    """
+    if projection.get("terminal"):
+        return
+    try:
+        from switchboard.storage.repositories import external_effects
+
+        rows = [
+            row for row in external_effects.list_external_effects(
+                project=project, task_id=task_id, status="failed") or []
+            if _mapping(row).get("effect_type") == "completion_effect"
+        ]
+    except Exception:
+        return
+    if not rows:
+        return
+    newest = max(rows, key=lambda row: float(_mapping(row).get("updated_at") or 0))
+    newest = _mapping(newest)
+    if not newest.get("last_error"):
+        return
+    projection["blocked_reason"] = str(newest.get("last_error"))
+    projection["blocked_effect"] = str(newest.get("resource") or "")
+    try:
+        projection["blocked_retry_count"] = int(newest.get("retry_count") or 0)
+    except (TypeError, ValueError):
+        projection["blocked_retry_count"] = 0
 
 
 def attach_many(
