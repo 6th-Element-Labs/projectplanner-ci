@@ -30,8 +30,13 @@ the Deliverables UI; pause/resume/stop is durable per scope.
   target fails closed. Archiving without a replacement explicitly stops the
   scope and atomically records an audit event plus an acknowledged operator
   message; silent scope loss is forbidden.
-- Project and lane allowlists fail closed. Paused lanes are removed between
-  deliverable effects; a project pause stops the whole project loop.
+- Active projects are rediscovered from the project registry and execution
+  policy on every sweep. Each project must have a valid active policy with
+  Autopilot enabled, then pass the authoritative execution-readiness gate
+  before the coordinator acquires its lease or starts work.
+- `PM_COORDINATOR_AUTOPILOT_PROJECTS` is an optional emergency ceiling, not
+  project authority. Paused lanes are removed between deliverable effects; a
+  project pause stops the whole project loop.
 - Generic deliverable drain selects flow-role links. Foundation, historical,
   moved, skipped, and parked links remain visible but are never generic
   automatic candidates.
@@ -41,7 +46,7 @@ the Deliverables UI; pause/resume/stop is durable per scope.
 | Variable | Default | Meaning |
 |---|---|---|
 | `PM_COORDINATOR_AUTOPILOT_PROFILE` | `autopilot-default` | Stable lease/control namespace |
-| `PM_COORDINATOR_AUTOPILOT_PROJECTS` | `switchboard` | Project allowlist |
+| `PM_COORDINATOR_AUTOPILOT_PROJECTS` | empty | Optional emergency project ceiling; registry policy remains authoritative |
 | `PM_COORDINATOR_AUTOPILOT_LANES` | empty (all) | Optional lane allowlist |
 | `PM_COORDINATOR_AUTOPILOT_ACT` | `0` in code, `1` in service | Enable effects for active scopes; no scopes is idle |
 | `PM_COORDINATOR_AUTOPILOT_POLL_SECONDS` | `30` | Loop interval |

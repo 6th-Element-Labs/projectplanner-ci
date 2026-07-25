@@ -49,7 +49,9 @@ def _csv(value: Any, *, upper: bool = False) -> tuple[str, ...]:
 @dataclass(frozen=True)
 class DaemonConfig:
     profile_id: str = "autopilot-default"
-    projects: tuple[str, ...] = ("switchboard",)
+    # Optional emergency ceiling.  The registry + execution policy are the
+    # authority; an empty tuple admits every policy-enabled project.
+    projects: tuple[str, ...] = ()
     allowed_lanes: tuple[str, ...] = ()
     actor: str = "switchboard/coordinator-autopilot"
     act: bool = False
@@ -72,7 +74,7 @@ class DaemonConfig:
         return cls(
             profile_id=(env.get("PM_COORDINATOR_AUTOPILOT_PROFILE")
                         or "autopilot-default").strip(),
-            projects=_csv(env.get("PM_COORDINATOR_AUTOPILOT_PROJECTS", "switchboard")),
+            projects=_csv(env.get("PM_COORDINATOR_AUTOPILOT_PROJECTS", "")),
             allowed_lanes=_csv(env.get("PM_COORDINATOR_AUTOPILOT_LANES", ""), upper=True),
             actor=(env.get("PM_COORDINATOR_AUTOPILOT_ACTOR")
                    or "switchboard/coordinator-autopilot").strip(),
@@ -154,6 +156,97 @@ class CoordinatorDaemon:
         self.sleeper = sleeper or time.sleep
         self.lifecycle_runner = lifecycle_runner
         self._stop = False
+        self._admitted_projects: tuple[str, ...] = ()
+
+    def _registry_project_ids(self) -> tuple[str, ...]:
+        project_ids = getattr(self.store, "project_ids", None)
+        if not callable(project_ids):
+            # Small injected stores used by offline/recovery tooling may expose
+            # only the configured project surface. Production ``store`` exports
+            # the registry accessor and always takes the dynamic path.
+            if self.config.projects:
+                return self.config.projects
+            from switchboard.storage.repositories.access import project_ids
+        return _csv(project_ids())
+
+    def _execution_policy(self, project: str) -> Dict[str, Any]:
+        getter = getattr(self.store, "get_project_execution_policy", None)
+        if not callable(getter):
+            if not callable(getattr(self.store, "project_ids", None)) \
+                    and project in self.config.projects:
+                return {
+                    "configured": True,
+                    "valid": True,
+                    "lifecycle": {"status": "active"},
+                    "autopilot": {"enabled": True},
+                }
+            from switchboard.storage.repositories.project_execution_policy import (
+                get_project_execution_policy as getter,
+            )
+        return dict(getter(project) or {})
+
+    def _execution_readiness(self, project: str) -> Dict[str, Any]:
+        getter = getattr(self.store, "get_project_execution_readiness", None)
+        if not callable(getter):
+            if not callable(getattr(self.store, "project_ids", None)) \
+                    and project in self.config.projects:
+                return {"passed": True, "status": "ready", "blockers": []}
+            from switchboard.storage.repositories.project_execution_readiness import (
+                get_project_execution_readiness as getter,
+            )
+        return dict(getter(project) or {})
+
+    def discover_projects(self) -> tuple[str, ...]:
+        """Resolve live Autopilot authority from the registry on every tick.
+
+        The environment list is deliberately only a kill-switch ceiling.  New
+        policy-enabled projects appear without a process restart; disabled or
+        archived policies disappear just as quickly.
+        """
+        ceiling = set(self.config.projects)
+        admitted = []
+        for project in self._registry_project_ids():
+            if ceiling and project not in ceiling:
+                continue
+            # Registry/policy failures are operational signals, not "project
+            # absent". Let the sweep fail loudly instead of silently shrinking
+            # the coordinator's authority set.
+            policy = self._execution_policy(project)
+            lifecycle = policy.get("lifecycle") or {}
+            autopilot = policy.get("autopilot") or {}
+            if (
+                policy.get("configured")
+                and policy.get("valid")
+                and str(lifecycle.get("status") or "").lower() == "active"
+                and bool(autopilot.get("enabled"))
+            ):
+                admitted.append(project)
+        return tuple(sorted(admitted))
+
+    def _readiness_refusal(self, project: str,
+                           readiness: Dict[str, Any]) -> Dict[str, Any]:
+        blockers = list(readiness.get("blockers") or [])
+        result = {
+            "schema": RUN_SCHEMA,
+            "project": project,
+            "status": "blocked_readiness",
+            "leader": False,
+            "acting": self.config.act,
+            "decision": {
+                "schema": "switchboard.coordinator_project_admission.v1",
+                "action": "refuse_start",
+                "reason_code": (
+                    readiness.get("reason_code")
+                    or (blockers[0].get("code") if blockers else "")
+                    or "project_execution_readiness_blocked"
+                ),
+                "readiness": readiness,
+            },
+        }
+        self.store.append_activity(
+            "coordinator.daemon.project_refused", self.config.actor,
+            result["decision"], project=project)
+        return result
 
     def _drain_lifecycle(self, project: str) -> Dict[str, Any]:
         """Publish an auditable zero-work-driving action census."""
@@ -252,7 +345,7 @@ class CoordinatorDaemon:
             control={
                 "mode": "janitor",
                 "profile_id": self.config.profile_id,
-                "project_allowlist": list(self.config.projects),
+                "project_allowlist": list(self._admitted_projects),
                 "lane_allowlist": list(self.config.allowed_lanes),
                 "acting": False,
             },
@@ -481,8 +574,12 @@ class CoordinatorDaemon:
         )
 
     def tick_project(self, project: str) -> Dict[str, Any]:
-        if project not in self.config.projects:
+        admitted = self._admitted_projects or self.discover_projects()
+        if project not in admitted:
             return {"project": project, "status": "denied_project"}
+        readiness = self._execution_readiness(project)
+        if not readiness.get("passed") or readiness.get("status") != "ready":
+            return self._readiness_refusal(project, readiness)
         now = float(self.clock())
         self._register_or_heartbeat(project)
         state = self._state(project)
@@ -564,10 +661,14 @@ class CoordinatorDaemon:
                 "state": state}
 
     def tick(self) -> Dict[str, Any]:
-        receipts = [self.tick_project(project) for project in self.config.projects]
+        # Re-read the registry and policy on every sweep.  This is the dynamic
+        # add/remove boundary and prevents a stale process-local allowlist from
+        # retaining dispatch authority.
+        self._admitted_projects = self.discover_projects()
+        receipts = [self.tick_project(project) for project in self._admitted_projects]
         return {"schema": RUN_SCHEMA, "profile_id": self.config.profile_id,
                 "instance_id": self.instance_id, "projects": receipts,
-                "ok": bool(receipts) and all(
+                "ok": all(
                     row.get("status") not in {"denied_project"} for row in receipts)}
 
     def stop(self, *_args: Any) -> None:

@@ -17,7 +17,9 @@ WorkingDirectory=/opt/projectplanner
 EnvironmentFile=/opt/projectplanner/.env
 Environment=PM_SQLITE_MMAP_BYTES=0
 Environment=PYTHONDONTWRITEBYTECODE=1
-Environment=PM_COORDINATOR_AUTOPILOT_PROJECTS=switchboard
+# Projects are discovered from active Autopilot-enabled execution policies.
+# PM_COORDINATOR_AUTOPILOT_PROJECTS may be set in .env only as an emergency
+# ceiling; leaving it unset permits registry-driven dynamic add/remove.
 # ADR-0008 W2: the scoped completion coordinator drives operator-armed
 # scopes to Done. ACT=1 is the default; work only moves when an operator
 # Starts a task or deliverable, and dormant scopes stay dormant until then.
