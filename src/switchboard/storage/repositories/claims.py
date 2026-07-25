@@ -2158,6 +2158,122 @@ def _completion_evidence_has_tests(evidence: Dict[str, Any],
     return bool(str(hygiene.get("verification") or "").strip())
 
 
+# The closed vocabulary of the executed-test-run contract, named once.
+#
+# COORD-61: these were two identical inline tuples inside
+# ``_executed_test_run_candidates`` and one inside
+# ``_executed_test_run_has_output_hash``. Naming them is not cosmetic — the gate now
+# *reports* what it looked for, and a report derived from a copy of the list would
+# drift from the list actually enforced. Same rule as the reason-code registry: the
+# vocabulary gets one owner.
+EXECUTED_TEST_RUN_PRIMARY_KEY = "executed_test_run"
+
+EXECUTED_TEST_RUN_KEYS: Tuple[str, ...] = (
+    "executed_test_run",
+    "executed_test_runs",
+    "test_run",
+    "test_runs",
+    "test_results",
+    "verification_run",
+    "verification_runs",
+)
+
+EXECUTED_TEST_RUN_HASH_KEYS: Tuple[str, ...] = (
+    "output_hash",
+    "output_sha256",
+    "stdout_sha256",
+    "stderr_sha256",
+    "log_hash",
+    "logs_hash",
+    "artifact_hash",
+    "result_hash",
+)
+
+# Where the gate looks, in the order it looks. Reported so a worker is told the
+# surface as well as the key — CO-21 wrote a valid run to the right surface under the
+# wrong key, and naming only the key would have been half an answer.
+EXECUTED_TEST_RUN_READ_SURFACES: Tuple[str, ...] = (
+    "claim evidence",
+    "work_session.hygiene",
+)
+
+# Tokens that mark a key as *meant* to be a test run. Deliberately narrow: "check"
+# is excluded because ``git_diff_check`` is a different legitimate evidence field and
+# reporting it as a near-miss would send a worker after the wrong thing.
+_TEST_RUN_INTENT_TOKENS = frozenset({
+    "test", "tests", "testing", "testrun", "suite", "suites", "spec", "specs",
+    "verification", "verifications", "verify",
+})
+
+# A stray-key report must stay bounded; evidence blobs are agent-authored.
+MAX_NEAR_MISS_KEYS = 6
+
+
+def _looks_like_test_run_intent(key: str) -> bool:
+    """Report whether ``key`` plausibly meant to carry an executed test run."""
+    tokens = str(key or "").strip().lower().replace("-", "_").split("_")
+    return any(token in _TEST_RUN_INTENT_TOKENS for token in tokens)
+
+
+def _executed_test_run_near_misses(
+    evidence: Dict[str, Any],
+    session: Optional[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Keys that plausibly meant to satisfy the contract but are not in it.
+
+    COORD-61 / the COORD-51 amendment. Live on CO-21: a runner executed five real
+    suites and recorded them under ``executed_tests``. The gate reads
+    ``executed_test_run``, refused with ``missing_executed_test_run``, and the repair
+    dispatch was handed that bare code — so a second agent re-ran the diagnosis and
+    changed nothing, while the near-miss sat one key away in
+    worksession-aa0ccd80bb504bbd. This is derivable at the moment of refusal from the
+    dicts already in hand; recomputing it later, or never, is the defect.
+    """
+    accepted = set(EXECUTED_TEST_RUN_KEYS)
+    session_id = str((session or {}).get("work_session_id") or "").strip()
+    hygiene = (session or {}).get("hygiene") or {}
+    found: List[Dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for surface, blob, holder in (
+        ("evidence", evidence or {}, ""),
+        ("hygiene", hygiene, session_id),
+    ):
+        if not isinstance(blob, dict):
+            continue
+        for key in blob:
+            name = str(key)
+            if name in accepted or not _looks_like_test_run_intent(name):
+                continue
+            if blob.get(key) in (None, "", [], {}):
+                continue
+            if (surface, name) in seen:
+                continue
+            seen.add((surface, name))
+            entry = {"key": name, "surface": f"{surface}.{name}"}
+            if holder:
+                entry["work_session_id"] = holder
+            found.append(entry)
+    found.sort(key=lambda item: (item["surface"], item["key"]))
+    return found[:MAX_NEAR_MISS_KEYS]
+
+
+def _missing_artifact_report(evidence: Dict[str, Any],
+                             session: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """What the gate required, where it looked, and what nearly matched."""
+    report = {
+        "schema": MISSING_ARTIFACT_SCHEMA,
+        "expected_key": EXECUTED_TEST_RUN_PRIMARY_KEY,
+        "expected_schema": EXECUTED_TEST_RUN_SCHEMA,
+        "accepted_keys": list(EXECUTED_TEST_RUN_KEYS),
+        "accepted_hash_keys": list(EXECUTED_TEST_RUN_HASH_KEYS),
+        "read_surfaces": list(EXECUTED_TEST_RUN_READ_SURFACES),
+    }
+    near_miss = _executed_test_run_near_misses(evidence, session)
+    if near_miss:
+        report["found_near_miss"] = near_miss
+    return report
+
+
 def _executed_test_run_candidates(evidence: Dict[str, Any],
                                   session: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
     candidates: List[Dict[str, Any]] = []
@@ -2174,26 +2290,10 @@ def _executed_test_run_candidates(evidence: Dict[str, Any],
             for item in value:
                 add(item, source)
 
-    for key in (
-        "executed_test_run",
-        "executed_test_runs",
-        "test_run",
-        "test_runs",
-        "test_results",
-        "verification_run",
-        "verification_runs",
-    ):
+    for key in EXECUTED_TEST_RUN_KEYS:
         add(evidence.get(key), f"evidence.{key}")
     hygiene = (session or {}).get("hygiene") or {}
-    for key in (
-        "executed_test_run",
-        "executed_test_runs",
-        "test_run",
-        "test_runs",
-        "test_results",
-        "verification_run",
-        "verification_runs",
-    ):
+    for key in EXECUTED_TEST_RUN_KEYS:
         add(hygiene.get(key), f"hygiene.{key}")
     return candidates
 
@@ -2208,16 +2308,7 @@ def _executed_test_run_commands(run: Dict[str, Any]) -> List[Any]:
 
 
 def _executed_test_run_has_output_hash(run: Dict[str, Any]) -> bool:
-    for key in (
-        "output_hash",
-        "output_sha256",
-        "stdout_sha256",
-        "stderr_sha256",
-        "log_hash",
-        "logs_hash",
-        "artifact_hash",
-        "result_hash",
-    ):
+    for key in EXECUTED_TEST_RUN_HASH_KEYS:
         if str(run.get(key) or "").strip():
             return True
     return False
@@ -2292,12 +2383,17 @@ def _executed_test_run_gate(evidence: Dict[str, Any],
             return {"ok": True, "schema": EXECUTED_TEST_RUN_SCHEMA,
                     "source": source, "run_id": run_id, "run": clean}
         problems.append({"source": source, "run_id": run_id, "problems": run_problems})
+    # COORD-61: the refusal now carries what was required and what nearly matched.
+    # Every input needed for this is already in this function's arguments, so the only
+    # reason a repair runner ever received a contentless `missing_executed_test_run`
+    # was that the answer was computed here and thrown away.
     return {"ok": False, "schema": EXECUTED_TEST_RUN_SCHEMA,
             "reason": "missing_executed_test_run" if not candidates else "invalid_executed_test_run",
             "message": (
                 "Completion evidence must include a passing executed test run with commands, "
                 "completion time, and output/log hash."
             ),
+            "missing_artifact": _missing_artifact_report(evidence, session),
             "problems": problems}
 
 

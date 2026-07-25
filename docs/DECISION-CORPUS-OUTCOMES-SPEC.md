@@ -170,6 +170,24 @@ additive migration has not run — losing merge provenance would be far worse th
 unrecorded outcome. Absence returns `skipped: true, reason: "decision_records_absent"`;
 every other storage fault still propagates.
 
+**§3.3 extends to the evidence family (COORD-61).** §3.3 was written against
+`_required_ci_decision`, but the same compute-then-discard existed one family over: the
+merge gate refused with a bare `missing_executed_test_run` and dropped everything it knew
+about what it had required and what it had actually found. Measured on CO-21, 2026-07-25 —
+a runner executed five real suites and wrote them under `executed_tests`; the attempt-2
+repair dispatch got the bare code, wrote nothing, orphaned a work session and exited, while
+the correct evidence sat one key away in `worksession-aa0ccd80bb504bbd`.
+
+As built, `_executed_test_run_gate` attaches a `switchboard.missing_artifact.v1` report to
+its refusal — `expected_key`, `expected_schema`, `accepted_keys`, `accepted_hash_keys`,
+`read_surfaces`, and `found_near_miss` (stray keys that plausibly meant to satisfy it, with
+the work-session id holding them). `_finding_decision` lifts it onto the decision after
+`_select_decision`, so it cannot enter the precedence key; it lands in `features_json` as a
+declared diagnostic and is stripped on export like the CI diagnostics. The accepted-key and
+hash-key tuples — previously written inline three times — are now single module constants,
+because a report built from a *copy* of the enforced list is the same drift defect in a new
+place.
+
 Also worth recording: retaining the failing-check identity had to be made **independent of
 context presentation order**. Taking "the first failing context" broke the 57,624-state
 permutation-invariance model in `tests/test_bug172_completion_classifier_model.py` — the

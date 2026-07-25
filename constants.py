@@ -167,6 +167,9 @@ MANAGED_WORK_SESSION_SCHEMA = "switchboard.managed_work_session.v1"
 WORK_SESSION_HEALTH_SCHEMA = "switchboard.session_health.v1"
 TASK_SESSION_HEALTH_SCHEMA = "switchboard.task_session_health.v1"
 EXECUTED_TEST_RUN_SCHEMA = "switchboard.executed_test_run.v1"
+# COORD-61: what an evidence gate required, where it looked, and what nearly matched.
+# Carried on the refusal so a repair runner is told the contract instead of rediscovering it.
+MISSING_ARTIFACT_SCHEMA = "switchboard.missing_artifact.v1"
 SESSION_POLICY_PROFILE_SCHEMA = "switchboard.session_policy_profiles.v1"
 WORK_SESSION_STATUSES = {"proposed", "active", "blocked", "completed", "archived", "expired"}
 WORK_SESSION_STORAGE_MODES = {"worktree", "clone", "external"}

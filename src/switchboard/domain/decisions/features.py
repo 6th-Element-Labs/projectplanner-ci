@@ -67,12 +67,20 @@ DIAGNOSTIC_FIELDS: tuple[str, ...] = (
     "failing_contexts",
     "failing_check_url",
     "failing_check_summary",
+    # COORD-61: the evidence-family analogue. What the gate required, where it looked,
+    # and which present-but-wrong key nearly satisfied it.
+    "missing_artifact",
 )
 
 # Bounded by construction: a PR with fifty required contexts must not write fifty
 # names into every episode, and a check description is untrusted upstream text.
 MAX_FAILING_CONTEXTS = 8
 MAX_SUMMARY_CHARS = 240
+# COORD-61 bounds for the missing_artifact block. A gate result is a nested blob and an
+# episode must not grow without limit.
+MAX_KEY_CHARS = 120
+MAX_ACCEPTED_KEYS = 12
+MAX_NEAR_MISS = 6
 
 OTHER = "other"
 NONE = "none"
@@ -303,8 +311,66 @@ def project_diagnostics(
     if summary:
         diagnostics["failing_check_summary"] = summary
 
+    artifact = _missing_artifact(verdict.get("missing_artifact"))
+    if artifact:
+        diagnostics["missing_artifact"] = artifact
+
     return {name: diagnostics[name] for name in DIAGNOSTIC_FIELDS
             if name in diagnostics}
+
+
+def _key_list(value: Any, limit: int) -> list[str]:
+    """A bounded, de-duplicated, order-stable list of key names."""
+    if not isinstance(value, (list, tuple)):
+        return []
+    names: list[str] = []
+    for item in value:
+        name = _clean_text(item, MAX_KEY_CHARS)
+        if name and name not in names:
+            names.append(name)
+    return names[:limit]
+
+
+def _missing_artifact(value: Any) -> dict[str, Any]:
+    """Normalize and bound the ``switchboard.missing_artifact.v1`` report (COORD-61).
+
+    The gate builds this; this function only bounds it. A gate result is a nested blob
+    that can carry the whole failing run, and an episode must not grow without limit —
+    the parent spec bounds snapshot bodies for the same reason.
+
+    Absent sub-fields are omitted rather than written empty, so a report that found no
+    near-miss is distinguishable from one that never looked.
+    """
+    report = _map(value)
+    if not report:
+        return {}
+    bounded: dict[str, Any] = {}
+    for name in ("schema", "expected_key", "expected_schema"):
+        text = _clean_text(report.get(name), MAX_KEY_CHARS)
+        if text:
+            bounded[name] = text
+    for name, limit in (
+        ("accepted_keys", MAX_ACCEPTED_KEYS),
+        ("accepted_hash_keys", MAX_ACCEPTED_KEYS),
+        ("read_surfaces", MAX_ACCEPTED_KEYS),
+    ):
+        names = _key_list(report.get(name), limit)
+        if names:
+            bounded[name] = names
+
+    near_miss: list[dict[str, Any]] = []
+    for item in (report.get("found_near_miss") or [])[:MAX_NEAR_MISS]:
+        entry = _map(item)
+        row: dict[str, Any] = {}
+        for name in ("key", "surface", "work_session_id"):
+            text = _clean_text(entry.get(name), MAX_KEY_CHARS)
+            if text:
+                row[name] = text
+        if row:
+            near_miss.append(row)
+    if near_miss:
+        bounded["found_near_miss"] = near_miss
+    return bounded
 
 
 def strip_diagnostics(features: Mapping[str, Any]) -> dict[str, Any]:
@@ -323,7 +389,10 @@ __all__ = [
     "DIAGNOSTIC_FIELDS",
     "FEATURES_VERSION",
     "FEATURE_FIELDS",
+    "MAX_ACCEPTED_KEYS",
     "MAX_FAILING_CONTEXTS",
+    "MAX_KEY_CHARS",
+    "MAX_NEAR_MISS",
     "MAX_SUMMARY_CHARS",
     "NONE",
     "OTHER",

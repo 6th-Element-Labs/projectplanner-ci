@@ -350,6 +350,42 @@ def _select_decision(
     ))
 
 
+#: Merge-gate finding codes whose refusal is about a *missing artifact* rather than a
+#: failed check. Their gate result carries a ``missing_artifact`` report naming the
+#: expected key, schema, accepted hash keys, read surfaces and any near-miss.
+_ARTIFACT_GATE_DETAIL_KEYS = ("executed_test_gate", "ui_playwright_gate")
+
+
+def _missing_artifact_identity(
+    findings: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Lift the ``missing_artifact`` report off an evidence-family gate finding.
+
+    COORD-61, extending COORD-51 §3.3 from the CI family to the evidence family. The
+    merge gate computed this at the moment it refused and it already rides on the
+    snapshot's findings; the classifier was dropping it, so a repair runner received a
+    bare ``missing_executed_test_run`` and re-derived nothing.
+
+    Measured on CO-21, 2026-07-25: a runner had executed five real suites and written
+    them under ``executed_tests``. The correct evidence was one key away in
+    worksession-aa0ccd80bb504bbd, and the attempt-2 repair dispatch — handed only the
+    reason code — wrote nothing, orphaned a fresh work session, and exited.
+
+    Read-only and diagnostic: it contributes no candidate and no precedence input.
+    """
+    for finding in findings:
+        if not isinstance(finding, Mapping):
+            continue
+        if finding.get("blocking") is False:
+            continue
+        details = _map(finding.get("details"))
+        for key in _ARTIFACT_GATE_DETAIL_KEYS:
+            report = _map(_map(details.get(key)).get("missing_artifact"))
+            if report:
+                return {"missing_artifact": report}
+    return {}
+
+
 def _finding_decision(findings: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
     """Map merge_gate codes; never infer a route from aggregate PR findings."""
     candidates: list[dict[str, Any]] = []
@@ -398,7 +434,13 @@ def _finding_decision(findings: Sequence[Mapping[str, Any]]) -> dict[str, Any] |
                 "blocked", "human", code or "unclassified_failed_gate",
                 board="Blocked",
             ))
-    return _select_decision(candidates)
+    selected = _select_decision(candidates)
+    # Attached AFTER selection, exactly as `_required_ci_decision` attaches the failing
+    # check identity: `_select_decision` keys only on route, reason_code and
+    # desired_role, so this cannot influence which blocker wins. Feature-only.
+    if selected is not None:
+        selected.update(_missing_artifact_identity(findings))
+    return selected
 
 
 def _is_merge_authorization_context(name: Any) -> bool:
