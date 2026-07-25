@@ -30,10 +30,12 @@ the Deliverables UI; pause/resume/stop is durable per scope.
   target fails closed. Archiving without a replacement explicitly stops the
   scope and atomically records an audit event plus an acknowledged operator
   message; silent scope loss is forbidden.
-- Active projects are rediscovered from the project registry and execution
-  policy on every sweep. Each project must have a valid active policy with
-  Autopilot enabled, then pass the authoritative execution-readiness gate
-  before the coordinator acquires its lease or starts work.
+- DHCP model (ADR-0008): an armed Autopilot **scope lease** is boot authority.
+  The coordinator asks `start_task`; Task Execution / Connect boots the runner.
+  Projects are rediscovered each sweep from (a) opted-in active execution
+  policy with Autopilot enabled, or (b) any project that already has an
+  active/paused scope. Readiness may refuse only **opted-in** projects
+  (BUG-190) — never starve an armed unconfigured dogfood board.
 - `PM_COORDINATOR_AUTOPILOT_PROJECTS` is an optional emergency ceiling, not
   project authority. Paused lanes are removed between deliverable effects; a
   project pause stops the whole project loop.
