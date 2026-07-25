@@ -255,6 +255,65 @@ def _strip_self_referential_mergeability(pr: Dict[str, Any]) -> Dict[str, Any]:
     return scrubbed
 
 
+def _record_merge_authorization(
+    resolved: List[Dict[str, Any]],
+    *,
+    repo: str,
+    number: int,
+    sha: str,
+    context: str,
+    state: str,
+    reason: str,
+    description: str,
+    blocked: List[Dict[str, Any]],
+) -> None:
+    """Persist the published authorization decision in Switchboard's own ledger.
+
+    A GitHub commit status carries only state/context/description, so the typed
+    ``code`` behind a red merge authorization is computed here and then thrown
+    away at the API boundary. An operator reading a red context on the PR has no
+    way back to *which* gate finding produced it.
+
+    This is diagnostics, never routing. The completion classifier deliberately
+    ignores this context and routes from the typed merge_gate findings already
+    on its snapshot (COORD-49); recording the code here must never become the
+    transport that re-introduces the round trip through GitHub.
+
+    Best-effort by construction: the CI gate's job is to publish the status. A
+    ledger write that fails is reported on stderr and never fails the gate.
+    """
+    for item in resolved:
+        task_id = str(item.get("task_id") or "")
+        project = str(item.get("project") or "")
+        if not task_id or not project:
+            continue
+        try:
+            store.append_activity(
+                "merge.authorization.published",
+                "switchboard-ci/merge-authorization",
+                {
+                    "repo": repo,
+                    "pr_number": number,
+                    "status_sha": sha,
+                    "context": context,
+                    "state": state,
+                    "reason_code": reason,
+                    "description": description,
+                    "blocking_codes": [
+                        str(finding.get("code") or "") for finding in blocked
+                    ],
+                    "routing_authority": False,
+                },
+                task_id=task_id,
+                project=project,
+            )
+        except Exception as exc:  # noqa: BLE001 - diagnostics must not gate CI
+            print(
+                f"warn: merge-authorization ledger write failed for {task_id}: {exc}",
+                file=sys.stderr,
+            )
+
+
 def run_merge_authorization_for_pr(
     pr: Dict[str, Any],
     *,
@@ -358,6 +417,12 @@ def run_merge_authorization_for_pr(
         target_url=pr_url,
         token=token,
     )
+    resolved_tasks = list(provenance.get("resolved") or [])
+    _record_merge_authorization(
+        resolved_tasks,
+        repo=repo, number=number, sha=sha, context=context,
+        state=state, reason=reason, description=description, blocked=blocked,
+    )
     return {
         "repo": repo,
         "pr": number,
@@ -365,7 +430,7 @@ def run_merge_authorization_for_pr(
         "context": context,
         "state": state,
         "reason": reason,
-        "task_ids": [item.get("task_id") for item in provenance.get("resolved") or []],
+        "task_ids": [item.get("task_id") for item in resolved_tasks],
         "gate_count": len(gate_results),
         "publish": publish if isinstance(publish, dict) else {"result": publish},
     }
