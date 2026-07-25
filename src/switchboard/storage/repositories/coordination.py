@@ -528,6 +528,33 @@ def task_start_ownership(task_id: str, *,
         raise
 
 
+
+def _dispatch_prior_attempts(
+    *, task_id: str, lifecycle: Dict[str, Any], project: str,
+) -> Optional[dict[str, Any]]:
+    """Bounded execution memory for this dispatch (COORD-52), or None.
+
+    Best-effort by construction: memory makes a worker smarter, and must never be able to
+    prevent one from starting. A corpus read that fails leaves the assignment exactly as it
+    was before this feature existed.
+    """
+    reason_code = str((lifecycle or {}).get("reason_code") or "").strip()
+    if not task_id or not reason_code:
+        return None
+    try:
+        from switchboard.domain.decisions.prior_attempts import build_prior_attempts
+        from switchboard.storage.repositories import decision_records
+
+        episodes = decision_records.list_decision_episodes(
+            project=project, task_id=task_id)
+        return build_prior_attempts(
+            episodes,
+            reason_code=reason_code,
+            head_sha=str((lifecycle or {}).get("head_sha") or ""),
+        )
+    except Exception:  # noqa: BLE001 — memory is additive; dispatch must not depend on it
+        return None
+
 def request_wake(selector: Dict[str, Any], reason: str = "",
                  source: str = "", policy: Optional[Dict[str, Any]] = None,
                  task_id: Optional[str] = None, principal_id: str = "",
@@ -640,6 +667,14 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
                     task_id=str(task_id or ""),
                     assignment=assignment,
                     lifecycle=admitted,
+                    # COORD-52: derived ONCE here, at dispatch, then carried verbatim.
+                    # Never re-derive on the claim path — see execution_assignment's
+                    # docstring for why exact-equality verification would fail.
+                    prior_attempts=_dispatch_prior_attempts(
+                        task_id=str(task_id or ""),
+                        lifecycle=admitted,
+                        project=project,
+                    ),
                 )
             wake_id = (
                 str((execution_lease or {}).get("wake_id") or "")

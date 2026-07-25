@@ -23,8 +23,21 @@ def build_execution_assignment(
     task_id: str,
     assignment: Mapping[str, Any],
     lifecycle: Mapping[str, Any],
+    prior_attempts: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Derive the complete immutable contract from admitted server state."""
+    """Derive the complete immutable contract from admitted server state.
+
+    ``prior_attempts`` (COORD-52) is bounded execution memory built by
+    ``domain.decisions.prior_attempts.build_prior_attempts`` at DISPATCH time and then
+    carried verbatim. It is passed in rather than derived here on purpose: this function is
+    re-run at claim time and compared to the stored contract with exact dict equality
+    (``require_exact_execution_assignment``), so a block re-derived from the append-only
+    corpus would drift between dispatch and claim and fail every claim. Callers on the
+    verification path must echo the stored value.
+
+    Omitted entirely when absent — a first-ever dispatch carries no key at all, because a
+    zeroed object reads as "nothing worked" rather than "there is no history".
+    """
 
     role = str(lifecycle.get("role") or "implementation")
     if role not in VALID_ROLES:
@@ -42,7 +55,7 @@ def build_execution_assignment(
     if not assignment_id:
         raise ExecutionAssignmentError("execution_assignment_id_missing")
 
-    return {
+    contract: dict[str, Any] = {
         "schema": SCHEMA,
         "task_id": str(task_id or "").strip().upper(),
         "execution_id": execution_id,
@@ -63,6 +76,9 @@ def build_execution_assignment(
         "route": str(lifecycle.get("route") or ""),
         "acceptance_findings": list(lifecycle.get("acceptance_findings") or []),
     }
+    if prior_attempts:
+        contract["prior_attempts"] = dict(prior_attempts)
+    return contract
 
 
 def require_exact_execution_assignment(
