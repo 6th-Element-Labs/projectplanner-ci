@@ -131,7 +131,7 @@ finally:
 # removed from connect_dispatch, widen the gate in the same change - do not let
 # the two files disagree again.
 dispatch_src = (ROOT / "src/switchboard/application/commands/connect_dispatch.py").read_text()
-ok('if configured_policy.get("configured"):' in dispatch_src,
+ok('if get_project_execution_policy(project).get("configured"):' in dispatch_src,
    "connect_dispatch still gates strict resolution on opt-in (the contract this matches)")
 
 print(f"\nBUG-190 readiness gate opt-in only: {passed} passed, {failed} failed")
