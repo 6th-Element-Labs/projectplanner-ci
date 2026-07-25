@@ -11,6 +11,7 @@ from .routing import task_ready_for_dispatch
 from .state_machine import (
     COMPLETION_DECISION_SCHEMA,
     COMPLETION_SNAPSHOT_SCHEMA,
+    MERGE_AUTHORIZATION_CONTEXT,
     build_completion_snapshot,
     classify_completion,
 )
@@ -18,6 +19,7 @@ from .state_machine import (
 __all__ = [
     "COMPLETION_DECISION_SCHEMA",
     "COMPLETION_SNAPSHOT_SCHEMA",
+    "MERGE_AUTHORIZATION_CONTEXT",
     "build_completion_snapshot",
     "build_human_closeout_request",
     "classify_completion",

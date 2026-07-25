@@ -44,6 +44,22 @@ _COORD_FINDINGS = {
     "missing_executed_test_run", "missing_ui_playwright_evidence",
 }
 
+#: Branch-protection projection of Switchboard's *own* merge gate, published by
+#: ``scripts/switchboard_pr_gate.run_merge_authorization_for_pr``.
+#:
+#: It is not an independent CI signal.  It republishes the same merge_gate
+#: findings the hydrator already places on ``snapshot["findings"]``, collapsed
+#: into one red/green bit -- the GitHub commit-status API carries only
+#: state/context/description, so the typed ``code`` cannot survive the trip.
+#: Routing off the projection therefore double-counts evidence that is already
+#: in hand and destroys its type on the way: a draft PR, a missing review
+#: verdict, and a missing ``executed_test_run`` all arrive here as one
+#: undifferentiated red context, which ``normalize_status_context`` can only
+#: attribute to ``product`` -- stamping every process-state problem as
+#: ``required_exact_head_ci_failed`` and burning a remediation runner on work
+#: with nothing to remediate (COORD-49).
+MERGE_AUTHORIZATION_CONTEXT = "Switchboard / merge authorization"
+
 # One snapshot can contain several independently blocking facts.  Their source
 # order is presentation detail, not authority.  Prefer concrete automatic work
 # first so it is not stranded behind a weaker wait/retry signal; retain human
@@ -377,12 +393,47 @@ def _finding_decision(findings: Sequence[Mapping[str, Any]]) -> dict[str, Any] |
     return _select_decision(candidates)
 
 
+def _is_merge_authorization_context(name: Any) -> bool:
+    return _text(name) == _text(MERGE_AUTHORIZATION_CONTEXT)
+
+
+def _typed_findings_present(findings: Any) -> bool:
+    """Report whether the merge gate's own typed originals are on the snapshot.
+
+    This is the fail-closed guard on deferring the merge-authorization
+    projection.  Deferring is only honest when the evidence the projection was
+    derived from is actually in hand and still carries a route-bearing
+    identifier; if hydrate failed or returned nothing, skipping the red context
+    would drop the signal entirely and let a genuinely blocked PR read clean.
+    """
+    if isinstance(findings, Mapping) or isinstance(findings, (str, bytes)):
+        return False
+    if not isinstance(findings, Sequence):
+        return False
+    return any(
+        isinstance(finding, Mapping)
+        and finding.get("blocking") is not False
+        and (
+            _text(finding.get("code"))
+            or _text(finding.get("failure_class"))
+            or _text(finding.get("finding_class") or finding.get("kind"))
+        )
+        for finding in findings
+    )
+
+
 def _required_ci_decision(snapshot: Mapping[str, Any]) -> dict[str, Any] | None:
     """Classify every required context, then select by explicit precedence."""
     required = list(snapshot.get("required_status_contexts") or [])
     contexts = _map(snapshot.get("status_contexts"))
+    # The merge-authorization projection is a restatement of these findings, not
+    # a second observation. Defer to the typed originals and the branches that
+    # own them (review, findings, mergeability, draft) whenever they are present.
+    defer_merge_authorization = _typed_findings_present(snapshot.get("findings"))
     candidates: list[dict[str, Any]] = []
     for name in required:
+        if defer_merge_authorization and _is_merge_authorization_context(name):
+            continue
         row = _map(contexts.get(name))
         state = _text(row.get("conclusion") or row.get("state") or row.get("status"))
         attribution = _text(

@@ -501,6 +501,32 @@ same `merge_gate` result. This is the enforcement boundary for repo-authorized
 CLI clients: a direct `gh pr merge` cannot bypass a missing exact-head verdict,
 open finding, Work Session gate, or other Switchboard merge finding.
 
+**That status is an enforcement boundary, not a routing input (COORD-49).** It
+is a projection of the same `merge_gate` findings the hydrator already places on
+the snapshot, collapsed into one red/green bit — a GitHub commit status carries
+only state, context, and description, so the typed finding code cannot survive
+the round trip. Classifying the red context therefore double-counts evidence
+already in hand and destroys its type: a draft PR, a missing review verdict, and
+a missing `executed_test_run` all arrive as one undifferentiated red check,
+which `normalize_status_context` can only attribute to `product`. That stamped
+every process-state problem `required_exact_head_ci_failed` and dispatched a
+remediation runner with nothing to remediate.
+
+`_required_ci_decision` skips this one context whenever route-bearing findings
+are present, deferring to the branches that already own those cases (review,
+findings, mergeability, draft). It **fails closed**: with no typed findings —
+hydrate failed, or the gate returned nothing — the context is classified exactly
+as before, so a genuinely blocked PR can never read clean. The deferral is
+scoped to this context alone; every other required context, including
+`Switchboard CI / VM gate` and `Switchboard UI / Playwright`, still routes to
+remediation when it goes red.
+
+For operator visibility the published authorization decision — state, reason
+code, and every blocking code — is recorded as a `merge.authorization.published`
+activity on the resolved task. That row is diagnostics only and is marked
+`routing_authority: false`; it must never become the transport that
+reintroduces the round trip through GitHub.
+
 ### 3. Pure classifier
 
 Implement a side-effect-free function:

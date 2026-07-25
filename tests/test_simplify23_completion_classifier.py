@@ -38,7 +38,10 @@ def snapshot(
             }],
         },
         required_status_contexts=["Switchboard CI / VM gate"],
-        review={"status": review, "head_sha": review_head},
+        # A verdict must name the PR it judged: `_review_matches_pr` compares
+        # both head_sha AND PR identity, so a verdict with no number can never
+        # match and every downstream branch collapses to review_verdict_stale.
+        review={"status": review, "head_sha": review_head, "number": 810},
         merge_gate={"findings": list(findings)},
         runner=runner or {},
     )
@@ -163,3 +166,26 @@ def test_board_projection_is_route_specific():
         None, snapshot(ci="FAILURE", attribution="infrastructure"))
     assert remediation["board_projection"] == "Blocked"
     assert coordination["board_projection"] == "In Review"
+
+
+# COORD-49: `scripts/switchboard_ci.sh` runs every test as `python <file>`, not
+# under pytest. Without this runner the whole module imported cleanly, defined
+# its functions, exited 0, and asserted nothing — a green CI line for a file
+# that never ran. Found while relying on this module's red-CI-still-remediates
+# coverage as the no-regression proof for the merge-authorization fix.
+if __name__ == "__main__":
+    _passed = _failed = 0
+    for _name, _case in sorted(dict(globals()).items()):
+        if not _name.startswith("test_") or not callable(_case):
+            continue
+        try:
+            _case()
+        except AssertionError as _exc:
+            _failed += 1
+            print("FAIL  %s: %s" % (_name, _exc))
+        else:
+            _passed += 1
+            print("PASS  %s" % _name)
+    print("\nSIMPLIFY-23 completion classifier: %d passed, %d failed"
+          % (_passed, _failed))
+    raise SystemExit(1 if _failed else 0)

@@ -99,8 +99,14 @@ implementation path already does correctly — BUG-178's `completion_handoff` is
 reference implementation.
 
 **1.4 The unifying change (CORRECTED): stop routing on the merge-authorization context.**
-When that specific required context is red, **defer to the already-typed findings and the
-draft branch** rather than classifying it.
+**SHIPPED — COORD-49.** When that specific required context is red, **defer to the
+already-typed findings and the draft branch** rather than classifying it.
+
+*As implemented:* `state_machine.MERGE_AUTHORIZATION_CONTEXT` names the context;
+`_typed_findings_present` is the fail-closed guard (a finding must be blocking and carry a
+route-bearing `code`/`failure_class`/`finding_class`); `_required_ci_decision` skips only
+that context, only when the guard passes. Covered by
+`tests/test_coord49_merge_authorization_routing.py`.
 
 *Justification:* merge authorization is not an independent CI signal — it is a
 **projection of merge_gate findings already present on the snapshot**. Routing off it
@@ -124,6 +130,10 @@ context with zero findings must not become `ready_to_queue`.
 *Worth keeping as diagnostics, not routing:* `switchboard_pr_gate.py:292` computes
 `reason = blocked[0]["code"]` and discards it from the published status. Persist that code
 in Switchboard's own ledger for operator visibility — never as the routing transport.
+**SHIPPED — COORD-49:** `_record_merge_authorization` writes a
+`merge.authorization.published` activity (state, `reason_code`, every blocking code) on
+each resolved task, marked `routing_authority: false`. Best-effort: a failed ledger write
+warns on stderr and never fails the CI gate.
 
 *Exit criterion: re-run DOGFOOD-19 and get at least one task to Done with no operator
 interaction.*
