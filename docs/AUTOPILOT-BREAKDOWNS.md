@@ -1317,3 +1317,89 @@ heartbeat, N hours of silent PTY on a live lease is an escalation; (b) headless 
 able to block on interactive prompts (`--dangerously-bypass-approvals` does not cover provider
 menus — config-level model-fallback or non-interactive mode); (c) HARDEN-46 rotation checklist
 gains "restart Agent Hosts".
+
+---
+
+## BREAKDOWN 22 — host-bundle drift: the server sprints, the host stands still, the fleet dies quietly
+
+**Severity: CRITICAL. STATUS: RECOVERED 2026-07-25 (bundles 0.4.0/0.4.1); systemic fix NOT filed.**
+
+The server autodeploys on every merge to master. Agent Hosts update only when an operator cuts an
+Ed25519-signed bundle by hand. Bundles stopped at 0.3.999 (Jul 24 15:56); the server then took
+~15 merges in ~30 hours, including COORD-52 (#908), which added `prior_attempts` to the
+execution-assignment wire contract. The Jul-24 host computed the old shape, BUG-168's
+fail-closed exact-match check refused the new one, and **every Connect launch on the host died at
+admission** (`execution_assignment_contract_mismatch`). The pre-ADAPTER-32 host also failed to
+report those failures (TLS blips on `complete_wake` were swallowed), so wakes parked in
+`claimed` — invisible to the pending loop, unretried, forever.
+
+Operator experience: "the simple 3-layer boot model that worked for days just stopped; nothing we
+did should have changed it." Something did — the wire contract moved with no host release. The
+drift was invisible: no alarm compares the host's installed bundle against what master would ship,
+even though the host reports its version in every heartbeat.
+
+**Recovery that worked:** cut+install 0.4.0 from master; for each stranded task `complete_wake`
+the parked wake, `release_resource` its surviving execution lease, `start_task`. Both stranded
+tasks (COORD-48, ENFORCE-14) booted real runners within seconds of the final fix.
+
+**Classes to spec from this (not filed):** (a) staleness alarm — host heartbeats its bundle
+manifest hash; server compares against the manifest its own tree would produce and badges the
+Fleet dock / Needs-you on drift, red when `src/switchboard/connect/` or `agent_host*.py` changed;
+(b) one-command release script (`scripts/agent_host_release.sh`) wrapping keychain → build-bundle
+→ verify → update; (c) contract-version negotiation so a host can refuse-and-report rather than
+refuse-and-strand.
+
+---
+
+## BREAKDOWN 23 — the sweep kills the wake but not its lease; retries replay the corpse's error
+
+**Severity: HIGH. STATUS: LIVE — not filed (operator: fix, don't file). Manual bypass proven.**
+
+When `sweep_wake_intents` fails a claimed wake at its deadline, the wake goes terminal but its
+**execution lease stays active** (`reserved`, TTL 7200s). `_acquire_execution_lease_in` coalesces
+any new start for the same task+role onto that lease, which resolves to the swept wake, whose
+stored result is `deadline_expired` — so `start_task`/`retry_task` return **the dead generation's
+error as if it were the new attempt's refusal**, with no hint that a corpse is being replayed.
+ENFORCE-14's remediation was undispatchable for what would have been 2 hours; nothing in the
+refusal named the lease.
+
+By contrast, a wake ended via `complete_wake` releases correctly (COORD-48 chained generations
+1→2→3 cleanly). The asymmetry is exactly the sweep path.
+
+**Manual bypass:** `list_active_resource_leases` → `release_resource(lease_id)` → start succeeds
+immediately. **Fix direction:** the sweep must release the execution lease in the same
+transaction that fails the wake, and a start refusal built from a terminal predecessor must say
+so (`stale_generation_replayed`, naming the lease and wake), per the evidence-grammar rule of
+BREAKDOWN 20.
+
+---
+
+## BREAKDOWN 24 — 0.4.0 required an Execution Context the server deliberately does not send
+
+**Severity: HIGH. STATUS: FIXED — ADAPTER-33 / #917, live as bundle 0.4.1.**
+
+ADAPTER-28 (#902) made the host demand a server-issued Execution Context for every Connect
+launch. But `connect_dispatch.enqueue_task` resolves a context **only for projects with a
+configured execution policy** — and switchboard has none *by design* (the restored COORD-47
+contract; configuring it prematurely caused two prior fleet stops, see the CO-20/UI-63 notes in
+that function). So minutes after the 0.4.0 rollout, every legacy wake refused with
+`invalid_execution_identity` — a new hard requirement colliding with a server path that is still
+the production path. Same-day irony: the host-side strictness was reviewed and merged hours
+before it met real traffic shapes it had never seen in tests, because the tests only built
+context-bearing wakes.
+
+**Fix:** materialization, generation binding, and the workspace receipt apply exactly when a
+context is present; context-less wakes launch from the host checkout as they always did, pinned
+by `test_legacy_wake_without_context_launches_from_repo_root`. **Rule worth keeping:** when the
+server keeps a legacy branch alive on purpose, the host must keep the matching branch alive too —
+delete both in one change, never one side first.
+
+---
+
+## OBSERVATION — renaming a PR's branch closes the PR, silently and irreversibly
+
+GitHub's branch-rename API (`/branches/{branch}/rename`) does not retarget open PRs from that
+branch — it **closes them**, and a closed PR whose head ref no longer exists cannot be reopened.
+Cost one PR cycle tonight (#910 → #912) while binding a branch to its board task. Rename first,
+open the PR second; if a PR is already open, live with the name or open a fresh PR from a new
+branch.
