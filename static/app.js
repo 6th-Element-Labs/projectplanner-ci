@@ -1225,13 +1225,24 @@ const TeepPlan = {
                 ? `<div class="p-2">${runners.map((s) => this._dockRunnerHtml(s)).join('')}</div>`
                 : `<div class="p-3 text-secondary small">No live runners for this project.</div>`;
         } else if (tab === 'prs' && this._dockPrUnavailable) {
-            const why = this._dockPrUnavailable === 'no_github_token'
+            // The server already knows why: build_open_prs returns `github_error: <exc>`
+            // with the real exception. Overwriting that with a blanket "GitHub is
+            // unreachable" threw the diagnosis away and made a transient 5xx on one call
+            // indistinguishable from a genuine outage, a missing token, or an auth
+            // failure. Show the server's own reason for anything we do not have specific
+            // copy for, so the next occurrence self-reports instead of needing a probe.
+            const raw = String(this._dockPrUnavailable || '');
+            const detail = raw.startsWith('github_error:')
+                ? raw.slice('github_error:'.length).trim() : '';
+            const why = raw === 'no_github_token'
                 ? 'The server has no GitHub token configured, so PR status is unavailable.'
-                : (this._dockPrUnavailable === 'no_canonical_repo'
+                : (raw === 'no_canonical_repo'
                     ? 'This project has no canonical GitHub repo configured.'
-                    : (this._dockPrUnavailable === 'auth_required'
+                    : (raw === 'auth_required'
                         ? 'Sign in again to load PR status.'
-                        : 'GitHub is unreachable right now. Status will return on the next refresh.'));
+                        : (detail
+                            ? `GitHub did not answer: ${detail}. Status will return on the next refresh.`
+                            : `PR status is unavailable (${raw}). Status will return on the next refresh.`)));
             body = `<div class="p-3 text-secondary small">${this.esc(why)}</div>`;
         } else if (tab === 'prs') {
             body = prs.length

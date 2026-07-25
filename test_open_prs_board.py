@@ -159,5 +159,47 @@ b3 = read_cache.ttl_read_cache("open_prs_t", "p", 101, _fake_build, ttl=60)
 ok(len(calls) == 2 and b1 is b2 and b3["n"] == 2,
    "same bucket served from cache; new bucket rebuilds")
 
+print("== list-call resilience and honest reason (dock 'GitHub is unreachable') ==")
+# The PR list was the single fatal call: every per-PR detail/CI call already degrades,
+# so one transient 5xx blanked the whole dock and reported a blanket "unreachable"
+# while the API was healthy. Retry once, and keep the real exception in the reason.
+_attempts = {"n": 0}
+
+
+def _flaky_list(r, t):
+    _attempts["n"] += 1
+    if _attempts["n"] == 1:
+        raise RuntimeError("HTTP Error 502: Bad Gateway")
+    return [{"number": 1, "title": "t", "head": {"sha": "s1"},
+             "base": {"ref": "master"}, "user": {"login": "u"},
+             "html_url": "http://x", "updated_at": "2026-07-25T00:00:00Z"}]
+
+
+out = open_prs.build_open_prs(
+    "switchboard", repo=REPO, token="tok", now=NOW,
+    list_fn=_flaky_list,
+    detail_fn=lambda r, n, t: {"mergeable_state": "clean"},
+    ci_fn=lambda r, sha, t: {"state": "success", "failing": []},
+    queue_fn=lambda r, t: {},
+    get_task_fn=lambda *a, **k: None)
+ok(_attempts["n"] == 2 and not out.get("unavailable") and len(out["prs"]) == 1,
+   "a transient list failure is retried once and the panel still renders")
+
+
+def _always_502(r, t):
+    raise RuntimeError("HTTP Error 502: Bad Gateway")
+
+
+out = open_prs.build_open_prs(
+    "switchboard", repo=REPO, token="tok", now=NOW,
+    list_fn=_always_502,
+    detail_fn=lambda r, n, t: {},
+    ci_fn=lambda r, sha, t: {"state": "none", "failing": []},
+    queue_fn=lambda r, t: {},
+    get_task_fn=lambda *a, **k: None)
+reason = str(out.get("unavailable") or "")
+ok(reason.startswith("github_error:") and "502" in reason,
+   "a persistent failure reports the real exception, not a blanket 'unreachable'")
+
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

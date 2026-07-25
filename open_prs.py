@@ -229,10 +229,24 @@ def build_open_prs(project: str, *,
         f"https://api.github.com/repos/{r}/pulls/{int(n)}", t))
     ci_fn = ci_fn or (lambda r, sha, t: ci_state_for_sha(r, sha, t))
     queue_fn = queue_fn or (lambda r, t: fetch_merge_queue_positions(r, t))
-    try:
-        listed = list_fn(repo, token) or []
-    except Exception as exc:
-        return {**base, "unavailable": f"github_error: {exc}"}
+    # The PR list is the one fatal call in this function — every per-PR detail/CI call
+    # below is individually caught and degrades to a partial row. A single transient 5xx
+    # or reset here blanked the whole dock panel, which is why "GitHub is unreachable"
+    # appeared every few minutes while the API was demonstrably healthy (99% quota
+    # remaining, 47ms from prod). Retry once before giving up, and keep the real
+    # exception in the reason so the UI can report the actual cause.
+    listed = None
+    last_exc: Exception | None = None
+    for attempt in range(2):
+        try:
+            listed = list_fn(repo, token) or []
+            break
+        except Exception as exc:  # noqa: BLE001 — reason is surfaced, not swallowed
+            last_exc = exc
+            if attempt == 0:
+                time.sleep(0.75)
+    if listed is None:
+        return {**base, "unavailable": f"github_error: {last_exc}"}
     queue_positions = queue_fn(repo, token)
     rows: List[Dict[str, Any]] = []
     for pr in listed:
