@@ -579,3 +579,592 @@ Every one of these is the same shape: **a diagnostic is computed and then destro
 | 5 | decision episodes | `runner_head_matches_exact_head` computed into features, consumed by nothing (BUG-186) |
 
 Five instances in one day. This is a convention or a lint, not five independent fixes.
+
+# RUN 2 — 2026-07-25, intervention session
+
+**Operator:** claude/COORD-50
+**Host:** `host/steve-mbp-co16`
+**Mode:** **INTERVENTION, not observation.** Unlike Run 1, repairs were made during this
+run at the operator's instruction.
+
+> ⚠️ **Evidence caveat.** This run violated Run 1's "do not fix what you log" rule *by
+> instruction*. BREAKDOWN 11 was repaired and deployed mid-run, and six PRs were merged
+> (three by admin bypass). Where a breakdown below is marked FIXED, the original failing
+> state is no longer reproducible on prod — the quoted evidence is all that survives.
+> Everything marked LIVE was still failing at the end of the run and was not touched.
+
+**Starting state:** every agent PR blocked; the scoped completion coordinator reporting
+`lifecycle: janitor_only` with an `action_census` of all zeros — zero dispatches, zero
+reviews, zero remediations, for hours.
+
+---
+
+## BREAKDOWN 11 — the classifier emits a state its own store rejects, killing every review tick ⚠️
+
+**Severity: CRITICAL. STATUS: FIXED — BUG-184, [PR #888](https://github.com/6th-Element-Labs/projectplanner/pull/888), master `a07af674`.**
+
+`classify_completion` is the decision authority; `completion_runs` records what it decided.
+Their vocabularies had silently diverged:
+
+```
+classifier can emit : assessing, blocked, ready_to_queue, reconciling, waiting, waiting_merge_queue
+store accepts       : blocked, done, failed, implementing, ready_to_queue, reconciling, waiting, waiting_merge_queue
+
+EMITTED BUT REJECTED: ['assessing']
+```
+
+`assessing` is the review branch — `review_required`, `review_verdict_stale`, and the review
+findings route. It is the most common route in the system, and it was the one state the
+store refused. Because `run_completion_tick` persists *before* it plans:
+
+```python
+decision = classify_completion(current, snapshot)
+persisted = ensure_completion_run(...)   # ← CompletionRunError raised here
+plan      = plan_effect(decision, snapshot, persisted)
+result    = execute_effect(...)
+```
+
+…every review tick died at the persist step — before planning an effect, before fencing a
+stale runner, before dispatching a review generation. Verbatim, from the coordinator's own
+receipts, repeating every ~60s:
+
+```json
+{"status":"completion_tick_failed","error":"CompletionRunError","task_id":"CO-20"}
+{"status":"completion_tick_failed","error":"CompletionRunError","task_id":"BUG-179"}
+{"status":"completion_tick_failed","error":"CompletionRunError","task_id":"BUG-183"}
+"lifecycle": {"status":"janitor_only","action_census":{ ...all zeros }}
+```
+
+Meanwhile #863, #868 and #885 sat blocked on "Review required" — waiting for a review the
+autopilot could not record the decision to request.
+
+**Why it went undetected:** the two enums landed two PRs apart — the store in #818
+(SIMPLIFY-22), `assessing` in #820 (SIMPLIFY-23) — and no test asserted they agree. Routes
+and phases were checked during this run and *do* agree; `assessing` was the only drifted
+value, so this is one bug and not a family.
+
+**Fix:** one line in the enum. The guard is the part that matters — a test reads every
+`_decision` call out of the classifier's AST and asserts its states and routes are subsets
+of what the store accepts, so a new branch is covered the moment it is written rather than
+when someone remembers a fixture. 4 of the 8 new tests fail with the one-line change reverted.
+
+---
+
+## OBSERVATION — a *correct* fix can move traffic into an unwritable state
+
+This is the most transferable lesson of the run, and it explains why the previous day's work
+appeared to accomplish nothing.
+
+COORD-49 ([PR #878](https://github.com/6th-Element-Labs/projectplanner/pull/878)) was
+correct. Before it, a red `Switchboard / merge authorization` context was misrouted through
+`_required_ci_decision` to `required_exact_head_ci_failed` → route `remediation` → state
+`blocked`. **`blocked` is writable.** So the fleet burned remediation runners pointlessly,
+but the tick survived and the system kept moving.
+
+COORD-49 correctly stopped the misrouting and deferred to the typed findings, which sends
+those cases to the review branch → state `assessing` → **unwritable**. A correct fix moved
+traffic into the one state that could not be persisted, converting a wasteful-but-moving
+system into a stopped one.
+
+**Implication for this log:** "we fixed the thing the evidence pointed at and the fleet is
+still stuck" is not proof the diagnosis was wrong. It can mean the fix was right and
+uncovered a defect the previous bug was masking. Verify by checking whether the *error class*
+changed, not whether the symptom cleared.
+
+---
+
+## OBSERVATION — cheap falsification beats confident architecture
+
+Recorded because the operator paid for this lesson in wall-clock time.
+
+Mid-run, this session produced a confident four-part architectural diagnosis: hydration
+laundering GitHub failures into facts, a missing "unobservable" classifier outcome, the retry
+budget having no durable home, and a server-side lease-reclaim path. It was coherent, it cited
+real code, and it was **wrong about what was actually stalling the fleet.**
+
+What killed it was a three-minute check — hydrating the three stuck tasks' real snapshots on
+prod, read-only:
+
+```
+CO-20     pr=863   head=a894afc0  | review_required  | persist OK on the pr/head guard
+BUG-179   pr=868   head=5e8c6149  | review_required  | persist OK on the pr/head guard
+BUG-183   pr=885   head=0ddbcf2e  | review_required  | persist OK on the pr/head guard
+```
+
+None of them produced `exact_head_pr_missing`, which the whole plan was built around. That
+falsification cost ten minutes and pointed straight at BREAKDOWN 11.
+
+**Recommendation:** before any autopilot diagnosis is written up, hydrate the affected tasks'
+live snapshots and classify them. It is read-only, it takes minutes, and it distinguishes a
+plausible story from the actual failing line.
+
+---
+
+## CORRECTION — expired execution leases *do* self-heal; there is no reclaim gap
+
+Logged so nobody builds the mechanism this session nearly proposed.
+
+The claim was that an expired execution lease permanently blocks dispatch, because
+`ux_active_execution_lease` keys only on `released_at IS NULL` and only an explicit release
+sets it. The index part is right. The conclusion is wrong:
+`coordination._acquire_execution_lease_in` walks the unreleased rows and expires any past
+their TTL *before* inserting the new lease.
+
+```python
+for row in rows:
+    expires_at = float(lease["claimed_at"]) + int(lease["ttl_seconds"])
+    if expires_at > now and str(lease.get("lease_state") or "active") in {...}:
+        return lease
+    c.execute("UPDATE resource_leases SET released_at=?,lease_state='expired',"
+              "fence_epoch=COALESCE(fence_epoch,0)+1 WHERE id=?", (now, lease["id"]))
+```
+
+Expiry self-heals lazily on the next dispatch attempt. A "reclaim expired leases past a grace
+period" job would have sat idle forever. Credit to the reviewing agent who caught this — the
+error came from reasoning off the index definition without reading the acquire path.
+
+---
+
+## BREAKDOWN 12 — runners with a null `execution_connection_id` can never be fenced ⚠️
+
+**Severity: HIGH. STATUS: LIVE — BUG-187. This is the top blocker as of the end of this run.**
+
+Only reachable once BREAKDOWN 11 was fixed; the persist crash was hiding it.
+
+`fence_task_generation` demands all seven fields of the exact execution identity and fails
+closed if any is empty:
+
+```python
+required = ("runner_session_id", "execution_id", "execution_connection_id",
+            "generation", "fence_epoch", "role", "head_sha")
+```
+
+Connect-path runners carry no `execution_connection_id` — the completion hydrator sources it
+only from `active_runner['metadata']['execution_connection_id']`, which is absent. CO-20's
+live runner, verbatim:
+
+```
+runner_session_id      : run_e9d5a081ab73a7df
+execution_id           : execlease-62d036501b6147ec9873
+execution_connection_id: null          ← fails the guard
+generation / fence     : 1 / 1
+role / head_sha        : review_merge / d150fd1b…
+```
+
+Such a runner is **permanently unfenceable through completion**, so a stale generation can
+never be replaced. Reproduced directly on prod after #888 deployed:
+
+```
+RAISED: TaskExecutionError
+msg   : exact execution generation identity is required
+```
+
+**Related, worth fixing alongside:** fencing is sequenced as a prologue to the repair effect
+inside `_execute_mutating_effect`, *after* five idempotency early-returns (verified replay,
+issued-awaiting-readback, claim-in-flight, retry-backoff, retry-claim-lost). Any condition
+that suppresses the repair also suppresses the fence — even though fencing is safe and
+idempotent, and is precisely the thing that needs to happen for progress.
+
+---
+
+## BREAKDOWN 13 — hot retry loop against an unsatisfiable dependency
+
+**Severity: MEDIUM. STATUS: LIVE — not separately filed; needs its own BUG if it is to be fixed independently of BREAKDOWN 12.**
+
+With CO-20 wedged, its dependent is dispatched roughly twice a minute and refused every time.
+Ten-minute window on prod, post-#888:
+
+```
+completion_tick_failed : 30  → all CO-20
+dispatched             : 19  → all CO-21
+  every one: {"action":"refused","reason":"Task dependencies are unsatisfied: CO-20."}
+```
+
+The refusal is correct — CO-25 added it. What is wrong is the cadence: nothing backs off, so
+a single wedged task converts into unbounded dispatch attempts on everything downstream of it.
+This is direct spend with a guaranteed-zero outcome, and it will scale with the depth of the
+dependency graph behind any stuck task.
+
+---
+
+## BREAKDOWN 14 — the coordinator receipt discards the exception message ⚠️
+
+**Severity: MEDIUM (diagnostic). STATUS: LIVE.**
+
+The receipt records the exception *class* and throws away its text:
+
+```json
+{"status":"completion_tick_failed","error":"CompletionRunError","task_id":"CO-20"}
+```
+
+The discarded message was `unsupported completion state: assessing` — it named the exact bad
+value. Preserving it would have made BREAKDOWN 11 a one-minute diagnosis. Instead it took
+hours of log archaeology across two agents, and the message was never found in the journal at
+all; the defect was located by reading the enums and reproducing offline.
+
+This is the same disease as BREAKDOWN 9: the diagnostic exists for one moment and is destroyed
+on write. Highest diagnostic-value-per-line fix in this log.
+
+---
+
+## BREAKDOWN 15 — the documented CI recovery path posts only one of two required contexts ⚠️
+
+**Severity: HIGH (process). STATUS: LIVE.**
+
+`master` branch protection requires three contexts: `Switchboard CI / VM gate`,
+`Switchboard UI / Playwright`, and `Switchboard / merge authorization`. There are two verify
+paths and they run **different workflow files**:
+
+| Path | Trigger | Workflow that runs | Contexts posted |
+|---|---|---|---|
+| `ci_verify_dispatch.dispatch_verify()` — *the documented manual recovery* | `repository_dispatch` on `projectplanner-ci` **main** | that repo's own `verify.yml` | VM gate **only** |
+| mirror push — the normal path | push to `ci/**` on `projectplanner-ci` | the **canonical** repo's `verify.yml` | VM gate **and** Playwright |
+
+Following the documented recovery therefore leaves a PR permanently `BLOCKED` with no error
+anywhere, and `gh pr merge` **exits 0 printing nothing** while silently not enqueuing. Cost a
+merge during this run before the divergence was spotted. `scripts/switchboard_pr_gate.py`
+does not post the Playwright context at all, so `--once-open-prs` cannot repair it either.
+
+**Workaround that works** (~5 min, then delete the branch):
+
+```
+git push <ci-repo> <HEAD_SHA>:refs/heads/ci/verify-<slug>-<sha8>
+```
+
+**Fix direction:** make the two `verify.yml` files agree, or make `dispatch_verify` target the
+mirror path. Two copies of a required-context list drifted apart — the same class of defect as
+BREAKDOWN 11, one layer out.
+
+---
+
+## BREAKDOWN 16 — one shared GitHub API budget; agents starve CI of it ⚠️
+
+**Severity: MEDIUM. STATUS: LIVE.**
+
+A CI verify run failed at its very first step:
+
+```
+verify  Post pending required status
+  gh: API rate limit exceeded for user ID 176963715 (HTTP 403)
+  ##[error]Process completed with exit code 1
+```
+
+That is the **same user ID** this session's own `gh` status-polling had been consuming. The
+CI workflow's `PRIVATE_READ_TOKEN` and an operator/agent `gh` share one 5,000/hr pool, so
+polling a PR's status can break the workflow that posts that status. Self-inflicted here, and
+it will recur whenever the fleet, CI, and a human overlap.
+
+**Likely the same root cause as the run's other unexplained 403s:** prod's
+`merge_coordinator` crashed four times with `HTTP Error 403` at 01:33–01:38, exactly when
+PR #879 opened, and that PR's CI trigger was never fired. It was initially written off as a
+transient GitHub blip. A shared-budget capacity problem fits the evidence better.
+**Not proven** — prod's token was not confirmed to be the same user ID.
+
+**Fix direction:** separate tokens per consumer, or a budget guard. Also: agents should poll
+with `until`-loops on 60–90s intervals, never tight retry.
+
+---
+
+## STATUS UPDATE — BREAKDOWN 9 (reason codes never aggregated)
+
+**Partially addressed.** COORD-50 shipped Phase 1 of `docs/DECISION-CORPUS-SPEC.md`
+([PR #879](https://github.com/6th-Element-Labs/projectplanner/pull/879), master `309eca24`):
+a reason-code registry with an AST conformance test, a 23-field export-safe feature
+projection, and `decision_records` as an append-only per-episode ledger that
+`run_completion_tick` writes on every tick — including automated ones.
+
+Two caveats, both honest:
+
+- The episode write sits *before* the persist that BREAKDOWN 11 was crashing on, so these
+  failures were being captured even while the tick died. That was luck of ordering.
+- `get_reason_code_counts` was **not yet live on the prod MCP surface** at the end of this
+  run. Until it is, the counting this breakdown asked for still requires an SSH session — which
+  is exactly how BREAKDOWNS 12–14 were found. Deploying it turns that into one query.
+
+## STATUS UPDATE — BREAKDOWN 6 (review verdicts invalidated by every push)
+
+**Still LIVE, and now the next thing behind BREAKDOWN 12.** BUG-179 at the time of this run:
+`verdict_count: 2`, `stale_verdict_count: 2`, `current_verdict: null`, `round 2 of 3`,
+`waited_seconds` climbing past 8,000. Two verdicts were recorded and both were invalidated by
+head moves; nothing re-recorded one for the current head.
+
+BREAKDOWN 11's fix restores the *ability* to dispatch a reviewer for a new head. It does not
+make verdicts survive a rebase, nor should it. Whether the loop closes faster than `master`
+moves is **open and unmeasured** — `stale_verdict_count` is the number to watch.
+
+---
+
+---
+
+## BREAKDOWN 17 — the Fleet dock freezes on a non-JSON error body and never recovers ⚠️
+
+**Severity: MEDIUM. STATUS: LIVE — BUG-188.**
+
+Found because the operator reported the dock saying it could not see GitHub while GitHub was
+demonstrably fine. Backend checked at the same moment: `build_open_prs` returned
+`unavailable: None` with 5 PRs, token at 4975/5000 core and 4745/5000 graphql. Thirty
+minutes of real browser traffic:
+
+```
+GET /ixp/v1/open_prs     150 x 200,  1 x 401
+GET /ixp/v1/deployments  150 x 200,  1 x 401
+```
+
+**One failure out of 151, and the dock was still showing it.**
+
+`_loadFleetDock` parses both responses *before* it inspects `.ok`, and the whole block ends:
+
+```js
+prPayload = await pRes.json();
+deploymentPayload = await dRes.json();
+...
+} catch (e) { this._fleetLoadBusy = false; return; }
+```
+
+The early return skips **both** the `_dockPrUnavailable` update and `_renderFleetDock`, so the
+dock keeps whatever it last drew. The signature is never recomputed on the throw path, which
+is precisely why no number of subsequent successes clears it.
+
+The inline comment states the assumption that fails: *"401/5xx bodies are `{detail: …}` with
+no `prs`/`unavailable`."* True for the app's own errors. **Not** true for a Caddy-level 502/503,
+which returns HTML — and those happen routinely, because every merge to `master` hard-restarts
+the fleet with no drain. Six PRs merged during this run; the single 401 is consistent with an
+in-flight request dropped by one of those restarts.
+
+**Do not conflate with two fixes that already landed and are correct:** #881 added the
+unavailable flags to `_fleetSignature` so a message-only transition re-renders, and #886
+replaced the blanket "GitHub is unreachable right now" with the server's real reason. This is
+the remaining path where *neither* runs, because the function returned before reaching them.
+
+**Fix direction:** treat a parse failure as an unavailable reason like any other rather than
+aborting the render, and distinguish "response was unreadable" from "you are not authenticated."
+A transient error should cost at most one wrong frame.
+
+---
+
+## OBSERVATION — a week-cached asset made a deleted bug look live
+
+The operator was seeing wording that **no longer exists anywhere in `master`**: #886 removed
+the string "GitHub is unreachable right now" that same evening, and a grep of the current tree
+returns zero hits. Prod was serving `app.js?v=61`; the browser was still running the cached
+`v=60`.
+
+Static assets are `Cache-Control: public, max-age=604800` **keyed on the `?v=` query**, so a
+returning browser runs week-old JavaScript until the pin changes *and* the page is hard-
+refreshed. Both #881 and #886 bumped the pin correctly. The gap is that a user with the old
+file cached keeps the old behaviour, including old copy for bugs that are already fixed.
+
+**Why this belongs in a breakdown log:** it cost real diagnosis time and it is a trap that will
+recur. When a UI defect is reported, **check whether the reported string still exists in the
+tree before investigating the behaviour.** If it does not, the report is about cached code and
+the first move is a hard refresh, not a bug hunt.
+
+---
+
+## BREAKDOWN 18 — `switchboard` fails its own project execution readiness gate ⚠️
+
+**Severity: CRITICAL (configuration, not code). STATUS: LIVE.**
+**Found by the session-2 agent (`codex`, PR #889 thread); independently verified here.**
+
+`ensure_review_generation` → `start(plan)` → `task_execution.start_task(...)`, and `start_task`
+now runs UI-63's project-execution readiness gate. For `switchboard` that gate fails:
+
+```
+readiness.passed : False
+reason_code      : project_execution_policy_missing
+   blocker: project_execution_policy_missing   no execution policy configured
+   blocker: provider_selector_missing
+   blocker: scm_connection_missing             SCM connection unavailable
+```
+
+The deliverable under test is *"project-independent execution plane for every Switchboard
+project"* — its premise is that a project declares repo topology, SCM authorization and
+execution policy as data, and then anything can run. UI-63 shipped the gate that enforces it
+and CO-20 made placement mandatory on the same facts. **Both are correct.** Nobody ever
+populated that data for the dogfood project itself, because until today nothing required it.
+We built the door and never cut ourselves a key.
+
+**Precision note, unresolved between the two logs:** the session-2 report lists
+`project_not_available` as the third blocker; this session's probe returns
+`provider_selector_missing`. Reconcile before configuring against the wrong field.
+
+**CORRECTED — the "gate" is not a gate.** The readiness *check* genuinely fails (verified
+above). But the traced refusal does **not** exist:
+
+```
+grep -rn "project_execution_not_ready" --include=*.py --include=*.js .   -> no matches, anywhere
+grep -rn "readiness" src/switchboard/application/commands/connect_dispatch.py -> no matches
+```
+
+`get_project_execution_readiness` is consumed only by reporting surfaces —
+`project_contract.py:167` and `projects.py:756`, both as a displayed
+`execution_readiness` field — and by tests. **No dispatch path consults it.** UI-63 (#864)
+shipped `static/js/settings.js` and test files; "expose" meant display it in Settings, not
+enforce it.
+
+So the session-2 claim that *"every autopilot dispatch is refused at the last step"* by this
+gate is **not supported by the code**. The configuration gap is real and worth closing on its
+own merits, but it is **not** currently blocking dispatch.
+
+**What is actually observed blocking, verified by direct probe:**
+- CO-20 dies at the fence — `TaskExecutionError: exact execution generation identity is required` (BUG-187)
+- CO-21 dies at the dependency check — `Task dependencies are unsatisfied: CO-20`
+
+**Honest limit on the evidence.** The readiness check is *verified failing*. It has **not** been observed
+refusing a live dispatch, because every current task dies earlier — CO-20 at the fence
+(BREAKDOWN 12), CO-21 at the dependency check. It is a confirmed *latent* blocker, not the
+observed one. Recorded this way deliberately: overclaiming which gate is "the" blocker is the
+mistake both agents made today, in opposite directions.
+
+---
+
+## THE JOINT MODEL — three gates in series, and why neither agent alone was right
+
+The two independent investigations converged on different layers of one dispatch path. A task
+moves only if the completion tick clears all three, in order:
+
+| # | Gate | Fails how | Status |
+|---|---|---|---|
+| 1 | **Persist** the classified decision | `CompletionRunError: unsupported completion state: assessing` | **FIXED** — BUG-184 / #888 |
+| 2 | **Fence** the stale runner | `TaskExecutionError: exact execution generation identity is required` | LIVE — BUG-187 |
+| 3 | **Dispatch** via `start_task` | ~~readiness refusal~~ — **no such gate exists; claim retracted** | UNPROVEN |
+
+Plus BUG-186 (nothing reaps a runner whose pinned head moved) as the safety net for when gate
+2 is never attempted.
+
+**Each agent claimed a single blocker and each was wrong — including the joint model's own
+gate 3, which was retracted within the hour when the refusal string turned out not to exist.** This session argued that repairing
+the fence would move CO-20 — it would then have hit gate 3. The session-2 agent argued
+readiness was "the single blocker for the entire autopilot right now" — CO-20 never reaches
+it. **Both fixes are required; neither is sufficient.**
+
+That is the transferable lesson, and it is the third time today the same error shape appeared:
+a correct local diagnosis presented as the whole cause. See also the COORD-49 observation above
+— a correct fix that moved traffic into an unwritable state.
+
+**Agreed order:** configure the project (gate 3, operator decision, no code) → BUG-187 (gate 2)
+→ BUG-186 (safety net) → the two lints.
+
+**Agreed proof, from the corpus rather than from inspection.** Baseline at the time of writing:
+
+```
+review_required        ep=10  ticks=700  tasks=4   ratio=70:1
+exact_head_pr_missing  ep=14  ticks=270  tasks=5   ratio=19:1
+total                  53 episodes / 1455 ticks
+```
+
+After the config and BUG-187, these must move or the model is wrong: `completion_tick_failed`
+for CO-20 → 0; a `review_merge` runner actually starts; the `review_required` tick-to-episode
+ratio falls from 70:1 toward ~1:1; CO-21's dependency refusals stop. A ratio near 1:1 means the
+classifier is deciding *and something is acting*. A high ratio means correct decisions with no
+actor — which is the fingerprint the session-2 agent identified, and the reason
+`runner_head_matches_exact_head` in `decision_records.features_json` should become the detector
+rather than staying computed-and-unused.
+
+## RUN 2 SUMMARY
+
+| # | Breakdown | Severity | Status |
+|---|---|---|---|
+| 11 | Classifier emits `assessing`; store rejects it | CRITICAL | **FIXED** (BUG-184 / #888) |
+| 12 | Null `execution_connection_id` ⇒ unfenceable runner | HIGH | LIVE — BUG-187, top blocker |
+| 13 | Hot retry loop on unsatisfiable dependency | MEDIUM | LIVE |
+| 14 | Coordinator receipt discards exception message | MEDIUM | LIVE |
+| 15 | Manual CI recovery posts 1 of 2 required contexts | HIGH | LIVE |
+| 16 | Shared GitHub rate-limit budget | MEDIUM | LIVE |
+| 17 | Fleet dock freezes on a non-JSON error body | MEDIUM | LIVE — BUG-188 |
+| 18 | `switchboard` fails its own execution readiness check | MEDIUM | LIVE — config gap; **not** a dispatch gate (corrected) |
+| 6 | Review verdict invalidated by every push | HIGH | LIVE (unchanged) |
+| 9 | Reason codes never aggregated | HIGH | Partially fixed (COORD-50) |
+
+**Net effect of the run:** the autopilot went from `janitor_only` with an all-zero action
+census to 19 dispatches in 10 minutes. It is acting again. It still cannot finish CO-20
+unaided, and it will not until BREAKDOWN 12 is repaired.
+
+**The pattern across 11, 15 and — one layer out — 9:** three separate places where two copies
+of a vocabulary drifted apart with no test asserting they agree. Two enums for completion
+state, two `verify.yml` files for required contexts, and `reason_code` as free text emitted by
+nine subsystems. Each was invisible until it wedged something.
+
+---
+
+# CORRECTION — 2026-07-25, appended when #890 was folded in
+
+**The retraction above is wrong. The readiness gate is real, it was the blocker, and it is now fixed.**
+
+`claude/COORD-50` retracted the readiness-gate claim after grepping and finding no
+`project_execution_not_ready` anywhere. That grep ran against the **shared Dropbox checkout**,
+which was parked on branch `revert/pr-881-fleet-dock` — a branch that predates #864. The code
+was on `master` the whole time:
+
+```
+git grep -n "readiness is blocked" origin/master
+origin/master:src/switchboard/application/commands/task_execution.py:668
+```
+
+The gate, verbatim from `task_execution.py:663-673`:
+
+```python
+readiness = get_project_execution_readiness(project)
+if readiness.get("passed") is not True:
+    raise TaskExecutionError(
+        "start_refused",
+        str(readiness.get("message") or "Project execution readiness is blocked."), ...)
+```
+
+That string is the exact `last_error` on all three failed CO-20 effects. Identity, not inference.
+
+The `connect_dispatch.py:250` analysis in the retraction is **correct and irrelevant**: strict
+resolution is indeed skipped for unconfigured projects, but that code is never reached, because
+`task_execution.py` raises thirteen lines earlier.
+
+**Causal chain, from commit timestamps and ledger `requested_at`:**
+
+| time | event |
+|---|---|
+| 03:56Z `1772cab0` | UI-63 lands the readiness refusal. Latent — nothing reaches `start_task`, BUG-184 throws first. |
+| 06:06Z `a07af674` | BUG-184 fix lands. The driver can now persist and proceed to execute. |
+| 06:22Z | First effect reaches `start_task` all day. Refused. `last_error = "Project execution readiness is blocked."` |
+| 07:42Z `3eea4234` | #891 scopes the gate to opted-in projects. Deployed 32s later. |
+| 07:47Z | `effect-964856e75357065f` goes `failed -> verified`, `last_error -> null`, `started: true`. |
+
+**Fixed by #891** (BUG-190) and **proven in production**. Two correct fixes, landed hours apart,
+composing into a hard stop — neither wrong alone, and nothing tested the composition.
+
+## BREAKDOWN — a shared checkout makes `grep` lie
+
+Several agents share one Dropbox working copy. Whatever branch it happens to be on is what every
+`grep` sees, so an agent can conclude with total confidence that code on `master` does not exist —
+and then retract a correct finding on that basis. This cost hours today and nearly buried the real
+root cause.
+
+**Rule: diagnose against `git grep <pattern> origin/master`, never a bare `grep` of the working tree.**
+Better: work in your own worktree ([[shared-checkout-use-worktrees]]).
+
+## BREAKDOWN — the sixth and seventh discard
+
+`last_error` sat in the external-effect ledger for eight hours while every tick reported
+`effect_retry_backoff` with `result={}`. Separately, `start_task` returned `started: true` while
+bound to a wake that was already `failed`, and the effect **verified**.
+
+Fixed by #892 (BUG-189): all four suppressed-effect receipts now carry `last_error` /
+`retry_count` / `resource`, a dispatch bound to a dead wake is a failure that names the wake and
+its `failure_class`, and `completion_projection` gained `blocked_reason`.
+
+## BREAKDOWN — nothing ever enqueues, because nothing is ever reviewed
+
+`effect="enqueue"` is emitted from exactly one place: `state_machine.py:684`,
+`exact_head_gates_passed`. Reaching it requires a recorded exact-head review verdict. The corpus
+over this window:
+
+| reason_code | episodes | ticks |
+|---|---|---|
+| `review_required` | 11 | **1000** |
+| `exact_head_gates_passed` | 1 | **5** |
+
+BUG-187/#890 itself: `verdict_count: 0`, `current_verdict_status: "missing"` — while GitHub's own
+`Switchboard / merge authorization` reads SUCCESS. The board and GitHub disagree about whether the
+PR is reviewed, and the board is what gates `enqueue`.
+
+So PRs sit green and unqueued forever. The merge queue is not broken; it is empty because nothing
+is ever handed to it.
+
