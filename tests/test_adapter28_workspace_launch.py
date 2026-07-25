@@ -520,6 +520,36 @@ def test_only_supported_provider_clis_launch(root):
        "the supported provider CLI set is explicit")
 
 
+def test_legacy_wake_without_context_launches_from_repo_root(root):
+    """The legacy placement path (no Execution Context) still launches.
+
+    switchboard has never configured a project execution policy, so the server
+    dispatches its Connect wakes WITHOUT an execution_context by design
+    (connect_dispatch.enqueue_task's restored COORD-47 contract). Requiring a
+    context for every Connect launch shut down the whole unconfigured board
+    within minutes of the 0.4.0 host rollout: every wake refused with
+    invalid_execution_identity. Context-less wakes launch from the host
+    checkout exactly as they did before ADAPTER-28; contextual wakes keep
+    every isolation guarantee.
+    """
+    remote, sha = action_engine_remote(root)
+    wake = connect_wake(context(sha), execution_id="execlease-legacy")
+    del wake["policy"]["execution_context"]
+    wake["policy"].pop("account_binding", None)
+    with Launcher(remote) as launcher:
+        rec = agent_host.launch(
+            wake, host_inventory(), runner_session_id="run_legacy")
+    ok(bool(rec.get("pid"))
+       and rec.get("started") is not False
+       and rec.get("reason") not in {"invalid_execution_identity",
+                                     "execution_context_invalid"},
+       f"a context-less legacy wake launches (got {rec.get('reason')})")
+    ok(launcher.last is not None and cwd_of(launcher.last) == str(ROOT),
+       "the legacy launch uses the host checkout as cwd, as before ADAPTER-28")
+    ok("SWITCHBOARD_WORKSPACE_RECEIPT" not in (launcher.last or {}).get("env", {}),
+       "no workspace receipt is invented for a legacy launch")
+
+
 def test_launch_has_no_repo_root_fallback_for_connect():
     source = (Path(__file__).parents[1] / "adapters" / "agent_host.py").read_text(
         encoding="utf-8")
@@ -540,6 +570,7 @@ with tempfile.TemporaryDirectory(prefix="adapter28-") as temporary:
     test_retries_dedupe_and_teardown_revokes(base / "retry")
     test_one_generation_owns_workspace_credential_and_identity(base / "generation")
     test_only_supported_provider_clis_launch(base / "runtimes")
+    test_legacy_wake_without_context_launches_from_repo_root(base / "legacy")
 test_launch_has_no_repo_root_fallback_for_connect()
 
 print(f"\nADAPTER-28 workspace launch: {passed} passed, {failed} failed")
