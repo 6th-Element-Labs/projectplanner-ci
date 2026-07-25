@@ -29,6 +29,7 @@ from constants import EXECUTED_TEST_RUN_SCHEMA, MISSING_ARTIFACT_SCHEMA
 from switchboard.domain.completion import state_machine
 from switchboard.domain.decisions import features as features_mod
 from switchboard.storage.migrations import runner as migrations
+from switchboard.application.commands.merge_gate import _merge_gate_finding
 from switchboard.storage.repositories import claims as claims_repo
 from switchboard.storage.repositories import completion_runs, decision_records
 
@@ -49,7 +50,15 @@ CO21_HYGIENE = {
 
 def _gate_finding(missing_artifact: dict | None = None,
                   code: str = "missing_executed_test_run") -> dict:
-    """One merge_gate finding shaped exactly as the gate emits it."""
+    """One merge_gate finding, built by the gate's OWN constructor.
+
+    BUG-192 follow-up: this helper used to hand-build the dict with a nested
+    ``details`` key. That is not the shape the gate emits — ``_merge_gate_finding``
+    splats ``details`` onto the top level — so the tests below were asserting against
+    an invented shape and passed while the production lift returned nothing. Building
+    through the real constructor is what makes them regression tests instead of
+    restatements of an assumption.
+    """
     gate = {
         "ok": False,
         "schema": EXECUTED_TEST_RUN_SCHEMA,
@@ -58,13 +67,12 @@ def _gate_finding(missing_artifact: dict | None = None,
     }
     if missing_artifact is not None:
         gate["missing_artifact"] = missing_artifact
-    return {
-        "code": code,
-        "message": "Merge gate requires a passing executed test run.",
-        "failure_class": "missing_data",
-        "blocking": True,
-        "details": {"executed_test_gate": gate, "policy_profile": "code_strict"},
-    }
+    return _merge_gate_finding(
+        code,
+        "Merge gate requires a passing executed test run.",
+        "missing_data",
+        details={"executed_test_gate": gate, "policy_profile": "code_strict"},
+    )
 
 
 def _snapshot(findings, *, head=HEAD):
@@ -209,6 +217,25 @@ class ClassifierCarriesMissingArtifactTest(unittest.TestCase):
         decision = state_machine.classify_completion(
             None, _snapshot([_gate_finding(None)]))
         self.assertNotIn("missing_artifact", decision)
+
+    def test_the_lift_reads_the_shape_the_gate_actually_emits(self):
+        """Regression: the first cut read finding["details"], which never exists.
+
+        _merge_gate_finding returns {code, message, failure_class, severity, blocking,
+        **details} — details are splatted. Looking under a "details" key returned {} for
+        every real finding, so the report the gate wrote was dropped one layer later:
+        the same discard this whole line of work removes, reintroduced by its own fix.
+        """
+        finding = _gate_finding(self._report())
+        self.assertNotIn("details", finding, "the gate splats details; it does not nest")
+        self.assertIn("executed_test_gate", finding)
+        self.assertTrue(state_machine._missing_artifact_identity([finding]))
+
+    def test_a_nested_details_finding_is_still_accepted(self):
+        # Belt and braces: a caller that hands us an unsplatted finding still works.
+        nested = {"code": "missing_executed_test_run", "blocking": True,
+                  "details": {"executed_test_gate": {"missing_artifact": self._report()}}}
+        self.assertTrue(state_machine._missing_artifact_identity([nested]))
 
     def test_a_non_blocking_finding_is_not_mined_for_a_report(self):
         finding = _gate_finding(self._report())

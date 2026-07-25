@@ -24,6 +24,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pr_provenance_gate  # noqa: E402
 import store  # noqa: E402
+# Imported after `store` so the src/ path bootstrap it performs is already in place.
+from switchboard.application.commands import merge_gate as merge_gate_command  # noqa: E402
 
 
 DEFAULT_REPO = "6th-Element-Labs/projectplanner"
@@ -367,12 +369,17 @@ def run_merge_authorization_for_pr(
                 project=project,
             ))
 
-        blocked = [
-            finding
+        # BUG-192: keep each blocking finding paired with the task whose gate produced
+        # it. A PR resolves to every task id in its title and branch, so when the branch
+        # names the wrong task the offending task IS the answer — and it was the one
+        # thing the published status never said.
+        blocked_pairs = [
+            (str(gate_result.get("task_id") or ""), finding)
             for gate_result in gate_results
             for finding in (gate_result.get("findings") or [])
             if finding.get("blocking")
         ]
+        blocked = [finding for _, finding in blocked_pairs]
         if not resolved:
             state = "failure"
             reason = str(provenance.get("reason") or "task_not_resolved")
@@ -382,9 +389,14 @@ def run_merge_authorization_for_pr(
             )
         elif blocked:
             state = "failure"
-            reason = str(blocked[0].get("code") or "merge_gate_blocked")
-            description = str(
-                blocked[0].get("message") or "Switchboard merge gate blocked"
+            blocked_task_id, blocked_finding = blocked_pairs[0]
+            reason = str(blocked_finding.get("code") or "merge_gate_blocked")
+            # BUG-192: the identifying values are already on the finding. Publish them
+            # instead of the constant message — the description is the only free-form
+            # field that survives to branch protection.
+            description = merge_gate_command.describe_blocking_finding(
+                blocked_finding,
+                task_id=blocked_task_id if len(resolved) > 1 else "",
             )
         else:
             state = "success"

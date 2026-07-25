@@ -372,15 +372,24 @@ def _missing_artifact_identity(
     reason code — wrote nothing, orphaned a fresh work session, and exited.
 
     Read-only and diagnostic: it contributes no candidate and no precedence input.
+
+    Reads the gate blocks from the finding's TOP LEVEL. ``_merge_gate_finding`` builds a
+    finding as ``{code, message, failure_class, severity, blocking, **details}`` — the
+    details are splatted, so there is no ``finding["details"]`` to read. The first cut of
+    this function looked under that key and therefore returned ``{}`` for every real
+    finding: the report was written by the gate and dropped again one layer later, which
+    is the exact defect it was written to remove. The nested form is still accepted
+    because a caller may hand us an unsplatted finding.
     """
     for finding in findings:
         if not isinstance(finding, Mapping):
             continue
         if finding.get("blocking") is False:
             continue
-        details = _map(finding.get("details"))
+        nested = _map(finding.get("details"))
         for key in _ARTIFACT_GATE_DETAIL_KEYS:
-            report = _map(_map(details.get(key)).get("missing_artifact"))
+            gate = _map(finding.get(key)) or _map(nested.get(key))
+            report = _map(gate.get("missing_artifact"))
             if report:
                 return {"missing_artifact": report}
     return {}

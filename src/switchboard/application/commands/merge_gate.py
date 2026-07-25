@@ -14,7 +14,7 @@ import copy
 import json
 import time
 import urllib.request
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from constants import DEFAULT_PROJECT, GITHUB_PR_URL_RE, MERGE_GATE_SCHEMA
 from switchboard.domain.provenance.semantic import semantic_completion_gate
@@ -154,6 +154,124 @@ def _merge_gate_finding(code: str, message: str, failure_class: str,
         "blocking": bool(blocking),
         **(details or {}),
     }
+
+
+# BUG-192 — say what you found, not just that you found something.
+#
+# A GitHub commit status carries only state/context/description, capped at 140 chars,
+# so the typed `code` cannot survive the trip to branch protection. The *description*
+# can, and it was being spent on a constant: a stale_branch refusal published
+# "PR branch does not match task/session evidence." while the finding it was built from
+# carried both branch names. Diagnosing a one-word branch typo therefore meant reading
+# task_id_parser and this module. The values are already in hand at this point; naming
+# them costs nothing and is the whole fix.
+STATUS_DESCRIPTION_LIMIT = 140
+
+_SHA_CHARS = 12
+
+
+def _short(value: Any, limit: int = 48) -> str:
+    text = " ".join(str(value or "").split())
+    return text[:limit]
+
+
+def _short_sha(value: Any) -> str:
+    return _short(value, _SHA_CHARS)
+
+
+def _mismatch(finding: Mapping[str, Any], expected_key: str, actual_key: str,
+              *, sha: bool = False) -> str:
+    render = _short_sha if sha else _short
+    expected = render(finding.get(expected_key))
+    actual = render(finding.get(actual_key))
+    if expected and actual:
+        return f"expected {expected}, PR has {actual}"
+    if expected:
+        return f"expected {expected}"
+    return f"PR has {actual}" if actual else ""
+
+
+def _missing_contexts(finding: Mapping[str, Any]) -> str:
+    names = [_short(name, 40) for name in (finding.get("missing_contexts") or [])]
+    names = [name for name in names if name]
+    return "missing " + ", ".join(names[:3]) if names else ""
+
+
+def _artifact_detail(finding: Mapping[str, Any]) -> str:
+    """Name the key the gate wanted and the near-miss it found (COORD-61)."""
+    for gate_key in ("executed_test_gate", "ui_playwright_gate"):
+        gate = finding.get(gate_key)
+        report = (gate or {}).get("missing_artifact") if isinstance(gate, Mapping) else None
+        if not isinstance(report, Mapping):
+            continue
+        expected = _short(report.get("expected_key"), 40)
+        near = [item for item in (report.get("found_near_miss") or [])
+                if isinstance(item, Mapping)]
+        if expected and near:
+            return f"wanted {expected}, found {_short(near[0].get('key'), 40)}"
+        if expected:
+            return f"wanted {expected}"
+    return ""
+
+
+#: Per-code renderers for the identifying values the finding already carries. Keys are
+#: read from the finding's TOP LEVEL because ``_merge_gate_finding`` splats ``details``.
+_FINDING_DETAIL: Dict[str, Any] = {
+    "stale_branch": lambda f: _mismatch(f, "expected_branch", "pr_branch"),
+    "stale_head_sha": lambda f: _mismatch(
+        f, "expected_head_sha", "pr_head_sha", sha=True),
+    "wrong_target_branch": lambda f: (
+        f"PR targets {_short(f.get('pr_base'))}, expected {_short(f.get('target_branch'))}"
+        if f.get("pr_base") or f.get("target_branch") else ""
+    ),
+    "missing_required_status_contexts": _missing_contexts,
+    "pr_not_mergeable": lambda f: (
+        f"merge_state {_short(f.get('merge_state'), 24)}" if f.get("merge_state") else ""
+    ),
+    "unknown_policy_profile": lambda f: (
+        f"profile {_short(f.get('policy_profile'), 32)}"
+        if f.get("policy_profile") else ""
+    ),
+    "missing_executed_test_run": _artifact_detail,
+    "invalid_executed_test_run": _artifact_detail,
+    "missing_ui_playwright_evidence": _artifact_detail,
+}
+
+
+def describe_blocking_finding(finding: Mapping[str, Any], *,
+                              task_id: str = "") -> str:
+    """Render one blocking finding as a bounded, self-sufficient status description.
+
+    A reader must be able to act on this string without opening the source. When a PR
+    resolves to several tasks the task id is the actionable fact — the branch usually
+    names the wrong one — so it leads.
+    """
+    finding = dict(finding or {})
+    code = str(finding.get("code") or "").strip().lower()
+    base = _short(finding.get("message"), STATUS_DESCRIPTION_LIMIT) or (
+        _short(code, 64) or "Switchboard merge gate blocked")
+
+    renderer = _FINDING_DETAIL.get(code)
+    detail = ""
+    if renderer is not None:
+        try:
+            detail = _short(renderer(finding), 96)
+        except Exception:  # noqa: BLE001 - a description must never break publishing
+            detail = ""
+
+    prefix = f"{_short(task_id, 24)}: " if task_id else ""
+    text = f"{prefix}{base}"
+    if detail:
+        text = f"{text} ({detail})"
+    if len(text) <= STATUS_DESCRIPTION_LIMIT:
+        return text
+    # Keep the identifying detail: it is the part a reader cannot reconstruct.
+    if detail:
+        tail = f" ({detail})"
+        room = STATUS_DESCRIPTION_LIMIT - len(prefix) - len(tail) - 1
+        if room > 0:
+            return f"{prefix}{base[:room]}…{tail}"[:STATUS_DESCRIPTION_LIMIT]
+    return text[:STATUS_DESCRIPTION_LIMIT - 1] + "…"
 
 
 def _merge_gate_pr_number(pr_url: str, pr_number: Any = None) -> int:
