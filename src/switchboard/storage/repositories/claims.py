@@ -91,14 +91,15 @@ def _review_continuation_wake_for_claim_in(
     return None
 
 
-def _repair_execution_for_claim_in(
+def _assigned_execution_for_claim_in(
         c: sqlite3.Connection, task_id: str, agent_id: str,
         principal_id: str, now: float) -> Optional[Dict[str, Any]]:
-    """Return the exact live coordination-repair execution authorizing a claim.
+    """Return the exact live server assignment authorizing an In Review claim.
 
     Ordinary implementation starts may not reopen an In Review task.  The only
-    exception is a server-admitted ``coordination_retry`` generation whose
-    immutable assignment requires a claim.  Every identity edge is checked
+    exceptions are exact-head review/remediation generations and a
+    server-admitted ``coordination_retry`` implementation generation whose
+    immutable assignment requires a claim. Every identity edge is checked
     before the status gate is relaxed; claim attachment performs the same
     binding again and persists the generation on the claim and Work Session.
     """
@@ -155,7 +156,13 @@ def _repair_execution_for_claim_in(
         or str(selector.get("agent_id") or "") != agent_id
         or str(assignment.get("assignment_id") or "")
         != str(metadata.get("assignment_id") or "")
-        or str(contract.get("route") or "") != "coordination_retry"
+        or not (
+            role in {"review_merge", "remediation"}
+            or (
+                role == "implementation"
+                and str(contract.get("route") or "") == "coordination_retry"
+            )
+        )
         or contract.get("claim_expectations") != {
             "required": True, "work_session_required": True, "role": role}
         or str(contract.get("task_id") or "") != task_id
@@ -183,7 +190,7 @@ def _repair_execution_for_claim_in(
     except (ExecutionAssignmentError, TypeError, ValueError):
         return None
     return {
-        "schema": "switchboard.repair_claim_authority.v1",
+        "schema": "switchboard.execution_claim_authority.v1",
         "wake_id": wake_id,
         "execution_id": execution_id,
         "generation": generation,
@@ -843,15 +850,15 @@ def _claim_task_impl(task_id: str, agent_id: str,
             _review_continuation_wake_for_claim_in(c, task_id, agent_id)
             if task.get("status") == "In Review" else None
         )
-        repair_execution = (
-            _repair_execution_for_claim_in(
+        assigned_execution = (
+            _assigned_execution_for_claim_in(
                 c, task_id, agent_id, principal_id, now)
             if task.get("status") == "In Review" else None
         )
         orphan_adoption = task.get("status") == "In Progress"
         if (task.get("status") not in READY_TASK_STATUSES
                 and not orphan_adoption and not review_continuation
-                and not repair_execution):
+                and not assigned_execution):
             response = {"claimed": False, "reason": "status_not_ready",
                         "task_id": task_id, "status": task.get("status")}
             _store_facade()._idem_store(c, "claim_task", idem_key, actor, payload, response)
@@ -920,7 +927,7 @@ def _claim_task_impl(task_id: str, agent_id: str,
         )
         next_status = (
             "In Review"
-            if review_continuation or repair_execution
+            if review_continuation or assigned_execution
             else "In Progress"
         )
         c.execute("UPDATE tasks SET status=?, assignee=?, updated_at=? WHERE task_id=?",
@@ -930,8 +937,10 @@ def _claim_task_impl(task_id: str, agent_id: str,
         if review_continuation:
             dispatch_reason["review_continuation"] = review_continuation
             dispatch_reason["workflow_status_preserved"] = "In Review"
-        if repair_execution:
-            dispatch_reason["repair_execution"] = repair_execution
+        if assigned_execution:
+            dispatch_reason["assigned_execution"] = assigned_execution
+            if assigned_execution["route"] == "coordination_retry":
+                dispatch_reason["repair_execution"] = assigned_execution
             dispatch_reason["workflow_status_preserved"] = "In Review"
         if orphan_adoption:
             dispatch_reason["orphan_adopted"] = True
