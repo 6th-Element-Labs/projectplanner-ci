@@ -170,6 +170,18 @@ _ENTRIES: tuple[ReasonCode, ...] = (
 
 REASON_CODES: dict[str, ReasonCode] = {entry.code: entry for entry in _ENTRIES}
 
+# Codes that assert the retry budget is spent, not merely that a retry is pending.
+# COORD-51 §3.1 closes the episodes they classify as ``abandoned``: the loop stopped
+# because it ran out of budget, which is a different outcome from a head that moved on.
+#
+# Deliberately narrow. ``merge_queue_locked`` and ``pr_mergeability_unknown`` are
+# emitted *while* a bounded retry is still live, so counting them as abandoned would
+# label a working loop as given-up. Adding a code here is a one-line change and should
+# be made only for a code whose emission means no further attempt will be made.
+RETRY_BUDGET_EXHAUSTED_CODES = frozenset({
+    "review_retry_budget_exhausted",
+})
+
 
 def spelling_key(code: str) -> str:
     """Fold a code onto its canonical spelling family.
@@ -207,12 +219,19 @@ def is_registered(code: str) -> bool:
     return canonical_reason_code(code) in REASON_CODES
 
 
+def is_retry_budget_exhausted(code: str) -> bool:
+    """Report whether ``code`` means no further attempt will be made."""
+    return canonical_reason_code(code) in RETRY_BUDGET_EXHAUSTED_CODES
+
+
 __all__ = [
     "EXPECTED",
     "FAMILIES",
     "REASON_CODES",
     "REASON_CODE_SCHEMA",
     "RESOLVERS",
+    "RETRY_BUDGET_EXHAUSTED_CODES",
+    "is_retry_budget_exhausted",
     "ReasonCode",
     "canonical_reason_code",
     "get_reason_code",

@@ -197,6 +197,14 @@ ADDITIVE_COLUMN_MIGRATIONS: List[Tuple[str, str, str, str]] = [
      "ALTER TABLE autopilot_scopes ADD COLUMN started_by TEXT NOT NULL DEFAULT ''"),
     ("0096_autopilot_scopes_started_at", "autopilot_scopes", "started_at",
      "ALTER TABLE autopilot_scopes ADD COLUMN started_at REAL"),
+    # COORD-51 §3.2 — join an episode to the run it produced. decision_records already
+    # carried (host_id, generation, fence_epoch), which runner sessions also carry, so
+    # the join was possible and merely never exposed; the runner's execution_id makes
+    # it direct instead of inferred. Private-half identity: never exported.
+    # decision_records is created in DDL_MIGRATIONS below, so the runner's deferred
+    # pass applies this after that create.
+    ("0120_decision_records_execution_id", "decision_records", "execution_id",
+     "ALTER TABLE decision_records ADD COLUMN execution_id TEXT NOT NULL DEFAULT ''"),
 ]
 
 # Idempotent DDL migrations (``CREATE ... IF NOT EXISTS``) applied after the column set,

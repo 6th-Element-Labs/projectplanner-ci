@@ -35,6 +35,7 @@ from switchboard.connect.execution_assignment import (
     build_execution_assignment,
     require_exact_execution_assignment,
 )
+from switchboard.storage.repositories import decision_records
 from switchboard.storage.repositories.tasks import (
     _deps_done,
     _heal_dependency_blocked_tasks_in,
@@ -1903,6 +1904,14 @@ def revoke_claim(claim_id: str, reason: str,
         vals.append(task_id)
         c.execute(f"UPDATE tasks SET {', '.join(sets)} WHERE task_id=? "
                   "AND status NOT IN ('Done', 'Cancelled', 'Canceled')", vals)
+
+        # COORD-51 §3.1: a revoke is an operator taking control of the loop, so the
+        # task's open episodes are flagged human_intervened with the verb. The outcome
+        # stays open deliberately — the work is back on the board and still spinning,
+        # and calling it closed would hide exactly that.
+        decision_records.mark_human_intervention_in(
+            c, project=project, task_id=task_id, human_action="revoke_claim",
+        )
 
         git_state = None
         if evidence_obj:

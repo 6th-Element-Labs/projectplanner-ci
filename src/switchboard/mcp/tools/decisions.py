@@ -163,6 +163,13 @@ def get_reason_code_counts(project: str = "maxwell", window_hours: float = 168.0
     or host_id. Codes not in `switchboard.reason_code.v1` are returned with
     registered=false and repeated in `unregistered_reason_codes` — an unowned code is
     surfaced, never silently counted as free text.
+
+    COORD-51 adds the outcome half. Each code carries `outcomes` (the breakdown),
+    `open_episodes`, `terminal_episodes`, `head_advanced_episodes`, `generations_spent`,
+    `human_intervened_episodes`, and `never_terminal`. Read
+    `never_terminal_reason_codes` to answer "which reason codes never reach a terminal
+    outcome" — the codes whose loop, on this window's evidence, has no exit. Outcomes
+    outside `switchboard.decision_outcome.v1` appear in `unregistered_outcomes`.
     project: 'maxwell' (default), 'helm', or 'switchboard'."""
     from switchboard.storage.repositories import decision_records
 
@@ -186,7 +193,20 @@ def list_decision_episodes(project: str = "maxwell", task_id: str = "",
     every distinct decision episode oldest-first, with the exact-head fence, the
     materialized `switchboard.decision_features.v1` projection, and `tick_count`.
     Use it to see how a task actually moved between routes rather than where it
-    stopped. project: 'maxwell' (default), 'helm', or 'switchboard'."""
+    stopped.
+
+    COORD-51 closes the loop on each episode:
+      - `outcome` (open|merged|done|superseded|abandoned|human_resolved) plus
+        `outcome_terminal`, `head_advanced`, `generations_spent`, `merged_sha`,
+        `human_intervened`, `human_action`. `superseded` means the head moved on and
+        whatever this episode decided, it decided about a head that no longer exists.
+      - `execution_id`: the run this episode's decision was observed against. Resolve
+        it with list_runner_sessions / get_task_execution to turn "routed to
+        remediation" into "routed to remediation, which produced run_X, which pushed
+        nothing and expired".
+      - `features.failing_contexts` / `failing_check_url` / `failing_check_summary` on
+        a CI-failure episode: WHICH required check failed, not merely that CI failed.
+    project: 'maxwell' (default), 'helm', or 'switchboard'."""
     from switchboard.storage.repositories import decision_records
 
     since = (

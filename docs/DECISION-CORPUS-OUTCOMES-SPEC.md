@@ -143,6 +143,38 @@ seven times and resolved nothing, because the signal it received named no failin
 - Regression tests over a synthetic window covering merge, supersede, human intervention and
   abandonment, plus idempotent re-backfill.
 
+## 6a. As built (COORD-51) — three places the implementation is narrower than §3
+
+**§3.3 diagnostics are stored in `features_json` but stripped on export.** §3.3 says the
+failing check identity is "covered by the parent spec's allowlist discipline and export
+rules". It is not: `EXPORT_COLUMNS` reads `features_json` wholesale, and parent spec §4.2
+explicitly excludes **status context names** ("these leak internal tooling inventory") and
+PR/check URLs from the poolable tier. Storing them there unchanged would have widened the
+commercial disclosure document by a side door. As built, the three keys live in
+`features_json` where a reader looks, are declared in `features.DIAGNOSTIC_FIELDS`, and
+`export_projection` strips them — so the exported projection is still exactly the
+twenty-three enum fields §6.3 promises. `execution_id` is a private-half column for the
+same reason. Both are asserted by test.
+
+**The head-advance hook lives in the episode writer, not in a git-state webhook.** §3.1
+names the trigger "new `head_sha` observed for a task". The completion driver is the only
+producer of episodes, so an episode arriving at a different head *is* that observation —
+and it commits in the same transaction as the insert instead of depending on a webhook
+delivery. A head going from a SHA to empty is a hydration regression, not an advance, and
+is deliberately not counted as one.
+
+**Every closer degrades visibly on a DB without the corpus table.** The closers run inside
+the merge, Done, and revoke transactions. Since the corpus "carries no authority: it gates
+nothing, routes nothing", it must not be able to fail a merge webhook on a DB whose
+additive migration has not run — losing merge provenance would be far worse than an
+unrecorded outcome. Absence returns `skipped: true, reason: "decision_records_absent"`;
+every other storage fault still propagates.
+
+Also worth recording: retaining the failing-check identity had to be made **independent of
+context presentation order**. Taking "the first failing context" broke the 57,624-state
+permutation-invariance model in `tests/test_bug172_completion_classifier_model.py` — the
+same class of source-ordering defect as COORD-49. The identity is ordered by context name.
+
 ---
 
 ## 7. Part 3 — feed the corpus back into the loop

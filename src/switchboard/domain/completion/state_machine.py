@@ -84,6 +84,11 @@ def _text(value: Any) -> str:
     return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
 
 
+def _text_raw(value: Any) -> str:
+    """Trim only. Context names and URLs are identifiers — folding case breaks them."""
+    return str(value or "").strip()
+
+
 def _head(record: Mapping[str, Any]) -> str:
     nested = record.get("head")
     if isinstance(nested, Mapping):
@@ -425,6 +430,58 @@ def _typed_findings_present(findings: Any) -> bool:
     )
 
 
+_FAILED_CI_STATES = {"failure", "failed", "error", "timed_out", "action_required"}
+
+
+def _failing_check_identity(
+    failing: Sequence[tuple[str, Mapping[str, Any]]],
+) -> dict[str, Any]:
+    """Name the required contexts that failed, from the rows already in hand.
+
+    Outcomes spec §3.3. ``_required_ci_decision`` iterated these rows to reach its
+    verdict and then dropped their identity, so ``required_exact_head_ci_failed``
+    reported that CI failed and never which check — seven CO-20 remediation runners
+    each received that signal, and the failing suite was identified only by cloning
+    the head and running it by hand.
+
+    Diagnostic only: it contributes no candidate, no route, and no precedence input.
+
+    Ordered by context name, never by the order the provider happened to present the
+    contexts in. COORD-49 was a source-ordering bug that chose a decision, and
+    `_select_decision` exists so ordering cannot; a diagnostic that varied under
+    permutation would reintroduce exactly that non-determinism into the classifier's
+    output — the 57,624-permutation model test in tests/test_bug172_* asserts the whole
+    decision is permutation-invariant, and it is right to.
+    """
+    if not failing:
+        return {}
+    ordered = sorted(
+        ((name, _map(row)) for name, row in failing if name),
+        key=lambda item: item[0],
+    )
+    if not ordered:
+        return {}
+    identity: dict[str, Any] = {
+        "failing_contexts": [name for name, _ in ordered],
+    }
+    # One representative check, chosen by the same total order.
+    _, representative = ordered[0]
+    url = _text_raw(
+        representative.get("target_url") or representative.get("url")
+        or representative.get("details_url") or representative.get("detailsUrl")
+        or representative.get("run_url")
+    )
+    if url:
+        identity["failing_check_url"] = url
+    summary = _text_raw(
+        representative.get("description") or representative.get("summary")
+        or representative.get("output_title")
+    )
+    if summary:
+        identity["failing_check_summary"] = summary
+    return identity
+
+
 def _required_ci_decision(snapshot: Mapping[str, Any]) -> dict[str, Any] | None:
     """Classify every required context, then select by explicit precedence."""
     required = list(snapshot.get("required_status_contexts") or [])
@@ -434,6 +491,7 @@ def _required_ci_decision(snapshot: Mapping[str, Any]) -> dict[str, Any] | None:
     # own them (review, findings, mergeability, draft) whenever they are present.
     defer_merge_authorization = _typed_findings_present(snapshot.get("findings"))
     candidates: list[dict[str, Any]] = []
+    failing: list[tuple[str, Mapping[str, Any]]] = []
     for name in required:
         if defer_merge_authorization and _is_merge_authorization_context(name):
             continue
@@ -465,7 +523,8 @@ def _required_ci_decision(snapshot: Mapping[str, Any]) -> dict[str, Any] | None:
                 "blocked", "coordination_retry",
                 f"required_ci_{state}", retry="bounded",
             ))
-        elif state in {"failure", "failed", "error", "timed_out", "action_required"}:
+        elif state in _FAILED_CI_STATES:
+            failing.append((_text_raw(name), row))
             if state == "action_required" or attribution in {"policy", "authority"}:
                 candidates.append(_decision(
                     "blocked", "human", "required_ci_authority_failure",
@@ -491,7 +550,14 @@ def _required_ci_decision(snapshot: Mapping[str, Any]) -> dict[str, Any] | None:
                 "blocked", "coordination_retry", "required_ci_state_unknown",
                 retry="bounded",
             ))
-    return _select_decision(candidates)
+    selected = _select_decision(candidates)
+    # Attach the retained identity AFTER selection: `_select_decision` keys only on
+    # route, reason_code and desired_role, so these fields cannot influence which
+    # blocker wins. §3.3 is feature-only — if a route changes because of this, that
+    # is a defect, not a spec change.
+    if selected is not None:
+        selected.update(_failing_check_identity(failing))
+    return selected
 
 
 def _changes_requested_decision(

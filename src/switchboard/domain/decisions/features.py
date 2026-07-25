@@ -48,6 +48,32 @@ FEATURE_FIELDS: tuple[str, ...] = (
     "generation_bucket",
 )
 
+# Diagnostic identity (outcomes spec §3.3). NOT part of the poolable projection.
+#
+# `_required_ci_decision` iterates the failing required contexts to reach its verdict
+# and then discards their identity, so `required_exact_head_ci_failed` says CI failed
+# and not *what* failed — seven CO-20 remediation runners each received that
+# contentless signal, and the failing suite was finally identified by cloning the head
+# and running it by hand. Recomputing what you already had is the recurring bug in
+# this system, so the identity is retained here.
+#
+# These three fields are stored *alongside* the projection in `features_json` because
+# that is where a reader looks, but they are content, not shape: context names leak
+# internal tooling inventory and a check URL carries the repository. The parent spec
+# §4.2 excludes exactly that from the poolable tier, so `export_projection` strips
+# these keys from every exported `features_json` and a test asserts it. Widening the
+# poolable tier stays a change to FEATURE_FIELDS, which is the whole point of §6.1.
+DIAGNOSTIC_FIELDS: tuple[str, ...] = (
+    "failing_contexts",
+    "failing_check_url",
+    "failing_check_summary",
+)
+
+# Bounded by construction: a PR with fifty required contexts must not write fifty
+# names into every episode, and a check description is untrusted upstream text.
+MAX_FAILING_CONTEXTS = 8
+MAX_SUMMARY_CHARS = 240
+
 OTHER = "other"
 NONE = "none"
 
@@ -232,11 +258,76 @@ def project_features(
     return {name: features[name] for name in FEATURE_FIELDS}
 
 
+def _clean_text(value: Any, limit: int) -> str:
+    """Collapse whitespace and truncate. Upstream descriptions are untrusted text."""
+    text = " ".join(str(value or "").split())
+    return text[:limit]
+
+
+def project_diagnostics(
+    snapshot: Mapping[str, Any],
+    decision: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Materialize the §3.3 diagnostic identity for one classified snapshot.
+
+    The classifier already resolved which required contexts failed, so it passes
+    ``failing_contexts`` / ``failing_check_url`` / ``failing_check_summary`` on the
+    decision. This function only normalizes and bounds them — it does not re-derive
+    the classification, because deriving it a second time here is how two
+    implementations of "which check failed" drift apart.
+
+    Absent keys are omitted rather than written empty: a decision that never looked
+    at a failing context must not claim it found none. Only :data:`DIAGNOSTIC_FIELDS`
+    can be returned.
+    """
+    verdict = _map(decision)
+    del snapshot  # identity comes from the verdict that used it, never re-derived
+
+    diagnostics: dict[str, Any] = {}
+
+    raw_contexts = verdict.get("failing_contexts")
+    if isinstance(raw_contexts, (list, tuple)):
+        names: list[str] = []
+        for item in raw_contexts:
+            name = _clean_text(item, MAX_SUMMARY_CHARS)
+            if name and name not in names:
+                names.append(name)
+        if names:
+            diagnostics["failing_contexts"] = names[:MAX_FAILING_CONTEXTS]
+
+    url = _clean_text(verdict.get("failing_check_url"), MAX_SUMMARY_CHARS)
+    if url:
+        diagnostics["failing_check_url"] = url
+
+    summary = _clean_text(verdict.get("failing_check_summary"), MAX_SUMMARY_CHARS)
+    if summary:
+        diagnostics["failing_check_summary"] = summary
+
+    return {name: diagnostics[name] for name in DIAGNOSTIC_FIELDS
+            if name in diagnostics}
+
+
+def strip_diagnostics(features: Mapping[str, Any]) -> dict[str, Any]:
+    """Drop every diagnostic key, leaving only the poolable projection.
+
+    The export boundary in one function so it is testable rather than implied.
+    """
+    return {
+        name: value for name, value in dict(features).items()
+        if name not in set(DIAGNOSTIC_FIELDS)
+    }
+
+
 __all__ = [
     "DECISION_FEATURES_SCHEMA",
+    "DIAGNOSTIC_FIELDS",
     "FEATURES_VERSION",
     "FEATURE_FIELDS",
+    "MAX_FAILING_CONTEXTS",
+    "MAX_SUMMARY_CHARS",
     "NONE",
     "OTHER",
+    "project_diagnostics",
     "project_features",
+    "strip_diagnostics",
 ]

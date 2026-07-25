@@ -37,6 +37,11 @@ DECISION_RECORDS_SQL = (
     "fence_epoch INTEGER NOT NULL DEFAULT 0, "
     "deliverable_id TEXT NOT NULL DEFAULT '', "
     "host_id TEXT NOT NULL DEFAULT '', "
+    # COORD-51 §3.2: the run this episode's decision was observed against. Turns
+    # "routed to remediation" into "routed to remediation, which produced run_e9d5a081,
+    # which pushed nothing and expired" — the question an operator actually asks.
+    # Legacy DBs receive it via additive migration 0120.
+    "execution_id TEXT NOT NULL DEFAULT '', "
     # private half: replay substrate, never exported
     "snapshot_hash TEXT NOT NULL, "
     "snapshot_json TEXT NOT NULL DEFAULT '{}', "

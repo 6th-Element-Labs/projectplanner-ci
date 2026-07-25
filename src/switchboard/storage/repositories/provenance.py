@@ -37,6 +37,7 @@ from switchboard.domain.provenance.semantic import (
     merge_done_gate,
     semantic_completion_gate,
 )
+from switchboard.storage.repositories import decision_records
 from switchboard.storage.repositories.tasks import (
     _heal_dependency_blocked_tasks_in,
     _task_row,
@@ -504,6 +505,15 @@ def _mark_task_merged_impl(task_id: str, merged_sha: str, pr_number: Optional[in
                     )
             except sqlite3.OperationalError:
                 pass
+        # COORD-51 §3.1: the merge closes every open decision episode for this task.
+        # Recorded on the same transaction as the provenance stamp, so the corpus can
+        # never roll back merge truth and never becomes a second, separately-failing
+        # write. Closed on the evidence-only path too: the PR did merge, and every
+        # episode deciding how to get it merged is answered either way — Done being
+        # withheld is a separate gate, not evidence the loop is still live.
+        decision_records.close_merged_episodes_in(
+            c, project=project, task_id=task_id, merged_sha=merged_sha,
+        )
         activity_kind = ("git.pr_merged" if done_gate.get("ok")
                          else "git.pr_merged_evidence")
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
@@ -579,6 +589,10 @@ def mark_task_default_branch_commit(task_id: str, commit_sha: str,
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (task_id, actor, "git.default_branch_backfilled",
                    json.dumps(evidence, sort_keys=True), now))
+        # COORD-51 §3.1: reaching terminal Done closes the task's open episodes.
+        decision_records.close_done_episodes_in(
+            c, project=project, task_id=task_id, merged_sha=commit_sha,
+        )
         _heal_dependency_blocked_tasks_in(
             c, completed_task_id=task_id, actor="switchboard/dependency-lifecycle",
             now=now)
@@ -672,6 +686,10 @@ def mark_task_offline_done(task_id: str, evidence: Any = None,
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (task_id, actor, "task.offline_verified",
                    json.dumps(offline_payload, sort_keys=True), now))
+        # COORD-51 §3.1: verifier-stamped offline Done is terminal too.
+        decision_records.close_done_episodes_in(
+            c, project=project, task_id=task_id,
+        )
         _heal_dependency_blocked_tasks_in(
             c, completed_task_id=task_id, actor="switchboard/dependency-lifecycle",
             now=now)

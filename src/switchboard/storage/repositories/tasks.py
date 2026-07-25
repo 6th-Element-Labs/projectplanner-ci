@@ -581,6 +581,39 @@ def get_task(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str,
         _store_facade()._enrich_task_project_context(t, project=project)
         return t
 
+
+def _record_decision_intervention_in(c: Any, task_id: str, changed: Dict[str, Any],
+                                     *, project: str) -> None:
+    """Mark a board-status edit against the task's open decision episodes.
+
+    COORD-51 §3.1. An out-of-band ``update_task`` status change is the "operator edit"
+    the spec names: the completion loop projects board status through its own effect
+    path, so a status arriving here came from outside that loop.
+
+    Scoped to status only. Every other editable field — title, description, phase,
+    dependencies — is routine board maintenance, and flagging those as intervention
+    would mark almost every episode intervened and make the flag worthless. Terminal
+    statuses close the episodes; anything else records the verb and leaves the outcome
+    open, because the loop is still live.
+    """
+    from switchboard.storage.repositories import decision_records
+
+    status = str(changed.get("status") or "").strip()
+    if not status:
+        return
+    lowered = status.lower()
+    if lowered in {"done", "cancelled", "canceled"}:
+        decision_records.mark_human_intervention_in(
+            c, project=project, task_id=task_id,
+            human_action=f"update_task:status={status}", resolved=True,
+        )
+        return
+    decision_records.mark_human_intervention_in(
+        c, project=project, task_id=task_id,
+        human_action=f"update_task:status={status}",
+    )
+
+
 def _update_task_impl(task_id: str, fields: Dict[str, Any], actor: str = "user",
                       project: str = DEFAULT_PROJECT) -> Any:
     sets, vals, changed = [], [], {}
@@ -626,6 +659,7 @@ def _update_task_impl(task_id: str, fields: Dict[str, Any], actor: str = "user",
             activity_changed["block_cause"] = "explicit"
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (task_id, actor, "edit", json.dumps(activity_changed), time.time()))
+        _record_decision_intervention_in(c, task_id, changed, project=project)
         if str(changed.get("status") or "").strip().lower() == "done":
             _heal_dependency_blocked_tasks_in(
                 c, completed_task_id=task_id,
