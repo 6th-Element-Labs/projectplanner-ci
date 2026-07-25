@@ -33,9 +33,11 @@ os.environ.update({key: value for key, value in env.items() if key.startswith("P
 (tmp / "projects").mkdir(parents=True)
 
 import store  # noqa: E402
+from execution_readiness_fixture import configure_ready_project  # noqa: E402
 
 store.init_project_registry()
 store.init_db("maxwell")
+configure_ready_project("maxwell", actor="test")
 store.create_task({"workstream_id": "AUTO", "title": "First ready task"},
                   actor="test", project="maxwell")
 store.create_task({"workstream_id": "AUTO", "title": "Blocked follow-on",

@@ -653,6 +653,24 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
         _refuse_unsatisfied_dependencies(task, task_id=task_id, project=project)
         if launcher is None:
             from switchboard.application.commands import connect_dispatch
+            from switchboard.storage.repositories.project_execution_readiness import (
+                get_project_execution_readiness,
+            )
+
+            # UI-63: a project that is not execution-ready must refuse before a wake is
+            # requested, alongside CO-25's dependency refusal above. The launcher seam is
+            # exempt so adapter/unit tests do not need a ready project.
+            readiness = get_project_execution_readiness(project)
+            if readiness.get("passed") is not True:
+                raise TaskExecutionError(
+                    "start_refused",
+                    str(readiness.get("message") or
+                        "Project execution readiness is blocked."),
+                    task_id=task_id, project=project,
+                    start_error=(readiness.get("reason_code")
+                                 or "project_execution_not_ready"),
+                    execution_readiness=readiness,
+                    blockers=list(readiness.get("blockers") or []))
 
             predecessor = str(
                 ((projection.get("last_dispatch_outcome") or {}).get("wake_id")) or "")

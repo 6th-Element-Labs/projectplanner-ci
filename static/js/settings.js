@@ -47,6 +47,7 @@
                 // can_edit probe — so a project editor legitimately sees this section.
                 { id: 'comms', label: 'Communications', icon: 'ti-mail-cog', scope: 'write:projects' },
                 { id: 'github', label: 'GitHub & repositories', icon: 'ti-brand-github', scope: 'write:system' },
+                { id: 'execution', label: 'Execution readiness', icon: 'ti-route-check', scope: 'write:system' },
                 { id: 'tokens', label: 'Access tokens', icon: 'ti-key', scope: 'write:system' },
             ],
         },
@@ -215,6 +216,7 @@
                 case 'members': return this._settingsMembersSection();
                 case 'comms': return this._settingsCommsSection();
                 case 'github': return this._settingsGithubSection();
+                case 'execution': return this._settingsExecutionSection();
                 case 'tokens': return this._settingsTokensSection();
                 case 'ai-governance': return this._settingsAiGovernanceSection();
                 case 'fleet': return this._settingsFleetSection();
@@ -794,6 +796,51 @@
         },
 
         /* ---- Project settings --------------------------------------------- */
+
+        async _settingsExecutionSection() {
+            const proj = window.PM_PROJECT || 'maxwell';
+            const data = await this._sfetch(`api/projects/${encodeURIComponent(proj)}/execution_readiness`);
+            if (data.error) return this._settingsErrCard('Execution readiness', data.error);
+            const states = data.states || {};
+            const labels = {
+                configuration: 'Configuration',
+                provider: 'Provider connections',
+                scm: 'SCM authorization',
+                persistent: 'Persistent capacity',
+                ephemeral: 'Ephemeral capacity',
+                autopilot: 'Autopilot',
+            };
+            const cards = Object.keys(labels).map((key) => {
+                const state = states[key] || {};
+                const ready = state.passed === true;
+                const tone = ready ? 'bg-green-lt text-green' : (
+                    ['disabled', 'not_required'].includes(state.status)
+                        ? 'bg-secondary-lt text-secondary' : 'bg-red-lt text-red');
+                const blockers = (state.blockers || []).map((blocker) =>
+                    `<li class="mb-2"><strong>${this.esc(blocker.message || blocker.code || 'Blocked')}</strong>`
+                    + `<div class="text-secondary">${this.esc(blocker.repair || '')}</div>`
+                    + `<code class="small">${this.esc(blocker.code || '')}</code></li>`).join('');
+                const details = blockers
+                    ? `<ul class="small ps-3 mb-0">${blockers}</ul>`
+                    : `<div class="small text-secondary">${this.esc(state.message || '')}</div>`;
+                return `<div class="col-md-6"><div class="card h-100" data-readiness-state="${key}">
+                    <div class="card-header py-2"><h4 class="card-title mb-0">${this.esc(labels[key])}</h4>
+                    <span class="badge ${tone} ms-auto">${this.esc(state.status || 'unknown')}</span></div>
+                    <div class="card-body py-3">${details}</div></div></div>`;
+            }).join('');
+            const overallTone = data.passed ? 'success' : 'danger';
+            return this._settingsCard({
+                id: 'settings-execution-readiness',
+                title: 'Execution readiness',
+                icon: 'ti-route-check',
+                subtitle: 'The same authoritative gate is rerun whenever an operator presses Start.',
+                actions: '<button class="btn btn-sm btn-outline-secondary" type="button" data-set-action="execution-refresh"><i class="ti ti-refresh me-1"></i>Rerun gate</button>',
+                body: `<div class="alert alert-${overallTone} py-2 px-3" id="execution-readiness-summary">
+                    <strong>${data.passed ? 'Ready' : 'Blocked'}</strong> · ${this.esc(data.message || '')}
+                    ${data.reason_code ? `<div><code>${this.esc(data.reason_code)}</code></div>` : ''}</div>
+                    <div class="row g-3">${cards}</div>`,
+            });
+        },
 
         // UI-20 (4/6): the UI-5 Members & access modal folded in-place. The section nav is
         // gated write:system, so anyone who can open it can edit — the server still enforces
@@ -1762,6 +1809,7 @@
             case 'verify-offline': return this.verifyOffline();
             case 'move-task': return this.moveTask();
             case 'refresh': return this.renderSettings();
+            case 'execution-refresh': return this.renderSettings();
             case 'ai-governance-refresh': return this.renderSettings();
             case 'ai-governance-disable': return this._settingsAiGovernanceToggle(true);
             case 'ai-governance-enable': return this._settingsAiGovernanceToggle(false);
