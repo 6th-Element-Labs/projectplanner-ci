@@ -395,8 +395,31 @@ def retention_sweep():
         "1", "true", "yes", "on")
     projects = _configured_projects("PM_RETENTION_PROJECTS", "all")
     for project_id in projects:
-        report = store.prune_operational_tables(
-            project=project_id, dry_run=dry_run, actor="jobs/retention_sweep")
+        # An ARCHIVED board rejects writes (ProjectLifecycleWriteBlocked). Skip it up
+        # front, exactly as reconcile_alerts does — and keep going: this sweep spans
+        # every board, so one unwritable board must not abandon the rest. An earlier
+        # version aborted the whole run on the first archived project, after it had
+        # already deleted from three others, leaving the job half-done and exit 1.
+        try:
+            lifecycle_status = store.project_lifecycle_status(project_id)
+        except Exception as exc:  # unreadable lifecycle: skip rather than guess
+            print(json.dumps({"project": project_id, "skipped": True,
+                              "skip_reason": "lifecycle_unavailable",
+                              "error": str(exc)}, sort_keys=True), flush=True)
+            continue
+        if lifecycle_status != "active":
+            print(json.dumps(_reconcile_lifecycle_skip(project_id, lifecycle_status),
+                             sort_keys=True), flush=True)
+            continue
+        try:
+            report = store.prune_operational_tables(
+                project=project_id, dry_run=dry_run, actor="jobs/retention_sweep")
+        except Exception as exc:
+            # Report and continue. Retention is per-board and idempotent, so the next
+            # daily run retries this board; losing every later board is the worse harm.
+            print(json.dumps({"project": project_id, "ok": False,
+                              "error": str(exc)}, sort_keys=True), flush=True)
+            continue
         # Print real numbers rather than a bare success line: a sweep that silently
         # deletes nothing for weeks should be visible in the journal.
         print(json.dumps(report, sort_keys=True), flush=True)

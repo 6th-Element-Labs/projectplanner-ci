@@ -129,6 +129,51 @@ try:
     ok(callable(store.prune_operational_tables),
        "prune_operational_tables is exported on store for jobs.retention_sweep")
 
+    # 6. The sweep spans EVERY board, so one unwritable board must not abandon the rest.
+    #    An archived project rejects writes (ProjectLifecycleWriteBlocked); the first
+    #    version of this job crashed on one after already deleting from three others,
+    #    leaving the run half-done and exit 1.
+    import jobs
+
+    seen = []
+    saved_status = store.project_lifecycle_status
+    saved_prune = store.prune_operational_tables
+    saved_projects = jobs._configured_projects
+    try:
+        jobs._configured_projects = lambda *_a, **_k: ["good-a", "archived", "good-b"]
+        jobs.store.project_lifecycle_status = (
+            lambda p: "archived" if p == "archived" else "active")
+
+        def fake_prune(project, dry_run=True, actor="", **_kw):
+            seen.append(project)
+            return {"project": project, "tables": {}, "total_deleted_rows": 0,
+                    "total_eligible_rows": 0, "total_eligible_bytes": 0}
+
+        jobs.store.prune_operational_tables = fake_prune
+        jobs.retention_sweep()
+        ok(seen == ["good-a", "good-b"],
+           "an archived board is skipped and the boards AFTER it still run")
+
+        # A board that raises must also not take the run down.
+        seen.clear()
+
+        def exploding_prune(project, dry_run=True, actor="", **_kw):
+            seen.append(project)
+            if project == "archived":
+                raise RuntimeError("boom")
+            return {"project": project, "tables": {}, "total_deleted_rows": 0,
+                    "total_eligible_rows": 0, "total_eligible_bytes": 0}
+
+        jobs.store.project_lifecycle_status = lambda p: "active"
+        jobs.store.prune_operational_tables = exploding_prune
+        jobs.retention_sweep()
+        ok(seen == ["good-a", "archived", "good-b"],
+           "a board that raises is reported and the run continues to the next board")
+    finally:
+        jobs._configured_projects = saved_projects
+        jobs.store.project_lifecycle_status = saved_status
+        jobs.store.prune_operational_tables = saved_prune
+
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
 
