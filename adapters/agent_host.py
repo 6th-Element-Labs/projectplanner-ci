@@ -2044,6 +2044,63 @@ def _runner_last_output_at(session):
     return _runner_timestamp(session.get("started_at"))
 
 
+def _runner_log_path(session):
+    metadata = dict(session.get("metadata") or {})
+    return str(session.get("log_path") or metadata.get("log_path") or "").strip()
+
+
+def _runner_output_bytes(session):
+    log_path = _runner_log_path(session)
+    if not log_path:
+        return None
+    try:
+        return int(os.stat(log_path).st_size)
+    except OSError:
+        return None
+
+
+def _runner_log_tail(session, limit=4000):
+    """Return a small clean PTY tail for progress-fault evidence (WATCH-19)."""
+    log_path = _runner_log_path(session)
+    if not log_path:
+        return ""
+    try:
+        data = Path(log_path).read_bytes()
+        return data[-limit:].decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _runner_cpu_percent(session):
+    """Best-effort CPU sample for progress-fault evidence; never raises."""
+    try:
+        pid = int(session.get("pid") or 0)
+    except (TypeError, ValueError):
+        return None
+    if pid <= 0:
+        return None
+    try:
+        import psutil  # optional on host images
+        return float(psutil.Process(pid).cpu_percent(interval=0.0))
+    except Exception:
+        return None
+
+
+def _runner_progress_metadata(session):
+    """Progress signals the host already owns; stop discarding them on heartbeat."""
+    payload = {
+        "last_output_at": _runner_last_output_at(session),
+        "log_tail": _runner_log_tail(session),
+    }
+    output_bytes = _runner_output_bytes(session)
+    if output_bytes is not None:
+        payload["output_bytes"] = output_bytes
+    cpu = _runner_cpu_percent(session)
+    if cpu is not None:
+        payload["cpu_percent"] = cpu
+    return payload
+
+
 def _runner_timestamp(value):
     try:
         return float(value or 0)
@@ -2360,6 +2417,9 @@ def renew_live_direct_runners(inventory):
                     "direct_assignment": True,
                     "assignment_schema": "switchboard.direct_cli_assignment.v1",
                 } if metadata.get("direct_assignment") is True else {}),
+                # WATCH-19: progress beside liveness — PTY mtime/bytes/tail the
+                # host already owns; previously discarded on every renewal.
+                **_runner_progress_metadata(session),
             },
             # Busy hosts may spend longer than one nominal tick finalizing other
             # work. A three-minute lease prevents a healthy direct PTY from

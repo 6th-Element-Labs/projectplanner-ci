@@ -807,6 +807,9 @@ def _runner_environment(session: Dict[str, Any], now: float) -> Dict[str, Any]:
         or snapshot.get("error")
         or (last_result.get("error") if isinstance(last_result, dict) else "")
     )
+    progress_fault = metadata.get("progress_fault")
+    if not isinstance(progress_fault, dict):
+        progress_fault = None
     return {
         "status": status,
         "uptime_seconds": uptime,
@@ -815,6 +818,8 @@ def _runner_environment(session: Dict[str, Any], now: float) -> Dict[str, Any]:
         "last_result": last_result or None,
         "log_tail": _text_tail(snapshot.get("log_tail") or metadata.get("log_tail") or ""),
         "log_path": metadata.get("log_path"),
+        "last_output_at": metadata.get("last_output_at"),
+        "progress_fault": progress_fault,
         "capabilities": _runner_control_capabilities(session),
     }
 
@@ -2138,6 +2143,23 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
                 "work_session_id"):
         if key in record and key not in metadata:
             metadata[key] = record.get(key)
+    # WATCH-19: stamp/clear progress_fault from host-reported last_output_at.
+    # Escalation only — never auto-kill; lease expiry remains the stop clock.
+    try:
+        import runner_progress_monitor as _progress_monitor
+
+        progress_row = {
+            **record,
+            "host_id": host_id,
+            "runner_session_id": runner_session_id,
+            "metadata": metadata,
+            "stale": False,
+            "live": True,
+        }
+        _progress_monitor.apply_progress_fault(progress_row, now=now)
+        metadata = dict(progress_row.get("metadata") or metadata)
+    except Exception:
+        pass
     record = {**record, "host_id": host_id, "metadata": metadata,
               "runner_session_id": runner_session_id}
     if narrow_host and not _native_agent_host_runner_allowed_in(

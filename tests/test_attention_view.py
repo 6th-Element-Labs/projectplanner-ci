@@ -133,6 +133,7 @@ def test_projection_is_project_scoped_counts_sources_and_tracks_source_transitio
     assert first["count"] == 5
     assert first["sources"] == {
         "provider": 1, "agent": 1, "inbox": 1, "mission": 1, "decision": 1,
+        "runner": 0,
     }
     assert len({item["source_id"] for item in first["items"]}) == first["count"]
 

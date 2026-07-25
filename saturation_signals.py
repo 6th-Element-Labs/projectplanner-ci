@@ -370,6 +370,12 @@ def compute_saturation_signals(
     )
     concurrency = concurrency_limiter.snapshot()
     bridge_monitor = bridge_attachment_monitor.snapshot(project)
+    try:
+        import runner_progress_monitor
+        progress_monitor = runner_progress_monitor.snapshot(project)
+    except Exception:
+        progress_monitor = {"active": False, "count": 0, "task_ids": [],
+                            "runner_session_ids": []}
     alerts = build_alerts(
         psi=psi,
         mcp_obs=mcp_obs,
@@ -392,6 +398,22 @@ def compute_saturation_signals(
             "task_ids": task_ids,
             "runner_session_ids": bridge_monitor.get("runner_session_ids") or [],
             "window_s": bridge_monitor.get("window_s"),
+        })
+    if progress_monitor.get("active"):
+        task_ids = progress_monitor.get("task_ids") or []
+        alerts.append({
+            "at": round(time.time(), 3),
+            "severity": "critical",
+            "kind": "runner_progress_stalled",
+            "message": (
+                "live runner leases have silent PTYs past the progress bound: "
+                + (", ".join(task_ids) if task_ids else "unknown tasks")
+            ),
+            "value": int(progress_monitor.get("count") or 0),
+            "task_ids": task_ids,
+            "runner_session_ids": progress_monitor.get("runner_session_ids") or [],
+            "bound_s": progress_monitor.get("bound_s"),
+            "faults": progress_monitor.get("faults") or {},
         })
     severity_rank = {"critical": 3, "warning": 2, "info": 1}
     top_severity = "healthy"

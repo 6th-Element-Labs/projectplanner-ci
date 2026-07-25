@@ -120,7 +120,8 @@ def attach_completion_projection(
 
 
 def _attach_blocked_reason(
-        projection: dict[str, Any], task_id: str, *, project: str) -> None:
+        projection: dict[str, Any], task_id: str, *, project: str,
+        runner_sessions_provider=None) -> None:
     """Name the effect-level failure the run is stalled on, if there is one.
 
     BUG-189: ``retry_deadline`` said *when* the next attempt was due and nothing
@@ -128,11 +129,18 @@ def _attach_blocked_reason(
     refusal was indistinguishable from one merely waiting. The external-effect
     ledger holds ``last_error`` the whole time; surface it next to the deadline.
 
+    WATCH-19: a live runner with a silent PTY is also a blocked_reason — progress
+    stalled even while heartbeats renew.
+
     Best-effort by construction: this is an additive read on a projection that
     several surfaces poll, so any failure leaves the projection exactly as it
     was rather than degrading task retrieval.
     """
     if projection.get("terminal"):
+        return
+    if _attach_progress_fault_blocked_reason(
+            projection, task_id, project=project,
+            runner_sessions_provider=runner_sessions_provider):
         return
     try:
         from switchboard.storage.repositories import external_effects
@@ -156,6 +164,53 @@ def _attach_blocked_reason(
         projection["blocked_retry_count"] = int(newest.get("retry_count") or 0)
     except (TypeError, ValueError):
         projection["blocked_retry_count"] = 0
+
+
+def _attach_progress_fault_blocked_reason(
+        projection: dict[str, Any], task_id: str, *, project: str,
+        runner_sessions_provider=None) -> bool:
+    """Surface WATCH-19 progress faults next to completion blocked_reason."""
+    try:
+        if runner_sessions_provider is None:
+            from switchboard.storage.repositories import runner as runner_repo
+            rows = runner_repo.list_runner_sessions(
+                task_id=task_id, include_stale=False, project=project) or []
+        else:
+            rows = runner_sessions_provider(
+                task_id=task_id, project=project) or []
+    except Exception:
+        return False
+    faulted = []
+    for row in rows:
+        mapping = _mapping(row)
+        if str(mapping.get("status") or "").lower() not in {"ready", "running"}:
+            continue
+        if mapping.get("stale") is True:
+            continue
+        metadata = mapping.get("metadata") if isinstance(
+            mapping.get("metadata"), dict) else {}
+        fault = metadata.get("progress_fault")
+        if isinstance(fault, dict) and fault.get("kind") == "runner_progress_stalled":
+            faulted.append((mapping, fault))
+    if not faulted:
+        return False
+    session, fault = max(
+        faulted,
+        key=lambda item: float(item[1].get("raised_at") or 0),
+    )
+    message = str(fault.get("message") or "").strip()
+    age = fault.get("output_age_s")
+    projection["blocked_reason"] = (
+        message or f"runner_progress_stalled output_age_s={age}"
+    )
+    if not projection["blocked_reason"].startswith("runner_progress_stalled"):
+        projection["blocked_reason"] = (
+            f"runner_progress_stalled: {projection['blocked_reason']}"
+        )
+    projection["blocked_effect"] = str(session.get("runner_session_id") or "")
+    projection["blocked_retry_count"] = 0
+    projection["progress_fault"] = dict(fault)
+    return True
 
 
 def attach_many(

@@ -143,6 +143,67 @@ def _agent_item(msg: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _runner_progress_item(session: Dict[str, Any],
+                          now: Optional[float] = None) -> Dict[str, Any]:
+    """WATCH-19: live lease + silent PTY — escalate to the operator, do not kill."""
+    metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+    fault = metadata.get("progress_fault") if isinstance(
+        metadata.get("progress_fault"), dict) else {}
+    runner_session_id = str(session.get("runner_session_id") or "")
+    task_id = str(session.get("task_id") or fault.get("task_id") or "")
+    raised_at = fault.get("raised_at")
+    try:
+        age_s = max(0, int((now if now is not None else time.time()) - float(raised_at))) \
+            if raised_at is not None else _age_s(session.get("heartbeat_at"))
+    except (TypeError, ValueError):
+        age_s = 0
+    summary = str(fault.get("message") or (
+        f"live runner {runner_session_id} has a silent PTY"
+    ))
+    return {
+        "attention_id": f"runner-progress:{runner_session_id}",
+        "source_id": f"runner-progress:{runner_session_id}",
+        "source": "runner",
+        "kind": "runner_progress_stalled",
+        "task_id": task_id,
+        "title": summary[:120],
+        "summary": summary,
+        "from": str(session.get("host_id") or fault.get("host_id") or ""),
+        "to": "",
+        "age_s": age_s,
+        "deadline": None,
+        "delivery_impact": "at_risk",
+        "unfinished_downstream": 1 if task_id else 0,
+        "links": {
+            "task": f"#task/{task_id}" if task_id else None,
+            "provider": None,
+            "host": session.get("host_id") or fault.get("host_id"),
+            "session": runner_session_id or None,
+        },
+        "payload": {
+            "runner_session_id": runner_session_id,
+            "kind": fault.get("kind") or "runner_progress_stalled",
+            "output_age_s": fault.get("output_age_s"),
+            "bound_s": fault.get("bound_s"),
+            "last_output_at": fault.get("last_output_at"),
+            "cpu_percent": fault.get("cpu_percent"),
+            "log_tail": fault.get("log_tail") or "",
+            "raised_at": raised_at,
+            "auto_kill": False,
+        },
+        # Escalation only in v1 — operator decides whether to kill/inject/ignore.
+        "decide": {
+            "method": "POST",
+            "path": "/ixp/v1/runner_controls",
+            "body": {
+                "runner_session_id": runner_session_id,
+                "action": "kill",
+                "reason": "operator acknowledged silent PTY progress fault",
+            },
+        },
+    }
+
+
 def _inbox_item(it: Dict[str, Any]) -> Dict[str, Any]:
     """A pending triaged inbound item (email / upload / note) awaiting confirm."""
     tri = it.get("triage") or {}
@@ -378,12 +439,28 @@ def create_router(*, resolve_project: ProjectResolver,
         if list_decisions:
             for decision in list_decisions(project=proj, status="proposed", limit=500):
                 items.append(_decision_item(decision))
+        try:
+            from switchboard.storage.repositories import runner as runner_repo
+            for session in runner_repo.list_runner_sessions(
+                    include_stale=False, project=proj) or []:
+                metadata = session.get("metadata") if isinstance(
+                    session.get("metadata"), dict) else {}
+                fault = metadata.get("progress_fault")
+                if (isinstance(fault, dict)
+                        and fault.get("kind") == "runner_progress_stalled"
+                        and str(session.get("status") or "").lower()
+                        in {"ready", "running"}
+                        and session.get("stale") is not True):
+                    items.append(_runner_progress_item(session))
+        except Exception:
+            pass
 
         items = _dedupe(items)
         items.sort(key=_rank)
         sources = {
             source: sum(1 for item in items if item["source"] == source)
-            for source in ("provider", "agent", "inbox", "mission", "decision")
+            for source in ("provider", "agent", "inbox", "mission", "decision",
+                           "runner")
         }
         return {"schema": ATTENTION_PROJECTION_SCHEMA, "project": proj,
                 "count": len(items), "items": items, "sources": sources}
