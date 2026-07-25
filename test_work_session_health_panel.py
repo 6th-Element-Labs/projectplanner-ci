@@ -159,6 +159,11 @@ try:
     # the same project-wide list via _fetchFleetRunners.
     ok("_fetchFleetRunners" in app_js and "mode: 'deliverable'" not in app_js,
        "all surfaces share the Fleet page's unscoped runner feed")
+    # HARDEN-39 deferred renderBoard(); the dock must still boot from init() so the
+    # Overview default tab gets Runners/PRs without visiting Board/Mission/Fleet first.
+    init_fn = app_js.split("async init() {", 1)[1].split("\n    async ", 1)[0]
+    ok("this.renderFleetDock()" in init_fn,
+       "init() starts the fleet dock on every page load (not only Board/Mission/Fleet)")
     ok("s.runner_session_id" in app_js and "x.ci_state" in app_js and
        "x.mergeable_state" in app_js,
        "fleet signature tracks runner lifecycle plus PR CI/mergeable state (dock v2)")

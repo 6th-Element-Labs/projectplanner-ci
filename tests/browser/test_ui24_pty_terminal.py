@@ -106,7 +106,7 @@ try:
     healthy = _wait_healthy()
     ok(healthy, "app.py boots and /health responds (required auth, throwaway DB)")
     index_html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
-    ok('js/runner-session.js?v=12' in index_html and 'app.js?v=59' in index_html,
+    ok('js/runner-session.js?v=12' in index_html and 'app.js?v=60' in index_html,
        "the deployed shell invalidates pre-Resume-review runner and modal assets")
     if not healthy:
         raise SystemExit("server did not become healthy — aborting")
@@ -1150,6 +1150,15 @@ try:
            and modal_runner["resumeVisible"] and modal_runner["startHidden"],
            "the task modal renders Resume review instead of Start task for a dead reviewer")
         modal_resume_before = len(resume_requests)
+        # Fixture is appended to <body> (not inside .modal.show). The Overview-boot
+        # Fleet pill sits fixed bottom-right over the same corner — hide it for the
+        # click the way a real Bootstrap modal does via _wireFleetDockModalGuard.
+        page.evaluate("""
+            () => {
+                const host = document.getElementById('fleet-dock');
+                if (host) { host.style.visibility = 'hidden'; host.style.pointerEvents = 'none'; }
+            }
+        """)
         page.locator('#task-primary-resume-review').click()
         page.wait_for_timeout(2500)
         ok(len(resume_requests) == modal_resume_before + 1

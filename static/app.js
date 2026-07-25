@@ -119,6 +119,10 @@ const TeepPlan = {
         await deliverablesReq;
         await this.initHeaderDeliverableSwitcher();
         this._renderActiveTop();   // deep-linked URLs land on a rendered tab, not a blank one
+        // Fleet dock floats over every tab. HARDEN-39 stopped calling renderBoard() on
+        // boot, and that was the only path that started the dock on Overview — so the
+        // bottom-right toast never appeared until Board/Mission/Fleet was opened.
+        this.renderFleetDock();
         const ds = document.getElementById('data-status');
         if (ds) { ds.className = 'badge bg-green-lt'; ds.textContent = `${this.tasks.length} tasks`; }
     },
@@ -750,10 +754,28 @@ const TeepPlan = {
     renderFleetDock() {
         // Callers used to pass a scope ctx; scoping is gone — every surface shows the
         // same project-wide fleet (operator decision 2026-07-22: one source of truth).
+        this._wireFleetDockModalGuard();
         this._startFleetLive();
         this._loadFleetDock(true);
     },
-    _fleetSignature(runners, prs, deployments) {
+    // The dock is position:fixed bottom-right. When a Bootstrap modal is open its
+    // primary actions (e.g. Resume review) land in the same corner — hide the dock
+    // for the modal lifetime so it cannot intercept pointer events.
+    _wireFleetDockModalGuard() {
+        if (this._fleetDockModalWired) return;
+        this._fleetDockModalWired = true;
+        const sync = () => {
+            const host = document.getElementById('fleet-dock');
+            if (!host) return;
+            const open = !!document.querySelector('.modal.show');
+            host.style.visibility = open ? 'hidden' : '';
+            host.style.pointerEvents = open ? 'none' : '';
+        };
+        document.addEventListener('shown.bs.modal', sync);
+        document.addEventListener('hidden.bs.modal', sync);
+        sync();
+    },
+    _fleetSignature(runners, prs, deployments, prUnavailable) {
         const r = (runners || []).map((s) => [
             s.runner_session_id || '', s.status || '', s.stale ? 1 : 0,
             ((s.last_snapshot || {}).captured_at) || 0,
@@ -770,7 +792,12 @@ const TeepPlan = {
             x.number || 0, x.status || '', x.merge_sha || '',
             x.deploy_task_id || '', x.deploy_task_status || '',
         ]).sort((a, b) => Number(a[0]) - Number(b[0]));
-        return JSON.stringify([r, p, d, Number((deployments || {}).undeployed_count || 0)]);
+        // Include unavailable flags so a recovery (auth_required → ok, or
+        // http_503 → no_github_token) re-renders instead of keeping a stale message.
+        return JSON.stringify([
+            r, p, d, Number((deployments || {}).undeployed_count || 0),
+            prUnavailable || '', (deployments || {}).unavailable || '',
+        ]);
     },
     async _loadFleetDock(force) {
         const host = document.getElementById('fleet-dock');
@@ -791,16 +818,35 @@ const TeepPlan = {
             runners = runnerList;
             prPayload = await pRes.json();
             deploymentPayload = await dRes.json();
+            // 401/5xx bodies are `{detail: …}` with no `prs`/`unavailable`. Treat those
+            // as unavailable so the dock stays visible with an explanation instead of
+            // clearing itself (empty runners + empty prs → host.innerHTML = '').
+            if (!pRes.ok && !prPayload.unavailable) {
+                prPayload = { prs: [], unavailable: pRes.status === 401 ? 'auth_required' : `http_${pRes.status}` };
+            }
+            if (!dRes.ok && !deploymentPayload.unavailable) {
+                deploymentPayload = {
+                    deployments: [], undeployed_count: 0,
+                    unavailable: dRes.status === 401 ? 'auth_required' : `http_${dRes.status}`,
+                };
+            }
         } catch (e) { this._fleetLoadBusy = false; return; }
         const prs = prPayload.prs || [];
         this._dockPrUnavailable = prPayload.unavailable || '';
         this._dockDeploymentUnavailable = deploymentPayload.unavailable || '';
-        const sig = this._fleetSignature(runners, prs, deploymentPayload);
+        const sig = this._fleetSignature(
+            runners, prs, deploymentPayload, this._dockPrUnavailable);
         const changed = sig !== this._fleetSig;
         this._fleetLoadBusy = false;
         if (force || changed) {
             this._fleetSig = sig;
-            this._renderFleetDock(runners, prs, deploymentPayload);
+            try {
+                this._renderFleetDock(runners, prs, deploymentPayload);
+            } catch (e) {
+                // Don't poison _fleetSig: a render throw would skip every later poll.
+                this._fleetSig = '';
+                console.warn('fleet dock render failed', e);
+            }
         }
     },
     // A backgrounded tab should keep every open deliverable/fleet view live, but poll
@@ -1183,7 +1229,9 @@ const TeepPlan = {
                 ? 'The server has no GitHub token configured, so PR status is unavailable.'
                 : (this._dockPrUnavailable === 'no_canonical_repo'
                     ? 'This project has no canonical GitHub repo configured.'
-                    : 'GitHub is unreachable right now. Status will return on the next refresh.');
+                    : (this._dockPrUnavailable === 'auth_required'
+                        ? 'Sign in again to load PR status.'
+                        : 'GitHub is unreachable right now. Status will return on the next refresh.'));
             body = `<div class="p-3 text-secondary small">${this.esc(why)}</div>`;
         } else if (tab === 'prs') {
             body = prs.length
