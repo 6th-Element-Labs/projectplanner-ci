@@ -35,9 +35,35 @@ __all__ = [
     "_merge_gate_pr_ref",
     "_merge_gate_required_contexts",
     "_merge_gate_status_contexts",
+    "_strip_self_referential_mergeability",
     "merge_gate",
     "execute_mapping_result",
 ]
+
+
+# GitHub folds required-status roll-up into mergeStateStatus. When our own
+# ``Switchboard / merge authorization`` context is red, GitHub reports
+# BLOCKED/UNSTABLE even though mergeable=true and the branch itself is fine.
+# Evaluating that word inside merge_gate is circular (BUG-193 / BUG-178).
+_SELF_REFERENTIAL_MERGE_STATES = frozenset({"blocked", "unstable"})
+
+
+def _strip_self_referential_mergeability(pr: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop merge-state words that merely restate 'a required check is not green yet'."""
+    if not isinstance(pr, dict) or not pr:
+        return pr
+    state = str(
+        pr.get("mergeable_state")
+        or pr.get("mergeStateStatus")
+        or pr.get("merge_state")
+        or ""
+    ).strip().lower()
+    if state not in _SELF_REFERENTIAL_MERGE_STATES:
+        return pr
+    scrubbed = dict(pr)
+    for key in ("mergeable_state", "mergeStateStatus", "merge_state"):
+        scrubbed.pop(key, None)
+    return scrubbed
 
 
 def _store_facade():
@@ -469,7 +495,9 @@ def _merge_gate_pr_evidence(pr_url: str, pr_number: int,
         if statuses:
             pr["status_contexts"] = statuses
             source["hydrated_status_contexts"] = True
-    return pr, source
+    # Apply on every hydration path (github_api and supplied_evidence) so a
+    # hand-run MCP merge_gate cannot contradict the publisher (BUG-193).
+    return _strip_self_referential_mergeability(pr), source
 
 
 def _github_commit_statuses(repo: str, head_sha: str,

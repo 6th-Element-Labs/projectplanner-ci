@@ -237,24 +237,11 @@ def _finding_looks_empty_or_stale(finding: Dict[str, Any]) -> bool:
 #
 # Only the two status-derived words are dropped. `mergeable` (the conflict boolean),
 # `dirty` (real conflicts) and `behind` (stale base) all describe the branch itself, not
-# our own check, so they keep blocking.
-_SELF_REFERENTIAL_MERGE_STATES = frozenset({"blocked", "unstable"})
-
-
-def _strip_self_referential_mergeability(pr: Dict[str, Any]) -> Dict[str, Any]:
-    """Drop merge-state words that merely restate 'a required check is not green yet'."""
-    state = str(
-        pr.get("mergeable_state")
-        or pr.get("mergeStateStatus")
-        or pr.get("merge_state")
-        or ""
-    ).strip().lower()
-    if state not in _SELF_REFERENTIAL_MERGE_STATES:
-        return pr
-    scrubbed = dict(pr)
-    for key in ("mergeable_state", "mergeStateStatus", "merge_state"):
-        scrubbed.pop(key, None)
-    return scrubbed
+# Shared with application merge_gate (BUG-178 / BUG-193). Kept as a module
+# attribute so test_switchboard_pr_gate can keep calling gate._strip_*.
+_strip_self_referential_mergeability = (
+    merge_gate_command._strip_self_referential_mergeability
+)
 
 
 def _record_merge_authorization(
