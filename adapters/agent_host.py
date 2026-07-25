@@ -66,6 +66,11 @@ from switchboard.domain.coordination.runtime_profile import (  # noqa: E402
     build_runtime_profile,
     runtime_env_key,
 )
+from repository_workspace import (  # noqa: E402
+    WorkspaceMaterializationError,
+    cleanup as cleanup_repository_workspace,
+    materialize as materialize_repository_workspace,
+)
 
 PROJECT = os.environ.get("PM_PROJECT", "switchboard")
 SUPERVISOR = os.path.join(_HERE, "codex", "supervisor.py")
@@ -141,6 +146,16 @@ def _csv(value):
     if isinstance(value, list):
         return [str(x).strip() for x in value if str(x).strip()]
     return [x.strip() for x in str(value or "").replace("\n", ",").split(",") if x.strip()]
+
+
+def _safe_identity(value):
+    """Return a stable git-ref component for server-owned identifiers."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "")).strip(".-")
+    if not safe:
+        raise WorkspaceMaterializationError(
+            "invalid_execution_identity",
+            "project, task, and execution identifiers must be non-empty")
+    return safe[:80]
 
 
 def _truthy(value):
@@ -883,7 +898,7 @@ def _issue_connect_session_mcp_token(wake, inventory, runner_session_id):
     return token
 
 
-def launch_command(wake, inventory, runner_session_id=""):
+def launch_command(wake, inventory, runner_session_id="", workspace_path=""):
     """Build the supervisor command for a wake without executing it."""
     sel = wake.get("selector") or {}
     eligible = eligible_runtime(wake, inventory)
@@ -951,8 +966,7 @@ def launch_command(wake, inventory, runner_session_id=""):
         execution_assignment = dict(
             connect_policy.get("execution_assignment") or {})
         execution_context = dict(connect_policy.get("execution_context") or {})
-        if (execution_context
-                and execution_context.get("schema")
+        if (execution_context and execution_context.get("schema")
                 != "switchboard.execution_context.v1"):
             raise ValueError("connect execution context contract is invalid")
         if execution_context and int(execution_context.get("generation") or 0) != int(
@@ -995,9 +1009,7 @@ def launch_command(wake, inventory, runner_session_id=""):
                 last_heartbeat_at=now,
             ),
             config,
-            workspace_path=str(
-                (execution_context.get("workspace") or {}).get("path")
-                or inventory.get("repo_root") or _git_root()),
+            workspace_path=str(workspace_path or ""),
             completion_contract=execution_assignment,
         )
         child = list(spec.argv)
@@ -1064,7 +1076,54 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
         rec = launch_codex_cloud_wake(wake, inventory, active_sessions=count)
         rec["host_id"] = inventory.get("host_id")
         return rec
-    cmd, mode = launch_command(wake, inventory, runner_session_id=runner_session_id)
+    materialized_workspace = None
+    mode = wake_mode(wake, inventory)
+    workspace_path = ""
+    if mode == "connect":
+        policy = wake.get("policy") or {}
+        context = dict(policy.get("execution_context") or {})
+        lifecycle = dict(policy.get("lifecycle") or {})
+        execution_id = str(lifecycle.get("execution_id") or "")
+        task_id = str(wake.get("task_id") or "")
+        generation = int(lifecycle.get("generation") or 0)
+        state_root = Path(os.environ.get(
+            "PM_AGENT_HOST_STATE_DIR",
+            str(Path.home() / ".local" / "share" / "switchboard-agent-host"),
+        )).expanduser()
+        try:
+            branch = (
+                f"agent/{_safe_identity(context.get('project_id'))}/"
+                f"{_safe_identity(task_id)}/{_safe_identity(execution_id)}-g{generation}"
+            )
+            materialized_workspace = materialize_repository_workspace(
+                context,
+                task_id=task_id,
+                execution_id=execution_id,
+                branch=branch,
+                cache_root=os.environ.get(
+                    "PM_AGENT_HOST_REPO_CACHE_ROOT",
+                    str(state_root / "repository-cache")),
+                workspace_root=os.environ.get(
+                    "PM_AGENT_HOST_WORKSPACE_ROOT",
+                    str(state_root / "workspaces")),
+            )
+            workspace_path = str(materialized_workspace.path)
+        except WorkspaceMaterializationError as exc:
+            return {
+                "runner_session_id": runner_session_id or None,
+                "started": False,
+                "wake_mode": mode,
+                "host_id": inventory.get("host_id"),
+                "runtime": (wake.get("selector") or {}).get("runtime") or "",
+                "task_id": task_id,
+                "reason": exc.code,
+                "failure_class": "failed_gate",
+                "provider_error": exc.message,
+                "workspace_materialization": exc.as_dict(),
+            }
+    cmd, mode = launch_command(
+        wake, inventory, runner_session_id=runner_session_id,
+        workspace_path=workspace_path)
     try:
         env = os.environ.copy()
         if mode == "connect":
@@ -1104,12 +1163,19 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
             env["PM_MCP_TOKEN"] = session_token
             env.pop("SWITCHBOARD_TOKEN", None)
         env.update({str(k): str(v) for k, v in (extra_env or {}).items()})
+        if materialized_workspace:
+            env["SWITCHBOARD_WORKSPACE_RECEIPT"] = str(
+                materialized_workspace.receipt_path)
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=20, env=env)
         if out.returncode != 0 or not (out.stdout or "").strip():
             detail = (out.stderr or out.stdout or "supervisor emitted no receipt")[-4000:]
             print(
                 f"[agent_host] supervisor start failed rc={out.returncode} "
                 f"stderr={detail!r}", flush=True)
+            if materialized_workspace:
+                cleanup_repository_workspace(
+                    materialized_workspace, quarantine=True,
+                    reason="supervisor-start-failed")
             return {
                 "runner_session_id": runner_session_id or None,
                 "started": False,
@@ -1127,8 +1193,16 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
             rec["host_id"] = inventory.get("host_id")
             rec["runtime"] = (wake.get("selector") or {}).get("runtime") or ""
             rec["task_id"] = rec.get("task_id") or wake.get("task_id") or ""
+            if materialized_workspace:
+                rec["cwd"] = workspace_path
+                rec.setdefault("metadata", {})["workspace_receipt"] = (
+                    materialized_workspace.receipt)
         return rec
     except Exception as e:
+        if materialized_workspace:
+            cleanup_repository_workspace(
+                materialized_workspace, quarantine=True,
+                reason="runtime-launch-exception")
         print(f"[agent_host] launch failed: {e}", flush=True)
         return {
             "runner_session_id": runner_session_id or None,
@@ -2900,9 +2974,11 @@ def handle_drain(request, inventory):
         publish_host=lambda status, capacity: _publish_drain_host(
             inventory, status, capacity),
         update_runner=_update_drained_runner,
-        workspace_root=os.environ.get("PM_WORKSPACE_ROOT")
-        or os.path.dirname(os.environ.get("PM_REPO_ROOT")
-                           or inventory.get("repo_root") or os.getcwd()),
+        workspace_root=os.environ.get("PM_AGENT_HOST_WORKSPACE_ROOT")
+        or str(Path(os.environ.get(
+            "PM_AGENT_HOST_STATE_DIR",
+            str(Path.home() / ".local" / "share" / "switchboard-agent-host"),
+        )).expanduser() / "workspaces"),
         runtime_root=os.environ.get("PM_PROVIDER_RUNTIME_ROOT"),
     )
     co_drain.write_receipt(receipt)

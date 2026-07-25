@@ -56,6 +56,18 @@ try:
     policy = wake["policy"]
     assignment = policy["assignment"]
     contract = policy["execution_assignment"]
+    policy["execution_context"] = {
+        "schema": "switchboard.execution_context.v1",
+        "project_id": P,
+        "task_id": task["task_id"],
+        "repository": "6th-Element-Labs/projectplanner",
+        "base_sha": HEAD,
+        "generation": policy["lifecycle"]["generation"],
+        "workspace": {"isolation": "worktree"},
+        "runtime": {"registry_name": "codex"},
+        "authority_digest": "sha256:bug168",
+        "digest": "sha256:bug168-generation-1",
+    }
 
     assert contract["task_id"] == task["task_id"]
     assert contract["assignment_id"] == assignment["assignment_id"]
@@ -110,7 +122,8 @@ try:
         }],
     }
     command, mode = agent_host.launch_command(
-        wake, inventory, runner_session_id="run_13a36dcc04555b14")
+        wake, inventory, runner_session_id="run_13a36dcc04555b14",
+        workspace_path=str(ROOT))
     child = command[command.index("--") + 1:]
     host_prompt = next(
         part for part in child
@@ -122,6 +135,7 @@ try:
 
     original_token = agent_host._issue_connect_session_mcp_token
     original_run = agent_host.subprocess.run
+    original_materialize = agent_host.materialize_repository_workspace
     captured = {}
 
     def fake_run(command, **kwargs):
@@ -139,11 +153,18 @@ try:
     try:
         agent_host._issue_connect_session_mcp_token = (
             lambda *_args, **_kwargs: "dst-bug168")
+        agent_host.materialize_repository_workspace = (
+            lambda *_args, **_kwargs: SimpleNamespace(
+                path=ROOT,
+                receipt_path=TMP / "workspace-receipt.json",
+                receipt={"schema": "switchboard.repository_workspace_receipt.v1"},
+            ))
         agent_host.subprocess.run = fake_run
         launched = agent_host.launch(
             wake, inventory, runner_session_id="run_13a36dcc04555b14")
     finally:
         agent_host._issue_connect_session_mcp_token = original_token
+        agent_host.materialize_repository_workspace = original_materialize
         agent_host.subprocess.run = original_run
     assert launched["started"] is True
     assert json.loads(
@@ -163,7 +184,8 @@ try:
         try:
             agent_host.launch_command(
                 forged_wake, inventory,
-                runner_session_id="run_13a36dcc04555b14")
+                runner_session_id="run_13a36dcc04555b14",
+                workspace_path=str(ROOT))
         except ValueError as exc:
             assert "execution assignment disagrees" in str(exc)
         else:
