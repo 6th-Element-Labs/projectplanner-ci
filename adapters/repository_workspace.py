@@ -47,6 +47,9 @@ class MaterializedWorkspace:
     receipt_path: Path
     receipt: dict[str, Any]
     reused: bool = False
+    # Teardown deletes and renames directories, so it must know the boundary it
+    # is allowed to act inside rather than inferring one from the path itself.
+    workspace_root: Path | None = None
 
 
 def _run(args: list[str], *, cwd: Path | None = None,
@@ -187,30 +190,74 @@ def _ensure_cache(cache_path: Path, remote: str, base_sha: str,
     return created, quarantined
 
 
+def _check_workspace(path: Path, receipt_path: Path,
+                     expected: Mapping[str, Any]) -> dict[str, Any]:
+    """Prove one checkout is still the exact authorized workspace.
+
+    Returns the receipt.  Raises the typed refusal that names the first thing
+    that disagrees, so callers can report *why* rather than a bare boolean.
+    """
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise WorkspaceMaterializationError(
+            "workspace_receipt_unreadable",
+            "workspace receipt is missing or unreadable",
+            receipt_path=str(receipt_path)) from exc
+    if not isinstance(receipt, dict) or receipt.get("schema") != RECEIPT_SCHEMA:
+        raise WorkspaceMaterializationError(
+            "workspace_receipt_invalid", "workspace receipt schema is invalid")
+    if receipt.get("revoked_at"):
+        raise WorkspaceMaterializationError(
+            "workspace_revoked", "workspace was revoked and may not be reused",
+            revoked_reason=str(receipt.get("revoked_reason") or ""))
+    for key, value in expected.items():
+        if receipt.get(key) != value:
+            raise WorkspaceMaterializationError(
+                "workspace_receipt_mismatch",
+                "workspace receipt disagrees with the Execution Context",
+                field=key)
+    if not path.is_dir():
+        raise WorkspaceMaterializationError(
+            "workspace_missing", "authorized workspace no longer exists",
+            workspace_path=str(path))
+    head = _run(["git", "rev-parse", "HEAD"], cwd=path).stdout.strip()
+    branch = _run(["git", "branch", "--show-current"], cwd=path).stdout.strip()
+    origin = _run(["git", "remote", "get-url", "origin"], cwd=path).stdout.strip()
+    if head != expected["base_sha"]:
+        raise WorkspaceMaterializationError(
+            "workspace_head_mismatch", "workspace HEAD is not the exact base SHA",
+            base_sha=str(expected["base_sha"]))
+    if branch != expected["branch"]:
+        raise WorkspaceMaterializationError(
+            "workspace_branch_mismatch", "workspace is on the wrong branch",
+            branch=str(expected["branch"]))
+    if _redacted_remote(origin) != _redacted_remote(expected["remote"]):
+        raise WorkspaceMaterializationError(
+            "workspace_origin_mismatch",
+            "workspace origin disagrees with the Execution Context repository")
+    return receipt
+
+
 def _workspace_valid(path: Path, receipt_path: Path,
                      expected: Mapping[str, Any]) -> bool:
     try:
-        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-        head = _run(["git", "rev-parse", "HEAD"], cwd=path).stdout.strip()
-        branch = _run(["git", "branch", "--show-current"], cwd=path).stdout.strip()
-        origin = _run(["git", "remote", "get-url", "origin"], cwd=path).stdout.strip()
-        return (
-            receipt.get("schema") == RECEIPT_SCHEMA
-            and all(receipt.get(key) == value for key, value in expected.items())
-            and head == expected["base_sha"]
-            and branch == expected["branch"]
-            and _redacted_remote(origin) == _redacted_remote(expected["remote"])
-        )
+        _check_workspace(path, receipt_path, expected)
     except (OSError, ValueError, WorkspaceMaterializationError):
         return False
+    return True
 
 
-def materialize(
+def _resolved_identity(
     execution_context: Mapping[str, Any], *, task_id: str, execution_id: str,
     branch: str, cache_root: str | Path, workspace_root: str | Path,
     remote_url: str = "",
-) -> MaterializedWorkspace:
-    """Create or recover one exact isolated checkout and durable receipt."""
+) -> dict[str, Any]:
+    """Validate one launch request and derive its exact paths and receipt fields.
+
+    Materialization and pre-process verification must agree on every one of
+    these values, so both derive them here rather than restating them.
+    """
     context = dict(execution_context or {})
     if context.get("schema") != "switchboard.execution_context.v1":
         raise WorkspaceMaterializationError(
@@ -267,6 +314,41 @@ def materialize(
         "base_sha": base_sha,
         "branch": branch,
     }
+    return {
+        "cache_root": cache_root_path,
+        "workspace_root": workspace_root_path,
+        "quarantine_root": quarantine_root,
+        "cache_key": key,
+        "cache_path": cache_path,
+        "workspace_path": workspace_path,
+        "receipt_path": receipt_path,
+        "remote": remote,
+        "base_sha": base_sha,
+        "branch": branch,
+        "expected": expected,
+    }
+
+
+def materialize(
+    execution_context: Mapping[str, Any], *, task_id: str, execution_id: str,
+    branch: str, cache_root: str | Path, workspace_root: str | Path,
+    remote_url: str = "",
+) -> MaterializedWorkspace:
+    """Create or recover one exact isolated checkout and durable receipt."""
+    resolved = _resolved_identity(
+        execution_context, task_id=task_id, execution_id=execution_id,
+        branch=branch, cache_root=cache_root, workspace_root=workspace_root,
+        remote_url=remote_url)
+    cache_root_path = resolved["cache_root"]
+    quarantine_root = resolved["quarantine_root"]
+    key = resolved["cache_key"]
+    cache_path = resolved["cache_path"]
+    workspace_path = resolved["workspace_path"]
+    receipt_path = resolved["receipt_path"]
+    remote = resolved["remote"]
+    base_sha = resolved["base_sha"]
+    branch = resolved["branch"]
+    expected = resolved["expected"]
 
     lock_path = cache_root_path / ".locks" / f"{key}.lock"
     with _locked(lock_path):
@@ -277,7 +359,8 @@ def materialize(
                 receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
                 return MaterializedWorkspace(
                     workspace_path, branch, base_sha, cache_path,
-                    receipt_path, receipt, reused=True)
+                    receipt_path, receipt, reused=True,
+                    workspace_root=resolved["workspace_root"])
             _quarantine(workspace_path, quarantine_root, "stale-workspace")
         workspace_path.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -306,18 +389,112 @@ def materialize(
                 json.dumps(receipt, sort_keys=True), encoding="utf-8")
             temporary.replace(receipt_path)
             return MaterializedWorkspace(
-                workspace_path, branch, head, cache_path, receipt_path, receipt)
+                workspace_path, branch, head, cache_path, receipt_path, receipt,
+                workspace_root=resolved["workspace_root"])
         except Exception:
             _quarantine(workspace_path, quarantine_root, "materialization-failed")
             raise
 
 
+def verify(
+    execution_context: Mapping[str, Any], *, task_id: str, execution_id: str,
+    branch: str, cache_root: str | Path, workspace_root: str | Path,
+    remote_url: str = "",
+) -> MaterializedWorkspace:
+    """Re-prove an authorized workspace immediately before a process starts.
+
+    ``materialize`` proves the checkout when it is created; this proves it again
+    at the last moment before a provider CLI is given the directory, so a
+    workspace that was deleted, rewound, re-pointed, or revoked in between
+    refuses the launch instead of silently running somewhere else.
+    """
+    resolved = _resolved_identity(
+        execution_context, task_id=task_id, execution_id=execution_id,
+        branch=branch, cache_root=cache_root, workspace_root=workspace_root,
+        remote_url=remote_url)
+    receipt = _check_workspace(
+        resolved["workspace_path"], resolved["receipt_path"],
+        resolved["expected"])
+    return MaterializedWorkspace(
+        resolved["workspace_path"], resolved["branch"], resolved["base_sha"],
+        resolved["cache_path"], resolved["receipt_path"], receipt, reused=True,
+        workspace_root=resolved["workspace_root"])
+
+
+def revoke(workspace: MaterializedWorkspace, *, reason: str,
+           quarantine: bool = False) -> dict[str, Any]:
+    """Terminally deny further writes to one materialized workspace.
+
+    The receipt is stamped first and the directory removed second, so a crash
+    between the two still leaves a revoked receipt that ``verify`` and
+    ``materialize`` both refuse to reuse.  Revoking twice is a no-op.
+    """
+    try:
+        receipt = json.loads(workspace.receipt_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        receipt = dict(workspace.receipt or {})
+    already = bool(receipt.get("revoked_at"))
+    if not already:
+        receipt["revoked_at"] = time.time()
+        receipt["revoked_reason"] = str(reason or "revoked")
+        try:
+            workspace.receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = workspace.receipt_path.with_suffix(".tmp")
+            temporary.write_text(
+                json.dumps(receipt, sort_keys=True), encoding="utf-8")
+            temporary.replace(workspace.receipt_path)
+        except OSError as exc:
+            raise WorkspaceMaterializationError(
+                "workspace_revocation_unrecorded",
+                "workspace revocation could not be persisted",
+                receipt_path=str(workspace.receipt_path)) from exc
+    removed = cleanup(workspace, quarantine=quarantine, reason=reason)
+    return {"revoked": True, "already_revoked": already,
+            "reason": str(reason or "revoked"), **removed}
+
+
+def safe_receipt(receipt: Mapping[str, Any]) -> dict[str, Any]:
+    """Project a receipt down to identity a central registry may safely hold.
+
+    Credentials never reach a receipt, but host cache and quarantine paths do.
+    Those describe the operator's machine rather than the execution, so they are
+    reduced to booleans and the remote is republished in redacted form.
+    """
+    receipt = dict(receipt or {})
+    projection = {
+        key: receipt.get(key) for key in (
+            "schema", "project_id", "task_id", "execution_id", "generation",
+            "authority_digest", "context_digest", "repository", "base_sha",
+            "branch", "workspace_path", "created_at", "revoked_at",
+            "revoked_reason",
+        ) if receipt.get(key) is not None
+    }
+    remote = str(receipt.get("remote") or "")
+    if remote:
+        try:
+            projection["remote"] = _redacted_remote(remote)
+        except WorkspaceMaterializationError:
+            projection["remote"] = ""
+    projection["cache_created"] = bool(receipt.get("cache_created"))
+    projection["cache_quarantined"] = bool(receipt.get("cache_quarantined"))
+    return projection
+
+
 def cleanup(workspace: MaterializedWorkspace, *, quarantine: bool = False,
             reason: str = "completed") -> dict[str, Any]:
-    root = workspace.path.parents[2]
+    """Remove or quarantine one workspace, never anything outside its root.
+
+    Teardown is driven by a durable receipt that outlives the process which
+    wrote it.  A receipt naming a path outside the configured workspace root is
+    refused rather than obeyed — this deletes directories, so "trust the file"
+    is not an acceptable posture.
+    """
+    root = (Path(workspace.workspace_root) if workspace.workspace_root
+            else workspace.path.parents[2])
+    path = _inside(root, workspace.path)
     if quarantine:
-        target = _quarantine(workspace.path, root / ".quarantine", reason)
+        target = _quarantine(path, root / ".quarantine", reason)
         return {"cleaned": False, "quarantined": str(target) if target else None}
-    if workspace.path.exists():
-        shutil.rmtree(workspace.path)
+    if path.exists():
+        shutil.rmtree(path)
     return {"cleaned": True, "quarantined": None}

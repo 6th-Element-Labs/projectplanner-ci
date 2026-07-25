@@ -23,10 +23,16 @@ from execution_policy_fixture import (  # noqa: E402
     install_ready_execution_policy, ready_execution_context,
 )
 from switchboard.application.commands import connect_dispatch  # noqa: E402
+from switchboard.application.commands.execution_context import (  # noqa: E402
+    with_generation,
+)
 from switchboard.connect import (  # noqa: E402
     Ack, HostRuntimeConfig, LaunchRefused, LeaseState, build_launch_spec,
 )
 import adapters.agent_host as agent_host  # noqa: E402
+from connect_workspace_fixture import (  # noqa: E402
+    stub_workspace, stubbed_workspace,
+)
 
 
 P = "switchboard"
@@ -62,18 +68,23 @@ try:
     policy = wake["policy"]
     assignment = policy["assignment"]
     contract = policy["execution_assignment"]
-    policy["execution_context"] = {
+    policy["execution_context"] = with_generation({
         "schema": "switchboard.execution_context.v1",
         "project_id": P,
         "task_id": task["task_id"],
         "repository": "6th-Element-Labs/projectplanner",
         "base_sha": HEAD,
-        "generation": policy["lifecycle"]["generation"],
         "workspace": {"isolation": "worktree"},
         "runtime": {"registry_name": "codex"},
+        "provider": {
+            "provider": "openai-codex",
+            "connection_reference": "provider-test",
+            "credential_version": 1,
+            "lifecycle_state": "active",
+            "revocation_state": "",
+        },
         "authority_digest": "sha256:bug168",
-        "digest": "sha256:bug168-generation-1",
-    }
+    }, policy["lifecycle"]["generation"])
 
     assert contract["task_id"] == task["task_id"]
     assert contract["assignment_id"] == assignment["assignment_id"]
@@ -141,7 +152,6 @@ try:
 
     original_token = agent_host._issue_connect_session_mcp_token
     original_run = agent_host.subprocess.run
-    original_materialize = agent_host.materialize_repository_workspace
     captured = {}
 
     def fake_run(command, **kwargs):
@@ -159,18 +169,12 @@ try:
     try:
         agent_host._issue_connect_session_mcp_token = (
             lambda *_args, **_kwargs: "dst-bug168")
-        agent_host.materialize_repository_workspace = (
-            lambda *_args, **_kwargs: SimpleNamespace(
-                path=ROOT,
-                receipt_path=TMP / "workspace-receipt.json",
-                receipt={"schema": "switchboard.repository_workspace_receipt.v1"},
-            ))
         agent_host.subprocess.run = fake_run
-        launched = agent_host.launch(
-            wake, inventory, runner_session_id="run_13a36dcc04555b14")
+        with stubbed_workspace(agent_host, stub_workspace(ROOT)):
+            launched = agent_host.launch(
+                wake, inventory, runner_session_id="run_13a36dcc04555b14")
     finally:
         agent_host._issue_connect_session_mcp_token = original_token
-        agent_host.materialize_repository_workspace = original_materialize
         agent_host.subprocess.run = original_run
     assert launched["started"] is True
     assert json.loads(

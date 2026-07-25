@@ -276,6 +276,90 @@ def with_generation(context: Mapping[str, Any], generation: int) -> dict[str, An
     return result
 
 
+def verify_digest(context: Mapping[str, Any]) -> None:
+    """Reject a context whose fields no longer agree with its own digest.
+
+    A host cannot re-resolve project authority, but it can prove that the
+    snapshot it was handed is the one the server signed for this generation.
+    """
+    if str(context.get("schema") or "") != SCHEMA:
+        raise ExecutionContextError(
+            "execution_context_invalid", "Execution Context schema is required")
+    claimed = str(context.get("digest") or "")
+    if not claimed:
+        raise ExecutionContextError(
+            "execution_context_digest_missing",
+            "Execution Context must carry its own digest")
+    recomputed = _digest({
+        key: value for key, value in dict(context).items() if key != "digest"})
+    if recomputed != claimed:
+        raise ExecutionContextError(
+            "execution_context_digest_mismatch",
+            "Execution Context fields disagree with their signed digest",
+            expected_digest=claimed, current_digest=recomputed)
+
+
+def require_generation_binding(
+    context: Mapping[str, Any], *, generation: int,
+    credential_reference: str = "",
+) -> dict[str, Any]:
+    """Bind provider credential authority and control-plane identity to one generation.
+
+    Called host-side immediately before a provider CLI is launched.  The
+    Execution Context, the execution lease generation that minted the runner /
+    claim / Work Session identity, and the provider credential the host is about
+    to use must all describe the same generation, or nothing starts.
+    """
+    verify_digest(context)
+    generation = int(generation or 0)
+    if generation <= 0:
+        raise ExecutionContextError(
+            "execution_generation_missing",
+            "an exact execution generation is required before launch")
+    if int(context.get("generation") or 0) != generation:
+        raise ExecutionContextError(
+            "execution_generation_mismatch",
+            "Execution Context generation disagrees with the execution lease",
+            context_generation=int(context.get("generation") or 0),
+            lease_generation=generation)
+
+    provider = dict(context.get("provider") or {})
+    reference = str(provider.get("connection_reference") or "")
+    if not reference:
+        raise ExecutionContextError(
+            "provider_connection_not_ready",
+            "Execution Context names no provider connection")
+    if str(provider.get("lifecycle_state") or "").lower() != "active":
+        raise ExecutionContextError(
+            "provider_connection_revoked",
+            "provider connection is not active for this generation",
+            connection_reference=reference,
+            lifecycle_state=str(provider.get("lifecycle_state") or ""))
+    revocation = str(provider.get("revocation_state") or "").strip().lower()
+    if revocation and revocation not in {"none", "active", "valid"}:
+        raise ExecutionContextError(
+            "provider_connection_revoked",
+            "provider credential was revoked for this generation",
+            connection_reference=reference, revocation_state=revocation)
+    if credential_reference and str(credential_reference) != reference:
+        raise ExecutionContextError(
+            "provider_credential_reference_mismatch",
+            "host credential reference disagrees with the Execution Context",
+            connection_reference=reference,
+            credential_reference=str(credential_reference))
+
+    return {
+        "generation": generation,
+        "authority_digest": str(context.get("authority_digest") or ""),
+        "context_digest": str(context.get("digest") or ""),
+        "provider": str(provider.get("provider") or ""),
+        "connection_reference": reference,
+        "credential_version": int(provider.get("credential_version") or 0),
+        "repository": str(context.get("repository") or ""),
+        "base_sha": str(context.get("base_sha") or ""),
+    }
+
+
 def require_current(context: Mapping[str, Any]) -> None:
     """Fence a wake whose authority changed after it was queued."""
     current = resolve(

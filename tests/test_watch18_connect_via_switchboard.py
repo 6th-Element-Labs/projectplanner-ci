@@ -9,6 +9,8 @@ import os
 from path_setup import ROOT  # noqa: F401
 
 from adapters import agent_host
+from execution_policy_fixture import ready_execution_context
+from switchboard.application.commands.execution_context import with_generation
 from switchboard.connect import Ack, Assignment, HostRuntimeConfig, ResourceLimits
 from switchboard.connect.execution_assignment import build_execution_assignment
 from switchboard.connect.launcher import assignment_note, build_launch_spec
@@ -119,6 +121,8 @@ wake["policy"]["execution_assignment"] = build_execution_assignment(
     assignment=wake["policy"]["assignment"],
     lifecycle=wake["policy"]["lifecycle"],
 )
+wake["policy"]["execution_context"] = with_generation(
+    ready_execution_context(wake["task_id"]), 1)
 inventory = {
     "host_id": "host/watch18",
     "repo_root": str(ROOT),

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import os
-from types import SimpleNamespace
+import tempfile
+from pathlib import Path
 
 from path_setup import ROOT  # noqa: F401
 
 from adapters import agent_host
+from connect_workspace_fixture import stub_workspace, stubbed_workspace
+from switchboard.application.commands.execution_context import with_generation
 from switchboard.connect.execution_assignment import build_execution_assignment
 
 
@@ -41,7 +44,7 @@ def _wake():
         assignment=wake["policy"]["assignment"],
         lifecycle=wake["policy"]["lifecycle"],
     )
-    wake["policy"]["execution_context"] = {
+    wake["policy"]["execution_context"] = with_generation({
         "schema": "switchboard.execution_context.v1",
         "project_id": "switchboard",
         "task_id": "BUG-139",
@@ -50,10 +53,15 @@ def _wake():
         "base_sha": "1" * 40,
         "workspace": {"isolation": "worktree", "repo_role": "canonical"},
         "runtime": {"registry_name": "codex"},
-        "generation": 1,
+        "provider": {
+            "provider": "openai-codex",
+            "connection_reference": "provider-test",
+            "credential_version": 1,
+            "lifecycle_state": "active",
+            "revocation_state": "",
+        },
         "authority_digest": "sha256:bug139-authority",
-        "digest": "sha256:bug139-context",
-    }
+    }, 1)
     return wake
 
 
@@ -66,9 +74,11 @@ inventory = {
                              "lane_mode": "all_project_lanes"}}],
 }
 
+WORKSPACE = Path(tempfile.mkdtemp(prefix="bug139-workspace-")) / "checkout"
+WORKSPACE.mkdir()
+
 saved_http = agent_host.sb._http
 saved_run = agent_host.subprocess.run
-saved_materialize = agent_host.materialize_repository_workspace
 saved_host_token = os.environ.get("PM_MCP_TOKEN")
 captured = {}
 try:
@@ -90,15 +100,9 @@ try:
 
     agent_host.sb._http = fake_http
     agent_host.subprocess.run = fake_run
-    agent_host.materialize_repository_workspace = (
-        lambda *_args, **_kwargs: SimpleNamespace(
-            path=ROOT,
-            receipt_path=ROOT / "workspace-receipt.json",
-            receipt={"schema": "switchboard.repository_workspace_receipt.v1"},
-        )
-    )
-    result = agent_host.launch(
-        _wake(), inventory, runner_session_id="run_bug139")
+    with stubbed_workspace(agent_host, stub_workspace(WORKSPACE)):
+        result = agent_host.launch(
+            _wake(), inventory, runner_session_id="run_bug139")
 
     assert result["runner_session_id"] == "run_bug139"
     assert captured["request"] == (
@@ -118,7 +122,6 @@ try:
 finally:
     agent_host.sb._http = saved_http
     agent_host.subprocess.run = saved_run
-    agent_host.materialize_repository_workspace = saved_materialize
     if saved_host_token is None:
         os.environ.pop("PM_MCP_TOKEN", None)
     else:

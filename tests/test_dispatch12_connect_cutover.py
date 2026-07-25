@@ -13,6 +13,7 @@ from switchboard.application.commands import connect_dispatch
 from switchboard.application.commands import task_execution
 from switchboard.connect.execution_assignment import build_execution_assignment
 from execution_policy_fixture import ready_execution_context
+from switchboard.application.commands.execution_context import with_generation
 
 
 passed = failed = 0
@@ -226,7 +227,8 @@ for row in captured:
         assignment=host_policy["assignment"],
         lifecycle=host_policy["lifecycle"],
     )
-    host_policy["execution_context"]["generation"] = 1
+    host_policy["execution_context"] = with_generation(
+        host_policy["execution_context"], 1)
     wake = {
         "wake_id": "wake-host-test", "task_id": "DISPATCH-12",
         "selector": row["selector"], "policy": host_policy,

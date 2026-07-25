@@ -67,9 +67,12 @@ from switchboard.domain.coordination.runtime_profile import (  # noqa: E402
     runtime_env_key,
 )
 from repository_workspace import (  # noqa: E402
+    MaterializedWorkspace,
     WorkspaceMaterializationError,
-    cleanup as cleanup_repository_workspace,
     materialize as materialize_repository_workspace,
+    revoke as revoke_repository_workspace,
+    safe_receipt as safe_workspace_receipt,
+    verify as verify_repository_workspace,
 )
 
 PROJECT = os.environ.get("PM_PROJECT", "switchboard")
@@ -880,6 +883,13 @@ def active_codex_cloud_session_count():
     return active
 
 
+CONNECT_RUNTIME_DEFAULTS = {
+    "codex": ("codex", "--dangerously-bypass-approvals-and-sandbox"),
+    "claude-code": ("claude", "--dangerously-skip-permissions"),
+    "cursor": ("cursor-agent", "--force"),
+}
+
+
 def _connect_mcp_endpoint():
     """Public MCP URL the host already uses for Switchboard Communicate."""
     base = str(os.environ.get("PM_BASE") or "https://plan.taikunai.com").rstrip("/")
@@ -909,6 +919,172 @@ def _issue_connect_session_mcp_token(wake, inventory, runner_session_id):
     if (result or {}).get("issued") is not True or not token.startswith("dst-"):
         raise RuntimeError("Connect Switchboard MCP authentication was denied")
     return token
+
+
+def _agent_host_state_root():
+    return Path(os.environ.get(
+        "PM_AGENT_HOST_STATE_DIR",
+        str(Path.home() / ".local" / "share" / "switchboard-agent-host"),
+    )).expanduser()
+
+
+def connect_workspace_request(wake):
+    """The exact materialize/verify arguments for one Connect wake.
+
+    Materialization, pre-process verification, and revocation all address the
+    same workspace, so they all derive their arguments here.
+    """
+    policy = wake.get("policy") or {}
+    context = dict(policy.get("execution_context") or {})
+    lifecycle = dict(policy.get("lifecycle") or {})
+    execution_id = str(lifecycle.get("execution_id") or "")
+    task_id = str(wake.get("task_id") or "")
+    generation = int(lifecycle.get("generation") or 0)
+    state_root = _agent_host_state_root()
+    return {
+        "execution_context": context,
+        "task_id": task_id,
+        "execution_id": execution_id,
+        "branch": (
+            f"agent/{_safe_identity(context.get('project_id'))}/"
+            f"{_safe_identity(task_id)}/{_safe_identity(execution_id)}-g{generation}"
+        ),
+        "cache_root": os.environ.get(
+            "PM_AGENT_HOST_REPO_CACHE_ROOT",
+            str(state_root / "repository-cache")),
+        "workspace_root": os.environ.get(
+            "PM_AGENT_HOST_WORKSPACE_ROOT", str(state_root / "workspaces")),
+    }
+
+
+def _workspace_binding_path(runner_session_id):
+    safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(runner_session_id or ""))
+    return _agent_host_state_root() / "workspace-bindings" / f"{safe_id}.json"
+
+
+def _record_workspace_binding(runner_session_id, workspace, request):
+    """Remember which workspace a runner owns so teardown can revoke it later.
+
+    The runner may outlive this daemon process, so the binding is durable rather
+    than in-memory: a restarted host must still be able to revoke.
+    """
+    if not runner_session_id or not workspace:
+        return None
+    path = _workspace_binding_path(runner_session_id)
+    payload = {
+        "runner_session_id": str(runner_session_id),
+        "workspace_path": str(workspace.path),
+        "receipt_path": str(workspace.receipt_path),
+        "branch": workspace.branch,
+        "head_sha": workspace.head_sha,
+        "cache_path": str(workspace.cache_path),
+        # Revocation removes directories from a file written by an earlier
+        # process. Persist the boundary it is allowed to act inside so a stale
+        # or corrupted binding cannot point teardown at an unrelated path.
+        "workspace_root": str((request or {}).get("workspace_root") or ""),
+        "task_id": str((request or {}).get("task_id") or ""),
+        "execution_id": str((request or {}).get("execution_id") or ""),
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+        temporary.replace(path)
+    except OSError as exc:
+        print(f"[agent_host] workspace binding not recorded: {exc}", flush=True)
+        return None
+    return payload
+
+
+def _revoke_launch_workspace(workspace, runner_session_id, reason):
+    """Revoke a workspace whose launch failed, and drop its runner binding."""
+    try:
+        result = revoke_repository_workspace(
+            workspace, reason=reason, quarantine=True)
+    except WorkspaceMaterializationError as exc:
+        result = {"revoked": False, "error": exc.code}
+    except OSError as exc:
+        result = {"revoked": False, "error": type(exc).__name__}
+    try:
+        _workspace_binding_path(runner_session_id).unlink()
+    except (FileNotFoundError, OSError):
+        pass
+    return result
+
+
+def revoke_runner_workspace(runner_session_id, reason):
+    """Deny further writes by a terminated runner's workspace.
+
+    Returns None when this runner never owned an isolated workspace (every
+    non-Connect mode), so callers can treat it as an ordinary no-op.
+    """
+    path = _workspace_binding_path(runner_session_id)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    root = str(payload.get("workspace_root") or "")
+    if not root:
+        return {"revoked": False, "error": "workspace_root_missing",
+                "reason": str(reason or "")}
+    workspace = MaterializedWorkspace(
+        Path(str(payload.get("workspace_path") or "")),
+        str(payload.get("branch") or ""),
+        str(payload.get("head_sha") or ""),
+        Path(str(payload.get("cache_path") or "")),
+        Path(str(payload.get("receipt_path") or "")),
+        {},
+        workspace_root=Path(root),
+    )
+    try:
+        result = revoke_repository_workspace(workspace, reason=str(reason or "terminal"))
+    except WorkspaceMaterializationError as exc:
+        return {"revoked": False, "error": exc.code, "reason": str(reason or "")}
+    except OSError as exc:
+        # Revocation runs inside the terminal-acknowledgement path. A directory
+        # that will not delete must be reported, never allowed to strand a
+        # killed runner in Stopping.
+        return {"revoked": False, "error": type(exc).__name__,
+                "reason": str(reason or "")}
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    return {**result, "runner_session_id": str(runner_session_id)}
+
+
+def connect_execution_generation(wake):
+    """The one generation a Connect wake is allowed to execute at."""
+    policy = wake.get("policy") or {}
+    lifecycle = dict(policy.get("lifecycle") or {})
+    assignment = dict(policy.get("execution_assignment") or {})
+    generation = int(lifecycle.get("generation") or 0)
+    if generation <= 0:
+        raise ValueError("connect lifecycle generation is missing")
+    if assignment and int(assignment.get("generation") or 0) != generation:
+        raise ValueError("connect execution assignment generation mismatch")
+    return generation
+
+
+def require_connect_generation_binding(wake):
+    """Refuse a Connect launch whose authorities disagree on the generation."""
+    from switchboard.application.commands import execution_context as _context
+
+    policy = wake.get("policy") or {}
+    context = dict(policy.get("execution_context") or {})
+    if not context:
+        raise ValueError("connect execution context is missing")
+    binding = dict(policy.get("account_binding") or {})
+    try:
+        # The runtime itself is already fenced by launch_command against the
+        # context's registry name; this gate owns generation and credential.
+        return _context.require_generation_binding(
+            context,
+            generation=connect_execution_generation(wake),
+            credential_reference=str(binding.get("credential_reference") or ""),
+        )
+    except _context.ExecutionContextError as exc:
+        raise ValueError(f"connect generation binding refused: {exc.code}") from exc
 
 
 def launch_command(wake, inventory, runner_session_id="", workspace_path=""):
@@ -953,13 +1129,13 @@ def launch_command(wake, inventory, runner_session_id="", workspace_path=""):
         # scrolling log with no composer, so Watch cannot show a real session
         # and chat injection has nothing to type into. PM_CONNECT_<RT>_ARGS
         # still overrides per host.
-        runtime_defaults = {
-            "codex": ("codex", "--dangerously-bypass-approvals-and-sandbox"),
-            "claude-code": ("claude", "--dangerously-skip-permissions"),
-            "cursor": ("cursor-agent", "--force"),
-        }
-        executable_default, args_default = runtime_defaults.get(
-            runtime, (runtime, "--prompt"))
+        if runtime not in CONNECT_RUNTIME_DEFAULTS:
+            # Guessing "<runtime> --prompt" for an unknown runtime launches a
+            # process that is not a supported provider CLI and cannot be
+            # watched, chatted with, or completed. Refuse the runtime instead.
+            raise ValueError(
+                f"connect runtime {runtime!r} has no supported provider CLI")
+        executable_default, args_default = CONNECT_RUNTIME_DEFAULTS[runtime]
         executable = str(os.environ.get(
             f"PM_CONNECT_{runtime_key}_EXECUTABLE", executable_default)).strip()
         before = tuple(shlex.split(str(os.environ.get(
@@ -992,6 +1168,11 @@ def launch_command(wake, inventory, runner_session_id="", workspace_path=""):
             raise ValueError("connect execution context runtime mismatch")
         if not execution_assignment:
             raise ValueError("connect execution assignment contract is missing")
+        # One generation owns the workspace, the provider credential, and the
+        # control-plane identity (runner/claim/Work Session/MCP principal). If
+        # any of them describes a different generation, or the provider
+        # connection was revoked since the wake was queued, nothing launches.
+        require_connect_generation_binding(wake)
         from switchboard.connect.execution_assignment import (
             ExecutionAssignmentError,
             build_execution_assignment,
@@ -1090,36 +1271,15 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
         rec["host_id"] = inventory.get("host_id")
         return rec
     materialized_workspace = None
+    workspace_request = None
     mode = wake_mode(wake, inventory)
     workspace_path = ""
     if mode == "connect":
-        policy = wake.get("policy") or {}
-        context = dict(policy.get("execution_context") or {})
-        lifecycle = dict(policy.get("lifecycle") or {})
-        execution_id = str(lifecycle.get("execution_id") or "")
         task_id = str(wake.get("task_id") or "")
-        generation = int(lifecycle.get("generation") or 0)
-        state_root = Path(os.environ.get(
-            "PM_AGENT_HOST_STATE_DIR",
-            str(Path.home() / ".local" / "share" / "switchboard-agent-host"),
-        )).expanduser()
         try:
-            branch = (
-                f"agent/{_safe_identity(context.get('project_id'))}/"
-                f"{_safe_identity(task_id)}/{_safe_identity(execution_id)}-g{generation}"
-            )
+            workspace_request = connect_workspace_request(wake)
             materialized_workspace = materialize_repository_workspace(
-                context,
-                task_id=task_id,
-                execution_id=execution_id,
-                branch=branch,
-                cache_root=os.environ.get(
-                    "PM_AGENT_HOST_REPO_CACHE_ROOT",
-                    str(state_root / "repository-cache")),
-                workspace_root=os.environ.get(
-                    "PM_AGENT_HOST_WORKSPACE_ROOT",
-                    str(state_root / "workspaces")),
-            )
+                **workspace_request)
             workspace_path = str(materialized_workspace.path)
         except WorkspaceMaterializationError as exc:
             return {
@@ -1177,8 +1337,31 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
             env.pop("SWITCHBOARD_TOKEN", None)
         env.update({str(k): str(v) for k, v in (extra_env or {}).items()})
         if materialized_workspace:
+            # Last gate before any process exists: re-prove the directory the
+            # CLI is about to be handed is still the authorized checkout. The
+            # supervisor would otherwise chdir into whatever now occupies that
+            # path, and a deleted or rewound workspace would surface as an
+            # unexplained provider crash instead of a named refusal.
+            try:
+                materialized_workspace = verify_repository_workspace(
+                    **workspace_request)
+            except WorkspaceMaterializationError as exc:
+                return {
+                    "runner_session_id": runner_session_id or None,
+                    "started": False,
+                    "wake_mode": mode,
+                    "host_id": inventory.get("host_id"),
+                    "runtime": (wake.get("selector") or {}).get("runtime") or "",
+                    "task_id": wake.get("task_id") or "",
+                    "reason": exc.code,
+                    "failure_class": "failed_gate",
+                    "provider_error": exc.message,
+                    "workspace_verification": exc.as_dict(),
+                }
             env["SWITCHBOARD_WORKSPACE_RECEIPT"] = str(
                 materialized_workspace.receipt_path)
+            _record_workspace_binding(
+                runner_session_id, materialized_workspace, workspace_request)
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=20, env=env)
         if out.returncode != 0 or not (out.stdout or "").strip():
             detail = (out.stderr or out.stdout or "supervisor emitted no receipt")[-4000:]
@@ -1186,9 +1369,9 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
                 f"[agent_host] supervisor start failed rc={out.returncode} "
                 f"stderr={detail!r}", flush=True)
             if materialized_workspace:
-                cleanup_repository_workspace(
-                    materialized_workspace, quarantine=True,
-                    reason="supervisor-start-failed")
+                _revoke_launch_workspace(
+                    materialized_workspace, runner_session_id,
+                    "supervisor-start-failed")
             return {
                 "runner_session_id": runner_session_id or None,
                 "started": False,
@@ -1209,13 +1392,13 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
             if materialized_workspace:
                 rec["cwd"] = workspace_path
                 rec.setdefault("metadata", {})["workspace_receipt"] = (
-                    materialized_workspace.receipt)
+                    safe_workspace_receipt(materialized_workspace.receipt))
         return rec
     except Exception as e:
         if materialized_workspace:
-            cleanup_repository_workspace(
-                materialized_workspace, quarantine=True,
-                reason="runtime-launch-exception")
+            _revoke_launch_workspace(
+                materialized_workspace, runner_session_id,
+                "runtime-launch-exception")
         print(f"[agent_host] launch failed: {e}", flush=True)
         return {
             "runner_session_id": runner_session_id or None,
@@ -1942,6 +2125,11 @@ def handle_runner_controls(inventory):
             # UI-24: deterministic cleanup — no orphan host tunnel outliving
             # the runner it was pumping bytes for.
             _drop_host_bridge(req.get("runner_session_id"))
+            revoked = revoke_runner_workspace(
+                req.get("runner_session_id"),
+                str((req.get("options") or {}).get("reason") or "runner_killed"))
+            if revoked:
+                result = {**result, "workspace_revoked": bool(revoked.get("revoked"))}
         _try("POST", P_COMPLETE_RUNNER_CONTROL,
              {"project": PROJECT, "host_id": host_id, "request_id": req_id,
               "status": status, "result": result, "snapshot": snapshot})
@@ -2137,6 +2325,12 @@ def expire_runner_leases(inventory, *, now=None):
         ok = bool(stopped and not stopped.get("error") and stopped.get("alive") is not True)
         if ok:
             _drop_host_bridge(runner_id)
+            # Teardown is part of stopping: an isolated workspace must not
+            # outlive the runner that leased it, or a surviving child could keep
+            # writing into an execution the control plane already ended.
+            revoked = revoke_runner_workspace(runner_id, reason)
+            if revoked:
+                outcome["workspace_revoked"] = bool(revoked.get("revoked"))
             receipt = {
                 "project": PROJECT, "runner_session_id": runner_id,
                 "host_id": host_id, "task_id": task_id,
@@ -2951,31 +3145,6 @@ def _reap_bound_finalizers(host_id):
             if row.get("host_id") != host_id
         ]
     return [{k: v for k, v in row.items() if k != "host_id"} for row in ours]
-
-
-def _acquire_provider_lease(wake, inventory, runner_session_id):
-    binding = ((wake.get("policy") or {}).get("account_binding") or {})
-    reference = str(binding.get("credential_reference") or "")
-    if not reference:
-        return {"error": "credential_reference_missing"}
-    return _try(
-        "POST",
-        f"/api/projects/{urllib.parse.quote(PROJECT, safe='')}/"
-        f"provider-connections/{urllib.parse.quote(reference, safe='')}/leases",
-        {
-            "project": PROJECT,
-            "user_id": binding.get("user_id"),
-            "provider": binding.get("provider"),
-            "provider_account_id": binding.get("provider_account_id"),
-            "task_id": wake.get("task_id"),
-            "host_id": inventory.get("host_id"),
-            "runner_session_id": runner_session_id,
-            "work_session_id": binding.get("work_session_id"),
-            "account_affinity_id": binding.get("account_affinity_id"),
-            "ttl_seconds": int((wake.get("policy") or {}).get(
-                "credential_lease_ttl_seconds") or 900),
-        },
-    ) or {"error": "credential_lease_acquisition_failed"}
 
 
 def _publish_drain_host(inventory, status, capacity):

@@ -14,6 +14,8 @@ from __future__ import annotations
 from path_setup import ROOT  # noqa: F401
 
 from adapters import agent_host
+from execution_policy_fixture import ready_execution_context
+from switchboard.application.commands.execution_context import with_generation
 from switchboard.connect.execution_assignment import build_execution_assignment
 
 
@@ -58,6 +60,8 @@ def connect_wake(runtime):
         assignment=wake["policy"]["assignment"],
         lifecycle=wake["policy"]["lifecycle"],
     )
+    wake["policy"]["execution_context"] = with_generation(
+        ready_execution_context("WATCH-10", runtime=runtime), 1)
     return wake
 
 

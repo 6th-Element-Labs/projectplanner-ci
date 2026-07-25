@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import store
 
+from switchboard.application.commands.execution_context import with_generation
+
 
 READY_EXECUTION_POLICY = {
     "runtimes": {
@@ -52,7 +54,7 @@ def ready_execution_context(
         "claude-code": "anthropic-claude",
         "cursor": "cursor",
     }[runtime]
-    return {
+    context = {
         "schema": "switchboard.execution_context.v1",
         "project_id": project,
         "task_id": task_id,
@@ -66,6 +68,10 @@ def ready_execution_context(
             "provider": provider,
             "connection_reference": "provider-test",
             "account_affinity_id": "test-affinity",
+            "connection_kind": "personal_plan",
+            "credential_version": 1,
+            "lifecycle_state": "active",
+            "revocation_state": "",
         },
         "scm": {
             "provider": "github_app",
@@ -74,8 +80,10 @@ def ready_execution_context(
         "placement": READY_EXECUTION_POLICY["placement"],
         "authority_digest": "sha256:test-authority",
         "generation": 0,
-        "digest": "sha256:test-context",
     }
+    # Hosts refuse a context whose fields disagree with its own digest, so the
+    # fixture must sign itself the same way the server does.
+    return with_generation(context, 0)
 
 
 def ready_host_placement(project: str = "switchboard") -> dict:
