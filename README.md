@@ -84,6 +84,7 @@ two systemd units, Caddy, and a Route 53 A record.
 | [`docs/CLAIM-NEXT-SPEC.md`](docs/CLAIM-NEXT-SPEC.md) | `claim_next` / `+TXP` dispatch profile: atomic task assignment, task claims, budget/model guidance |
 | [`docs/BUG-INTAKE-CONTRACT.md`](docs/BUG-INTAKE-CONTRACT.md) | Bug Intake Agent contract: report schema, severity, dedupe, and audited autonomous routing |
 | [`docs/TALLY-SPEC.md`](docs/TALLY-SPEC.md) | Tally / `+OXP` cost-to-outcome and KPI ledger: gateway-measured plus agent-reported spend |
+| [`docs/DECISION-CORPUS-SPEC.md`](docs/DECISION-CORPUS-SPEC.md) | Decision corpus: reason-code registry, exported feature allowlist, append-only `decision_record` for classifier replay, and the leave-one-board-out protocol that measures pooled failure intelligence |
 | [`docs/SWITCHBOARD-RENAME-MIGRATION.md`](docs/SWITCHBOARD-RENAME-MIGRATION.md) | Safe migration from `projectplanner` repo/ops identity to Switchboard product identity |
 | [`docs/decisions/0001-…`](docs/decisions/0001-multi-agent-coordination-primitives.md) | ADR: build order for the multi-agent coordination primitives |
 | [`docs/decisions/0005-store-module-decomposition.md`](docs/decisions/0005-store-module-decomposition.md) | ADR: strangler-split `store.py` — foundation shipped (ARCH-1…5); remainder superseded by ADR-0006 |
