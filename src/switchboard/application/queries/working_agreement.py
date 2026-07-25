@@ -81,6 +81,10 @@ def execute(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             "push the task branch",
             "open or update the PR against the intended branch",
             "mark the PR ready (non-draft) before requesting merge authorization; already-ready is a no-op",
+            "record executed-test evidence with the typed record_executed_test_run tool "
+            "(task_id, work_session_id, commands, passed|exit_code, output_sha256) — one call "
+            "writes work_session.hygiene AND claim evidence and returns the gate verdict; do not "
+            "hand-build executed_test_run dicts or invent hash keys",
             "include branch, head_sha, pr_number/pr_url in complete_claim evidence",
             "complete_claim moves the task to In Review and releases the claim",
             "after merge/rebase reaches the intended branch, the GitHub webhook or default-branch backfill stamps merged_sha and marks Done",

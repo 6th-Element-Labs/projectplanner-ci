@@ -6,6 +6,7 @@ application commands used by REST own transport-neutral validation.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -16,6 +17,7 @@ import store
 from switchboard.application.commands import claim_next as claim_next_command
 from switchboard.application.commands import claim_task as claim_task_command
 from switchboard.application.commands import complete_claim as complete_claim_command
+from switchboard.application.commands import executed_test_runs as executed_test_runs_command
 
 
 @dataclass(frozen=True)
@@ -150,6 +152,39 @@ def complete_claim(claim_id: str, ctx: Context, evidence: str = "", final_status
     ))
 
 
+def record_executed_test_run(test_run_json: str, ctx: Context,
+                             project: str = "maxwell") -> str:
+    """Record one passing executed test run as typed completion evidence (COORD-62).
+
+    test_run_json follows switchboard.executed_test_run.record_command.v1: task_id,
+    work_session_id, commands (list, min 1), passed and/or exit_code, output_sha256
+    (64-hex over the combined run output), optional branch/head_sha cross-checks.
+    completed_at is stamped server-side. One call writes work_session.hygiene AND
+    claim evidence atomically and returns the executed-test gate's verdict, so a
+    runner learns immediately whether completion/merge authorization accept it.
+    """
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:ixp",))
+    try:
+        payload = json.loads(test_run_json or "{}")
+    except json.JSONDecodeError:
+        return services.dumps({"error": "test_run_json must be valid JSON"})
+    if not isinstance(payload, dict):
+        return services.dumps({"error": "test_run_json must be a JSON object"})
+    task_id = str(payload.get("task_id") or "").strip()
+    binding = services.resolve_write_actor(
+        principal, project=project, task_id=task_id, agent_id="")
+    if not binding.get("ok"):
+        return services.dumps(binding)
+    result = executed_test_runs_command.execute_mapping(
+        payload, actor=binding["actor"], principal_id=principal.get("id") or "",
+        project=project,
+    )
+    if result.get("recorded"):
+        services.write_binding_comment(task_id, binding, project)
+    return services.dumps(result)
+
+
 def verify_offline_completion(task_id: str, ctx: Context, evidence: str = "",
                               artifact_url: str = "", evidence_hash: str = "",
                               verifier: str = "", reviewed_at: float = 0,
@@ -207,7 +242,9 @@ def revoke_claim(claim_id: str, reason: str, ctx: Context,
 
 
 
-CLAIM_TOOL_NAMES = ("claim_next", "claim_task", "complete_claim", 'verify_offline_completion', 'abandon_claim', 'revoke_claim')
+CLAIM_TOOL_NAMES = ("claim_next", "claim_task", "complete_claim",
+                    "record_executed_test_run",
+                    'verify_offline_completion', 'abandon_claim', 'revoke_claim')
 
 
 def register_claim_tools(mcp: Any, services: ClaimToolServices) -> dict[str, Callable[..., str]]:

@@ -1,5 +1,5 @@
 {
-  "count": 59,
+  "count": 60,
   "schema": "switchboard.schema_manifest.v1",
   "schemas": [
     {
@@ -89,6 +89,10 @@
     {
       "$id": "switchboard.deliverable_waiver.v1",
       "path": "switchboard.deliverable_waiver.v1.json"
+    },
+    {
+      "$id": "switchboard.executed_test_run.record_command.v1",
+      "path": "switchboard.executed_test_run.record_command.v1.json"
     },
     {
       "$id": "switchboard.messaging.ack_message_command.v1",

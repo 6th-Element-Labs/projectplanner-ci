@@ -1,0 +1,81 @@
+{
+  "$id": "switchboard.executed_test_run.record_command.v1",
+  "additionalProperties": false,
+  "description": "One executed-and-passing test run, recorded against the bound Work Session.\n\n``completed_at`` is deliberately not a field — the server stamps it. The only\nhash key is ``output_sha256``; the server maps it onto the gate's accepted set.\n``head_sha``/``branch`` are optional cross-checks: when given they must match\nthe Work Session, and the persisted record is always pinned to the session's\nown values.",
+  "properties": {
+    "branch": {
+      "default": "",
+      "description": "Optional cross-check; must match the session branch.",
+      "title": "Branch",
+      "type": "string"
+    },
+    "commands": {
+      "description": "The exact command(s) that ran, in order. At least one.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Commands",
+      "type": "array"
+    },
+    "exit_code": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Process exit code of the run (0 == pass).",
+      "title": "Exit Code"
+    },
+    "head_sha": {
+      "default": "",
+      "description": "Optional cross-check; must match the session head_sha.",
+      "title": "Head Sha",
+      "type": "string"
+    },
+    "output_sha256": {
+      "description": "Lowercase hex sha256 over the combined run output/log.",
+      "title": "Output Sha256",
+      "type": "string"
+    },
+    "passed": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "True only if every command passed.",
+      "title": "Passed"
+    },
+    "schema": {
+      "default": "switchboard.executed_test_run.record_command.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "task_id": {
+      "description": "Board task this evidence belongs to.",
+      "title": "Task Id",
+      "type": "string"
+    },
+    "work_session_id": {
+      "description": "The BOUND Work Session; a forked session cannot satisfy the gate.",
+      "title": "Work Session Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "task_id",
+    "work_session_id",
+    "commands",
+    "output_sha256"
+  ],
+  "title": "RecordExecutedTestRunCommand",
+  "type": "object"
+}

@@ -2271,6 +2271,14 @@ def _missing_artifact_report(evidence: Dict[str, Any],
         "accepted_keys": list(EXECUTED_TEST_RUN_KEYS),
         "accepted_hash_keys": list(EXECUTED_TEST_RUN_HASH_KEYS),
         "read_surfaces": list(EXECUTED_TEST_RUN_READ_SURFACES),
+        # COORD-62: the refusal is an instruction, not just a diagnosis — one typed
+        # call satisfies this contract on both read surfaces.
+        "repair_tool": "record_executed_test_run",
+        "repair": (
+            "Call record_executed_test_run(task_id, work_session_id, commands, "
+            "passed|exit_code, output_sha256) — it writes the accepted record to "
+            "both read surfaces and returns this gate's verdict."
+        ),
     }
     near_miss = _executed_test_run_near_misses(evidence, session)
     if near_miss:
@@ -2395,7 +2403,8 @@ def _executed_test_run_gate(evidence: Dict[str, Any],
             "reason": "missing_executed_test_run" if not candidates else "invalid_executed_test_run",
             "message": (
                 "Completion evidence must include a passing executed test run with commands, "
-                "completion time, and output/log hash."
+                "completion time, and output/log hash. Record it with the "
+                "record_executed_test_run tool — one call writes both read surfaces."
             ),
             "missing_artifact": _missing_artifact_report(evidence, session),
             "problems": problems}

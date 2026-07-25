@@ -3,6 +3,7 @@ from . import (
     agents,
     claims,
     deliverables,
+    evidence,
     messaging,
     projects,
     provider_credentials,

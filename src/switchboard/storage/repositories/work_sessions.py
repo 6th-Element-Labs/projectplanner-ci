@@ -29,8 +29,17 @@ from switchboard.storage.repositories.access import (  # noqa: F401
     has_project,
     normalize_project_id,
 )
-from switchboard.storage.repositories.claims import _active_task_claims_in  # noqa: F401
-from switchboard.storage.repositories.provenance import _load_git_state  # noqa: F401
+from switchboard.storage.repositories.claims import (  # noqa: F401
+    EXECUTED_TEST_RUN_KEYS,
+    EXECUTED_TEST_RUN_PRIMARY_KEY,
+    _active_task_claims_in,
+    _executed_test_run_gate,
+    _looks_like_test_run_intent,
+)
+from switchboard.storage.repositories.provenance import (  # noqa: F401
+    _load_git_state,
+    _upsert_git_state,
+)
 from switchboard.storage.repositories.tasks import (  # noqa: F401
     _task_looks_like_code_work,
     get_task,
@@ -934,6 +943,84 @@ def list_session_health(project: str = DEFAULT_PROJECT, task_id: str = "",
     }
 
 
+# COORD-62: the typed alternative every near-miss warning points at. The name is
+# load-bearing — it appears in warnings, the gate refusal, and the working agreement.
+EXECUTED_TEST_RUN_TOOL = "record_executed_test_run"
+
+_EXECUTED_TEST_RUN_TOOL_HINT = (
+    f"Executed-test evidence belongs in the typed {EXECUTED_TEST_RUN_TOOL} tool "
+    "(task_id, work_session_id, commands, passed|exit_code, output_sha256) — one call "
+    "writes work_session.hygiene AND claim evidence and returns the gate verdict."
+)
+
+
+def _executed_test_run_write_warnings(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Non-blocking near-miss warnings for free-form executed-test writes (COORD-62).
+
+    BREAKDOWN 20: the CO-21 runner wrote five real passing suites to
+    ``hygiene.executed_tests`` and update_work_session answered with a silent
+    success — the wrong grammar was accepted without a word. The write still
+    lands (COORD-61's refusal identity teaches at the gate; this is the bridge),
+    but the response now names the typed tool at the moment of the mistake.
+    """
+    payload = payload if isinstance(payload, dict) else {}
+    accepted = set(EXECUTED_TEST_RUN_KEYS)
+    warnings: List[Dict[str, Any]] = []
+
+    hygiene_raw = payload.get("hygiene", payload.get("hygiene_json"))
+    hygiene: Dict[str, Any] = {}
+    if isinstance(hygiene_raw, str):
+        try:
+            parsed = json.loads(hygiene_raw)
+            hygiene = parsed if isinstance(parsed, dict) else {}
+        except (TypeError, ValueError):
+            hygiene = {}
+    elif isinstance(hygiene_raw, dict):
+        hygiene = hygiene_raw
+    if hygiene and not any(str(key) in accepted for key in hygiene):
+        near = sorted(
+            str(key) for key in hygiene
+            if _looks_like_test_run_intent(str(key))
+            and str(key) not in accepted
+            and hygiene.get(key) not in (None, "", [], {})
+        )
+        if near:
+            warnings.append({
+                "reason": "executed_test_run_near_miss",
+                "blocking": False,
+                "surface": "hygiene",
+                "keys": near,
+                "repair_tool": EXECUTED_TEST_RUN_TOOL,
+                "message": (
+                    "hygiene." + ", hygiene.".join(near) + " is not a key the "
+                    "executed-test gate reads; the write was kept but will not "
+                    "satisfy completion or merge authorization. "
+                    + _EXECUTED_TEST_RUN_TOOL_HINT
+                ),
+            })
+
+    dropped = sorted(
+        str(key) for key in payload
+        if str(key) not in ("hygiene", "hygiene_json")
+        and _looks_like_test_run_intent(str(key))
+        and payload.get(key) not in (None, "", [], {})
+    )
+    if dropped:
+        warnings.append({
+            "reason": "executed_test_run_near_miss",
+            "blocking": False,
+            "surface": "top_level",
+            "keys": dropped,
+            "repair_tool": EXECUTED_TEST_RUN_TOOL,
+            "message": (
+                ", ".join(dropped) + " is not a Work Session field and was NOT "
+                "persisted anywhere the executed-test gate reads. "
+                + _EXECUTED_TEST_RUN_TOOL_HINT
+            ),
+        })
+    return warnings
+
+
 def update_work_session(work_session_id: str, payload: Dict[str, Any], actor: str = "system",
                         project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     work_session_id = (work_session_id or "").strip()
@@ -944,8 +1031,12 @@ def update_work_session(work_session_id: str, payload: Dict[str, Any], actor: st
     if errors:
         return {"error": "invalid_work_session", "errors": errors,
                 "contract": work_session_contract(project)}
+    write_warnings = _executed_test_run_write_warnings(payload or {})
     if not data:
-        return {"updated": False, "work_session": existing}
+        response = {"updated": False, "work_session": existing}
+        if write_warnings:
+            response["warnings"] = write_warnings
+        return response
     now = time.time()
     data["updated_at"] = now
     data["updated_by"] = actor
@@ -969,7 +1060,169 @@ def update_work_session(work_session_id: str, payload: Dict[str, Any], actor: st
                    json.dumps(event, sort_keys=True), now))
         row = c.execute("SELECT * FROM work_sessions WHERE work_session_id=?",
                         (work_session_id,)).fetchone()
-    return {"updated": True, "work_session": _work_session_row(row)}
+    response = {"updated": True, "work_session": _work_session_row(row)}
+    if write_warnings:
+        response["warnings"] = write_warnings
+    return response
+
+
+RECORD_EXECUTED_TEST_RUN_RESULT_SCHEMA = "switchboard.executed_test_run.record_result.v1"
+
+# Where the record lands, verbatim in every success response, so a runner learns the
+# geography of the evidence surfaces from the tool instead of from failure-memory.
+EXECUTED_TEST_RUN_SURFACES = (
+    "work_session.hygiene.executed_test_run",
+    "task_git_state.evidence.executed_test_run",
+)
+
+
+def _record_evidence_error(code: str, message: str, failure_class: str,
+                           **details: Any) -> Dict[str, Any]:
+    return {"error": code, "message": message, "failure_class": failure_class,
+            "repair_tool": EXECUTED_TEST_RUN_TOOL, **details}
+
+
+def record_executed_test_run(data: Dict[str, Any], actor: str = "system",
+                             principal_id: str = "",
+                             project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Persist one typed executed-test record onto BOTH evidence read surfaces (COORD-62).
+
+    The completion gate reads caller evidence + ``work_session.hygiene``; merge
+    authorization reads ``work_session.hygiene`` alone (the PR gate passes no
+    evidence). Writing the canonical ``executed_test_run`` key into hygiene —
+    merged, never replacing the dict — and mirroring the same record into
+    ``task_git_state.evidence`` in the same transaction means both gates observe
+    one record with no second write. The record is pinned to the session's own
+    branch/head_sha, and ``completed_at`` is stamped here, never trusted from the
+    caller.
+    """
+    data = dict(data or {})
+    task_id = str(data.get("task_id") or "").strip()
+    work_session_id = str(data.get("work_session_id") or "").strip()
+    commands = [str(cmd or "").strip() for cmd in (data.get("commands") or [])]
+    commands = [cmd for cmd in commands if cmd]
+    output_sha256 = str(data.get("output_sha256") or "").strip().lower()
+    passed = data.get("passed")
+    exit_code = data.get("exit_code")
+    input_branch = str(data.get("branch") or "").strip()
+    input_head = str(data.get("head_sha") or "").strip()
+    if (not task_id or not work_session_id or not commands or not output_sha256
+            or (passed is None and exit_code is None)):
+        return _record_evidence_error(
+            "invalid_executed_test_run",
+            "task_id, work_session_id, commands, output_sha256, and passed/exit_code are required.",
+            "invalid_input")
+
+    session = get_work_session(work_session_id, project=project)
+    if not session:
+        return _record_evidence_error(
+            "work_session_not_found",
+            f"No Work Session {work_session_id} in project {project}.",
+            "missing_data", work_session_id=work_session_id)
+    session_task = str(session.get("task_id") or "").strip()
+    if session_task.upper() != task_id.upper():
+        return _record_evidence_error(
+            "work_session_task_mismatch",
+            "The Work Session is bound to a different task; record evidence on the "
+            "session the gate reads, not a fork.",
+            "failed_gate", work_session_id=work_session_id,
+            task_id=task_id, work_session_task_id=session_task)
+    status = str(session.get("status") or "").strip().lower()
+    if status not in ("active", "proposed"):
+        return _record_evidence_error(
+            "work_session_not_active",
+            f"Work Session {work_session_id} is {status or 'unknown'}; evidence must land "
+            "on the live bound session (the CO-21 repair forked a fresh one and satisfied "
+            "nothing).",
+            "failed_gate", work_session_id=work_session_id, status=status or None)
+    session_branch = str(session.get("branch") or "").strip()
+    session_head = str(session.get("head_sha") or "").strip()
+    if input_branch and session_branch and input_branch != session_branch:
+        return _record_evidence_error(
+            "branch_mismatch",
+            "branch does not match the bound Work Session.",
+            "stale_branch", branch=input_branch, work_session_branch=session_branch)
+    if input_head and session_head and input_head != session_head:
+        return _record_evidence_error(
+            "head_sha_mismatch",
+            "head_sha does not match the bound Work Session; rerun the suite at the "
+            "session head (or update the session first), then re-record.",
+            "stale_branch", head_sha=input_head, work_session_head_sha=session_head)
+
+    now = time.time()
+    record: Dict[str, Any] = {
+        "schema": EXECUTED_TEST_RUN_SCHEMA,
+        "run_id": "testrun-" + uuid.uuid4().hex[:16],
+        "task_id": session_task,
+        "work_session_id": work_session_id,
+        "commands": commands,
+        "output_sha256": output_sha256,
+        "completed_at": now,
+        "recorded_at": now,
+        "recorded_by": actor,
+        "source_tool": EXECUTED_TEST_RUN_TOOL,
+    }
+    if passed is not None:
+        record["passed"] = bool(passed)
+    if exit_code is not None:
+        record["exit_code"] = int(exit_code)
+    branch = session_branch or input_branch
+    head_sha = session_head or input_head
+    if branch:
+        record["branch"] = branch
+    if head_sha:
+        record["head_sha"] = head_sha
+
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM work_sessions WHERE work_session_id=?",
+                        (work_session_id,)).fetchone()
+        if not row:
+            return _record_evidence_error(
+                "work_session_not_found",
+                f"No Work Session {work_session_id} in project {project}.",
+                "missing_data", work_session_id=work_session_id)
+        try:
+            hygiene = json.loads(row["hygiene_json"] or "{}")
+        except (TypeError, ValueError):
+            hygiene = {}
+        if not isinstance(hygiene, dict):
+            hygiene = {}
+        # Merge, never replace: preflight keys and any free-form near-miss the runner
+        # already wrote stay put beside the canonical record.
+        hygiene[EXECUTED_TEST_RUN_PRIMARY_KEY] = record
+        c.execute(
+            "UPDATE work_sessions SET hygiene_json=?, updated_at=?, updated_by=? "
+            "WHERE work_session_id=?",
+            (json.dumps(hygiene, sort_keys=True), now, actor, work_session_id))
+        c.execute(
+            "INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+            (session_task or None, actor, "work_session.updated",
+             json.dumps({
+                 "work_session_id": work_session_id,
+                 "updated_fields": ["hygiene_json"],
+                 "evidence": EXECUTED_TEST_RUN_PRIMARY_KEY,
+                 "run_id": record["run_id"],
+                 "output_sha256": output_sha256,
+                 "source_tool": EXECUTED_TEST_RUN_TOOL,
+                 "status": row["status"],
+             }, sort_keys=True), now))
+        _upsert_git_state(c, session_task, {
+            "evidence": {EXECUTED_TEST_RUN_PRIMARY_KEY: record},
+        })
+        refreshed_row = c.execute("SELECT * FROM work_sessions WHERE work_session_id=?",
+                                  (work_session_id,)).fetchone()
+    refreshed = _work_session_row(refreshed_row)
+    verdict = _executed_test_run_gate({}, refreshed)
+    return {
+        "schema": RECORD_EXECUTED_TEST_RUN_RESULT_SCHEMA,
+        "recorded": True,
+        "task_id": session_task,
+        "work_session_id": work_session_id,
+        "run": record,
+        "surfaces": list(EXECUTED_TEST_RUN_SURFACES),
+        "executed_test_gate": verdict,
+        "work_session": refreshed,
+    }
 
 
 def _managed_workspace_error(code: str, message: str, failure_class: str = "failed_gate",
