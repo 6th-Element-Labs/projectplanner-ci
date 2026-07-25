@@ -653,6 +653,9 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
         _refuse_unsatisfied_dependencies(task, task_id=task_id, project=project)
         if launcher is None:
             from switchboard.application.commands import connect_dispatch
+            from switchboard.storage.repositories.project_execution_policy import (
+                get_project_execution_policy,
+            )
             from switchboard.storage.repositories.project_execution_readiness import (
                 get_project_execution_readiness,
             )
@@ -660,8 +663,20 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
             # UI-63: a project that is not execution-ready must refuse before a wake is
             # requested, alongside CO-25's dependency refusal above. The launcher seam is
             # exempt so adapter/unit tests do not need a ready project.
+            #
+            # The refusal is scoped to projects that have OPTED IN to an execution
+            # policy, matching connect_dispatch's contract: "Once a project opts into
+            # execution policy, however, every field is mandatory and resolution fails
+            # closed." An unconfigured project still takes COORD-47's legacy path there,
+            # so refusing it here would make "no policy" fatal in one file and supported
+            # in the next. That is not hypothetical: shipped unscoped, this took the
+            # switchboard board's own autopilot offline for a full day — every dispatch
+            # failed with "Project execution readiness is blocked." while the legacy
+            # path it would have used was still open. Widen this only by deleting the
+            # legacy path in connect_dispatch first.
             readiness = get_project_execution_readiness(project)
-            if readiness.get("passed") is not True:
+            if (get_project_execution_policy(project).get("configured")
+                    and readiness.get("passed") is not True):
                 raise TaskExecutionError(
                     "start_refused",
                     str(readiness.get("message") or
