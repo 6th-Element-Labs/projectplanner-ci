@@ -18,12 +18,37 @@ push, PR, CI, lease surrender and even autonomous bug intake all work with no op
 
 ## Root cause (one sentence)
 
-The merge gate emits precise, typed reason codes, but the worker receives a single
-undifferentiated `failure` — so process-state problems (draft PR, missing verdict,
-missing evidence) are indistinguishable from "your code is wrong", and the worker's only
-available response is another commit, which can never fix any of them.
+**Corrected 2026-07-25 after operator code review — see Amendment history.**
 
-Everything in Phase 1 below is a consequence of that one design gap.
+`Switchboard / merge authorization` is a required status context, so any process-state
+problem turns it red; `_required_ci_decision` is consulted *before* the review, findings
+and draft branches, misattributes that red context as `product` CI failure, and returns —
+making the already-correct typed routing downstream structurally unreachable.
+
+The defect is **ordering**, not missing types. Everything in Phase 1 follows from it.
+
+### The chain, verified in code
+
+| Step | Location | What happens |
+|---|---|---|
+| 1 | `state_machine.py:578` | `_required_ci_decision(snap)` runs first and returns early |
+| 2 | `normalize.py:76-85` | red merge-auth context has no authority/infrastructure prose → else-branch stamps `failure_attribution = "product"` |
+| 3 | `state_machine.py:404-408` | `product` → `_decision("blocked","remediation","required_exact_head_ci_failed")` |
+| 4 | `state_machine.py:583/596/619` | review check, `_finding_decision`, and the draft branch are never reached |
+
+### What already exists and is already correct
+
+- `hydrate_completion_snapshot` (`completion_driver.py:47`) already calls `merge_gate`
+  (`:77`), so **coded findings are already on the snapshot**.
+- `_finding_decision` (`state_machine.py:329`) — *"Map merge_gate codes; never infer a
+  route from aggregate PR findings"* — already routes review findings to `review_merge`
+  and coord findings to `coordination_retry`, and deliberately **skips**
+  `draft_pr`/`pr_not_mergeable` at `:340` so the draft branch owns them.
+- The draft branch (`:619`) returns `draft_ready_to_mark_ready` / effect
+  `mark_ready_then_reread`, and `completion_driver.mark_ready` (`:158`) already shells
+  `gh pr ready`.
+
+Nothing needs inventing. The typed machinery is complete; it is simply unreachable.
 
 ---
 
@@ -73,9 +98,32 @@ of the push cycle rather than a one-shot. The gate should also distinguish
 implementation path already does correctly — BUG-178's `completion_handoff` is the
 reference implementation.
 
-**1.4 The unifying change: typed reason → typed action.** Publish the gate's reason codes
-to the worker with a required next action per code. Without this, 1.1–1.3 are three
-patches to the same hole and the next process-state code will stall the fleet again.
+**1.4 The unifying change (CORRECTED): stop routing on the merge-authorization context.**
+When that specific required context is red, **defer to the already-typed findings and the
+draft branch** rather than classifying it.
+
+*Justification:* merge authorization is not an independent CI signal — it is a
+**projection of merge_gate findings already present on the snapshot**. Routing off it
+double-counts the same evidence and destroys its type in transit through GitHub. It should
+never have been a routing input, for any reason code. This single change unblocks the whole
+Class A family, which is why 1.1–1.3 become optional hardening rather than the fix.
+
+*Must fail closed:* if hydrate fails or findings come back empty, deferring would drop the
+signal entirely and let a genuinely blocked PR look clean. Defer **only when findings are
+present**; otherwise retain today's behaviour. Test this explicitly — a red merge-auth
+context with zero findings must not become `ready_to_queue`.
+
+### Rejected alternatives (verified in code — do not retry)
+
+| Idea | Why it fails |
+|---|---|
+| Publish `failure_attribution` on the commit status | `post_status` (`switchboard_pr_gate.py:94`) carries only state/context/description/target_url. The GitHub commit-status API cannot hold structured attribution. |
+| Add an `attribution="process"` value | `_required_ci_decision` understands only `product` \| `authority`/`policy` \| `infrastructure`. Anything else hits the else-branch → `required_ci_failure_unknown`, `route=human`. Stops the remediation burn, replaces it with a human page, never reaches `mark_ready`. |
+| Another prose heuristic in `normalize.py` | The typed original is already in hand. Inferring from prose is what lost the type in the first place. |
+
+*Worth keeping as diagnostics, not routing:* `switchboard_pr_gate.py:292` computes
+`reason = blocked[0]["code"]` and discards it from the published status. Persist that code
+in Switchboard's own ledger for operator visibility — never as the routing transport.
 
 *Exit criterion: re-run DOGFOOD-19 and get at least one task to Done with no operator
 interaction.*
@@ -122,6 +170,22 @@ fleet-detection signal (B4).
 
 ## Recommended first move
 
-**Phase 1.1 + 2.1 together.** Between them they are a few hours of work, they unblock three
-of five PRs immediately, and they stop the most expensive form of waste observed. Then
-re-run DOGFOOD-19 as the acceptance test for Phase 1.
+**Phase 1.4 + 2.1 together** (revised — 1.4 is now the root fix, not the capstone):
+
+1. **Merge-auth red → defer to findings/draft** (classifier ordering). Unblocks Class A as
+   a family, including the review-verdict and evidence cases that a draft-only fix misses.
+2. **B3 dependency gate on `start_task`** (CO-25).
+3. **`gh pr ready` in the worker completion contract** (ADAPTER-30) as belt-and-suspenders.
+4. **Re-run DOGFOOD-19** as the Phase 1 acceptance test.
+
+## Amendment history
+
+**2026-07-25 — root cause corrected after operator code review.** The original framing was
+*"the worker receives an undifferentiated failure and can only answer with a commit."* That
+described the symptom the worker sees, not the mechanism, and led to two proposals that were
+disproved in code (publishing attribution on the GitHub status; adding an `attribution=process`
+value). The verified mechanism is classifier **ordering**: a red merge-authorization context
+short-circuits `_required_ci_decision` before the typed review/findings/draft branches can run.
+The observation that the publisher computes `blocked[0]["code"]` and discards it remains valid
+as evidence, and is retained as an operator-diagnostics item rather than a routing fix.
+Board task COORD-49 was retitled and rewritten to match.
