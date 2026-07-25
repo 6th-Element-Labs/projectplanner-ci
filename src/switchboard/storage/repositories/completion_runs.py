@@ -17,8 +17,15 @@ from switchboard.storage.repositories import task_completion
 
 
 SCHEMA = "switchboard.completion_run.v1"
+# The classifier is the decision authority; this store records what it decided.
+# So this set must contain every state ``classify_completion`` can emit, and
+# tests/test_bug184_completion_state_vocabulary.py fails if the two ever drift.
+# ``assessing`` (BUG-184) is the review branch — review_required,
+# review_verdict_stale, and the review findings route. It was emitted from
+# SIMPLIFY-23 onward and never accepted here, so every review tick raised
+# CompletionRunError before it could plan an effect.
 STATES = frozenset({
-    "implementing", "waiting", "blocked", "ready_to_queue",
+    "implementing", "assessing", "waiting", "blocked", "ready_to_queue",
     "waiting_merge_queue", "reconciling", "done", "failed",
 })
 ROUTES = frozenset({
