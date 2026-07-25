@@ -3292,6 +3292,7 @@ def _host_row(row: sqlite3.Row, now: Optional[float] = None) -> Dict[str, Any]:
     runtimes = _json_obj(d.pop("runtimes_json", "[]"), [])
     limits = _json_obj(d.pop("limits_json", "{}"), {})
     capacity = _json_obj(d.pop("capacity_json", "{}"), {})
+    relay_auth = _json_obj(d.pop("relay_auth_json", "{}"), {})
     ttl_s = int(d.get("heartbeat_ttl_s") or 60)
     expires_at = float(d.get("heartbeat_at") or 0) + ttl_s
     active = int(capacity.get("active_sessions") or 0)
@@ -3314,6 +3315,13 @@ def _host_row(row: sqlite3.Row, now: Optional[float] = None) -> Dict[str, Any]:
             dict(capacity.get("runtime_profile") or {})
             if isinstance(capacity.get("runtime_profile"), dict) else None
         ),
+        # HARDEN-79: the relay-auth streak, plus the single typed fault it
+        # escalated to. ``fault`` is promoted to the top level because an
+        # operator reading host_status should not have to know the streak
+        # bookkeeping exists to see that this host is locked out.
+        "relay_auth": relay_auth,
+        "fault": (dict(relay_auth.get("fault"))
+                  if isinstance(relay_auth.get("fault"), dict) else None),
     })
     return d
 
@@ -3512,6 +3520,7 @@ def heartbeat_host(host_id: str, active_sessions: Optional[int] = None,
                    capacity: Optional[Dict[str, Any]] = None,
                    status: str = "online", last_error: str = "",
                    principal_id: str = "",
+                   relay_auth_fault: Optional[Dict[str, Any]] = None,
                    actor: str = "system",
                    project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     started_at = time.time()
@@ -3558,6 +3567,29 @@ def heartbeat_host(host_id: str, active_sessions: Optional[int] = None,
                 (now, json.dumps(current, sort_keys=True), status or "online",
                  last_error or None, reported_host_version, reported_host_version, host_id),
             )
+            if isinstance(relay_auth_fault, dict) and relay_auth_fault:
+                # HARDEN-79: the host's own account of the lockout. It reaches
+                # us only when the bearer recovered enough to heartbeat, so it
+                # supplements the server-observed streak rather than replacing
+                # it — and it carries the part only the host knows: which
+                # credential source it read, and whether a restart is required.
+                relay_state = _json_obj(row["relay_auth_json"], {}) or {}
+                relay_state["schema"] = HOST_RELAY_AUTH_SCHEMA
+                relay_state["host_reported"] = dict(relay_auth_fault)
+                relay_state["host_reported_at"] = now
+                if not isinstance(relay_state.get("fault"), dict):
+                    relay_state["fault"] = dict(relay_auth_fault)
+                    relay_state["faulted"] = True
+                c.execute(
+                    "UPDATE agent_hosts SET relay_auth_json=? WHERE host_id=?",
+                    (json.dumps(relay_state, sort_keys=True), host_id))
+                c.execute(
+                    "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                    "VALUES (?,?,?,?,?)",
+                    (None, actor, "agent_host.relay_auth_failed",
+                     json.dumps({"host_id": host_id, "origin": "host_reported",
+                                 "relay_auth_fault": dict(relay_auth_fault)},
+                                sort_keys=True), now))
             from .runner import terminal_task_cleanup_for_host_in
             terminal_cleanup = terminal_task_cleanup_for_host_in(
                 c, host_id, actor, now)
@@ -3591,6 +3623,117 @@ def heartbeat_host(host_id: str, active_sessions: Optional[int] = None,
         result["authoritative_execution_policy"] = dict(
             identity.get("execution_policy") or {})
     return result
+
+
+# HARDEN-79 — a host whose bearer predates a rotation cannot report anything:
+# its heartbeat 401s too. The relay handshake is the one place the server still
+# hears from it, because /pty/host carries host_id in the query string and is
+# read before the ticket is verified. Counting rejections there is what makes a
+# locked-out host visible off-box at all.
+HOST_RELAY_AUTH_FAULT_THRESHOLD = 5
+HOST_RELAY_AUTH_FAULT_REASON = "relay_auth_failed"
+HOST_RELAY_AUTH_SCHEMA = "switchboard.host_relay_auth.v1"
+
+
+def _host_relay_auth_fault(state: Dict[str, Any], host_id: str,
+                           now: float) -> Dict[str, Any]:
+    return {
+        "schema": "switchboard.host_relay_auth_fault.v1",
+        "reason": HOST_RELAY_AUTH_FAULT_REASON,
+        "host_id": host_id,
+        "origin": "relay_endpoint",
+        "attempt_count": int(state.get("consecutive_failures") or 0),
+        "first_failure_at": float(state.get("first_failure_at") or now),
+        "faulted_at": now,
+        "detail": str(state.get("last_reason") or ""),
+        "runner_session_id": str(state.get("last_runner_session_id") or ""),
+        "remediation": (
+            "the host tunnel is being refused: re-key or restart this Agent "
+            "Host (its bearer may predate the last credential rotation)"),
+    }
+
+
+def record_host_relay_auth_event(
+        host_id: str, *, outcome: str, reason: str = "",
+        runner_session_id: str = "", actor: str = "system",
+        threshold: int = HOST_RELAY_AUTH_FAULT_THRESHOLD,
+        now: Optional[float] = None,
+        project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Record one host-tunnel handshake outcome and escalate a persistent streak.
+
+    ``outcome`` is ``"accepted"`` or ``"rejected"``. The Nth consecutive
+    rejection writes one typed fault and one activity row; rejections N+1.. add
+    to the count without re-announcing it, and a single acceptance clears the
+    episode. Unknown hosts are ignored — a bad host_id must not create rows.
+    """
+    host_id = str(host_id or "").strip()
+    if not host_id:
+        return {"recorded": False, "reason": "host_id required"}
+    now = time.time() if now is None else float(now)
+    threshold = max(1, int(threshold))
+    started_at = time.time()
+    try:
+        with _control_plane_conn(project) as c:
+            row = c.execute(
+                "SELECT relay_auth_json FROM agent_hosts WHERE host_id=?",
+                (host_id,)).fetchone()
+            if not row:
+                return {"recorded": False, "reason": "host not registered",
+                        "host_id": host_id}
+            state = _json_obj(row["relay_auth_json"], {}) or {}
+            was_faulted = bool(state.get("faulted"))
+            if outcome == "accepted":
+                if not state.get("consecutive_failures") and not was_faulted:
+                    return {"recorded": False, "host_id": host_id,
+                            "relay_auth": state, "cleared": False}
+                state = {"schema": HOST_RELAY_AUTH_SCHEMA,
+                         "consecutive_failures": 0, "faulted": False,
+                         "fault": None, "last_accepted_at": now,
+                         "recovered_at": now if was_faulted else None}
+                escalated = False
+            else:
+                count = int(state.get("consecutive_failures") or 0) + 1
+                state = {
+                    "schema": HOST_RELAY_AUTH_SCHEMA,
+                    "consecutive_failures": count,
+                    "first_failure_at": float(
+                        state.get("first_failure_at") or now),
+                    "last_failure_at": now,
+                    "last_reason": str(reason or ""),
+                    "last_runner_session_id": str(runner_session_id or ""),
+                    "last_accepted_at": state.get("last_accepted_at"),
+                    "faulted": was_faulted,
+                    "fault": state.get("fault"),
+                    "threshold": threshold,
+                }
+                escalated = not was_faulted and count >= threshold
+                if escalated:
+                    state["faulted"] = True
+                    state["fault"] = _host_relay_auth_fault(state, host_id, now)
+                elif was_faulted and isinstance(state.get("fault"), dict):
+                    # Keep the original fault's identity; only the count moves.
+                    state["fault"] = {**state["fault"], "attempt_count": count}
+            c.execute("UPDATE agent_hosts SET relay_auth_json=? WHERE host_id=?",
+                      (json.dumps(state, sort_keys=True), host_id))
+            if escalated or (outcome == "accepted" and was_faulted):
+                # Exactly one row per transition — the failure mode this fixes
+                # was 46 identical retries that said nothing an operator saw.
+                c.execute(
+                    "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                    "VALUES (?,?,?,?,?)",
+                    (None, actor,
+                     "agent_host.relay_auth_failed" if escalated
+                     else "agent_host.relay_auth_recovered",
+                     json.dumps({"host_id": host_id,
+                                 "relay_auth": state}, sort_keys=True), now))
+    except sqlite3.OperationalError as exc:
+        if _store_facade()._sqlite_busy(exc):
+            return _control_plane_unavailable(
+                "record_host_relay_auth_event", project, started_at, exc)
+        raise
+    return {"recorded": True, "host_id": host_id, "relay_auth": state,
+            "escalated": escalated,
+            "cleared": outcome == "accepted" and was_faulted}
 
 
 def list_agent_hosts(runtime: str = "", lane: str = "", capability: str = "",
@@ -3735,6 +3878,9 @@ __all__ = [
     "_active_agent_ids_for_task",
     "list_active_agents",
     "_host_row",
+    "HOST_RELAY_AUTH_FAULT_THRESHOLD",
+    "HOST_RELAY_AUTH_FAULT_REASON",
+    "record_host_relay_auth_event",
     "_selector_runtime_for_agent",
     "_runtime_matches_selector",
     "_host_can_handle",

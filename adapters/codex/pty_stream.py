@@ -37,6 +37,15 @@ except ModuleNotFoundError:  # adapters/ on sys.path without src/
     from switchboard.api.routers.auth.jwt_util import decode as jwt_decode
     from switchboard.api.routers.auth.jwt_util import encode as jwt_encode
 
+try:
+    from adapters import relay_auth
+except ModuleNotFoundError:
+    try:
+        import relay_auth
+    except ModuleNotFoundError:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        import relay_auth
+
 # ``session_chat`` is the browser/control-plane name for ordinary text entered in
 # the Watch composer.  Keep it distinct in the audit response while formatting it
 # exactly like ``freeform`` for the PTY.  The two sides previously disagreed here,
@@ -681,6 +690,7 @@ def _start_host_ws_executor(
     target_label: str = "",
     refresh_url: Any = None,
     reconnect_log: Any = None,
+    auth_policy: Any = None,
 ) -> Any:
     """Dial Switchboard and pump master_fd (file logging stays in the executor)."""
     try:
@@ -697,6 +707,7 @@ def _start_host_ws_executor(
         dial=True,
         refresh_url=refresh_url,
         reconnect_log=reconnect_log,
+        auth_policy=auth_policy,
     )
     if initial_snapshot:
         from switchboard.domain import runner_pty as pty_domain
@@ -940,6 +951,25 @@ def serve(
             f"host_ws_reconnect attempt={attempt} outcome={outcome}{suffix}\n")
         sys.stderr.flush()
 
+    def _publish_relay_auth_fault(fault: dict) -> None:
+        # HARDEN-79: the companion holds no coordination bearer, so the fault
+        # travels the same session-directory hop the ticket refresh uses. The
+        # Agent Host picks it up and puts it on the host row.
+        published = relay_auth.publish_fault(url_path.parent, fault)
+        sys.stderr.write(
+            "host_ws_relay_auth_fault "
+            f"reason={fault.get('reason')} "
+            f"attempts={fault.get('attempt_count')} "
+            f"first_failure_at={fault.get('first_failure_at')} "
+            f"credential_source={fault.get('credential_source')} "
+            f"restart_required={fault.get('restart_required')} "
+            f"published={published}\n")
+        sys.stderr.flush()
+
+    auth_policy = relay_auth.RelayAuthFaultTracker(
+        label=str(runner_session_id or ""),
+        on_fault=_publish_relay_auth_fault)
+
     def _maybe_attach_host_ws() -> None:
         nonlocal relay_url
         published_url = ""
@@ -968,6 +998,7 @@ def serve(
                 target_label=target_label,
                 refresh_url=_refresh_relay_url,
                 reconnect_log=_log_reconnect,
+                auth_policy=auth_policy,
             )
         except Exception as exc:  # noqa: BLE001
             sys.stderr.write(f"host_ws_attach_failed:{type(exc).__name__}:{exc}\n")

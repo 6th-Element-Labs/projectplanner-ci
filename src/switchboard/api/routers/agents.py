@@ -129,6 +129,10 @@ def create_router(*, resolve_project: ProjectResolver,
             capacity=body.get("capacity") or {},
             status=body.get("status") or "online",
             last_error=body.get("last_error") or "",
+            # HARDEN-79: a typed relay-auth fault the host raised locally.
+            relay_auth_fault=(body.get("relay_auth_fault")
+                              if isinstance(body.get("relay_auth_fault"), dict)
+                              else None),
             principal_id=principal["id"], actor=auth.actor(principal), project=project))
 
     @router.post("/ixp/v1/direct_assignments/mcp_token")

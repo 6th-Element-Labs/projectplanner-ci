@@ -205,6 +205,12 @@ ADDITIVE_COLUMN_MIGRATIONS: List[Tuple[str, str, str, str]] = [
     # pass applies this after that create.
     ("0120_decision_records_execution_id", "decision_records", "execution_id",
      "ALTER TABLE decision_records ADD COLUMN execution_id TEXT NOT NULL DEFAULT ''"),
+    # HARDEN-79 — server-observed relay-auth state for one host. Deliberately not
+    # inside capacity_json: capacity is what the host advertises about itself, and
+    # the whole point here is a signal that survives a host whose bearer can no
+    # longer authenticate anything, including its own heartbeat.
+    ("0121_agent_hosts_relay_auth_json", "agent_hosts", "relay_auth_json",
+     "ALTER TABLE agent_hosts ADD COLUMN relay_auth_json TEXT NOT NULL DEFAULT '{}'"),
 ]
 
 # Idempotent DDL migrations (``CREATE ... IF NOT EXISTS``) applied after the column set,

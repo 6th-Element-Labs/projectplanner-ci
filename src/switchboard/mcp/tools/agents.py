@@ -107,17 +107,29 @@ def list_active_agents(project: str = "maxwell", lane: str = "") -> str:
 
 def heartbeat_host(host_id: str, ctx: Context, active_sessions: int = -1,
                    capacity_json: str = "{}", status: str = "online",
-                   last_error: str = "", project: str = "maxwell") -> str:
-    """Renew liveness/capacity for an Agent Host."""
+                   last_error: str = "", relay_auth_fault_json: str = "",
+                   project: str = "maxwell") -> str:
+    """Renew liveness/capacity for an Agent Host.
+
+    ``relay_auth_fault_json`` (HARDEN-79) carries a typed relay-auth fault the
+    host raised locally, e.g. after repeated 401s on its host tunnel.
+    """
     services = _services()
     principal = services.require_write(ctx, project, ("write:ixp",))
     try:
         capacity = json.loads(capacity_json or "{}")
     except Exception:
         return services.dumps({"error": "capacity_json must be a JSON object string"})
+    try:
+        relay_auth_fault = json.loads(relay_auth_fault_json or "null")
+    except Exception:
+        return services.dumps(
+            {"error": "relay_auth_fault_json must be a JSON object string"})
     return services.dumps(store.heartbeat_host(
         host_id, active_sessions=(None if active_sessions < 0 else active_sessions),
         capacity=capacity, status=status, last_error=last_error,
+        relay_auth_fault=(relay_auth_fault
+                          if isinstance(relay_auth_fault, dict) else None),
         principal_id=principal["id"], actor=auth.actor(principal), project=project))
 
 

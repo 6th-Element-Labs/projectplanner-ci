@@ -411,6 +411,60 @@ Agents see that boundary in `list_projects`, `get_working_agreement`, `get_proje
 `prepare_agent_session`. Cross-project cleanup uses `move_task` or `archive_task`; both are audited
 and refuse unknown projects or active claims/leases instead of silently editing shared state.
 
+## 3.1 Rotating a coordination bearer — reach every live Agent Host (HARDEN-79)
+
+Rotating `PM_MCP_TOKEN` / `SWITCHBOARD_TOKEN` in `.env` and your shell is **not** the whole
+rotation. An Agent Host is an always-on process that read its bearer once, at start, and keeps it
+in process memory for as long as it runs. A host started before the rotation therefore keeps
+presenting the old value — its mints 401, its host tunnel is refused, and (before HARDEN-79) it
+retried that refusal silently and indefinitely. Breakdown 21 caught one at 46 consecutive cycles.
+
+**Where a host's bearer comes from.** Enrolled hosts run
+`agent_host_enrollment.py service-run --identity <identity.json> --config <config.json>`, which
+reads `identity["host_token"]`, exports it as `PM_MCP_TOKEN`, and `execve`s `adapters/agent_host.py`.
+So there are three stores and they do not update together:
+
+| Store | Holds | Refreshed by |
+| --- | --- | --- |
+| `<config_root>/identity.json` (`host_token`, mode 0600) | the durable per-host bearer | `agent_host_enrollment.py rotate` |
+| the daemon's process env (`PM_MCP_TOKEN`) | the bearer actually in use | a **restart** — or HARDEN-79's reload-on-auth-failure |
+| an operator shell (`~/.zshenv`, launchd/systemd `EnvironmentVariables`) | bearers for hand-run adapters | editing that file, then restarting what read it |
+
+**Do this after rotating a bearer:**
+
+1. Rotate enrolled hosts through their own lifecycle, which already stops the daemon before it
+   invalidates the old bearer and restarts it after:
+   `python3 adapters/agent_host_enrollment.py rotate --identity <identity.json> --config <config.json> --project switchboard`
+2. For any host **not** started by `service-run` (a shell-launched daemon, a tmux session, a
+   launchd job with an inline `PM_MCP_TOKEN`), restart it. There is no other way to replace a
+   spawn-time env value.
+3. Verify no process is left on the old value. Compare fingerprints rather than secrets — the
+   Agent Host logs the same 8-hex `sha256(token)[:8]` that this runbook and the fault use:
+   ```bash
+   python3 -c 'import hashlib,os,sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:8])' "$PM_MCP_TOKEN"
+   ```
+   Then confirm each host is transacting: `host_status(host_id)` must show a recent `heartbeat_at`
+   and `fault: null`.
+
+**What HARDEN-79 changed, so a missed step is loud instead of silent:**
+
+- After 5 consecutive **auth** rejections (401/403, or a `4401`/`4403` relay close), the host
+  stops tight-looping, widens its reconnect backoff, and raises exactly one typed
+  `relay_auth_failed` fault carrying the attempt count and first-failure time.
+- Before faulting it re-reads `identity.json`. If a rotation already landed there, it adopts the
+  new bearer and continues with **no restart**. If the on-disk copy is the same stale value — or
+  there is no on-disk source at all, i.e. a spawn-env-only host — the fault says
+  `restart_required: true` rather than implying it can heal itself.
+- The relay endpoint counts the same rejections server-side and stamps the host row. That path is
+  the one that matters most here: a bearer stale enough to fault is stale enough to reject the
+  host's own heartbeat, so the host cannot be relied on to report its own lockout. Read it with
+  `host_status(host_id)` → `fault` / `relay_auth`, or in activity as `agent_host.relay_auth_failed`
+  (emitted once per episode, cleared by `agent_host.relay_auth_recovered`).
+
+Note that revoking a GitHub OAuth (`gho_`) token is a separate problem: re-authorizing the gh CLI
+mints a new token without invalidating the old one. See the HARDEN-46 notes before assuming an
+exposed `SWITCHBOARD_CI_GITHUB_TOKEN` is dead.
+
 ## 4. Run an autonomous agent (agent host)
 ```bash
 export PM_BASE=https://plan.taikunai.com PM_PROJECT=switchboard PM_MCP_TOKEN=…  PM_AGENT_ID=claude/work-1

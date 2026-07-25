@@ -34,6 +34,17 @@ except ModuleNotFoundError:
     sys.path.insert(0, str(_ROOT / "src"))
     from switchboard.domain import runner_pty as domain
 
+try:
+    from adapters import relay_auth
+except ModuleNotFoundError:
+    try:
+        import relay_auth
+    except ModuleNotFoundError:
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        import relay_auth
+
 
 OnCloseFn = Callable[[str], None]
 OnFrameFn = Callable[[bytes], None]
@@ -53,6 +64,7 @@ class HostTunnelConnection:
         require_initial: bool = True,
         refresh_url: Optional[RefreshUrlFn] = None,
         reconnect_log: Optional[ReconnectLogFn] = None,
+        auth_policy: Optional["relay_auth.RelayAuthFaultTracker"] = None,
     ):
         self.url = str(url or "")
         self.on_frame = on_frame
@@ -61,6 +73,9 @@ class HostTunnelConnection:
         self.require_initial = bool(require_initial)
         self.refresh_url = refresh_url
         self.reconnect_log = reconnect_log
+        # HARDEN-79: without a policy the ladder is the historic one (retry to
+        # an 8s ceiling, forever). With one, repeated auth rejections escalate.
+        self.auth_policy = auth_policy
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._ws = None
         self._thread: Optional[threading.Thread] = None
@@ -128,6 +143,8 @@ class HostTunnelConnection:
                     self._connect_error = None
                     self._ready.set()
                     backoff = 0.5
+                    if self.auth_policy is not None:
+                        self.auth_policy.record_success()
                     if reconnect_attempt and self.reconnect_log is not None:
                         self.reconnect_log(reconnect_attempt, "connected", "")
                     if self.on_connect is not None:
@@ -156,9 +173,27 @@ class HostTunnelConnection:
                 if reconnect_attempt and self.reconnect_log is not None:
                     self.reconnect_log(
                         reconnect_attempt, "connect_failed", type(exc).__name__)
+                ceiling = relay_auth.DEFAULT_BACKOFF_CEILING_S
+                if self.auth_policy is not None:
+                    decision = self.auth_policy.record_failure(
+                        relay_auth.classify_relay_failure(exc),
+                        f"{type(exc).__name__}: {exc}")
+                    ceiling = float(
+                        decision.get("backoff_ceiling_s") or ceiling)
+                    if decision.get("escalated") and self.reconnect_log is not None:
+                        # One line, once — the whole point is that attempt 46
+                        # said nothing attempt 5 had not already said.
+                        self.reconnect_log(
+                            reconnect_attempt, "auth_fault",
+                            str((decision.get("fault") or {}).get(
+                                "remediation") or relay_auth.FAULT_REASON))
+                    if decision.get("escalated"):
+                        # Widen immediately; doubling from 0.5s would keep the
+                        # tight loop alive for several more minutes.
+                        backoff = ceiling
                 reconnect_reason = type(exc).__name__
                 await asyncio.sleep(backoff * random.uniform(0.8, 1.2))
-                backoff = min(backoff * 2, 8.0)
+                backoff = min(backoff * 2, ceiling)
             finally:
                 self._ws = None
                 self._connected.clear()
@@ -472,6 +507,7 @@ def open_host_bridge(
     target_label: str = "",
     refresh_url: Optional[RefreshUrlFn] = None,
     reconnect_log: Optional[ReconnectLogFn] = None,
+    auth_policy: Optional["relay_auth.RelayAuthFaultTracker"] = None,
 ) -> HostBridgeSession:
     """Open the host side of the session transport.
 
@@ -495,6 +531,7 @@ def open_host_bridge(
         require_initial=False,
         refresh_url=refresh_url,
         reconnect_log=reconnect_log,
+        auth_policy=auth_policy,
     )
     conn.start()
     executor = None

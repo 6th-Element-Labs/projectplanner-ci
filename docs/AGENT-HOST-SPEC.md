@@ -449,6 +449,30 @@ interrupt-tier rules.
 - Every launch, claim, failure, kill, and session exit writes activity/audit.
 - Host-side secrets must never be copied into Switchboard activity payloads.
 
+### Credential rotation must reach the running process (HARDEN-79)
+
+A long-running host is a stale-secret surface: it read `PM_MCP_TOKEN` once, at start, so a
+rotation that lands in `identity.json`, `.env`, or an operator shell does not reach it. Rotation
+therefore has an explicit host step — see "Rotating a coordination bearer" in
+`docs/SWITCHBOARD-RUNBOOK.md` §3.1.
+
+A host that can no longer authenticate must say so once, loudly, instead of retrying forever:
+
+- Five consecutive **auth** rejections (HTTP 401/403, or a `4401`/`4403` relay close) on the host
+  tunnel or the `mint_host_tunnel_url` call end the tight loop. The reconnect ladder widens to a
+  60s ceiling and exactly one typed `relay_auth_failed` fault is raised per episode, carrying
+  `attempt_count` and `first_failure_at`. A successful connect is the only thing that clears it.
+- Before faulting, the host re-reads its credential source. `service-run` exports
+  `PM_AGENT_HOST_IDENTITY_PATH`, so an already-landed rotation is adopted and the host heals with
+  no restart. When the on-disk copy is equally stale, or the process only ever had a spawn-time
+  env value, the fault reports `restart_required: true` rather than implying self-healing.
+- The relay endpoint records the same rejections against `agent_hosts.relay_auth_json`. This is
+  the authoritative off-box signal, because a bearer stale enough to fault also rejects the host's
+  own heartbeat — the host cannot be trusted to report its own lockout. Surfaces:
+  `host_status(host_id)` → `fault` / `relay_auth`, and the `agent_host.relay_auth_failed` /
+  `agent_host.relay_auth_recovered` activity kinds. Covered by
+  `tests/test_harden79_relay_auth_fault.py`.
+
 ### Runner-row ownership and safe reaping
 
 Runner-session ownership follows the identity-proven `host_id` binding, not the principal that
@@ -471,6 +495,8 @@ Minimum activity kinds:
 |---|---|
 | `agent_host.registered` | host inventory refreshed |
 | `agent_host.heartbeat` | host liveness/capacity renewed |
+| `agent_host.relay_auth_failed` | host tunnel refused N consecutive times — credential likely stale (once per episode) |
+| `agent_host.relay_auth_recovered` | a refused host tunnel attached again |
 | `wake.requested` | durable wake created |
 | `wake.claimed` | host accepted responsibility |
 | `wake.completed` | runtime registered or wake otherwise succeeded |

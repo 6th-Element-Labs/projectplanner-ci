@@ -890,7 +890,11 @@ def apply_schema(c):
             heartbeat_at       REAL NOT NULL,
             heartbeat_ttl_s    INTEGER NOT NULL DEFAULT 60,
             status             TEXT NOT NULL DEFAULT 'online',
-            last_error         TEXT
+            last_error         TEXT,
+            -- HARDEN-79: server-observed relay auth state (rejection streak +
+            -- typed fault). Server-owned, so it still surfaces a host whose
+            -- bearer is too stale to file a heartbeat of its own.
+            relay_auth_json    TEXT NOT NULL DEFAULT '{}'
         );
         CREATE INDEX IF NOT EXISTS ix_agent_hosts_heartbeat
             ON agent_hosts(status, heartbeat_at);

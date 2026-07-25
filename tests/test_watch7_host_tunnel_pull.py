@@ -19,8 +19,13 @@ def ok(condition, message):
 
 calls = []
 saved_try = agent_host._try
+# HARDEN-79 moved the mint off the fail-open ``_try`` helper: it now calls
+# ``sb._http`` directly so a 401 can be classified as an auth failure instead of
+# being discarded into a log line. Stub that seam; the contract asserted below
+# (exact project/host/runner binding) is unchanged.
+saved_http = agent_host.sb._http
 try:
-    agent_host._try = lambda method, path, body=None: (
+    agent_host.sb._http = lambda method, path, body=None, **_kwargs: (
         calls.append((method, path, body)) or {
             "server_relay": {
                 "host_url": "wss://plan.example/ixp/v1/runner_sessions/run-watch7/pty/host?ticket=fresh",
@@ -29,7 +34,7 @@ try:
         })
     relay = agent_host._fresh_server_relay({}, "run-watch7", "host/watch7")
 finally:
-    agent_host._try = saved_try
+    agent_host.sb._http = saved_http
 
 ok(relay.get("host_url", "").endswith("ticket=fresh"),
    "a missing bridge capability is replaced by a freshly pulled URL")
@@ -42,10 +47,12 @@ ok(calls == [("POST", agent_host.P_MINT_HOST_TUNNEL_URL, {
 calls.clear()
 existing = {"host_url": "wss://plan.example/existing"}
 agent_host._try = lambda *args, **kwargs: calls.append((args, kwargs))
+agent_host.sb._http = lambda *args, **kwargs: calls.append((args, kwargs))
 try:
     reused = agent_host._fresh_server_relay(existing, "run-watch7", "host/watch7")
 finally:
     agent_host._try = saved_try
+    agent_host.sb._http = saved_http
 ok(reused == existing and not calls,
    "a still-present host URL is reused without an unnecessary mint request")
 

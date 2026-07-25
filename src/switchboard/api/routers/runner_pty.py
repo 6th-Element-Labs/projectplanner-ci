@@ -253,7 +253,27 @@ def create_router(
         if not host_bind:
             await websocket.close(code=4403, reason="host_id_required")
             return
+        relay_project = str(websocket.query_params.get("project") or "").strip()
+
+        def _record_relay_auth(outcome: str, reason: str = "") -> None:
+            """HARDEN-79: count this handshake against the host's auth streak.
+
+            This is the only channel that still reaches Switchboard when a host's
+            bearer has gone stale — everything else it can say is a 401 — so a
+            failure to record here must never also take down the tunnel.
+            """
+            try:
+                from switchboard.storage.repositories import (
+                    coordination as coordination_repo)
+                coordination_repo.record_host_relay_auth_event(
+                    host_bind, outcome=outcome, reason=reason,
+                    runner_session_id=runner_session_id,
+                    **({"project": relay_project} if relay_project else {}))
+            except Exception:  # noqa: BLE001 — observability, never a gate
+                pass
+
         if not ticket:
+            _record_relay_auth("rejected", "missing_ticket")
             await websocket.close(code=4401, reason="unauthorized")
             return
         payload, reason = relay.verify_capability_ticket(
@@ -265,10 +285,12 @@ def create_router(
             },
         )
         if payload is None:
+            _record_relay_auth("rejected", str(reason or "unauthorized"))
             await websocket.close(code=4401, reason=(reason or "unauthorized")[:120])
             return
         allowed, deny_reason = relay.ticket_allows_host_tunnel(payload)
         if not allowed:
+            _record_relay_auth("rejected", str(deny_reason or "forbidden"))
             await websocket.close(code=4403, reason=deny_reason[:120])
             return
         await websocket.accept()
@@ -306,8 +328,11 @@ def create_router(
         attached = _hub().attach_host(
             runner_session_id, send_fn, binding=payload, close_fn=close_fn)
         if not attached.get("ok"):
+            _record_relay_auth("rejected", str(attached.get("error") or "denied"))
             await websocket.close(code=4403, reason=str(attached.get("error") or "denied")[:120])
             return
+        # A tunnel that actually attached is the only thing that clears a streak.
+        _record_relay_auth("accepted")
 
         async def writer() -> None:
             while not closed["flag"]:

@@ -48,6 +48,7 @@ if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 import switchboard_core as sb  # noqa: E402  (reuses _http + agent_id, same contract)
 import co_drain  # noqa: E402
+import relay_auth  # noqa: E402
 from agent_host_enrollment import (  # noqa: E402
     ACCOUNT_AFFINITIES_FILENAME,
     ACCOUNT_AFFINITY_IDS_KEY,
@@ -438,14 +439,72 @@ def _try(method, path, body=None):
         return None
 
 
+# HARDEN-79: the mint is the credential-bearing half of the Watch path. When it
+# 401s the companion's redial loop can never converge, so the failures have to
+# be counted here rather than discarded by _try's fail-open print.
+_RELAY_AUTH_FAULTS = []
+_RELAY_AUTH_FAULTS_LOCK = threading.Lock()
+_MINT_AUTH_POLICY = None
+
+
+def _record_relay_auth_fault(fault):
+    with _RELAY_AUTH_FAULTS_LOCK:
+        _RELAY_AUTH_FAULTS.append(dict(fault))
+    print(
+        f"[agent_host] relay auth fault reason={fault.get('reason')} "
+        f"attempts={fault.get('attempt_count')} "
+        f"first_failure_at={fault.get('first_failure_at')} "
+        f"credential_source={fault.get('credential_source')} "
+        f"restart_required={fault.get('restart_required')}",
+        flush=True,
+    )
+
+
+def drain_relay_auth_faults():
+    """Take the faults raised since the last heartbeat (one per episode)."""
+    with _RELAY_AUTH_FAULTS_LOCK:
+        drained = list(_RELAY_AUTH_FAULTS)
+        _RELAY_AUTH_FAULTS.clear()
+    return drained
+
+
+def _mint_auth_policy():
+    global _MINT_AUTH_POLICY
+    if _MINT_AUTH_POLICY is None:
+        _MINT_AUTH_POLICY = relay_auth.RelayAuthFaultTracker(
+            label="mint_host_tunnel_url", on_fault=_record_relay_auth_fault)
+    return _MINT_AUTH_POLICY
+
+
 def mint_host_tunnel_url(runner_session_id, host_id):
-    """Ask Switchboard for a fresh relay URL without exposing its signing key."""
-    result = _try("POST", P_MINT_HOST_TUNNEL_URL, {
+    """Ask Switchboard for a fresh relay URL without exposing its signing key.
+
+    A rejection here is retried exactly once, and only after re-reading the
+    bearer from its on-disk source: a rotation that already landed then heals
+    without an operator restart. A rejection that survives that reload is a
+    stale-credential fault, not a blip to print and forget.
+    """
+    body = {
         "project": PROJECT,
         "runner_session_id": str(runner_session_id or ""),
         "host_id": str(host_id or ""),
-    }) or {}
-    return dict(result.get("server_relay") or {})
+    }
+    policy = _mint_auth_policy()
+    for attempt in (1, 2):
+        try:
+            result = sb._http("POST", P_MINT_HOST_TUNNEL_URL, body) or {}
+        except Exception as exc:  # noqa: BLE001 — fail-open stays, loud now
+            kind = relay_auth.classify_relay_failure(exc)
+            print(
+                f"[agent_host] POST {P_MINT_HOST_TUNNEL_URL} failed "
+                f"({type(exc).__name__}, {kind}); skipping", flush=True)
+            decision = policy.record_failure(kind, f"{type(exc).__name__}: {exc}")
+            if attempt == 1 and decision.get("healed"):
+                continue  # rotated credential adopted — retry with it once
+            return {}
+        policy.record_success()
+        return dict(result.get("server_relay") or {})
+    return {}
 
 
 def _fresh_server_relay(server_relay, runner_session_id, host_id):
@@ -454,6 +513,22 @@ def _fresh_server_relay(server_relay, runner_session_id, host_id):
     if relay.get("host_url"):
         return relay
     return mint_host_tunnel_url(runner_session_id, host_id) or relay
+
+
+def _collect_companion_relay_auth_fault(runner_session_id):
+    """Pick up a fault the executor companion could not report itself."""
+    try:
+        from codex import supervisor as _sup
+        fault = relay_auth.consume_fault(
+            _sup._session_dir(str(runner_session_id or "")))
+    except Exception:  # noqa: BLE001 — a missing session dir is not a fault
+        return None
+    if not fault:
+        return None
+    fault.setdefault("runner_session_id", str(runner_session_id or ""))
+    fault.setdefault("origin", "executor_companion")
+    _record_relay_auth_fault(fault)
+    return fault
 
 
 def _consume_host_relay_refresh_request(runner_session_id, host_id):
@@ -2625,6 +2700,7 @@ def renew_live_direct_runners(inventory):
         if host_preflight:
             body["metadata"]["host_repo_preflight"] = host_preflight
         result = _try("POST", P_HEARTBEAT_RUNNER, body)
+        _collect_companion_relay_auth_fault(session.get("runner_session_id"))
         requested_relay = _consume_host_relay_refresh_request(
             session.get("runner_session_id"), host_id)
         server_relay = requested_relay or _fresh_server_relay((
@@ -3237,10 +3313,18 @@ def run_once(inventory):
     host_id = inventory["host_id"]
     finalized = _reap_bound_finalizers(host_id)
     capacity = heartbeat_capacity(inventory)
-    heartbeat = _try("POST", P_HEARTBEAT_HOST, {
+    heartbeat_body = {
         "project": PROJECT, "host_id": host_id,
         "active_sessions": capacity["active_sessions"], "capacity": capacity,
-    })
+    }
+    # HARDEN-79: carry any relay-auth fault raised since the last tick. It is
+    # best-effort by nature — a bearer stale enough to fault is stale enough to
+    # reject this heartbeat too, which is why the relay endpoint records the
+    # same rejection server-side and does not depend on the host reporting it.
+    relay_auth_faults = drain_relay_auth_faults()
+    if relay_auth_faults:
+        heartbeat_body["relay_auth_fault"] = relay_auth_faults[-1]
+    heartbeat = _try("POST", P_HEARTBEAT_HOST, heartbeat_body)
     if apply_authoritative_execution_policy(inventory, heartbeat):
         advertised = _try("POST", P_REGISTER_HOST, registration_inventory(inventory))
         apply_authoritative_execution_policy(inventory, advertised)
