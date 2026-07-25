@@ -186,7 +186,11 @@ def _assigned_execution_for_claim_in(
         require_exact_execution_assignment(
             contract,
             build_execution_assignment(
-                task_id=task_id, assignment=assignment, lifecycle=lifecycle),
+                task_id=task_id, assignment=assignment, lifecycle=lifecycle,
+                # COORD-52: echo the dispatch-time memory rather than re-deriving it.
+                # The corpus is append-only and moves between dispatch and claim, so a
+                # fresh derivation here would differ and fail every exact-equality check.
+                prior_attempts=contract.get("prior_attempts")),
         )
     except (ExecutionAssignmentError, TypeError, ValueError):
         return None
