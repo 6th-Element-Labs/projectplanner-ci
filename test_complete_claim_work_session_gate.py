@@ -169,9 +169,18 @@ try:
         actor="test",
         project=P,
     )
-    ok(claimed_tests["completed"] is False and
-       claimed_tests["reason"] == "missing_executed_test_run",
-       "complete_claim rejects claimed test commands without executed run proof")
+    # ADR-0020: shape problems warn instead of denying. Claimed-but-unproven
+    # test commands complete with a named, recorded warning — CI on the exact
+    # SHA is the executor of record; identity/provenance checks still deny.
+    claimed_tests_warnings = {
+        w.get("reason") for w in (
+            (claimed_tests.get("git_state") or {}).get("evidence") or {}
+        ).get("evidence_warnings") or []
+    }
+    ok(claimed_tests["completed"] is True and
+       ("missing_executed_test_run" in claimed_tests_warnings
+        or "invalid_executed_test_run" in claimed_tests_warnings),
+       "claimed test commands complete with a named executed-run warning")
 
     valid_task, valid_claim, valid_payload = claim_strict("valid completion allowed", order=50)
     valid_payload["work_session_id"] = valid_claim["work_session_id"]

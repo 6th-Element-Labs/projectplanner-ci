@@ -758,20 +758,31 @@ def _complete_claim_work_session_gate_in(
         problems.append({"reason": "missing_push_or_review_evidence",
                          "failure_class": "missing_data",
                          "message": "Completion evidence must include PR, pushed branch, or offline evidence."})
+    # Test-run and diff-check *shape* checks warn instead of denying. CI on the
+    # exact SHA is the executor of record for "the tests ran"; a locally
+    # attested hash is bookkeeping, and refusing a completion because that
+    # bookkeeping used the wrong key spelling blocked green work for hours
+    # while proving nothing (ADR-0008). The warnings are named and recorded in
+    # completion evidence — a visible fallback, not a silent one. Identity and
+    # provenance checks (branch, head_sha, push evidence) remain hard denials.
+    evidence_warnings: List[Dict[str, Any]] = []
     executed_test_gate = None
     if rules.get("requires_executed_tests"):
         executed_test_gate = _store_facade()._executed_test_run_gate(evidence_obj, session)
         if not executed_test_gate.get("ok"):
-            problems.append({"reason": executed_test_gate.get("reason") or "missing_executed_test_run",
-                             "failure_class": "missing_data",
-                             "message": executed_test_gate.get("message"),
-                             "executed_test_gate": executed_test_gate})
+            evidence_warnings.append({
+                "reason": executed_test_gate.get("reason") or "missing_executed_test_run",
+                "failure_class": "missing_data",
+                "message": executed_test_gate.get("message"),
+                "executed_test_gate": executed_test_gate})
     elif rules.get("requires_tests") and not _store_facade()._completion_evidence_has_tests(evidence_obj, session):
-        problems.append({"reason": "missing_test_evidence", "failure_class": "missing_data",
-                         "message": "Completion evidence must record relevant tests or verification."})
+        evidence_warnings.append({
+            "reason": "missing_test_evidence", "failure_class": "missing_data",
+            "message": "Completion evidence must record relevant tests or verification."})
     if rules.get("requires_diff_check") and not _store_facade()._completion_evidence_has_diff_check(evidence_obj, session):
-        problems.append({"reason": "missing_diff_check", "failure_class": "missing_data",
-                         "message": "Completion evidence must record git diff --check as clean."})
+        evidence_warnings.append({
+            "reason": "missing_diff_check", "failure_class": "missing_data",
+            "message": "Completion evidence must record git diff --check as clean."})
     hygiene = (session or {}).get("hygiene") or {}
     preflight = hygiene.get("repo_preflight") or {}
     changed_files = (
@@ -805,6 +816,10 @@ def _complete_claim_work_session_gate_in(
             "allow_dirty": allow_dirty}
     if executed_test_gate:
         response["executed_test_gate"] = executed_test_gate
+    if evidence_warnings:
+        # Recorded into completion evidence by the caller so the yellow signal
+        # survives in git_state/activity, per the visible-fallback rule.
+        response["evidence_warnings"] = evidence_warnings
     return response
 
 def _claim_task_impl(task_id: str, agent_id: str,
@@ -1276,6 +1291,8 @@ def _complete_claim_impl(claim_id: str, evidence: str = "", final_status: str = 
                       (row["task_id"], actor, "task.complete_blocked_work_session",
                        json.dumps({"evidence": evidence_obj, **response}, sort_keys=True), now))
             return response
+        if work_session_gate.get("evidence_warnings"):
+            evidence_obj["evidence_warnings"] = work_session_gate["evidence_warnings"]
         semantic_gate = semantic_completion_gate(task_for_gate, evidence_obj)
         if not semantic_gate.get("ok"):
             current_git = _store_facade()._load_git_state(c, row["task_id"])

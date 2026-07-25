@@ -271,6 +271,9 @@ _FINDING_DETAIL: Dict[str, Any] = {
     "pr_not_mergeable": lambda f: (
         f"merge_state {_short(f.get('merge_state'), 24)}" if f.get("merge_state") else ""
     ),
+    "pr_merge_state_decomposed": lambda f: (
+        f"merge_state {_short(f.get('merge_state'), 24)}" if f.get("merge_state") else ""
+    ),
     "unknown_policy_profile": lambda f: (
         f"profile {_short(f.get('policy_profile'), 32)}"
         if f.get("policy_profile") else ""
@@ -596,6 +599,15 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
             "task_not_found", "Merge gate requires a known task_id.", "missing_data",
             details={"task_id": task_id}))
         task = {"task_id": task_id, "agent_state": {}}
+    if not pr_url and not pr_number:
+        # A bare board/MCP call often supplies only task_id while git_state
+        # already records the PR this task is riding. Reporting "PR state
+        # unavailable" when the identity is one lookup away is the
+        # data-present-but-not-consulted pattern; fall back before declaring
+        # anything missing.
+        recorded_git = (task.get("git_state") or {})
+        pr_url = str(recorded_git.get("pr_url") or "").strip()
+        pr_number = _merge_gate_pr_number(pr_url, recorded_git.get("pr_number"))
     role_info = get_project_repo_role(repo, project=project)
     if not role_info.get("canonical"):
         findings.append(_merge_gate_finding(
@@ -649,11 +661,30 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
             or pr.get("merge_state")
             or ""
         ).strip().lower()
-        if mergeable is False or merge_state in {"dirty", "blocked", "behind", "unstable", "unknown"}:
+        # Completion-state-machine rule 7: mergeability is decomposed into its
+        # underlying cause, never consumed as a decision by itself. Only a real
+        # conflict blocks here. "blocked"/"unstable" never reach this point —
+        # _strip_self_referential_mergeability removes them at hydration
+        # (BUG-193): they are aggregates of required status contexts, including
+        # this gate's own posted status, and blocking on them deadlocked the
+        # gate on its own output. "behind" is the stale-branch findings' job;
+        # "unknown" is a transient GitHub computation state, decomposed here to
+        # a named non-blocking finding rather than silence.
+        if mergeable is False or merge_state in {"dirty", "conflicting"}:
+            # Keep the historical code: BUG-182 taught the completion classifier
+            # to decompose findings named pr_not_mergeable into pr_merge_conflict.
             findings.append(_merge_gate_finding(
                 "pr_not_mergeable",
-                "GitHub PR state is not cleanly mergeable.",
+                "PR has merge conflicts against the target branch.",
                 "failed_gate",
+                details={"mergeable": pr.get("mergeable"), "merge_state": merge_state}))
+        elif merge_state in {"blocked", "unstable", "unknown"}:
+            findings.append(_merge_gate_finding(
+                "pr_merge_state_decomposed",
+                "GitHub reports an aggregate merge state; the underlying causes "
+                "(required contexts, draft, conflicts, stale branch) are gated "
+                "individually and this aggregate is never blocking by itself.",
+                "missing_data", severity="info", blocking=False,
                 details={"mergeable": pr.get("mergeable"), "merge_state": merge_state}))
         expected_head = str(
             merged_payload.get("head_sha")
