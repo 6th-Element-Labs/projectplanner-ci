@@ -222,6 +222,12 @@ def dispatch_scratchpad_ref(
         # completion is asynchronous and may exceed GitHub's webhook deadline.
         "poll_after_push": False,
         "cleanup_mirror_branch": True,
+        # BUG-180: this path exists for merge-group heads, whose SHA is minted by GitHub
+        # and can never be changed. If a previous attempt aborted before publishing a
+        # verdict (mirror sync failed, token expiry, GitHub 5xx), re-running THIS SHA is
+        # the only way the queue can ever get its required status — otherwise it waits
+        # forever. A run that already reported success/failure is untouched.
+        "retry_terminal_error": True,
         "request": {
             "label": label,
             "schema": SCHEMA,
@@ -242,6 +248,15 @@ def dispatch_scratchpad_ref(
         result["message"] = (
             f"scratchpad push sent to {cvd.ci_repo()}:{mirror_branch} "
             f"(run_id={mirror.get('run_id')})")
+    # A refused resume (previous_run_failed / retry_reset_failed) must reach the caller.
+    # Losing it is what let handle_merge_group report dispatched=True with a dead run id
+    # and no new Actions run — the fail-quietly half of BUG-180.
+    if mirror.get("skip_reason"):
+        result["skip_reason"] = mirror["skip_reason"]
+    if mirror.get("retryable"):
+        result["retryable"] = True
+    if mirror.get("retried_from_terminal"):
+        result["retried_from_terminal"] = True
     return result
 
 

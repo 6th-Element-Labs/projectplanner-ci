@@ -55,6 +55,14 @@ EXTERNAL_CI_STATUSES = {
     "requested", "mirrored", "triggered", "running", "success", "failure", "cancelled", "error"
 }
 EXTERNAL_CI_TERMINAL_STATUSES = {"success", "failure", "cancelled", "error"}
+# BUG-180: terminal is not one thing. `success`/`failure` mean CI ran and PUBLISHED a
+# verdict, so the commit status exists and re-running would be waste. `error`/`cancelled`
+# mean the run aborted before publishing anything — no status was posted and none ever
+# will be, so that SHA is stuck unless the run can be made runnable again. A PR head can
+# dodge this by pushing a new commit; a merge-group head SHA is minted by GitHub and
+# cannot change, which is how the native merge queue hung indefinitely.
+EXTERNAL_CI_ABORTIVE_STATUSES = {"error", "cancelled"}
+EXTERNAL_CI_VERDICT_STATUSES = {"success", "failure"}
 EXTERNAL_CI_EXECUTION_LEASE_SECONDS = 3600.0
 # A lease is a recovery deadline, not a caller preference. Bounding it at the
 # storage boundary is what makes reclaim guaranteed: an unbounded lease would
@@ -424,6 +432,56 @@ def acquire_external_ci_execution(run_id: str, owner_id: str,
         return fresh
 
 
+def reset_external_ci_run_for_retry(run_id: str, actor: str = "system",
+                                    project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Make an ABORTED run runnable again so its SHA can get a CI status (BUG-180).
+
+    Only `error`/`cancelled` runs qualify — they published no verdict, so nothing is
+    discarded. A `success`/`failure` run is refused: CI genuinely reported and the status
+    already exists on the SHA.
+
+    Clearing the status alone is not enough. An aborted run leaves its execution lease
+    held for the full lease window (an hour by default), and acquire_external_ci_execution
+    refuses any run whose lease is still live. So the lease must be released in the SAME
+    transaction, or the retry cannot acquire the run it just reset.
+    """
+    init_db(project)
+    now = time.time()
+    with _conn(project) as c:
+        c.execute("BEGIN IMMEDIATE")
+        row = c.execute(
+            "SELECT * FROM external_ci_runs WHERE run_id=?", (run_id,)).fetchone()
+        if not row:
+            return {"error": "external_ci_run not found", "run_id": run_id}
+        current = _external_ci_row(row)
+        status = str(current.get("status") or "")
+        if status not in EXTERNAL_CI_ABORTIVE_STATUSES:
+            return {**current, "reset": False,
+                    "reset_refused": "run_is_not_abortive", "status": status}
+        c.execute(
+            """UPDATE external_ci_runs
+               SET status='pending', conclusion=NULL, failure_class=NULL,
+                   failure_reason=NULL, completed_at=NULL,
+                   execution_owner_id=NULL, execution_lease_expires_at=NULL,
+                   execution_started_at=NULL, updated_at=?
+               WHERE run_id=?""",
+            (now, run_id),
+        )
+        c.execute(
+            "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+            "VALUES (?,?,?,?,?)",
+            (current.get("task_id"), actor, "external_ci.reset_for_retry",
+             json.dumps({"run_id": run_id, "previous_status": status,
+                         "previous_failure_class": current.get("failure_class")},
+                        sort_keys=True), now),
+        )
+        fresh = _external_ci_row(c.execute(
+            "SELECT * FROM external_ci_runs WHERE run_id=?", (run_id,)).fetchone())
+    fresh["reset"] = True
+    fresh["reset_from_status"] = status
+    return fresh
+
+
 def update_external_ci_run(run_id: str, fields: Dict[str, Any], actor: str = "system",
                            project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     init_db(project)
@@ -718,6 +776,8 @@ def default_external_ci_repository() -> StoreExternalCiRepository:
 __all__ = [
     "EXTERNAL_CI_STATUSES",
     "EXTERNAL_CI_TERMINAL_STATUSES",
+    "EXTERNAL_CI_ABORTIVE_STATUSES",
+    "EXTERNAL_CI_VERDICT_STATUSES",
     "EXTERNAL_CI_FAILURE_CLASSES",
     "EXTERNAL_CI_EXECUTION_LEASE_SECONDS",
     "EXTERNAL_CI_EXECUTION_LEASE_MAX_SECONDS",
@@ -729,6 +789,7 @@ __all__ = [
     "default_external_ci_mirror_branch",
     "create_external_ci_run",
     "acquire_external_ci_execution",
+    "reset_external_ci_run_for_retry",
     "update_external_ci_run",
     "get_external_ci_run",
     "list_external_ci_runs",

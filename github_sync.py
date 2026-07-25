@@ -403,9 +403,18 @@ def handle_merge_group(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
         actor="github-webhook",
     )
     ensure = result.get("ensure_result") or {}
-    dispatched = bool(ensure.get("dispatched") or (
-        result.get("ensured") and not result.get("error")
-        and result.get("status") in {"pending", "green", "red"}))
+    # BUG-180: an explicit refusal from the ensure path is authoritative. The fallback
+    # below infers "dispatched" from the run merely EXISTING, which is exactly how a
+    # poisoned SHA reported success: the dead run was still there with status pending,
+    # so this said dispatched=True while no Actions run had started and no status would
+    # ever be posted. If the dispatcher told us why it declined, believe it.
+    refused = ensure.get("skip_reason")
+    if refused:
+        dispatched = False
+    else:
+        dispatched = bool(ensure.get("dispatched") or (
+            result.get("ensured") and not result.get("error")
+            and result.get("status") in {"pending", "green", "red"}))
     merge_authorization = _maybe_publish_merge_group_authorization(
         repo, head_sha, head_ref, project=project,
     )
