@@ -89,6 +89,33 @@ def _text_raw(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _finding_detail(finding: Mapping[str, Any], *keys: str) -> Any:
+    """Read a detail off a merge-gate finding, whatever shape it arrived in.
+
+    ``_merge_gate_finding`` SPLATS its ``details`` argument onto the finding, so a
+    conflicted PR arrives as ``{"code": "pr_not_mergeable", "mergeable": False, ...}``
+    and ``finding["details"]`` does not exist.
+
+    Every consumer in this module goes through here because reading it by hand went
+    wrong twice in one day, in two unrelated fixes, by two authors — COORD-61's artifact
+    lift and BUG-182's conflict decomposer both read ``finding.get("details")``, both
+    returned nothing for every real finding, and both shipped green because their tests
+    hand-built the nested shape they assumed. One accessor that knows the truth is worth
+    more than two correct call sites.
+
+    The nested form is still honoured: preflight findings (``work_sessions.py``) really
+    do nest under ``details``, and a caller may hand us either family.
+    """
+    nested = finding.get("details")
+    nested = nested if isinstance(nested, Mapping) else {}
+    for key in keys:
+        if key in finding and finding.get(key) is not None:
+            return finding.get(key)
+        if key in nested and nested.get(key) is not None:
+            return nested.get(key)
+    return None
+
+
 def _head(record: Mapping[str, Any]) -> str:
     nested = record.get("head")
     if isinstance(nested, Mapping):
@@ -373,22 +400,19 @@ def _missing_artifact_identity(
 
     Read-only and diagnostic: it contributes no candidate and no precedence input.
 
-    Reads the gate blocks from the finding's TOP LEVEL. ``_merge_gate_finding`` builds a
-    finding as ``{code, message, failure_class, severity, blocking, **details}`` — the
-    details are splatted, so there is no ``finding["details"]`` to read. The first cut of
-    this function looked under that key and therefore returned ``{}`` for every real
-    finding: the report was written by the gate and dropped again one layer later, which
-    is the exact defect it was written to remove. The nested form is still accepted
-    because a caller may hand us an unsplatted finding.
+    Reads through :func:`_finding_detail` because ``_merge_gate_finding`` splats its
+    ``details``: there is no ``finding["details"]`` to read. The first cut of this
+    function looked under that key and returned ``{}`` for every real finding — the
+    report was written by the gate and dropped one layer later, the exact defect it was
+    written to remove.
     """
     for finding in findings:
         if not isinstance(finding, Mapping):
             continue
         if finding.get("blocking") is False:
             continue
-        nested = _map(finding.get("details"))
         for key in _ARTIFACT_GATE_DETAIL_KEYS:
-            gate = _map(finding.get(key)) or _map(nested.get(key))
+            gate = _map(_finding_detail(finding, key))
             report = _map(gate.get("missing_artifact"))
             if report:
                 return {"missing_artifact": report}
@@ -683,13 +707,11 @@ def _merge_conflict_decision(
             continue
         if _text(finding.get("code")) != "pr_not_mergeable":
             continue
-        details = _map(finding.get("details"))
-        detail_mergeable = details.get("mergeable")
-        detail_state = _text(
-            details.get("merge_state")
-            or details.get("mergeStateStatus")
-            or details.get("mergeable_state")
-        )
+        # BUG-182's decomposer read finding["details"] and therefore never fired: the
+        # gate splats details, so the conflict evidence sits on the finding itself.
+        detail_mergeable = _finding_detail(finding, "mergeable")
+        detail_state = _text(_finding_detail(
+            finding, "merge_state", "mergeStateStatus", "mergeable_state"))
         if detail_mergeable is False or detail_state in {"dirty", "conflicting"}:
             return _decision(
                 "blocked", "remediation", "pr_merge_conflict",

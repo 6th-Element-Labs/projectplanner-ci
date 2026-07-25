@@ -14,6 +14,7 @@ from unittest.mock import patch
 from path_setup import ROOT  # noqa: F401
 
 from switchboard.application import completion_driver
+from switchboard.application.commands.merge_gate import _merge_gate_finding
 from switchboard.domain.completion.state_machine import (
     build_completion_snapshot,
     classify_completion,
@@ -22,6 +23,21 @@ from switchboard.domain.completion.state_machine import (
 
 HEAD = "8a79c572037366f1b100531441b19908c4717b51"
 PR_URL = "https://github.com/6th-Element-Labs/projectplanner/pull/863"
+
+def _dirty_pr_finding():
+    """The conflict finding built by the gate's OWN constructor.
+
+    Hand-building it with a nested "details" key is what let the original
+    BUG-182 fix ship dead: _merge_gate_finding SPLATS details, so the shape the
+    test asserted against never occurs in production.
+    """
+    return _merge_gate_finding(
+        "pr_not_mergeable",
+        "GitHub PR state is not cleanly mergeable.",
+        "failed_gate",
+        details={"mergeable": False, "merge_state": "dirty"},
+    )
+
 
 
 def _board_task(**overrides):
@@ -128,12 +144,7 @@ class Bug182Classifier(unittest.TestCase):
                 "pr_url": PR_URL,
             },
             merge_gate={
-                "findings": [{
-                    "code": "pr_not_mergeable",
-                    "failure_class": "failed_gate",
-                    "blocking": True,
-                    "details": {"mergeable": False, "merge_state": "dirty"},
-                }],
+                "findings": [_dirty_pr_finding()],
                 "head_sha": HEAD,
                 "pr_number": 863,
                 "pr_url": PR_URL,
@@ -177,12 +188,7 @@ class Bug182Hydrator(unittest.TestCase):
             "pr_url": PR_URL,
             "head_sha": HEAD,
             "github_pr": dirty,
-            "findings": [{
-                "code": "pr_not_mergeable",
-                "failure_class": "failed_gate",
-                "blocking": True,
-                "details": {"mergeable": False, "merge_state": "dirty"},
-            }],
+            "findings": [_dirty_pr_finding()],
             "required_status_contexts": ["Switchboard CI / VM gate"],
             "status_contexts": {
                 "Switchboard CI / VM gate": {
@@ -239,12 +245,7 @@ class Bug182Hydrator(unittest.TestCase):
             "pr_url": PR_URL,
             "head_sha": HEAD,
             "github_pr": dirty,
-            "findings": [{
-                "code": "pr_not_mergeable",
-                "failure_class": "failed_gate",
-                "blocking": True,
-                "details": {"mergeable": False, "merge_state": "dirty"},
-            }],
+            "findings": [_dirty_pr_finding()],
             "required_status_contexts": ["Switchboard CI / VM gate"],
             "status_contexts": {
                 "Switchboard CI / VM gate": {

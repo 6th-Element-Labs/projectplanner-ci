@@ -172,6 +172,23 @@ def append_activity(*args: Any, **kwargs: Any) -> Any:
 def _merge_gate_finding(code: str, message: str, failure_class: str,
                         severity: str = "high", blocking: bool = True,
                         details: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Build one gate finding.
+
+    WARNING — ``details`` is SPLATTED onto the finding, not nested. There is no
+    ``finding["details"]`` key in the result; ``details={"mergeable": False}`` produces
+    ``finding["mergeable"]``.
+
+    This signature is a trap and has been walked into twice, independently, by two
+    different authors on 2026-07-25: the COORD-61 artifact lift and the BUG-182 merge
+    conflict decomposer both read ``finding.get("details")``, both silently returned
+    nothing for every real finding, and both shipped with tests that hand-built the
+    nested shape and therefore passed. Read details from the finding's TOP LEVEL, or use
+    ``state_machine._finding_detail`` which handles both forms.
+
+    The parameter keeps its name because ~40 call sites read naturally as "these are the
+    details"; the splat is what callers must remember, so it is stated here rather than
+    left to be rediscovered.
+    """
     return {
         "code": code,
         "message": message,
