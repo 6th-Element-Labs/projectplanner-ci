@@ -312,23 +312,36 @@ def enqueue_task(
     lane = str(task.get("_wsId") or task.get("workstream") or "").strip()
     generation = generation_ref or str(predecessor_wake_id or "")
     assignment_id = _assignment_id(project, task_id, runtime_name, generation)
-    # CO-20: every task-bound Connect generation is project-derived. An absent,
-    # incomplete, or stale policy is an admission failure, never legacy placement.
-    try:
-        context = execution_context.resolve(
-            project=project, task_id=task_id, runtime=runtime_name)
-    except execution_context.ExecutionContextError as exc:
-        return {"dispatched": False, **exc.as_dict(),
-                "task_id": task_id, "project": project}
-    except Exception as exc:
-        return {
-            "dispatched": False,
-            "error": "execution_context_unavailable",
-            "reason": str(exc),
-            "failure_class": "broken_connection",
-            "task_id": task_id,
-            "project": project,
-        }
+    # COORD-47's contract, restored 2026-07-25: a project that has OPTED IN to an
+    # execution policy is project-derived and fails closed — an absent, incomplete,
+    # or stale policy is an admission failure. A project that has never configured
+    # one keeps the legacy placement path. CO-20 (#863) removed this guard ahead of
+    # its prerequisites; within minutes of deploying, every dispatch on this
+    # unconfigured board was refused ("no project execution policy is configured")
+    # and the fleet stopped — the same outage UI-63 caused at task_execution the
+    # same morning, from the other side of the seam. Delete the legacy branch only
+    # when a configured project has been proven to dispatch end-to-end, in the same
+    # change that configures it.
+    from switchboard.storage.repositories.project_execution_policy import (
+        get_project_execution_policy,
+    )
+    context: dict[str, Any] = {}
+    if get_project_execution_policy(project).get("configured"):
+        try:
+            context = execution_context.resolve(
+                project=project, task_id=task_id, runtime=runtime_name)
+        except execution_context.ExecutionContextError as exc:
+            return {"dispatched": False, **exc.as_dict(),
+                    "task_id": task_id, "project": project}
+        except Exception as exc:
+            return {
+                "dispatched": False,
+                "error": "execution_context_unavailable",
+                "reason": str(exc),
+                "failure_class": "broken_connection",
+                "task_id": task_id,
+                "project": project,
+            }
     execution_agent_id = str(caller_agent_id or "").strip()
     assignment = Assignment(
         assignment_id=assignment_id,
@@ -392,7 +405,10 @@ def enqueue_task(
         }
     policy = {
         "mode": CONNECT_WAKE_MODE,
-        **_hybrid_policy(context, task, runtime_name),
+        # Hybrid placement is derived from the project execution context, so it
+        # exists exactly when the project opted in. The legacy path ships the
+        # pre-CO-20 policy shape (mode/assignment/lifecycle[/effect_identity]).
+        **(_hybrid_policy(context, task, runtime_name) if context else {}),
         "assignment": {
             "schema": "switchboard.connect.assignment.v1",
             **asdict(assignment),
@@ -402,7 +418,8 @@ def enqueue_task(
         # decode the Assignment byte-for-byte.
         "lifecycle": lifecycle,
     }
-    policy["execution_context"] = context
+    if context:
+        policy["execution_context"] = context
     # The external effect represents one durable completion decision, not the
     # coordinator/lease that happened to request it. Generation and fence are
     # allocated atomically below and intentionally do not participate either.

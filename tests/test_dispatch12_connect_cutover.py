@@ -27,6 +27,11 @@ def ok(condition: bool, message: str) -> None:
 
 captured: list[dict] = []
 original_request_wake = connect_dispatch.coordination_repo.request_wake
+from switchboard.storage.repositories import project_execution_policy  # noqa: E402
+original_policy = project_execution_policy.get_project_execution_policy
+# This test exercises the CONFIGURED-project Connect path end to end.
+project_execution_policy.get_project_execution_policy = (
+    lambda _project: {"configured": True})
 original_resolve = connect_dispatch.execution_context.resolve
 
 
@@ -55,6 +60,7 @@ try:
 finally:
     connect_dispatch.coordination_repo.request_wake = original_request_wake
     connect_dispatch.execution_context.resolve = original_resolve
+    project_execution_policy.get_project_execution_policy = original_policy
 
 request_payload_fields = ("selector", "reason", "source", "policy", "task_id")
 ok(captured[0]["idem_key"] == captured[-1]["idem_key"]

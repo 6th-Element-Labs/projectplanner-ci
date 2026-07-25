@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from path_setup import ROOT  # noqa: F401
 from switchboard.application.commands import connect_dispatch, execution_context
+from switchboard.storage.repositories import project_execution_policy
 from switchboard.domain.coordination.placement import (
     HOST_PLACEMENT_SCHEMA,
     evaluate_host,
@@ -75,6 +76,12 @@ def host() -> dict:
             },
         },
     }
+
+
+# These tests pin the CONFIGURED-project path: hybrid placement derives from
+# the execution context, which exists exactly when the project opted in.
+project_execution_policy.get_project_execution_policy = (
+    lambda _project: {"configured": True})
 
 
 def test_enqueue_requires_execution_context_and_persists_hybrid_policy():
