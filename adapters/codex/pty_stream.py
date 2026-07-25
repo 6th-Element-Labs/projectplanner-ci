@@ -707,6 +707,147 @@ def _start_host_ws_executor(
     return bridge
 
 
+def _attention_http(method: str, path: str, body: Any = None) -> dict[str, Any]:
+    """POST/GET Switchboard host attention APIs using the session bearer."""
+    try:
+        from adapters.switchboard_core import _http
+    except ModuleNotFoundError:
+        root = Path(__file__).resolve().parents[2]
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        try:
+            from adapters.switchboard_core import _http
+        except ModuleNotFoundError:
+            adapters_dir = str(Path(__file__).resolve().parents[1])
+            if adapters_dir not in sys.path:
+                sys.path.insert(0, adapters_dir)
+            from switchboard_core import _http  # type: ignore
+    return _http(method, path, body)
+
+
+def _import_pty_prompt_attention():
+    """Resolve the ADAPTER-31 module whether launched as a package or script."""
+    try:
+        from adapters.codex.pty_prompt_attention import (
+            CodexPtyAttentionBridge, PtyPromptWatcher,
+        )
+        return CodexPtyAttentionBridge, PtyPromptWatcher
+    except ModuleNotFoundError:
+        pass
+    root = Path(__file__).resolve().parents[2]
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    try:
+        from adapters.codex.pty_prompt_attention import (
+            CodexPtyAttentionBridge, PtyPromptWatcher,
+        )
+        return CodexPtyAttentionBridge, PtyPromptWatcher
+    except ModuleNotFoundError:
+        sibling = str(Path(__file__).resolve().parent)
+        if sibling not in sys.path:
+            sys.path.insert(0, sibling)
+        from pty_prompt_attention import (  # type: ignore
+            CodexPtyAttentionBridge, PtyPromptWatcher,
+        )
+        return CodexPtyAttentionBridge, PtyPromptWatcher
+
+
+def _start_pty_attention_watcher(
+    *,
+    master_fd: int,
+    write_lock: threading.Lock,
+    log_path: str,
+    runner_session_id: str,
+    host_id: str,
+    task_id: str,
+    child_pid: int,
+    child_process: Any,
+) -> Any:
+    """ADAPTER-31: surface known Codex TUI prompts into the Needs-you queue.
+
+    Fail-soft: import/setup errors never take down the PTY companion. Watch and
+    Chat must keep working even if attention wiring cannot load.
+    """
+    if str(os.environ.get("PM_CODEX_PTY_ATTENTION", "1")).strip().lower() in {
+        "0", "false", "no", "off",
+    }:
+        return None
+    if not task_id:
+        return None
+    try:
+        CodexPtyAttentionBridge, PtyPromptWatcher = _import_pty_prompt_attention()
+
+        def write_pty(data: bytes) -> None:
+            with write_lock:
+                os.write(master_fd, data)
+
+        fault_path = Path(log_path).with_name("pty_attention_fault.json")
+
+        def on_fault(exc: BaseException) -> None:
+            payload = {
+                "schema": "switchboard.codex_pty_attention_fault.v1",
+                "runner_session_id": runner_session_id,
+                "task_id": task_id,
+                "host_id": host_id,
+                "error": str(exc),
+                "failure_class": "failed_gate",
+                "never_auto_switch_model": True,
+            }
+            try:
+                fault_path.write_text(
+                    json.dumps(payload, sort_keys=True), encoding="utf-8")
+            except Exception:
+                pass
+            sys.stderr.write(f"pty_attention_fault:{exc}\n")
+            sys.stderr.flush()
+            # Visible runner fault — do not invent a model choice.
+            target = int(child_pid or 0)
+            if target > 0:
+                try:
+                    os.killpg(target, 15)
+                except Exception:
+                    try:
+                        os.kill(target, 15)
+                    except Exception:
+                        pass
+            if child_process is not None:
+                try:
+                    child_process.terminate()
+                except Exception:
+                    pass
+
+        journal = str(Path(log_path).with_name("pty_attention_journal.json"))
+        bridge = CodexPtyAttentionBridge(
+            http=_attention_http,
+            binding={
+                "project": str(os.environ.get("PM_PROJECT") or "switchboard"),
+                "task_id": str(task_id),
+                "work_session_id": str(os.environ.get("PM_WORK_SESSION_ID") or ""),
+                "runner_session_id": str(runner_session_id),
+                "host_id": str(host_id or os.environ.get("PM_HOST_ID") or ""),
+            },
+            write_pty=write_pty,
+            journal_path=journal,
+            poll_interval=float(
+                os.environ.get("PM_CODEX_PTY_ATTENTION_POLL_S") or 1.0),
+            claim_deadline_s=float(
+                os.environ.get("PM_CODEX_PTY_ATTENTION_CLAIM_DEADLINE_S") or 3600.0),
+            expires_in_s=float(
+                os.environ.get("PM_CODEX_PTY_ATTENTION_EXPIRES_S") or 3600.0),
+        )
+        watcher = PtyPromptWatcher(bridge=bridge, on_fault=on_fault)
+        watcher.start_log_tail(
+            log_path,
+            poll_s=float(os.environ.get("PM_CODEX_PTY_ATTENTION_DETECT_S") or 0.5),
+        )
+        return watcher
+    except Exception as exc:  # noqa: BLE001 — never brick Connect/Watch
+        sys.stderr.write(
+            f"pty_attention_watcher_disabled:{type(exc).__name__}:{exc}\n")
+        sys.stderr.flush()
+        return None
+
+
 def serve(
     *,
     master_fd: int,
@@ -864,10 +1005,25 @@ def serve(
             except Exception:
                 pass
 
+    attention_watcher = _start_pty_attention_watcher(
+        master_fd=master_fd,
+        write_lock=write_lock,
+        log_path=log_path,
+        runner_session_id=runner_session_id,
+        host_id=host_id,
+        task_id=str(task_id or ""),
+        child_pid=int(child_pid or 0),
+        child_process=child_process,
+    )
     threading.Thread(target=pump_until_host_ws, name="pty-pump", daemon=True).start()
     try:
         server.serve_forever(poll_interval=0.05)
     finally:
+        if attention_watcher is not None:
+            try:
+                attention_watcher.stop()
+            except Exception:
+                pass
         fanout.close()
         bridge = host_session.get("bridge")
         if bridge is not None:
