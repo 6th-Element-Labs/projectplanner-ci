@@ -35,7 +35,8 @@ connect_dispatch.execution_context.resolve = (
     lambda **kwargs: ready_execution_context(
         kwargs["task_id"], runtime=kwargs["runtime"]))
 HEAD = "a" * 40
-AGENT = "agent/codex/bug-174-test"
+# COORD-64: admission keys on minted execution principal
+AGENT = "agent/codex/placeholder"
 RUNNER = "run-bug174-repair"
 HOST = "host/bug174"
 
@@ -57,6 +58,7 @@ task = store.create_task({
         "pr_url": "https://github.com/example/projectplanner/pull/174",
     },
 }, actor="bug174-test", project=P)
+AGENT = f"agent/codex/{task['task_id'].lower()}"  # minted principal
 
 # A normal implementation claimant remains unable to take an In Review task.
 control = store.create_task({

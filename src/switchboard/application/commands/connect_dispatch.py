@@ -342,11 +342,12 @@ def enqueue_task(
                 "task_id": task_id,
                 "project": project,
             }
-    execution_agent_id = str(caller_agent_id or "").strip()
+    # DHCP: mint a per-task worker principal. Never hand the caller's identity
+    # to the runner — that clobbers the coordinator's presence and blocks the
+    # next start_task (BREAKDOWN 25). caller_agent_id stays wake auth only.
     assignment = Assignment(
         assignment_id=assignment_id,
-        principal_ref=(execution_agent_id
-                       or f"agent/{runtime_name}/{task_id.lower()}"),
+        principal_ref=f"agent/{runtime_name}/{task_id.lower()}",
         work_ref=f"task:{project}:{task_id}",
         runtime=runtime_name,
         provider=provider,

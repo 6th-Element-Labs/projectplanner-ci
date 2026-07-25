@@ -196,30 +196,39 @@ class CoordinatorDaemon:
             )
         return dict(getter(project) or {})
 
-    def discover_projects(self) -> tuple[str, ...]:
-        """Resolve live Autopilot authority from the registry on every tick.
+    def _has_active_autopilot_scopes(self, project: str) -> bool:
+        """Operator already armed Autopilot (scope lease = boot authority)."""
+        try:
+            rows = self.store.list_autopilot_scopes(
+                project=project, profile_id=self.config.profile_id,
+                status="active,paused")
+        except Exception:
+            return False
+        return bool(rows)
 
-        The environment list is deliberately only a kill-switch ceiling.  New
-        policy-enabled projects appear without a process restart; disabled or
-        archived policies disappear just as quickly.
+    def discover_projects(self) -> tuple[str, ...]:
+        """Which projects may receive Autopilot ticks this sweep.
+
+        DHCP rule (ADR-0008): an armed scope lease is enough authority to ask
+        ``start_task`` to boot a runner. Policy discovery is additive for
+        future opted-in projects; it must not starve a board that already has
+        a live scope. ``PM_COORDINATOR_AUTOPILOT_PROJECTS`` is only a ceiling.
         """
         ceiling = set(self.config.projects)
         admitted = []
         for project in self._registry_project_ids():
             if ceiling and project not in ceiling:
                 continue
-            # Registry/policy failures are operational signals, not "project
-            # absent". Let the sweep fail loudly instead of silently shrinking
-            # the coordinator's authority set.
             policy = self._execution_policy(project)
             lifecycle = policy.get("lifecycle") or {}
             autopilot = policy.get("autopilot") or {}
-            if (
+            policy_armed = (
                 policy.get("configured")
                 and policy.get("valid")
                 and str(lifecycle.get("status") or "").lower() == "active"
                 and bool(autopilot.get("enabled"))
-            ):
+            )
+            if policy_armed or self._has_active_autopilot_scopes(project):
                 admitted.append(project)
         return tuple(sorted(admitted))
 
@@ -577,9 +586,14 @@ class CoordinatorDaemon:
         admitted = self._admitted_projects or self.discover_projects()
         if project not in admitted:
             return {"project": project, "status": "denied_project"}
-        readiness = self._execution_readiness(project)
-        if not readiness.get("passed") or readiness.get("status") != "ready":
-            return self._readiness_refusal(project, readiness)
+        # DHCP: scope says boot; readiness refuses only opted-in projects
+        # (BUG-190). Never block an armed unconfigured dogfood board here.
+        policy = self._execution_policy(project)
+        if policy.get("configured"):
+            readiness = self._execution_readiness(project)
+            if (not readiness.get("passed")
+                    or readiness.get("status") != "ready"):
+                return self._readiness_refusal(project, readiness)
         now = float(self.clock())
         self._register_or_heartbeat(project)
         state = self._state(project)

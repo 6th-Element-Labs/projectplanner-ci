@@ -1403,3 +1403,23 @@ branch — it **closes them**, and a closed PR whose head ref no longer exists c
 Cost one PR cycle tonight (#910 → #912) while binding a branch to its board task. Rename first,
 open the PR second; if a PR is already open, live with the name or open a fresh PR from a new
 branch.
+
+---
+
+## BREAKDOWN 25 — Autopilot forgot DHCP (starved scopes + stole the caller's name)
+
+**Severity: HIGH. STATUS: FIXED — this branch (COORD-64 admit + principal).**
+
+Two regressions stacked on the ADR-0008 DHCP model ("scope says boot → `start_task` →
+runner"):
+
+1. **COORD-48 admit** required a configured execution policy *and* green readiness before
+   ticking a project. Unconfigured dogfood boards with live Autopilot scopes got
+   `candidate_count: 0` forever (DOGFOOD-25 ready, nothing started). BUG-190 already said
+   readiness is opt-in for `start_task`; the daemon invented a second kill switch.
+2. **Worker principal = caller** in `connect_dispatch` made the runner `register_agent` as
+   the coordinator, task-bound. Next `start_task` for any other task refused
+   `agent_registered_on_different_task` (six ENFORCE-14 remediation retries, zero runners).
+
+**Fix (subtraction, not new machinery):** armed scope ⇒ admit; readiness refuses only
+opted-in policies; mint `agent/<runtime>/<task-id>` as the worker principal always.
