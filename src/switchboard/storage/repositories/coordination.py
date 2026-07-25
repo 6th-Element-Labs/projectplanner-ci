@@ -3420,6 +3420,22 @@ def register_host(inventory: Dict[str, Any], principal_id: str = "",
     ttl_s = max(10, int(inventory.get("heartbeat_ttl_s") or inventory.get("ttl_s") or 60))
     try:
         with _control_plane_conn(project) as c:
+            # An Agent Host re-registers on a keepalive cadence (adapters/agent_host.py
+            # re-POSTs every heartbeat_ttl_s // 2, so ~30s by default), and the upsert
+            # below is idempotent. Logging every one of those produced 75,130
+            # `agent_host.registered` rows across only 82 DISTINCT payloads — a single
+            # host repeated one identical 527-byte payload 36,897 times. The real signal
+            # is "a host appeared, or changed what it advertises"; a keepalive that
+            # changes nothing is not an event. Read the prior advertisement first so the
+            # log records transitions only.
+            prior = c.execute(
+                "SELECT runtimes_json, limits_json, heartbeat_ttl_s FROM agent_hosts "
+                "WHERE host_id=?", (host_id,)).fetchone()
+            advertisement_changed = prior is None or (
+                _json_obj(prior["runtimes_json"], None) != runtimes
+                or _json_obj(prior["limits_json"], None) != limits
+                or int(prior["heartbeat_ttl_s"] or 0) != ttl_s
+            )
             c.execute(
                 "INSERT INTO agent_hosts(host_id, hostname, agent_host_version, repo_root, "
                 "runtimes_json, limits_json, capacity_json, principal_id, registered_at, "
@@ -3436,11 +3452,15 @@ def register_host(inventory: Dict[str, Any], principal_id: str = "",
                  json.dumps(capacity, sort_keys=True), principal_id or None, now, now, ttl_s,
                  "online", None),
             )
-            payload = {"host_id": host_id, "runtimes": runtimes, "limits": limits,
-                       "heartbeat_ttl_s": ttl_s}
-            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
-                      (None, actor, "agent_host.registered",
-                       json.dumps(payload, sort_keys=True), now))
+            if advertisement_changed:
+                payload = {"host_id": host_id, "runtimes": runtimes, "limits": limits,
+                           "heartbeat_ttl_s": ttl_s,
+                           # Distinguishes a host appearing from one changing its
+                           # advertisement, which the old always-log could not express.
+                           "change": "first_registration" if prior is None else "advertisement_changed"}
+                c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                          (None, actor, "agent_host.registered",
+                           json.dumps(payload, sort_keys=True), now))
             row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
     except sqlite3.OperationalError as exc:
         if _store_facade()._sqlite_busy(exc):

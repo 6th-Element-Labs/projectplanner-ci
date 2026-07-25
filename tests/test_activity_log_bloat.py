@@ -114,6 +114,75 @@ try:
     ok(len((live.get("runtime_profile") or {}).get("inventory") or {}) == 30,
        "authoritative capacity still carries the complete tool inventory")
 
+    # ------------------------------------------------------------------------------
+    # register_host logs TRANSITIONS, not keepalives.
+    #
+    # adapters/agent_host.py re-POSTs its registration every heartbeat_ttl_s // 2
+    # (~30s), and the upsert is idempotent — so an unconditional activity write turned
+    # a keepalive into permanent history. Prod carried 75,130 `agent_host.registered`
+    # rows across only 82 DISTINCT payloads, one host repeating a single identical
+    # 527-byte payload 36,897 times. "A host appeared or changed what it advertises"
+    # is the event worth keeping; "the same host said the same thing 30 seconds later"
+    # is not.
+    # ------------------------------------------------------------------------------
+    def registration_rows():
+        with _conn(P) as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM activity WHERE kind='agent_host.registered'"
+            ).fetchone()[0]
+
+    def register(runtimes, limits, ttl=60):
+        return store.register_host({
+            "host_id": "host/reregister-probe", "agent_host_version": "0.2.25",
+            "runtimes": runtimes, "limits": limits, "capacity": {"active_sessions": 0},
+            "heartbeat_ttl_s": ttl,
+        }, principal_id="principal/reregister", actor="host/reregister-probe", project=P)
+
+    base_runtimes = [{"runtime": "codex", "lanes": ["BUG"]}]
+    base_limits = {"max_sessions": 4}
+
+    before = registration_rows()
+    register(base_runtimes, base_limits)
+    ok(registration_rows() == before + 1,
+       "a host's FIRST registration is logged")
+
+    after_first = registration_rows()
+    for _ in range(25):
+        register(base_runtimes, base_limits)
+    ok(registration_rows() == after_first,
+       "25 identical keepalive re-registrations add ZERO activity rows")
+
+    # ...but a real change must still be recorded, or we would have traded noise for
+    # blindness. Each of these is a different kind of advertisement change.
+    register(base_runtimes, {"max_sessions": 8})
+    ok(registration_rows() == after_first + 1,
+       "changing advertised limits IS logged")
+    register([{"runtime": "codex", "lanes": ["BUG", "PERF"]}], {"max_sessions": 8})
+    ok(registration_rows() == after_first + 2,
+       "changing advertised runtimes/lanes IS logged")
+    register([{"runtime": "codex", "lanes": ["BUG", "PERF"]}], {"max_sessions": 8}, ttl=120)
+    ok(registration_rows() == after_first + 3,
+       "changing the heartbeat TTL IS logged")
+
+    with _conn(P) as conn:
+        first_payload, last_payload = conn.execute(
+            "SELECT payload FROM activity WHERE kind='agent_host.registered' "
+            "AND payload LIKE '%reregister-probe%' ORDER BY id LIMIT 1"
+        ).fetchone()[0], conn.execute(
+            "SELECT payload FROM activity WHERE kind='agent_host.registered' "
+            "AND payload LIKE '%reregister-probe%' ORDER BY id DESC LIMIT 1"
+        ).fetchone()[0]
+    ok(json.loads(first_payload).get("change") == "first_registration",
+       "the log distinguishes a host appearing...")
+    ok(json.loads(last_payload).get("change") == "advertisement_changed",
+       "...from a host changing what it advertises")
+
+    # The keepalives must still do their real job: liveness stays fresh even though
+    # nothing was logged. Dropping the log row must not drop the registration.
+    live_host = store.host_status("host/reregister-probe", project=P) or {}
+    ok((live_host.get("limits") or {}).get("max_sessions") == 8,
+       "the authoritative host record still reflects the latest registration")
+
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
 
