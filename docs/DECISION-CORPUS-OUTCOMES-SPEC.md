@@ -142,3 +142,95 @@ seven times and resolved nothing, because the signal it received named no failin
 - Outcome vocabulary is registered; an unregistered outcome is surfaced, not silently counted.
 - Regression tests over a synthetic window covering merge, supersede, human intervention and
   abandonment, plus idempotent re-backfill.
+
+---
+
+## 7. Part 3 — feed the corpus back into the loop
+
+Sections 3.1–3.3 make the corpus answer questions **we** ask. This section makes it answer
+the question **the agent** should have asked. It is specified here because it depends
+entirely on §3.1: without outcomes there is nothing worth telling a runner.
+
+### 7.1 The measured problem
+
+A remediation runner receives exactly this today (CO-20, live, verbatim):
+
+```json
+{"reason_code": "required_exact_head_ci_failed", "route": "remediation",
+ "acceptance_findings": [], "generation": 1, "exact_head_sha": "d150fd1b…"}
+```
+
+`acceptance_findings` is empty and there is no history field. Runner #7 was handed
+precisely what runner #1 was handed.
+
+That reframes the CO-20 loop. By the seventh dispatch the classifier was routing
+*correctly* — CI genuinely was failing. The loop persisted because **every attempt was, from
+the agent's perspective, the first attempt.** Seven agents each independently concluded
+"CI failed, inspect CI," and none knew the previous six had already done exactly that and
+changed nothing. This is amnesia, not misclassification, and no retry budget fixes it:
+attempt seven has no reason to behave differently from attempt one.
+
+### 7.2 What to add
+
+Attach a bounded prior-attempt summary to `switchboard.execution_assignment.v1`:
+
+```json
+"prior_attempts": {
+  "schema": "switchboard.prior_attempts.v1",
+  "attempt_number": 7,
+  "same_reason_code_on_this_head": 6,
+  "reason_code": "required_exact_head_ci_failed",
+  "routes_tried": ["remediation"],
+  "outcomes": ["superseded", "superseded", "superseded", "superseded", "superseded", "superseded"],
+  "head_advanced_since_first": false,
+  "generations_spent": 0,
+  "recent_execution_ids": ["run_fadc7ab2", "run_e9d5a081"]
+}
+```
+
+Derived entirely from `decision_records` once §3.1 and §3.2 land. No new storage.
+
+**Bounded by construction.** A summary, never a transcript dump: counts, the distinct
+routes tried, the outcome vector, and at most a few execution ids. A task with two hundred
+episodes must not produce a two-hundred-entry payload — cap the vectors and report totals.
+
+### 7.3 The behavioural contract
+
+The assignment is already declared lifecycle authority ("fail closed before claiming if
+task_id, assignment_id, execution_id, generation, desired_role or exact_head_sha
+disagrees"). Extend that contract:
+
+> When `attempt_number > 1` and `head_advanced_since_first` is false, the previous
+> approach demonstrably did not move the work. Do not repeat it. Either take a
+> structurally different approach or escalate with a stated reason.
+
+This is the whole point. A worker that knows it is attempt seven of an unmoved head should
+escalate; a worker that thinks it is attempt one will re-diagnose CI forever.
+
+### 7.4 Non-goals
+
+- **Transcripts of prior attempts.** SIMPLIFY-9, and it would blow the payload budget.
+  Counts and outcomes are sufficient to change behaviour; reasoning is not required.
+- **Deciding for the agent.** This adds context, not a route. The classifier still owns
+  routing.
+
+### 7.5 Acceptance
+
+- A second dispatch for the same reason_code and head carries `attempt_number: 2` with a
+  non-empty `outcomes` vector.
+- The payload is bounded: a task with 200 episodes yields a summary of fixed maximum size.
+- Replaying the 2026-07-25 CO-20 window, the seventh remediation dispatch reports
+  `attempt_number: 7`, `same_reason_code_on_this_head: 6`, `head_advanced_since_first: false`.
+- A first-ever dispatch omits `prior_attempts` entirely rather than sending a zeroed object.
+- Regression test asserting the cap holds and that the field is absent on attempt one.
+
+### 7.6 Prerequisite, and a warning
+
+Requires §3.1 outcomes to be meaningful — an `outcomes` vector of six `open` values tells a
+runner nothing.
+
+**It also requires the reason codes to be true.** `exact_head_pr_missing` fired 92 ticks
+across four tasks in this window and was largely wrong — a symptom of DIRTY pull requests,
+not a missing PR (BUG-182). Feeding a mislabelled history to a worker is worse than feeding
+it nothing: it will confidently act on a false pattern. Fix the vocabulary before wiring it
+into the loop.
