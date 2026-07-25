@@ -18,7 +18,7 @@ COMPLETION_SNAPSHOT_SCHEMA = "switchboard.completion_snapshot.v1"
 COMPLETION_DECISION_SCHEMA = "switchboard.completion_decision.v1"
 # Stamped on every decision record so a replay (spec §8.2) can tell which classifier
 # produced a verdict. Bump when this module's routing changes observably.
-COMPLETION_CLASSIFIER_VERSION = "switchboard.completion_classifier.v1"
+COMPLETION_CLASSIFIER_VERSION = "switchboard.completion_classifier.v2"
 
 _PASS = {"success", "passed", "pass", "ok"}
 _POLICY_PASS = _PASS | {"neutral", "skipped"}
@@ -648,6 +648,73 @@ def _changes_requested_decision(
     return decision
 
 
+def _merge_conflict_decision(
+    pr: Mapping[str, Any],
+    findings: Sequence[Any],
+) -> dict[str, Any] | None:
+    """Detect an agent-fixable merge conflict from the PR or gate findings.
+
+    ``pr_not_mergeable`` findings are aggregate and are skipped by
+    ``_finding_decision`` so this module can decompose them. When live
+    ``github_pr`` hydration is empty, the finding's ``details`` are the only
+    remaining conflict evidence — use them rather than pretending the PR is
+    missing (BUG-182).
+    """
+    mergeable = pr.get("mergeable")
+    merge_state = _text(
+        pr.get("mergeStateStatus") or pr.get("mergeable_state") or pr.get("merge_state")
+    )
+    if mergeable is False or merge_state in {"dirty", "conflicting"}:
+        return _decision(
+            "blocked", "remediation", "pr_merge_conflict",
+            role="remediation", board="Blocked",
+        )
+    for finding in findings:
+        if not isinstance(finding, Mapping):
+            continue
+        if _text(finding.get("code")) != "pr_not_mergeable":
+            continue
+        details = _map(finding.get("details"))
+        detail_mergeable = details.get("mergeable")
+        detail_state = _text(
+            details.get("merge_state")
+            or details.get("mergeStateStatus")
+            or details.get("mergeable_state")
+        )
+        if detail_mergeable is False or detail_state in {"dirty", "conflicting"}:
+            return _decision(
+                "blocked", "remediation", "pr_merge_conflict",
+                role="remediation", board="Blocked",
+            )
+    return None
+
+
+def _board_named_pr(snap: Mapping[str, Any], board_pr_identity: str) -> bool:
+    return bool(
+        board_pr_identity
+        or snap.get("board_pr_number")
+        or str(snap.get("board_pr_url") or "").strip()
+    )
+
+
+def _github_pr_hydration_unavailable(
+    findings: Sequence[Any],
+) -> dict[str, Any]:
+    """Board still names a PR, but live hydration did not produce one."""
+    for finding in findings:
+        if not isinstance(finding, Mapping):
+            continue
+        if _text(finding.get("code")) == "github_pr_state_unavailable":
+            return _decision(
+                "blocked", "coordination_retry", "github_pr_state_unavailable",
+                retry="bounded",
+            )
+    return _decision(
+        "blocked", "coordination_retry", "github_pr_state_unavailable",
+        retry="bounded",
+    )
+
+
 def classify_completion(
     current_run: Mapping[str, Any] | None,
     snapshot: Mapping[str, Any],
@@ -661,6 +728,7 @@ def classify_completion(
     queue = _map(snap.get("merge_queue"))
     review = _map(snap.get("review"))
     runner = _map(snap.get("runner"))
+    findings = list(snap.get("findings") or [])
     head_sha = str(snap.get("head_sha") or _head(pr)).strip()
     board_head = str(snap.get("board_head_sha") or "").strip()
     current_pr_identity = str(
@@ -677,6 +745,7 @@ def classify_completion(
             "url": snap.get("board_pr_url"),
         })
     ).strip()
+    conflict = _merge_conflict_decision(pr, findings)
 
     if task_status in _TERMINAL_BOARD and (
         task_status != "done" or provenance.get("merged_sha")
@@ -692,6 +761,13 @@ def classify_completion(
                          retry="bounded" if route == "coordination_retry" else "none",
                          board="In Review" if route == "coordination_retry" else "Blocked")
     if not pr or not head_sha:
+        # A board-named PR (or a DIRTY finding already on the snapshot) is never
+        # "exact head has no PR". Reserve exact_head_pr_missing for the genuine
+        # empty case so conflicted/DIRTY work reaches remediation (BUG-182).
+        if conflict:
+            return conflict
+        if _board_named_pr(snap, board_pr_identity):
+            return _github_pr_hydration_unavailable(findings)
         return _decision("blocked", "coordination_retry", "exact_head_pr_missing",
                          retry="bounded")
     if not current_pr_identity:
@@ -707,6 +783,12 @@ def classify_completion(
     if board_head and board_head != head_sha:
         return _decision("blocked", "coordination_retry", "board_pr_head_mismatch",
                          retry="bounded")
+
+    # Conflicts are ordinary, agent-fixable rebase work. They outrank queue /
+    # CI / review / evidence findings so DIRTY PRs dispatch remediation instead
+    # of spinning on bounded infra retry (BUG-182).
+    if conflict:
+        return conflict
 
     queue_state = _text(queue.get("state") or queue.get("status"))
     if queue_state in {"merged", "complete", "completed"}:
@@ -756,7 +838,7 @@ def classify_completion(
                          "review_verdict_stale" if review_passed else "review_required",
                          role="review_merge")
 
-    finding_route = _finding_decision(snap.get("findings") or [])
+    finding_route = _finding_decision(findings)
     if finding_route:
         return finding_route
 
@@ -764,9 +846,6 @@ def classify_completion(
     merge_state = _text(
         pr.get("mergeStateStatus") or pr.get("mergeable_state") or pr.get("merge_state")
     )
-    if mergeable is False or merge_state in {"dirty", "conflicting"}:
-        return _decision("blocked", "remediation", "pr_merge_conflict",
-                         role="remediation", board="Blocked")
     if merge_state == "behind":
         return _decision("blocked", "coordination_retry", "pr_branch_behind",
                          retry="bounded")

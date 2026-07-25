@@ -71,21 +71,31 @@ def hydrate_completion_snapshot(
     pr_url = str(git_state.get("pr_url") or "")
     repo = str(get_repo(project) or "")
     token = provenance._github_token()
+    # Fetch once and hand the same record to merge_gate. Dual independent fetches
+    # previously let the snapshot see an empty PR while the gate still observed
+    # DIRTY, which the classifier then misreported as exact_head_pr_missing
+    # (BUG-182).
     github_pr = (
         provenance._github_pr(repo, pr_number, token)
         if repo and pr_number else {}
     ) or {}
+    gate_payload: dict[str, Any] = {
+        "task_id": task_id,
+        "pr_number": pr_number,
+        "pr_url": pr_url,
+        "repo": repo,
+    }
+    if github_pr:
+        gate_payload["evidence"] = {"github_pr": github_pr}
     gate = merge_gate_command.merge_gate(
-        {
-            "task_id": task_id,
-            "pr_number": pr_number,
-            "pr_url": pr_url,
-            "repo": repo,
-        },
+        gate_payload,
         actor=actor,
         project=project,
         record=False,
     )
+    # Prefer the PR merge_gate resolved so a successful gate fetch still reaches
+    # the classifier when the hydrator's direct call returned empty.
+    resolved_pr = _map(gate.get("github_pr")) or github_pr
     verdict = _map(_map(task.get("review_verdict")).get("current_verdict"))
     session_health = _map(task.get("session_health"))
     sessions = list(session_health.get("latest_sessions") or [])
@@ -109,12 +119,12 @@ def hydrate_completion_snapshot(
     }
     snapshot = build_completion_snapshot(
         task=task,
-        github_pr=github_pr,
+        github_pr=resolved_pr,
         required_status_contexts=list(gate.get("required_status_contexts") or []),
         status_contexts=gate.get("status_contexts"),
         review=verdict or _map(gate.get("review_gate")),
         merge_gate=gate,
-        merge_queue=_map(github_pr.get("mergeQueueEntry")),
+        merge_queue=_map(resolved_pr.get("mergeQueueEntry")),
         work_session=work_session,
         runner=runner,
         merge_provenance=_map(task.get("provenance")),
