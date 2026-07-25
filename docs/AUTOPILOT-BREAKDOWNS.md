@@ -1168,3 +1168,152 @@ PR is reviewed, and the board is what gates `enqueue`.
 So PRs sit green and unqueued forever. The merge queue is not broken; it is empty because nothing
 is ever handed to it.
 
+
+---
+
+# SESSION 3 — 2026-07-25 evening → 2026-07-26 morning (claude/DOGFOOD-19)
+
+Autopilot's first genuinely productive window: seven tasks reached Done (UI-63, ADAPTER-27,
+BUG-178/179/183, CO-20, CO-21) plus COORD-51 overnight. This section records the two failures
+inside that window, with enough evidence that the fix can be specced without re-deriving anything.
+**Operator direction: evidence only — no new tasks, no code changes filed from this section yet.**
+
+## BREAKDOWN 20 — the evidence-grammar gap: right facts, wrong key, nobody told
+
+**The single human assist in an otherwise autonomous CO-21 run, end to end:**
+
+| time (UTC 07-25) | event |
+|---|---|
+| 09:29 | deliverable scope dispatches CO-21 (and ADAPTER-28) |
+| 09:40 | In Progress; runner working in /private/tmp/co21-codex |
+| 09:43 | branch pushed, PR #896 opens, In Review |
+| 09:44:33 | review verdict `pass` recorded for exact head `41092162` (round 1) |
+| 09:46 | runner completes session and exits cleanly |
+| 09:49 | VM gate SUCCESS. Merge authorization: **FAILURE — missing_executed_test_run** |
+| 09:50–09:51 | repair dispatch (attempt 2) runs ~90s, writes nothing, exits |
+| 10:05 | human assist (below) |
+| 10:16:00 | machine merges #896 → `d12267e9`; 10:16:30 board Done |
+
+**What the runner recorded** (worksession-aa0ccd80bb504bbd hygiene, verbatim):
+
+```json
+"executed_tests": [
+  {"command": "python test_co_fleet.py", "passed": true, "summary": "46 passed"},
+  {"command": "./test_co_repo_cache.py", "passed": true, "summary": "8 passed"},
+  {"command": "python tests/test_co9_hybrid_scheduler.py", "passed": true, "summary": "27 passed"},
+  {"command": "python tests/test_bug91_runtime_config_contract.py", "passed": true, "summary": "15 passed"},
+  {"command": "python tests/test_co4_graceful_drain.py", "passed": true, "summary": "10 passed"}]
+```
+
+It also recorded `baseline_findings` — a test failing on clean origin/master, checked and
+attributed correctly. The *work* was professional. The runner even did diligence nobody asked for.
+
+**What the gate reads:** a single `executed_test_run` object, schema
+`switchboard.executed_test_run.v1`, with `commands`, a pass signal (`passed:true` or
+`exit_code:0`), a completion timestamp, and an output hash under one of EIGHT exact key names
+(`output_hash`, `output_sha256`, `stdout_sha256`, `stderr_sha256`, `log_hash`, `logs_hash`,
+`artifact_hash`, `result_hash` — see `store.py:_executed_test_run_has_output_hash`).
+`executed_tests` (plural, no schema, no hash) does not qualify. Same facts, wrong grammar.
+
+**Why the repair failed:** attempt 2's assignment carried only
+`reason_code: missing_executed_test_run` — no expected shape, no pointer to the near-miss.
+It ran preflight in a fresh worktree, **forked a NEW work session**
+(worksession-7e0e58113497497d, left active/orphaned — a gate reading the *bound* session can
+never be satisfied by a forked one), wrote no evidence, and exited. Attempt 3 would have received
+the identical brief.
+
+**The assist (claude/DOGFOOD-19, ~10:05):** re-ran all five suites in a detached worktree at the
+exact PR head; identical results (46/8/27/15/10, exit 0); sha256 over the combined log
+(`9803d0a1…64fcf1d`); wrote a conforming `executed_test_run` onto the BOUND session with the
+runner's original preserved beside it and an attribution note. Merge authorization went green on
+the next evaluation; everything downstream (authorize → merge → Done) was autonomous.
+
+**Root cause, precisely:** the contract exists only as a parser inside the gate. It is disclosed
+nowhere a runner can see — not in the assignment, not in the claim response, not in the
+`update_work_session` write path (which accepted the wrong key with a silent success), and not in
+the refusal. Desktop agents pass this gate because they carry accumulated failure-memory; fleet
+runners are born fresh and only get the prompt. **The gate assumes culture; runners only have the
+contract — so the contract must be the interface.**
+
+## Scoping state — asked 2026-07-26: "did we scope that fix, is it in COORD-51?"
+
+**No, and deliberately.** COORD-51's freeze (agreed msgs 1369/1376) put "typed merge-close
+(draft→ready / verdict / **evidence**)" in **L1** and restricted COORD-51/52 to L2 memory. The L1
+layer was named in the freeze and **never filed as work** — that is the hole this breakdown fell
+through.
+
+Two further scoping facts:
+- The `missing_artifact` amendment (features_json carries expected_key/expected_schema/
+  found_near_miss) was appended to COORD-51 at ~10:00Z 07-25 — **after the builder had started**.
+  #897 merged overnight WITHOUT it (`git show b4de4de1 | grep -c missing_artifact` → 0). The
+  amendment text survives on the COORD-51/52 task descriptions and in the builder's mailbox
+  (msg 1397, unacked as of this writing).
+- The two write-path fixes discussed on 07-25 (reject-at-write; teach-at-refusal) were proposed
+  in-session and **never filed** — held per operator direction, evidence first.
+
+## PROPOSED FIX (not filed) — make evidence a typed tool, the Atlas pattern
+
+Operator direction 2026-07-26: "we need to show them what they need to do — make it a typed tool
+like we do in Atlas." Verified against the ActionEngine repo
+(`actionengine/engine/services/atlas_context/contracts.py`): every service boundary is a pydantic
+contract — `Field(..., min_length=1, description=…)`, constrained ranges, `json_schema_extra`
+examples, and the header rule *"These contracts are immutable — services depend on them."* The
+schema IS the interface; a malformed request cannot exist.
+
+Applied here: a first-class MCP tool, e.g. `record_executed_test_run`, whose **input schema is
+the evidence contract**:
+
+- typed fields: `commands: list[str]` (min 1), `passed: bool` / `exit_code: int`,
+  `output_sha256: str` (pattern-validated) — ONE canonical hash key, server maps to the gate's
+  accepted set; `completed_at` stamped server-side, not trusted from the caller
+- writes to BOTH read surfaces at once (work_session.hygiene AND claim evidence), erasing the
+  split-surface trap documented 07-25 (completion reads evidence; merge authorization reads hygiene)
+- returns the gate's verdict immediately — the runner learns "evidence accepted, merge
+  authorization now lacks only X" in the same call, the desktop-agent feedback loop at machine speed
+- the `missing_executed_test_run` refusal names this tool: "call record_executed_test_run" — the
+  refusal becomes an instruction, not a diagnosis
+
+Why this beats validating the free-form dict: a validator still lets the runner guess the
+envelope; a typed tool makes the wrong key **unrepresentable**. It is also subtraction-shaped —
+once runners use the tool, the eight-hash-key tolerance ladder and the near-miss detection become
+legacy compatibility, not load-bearing logic.
+
+Candidate follow-ons in the same pattern (evidence for the L1 layer, not filed): typed
+`record_review_verdict` already exists and worked first try on CO-21 — proof the pattern holds;
+`mark_pr_ready` and draft-state transitions are the remaining untyped L1 actions.
+
+## BREAKDOWN 21 — the immortal zombie: dead runner, green heartbeat, 9 hours
+
+ADAPTER-28's runner (run_f1a4357f86bc380c, dispatched 09:29 07-25) hit an OpenAI rate-limit
+stream error at ~21:34 local and died at an interactive prompt:
+
+```
+■ stream disconnected before completion: Internal server error
+  Approaching rate limits — Switch to gpt-5.4-mini for lower credit usage?
+  › 1. Switch to gpt-5.4-mini   2. Keep current model   3. Keep current model (never show again)
+```
+
+**Evidence it was dead, not waiting** (2026-07-26 morning):
+- PTY log: zero bytes appended since 21:34 (~9h); process 0% CPU, state Ss, no children
+- Input injection through the host's own endpoint (`/runner/v1/sessions/…/inject`, valid minted
+  ticket) returned `injected: true, bytes_written: 1` for both "3" and Enter — **and produced zero
+  redraw**. A live TUI repaints on any keypress. Nobody was home.
+- Meanwhile the host wrapper heartbeated faithfully the entire time (`heartbeat_ttl_s: 180`,
+  renewed all night), so no lease expiry, no reaper, no escalation. It never created a Work
+  Session — 9 hours of green liveness, zero progress. **Liveness and progress are different
+  measurements and we only take one of them.**
+- Resolution: `stop_task` 07-26 ~08:40Z; host acked; process gone in ~20s; coordinator re-dispatch
+  expected on its normal cadence.
+
+**Compounding find — stale secret after rotation (HARDEN-46):** the runner's PTY stream showed
+its relay websocket in an endless connect→fail loop (46 straight attempts). The host process
+predates yesterday's token rotation and still carries the OLD `PM_MCP_TOKEN` (env hash
+`7938bfc3…` vs the shell's rotated `913887d0…` — how the inject 401 was diagnosed). Long-running
+Agent Hosts are a stale-secret surface the rotation checklist does not cover; a host restart is
+required to pick up rotated credentials.
+
+**Classes to spec from this (not filed):** (a) progress watchdog — output-staleness beside
+heartbeat, N hours of silent PTY on a live lease is an escalation; (b) headless codex must not be
+able to block on interactive prompts (`--dangerously-bypass-approvals` does not cover provider
+menus — config-level model-fallback or non-interactive mode); (c) HARDEN-46 rotation checklist
+gains "restart Agent Hosts".
