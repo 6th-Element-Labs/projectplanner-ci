@@ -80,6 +80,7 @@ def execute(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         "github_lifecycle": [
             "push the task branch",
             "open or update the PR against the intended branch",
+            "mark the PR ready (non-draft) before requesting merge authorization; already-ready is a no-op",
             "include branch, head_sha, pr_number/pr_url in complete_claim evidence",
             "complete_claim moves the task to In Review and releases the claim",
             "after merge/rebase reaches the intended branch, the GitHub webhook or default-branch backfill stamps merged_sha and marks Done",

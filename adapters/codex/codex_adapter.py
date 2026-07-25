@@ -154,14 +154,11 @@ def claim_task(task_id, ttl_seconds=1800, idem_key="", cwd=None):
 
 
 def complete_claim(claim_id, evidence=None, final_status=""):
-    body = {
-        "project": PROJECT,
-        "claim_id": claim_id,
-        "evidence": evidence or {},
-    }
-    if final_status:
-        body["final_status"] = final_status
-    return sb._http("POST", "/txp/v1/complete_claim", body)
+    # Route through the shared worker completion contract so mark-ready runs
+    # before merge authorization (ADAPTER-30), matching every other runtime.
+    return sb.complete_claim(
+        PROJECT, claim_id, evidence or {}, final_status=final_status,
+    )
 
 
 def abandon_claim(claim_id, reason):

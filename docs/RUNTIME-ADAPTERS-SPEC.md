@@ -187,12 +187,18 @@ On normal exit:
 run repo preflight and refresh the Work Session
 execute the relevant test command(s) through the adapter/host runner
 attach switchboard.executed_test_run.v1 evidence with command(s), exit status, completion time, and output/log hash
-call complete_claim with branch, head_sha, PR/push/offline proof, executed_test_run, and git diff --check
+mark the PR ready (gh pr ready) when PR evidence is present — idempotent if already ready
+call complete_claim with branch, head_sha, PR/push/offline proof, executed_test_run, git diff --check, and pr_ready
 report usage if available
 release all owned leases
 ack any handled terminal signals
 write final heartbeat/state
 ```
+
+Marking the PR ready is part of the shared worker completion contract
+(`adapters/switchboard_core.py` `ensure_pr_ready` / `complete_claim`), not an
+adapter-specific step. It runs for implementation and remediation alike, and it
+must happen before merge authorization so a draft never reaches `merge_gate`.
 
 For `code_strict` sessions, Switchboard refuses `complete_claim` when the Work Session is dirty
 without an explicit allowance, has conflict markers, has a mismatched branch/head SHA, lacks
