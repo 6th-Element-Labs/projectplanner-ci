@@ -9,6 +9,7 @@ from .effects import effect_key, plan_effect
 from .human_closeout import build_human_closeout_request
 from .routing import task_ready_for_dispatch
 from .state_machine import (
+    COMPLETION_CLASSIFIER_VERSION,
     COMPLETION_DECISION_SCHEMA,
     COMPLETION_SNAPSHOT_SCHEMA,
     MERGE_AUTHORIZATION_CONTEXT,
@@ -17,6 +18,7 @@ from .state_machine import (
 )
 
 __all__ = [
+    "COMPLETION_CLASSIFIER_VERSION",
     "COMPLETION_DECISION_SCHEMA",
     "COMPLETION_SNAPSHOT_SCHEMA",
     "MERGE_AUTHORIZATION_CONTEXT",

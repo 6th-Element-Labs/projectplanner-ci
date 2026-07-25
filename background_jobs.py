@@ -103,6 +103,16 @@ JOB_CATALOG: Dict[str, JobSpec] = {
         task_anchors=("PERF-1",),
         description="Apply pending webhook-inbox events idempotently off the request path.",
     ),
+    "compact_decision_snapshots": JobSpec(
+        job_name="compact_decision_snapshots",
+        title="Compact decision-corpus snapshot bodies",
+        dbos_eligible=True,
+        task_anchors=("COORD-50",),
+        description=(
+            "Drop decision_records snapshot bodies past their TTL, keeping escalated, "
+            "abandoned, and human-resolved episodes indefinitely as demonstrations."
+        ),
+    ),
 }
 
 
@@ -342,6 +352,7 @@ def _step_handler(job_name: str) -> Callable[[str, Mapping[str, Any]], Dict[str,
         "receipt_projection_batch": _step_receipt_projection,
         "reconcile_alerts_resumable": _step_reconcile_alerts,
         "drain_webhook_inbox": _step_drain_webhook_inbox,
+        "compact_decision_snapshots": _step_compact_decision_snapshots,
     }
     handler = handlers.get(job_name)
     if not handler:
@@ -383,6 +394,28 @@ def _step_plan_agent(project_id: str, params: Mapping[str, Any]) -> Dict[str, An
         "recipients": result.get("recipients"),
         "dispatch_targets": result.get("dispatch_targets") or [],
     }
+
+
+def _step_compact_decision_snapshots(
+        project_id: str, params: Mapping[str, Any]) -> Dict[str, Any]:
+    """Bound decision-corpus storage by episode count, not tick rate (COORD-50).
+
+    The projected half is ~200 bytes and is retained indefinitely; a hydrated
+    snapshot body is 5-50 KB and is dropped past its TTL unless the episode is a
+    demonstration (escalated, abandoned, or human-resolved). The box is a t4g.micro
+    that has already wedged itself once on disk, so this is not optional.
+    """
+    from switchboard.storage.repositories import decision_records
+
+    store.init_db(project_id)
+    ttl_days = params.get("ttl_days")
+    return decision_records.compact_decision_snapshots(
+        project=project_id,
+        ttl_days=(
+            int(ttl_days) if ttl_days is not None
+            else decision_records.DEFAULT_SNAPSHOT_TTL_DAYS
+        ),
+    )
 
 
 def _step_replay_verify(project_id: str, params: Mapping[str, Any]) -> Dict[str, Any]:

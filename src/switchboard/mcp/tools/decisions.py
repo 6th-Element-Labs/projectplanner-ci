@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -143,12 +144,69 @@ def get_decision(decision_id: str, project: str = "maxwell") -> str:
     return _services().dumps(record) if record else "decision not found"
 
 
+def get_reason_code_counts(project: str = "maxwell", window_hours: float = 168.0,
+                           task_id: str = "", deliverable_id: str = "",
+                           host_id: str = "", limit: int = 50) -> str:
+    """Reason-code concentration over a window, counting EPISODES not ticks (COORD-50).
+
+    Answers "is this one systemic stall, or N unrelated per-task retries?" — the
+    question that cost a human a manual diagnosis on DOGFOOD-19, where the identical
+    `required_exact_head_ci_failed` fired on 3 of 3 PRs from a single classifier
+    ordering bug and nothing counted them.
+
+    The completion driver re-ticks an unchanged head, so raw tick counts measure
+    polling frequency. `episodes` collapses identical consecutive observations;
+    `ticks` is kept alongside so a retry loop is visible rather than inflating the
+    signal. `dominant_reason_code` is the top code by episode share.
+
+    Scope with window_hours (default 7 days), and optionally task_id, deliverable_id,
+    or host_id. Codes not in `switchboard.reason_code.v1` are returned with
+    registered=false and repeated in `unregistered_reason_codes` — an unowned code is
+    surfaced, never silently counted as free text.
+    project: 'maxwell' (default), 'helm', or 'switchboard'."""
+    from switchboard.storage.repositories import decision_records
+
+    since = (
+        time.time() - (float(window_hours) * 3600.0)
+        if float(window_hours or 0) > 0 else None
+    )
+    return _services().dumps(decision_records.count_reason_code_episodes(
+        project=project, since=since, task_id=task_id,
+        deliverable_id=deliverable_id, host_id=host_id, limit=limit,
+    ))
+
+
+def list_decision_episodes(project: str = "maxwell", task_id: str = "",
+                           window_hours: float = 168.0, deliverable_id: str = "",
+                           host_id: str = "", limit: int = 100) -> str:
+    """The append-only reason-code timeline for a task or window (COORD-50).
+
+    `completion_runs` holds one row per task and overwrites `reason_code` in place,
+    so it can only ever show the latest verdict. This returns the durable history:
+    every distinct decision episode oldest-first, with the exact-head fence, the
+    materialized `switchboard.decision_features.v1` projection, and `tick_count`.
+    Use it to see how a task actually moved between routes rather than where it
+    stopped. project: 'maxwell' (default), 'helm', or 'switchboard'."""
+    from switchboard.storage.repositories import decision_records
+
+    since = (
+        time.time() - (float(window_hours) * 3600.0)
+        if float(window_hours or 0) > 0 else None
+    )
+    return _services().dumps(decision_records.list_decision_episodes(
+        project=project, task_id=task_id, since=since,
+        deliverable_id=deliverable_id, host_id=host_id, limit=limit,
+    ))
+
+
 DECISION_TOOL_NAMES = (
     "record_decision",
     "record_coordinator_decision",
     "list_decisions",
     "list_coordinator_decisions",
     "get_decision",
+    "get_reason_code_counts",
+    "list_decision_episodes",
 )
 
 

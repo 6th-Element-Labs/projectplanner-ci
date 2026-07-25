@@ -16,6 +16,9 @@ from typing import Any, Mapping, Sequence
 
 COMPLETION_SNAPSHOT_SCHEMA = "switchboard.completion_snapshot.v1"
 COMPLETION_DECISION_SCHEMA = "switchboard.completion_decision.v1"
+# Stamped on every decision record so a replay (spec §8.2) can tell which classifier
+# produced a verdict. Bump when this module's routing changes observably.
+COMPLETION_CLASSIFIER_VERSION = "switchboard.completion_classifier.v1"
 
 _PASS = {"success", "passed", "pass", "ok"}
 _POLICY_PASS = _PASS | {"neutral", "skipped"}

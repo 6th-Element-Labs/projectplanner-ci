@@ -18,6 +18,22 @@ from switchboard.domain.completion.state_machine import build_completion_snapsho
 
 
 HEAD = "8" * 40
+
+# These are unit proofs of effect identity and replay safety; they hold no database.
+# run_completion_tick also appends to the COORD-50 decision corpus, whose persistence
+# is proven in tests/test_coord50_decision_corpus.py.
+_CORPUS_PATCH = patch(
+    "switchboard.storage.repositories.decision_records.record_decision_episode",
+    return_value={},
+)
+
+
+def setUpModule():
+    _CORPUS_PATCH.start()
+
+
+def tearDownModule():
+    _CORPUS_PATCH.stop()
 PR_URL = "https://github.com/example/projectplanner/pull/810"
 
 

@@ -17,6 +17,22 @@ HEAD_812 = "25951e34" + "0" * 32
 PR_810 = "https://github.com/6th-Element-Labs/projectplanner/pull/810"
 PR_812 = "https://github.com/6th-Element-Labs/projectplanner/pull/812"
 
+# These are unit proofs of the driver's ports and routing; they hold no database.
+# run_completion_tick also appends to the COORD-50 decision corpus, whose persistence
+# is proven in tests/test_coord50_decision_corpus.py.
+_CORPUS_PATCH = patch(
+    "switchboard.storage.repositories.decision_records.record_decision_episode",
+    return_value={},
+)
+
+
+def setUpModule():
+    _CORPUS_PATCH.start()
+
+
+def tearDownModule():
+    _CORPUS_PATCH.stop()
+
 
 def managed_runner(head: str, generation: int, role: str) -> dict:
     return {

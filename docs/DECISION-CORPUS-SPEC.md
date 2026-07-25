@@ -1,6 +1,7 @@
 # Decision corpus spec — replay at n=1, pooled failure intelligence at n=many
 
-- **Status:** Proposed — schemas frozen for review; requires ADR ratification (see §11)
+- **Status:** Phase 1 implemented (COORD-50); Phases 2–6 proposed and **blocked on ADR
+  ratification** (see §11 and §12)
 - **Date:** 2026-07-25
 - **Strategy anchors:** DOGFOOD-7 (open-core boundary), DOGFOOD-10
   ([`SWITCHBOARD-BACKEND-MOAT.md`](SWITCHBOARD-BACKEND-MOAT.md) §5–§7)
@@ -452,11 +453,44 @@ spec should not be implemented past Phase 1 until that record exists.
 Each phase is independently valuable, and no phase requires redesigning an earlier one, because the
 projection boundary and `advice_version` are present from the first row.
 
-**Phase 1 — Start the clock.** Registry, feature allowlist, `decision_records` with both halves,
-`advice_version` stamped `NULL`, episode dedupe, retention compaction. No tools, no aggregation, no
-analysis. *Value at n=1: none directly — but the baseline is only obtainable prospectively, and
+**Phase 1 — Start the clock. — SHIPPED (COORD-50).** Registry, feature allowlist,
+`decision_records` with both halves, `advice_version` stamped `NULL`, episode dedupe, retention
+compaction. *Value at n=1: none directly — but the baseline is only obtainable prospectively, and
 every week without it is a week of unrecoverable history.* This is the gate on everything else and
-should ship in its dumbest working form.
+shipped in its dumbest working form.
+
+| Artifact | Where it landed |
+|---|---|
+| `switchboard.reason_code.v1` | `src/switchboard/domain/decisions/reason_codes.py` |
+| `switchboard.decision_features.v1` | `src/switchboard/domain/decisions/features.py` |
+| `switchboard.decision_record.v1` | migrations `0117`–`0119`, `src/switchboard/storage/repositories/decision_records.py` |
+| Write path | `run_completion_tick` appends one episode per tick, on automated ticks too |
+| Retention | `compact_decision_snapshots` in the `background_jobs.py` catalogue |
+| Counts | `get_reason_code_counts` / `list_decision_episodes` MCP tools |
+| Proof | `tests/test_coord50_decision_corpus.py` |
+
+Three deviations from the text above, all deliberate:
+
+1. **`snapshot_hash` hashes the decision-relevant projection, not the raw snapshot body.** The
+   hydrated snapshot embeds the whole task row and the session-health probe, both of which carry
+   timestamps that move on every tick. Hashing the body would make every tick unique and defeat §5
+   entirely. The identity is the classified verdict, the exact-head fence, and the materialized
+   feature vector — anything that would change the decision changes the hash.
+2. **`deliverable_id` and `host_id` are private-half columns**, added so counts can be scoped as
+   the task required. They are named in `PRIVATE_COLUMNS` and asserted absent from every export,
+   for the same reason head SHAs are: they identify the environment.
+3. **Unregistered codes are surfaced by the count query**, not by a column on the ledger. The table
+   stays as specified; `count_reason_code_episodes` returns `registered: false` and an explicit
+   `unregistered_reason_codes` list. `switchboard.reason_code.v1` currently owns the completion
+   authority's vocabulary; §15 Q3 leaves the other emitting subsystems open.
+
+`§4.1`'s spelling rule is enforced by folding, not by editing the classifier: `required_ci_canceled`
+and `required_ci_cancelled` are both still emitted by `_COORD_CI`, and `canonical_reason_code`
+collapses them onto one registered cohort at the corpus boundary.
+
+Phase 1 adds no authority — it gates nothing and routes nothing — so it does not consume the §11
+subtraction budget. **Phase 2 onward must not start until ADR-0020 (or the ADR-0006 amendment)
+exists and §11's three retirements actually ship.**
 
 **Phase 2 — Replay harness.** Re-run the current classifier over the corpus; diff decisions against
 what was recorded; surface every changed verdict for review. *Value at n=1: pays off on the very

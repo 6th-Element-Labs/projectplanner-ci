@@ -42,6 +42,7 @@ from switchboard.storage.migrations.attention import (
     ATTENTION_INDEX_SQL,
     ATTENTION_REQUESTS_SQL,
 )
+from switchboard.storage.migrations.decisions import DECISION_RECORDS_SQL
 
 # Ordered and append-only. ``name`` is the immutable ledger key — never renumber, rename,
 # or reuse one. Each tuple is (name, table, column, ddl); every entry adds one column and
@@ -442,6 +443,18 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
     ("0115_ix_attention_completion_wakes_task", ATTENTION_INDEX_SQL[5]),
     # Custom transactional table rebuild runs after the generic DDL pass.
     ("0116_review_verdict_exact_pr_identity", "SELECT 1"),
+    # COORD-50 — decision corpus (docs/DECISION-CORPUS-SPEC.md §4.3). Append-only,
+    # one row per decision *episode*. Carries no authority: it gates nothing and
+    # routes nothing. The private half (snapshot_json/decision_json) is the replay
+    # substrate; the projected half (reason_code/features_json) is export-safe and
+    # is materialized at write time, never derived at export time.
+    ("0117_decision_records", DECISION_RECORDS_SQL),
+    ("0118_ix_decision_records_projection",
+     "CREATE INDEX IF NOT EXISTS ix_decision_records_projection "
+     "ON decision_records(project, reason_code, first_seen_at DESC)"),
+    ("0119_ix_decision_records_convergence",
+     "CREATE INDEX IF NOT EXISTS ix_decision_records_convergence "
+     "ON decision_records(project, task_id, head_sha, generation)"),
 ]
 
 

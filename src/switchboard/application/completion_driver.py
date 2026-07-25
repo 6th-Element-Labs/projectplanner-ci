@@ -13,6 +13,7 @@ from switchboard.domain.completion.executor import (
 )
 from switchboard.domain.completion.normalize import normalize_snapshot
 from switchboard.domain.completion.state_machine import (
+    COMPLETION_CLASSIFIER_VERSION,
     build_completion_snapshot,
     classify_completion,
 )
@@ -215,7 +216,7 @@ def run_completion_tick(
 ) -> dict[str, Any]:
     """Execute exactly one persisted route effect for one task."""
     from switchboard.application.commands import task_execution
-    from switchboard.storage.repositories import completion_runs
+    from switchboard.storage.repositories import completion_runs, decision_records
 
     snapshot = hydrator(
         task_id, project=project, actor=actor, store_mod=store_mod,
@@ -224,6 +225,18 @@ def run_completion_tick(
         task_id, project=project,
     ) or {}
     decision = classify_completion(current, snapshot)
+    # COORD-50: retain the classifier's input and output on EVERY tick, not only
+    # the ones that pull a human in. completion_runs overwrites reason_code in
+    # place, so this append-only episode is the only durable timeline. advice_version
+    # is NULL until Phase 4 makes advice live — the control arm needs the column
+    # populated from the first row, not retrofitted (spec §7).
+    episode = decision_records.record_decision_episode(
+        project=project,
+        snapshot=snapshot,
+        decision=decision,
+        classifier_version=COMPLETION_CLASSIFIER_VERSION,
+        advice_version=None,
+    )
     # Human projection and its Needs-you authority must commit atomically in
     # execute_effect; pre-persisting Blocked(route=human) could strand a task
     # without an operator-visible request.
@@ -272,6 +285,12 @@ def run_completion_tick(
         "decision": decision,
         "plan": plan,
         "execution": result,
+        "decision_record": {
+            "record_id": episode.get("record_id"),
+            "snapshot_hash": episode.get("snapshot_hash"),
+            "tick_count": episode.get("tick_count"),
+            "reason_code_registered": episode.get("reason_code_registered"),
+        },
     }
 
 
