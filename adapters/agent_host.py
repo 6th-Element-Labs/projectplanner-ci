@@ -552,19 +552,117 @@ def _consume_host_relay_refresh_request(runner_session_id, host_id):
         return {}
 
 
+def _http_status_from_exception(exc):
+    """Extract an HTTP status when sb._http raised RuntimeError(HTTP N ...) or HTTPError."""
+    cause = getattr(exc, "__cause__", None)
+    if isinstance(cause, urllib.error.HTTPError):
+        return int(cause.code or 0)
+    if isinstance(exc, urllib.error.HTTPError):
+        return int(exc.code or 0)
+    match = re.match(r"HTTP\s+(\d{3})\b", str(exc or ""))
+    return int(match.group(1)) if match else 0
+
+
+def _error_code_from_exception(exc, default="runner_bind_incomplete"):
+    text = str(exc or "")
+    match = re.search(r"error_code=([A-Za-z0-9_.-]+)", text)
+    return match.group(1) if match else default
+
+
 def _require(method, path, body=None):
-    """Fail-closed REST used for COORD-34 claim-bound runner registration."""
+    """Fail-closed REST used for COORD-34 claim-bound runner registration.
+
+    Transport/local exceptions (URLError, timeout, 5xx) are broken_connection.
+    HTTP 4xx registry/policy refusals (including narrow-host 403 raised by
+    sb._http as RuntimeError) stay refused / non-transport so Connect does not
+    retry them as blips.
+    """
     try:
         return sb._http(method, path, body)
     except Exception as e:
         print(f"[agent_host] {method} {path} failed ({type(e).__name__}): {e}", flush=True)
+        status = _http_status_from_exception(e)
+        if 400 <= status < 500:
+            error_code = _error_code_from_exception(e)
+            return {
+                "error": error_code,
+                "error_code": error_code,
+                "failure_class": "failed_gate",
+                "refused": True,
+                "transport_error": False,
+                "http_status": status,
+                "message": f"{method} {path} failed: {type(e).__name__}: {e}",
+            }
         return {
-            "error": "runner_bind_incomplete",
-            "error_code": "runner_bind_incomplete",
-            "failure_class": "unbound_identity",
-            "refused": True,
-            "message": f"{method} {path} failed: {type(e).__name__}",
+            "error": "control_plane_unavailable",
+            "error_code": "control_plane_unavailable",
+            "failure_class": "broken_connection",
+            "refused": False,
+            "transport_error": True,
+            "http_status": status or None,
+            "message": f"{method} {path} failed: {type(e).__name__}: {e}",
         }
+
+
+def _is_transport_registration_error(reg):
+    """True when runner registration failed because the control plane was unreachable."""
+    if reg is None:
+        return True
+    if not isinstance(reg, dict):
+        return False
+    if reg.get("transport_error"):
+        return True
+    if reg.get("error_code") == "control_plane_unavailable":
+        return True
+    if reg.get("failure_class") == "broken_connection":
+        return True
+    return False
+
+
+def _classify_connect_registration_failure(reg):
+    """Separate control-plane transport blips from registry policy refusals."""
+    if _is_transport_registration_error(reg):
+        message = (
+            (reg or {}).get("message")
+            or "Control plane unavailable during Connect runner registration"
+        )
+        return {
+            "failure_class": "broken_connection",
+            "provider_error": str(message)[:500],
+            "reason": "connect_runner_registration_transport_failed",
+        }
+    return {
+        "failure_class": "failed_gate",
+        "provider_error": "Connect runner registry rejected the launch",
+        "reason": "connect_runner_registration_failed",
+    }
+
+
+def _complete_wake_with_retry(body, attempts=3, delay_s=0.5):
+    """Post complete_wake with retries so a blip cannot leave the wake claimed."""
+    last = None
+    total = max(1, int(attempts or 1))
+    for i in range(total):
+        last = _try("POST", P_COMPLETE_WAKE, body)
+        if last and not last.get("error") and not last.get("error_code"):
+            return last
+        if i + 1 < total:
+            print(
+                f"[agent_host] POST {P_COMPLETE_WAKE} incomplete; "
+                f"retry {i + 1}/{total}",
+                flush=True,
+            )
+            time.sleep(max(0.0, float(delay_s or 0)))
+    print(
+        f"[agent_host] POST {P_COMPLETE_WAKE} exhausted retries; "
+        f"wake may remain claimed wake_id={(body or {}).get('wake_id')}",
+        flush=True,
+    )
+    return last
+
+
+CONNECT_REGISTER_ATTEMPTS = 3
+CONNECT_REGISTER_RETRY_DELAY_S = 0.5
 
 
 def default_inventory():
@@ -3724,20 +3822,42 @@ def run_once(inventory):
                 register_runner_session(rec, claimed_wake, inventory) if started else None
             )
             connect_mode = wake_mode(claimed_wake, inventory) == "connect"
-            if started and connect_mode and (
-                    not runner_registration
-                    or runner_registration.get("error")
-                    or runner_registration.get("error_code")):
-                rec = {
-                    **(rec or {}),
-                    "failure_class": "failed_gate",
-                    "provider_error": "Connect runner registry rejected the launch",
-                }
-                supervisor_action("kill", runner_session_id, {
-                    "grace_seconds": 2.0,
-                    "reason": "connect runner registration failed"})
-                started = False
-                result_reason = "connect_runner_registration_failed"
+            if started and connect_mode:
+                # ADAPTER-32 / BUG-195: retry transport blips before failing closed.
+                for attempt in range(1, CONNECT_REGISTER_ATTEMPTS):
+                    if (runner_registration
+                            and not runner_registration.get("error")
+                            and not runner_registration.get("error_code")):
+                        break
+                    if (runner_registration
+                            and not _is_transport_registration_error(runner_registration)):
+                        break
+                    print(
+                        f"[agent_host] Connect register_runner_session transport "
+                        f"blip; retry {attempt}/{CONNECT_REGISTER_ATTEMPTS - 1} "
+                        f"wake_id={wake_id}",
+                        flush=True,
+                    )
+                    time.sleep(CONNECT_REGISTER_RETRY_DELAY_S)
+                    runner_registration = register_runner_session(
+                        rec, claimed_wake, inventory)
+                if (not runner_registration
+                        or runner_registration.get("error")
+                        or runner_registration.get("error_code")):
+                    classified = _classify_connect_registration_failure(
+                        runner_registration)
+                    rec = {
+                        **(rec or {}),
+                        "failure_class": classified["failure_class"],
+                        "provider_error": classified["provider_error"],
+                    }
+                    supervisor_action("kill", runner_session_id, {
+                        "grace_seconds": 2.0,
+                        "reason": classified["reason"]})
+                    started = False
+                    result_reason = classified["reason"]
+                else:
+                    result_reason = "started"
             # COORD-34: non-BYOA claimed-task boots must publish a successful bind
             # before Watch/Chat may open. Incomplete/failed register fails the wake.
             elif started and (rec or {}).get("claim_id"):
@@ -3788,10 +3908,16 @@ def run_once(inventory):
         if binding:
             result["wake_completion_delegated"] = bool(started)
         if not binding or not started:
-            _try("POST", P_COMPLETE_WAKE, {"project": PROJECT, "wake_id": wake_id,
-                                           "runner_session_id": result["runner_session_id"],
-                                           "agent_id": (w.get("selector") or {}).get("agent_id"),
-                                           "result": result})
+            # ADAPTER-32: retry complete_wake so a single blip cannot strand a
+            # claimed Connect wake (COORD-48 "Starting" limbo). Exhaustion still
+            # logs loudly; other one-shot _try complete_wake paths are unchanged.
+            _complete_wake_with_retry({
+                "project": PROJECT,
+                "wake_id": wake_id,
+                "runner_session_id": result["runner_session_id"],
+                "agent_id": (w.get("selector") or {}).get("agent_id"),
+                "result": result,
+            })
         acted.append({"wake_id": wake_id, **result})
     return {"host_id": host_id, "pending": len(wakes), "acted": acted,
             "refused": refused,
