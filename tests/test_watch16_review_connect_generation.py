@@ -5,6 +5,7 @@ from __future__ import annotations
 from path_setup import ROOT  # noqa: F401
 
 from switchboard.application.commands import connect_dispatch, task_execution
+from execution_policy_fixture import ready_execution_context  # noqa: E402
 from switchboard.storage.repositories import (
     project_execution_policy,
     project_execution_readiness,
@@ -31,6 +32,9 @@ try:
     project_execution_policy.get_project_execution_policy = (
         lambda _project: {"configured": False}
     )
+    connect_dispatch.execution_context.resolve = (
+        lambda **kwargs: ready_execution_context(
+            kwargs["task_id"], runtime=kwargs.get("runtime") or "codex"))
     connect_dispatch.coordination_repo.request_wake = request_wake
     task_execution.runner_repo.task_live_executions = lambda *_args, **_kwargs: []
     task_execution._projection = lambda *_args, **_kwargs: {
@@ -65,8 +69,14 @@ assert first["started"] is True and first["role"] == "review_merge", first
 assert retried["started"] is True, retried
 assert len(captured) == 4
 assert captured[0]["policy"]["mode"] == "connect"
+# CO-20 makes hybrid placement mandatory, so every Connect wake policy now also carries
+# the placement decision, its scheduler input, the resolved execution context, the
+# bounded no-host outcome and the placement deadline. Kept as an exact-set assertion so
+# the wake contract stays pinned rather than becoming open-ended.
 assert set(captured[0]["policy"]) == {
-    "mode", "assignment", "lifecycle", "effect_identity"}
+    "mode", "assignment", "lifecycle", "effect_identity",
+    "placement", "scheduler", "execution_context",
+    "no_eligible_host", "deadline_seconds"}
 assert captured[0]["idem_key"] == captured[1]["idem_key"]
 assert captured[0]["policy"] == captured[1]["policy"]
 assert captured[2]["idem_key"] != captured[0]["idem_key"]

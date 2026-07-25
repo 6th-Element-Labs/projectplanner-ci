@@ -9,6 +9,7 @@ from pathlib import Path
 
 import mission_coordinator
 from switchboard.application.commands import connect_dispatch, task_execution
+from execution_policy_fixture import ready_execution_context  # noqa: E402
 from switchboard.storage.repositories import (
     project_execution_policy,
     project_execution_readiness,
@@ -63,6 +64,9 @@ try:
     project_execution_policy.get_project_execution_policy = (
         lambda _project: {"configured": False}
     )
+    connect_dispatch.execution_context.resolve = (
+        lambda **kwargs: ready_execution_context(
+            kwargs["task_id"], runtime=kwargs.get("runtime") or "codex"))
     connect_dispatch.coordination_repo.request_wake = request_wake
     task_execution.runner_repo.task_live_executions = lambda *_args, **_kwargs: []
     task_execution._projection = lambda *_args, **_kwargs: {
