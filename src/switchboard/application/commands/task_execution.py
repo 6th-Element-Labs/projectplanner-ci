@@ -937,8 +937,20 @@ def fence_task_generation(
     """
     task_id = _normalize(task_id)
     expected = dict(expected_identity or {})
+    # BUG-187: ``execution_connection_id`` is deliberately absent from this list.
+    # It is still compared field-by-field in make_runner_lease_due, which reads
+    # the current value as ``metadata.get("execution_connection_id") or ""`` — so
+    # a runner that HAS a connection id must still match it exactly, and a
+    # supplied-vs-stored disagreement in either direction is a mismatch that
+    # refuses the fence. What it must not do is treat *absence* as ambiguity:
+    # Connect-path runners structurally never carry one, so requiring it here
+    # made an entire class of runner permanently unfenceable. A stale generation
+    # could then never be replaced, no review_merge runner could start, no review
+    # verdict was ever recorded, and nothing reached the merge queue all day.
+    # The remaining six fields still pin the exact generation, and
+    # runner_session_id alone identifies the runner.
     required = (
-        "runner_session_id", "execution_id", "execution_connection_id",
+        "runner_session_id", "execution_id",
         "generation", "fence_epoch", "role", "head_sha",
     )
     missing = [
