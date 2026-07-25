@@ -462,3 +462,120 @@ leverage-to-cost ratio.
 **Corollary for BREAKDOWN 7:** BUG-178 proves the evidence machinery works end to end.
 Do not chase "workers cannot produce executed_test_run" as a general defect — scope it to
 the remediation path, where UI-63 failed.
+
+---
+
+# Session 2 — after COORD-49 / CO-25 / ADAPTER-30 / COORD-50 / BUG-184 landed
+
+Same protocol: observe, record, do not repair mid-run. All four fixes from session 1 are
+merged AND deployed to prod (`a07af674`), so this section describes behaviour with them live.
+
+## OBSERVATION — the session-1 fixes verifiably worked
+
+- `required_exact_head_ci_failed` fell from dominant (3 of 3 PRs) to absent in the window.
+- `draft_ready_to_mark_ready` began firing on the `review_merge` route — the branch that was
+  structurally unreachable before COORD-49.
+- `review_required` now routes to `review_merge` rather than remediation, i.e. the fix
+  generalised past draft to the whole Class A family exactly as intended.
+- BUG-184 stopped the completion tick crashing; episodes persist and the corpus fills.
+- Two PRs merged fully hands-off on their own gates: #865 ADAPTER-27 (`0ec6988f`) and
+  #864 UI-63 (`1772cab0`).
+
+**Accuracy note on the day's merge count.** Six PRs reached master, but only those two were
+hands-off. #886, #885 and #868 were **admin merges** by the operator, and #863's conflicts
+were resolved by hand. Counting all six as autopilot successes would be wrong.
+
+---
+
+## BREAKDOWN 11 — nothing reaps a runner whose pinned head no longer exists ⚠️
+
+**Severity:** HIGH. Filed as **BUG-186** (blocking). **Stalled the whole board twice in one day.**
+
+A runner is dispatched with an immutable assignment pinning `exact_head_sha`, and is
+instructed to fail closed on mismatch — which it correctly does. When the PR head then moves,
+**nothing terminates it.** It stays alive, unable to act, holding the execution lease that
+would allow a fresh dispatch at the real head.
+
+```
+Occurrence 1 (~05:00): five runners stale simultaneously
+  CO-20       pinned 259812aa   PR head 8a79c572   alive 4.5h
+  UI-63       pinned fb652f50   PR head 915c2ee2   alive 4.3h
+  ADAPTER-27  pinned cf496b36   PR head e49b68a8   alive 4.3h
+  CO-21       no head at all    orphan             alive 4.7h
+Occurrence 2 (~07:00, after BUG-184 deployed): one runner, same shape
+  CO-20  run_e9d5a081  pinned d150fd1b   PR head a894afc0   alive 2.8h
+```
+
+**Fingerprint:** a very high tick-to-episode ratio. Occurrence 2 showed `review_required`
+at 584 ticks across 5 episodes (~117:1). The classifier decided correctly every tick;
+nothing could act.
+
+**Why it is systemic.** Any head change orphans the current runner, and head changes are
+routine — remediation pushes, rebases, and *a sibling PR merging*, which forces every other
+branch in the deliverable to rebase. #863 went stale twice for exactly that reason, once
+when ADAPTER-27 merged and once when UI-63 merged. The more parallel work in a deliverable,
+the more often this fires.
+
+**It masks other fixes.** Occurrence 2 was initially misread as "BUG-184 did not work,"
+because the board looked frozen immediately after a correct fix deployed. BUG-184 *had*
+worked. A held lease is indistinguishable from a dead system from the outside. **Check
+`runner_head_matches_exact_head` before concluding a classifier or gate fix failed.**
+
+**The detection input already exists and is unused.** `decision_records.features_json`
+carries `runner_head_matches_exact_head` and `runner_live` on every episode. Both
+occurrences were fully described in the corpus while an operator rediscovered each by hand
+via `list_runner_sessions`.
+
+---
+
+## BREAKDOWN 12 — the completion driver ticks tasks that no autopilot scope owns
+
+**Severity:** MEDIUM (waste, and it disguises itself as a stall)
+
+After the stale runner in occurrence 2 was killed, CO-20 had a free lease, the host had
+16/16 headroom, the tick was healthy and the route was correct — and **nothing was
+dispatched.** Cause:
+
+```
+get_autopilot(project-independent-execution-plane) -> scopes: []
+```
+
+No armed scope. The prior scope was **task-scoped to COORD-47** and completed when COORD-47
+merged; nothing re-armed at the deliverable level. So the completion driver went on
+classifying three tasks that no scope owned:
+
+```
+review_required   6 episodes / 604 ticks / 3 tasks   route=review_merge   resolver=agent
+```
+
+Correct decisions, indefinitely, with no actor to execute them.
+
+**Why it matters beyond the wasted compute.** It is externally indistinguishable from a
+stall: PRs sit, ticks climb, nothing moves — the same surface as BREAKDOWN 11 and the same
+surface as a broken classifier. Diagnosing it costs a scope check that nothing prompts you
+to make.
+
+**Fix direction:** either the driver should not tick a task no scope owns (and should say
+so), or an unowned-but-ready task should surface as an explicit "needs arming" state rather
+than silently accumulating episodes. A task generating 604 ticks with `resolver: agent` and
+no agent is a condition the system should name itself.
+
+**Note this is arguably by design** — the Autopilot MVP's end state is "one operator action
+arms a deliverable." The gap is that nothing reports the *absence* of that action, so an
+unarmed deliverable and a broken one look identical.
+
+---
+
+## RUNNING TALLY OF THE ONE RECURRING DEFECT
+
+Every one of these is the same shape: **a diagnostic is computed and then destroyed.**
+
+| # | Where | What is discarded |
+|---|---|---|
+| 1 | merge-authorization gate | `blocked[0]["code"]`, dropped from the published status (COORD-49) |
+| 2 | Fleet dock | server's `github_error: <exc>`, overwritten with "GitHub is unreachable" (BUG-185) |
+| 3 | `_required_ci_decision` | names of the failing required contexts (COORD-51 §3.3) |
+| 4 | coordinator receipt | exception *message* kept only as class name — `CompletionRunError` vs `unsupported completion state: assessing` (BUG-184) |
+| 5 | decision episodes | `runner_head_matches_exact_head` computed into features, consumed by nothing (BUG-186) |
+
+Five instances in one day. This is a convention or a lint, not five independent fixes.
