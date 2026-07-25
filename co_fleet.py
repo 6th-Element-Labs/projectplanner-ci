@@ -44,6 +44,7 @@ from switchboard.domain import execution_liveness
 # SIMPLIFY-18: the autoscaler reads the one canonical vocabulary.
 TERMINAL_RUNNER_STATES = execution_liveness.TERMINAL_EXECUTION_STATES
 SAFE_SELECTOR = re.compile(r"^[A-Za-z0-9._:/@+\-]{1,160}$")
+FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
 @dataclass(frozen=True)
@@ -104,7 +105,9 @@ def load_config(env: dict[str, str] | None = None) -> Config:
     if not 30 <= drain_timeout <= 300:
         raise ValueError("CO_DRAIN_TIMEOUT_SECONDS must be between 30 and 300")
     return Config(
-        project=env.get("PM_PROJECT", "switchboard"),
+        # This selects the coordination-plane queue only.  A worker's task
+        # project is always taken from its immutable execution context.
+        project=env.get("CO_CONTROL_PROJECT", "switchboard"),
         region=env.get("AWS_REGION", "us-east-1"),
         account_id=env.get("CO_AWS_ACCOUNT_ID", "584673484283"),
         idle_seconds=idle,
@@ -252,6 +255,48 @@ def _safe_field(value: Any, name: str, required: bool = True) -> str:
     return value
 
 
+def _execution_repository(wake: dict[str, Any]) -> dict[str, str]:
+    """Return the immutable task-repository binding or fail closed.
+
+    Fleet images contain runner software, never a task checkout.  The only
+    authority for cache/materialization identity is the server-owned execution
+    context persisted on the wake.
+    """
+    context = (wake.get("policy") or {}).get("execution_context") or {}
+    repository = context.get("repository")
+    if isinstance(repository, dict):
+        slug = repository.get("slug") or repository.get("repository")
+        provider = repository.get("provider")
+        default_branch = repository.get("default_branch")
+        base_sha = repository.get("base_sha")
+    else:
+        slug = repository
+        scm = context.get("scm") or {}
+        provider = scm.get("provider")
+        default_branch = context.get("default_branch")
+        base_sha = context.get("base_sha")
+    project = context.get("project_id") or context.get("project")
+    generation = context.get("generation")
+    digest = context.get("digest") or context.get("context_digest")
+    values = {
+        "project": _safe_field(project, "execution_context.project"),
+        "provider": _safe_field(provider, "execution_context.scm.provider"),
+        "repository": _safe_field(slug, "execution_context.repository"),
+        "default_branch": _safe_field(
+            default_branch, "execution_context.default_branch"),
+        "base_sha": str(base_sha or ""),
+        "generation": str(generation if generation is not None else ""),
+        "digest": _safe_field(digest, "execution_context.digest"),
+    }
+    if not FULL_SHA.fullmatch(values["base_sha"]):
+        raise ValueError("execution_context.base_sha must be a full lowercase SHA-1")
+    if not values["generation"].isdigit():
+        raise ValueError("execution_context.generation must be a non-negative integer")
+    if str(context.get("task_id") or "") != str(wake.get("task_id") or ""):
+        raise ValueError("execution_context.task_id does not match wake")
+    return values
+
+
 def _tag_specs(existing: list[dict[str, Any]], tags: dict[str, str]) -> list[dict[str, Any]]:
     by_type = {spec.get("ResourceType"): dict(spec) for spec in existing or []}
     for resource_type in ("instance", "volume"):
@@ -271,6 +316,7 @@ def render_user_data(base_user_data: str, wake: dict[str, Any], pool: Pool) -> s
     task_id = _safe_field(wake.get("task_id"), "task_id")
     runtime = _safe_field(selector.get("runtime"), "runtime")
     lane = _safe_field(selector.get("lane"), "lane")
+    execution_repo = _execution_repository(wake)
     provider, identifier = secret_reference(policy.get("runtime_config_ref") or "")
     marker = "# CO-3 will create this SecureString"
     if marker not in base_user_data:
@@ -282,28 +328,38 @@ def render_user_data(base_user_data: str, wake: dict[str, Any], pool: Pool) -> s
     serial_download = """for part_number in $(seq 0 $((MIRROR_PART_COUNT - 1))); do
   printf -v part_suffix '%03d' "$part_number"
   aws s3 cp "${MIRROR_PARTS_PREFIX}${part_suffix}" "/var/cache/switchboard-co/mirror.part-${part_suffix}" --only-show-errors
-  cat "/var/cache/switchboard-co/mirror.part-${part_suffix}" >>/var/cache/switchboard-co/projectplanner.mirror.tar.gz
+  cat "/var/cache/switchboard-co/mirror.part-${part_suffix}" >>/var/cache/switchboard-co/repository-cache.tar.gz
   rm -f "/var/cache/switchboard-co/mirror.part-${part_suffix}"
 done"""
-    parallel_download = """MIRROR_ARCHIVE="$(jq -r '.repositories["6th-Element-Labs/projectplanner"].mirror_archive // empty' /var/cache/switchboard-co/cache-manifest.json)"
-MIRROR_SHA256="$(jq -r '.repositories["6th-Element-Labs/projectplanner"].mirror_sha256 // empty' /var/cache/switchboard-co/cache-manifest.json)"
+    parallel_download = """CACHE_PROVIDER=${CO_CACHE_PROVIDER:?}
+CACHE_REPOSITORY=${CO_CACHE_REPOSITORY:?}
+CACHE_OBJECT_SHA=${CO_CACHE_OBJECT_SHA:?}
+CACHE_ENTRY="$(jq -cer --arg provider "$CACHE_PROVIDER" --arg repo "$CACHE_REPOSITORY" --arg sha "$CACHE_OBJECT_SHA" \
+  '.repositories[$provider][$repo][$sha] // error("exact repository cache miss")' \
+  /var/cache/switchboard-co/cache-manifest.json)"
+MIRROR_ARCHIVE="$(jq -r '.mirror_archive' <<<"$CACHE_ENTRY")"
+MIRROR_SHA256="$(jq -r '.mirror_sha256' <<<"$CACHE_ENTRY")"
 download_mirror_part() {
   printf -v part_suffix '%03d' "$1"
   aws s3 cp "${MIRROR_PARTS_PREFIX}${part_suffix}" "/var/cache/switchboard-co/mirror.part-${part_suffix}" --only-show-errors
 }
 if [ -n "$MIRROR_ARCHIVE" ] && [ -n "$MIRROR_SHA256" ]; then
-  aws s3 cp "$MIRROR_ARCHIVE" /var/cache/switchboard-co/projectplanner.mirror.tar.gz --only-show-errors
-  printf '%s  %s\n' "$MIRROR_SHA256" /var/cache/switchboard-co/projectplanner.mirror.tar.gz | sha256sum -c -
+  aws s3 cp "$MIRROR_ARCHIVE" /var/cache/switchboard-co/repository-cache.tar.gz --only-show-errors
+  printf '%s  %s\n' "$MIRROR_SHA256" /var/cache/switchboard-co/repository-cache.tar.gz | sha256sum -c -
 else
   export -f download_mirror_part
   export MIRROR_PARTS_PREFIX
   seq 0 $((MIRROR_PART_COUNT - 1)) | xargs -P 8 -n 1 bash -c 'download_mirror_part "$1"' _
   for part_number in $(seq 0 $((MIRROR_PART_COUNT - 1))); do
     printf -v part_suffix '%03d' "$part_number"
-    cat "/var/cache/switchboard-co/mirror.part-${part_suffix}" >>/var/cache/switchboard-co/projectplanner.mirror.tar.gz
+    cat "/var/cache/switchboard-co/mirror.part-${part_suffix}" >>/var/cache/switchboard-co/repository-cache.tar.gz
     rm -f "/var/cache/switchboard-co/mirror.part-${part_suffix}"
   done
-fi"""
+fi
+tar -xOf /var/cache/switchboard-co/repository-cache.tar.gz cache-manifest.json \
+  | jq -e --arg provider "$CACHE_PROVIDER" --arg repo "$CACHE_REPOSITORY" --arg sha "$CACHE_OBJECT_SHA" \
+    '.schema == "switchboard.repository_cache.v1"
+     and .scm_provider == $provider and .repository == $repo and .object_sha == $sha' >/dev/null"""
     if serial_download not in prefix:
         raise ValueError("base launch-template user data lacks the expected serial mirror download")
     prefix = prefix.replace(serial_download, parallel_download, 1)
@@ -318,8 +374,8 @@ fi"""
     image_validation = """HOME="$RUNTIME_HOME" CLAUDE_CONFIG_DIR="$CLAUDE_RUNTIME_HOME" claude --version
 CODEX_HOME="$CODEX_RUNTIME_HOME" codex --version
 HOME="$RUNTIME_HOME" gh --version
-PYTHONPATH=/opt/projectplanner /opt/projectplanner/.venv/bin/python /opt/projectplanner/adapters/agent_host.py --help
-/opt/projectplanner/.venv/bin/python /opt/projectplanner/adapters/codex/supervisor.py --help"""
+/opt/switchboard-agent-host/bin/python /opt/switchboard-agent-host/adapters/agent_host.py --help
+/opt/switchboard-agent-host/bin/python /opt/switchboard-agent-host/adapters/codex/supervisor.py --help"""
     if image_validation not in prefix:
         raise ValueError("base launch-template user data lacks image validation contract")
     prefix = prefix.replace(image_validation, "", 1)
@@ -330,13 +386,12 @@ PYTHONPATH=/opt/projectplanner /opt/projectplanner/.venv/bin/python /opt/project
     if cloudwatch_start not in prefix:
         raise ValueError("base launch-template user data lacks CloudWatch startup contract")
     prefix = prefix.replace(cloudwatch_start, "", 1)
-    # The golden image owns dependencies and system services, while the signed S3
-    # mirror owns the exact application revision. Run Agent Host from that checked,
-    # detached worktree so a fleet roll-forward does not require mutating the image.
-    source_line = re.compile(r"^SWITCHBOARD_CO_SOURCE_SHA=[0-9a-f]{40}$", re.MULTILINE)
-    if len(source_line.findall(prefix)) != 1:
-        raise ValueError("base launch-template user data lacks one pinned source revision")
-    prefix = source_line.sub("SWITCHBOARD_CO_SOURCE_SHA=${SOURCE_SHA}", prefix, count=1)
+    prefix = "\n".join([
+        f"CO_CACHE_PROVIDER={shlex.quote(execution_repo['provider'])}",
+        f"CO_CACHE_REPOSITORY={shlex.quote(execution_repo['repository'])}",
+        f"CO_CACHE_OBJECT_SHA={execution_repo['base_sha']}",
+        prefix,
+    ])
     capabilities = ",".join(pool.capabilities)
     # shlex.quote is defense in depth after the strict selector/reference allowlist.
     values = {
@@ -350,6 +405,12 @@ PYTHONPATH=/opt/projectplanner /opt/projectplanner/.venv/bin/python /opt/project
         "tenant": shlex.quote(str(binding.get("tenant_id") or "")),
         "provider": shlex.quote(str(binding.get("provider") or "")),
         "affinity": shlex.quote(str(binding.get("account_affinity_id") or "")),
+        "project": shlex.quote(execution_repo["project"]),
+        "repository": shlex.quote(execution_repo["repository"]),
+        "base_sha": execution_repo["base_sha"],
+        "default_branch": shlex.quote(execution_repo["default_branch"]),
+        "generation": execution_repo["generation"],
+        "digest": shlex.quote(execution_repo["digest"]),
     }
     extension = f"""
 # CO-3 reference-only runtime binding. No secret value is present in this script.
@@ -369,7 +430,7 @@ python3 - "$runtime_json" <<'PY'
 import json, shlex, sys
 value = json.loads(sys.argv[1])
 allowed = {{
-    "PM_BASE", "PM_PROJECT", "PM_MCP_TOKEN", "PM_AGENT_WORK_MODULE",
+    "PM_BASE", "PM_MCP_TOKEN", "PM_AGENT_WORK_MODULE",
     "PM_AGENT_WORK_MODULE_CODEX", "PM_AGENT_WORK_MODULE_CLAUDE_CODE",
     "PM_AGENT_WORK_MODULE_CURSOR",
     "PM_VERIFY_COMPLETION_PUSH", "PM_WORK_SESSION_TEST_CMD", "AWS_REGION",
@@ -406,12 +467,17 @@ PM_HOST_CAPABILITIES={values['caps']}
 PM_HOST_MAX_SESSIONS={values['sessions']}
 PM_HOST_CLASS=ephemeral
 PM_HOST_COST_CLASS=ephemeral_variable
-PM_HOST_PROJECTS={shlex.quote(str(wake.get('project') or 'switchboard'))}
+PM_HOST_PROJECTS={values['project']}
 PM_HOST_TENANTS={values['tenant']}
 PM_HOST_PROVIDERS={values['provider']}
 PM_HOST_ACCOUNT_AFFINITIES={values['affinity']}
 PM_HOST_SUPPORTS_CREDENTIAL_LEASES=1
-PM_HOST_REPOSITORIES=6th-Element-Labs/projectplanner
+PM_HOST_REPOSITORIES={values['repository']}
+PM_EXECUTION_REPOSITORY={values['repository']}
+PM_EXECUTION_BASE_SHA={values['base_sha']}
+PM_EXECUTION_DEFAULT_BRANCH={values['default_branch']}
+PM_EXECUTION_GENERATION={values['generation']}
+PM_EXECUTION_CONTEXT_DIGEST={values['digest']}
 PM_HOST_SESSION_POLICIES=code_strict
 PM_HOST_ISOLATION=task_worktree
 PM_WAKE_ID={values['wake']}
@@ -428,11 +494,8 @@ chmod 0600 /etc/switchboard-co/agent-host.env
 install -d -m 0770 -o switchboard -g switchboard /run/switchboard-co
 install -d -m 0700 -o switchboard -g switchboard /var/lib/switchboard-co/provider-runtimes
 install -d -m 0755 /etc/systemd/system/switchboard-co-agent-host.service.d
-cat >/etc/systemd/system/switchboard-co-agent-host.service.d/10-co-fleet-worktree.conf <<EOF
+cat >/etc/systemd/system/switchboard-co-agent-host.service.d/10-co-fleet-runtime.conf <<EOF
 [Service]
-ExecStart=
-ExecStart=/opt/projectplanner/.venv/bin/python ${{WORKTREE}}/adapters/agent_host.py --interval 10
-Environment=PYTHONPATH=${{WORKTREE}}:${{WORKTREE}}/src
 ReadWritePaths=/run/switchboard-co
 EOF
 systemctl daemon-reload

@@ -29,7 +29,7 @@ def run(*args, cwd=None, check=True):
 try:
     source = TMP / "source"
     publisher = TMP / "publisher.git"
-    archive = TMP / "projectplanner.mirror.tar.gz"
+    archive = TMP / "repository-cache.tar.gz"
     source.mkdir()
     run("git", "init", "--bare", "-q", publisher)
     run("git", "init", "-q", source)
@@ -38,25 +38,28 @@ try:
     (source / "proof.txt").write_text("portable cache\n", encoding="utf-8")
     run("git", "add", "proof.txt", cwd=source)
     run("git", "commit", "-q", "-m", "cache fixture", cwd=source)
-    canonical_origin = "https://example.test/6th-Element-Labs/projectplanner.git"
+    provider = "github"
+    repository = "example-org/atlas"
+    canonical_origin = f"https://example.test/{repository}.git"
     run("git", "remote", "add", "origin", canonical_origin, cwd=source)
     commit = run("git", "rev-parse", "HEAD", cwd=source).stdout.strip()
 
-    built = run(SCRIPT, source, commit, archive)
+    built = run(SCRIPT, source, provider, repository, commit, archive)
     ok(archive.is_file() and "built archive=" in built.stdout,
        "builder creates a checksummed exact-source mirror archive")
-    verified = run(SCRIPT, "--verify", archive, commit)
+    verified = run(SCRIPT, "--verify", archive, provider, repository, commit)
     ok("verified archive=" in verified.stdout,
        "published archive passes extraction, full git fsck, and pinned-commit verification")
     entries = run("tar", "-tzf", archive).stdout.splitlines()
-    ok(any(entry.startswith("projectplanner.git/") for entry in entries)
+    ok(any(entry.startswith("repository.git/") for entry in entries)
+       and "cache-manifest.json" in entries
        and not any("/._" in entry or entry.startswith("._") for entry in entries),
-       "portable archive contains the expected mirror root and no AppleDouble entries")
+       "portable archive contains a generic mirror plus its identity manifest")
 
     unpacked_cache = TMP / "unpacked-cache"
     unpacked_cache.mkdir()
     run("tar", "-xzf", archive, "-C", unpacked_cache)
-    cached_git = unpacked_cache / "projectplanner.git"
+    cached_git = unpacked_cache / "repository.git"
     cached_origin = run(
         "git", f"--git-dir={cached_git}", "config", "--get", "remote.origin.url"
     ).stdout.strip()
@@ -88,15 +91,26 @@ try:
     unpacked = TMP / "tampered"
     unpacked.mkdir()
     run("tar", "-xzf", archive, "-C", unpacked)
-    apple_double = unpacked / "projectplanner.git" / "objects" / "pack" / "._pack-test"
+    apple_double = unpacked / "repository.git" / "objects" / "pack" / "._pack-test"
     apple_double.parent.mkdir(parents=True, exist_ok=True)
     apple_double.write_text("forbidden metadata", encoding="utf-8")
     tampered = TMP / "tampered.tar.gz"
     with tarfile.open(tampered, "w:gz") as archive_file:
-        archive_file.add(unpacked / "projectplanner.git", arcname="projectplanner.git")
-    rejected = run(SCRIPT, "--verify", tampered, commit, check=False)
+        archive_file.add(unpacked / "cache-manifest.json", arcname="cache-manifest.json")
+        archive_file.add(unpacked / "repository.git", arcname="repository.git")
+    rejected = run(
+        SCRIPT, "--verify", tampered, provider, repository, commit, check=False)
     ok(rejected.returncode != 0 and "AppleDouble" in rejected.stderr,
        "verifier rejects AppleDouble metadata before a cache can be published")
+
+    wrong_repo = run(
+        SCRIPT, "--verify", archive, provider, "example-org/wrong", commit, check=False)
+    wrong_sha = run(
+        SCRIPT, "--verify", archive, provider, repository, "f" * 40, check=False)
+    ok(wrong_repo.returncode != 0 and "cache identity mismatch" in wrong_repo.stderr,
+       "cache verification fails closed for a different repository")
+    ok(wrong_sha.returncode != 0 and "cache identity mismatch" in wrong_sha.stderr,
+       "cache verification fails closed for a different object SHA")
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
 

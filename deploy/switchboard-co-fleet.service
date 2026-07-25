@@ -10,7 +10,9 @@ Group=projectplanner
 WorkingDirectory=/opt/projectplanner
 EnvironmentFile=/opt/projectplanner/.env
 EnvironmentFile=-/etc/switchboard-co-fleet.env
-Environment=PM_PROJECT=switchboard
+# Coordination-plane queue selector only; task projects come from each wake's
+# immutable execution context.
+Environment=CO_CONTROL_PROJECT=switchboard
 Environment=AWS_REGION=us-east-1
 Environment=CO_IDLE_SECONDS=720
 Environment=CO_DRAIN_TIMEOUT_SECONDS=120

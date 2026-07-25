@@ -169,14 +169,18 @@ macOS copyfile metadata, rejects AppleDouble entries, extracts the result, runs 
 `git fsck`, and verifies the pinned commit before it returns success:
 
 ```bash
-scripts/build_co_repo_cache.sh /path/to/projectplanner "$SOURCE_SHA" \
-  "/tmp/projectplanner-${SOURCE_SHA}.mirror.tar.gz"
+scripts/build_co_repo_cache.sh /path/to/repository github OWNER/REPOSITORY "$SOURCE_SHA" \
+  "/tmp/repository-${SOURCE_SHA}.cache.tar.gz"
 scripts/build_co_repo_cache.sh --verify \
-  "/tmp/projectplanner-${SOURCE_SHA}.mirror.tar.gz" "$SOURCE_SHA"
+  "/tmp/repository-${SOURCE_SHA}.cache.tar.gz" github OWNER/REPOSITORY "$SOURCE_SHA"
 ```
 
 Publish the archive only after that verification passes, then update the cache manifest's
-`mirror_archive`, `mirror_sha256`, and `source_sha` together. Fleet control on the Plan VM
+exact `SCM provider -> repository slug -> object SHA` entry. Workers reject a
+cache whose embedded identity differs from any of those three fields; a nearby
+repository or stale SHA is never an eligible fallback.
+Each leaf records `mirror_archive` and `mirror_sha256`; the SHA is the leaf key.
+Fleet control on the Plan VM
 should use its local coordination endpoint (`PM_BASE=http://127.0.0.1:8110`) so a transient
 public-edge read cannot turn an already-online worker into failed capacity. Registration
 polling still tolerates transient local read timeouts until the configured deadline; auth and

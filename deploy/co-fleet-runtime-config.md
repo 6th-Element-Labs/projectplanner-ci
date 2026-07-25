@@ -21,7 +21,7 @@ parameter that nothing in the repo described, so nothing could catch it.
 | `PM_AGENT_WORK_MODULE_CURSOR` | for cursor pools | |
 | `PM_AGENT_WORK_MODULE` | fallback | used when no runtime-specific key is set |
 | `PM_AUTO_WORK_SESSION` | **yes** for `code_strict` lanes | without it a code_strict task is never claimed |
-| `PM_BASE`, `PM_PROJECT` | yes | |
+| `PM_BASE` | yes | control-plane endpoint; task project comes from execution context |
 | `PM_VERIFY_COMPLETION_PUSH` | recommended | see the push-verify memo |
 | `PM_WORK_SESSION_TEST_CMD` | optional | |
 | `AWS_REGION`, `GH_TOKEN`, `GITHUB_TOKEN`, `GH_HOST` | optional | |
@@ -39,7 +39,6 @@ fallbacks): `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKE
 ```json
 {
   "PM_BASE": "https://plan.taikunai.com",
-  "PM_PROJECT": "switchboard",
   "PM_MCP_TOKEN": "<secret>",
   "PM_AGENT_WORK_MODULE_CODEX": "adapters.codex_local_worker:run",
   "PM_AUTO_WORK_SESSION": "1",

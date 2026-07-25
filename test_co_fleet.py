@@ -72,21 +72,20 @@ set -euo pipefail
 echo immutable-base
 MIRROR_PARTS_PREFIX=s3://example/repo.part-
 MIRROR_PART_COUNT=2
-: >/var/cache/switchboard-co/projectplanner.mirror.tar.gz
+: >/var/cache/switchboard-co/repository-cache.tar.gz
 for part_number in $(seq 0 $((MIRROR_PART_COUNT - 1))); do
   printf -v part_suffix '%03d' "$part_number"
   aws s3 cp "${MIRROR_PARTS_PREFIX}${part_suffix}" "/var/cache/switchboard-co/mirror.part-${part_suffix}" --only-show-errors
-  cat "/var/cache/switchboard-co/mirror.part-${part_suffix}" >>/var/cache/switchboard-co/projectplanner.mirror.tar.gz
+  cat "/var/cache/switchboard-co/mirror.part-${part_suffix}" >>/var/cache/switchboard-co/repository-cache.tar.gz
   rm -f "/var/cache/switchboard-co/mirror.part-${part_suffix}"
 done
 git --git-dir="$REPO_MIRROR" fsck --full
 HOME="$RUNTIME_HOME" CLAUDE_CONFIG_DIR="$CLAUDE_RUNTIME_HOME" claude --version
 CODEX_HOME="$CODEX_RUNTIME_HOME" codex --version
 HOME="$RUNTIME_HOME" gh --version
-PYTHONPATH=/opt/projectplanner /opt/projectplanner/.venv/bin/python /opt/projectplanner/adapters/agent_host.py --help
-/opt/projectplanner/.venv/bin/python /opt/projectplanner/adapters/codex/supervisor.py --help
+/opt/switchboard-agent-host/bin/python /opt/switchboard-agent-host/adapters/agent_host.py --help
+/opt/switchboard-agent-host/bin/python /opt/switchboard-agent-host/adapters/codex/supervisor.py --help
 test "$(sudo -u switchboard git -C "$WORKTREE" rev-parse HEAD)" = "$SOURCE_SHA"
-SWITCHBOARD_CO_SOURCE_SHA=d38563e6d9df76e56f0426e96b011c7f3c6bbd62
 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/switchboard-co.json
 # CO-3 will create this SecureString only after its provisioner exists.
 if runtime_json=old; then echo old; fi
@@ -102,6 +101,17 @@ wake = {
     "policy": {
         "mode": "co_fleet",
         "runtime_config_ref": "ssm:/switchboard/co/runtime/co-3",
+        "execution_context": {
+            "schema": "switchboard.execution_context.v1",
+            "project_id": "atlas",
+            "task_id": "CO-3",
+            "repository": "6th-Element-Labs/ActionEngine",
+            "default_branch": "main",
+            "base_sha": "a" * 40,
+            "scm": {"provider": "github"},
+            "generation": 7,
+            "digest": "sha256:atlas-context",
+        },
     },
 }
 general = config.pools["co-general"]
@@ -117,8 +127,9 @@ ok("PM_AGENT_HOST_ALLOW_WORK=1" in rendered
 ok("runtime_json=old" not in rendered,
    "CO-3 replaces the fixed CO-2 runtime-config placeholder")
 ok("mirror_archive" in rendered and "sha256sum -c -" in rendered
-   and "xargs -P 8" in rendered and "fsck --connectivity-only" in rendered,
-   "cold bootstrap prefers one checksummed archive with a parallel-parts fallback")
+   and "exact repository cache miss" in rendered
+   and "CACHE_REPOSITORY=6th-Element-Labs/ActionEngine" in rendered,
+   "cold bootstrap selects one exact provider/repository/SHA cache entry")
 ok("claude --version" not in rendered and "codex --version" not in rendered
    and "agent_host.py --help" not in rendered,
    "per-wake bootstrap relies on golden-image validation instead of repeating it")
@@ -127,11 +138,31 @@ ok(rendered.index("systemctl enable --now switchboard-co-agent-host.service")
    "telemetry startup no longer blocks exact worker registration")
 ok('test "$(sudo -u switchboard git -C "$WORKTREE" rev-parse HEAD)" = "$SOURCE_SHA"' in rendered,
    "per-wake bootstrap still verifies the exact checked-out source revision")
-ok("SWITCHBOARD_CO_SOURCE_SHA=${SOURCE_SHA}" in rendered
-   and "${WORKTREE}/adapters/agent_host.py --interval 10" in rendered,
-   "Agent Host executes the exact checked mirror revision, not stale image code")
-ok("Environment=PYTHONPATH=${WORKTREE}:${WORKTREE}/src" in rendered,
-   "fleet Agent Host exposes both the exact worktree and its src package root")
+ok("CO_CACHE_OBJECT_SHA=" + "a" * 40 in rendered
+   and "ExecStart=/opt/switchboard-agent-host" not in rendered
+   and "${WORKTREE}/adapters/agent_host.py" not in rendered,
+   "installed Agent Host runtime stays separate from the task repository")
+ok("PM_HOST_REPOSITORIES=6th-Element-Labs/ActionEngine" in rendered
+   and "PM_HOST_PROJECTS=atlas" in rendered
+   and "PM_EXECUTION_CONTEXT_DIGEST=sha256:atlas-context" in rendered,
+   "fleet advertisement is derived from the immutable execution context")
+ok("6th-Element-Labs/projectplanner" not in rendered,
+   "rendered Atlas bootstrap contains no baked Switchboard task repository")
+switchboard_wake = json.loads(json.dumps(wake))
+switchboard_wake["policy"]["execution_context"].update({
+    "project_id": "switchboard",
+    "repository": "6th-Element-Labs/switchboard-control-plane",
+    "default_branch": "master",
+    "base_sha": "b" * 40,
+    "digest": "sha256:switchboard-context",
+})
+switchboard_rendered = co_fleet.render_user_data(base_script, switchboard_wake, general)
+ok("CO_CACHE_REPOSITORY=6th-Element-Labs/ActionEngine" in rendered
+   and "CO_CACHE_OBJECT_SHA=" + "a" * 40 in rendered
+   and "CO_CACHE_REPOSITORY=6th-Element-Labs/switchboard-control-plane"
+       in switchboard_rendered
+   and "CO_CACHE_OBJECT_SHA=" + "b" * 40 in switchboard_rendered,
+   "the same image renders isolated Atlas and Switchboard repository caches")
 ok("ReadWritePaths=/run/switchboard-co" in rendered,
    "fleet Agent Host can atomically persist drain receipts under its strict sandbox")
 ok(rendered.index("install -d -m 0770 -o switchboard -g switchboard /run/switchboard-co")
@@ -139,12 +170,12 @@ ok(rendered.index("install -d -m 0770 -o switchboard -g switchboard /run/switchb
    < rendered.index("systemctl enable --now switchboard-co-agent-host.service"),
    "drain runtime directory ownership and write grant are ready before Agent Host starts")
 worktree_drop_in = rendered.split(
-    "cat >/etc/systemd/system/switchboard-co-agent-host.service.d/10-co-fleet-worktree.conf <<EOF\n",
+    "cat >/etc/systemd/system/switchboard-co-agent-host.service.d/10-co-fleet-runtime.conf <<EOF\n",
     1,
 )[1].split("\nEOF", 1)[0]
 ok(worktree_drop_in.count("ReadWritePaths=") == 1
-   and "ProtectSystem=" not in worktree_drop_in,
-   "fleet override adds only the narrow runtime write path and preserves base sandboxing")
+   and "ExecStart=" not in worktree_drop_in and "PYTHONPATH=" not in worktree_drop_in,
+   "fleet override keeps the image-installed Agent Host executable")
 repo_root = Path(__file__).resolve().parent
 import_probe = subprocess.run(
     [sys.executable, "-c",
@@ -176,6 +207,26 @@ try:
 except ValueError:
     raw_allowed = False
 ok(not raw_allowed, "raw credential input is rejected")
+
+missing_context = json.loads(json.dumps(wake))
+missing_context["policy"].pop("execution_context")
+try:
+    co_fleet.render_user_data(base_script, missing_context, general)
+    missing_context_allowed = True
+except ValueError as exc:
+    missing_context_allowed = "execution_context" not in str(exc)
+ok(not missing_context_allowed,
+   "fleet bootstrap fails closed when immutable repository context is absent")
+
+wrong_task_context = json.loads(json.dumps(wake))
+wrong_task_context["policy"]["execution_context"]["task_id"] = "OTHER-1"
+try:
+    co_fleet.render_user_data(base_script, wrong_task_context, general)
+    wrong_task_allowed = True
+except ValueError:
+    wrong_task_allowed = False
+ok(not wrong_task_allowed,
+   "fleet bootstrap rejects a repository context bound to another task")
 
 
 build_wake = json.loads(json.dumps(wake))
