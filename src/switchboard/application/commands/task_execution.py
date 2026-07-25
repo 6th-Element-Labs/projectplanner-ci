@@ -112,6 +112,48 @@ def _normalize(task_id: Any) -> str:
     return str(task_id or "").strip().upper()
 
 
+def _blocking_dependency_ids(task: Mapping[str, Any]) -> list[str]:
+    """Return blocker task ids from dependency_state (or empty when satisfied)."""
+    dep_state = task.get("dependency_state")
+    if not isinstance(dep_state, Mapping):
+        return []
+    if dep_state.get("satisfied") is not False:
+        return []
+    blocking = dep_state.get("blocking") or []
+    ids: list[str] = []
+    for row in blocking:
+        if isinstance(row, Mapping):
+            task_id = str(row.get("task_id") or "").strip()
+        else:
+            task_id = str(row or "").strip()
+        if task_id and task_id not in ids:
+            ids.append(task_id)
+    if not ids:
+        for dep in task.get("depends_on") or []:
+            dep_id = str(dep or "").strip()
+            if dep_id and dep_id not in ids:
+                ids.append(dep_id)
+    return ids
+
+
+def _refuse_unsatisfied_dependencies(task: Mapping[str, Any], *, task_id: str,
+                                     project: str) -> None:
+    """Fail closed before wake/runner/Work Session creation (CO-25)."""
+    blocking_ids = _blocking_dependency_ids(task)
+    if not blocking_ids:
+        return
+    named = ", ".join(blocking_ids)
+    raise TaskExecutionError(
+        "start_refused",
+        f"Task dependencies are unsatisfied: {named}.",
+        task_id=task_id,
+        project=project,
+        start_error="dependencies_unsatisfied",
+        blocking=blocking_ids,
+        dependency_state=task.get("dependency_state"),
+    )
+
+
 def _projection(task_id: str, project: str) -> dict[str, Any]:
     """The SIMPLIFY-1 read model is the sole execution-state authority."""
     projection = task_session_query.execute_for(task_id, project=project)
@@ -604,35 +646,39 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
                 lane=str((projection.get("task") or {}).get("_wsId")
                          or (projection.get("task") or {}).get("workstream") or "")),
         }
-    elif launcher is None:
-        from switchboard.application.commands import connect_dispatch
-
-        task = projection.get("task") or {}
-        predecessor = str(
-            ((projection.get("last_dispatch_outcome") or {}).get("wake_id")) or "")
-        result = connect_dispatch.enqueue_task(
-            task, project=project, actor=actor, runtime=runtime,
-            predecessor_wake_id=predecessor,
-            generation_ref=(f"{role}:{source_sha.lower()}:{route}:"
-                            f"{int(decision_attempt or 0)}:"
-                            f"{int(state_version or 0)}"
-                            if role in {"review_merge", "remediation"}
-                            and source_sha else ""),
-            role=role,
-            caller_agent_id=caller_agent_id,
-            principal_id=principal_id,
-            source_sha=source_sha,
-            reason_code=reason_code,
-            acceptance_findings=list(findings or []),
-            route=route,
-            decision_attempt=decision_attempt,
-            state_version=state_version,
-        )
     else:
-        # Test/adapter seam retained while all product surfaces use Connect.
-        result = launcher(task_id, actor=actor, project=project,
-                          principal_id=principal_id, role=role, runtime=runtime,
-                          instruction=instruction, findings=list(findings or []))
+        # New wake path only — attach/pending leave an already-requested
+        # generation alone. Cheap readiness check before Connect dispatch.
+        task = projection.get("task") or {}
+        _refuse_unsatisfied_dependencies(task, task_id=task_id, project=project)
+        if launcher is None:
+            from switchboard.application.commands import connect_dispatch
+
+            predecessor = str(
+                ((projection.get("last_dispatch_outcome") or {}).get("wake_id")) or "")
+            result = connect_dispatch.enqueue_task(
+                task, project=project, actor=actor, runtime=runtime,
+                predecessor_wake_id=predecessor,
+                generation_ref=(f"{role}:{source_sha.lower()}:{route}:"
+                                f"{int(decision_attempt or 0)}:"
+                                f"{int(state_version or 0)}"
+                                if role in {"review_merge", "remediation"}
+                                and source_sha else ""),
+                role=role,
+                caller_agent_id=caller_agent_id,
+                principal_id=principal_id,
+                source_sha=source_sha,
+                reason_code=reason_code,
+                acceptance_findings=list(findings or []),
+                route=route,
+                decision_attempt=decision_attempt,
+                state_version=state_version,
+            )
+        else:
+            # Test/adapter seam retained while all product surfaces use Connect.
+            result = launcher(task_id, actor=actor, project=project,
+                              principal_id=principal_id, role=role, runtime=runtime,
+                              instruction=instruction, findings=list(findings or []))
     if "action" not in result:
         result = {
             **result,

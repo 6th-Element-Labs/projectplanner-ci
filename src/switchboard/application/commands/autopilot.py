@@ -179,12 +179,21 @@ def control_autopilot(deliverable_id: Any, *, project: str = DEFAULT_PROJECT,
             "start_task", task_id, project=task_project or project,
             actor=actor, agent_id=agent_id, runtime=runtime)
         if task_start.get("refused") or task_start.get("error"):
-            raise AutopilotError(
-                "structural_blocker",
-                str(task_start.get("message") or task_start.get("error")
-                    or "task start refused"),
-                deliverable_id=deliverable_id, task_project=task_project or project,
-                task_id=str(task_id or "").strip().upper(), task_start=task_start)
+            # CO-25: unsatisfied dependencies must not spawn a wake/runner, but
+            # Autopilot may still arm a durable waiting scope so the coordinator
+            # can start once the graph clears (UI-27). Other start refusals stay
+            # hard blockers and never leave a scope behind.
+            start_error = str(
+                task_start.get("start_error") or task_start.get("error") or "")
+            if start_error != "dependencies_unsatisfied":
+                raise AutopilotError(
+                    "structural_blocker",
+                    str(task_start.get("message") or task_start.get("error")
+                        or "task start refused"),
+                    deliverable_id=deliverable_id,
+                    task_project=task_project or project,
+                    task_id=str(task_id or "").strip().upper(),
+                    task_start=task_start)
     if verb == "start":
         result = scopes_repo.start_autopilot_scope(**common, runtime=runtime)
     else:

@@ -59,6 +59,40 @@ def test_start_refusal_leaves_no_active_scope():
         autopilot_scopes.start_autopilot_scope = original_start
 
 
+def test_dependencies_unsatisfied_arms_waiting_scope_without_hard_block():
+    """CO-25 + UI-27: no wake, but Autopilot still arms a durable waiting scope."""
+    created = []
+    original_validate = autopilot_scopes.validate_autopilot_target
+    original_start = autopilot_scopes.start_autopilot_scope
+    try:
+        autopilot_scopes.validate_autopilot_target = lambda **_kw: None
+
+        def start_scope(**kwargs):
+            created.append(kwargs)
+            return {"scope_id": "autopilot-waiting", "scope_type": "task",
+                    "task_id": "AUTO-2", "status": "active"}
+
+        autopilot_scopes.start_autopilot_scope = start_scope
+        result = autopilot.control_autopilot(
+            "deliverable-ui27", project="switchboard", action="start",
+            scope_type="task", task_project="switchboard", task_id="AUTO-2",
+            task_starter=lambda *_a, **_kw: {
+                "refused": True,
+                "error_code": "start_refused",
+                "start_error": "dependencies_unsatisfied",
+                "error": "dependencies_unsatisfied",
+                "blocking": ["AUTO-1"],
+                "message": "Task dependencies are unsatisfied: AUTO-1.",
+            })
+        assert result["command"] == "control_autopilot"
+        assert result["scope"]["status"] == "active"
+        assert result["task_start"]["start_error"] == "dependencies_unsatisfied"
+        assert len(created) == 1
+    finally:
+        autopilot_scopes.validate_autopilot_target = original_validate
+        autopilot_scopes.start_autopilot_scope = original_start
+
+
 def test_unsupported_runtime_is_refused_before_task_start_or_scope_creation():
     calls = []
     original_validate = autopilot_scopes.validate_autopilot_target
@@ -121,6 +155,7 @@ def test_task_start_routes_triage_before_launcher():
 if __name__ == "__main__":
     test_autopilot_crosses_start_boundary_and_creates_scope_after_dispatch()
     test_start_refusal_leaves_no_active_scope()
+    test_dependencies_unsatisfied_arms_waiting_scope_without_hard_block()
     test_unsupported_runtime_is_refused_before_task_start_or_scope_creation()
     test_task_start_routes_triage_before_launcher()
-    print("BUG-144 autopilot Triage Start: 4 passed")
+    print("BUG-144 autopilot Triage Start: 5 passed")
