@@ -844,6 +844,85 @@ recur. When a UI defect is reported, **check whether the reported string still e
 tree before investigating the behaviour.** If it does not, the report is about cached code and
 the first move is a hard refresh, not a bug hunt.
 
+---
+
+## BREAKDOWN 18 — `switchboard` fails its own project execution readiness gate ⚠️
+
+**Severity: CRITICAL (configuration, not code). STATUS: LIVE.**
+**Found by the session-2 agent (`codex`, PR #889 thread); independently verified here.**
+
+`ensure_review_generation` → `start(plan)` → `task_execution.start_task(...)`, and `start_task`
+now runs UI-63's project-execution readiness gate. For `switchboard` that gate fails:
+
+```
+readiness.passed : False
+reason_code      : project_execution_policy_missing
+   blocker: project_execution_policy_missing   no execution policy configured
+   blocker: provider_selector_missing
+   blocker: scm_connection_missing             SCM connection unavailable
+```
+
+The deliverable under test is *"project-independent execution plane for every Switchboard
+project"* — its premise is that a project declares repo topology, SCM authorization and
+execution policy as data, and then anything can run. UI-63 shipped the gate that enforces it
+and CO-20 made placement mandatory on the same facts. **Both are correct.** Nobody ever
+populated that data for the dogfood project itself, because until today nothing required it.
+We built the door and never cut ourselves a key.
+
+**Precision note, unresolved between the two logs:** the session-2 report lists
+`project_not_available` as the third blocker; this session's probe returns
+`provider_selector_missing`. Reconcile before configuring against the wrong field.
+
+**Honest limit on the evidence.** The gate is *verified failing*. It has **not** been observed
+refusing a live dispatch, because every current task dies earlier — CO-20 at the fence
+(BREAKDOWN 12), CO-21 at the dependency check. It is a confirmed *latent* blocker, not the
+observed one. Recorded this way deliberately: overclaiming which gate is "the" blocker is the
+mistake both agents made today, in opposite directions.
+
+---
+
+## THE JOINT MODEL — three gates in series, and why neither agent alone was right
+
+The two independent investigations converged on different layers of one dispatch path. A task
+moves only if the completion tick clears all three, in order:
+
+| # | Gate | Fails how | Status |
+|---|---|---|---|
+| 1 | **Persist** the classified decision | `CompletionRunError: unsupported completion state: assessing` | **FIXED** — BUG-184 / #888 |
+| 2 | **Fence** the stale runner | `TaskExecutionError: exact execution generation identity is required` | LIVE — BUG-187 |
+| 3 | **Dispatch** via `start_task` | `start_refused / project_execution_not_ready` | LIVE — BREAKDOWN 18 |
+
+Plus BUG-186 (nothing reaps a runner whose pinned head moved) as the safety net for when gate
+2 is never attempted.
+
+**Each agent claimed a single blocker and each was wrong.** This session argued that repairing
+the fence would move CO-20 — it would then have hit gate 3. The session-2 agent argued
+readiness was "the single blocker for the entire autopilot right now" — CO-20 never reaches
+it. **Both fixes are required; neither is sufficient.**
+
+That is the transferable lesson, and it is the third time today the same error shape appeared:
+a correct local diagnosis presented as the whole cause. See also the COORD-49 observation above
+— a correct fix that moved traffic into an unwritable state.
+
+**Agreed order:** configure the project (gate 3, operator decision, no code) → BUG-187 (gate 2)
+→ BUG-186 (safety net) → the two lints.
+
+**Agreed proof, from the corpus rather than from inspection.** Baseline at the time of writing:
+
+```
+review_required        ep=10  ticks=700  tasks=4   ratio=70:1
+exact_head_pr_missing  ep=14  ticks=270  tasks=5   ratio=19:1
+total                  53 episodes / 1455 ticks
+```
+
+After the config and BUG-187, these must move or the model is wrong: `completion_tick_failed`
+for CO-20 → 0; a `review_merge` runner actually starts; the `review_required` tick-to-episode
+ratio falls from 70:1 toward ~1:1; CO-21's dependency refusals stop. A ratio near 1:1 means the
+classifier is deciding *and something is acting*. A high ratio means correct decisions with no
+actor — which is the fingerprint the session-2 agent identified, and the reason
+`runner_head_matches_exact_head` in `decision_records.features_json` should become the detector
+rather than staying computed-and-unused.
+
 ## RUN 2 SUMMARY
 
 | # | Breakdown | Severity | Status |
@@ -855,6 +934,7 @@ the first move is a hard refresh, not a bug hunt.
 | 15 | Manual CI recovery posts 1 of 2 required contexts | HIGH | LIVE |
 | 16 | Shared GitHub rate-limit budget | MEDIUM | LIVE |
 | 17 | Fleet dock freezes on a non-JSON error body | MEDIUM | LIVE — BUG-188 |
+| 18 | `switchboard` fails its own execution readiness gate | CRITICAL | LIVE — config, found by session-2 agent |
 | 6 | Review verdict invalidated by every push | HIGH | LIVE (unchanged) |
 | 9 | Reason codes never aggregated | HIGH | Partially fixed (COORD-50) |
 
