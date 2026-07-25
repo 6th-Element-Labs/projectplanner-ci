@@ -1293,6 +1293,61 @@ def _complete_claim_impl(claim_id: str, evidence: str = "", final_status: str = 
             return response
         if work_session_gate.get("evidence_warnings"):
             evidence_obj["evidence_warnings"] = work_session_gate["evidence_warnings"]
+        execution_publication = None
+        execution_context_value = evidence_obj.get("execution_context")
+        # Managed executions already carry the server-resolved context on their
+        # wake. Prefer that immutable source over requiring an agent to echo it.
+        if not execution_context_value and evidence_obj.get("pr_url") and row["runner_session_id"]:
+            runner = c.execute(
+                "SELECT metadata_json FROM runner_sessions WHERE runner_session_id=? "
+                "AND task_id=?",
+                (row["runner_session_id"], row["task_id"])).fetchone()
+            metadata = json.loads(runner["metadata_json"] or "{}") if runner else {}
+            wake_id = str(metadata.get("wake_id") or "")
+            wake = c.execute(
+                "SELECT policy_json FROM wake_intents WHERE wake_id=? AND task_id=?",
+                (wake_id, row["task_id"])).fetchone() if wake_id else None
+            policy = json.loads(wake["policy_json"] or "{}") if wake else {}
+            execution_context_value = policy.get("execution_context")
+            if execution_context_value:
+                evidence_obj["execution_context"] = execution_context_value
+                evidence_obj["execution_id"] = str(metadata.get("execution_id") or "")
+        if execution_context_value:
+            from switchboard.storage.repositories.execution_publications import (
+                ExecutionPublicationError,
+                build_binding,
+            )
+            try:
+                execution_publication = build_binding(
+                    project=project,
+                    task_id=row["task_id"],
+                    execution_id=str(evidence_obj.get("execution_id") or ""),
+                    execution_context=execution_context_value,
+                    branch=str(evidence_obj.get("branch") or ""),
+                    head_sha=str(evidence_obj.get("head_sha") or ""),
+                    pr_number=int(evidence_obj.get("pr_number") or 0),
+                    pr_url=str(evidence_obj.get("pr_url") or ""),
+                )
+            except (ExecutionPublicationError, TypeError, ValueError) as exc:
+                detail = (exc.as_dict() if isinstance(exc, ExecutionPublicationError)
+                          else {"error": "execution_publication_invalid",
+                                "message": str(exc), "failure_class": "failed_gate"})
+                response = {
+                    "completed": False,
+                    "reason": detail["error"],
+                    "failure_class": detail.get("failure_class", "failed_gate"),
+                    "message": detail["message"],
+                    "claim_id": claim_id,
+                    "task_id": row["task_id"],
+                    "execution_publication_gate": detail,
+                }
+                c.execute(
+                    "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                    "VALUES (?,?,?,?,?)",
+                    (row["task_id"], actor,
+                     "task.complete_blocked_execution_publication",
+                     json.dumps(response, sort_keys=True), now))
+                return response
         semantic_gate = semantic_completion_gate(task_for_gate, evidence_obj)
         if not semantic_gate.get("ok"):
             current_git = _store_facade()._load_git_state(c, row["task_id"])
@@ -1337,6 +1392,10 @@ def _complete_claim_impl(claim_id: str, evidence: str = "", final_status: str = 
                   "AND status NOT IN ('Done', 'Cancelled', 'Canceled')",
                   (next_status, now, row["task_id"]))
         current_git = _store_facade()._load_git_state(c, row["task_id"])
+        if execution_publication:
+            from switchboard.storage.repositories.execution_publications import persist_in
+            execution_publication = persist_in(c, execution_publication)
+            evidence_obj["execution_publication"] = execution_publication
         git_updates = {
             "branch": evidence_obj.get("branch"),
             "head_sha": evidence_obj.get("head_sha"),

@@ -267,23 +267,40 @@ def _preserve_provider_pr_evidence(current: Dict[str, Any],
 def mark_task_pr_opened(task_id: str, pr_number: int, pr_url: str = "",
                         branch: str = "", head_sha: str = "",
                         actor: str = "github-webhook",
-                        project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+                        project: str = DEFAULT_PROJECT,
+                        base_branch: str = "") -> Dict[str, Any]:
     # Retry the whole write on a transient sqlite lock so a busy DB never silently drops the
     # PR-open provenance event (dropped webhook -> stuck 'Not Started' task -> blocked claim gate).
     s = _store_facade()
     return s._write_through(project, lambda: s._mark_task_pr_opened_impl(
-        task_id, pr_number, pr_url, branch, head_sha, actor, project))
+        task_id, pr_number, pr_url, branch, head_sha, actor, project, base_branch))
 
 
 def _mark_task_pr_opened_impl(task_id: str, pr_number: int, pr_url: str = "",
                               branch: str = "", head_sha: str = "",
                               actor: str = "github-webhook",
-                              project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+                              project: str = DEFAULT_PROJECT,
+                              base_branch: str = "") -> Dict[str, Any]:
     now = time.time()
     with _conn(project) as c:
         row = c.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
         if not row:
             return {"error": "task not found", "task_id": task_id}
+        from switchboard.storage.repositories.execution_publications import (
+            ExecutionPublicationError,
+            get_for_task_in,
+            validate_event,
+        )
+        publication = get_for_task_in(c, project, task_id)
+        if publication:
+            repo = _github_repo_from_pr_url(pr_url)
+            try:
+                validate_event(
+                    publication, project=project, repository=repo,
+                    pr_number=pr_number, branch=branch, head_sha=head_sha,
+                    base_branch=base_branch)
+            except ExecutionPublicationError as exc:
+                return exc.as_dict() | {"task_id": task_id}
         current = _load_git_state(c, task_id)
         same_pr = (
             current.get("pr_number") == pr_number and
@@ -351,13 +368,14 @@ def mark_task_merged(task_id: str, merged_sha: str, pr_number: Optional[int] = N
                      actor: str = "github-webhook",
                      project: str = DEFAULT_PROJECT,
                      provenance_source: str = "",
-                     task_ids_found: Any = None) -> Dict[str, Any]:
+                     task_ids_found: Any = None,
+                     base_branch: str = "") -> Dict[str, Any]:
     # Retry the whole write on a transient sqlite lock so a busy DB never silently drops the
     # merge provenance event (dropped webhook -> task stuck In Review instead of Done).
     s = _store_facade()
     result = s._write_through(project, lambda: s._mark_task_merged_impl(
         task_id, merged_sha, pr_number, pr_url, branch, head_sha, actor, project,
-        provenance_source, task_ids_found))
+        provenance_source, task_ids_found, base_branch))
     if result.get("status") == "Done":
         try:
             from switchboard.storage.repositories.review_remediations import (
@@ -383,12 +401,28 @@ def _mark_task_merged_impl(task_id: str, merged_sha: str, pr_number: Optional[in
                            actor: str = "github-webhook",
                            project: str = DEFAULT_PROJECT,
                            provenance_source: str = "",
-                           task_ids_found: Any = None) -> Dict[str, Any]:
+                           task_ids_found: Any = None,
+                           base_branch: str = "") -> Dict[str, Any]:
     now = time.time()
     with _conn(project) as c:
         row = c.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
         if not row:
             return {"error": "task not found", "task_id": task_id}
+        from switchboard.storage.repositories.execution_publications import (
+            ExecutionPublicationError,
+            get_for_task_in,
+            validate_event,
+        )
+        publication = get_for_task_in(c, project, task_id)
+        if publication:
+            try:
+                validate_event(
+                    publication, project=project,
+                    repository=_github_repo_from_pr_url(pr_url),
+                    pr_number=int(pr_number or 0), branch=branch,
+                    head_sha=head_sha, base_branch=base_branch)
+            except ExecutionPublicationError as exc:
+                return exc.as_dict() | {"task_id": task_id}
         current = _load_git_state(c, task_id)
         task = _task_row(row)
         semantic_gate = semantic_completion_gate(task, current.get("evidence") or {})

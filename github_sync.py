@@ -470,7 +470,8 @@ def handle_pr(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
         skipped: List[Dict[str, str]] = []
         for task_id in task_ids:
             res = store.mark_task_pr_opened(
-                task_id, pr_num, pr_url, branch, head_sha, "github-webhook", project
+                task_id, pr_num, pr_url, branch, head_sha, "github-webhook", project,
+                base_branch=base,
             )
             if res.get("error"):
                 skipped.append({"task_id": task_id, "reason": res["error"]})
@@ -478,7 +479,14 @@ def handle_pr(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
                 touched.append(task_id)
                 organic_github_ci.invalidate_prior_head(task_id, head_sha, project)
         # Event-driven CI: pull-model dispatch and/or on-box gate marker (no 5-min wait).
-        ci = _maybe_trigger_ci(repo, pr_num, head_sha, project)
+        ci = (_maybe_trigger_ci(repo, pr_num, head_sha, project) if touched else {
+            "scratchpad_dispatched": False,
+            "scratchpad_skip_reason": "execution_publication_rejected",
+            "pull_model_dispatched": False,
+            "pull_model_skip_reason": "execution_publication_rejected",
+            "claim_gate_refreshed": False,
+            "claim_gate_skip_reason": "execution_publication_rejected",
+        })
         return {"action": "pr_review_recorded", "repo": repo, "pr": pr_num,
                 "in_review_tasks": touched, "skipped_tasks": skipped,
                 "scratchpad_dispatched": ci.get("scratchpad_dispatched"),
@@ -493,7 +501,6 @@ def handle_pr(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
 
     if not pr.get("merged"):
         return {"action": "ignored", "reason": "closed PR was not merged", "pr": pr_num}
-
     merged_sha = pr.get("merge_commit_sha") or ""
     if not merged_sha:
         return {"action": "ignored", "reason": "missing merge_commit_sha", "pr": pr_num}
@@ -511,7 +518,8 @@ def handle_pr(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
             skipped.append({"task_id": task_id, "reason": "cancelled"})
             continue
         res = store.mark_task_merged(
-            task_id, merged_sha, pr_num, pr_url, branch, head_sha, "github-webhook", project
+            task_id, merged_sha, pr_num, pr_url, branch, head_sha,
+            "github-webhook", project, base_branch=base,
         )
         if res.get("error"):
             skipped.append({"task_id": task_id, "reason": res["error"]})

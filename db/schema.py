@@ -368,6 +368,29 @@ def apply_schema(c):
             evidence_json      TEXT NOT NULL DEFAULT '{}',
             updated_at         REAL NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS execution_publications (
+            publication_id      TEXT PRIMARY KEY,
+            project_id          TEXT NOT NULL,
+            task_id             TEXT NOT NULL,
+            execution_id        TEXT NOT NULL,
+            execution_generation INTEGER NOT NULL,
+            repo_role           TEXT NOT NULL,
+            repository          TEXT NOT NULL,
+            default_branch      TEXT NOT NULL,
+            base_sha            TEXT NOT NULL,
+            branch              TEXT NOT NULL,
+            head_sha            TEXT NOT NULL,
+            pr_number           INTEGER NOT NULL,
+            pr_url              TEXT NOT NULL,
+            scm_connection_ref  TEXT NOT NULL,
+            context_digest      TEXT NOT NULL,
+            created_at          REAL NOT NULL,
+            updated_at          REAL NOT NULL,
+            UNIQUE(project_id, task_id, execution_id, head_sha),
+            UNIQUE(project_id, repository, pr_number, head_sha)
+        );
+        CREATE INDEX IF NOT EXISTS ix_execution_publications_head
+            ON execution_publications(project_id, repository, head_sha);
         -- COORD-18: code-review judgment is durable board state, fenced to the
         -- exact PR head it reviewed.  Findings are separate rows so remediation,
         -- audit, and future merge policy can query them without parsing activity.

@@ -216,6 +216,21 @@ ADDITIVE_COLUMN_MIGRATIONS: List[Tuple[str, str, str, str]] = [
 # Idempotent DDL migrations (``CREATE ... IF NOT EXISTS``) applied after the column set,
 # once each, recorded in the same ledger. (name, sql).
 DDL_MIGRATIONS: List[Tuple[str, str]] = [
+    ("0121_execution_publications",
+     "CREATE TABLE IF NOT EXISTS execution_publications ("
+     "publication_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, "
+     "task_id TEXT NOT NULL, execution_id TEXT NOT NULL, "
+     "execution_generation INTEGER NOT NULL, repo_role TEXT NOT NULL, "
+     "repository TEXT NOT NULL, default_branch TEXT NOT NULL, "
+     "base_sha TEXT NOT NULL, branch TEXT NOT NULL, head_sha TEXT NOT NULL, "
+     "pr_number INTEGER NOT NULL, pr_url TEXT NOT NULL, "
+     "scm_connection_ref TEXT NOT NULL, context_digest TEXT NOT NULL, "
+     "created_at REAL NOT NULL, updated_at REAL NOT NULL, "
+     "UNIQUE(project_id, task_id, execution_id, head_sha), "
+     "UNIQUE(project_id, repository, pr_number, head_sha))"),
+    ("0122_ix_execution_publications_head",
+     "CREATE INDEX IF NOT EXISTS ix_execution_publications_head "
+     "ON execution_publications(project_id, repository, head_sha)"),
     ("0062_ingest_operations",
      "CREATE TABLE IF NOT EXISTS ingest_operations ("
      "idem_key TEXT PRIMARY KEY, request_hash TEXT NOT NULL, status TEXT NOT NULL, "

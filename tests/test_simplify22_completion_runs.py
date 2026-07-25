@@ -289,7 +289,12 @@ class MergeWebhookCreatesCompletionRunTest(unittest.TestCase):
             "id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT, actor TEXT, "
             "kind TEXT, payload TEXT, created_at REAL)")
         for name, sql in migrations.DDL_MIGRATIONS:
-            if name in {"0111_completion_runs", "0112_ux_completion_runs_task"}:
+            if name in {
+                "0111_completion_runs",
+                "0112_ux_completion_runs_task",
+                "0121_execution_publications",
+                "0122_ix_execution_publications_head",
+            }:
                 self.db.execute(sql)
         self.db.execute(
             "INSERT INTO tasks(task_id, status, updated_at) VALUES (?,?,?)",

@@ -704,6 +704,24 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
                 "PR branch does not match task/session evidence.",
                 "stale_branch",
                 details={"expected_branch": expected_branch, "pr_branch": head_ref}))
+        if task_id:
+            from switchboard.storage.repositories.execution_publications import (
+                ExecutionPublicationError,
+                get_for_task_in,
+                validate_event,
+            )
+            with _conn(project) as c:
+                publication = get_for_task_in(c, project, task_id)
+            if publication:
+                try:
+                    validate_event(
+                        publication, project=project, repository=repo,
+                        pr_number=pr_number, branch=head_ref,
+                        head_sha=head_sha, base_branch=base_ref)
+                except ExecutionPublicationError as exc:
+                    findings.append(_merge_gate_finding(
+                        exc.code, exc.message, "failed_gate",
+                        details=exc.details))
         behind = pr.get("behind_by", pr.get("behind_count", 0))
         try:
             behind_count = int(behind or 0)
