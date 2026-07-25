@@ -11,6 +11,7 @@ from switchboard.connect import (
     Ack, Assignment, HostRuntimeConfig, ResourceLimits, build_launch_spec,
 )
 from switchboard.storage.repositories.external_effects import make_external_effect_key
+from execution_policy_fixture import ready_execution_context
 
 
 def ok(condition: bool, message: str) -> None:
@@ -42,6 +43,9 @@ decision = {
     "acceptance_findings": [{"code": "review_required", "blocking": True}],
 }
 with patch.object(connect_dispatch.coordination_repo, "request_wake", request_wake), \
+        patch.object(connect_dispatch.execution_context, "resolve",
+                     lambda **kwargs: ready_execution_context(
+                         kwargs["task_id"], runtime=kwargs["runtime"])), \
         patch.object(connect_dispatch, "capacity_readback", lambda *_a, **_k: {}):
     first = connect_dispatch.enqueue_task(
         task, project="switchboard", actor="coordinator/a",

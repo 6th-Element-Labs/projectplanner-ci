@@ -22,15 +22,29 @@ worktree.mkdir()
 
 import store  # noqa: E402
 from switchboard.application.commands import connect_dispatch  # noqa: E402
+from execution_policy_fixture import (  # noqa: E402
+    install_ready_execution_policy, ready_execution_context,
+)
 
 
 P = "switchboard"
+# CO-20 resolves an execution context for every Connect wake; the siblings updated
+# in that change stub the resolver rather than standing up a real provider
+# connection, otherwise enqueue_task refuses with provider_connection_not_ready.
+connect_dispatch.execution_context.resolve = (
+    lambda **kwargs: ready_execution_context(
+        kwargs["task_id"], runtime=kwargs["runtime"]))
 HEAD = "a" * 40
 AGENT = "agent/codex/bug-174-test"
 RUNNER = "run-bug174-repair"
 HOST = "host/bug174"
 
 store.init_db(P)
+# CO-20 made hybrid placement mandatory: enqueue_task now fails closed with
+# project_execution_policy_missing when a project has no execution policy, so no
+# wake is created at all. This test predates that requirement (it landed via a
+# separate PR), which left it looking up a wake_id that was never persisted.
+install_ready_execution_policy(P)
 task = store.create_task({
     "task_id": "BUG-174-REPRO",
     "workstream_id": "BUG",

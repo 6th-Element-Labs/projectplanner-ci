@@ -20,12 +20,17 @@ os.environ["PM_AUTH_MODE"] = "dev-open"
 
 import store  # noqa: E402
 import auth  # noqa: E402
+from execution_policy_fixture import (  # noqa: E402
+    install_ready_execution_policy, ready_execution_context, ready_host_placement,
+)
 from db.connection import _conn  # noqa: E402
 from switchboard.application.commands import connect_dispatch  # noqa: E402
 from switchboard.domain.runner_pty import planned_runner_session_id  # noqa: E402
 
 
 P = "switchboard"
+connect_dispatch.execution_context.resolve = lambda **kwargs: ready_execution_context(
+    kwargs["task_id"], runtime=kwargs["runtime"])
 HOST = "host/bug127-native"
 PRINCIPAL = "principal/bug127-native"
 passed = failed = 0
@@ -40,6 +45,7 @@ def ok(condition, message):
 
 try:
     store.init_db(P)
+    install_ready_execution_policy(P)
     task = store.create_task({
         "workstream_id": "BUG",
         "title": "BUG-127 Connect native runner registration",
@@ -56,7 +62,10 @@ try:
             "policy": {"allow_work": True, "lane_mode": "all_project_lanes"},
         }],
         "limits": {"max_sessions": 2},
-        "capacity": {"active_sessions": 0, "allow_work": True},
+        "capacity": {
+            "active_sessions": 0, "allow_work": True,
+            "placement": ready_host_placement(P),
+        },
         "heartbeat_ttl_s": 60,
     }
     store.register_host(
