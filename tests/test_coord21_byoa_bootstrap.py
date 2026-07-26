@@ -20,6 +20,8 @@ from switchboard.integrations.worker_credential_envelope import (
     encrypt_for_worker,
 )
 
+os.environ["PM_WORK_SESSION_DEFAULT_BRANCH"] = "master"
+
 
 passed = failed = 0
 
@@ -145,6 +147,7 @@ try:
         "status": "active",
         "head_sha": bound_head,
         "branch": "codex/COORD-21-byoa",
+        "default_branch": "master",
         "repo": repo.as_uri(),
         "worktree_path": str(repo),
         "policy_profile": "code_strict",

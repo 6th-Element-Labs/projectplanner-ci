@@ -2210,6 +2210,7 @@ try:
         "status": "active", "head_sha": binding_sha,
         "branch": "codex/ADAPTER-18-local-worker", "policy_profile": "code_strict",
         "repo": binding_remote.as_uri(),
+        "default_branch": "master",
         "worktree_path": str(coordinator_workspace),
     }
     binding_environment = {

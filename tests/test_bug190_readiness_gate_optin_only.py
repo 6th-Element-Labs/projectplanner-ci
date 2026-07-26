@@ -127,12 +127,13 @@ finally:
     project_execution_readiness.get_project_execution_readiness = saved_readiness
     connect_dispatch.enqueue_task = saved_enqueue
 
-# The contract this gate must stay consistent with. If the legacy path is ever
-# removed from connect_dispatch, widen the gate in the same change - do not let
-# the two files disagree again.
+# HARDEN-78 removes the downstream legacy scheduler branch. The readiness
+# projection may remain explanatory here, but Connect itself always resolves
+# exact project authority before creating a wake.
 dispatch_src = (ROOT / "src/switchboard/application/commands/connect_dispatch.py").read_text()
-ok('if get_project_execution_policy(project).get("configured"):' in dispatch_src,
-   "connect_dispatch still gates strict resolution on opt-in (the contract this matches)")
+ok('execution_context.resolve(' in dispatch_src
+   and 'if get_project_execution_policy(project).get("configured"):' not in dispatch_src,
+   "connect_dispatch always resolves exact project execution authority")
 
 print(f"\nBUG-190 readiness gate opt-in only: {passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)

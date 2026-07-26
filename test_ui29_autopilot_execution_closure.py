@@ -15,6 +15,7 @@ os.environ.update({
     "PM_PROJECT_REGISTRY_DB_PATH": str(TMP / "registry.db"),
     "PM_DYNAMIC_PROJECTS_DIR": str(TMP / "projects"),
     "PM_PROJECT": "switchboard",
+    "PM_WORK_SESSION_DEFAULT_BRANCH": "master",
 })
 (TMP / "projects").mkdir()
 

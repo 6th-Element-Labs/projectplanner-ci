@@ -1287,18 +1287,7 @@ def _managed_workspace_root(project: str, payload: Dict[str, Any]) -> str:
 
 def _managed_workspace_source_path(project: str, payload: Dict[str, Any]) -> str:
     configured = str(payload.get("source_path") or payload.get("repo_path") or "").strip()
-    if configured:
-        return configured
-    suffix = _project_env_suffix(project)
-    env = (
-        os.environ.get(f"PM_REPO_PATH_{suffix}") if suffix else ""
-    ) or os.environ.get("PM_REPO_PATH")
-    if env:
-        return env
-    # work_sessions.py lives under src/switchboard/storage/repositories/ → repo root.
-    return os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
-    )
+    return configured
 
 
 def _managed_workspace_path(root: str, project: str, task_id: str, branch: str,

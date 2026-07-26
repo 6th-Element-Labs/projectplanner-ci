@@ -630,7 +630,7 @@ def create_external_work_session(project, task_id, agent_id, runtime, source_pat
     if fetched.returncode != 0:
         raise RuntimeError("external canonical origin fetch failed")
     default_branch = str(
-        os.environ.get("PM_WORK_SESSION_DEFAULT_BRANCH") or "master").strip()
+        os.environ.get("PM_WORK_SESSION_DEFAULT_BRANCH") or "").strip()
     if (not default_branch
             or subprocess.run(
                 ["git", "check-ref-format", "--branch", default_branch],
@@ -1365,7 +1365,9 @@ def _materialize_personal_workspace(session, source_sha, workspace_root):
     branch = str(session.get("branch") or "").strip()
     if not branch or _personal_git(["check-ref-format", "--branch", branch]).returncode != 0:
         raise RuntimeError("personal Work Session branch is invalid")
-    default_branch = str(session.get("default_branch") or "master").strip()
+    default_branch = str(session.get("default_branch") or "").strip()
+    if not default_branch:
+        raise RuntimeError("personal Work Session default branch is not configured")
     if (_personal_git(["check-ref-format", "--branch", default_branch]).returncode != 0):
         raise RuntimeError("personal Work Session default branch is invalid")
     clone_url, expected_identity = _personal_repo_clone_url(session.get("repo"))

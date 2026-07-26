@@ -65,7 +65,9 @@ def _prepare_workspace(assignment: dict[str, Any]) -> tuple[Path, str, str]:
         raise RuntimeError("enrolled source repository is not a git worktree")
 
     repo = assignment.get("repository") or {}
-    default_branch = str(repo.get("default_branch") or "master").strip()
+    default_branch = str(repo.get("default_branch") or "").strip()
+    if not default_branch:
+        raise RuntimeError("assignment default branch is required")
     if subprocess.run(
         ["git", "check-ref-format", "--branch", default_branch],
         capture_output=True, text=True, check=False,
@@ -167,7 +169,7 @@ def _write_assignment_toml(
         f"slug = {_toml_string(repo.get('slug'))}",
         f"source_root = {_toml_string(os.environ.get('PM_AGENT_HOST_WORK_SOURCE_ROOT') or os.environ.get('PM_AGENT_HOST_SOURCE_REPO_ROOT'))}",
         f"workspace = {_toml_string(workspace)}",
-        f"default_branch = {_toml_string(repo.get('default_branch') or 'master')}",
+        f"default_branch = {_toml_string(repo.get('default_branch'))}",
         f"branch = {_toml_string(branch)}",
         f"canonical_sha = {_toml_string(canonical_sha)}",
         f"source_sha = {_toml_string(repo.get('source_sha') or assignment.get('source_sha'))}",

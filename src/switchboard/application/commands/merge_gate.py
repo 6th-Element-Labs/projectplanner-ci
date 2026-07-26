@@ -590,7 +590,12 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
     topology = get_project_repo_topology(project)
     roles = topology.get("roles") or {}
     canonical = roles.get("canonical") or {}
-    default_branch = (canonical.get("default_branch") or "master").strip() or "master"
+    default_branch = str(canonical.get("default_branch") or "").strip()
+    if not default_branch:
+        findings.append(_merge_gate_finding(
+            "canonical_default_branch_missing",
+            "Canonical repository topology must declare an exact default branch.",
+            "missing_data"))
     if not target_branch:
         target_branch = default_branch
     task = get_task(task_id, project=project) if task_id else None

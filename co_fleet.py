@@ -434,7 +434,7 @@ allowed = {{
     "PM_AGENT_WORK_MODULE_CODEX", "PM_AGENT_WORK_MODULE_CLAUDE_CODE",
     "PM_AGENT_WORK_MODULE_CURSOR",
     "PM_VERIFY_COMPLETION_PUSH", "PM_WORK_SESSION_TEST_CMD", "AWS_REGION",
-    "GH_TOKEN", "GITHUB_TOKEN", "GH_HOST",
+    "GH_HOST",
     # BUG-91: without this the worker cannot auto-provision a Work Session, so a
     # code_strict task is never claimed -- no claim_id, no work_session_id, and
     # therefore a runner row that can never satisfy the Watch/Chat bind contract.

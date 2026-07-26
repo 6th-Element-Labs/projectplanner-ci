@@ -1347,32 +1347,19 @@ def launch_command(wake, inventory, runner_session_id="", workspace_path=""):
         execution_assignment = dict(
             connect_policy.get("execution_assignment") or {})
         execution_context = dict(connect_policy.get("execution_context") or {})
-        if (execution_context and execution_context.get("schema")
-                != "switchboard.execution_context.v1"):
+        if execution_context.get("schema") != "switchboard.execution_context.v1":
             raise ValueError("connect execution context contract is invalid")
-        if execution_context and int(execution_context.get("generation") or 0) != int(
+        if int(execution_context.get("generation") or 0) != int(
                 execution_assignment.get("generation") or 0):
             raise ValueError("connect execution context generation mismatch")
         context_runtime = str(
             (execution_context.get("runtime") or {}).get("registry_name") or "")
-        if execution_context and context_runtime not in {
+        if context_runtime not in {
                 runtime, "claude_code" if runtime == "claude-code" else runtime}:
             raise ValueError("connect execution context runtime mismatch")
         if not execution_assignment:
             raise ValueError("connect execution assignment contract is missing")
-        # One generation owns the workspace, the provider credential, and the
-        # control-plane identity (runner/claim/Work Session/MCP principal). If
-        # any of them describes a different generation, or the provider
-        # connection was revoked since the wake was queued, nothing launches.
-        # A wake WITHOUT an Execution Context is the legacy placement path for
-        # projects that have not opted into an execution policy (COORD-47's
-        # restored contract, connect_dispatch.enqueue_task) — the server never
-        # resolves a context for them, so there is no generation to bind and
-        # requiring one here shut down every unconfigured board's dispatch
-        # within minutes of the 0.4.0 rollout. Gate the binding on context
-        # presence, exactly as the server gates resolution on configuration.
-        if execution_context:
-            require_connect_generation_binding(wake)
+        require_connect_generation_binding(wake)
         from switchboard.connect.execution_assignment import (
             ExecutionAssignmentError,
             build_execution_assignment,
@@ -1403,14 +1390,7 @@ def launch_command(wake, inventory, runner_session_id="", workspace_path=""):
                 last_heartbeat_at=now,
             ),
             config,
-            # A materialized isolated workspace when the wake carries an
-            # Execution Context; the host's own checkout on the legacy
-            # placement path, which is where these sessions have always run.
-            workspace_path=str(
-                workspace_path
-                or (inventory.get("repo_root")
-                    if not execution_context else "")
-                or ""),
+            workspace_path=str(workspace_path or ""),
             completion_contract=execution_assignment,
         )
         child = list(spec.argv)
@@ -1481,13 +1461,7 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
     workspace_request = None
     mode = wake_mode(wake, inventory)
     workspace_path = ""
-    if mode == "connect" and dict(
-            (wake.get("policy") or {}).get("execution_context") or {}):
-        # Only a wake that carries an Execution Context gets (and requires) an
-        # isolated materialized workspace. Context-less wakes are the legacy
-        # placement path for unconfigured projects and launch from the host's
-        # own checkout, as they always have — the server's comment in
-        # connect_dispatch.enqueue_task owns when that branch may be deleted.
+    if mode == "connect":
         task_id = str(wake.get("task_id") or "")
         try:
             workspace_request = connect_workspace_request(wake)

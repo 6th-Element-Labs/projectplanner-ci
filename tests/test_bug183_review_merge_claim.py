@@ -22,6 +22,10 @@ worktree.mkdir()
 
 import store  # noqa: E402
 from switchboard.application.commands import connect_dispatch  # noqa: E402
+from tests.execution_policy_fixture import (  # noqa: E402
+    install_ready_execution_policy,
+    ready_execution_context,
+)
 
 
 P = "switchboard"
@@ -32,6 +36,9 @@ RUNNER = "run-bug183-review"
 HOST = "host/bug183"
 
 store.init_db(P)
+install_ready_execution_policy(P)
+connect_dispatch.execution_context.resolve = lambda **kwargs: ready_execution_context(
+    kwargs["task_id"], runtime=kwargs["runtime"])
 task = store.create_task({
     "task_id": "BUG-183-REPRO",
     "workstream_id": "BUG",

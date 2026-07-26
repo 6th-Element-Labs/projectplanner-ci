@@ -2,6 +2,7 @@
 """SIMPLIFY-4 / SIMPLIFY-13 regression proof for Agent Host Work Session sources."""
 import contextlib
 import io
+import os
 import shutil
 import subprocess
 import tempfile
@@ -9,6 +10,8 @@ from pathlib import Path
 
 from adapters import agent_host_enrollment as enrollment
 from adapters import switchboard_core as core
+
+os.environ["PM_WORK_SESSION_DEFAULT_BRANCH"] = "master"
 
 
 def git(repo, *args):

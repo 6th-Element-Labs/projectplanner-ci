@@ -31,6 +31,10 @@ os.environ["PM_AUTH_MODE"] = "dev-open"
 
 import store  # noqa: E402
 from switchboard.application.commands import connect_dispatch  # noqa: E402
+from tests.execution_policy_fixture import (  # noqa: E402
+    install_ready_execution_policy,
+    ready_execution_context,
+)
 
 P = "switchboard"
 COORDINATOR = "switchboard/coordinator-autopilot/breakdown25"
@@ -48,6 +52,9 @@ def ok(condition, label):
 
 
 store.init_db(P)
+install_ready_execution_policy(P)
+connect_dispatch.execution_context.resolve = lambda **kwargs: ready_execution_context(
+    kwargs["task_id"], runtime=kwargs["runtime"])
 first = store.create_task(
     {"workstream_id": "COORD", "title": "breakdown25 first task"},
     actor="breakdown25", project=P)
