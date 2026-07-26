@@ -1945,7 +1945,7 @@ def _verify_completion_push(evidence_obj: Dict[str, Any],
         repo = _store_facade().get_project_github_repo(project)
     except Exception:
         repo = ""
-    token = push_verification.github_token_from_env()
+    token = push_verification.github_token_from_env(repo=repo)
     try:
         return push_verification.verify_push_evidence(evidence_obj, repo, token)
     except Exception as e:

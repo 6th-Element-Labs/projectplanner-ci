@@ -1234,7 +1234,10 @@ const TeepPlan = {
             const raw = String(this._dockPrUnavailable || '');
             const detail = raw.startsWith('github_error:')
                 ? raw.slice('github_error:'.length).trim() : '';
-            const why = raw === 'no_github_token'
+            const why = raw.startsWith('rate_limited:')
+                ? `GitHub's hourly request budget for this server is spent (${raw.slice('rate_limited:'.length).trim()}). `
+                  + 'PR status returns when it resets — see docs/GITHUB-APP-RATE-LIMIT.md.'
+                : (raw === 'no_github_token'
                 ? 'The server has no GitHub token configured, so PR status is unavailable.'
                 : (raw === 'no_canonical_repo'
                     ? 'This project has no canonical GitHub repo configured.'
@@ -1242,7 +1245,7 @@ const TeepPlan = {
                         ? 'Sign in again to load PR status.'
                         : (detail
                             ? `GitHub did not answer: ${detail}. Status will return on the next refresh.`
-                            : `PR status is unavailable (${raw}). Status will return on the next refresh.`)));
+                            : `PR status is unavailable (${raw}). Status will return on the next refresh.`))));
             body = `<div class="p-3 text-secondary small">${this.esc(why)}</div>`;
         } else if (tab === 'prs') {
             body = prs.length

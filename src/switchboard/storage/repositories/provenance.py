@@ -964,13 +964,15 @@ def _fetch_github_prs(pr_keys: List[Tuple[str, int]], token: str = "") -> Tuple[
     return fetched, checks
 
 
-def _github_token() -> str:
-    return (
-        os.environ.get("PM_GITHUB_TOKEN")
-        or os.environ.get("GITHUB_TOKEN")
-        or os.environ.get("SWITCHBOARD_CI_GITHUB_TOKEN")
-        or ""
-    ).strip()
+def _github_token(repo: str = "") -> str:
+    """App installation token when configured, else the historical PAT chain.
+
+    Reconcile sweeps every canonical repo, so the credential is resolved per repo —
+    installation tokens are scoped to one installation (see github_app_auth)."""
+    import github_app_auth
+    return github_app_auth.resolve_token(
+        repo=repo,
+        env_order=("PM_GITHUB_TOKEN", "GITHUB_TOKEN", "SWITCHBOARD_CI_GITHUB_TOKEN"))
 
 
 def _github_merged_prs(repo: str, token: str = "", limit: int = 30) -> List[Dict[str, Any]]:
@@ -1043,7 +1045,7 @@ def retire_merged_branch(repo: str, branch: str, head_sha: str = "",
     if not head_sha:
         return {"retired": False, "reason": "no_head_sha_cannot_archive",
                 "repo": repo, "branch": branch}
-    token = _store_facade()._github_token()
+    token = _store_facade()._github_token(repo)
     if not token:
         return {"retired": False, "reason": "no_github_token"}
     out: Dict[str, Any] = {"repo": repo, "branch": branch}
@@ -1225,7 +1227,7 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
                                              "detail": "Recorded merged_sha is not reachable from canonical main."})
                 checks["git_checks_skipped_immutable"] = skipped_immutable_git
 
-    token = _store_facade()._github_token()
+    token = _store_facade()._github_token(repo)
     recorded_pr_tasks = [
         t for t in tasks if git_states.get(t["task_id"], {}).get("pr_number")
     ]

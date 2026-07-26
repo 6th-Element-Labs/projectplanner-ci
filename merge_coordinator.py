@@ -343,9 +343,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     import task_id_parser
     gate = _load_gate()
     repo = args.repo or gate._repo()
-    token = gate._token()
+    token = gate._token(repo)
     if not token:
-        print("ERROR: set PM_GITHUB_TOKEN, GITHUB_TOKEN, or SWITCHBOARD_CI_GITHUB_TOKEN.")
+        print("ERROR: no GitHub credential. Configure the GitHub App "
+              "(PM_GITHUB_APP_ID + PM_GITHUB_APP_PRIVATE_KEY_PATH) or set "
+              "PM_GITHUB_TOKEN, GITHUB_TOKEN, or SWITCHBOARD_CI_GITHUB_TOKEN.")
         return 2
     # The coordinator gates on the VM CI status (what verify.yml posts and the required
     # check), NOT the claim gate. gate.DEFAULT_CONTEXT was removed when the gate module

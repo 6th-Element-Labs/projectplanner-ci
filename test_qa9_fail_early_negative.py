@@ -234,7 +234,7 @@ try:
         seen_pr.append({"repo": repo, "number": number, "token": token})
         return None
 
-    store._github_token = lambda: ""
+    store._github_token = lambda repo="": ""
     store._github_pr = fake_pr
     try:
         pr_report = store.reconcile(project=P)

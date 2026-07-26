@@ -46,13 +46,19 @@ SKIPPED = "skipped"
 _TOKEN_ENV_VARS = ("PM_GITHUB_TOKEN", "GITHUB_TOKEN", "SWITCHBOARD_CI_GITHUB_TOKEN")
 
 
-def github_token_from_env(env: Optional[Mapping[str, str]] = None) -> str:
-    env = env if env is not None else os.environ
-    for name in _TOKEN_ENV_VARS:
-        val = (env.get(name) or "").strip()
-        if val:
-            return val
-    return ""
+def github_token_from_env(env: Optional[Mapping[str, str]] = None,
+                          repo: str = "") -> str:
+    """The PAT chain, or a GitHub App installation token when one is configured.
+
+    An explicit ``env`` mapping keeps the pure env-only behaviour tests rely on."""
+    if env is not None:
+        for name in _TOKEN_ENV_VARS:
+            val = (env.get(name) or "").strip()
+            if val:
+                return val
+        return ""
+    import github_app_auth
+    return github_app_auth.resolve_token(repo=repo, env_order=_TOKEN_ENV_VARS)
 
 
 def _default_request_fn(url: str, token: str = "") -> Tuple[int, Any]:

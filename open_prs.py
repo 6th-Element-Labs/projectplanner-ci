@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import urllib.error
 import urllib.request
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
@@ -27,12 +28,41 @@ CACHE_BUCKET_SECONDS = int(os.environ.get("PM_OPEN_PRS_CACHE_S", "60") or 60)
 STALL_AFTER_SECONDS = 24 * 3600
 
 
-def _token() -> str:
-    for name in ("PM_GITHUB_TOKEN", "GITHUB_TOKEN", "SWITCHBOARD_CI_GITHUB_TOKEN"):
-        value = (os.environ.get(name) or "").strip()
-        if value:
-            return value
-    return ""
+def _token(repo: str = "") -> str:
+    """Prefer a GitHub App installation token; fall back to the PAT chain.
+
+    The dock polls on a 60s bucket, so on a PAT it competed with the batch timers
+    for one account-wide 5,000/hr budget (see github_app_auth)."""
+    import github_app_auth
+    return github_app_auth.resolve_token(
+        repo=repo,
+        env_order=("PM_GITHUB_TOKEN", "GITHUB_TOKEN", "SWITCHBOARD_CI_GITHUB_TOKEN"))
+
+
+class RateLimitedError(RuntimeError):
+    """GitHub refused because the credential's hourly budget is spent.
+
+    Its own type because it is not a transient 403: retrying inside the window
+    cannot succeed, and the operator fix (a bigger/separate bucket) is nothing like
+    the fix for a bad token. The 2026-07-26 outage read as "GitHub is unreachable"
+    for hours because this was flattened into a generic error."""
+
+
+def _rate_limit_reason(exc: Any) -> str:
+    """'rate_limited: …' when the failure is budget exhaustion, else ''."""
+    headers = getattr(exc, "headers", None)
+    if headers is None:
+        return ""
+    remaining = str(headers.get("x-ratelimit-remaining") or "").strip()
+    if remaining != "0":
+        return ""
+    limit = str(headers.get("x-ratelimit-limit") or "?").strip()
+    try:
+        resets_in = max(0, int(headers.get("x-ratelimit-reset") or 0) - int(time.time()))
+        window = f", resets in {resets_in // 60}m" if resets_in else ""
+    except (TypeError, ValueError):
+        window = ""
+    return f"rate_limited: {limit}/{limit} requests used this hour{window}"
 
 
 def _github_request(url: str, token: str = "") -> Any:
@@ -40,8 +70,14 @@ def _github_request(url: str, token: str = "") -> Any:
     req.add_header("Accept", "application/vnd.github+json")
     if token:
         req.add_header("Authorization", f"Bearer {token}")
-    with urllib.request.urlopen(req, timeout=12) as resp:
-        return json.loads(resp.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        reason = _rate_limit_reason(exc)
+        if reason:
+            raise RateLimitedError(reason) from exc
+        raise
 
 
 def _github_graphql(query: str, token: str) -> Any:
@@ -213,7 +249,7 @@ def build_open_prs(project: str, *,
             repo = store.get_project_github_repo(project) or ""
         except Exception:
             repo = ""
-    token = token or _token()
+    token = token or _token(repo)
     if get_task_fn is None:
         import store
         get_task_fn = store.get_task
@@ -237,14 +273,22 @@ def build_open_prs(project: str, *,
     # exception in the reason so the UI can report the actual cause.
     listed = None
     last_exc: Exception | None = None
+    rate_limited = ""
     for attempt in range(2):
         try:
             listed = list_fn(repo, token) or []
+            break
+        except RateLimitedError as exc:
+            # Budget exhaustion is not transient — a retry inside the window burns
+            # another request and cannot succeed. Report it as its own reason.
+            rate_limited = str(exc)
             break
         except Exception as exc:  # noqa: BLE001 — reason is surfaced, not swallowed
             last_exc = exc
             if attempt == 0:
                 time.sleep(0.75)
+    if rate_limited:
+        return {**base, "unavailable": rate_limited}
     if listed is None:
         return {**base, "unavailable": f"github_error: {last_exc}"}
     queue_positions = queue_fn(repo, token)

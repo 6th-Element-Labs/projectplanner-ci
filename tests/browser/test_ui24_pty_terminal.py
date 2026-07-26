@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -106,7 +107,15 @@ try:
     healthy = _wait_healthy()
     ok(healthy, "app.py boots and /health responds (required auth, throwaway DB)")
     index_html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
-    ok('js/runner-session.js?v=12' in index_html and 'app.js?v=61' in index_html,
+    # Assets must be at LEAST the versions that shipped the Resume-review fix — pinning
+    # the exact number made every later cache-bust bump a false failure (any `app.js`
+    # edit has to bump `?v=` or returning browsers get week-stale JS).
+    def _asset_version(html, asset):
+        match = re.search(re.escape(asset) + r"\?v=(\d+)", html)
+        return int(match.group(1)) if match else -1
+
+    ok(_asset_version(index_html, 'js/runner-session.js') >= 12
+       and _asset_version(index_html, 'app.js') >= 61,
        "the deployed shell invalidates pre-Resume-review runner and modal assets")
     if not healthy:
         raise SystemExit("server did not become healthy — aborting")

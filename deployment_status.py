@@ -52,7 +52,7 @@ def build_deployments(
 ) -> Dict[str, Any]:
     now = time.time() if now is None else float(now)
     repo = repo or (store.get_project_github_repo(project) or "")
-    token = token or open_prs._token()
+    token = token or open_prs._token(repo)
     health = dict((health_fn or deploy_staleness.health_view)() or {})
     base = {
         "schema": SCHEMA,

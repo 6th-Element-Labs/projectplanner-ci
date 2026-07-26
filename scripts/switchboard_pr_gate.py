@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 # cover repo-root modules; without this the systemd claim-gate unit dies on import.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import github_app_auth  # noqa: E402
 import pr_provenance_gate  # noqa: E402
 import store  # noqa: E402
 # Imported after `store` so the src/ path bootstrap it performs is already in place.
@@ -47,13 +48,16 @@ def _repo() -> str:
     ).strip()
 
 
-def _token() -> str:
-    return (
-        os.environ.get("SWITCHBOARD_CI_GITHUB_TOKEN")
-        or os.environ.get("PM_GITHUB_TOKEN")
-        or os.environ.get("GITHUB_TOKEN")
-        or ""
-    ).strip()
+def _token(repo: str = "") -> str:
+    """Credential for ``repo``: an App installation token when one is configured.
+
+    Resolved per repo, not once per run — the fleet spans owners (the org repos
+    plus a personal-account Helm) and an installation token is valid for exactly
+    one installation. github_app_auth caches, so this is a dict hit after the
+    first call. Falls back to the PAT chain in this script's historical order."""
+    return github_app_auth.resolve_token(
+        repo=repo,
+        env_order=("SWITCHBOARD_CI_GITHUB_TOKEN", "PM_GITHUB_TOKEN", "GITHUB_TOKEN"))
 
 
 def _github_request(method: str, path: str, *, token: str, body: Optional[Dict[str, Any]] = None) -> Any:
@@ -185,7 +189,8 @@ def list_pr_files(repo: str, number: int, *, token: str) -> List[str]:
 
 
 def run_claim_gate_for_pr(pr: Dict[str, Any], *, repo: str, token: str,
-                          context: str, mode: str) -> Optional[Dict[str, Any]]:
+                          context: str, mode: str,
+                          changed_paths: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
     """SESSION-12 provenance gate: post a commit status that checks whether a fleet PR
     is backed by a claimed task / Work Session. Reads the production board (this
     process' store), never the PR worktree. mode is resolved per-repo by the caller
@@ -195,7 +200,8 @@ def run_claim_gate_for_pr(pr: Dict[str, Any], *, repo: str, token: str,
     number = int(pr["number"])
     sha = pr["head"]["sha"]
     pr_url = pr.get("html_url", f"https://github.com/{repo}/pull/{number}")
-    changed_paths = list_pr_files(repo, number, token=token)
+    if changed_paths is None:
+        changed_paths = list_pr_files(repo, number, token=token)
     verdict = pr_provenance_gate.evaluate_pr_provenance(
         pr, repo=repo, mode=mode, changed_paths=changed_paths)
     post_status(repo, sha, verdict["state"], context=context,
@@ -310,6 +316,7 @@ def run_merge_authorization_for_pr(
     token: str,
     context: str = DEFAULT_MERGE_CONTEXT,
     status_sha: str = "",
+    changed_paths: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Post the branch-protection projection of Switchboard's real merge gate.
 
@@ -320,7 +327,8 @@ def run_merge_authorization_for_pr(
     pr_head_sha = str((pr.get("head") or {}).get("sha") or "")
     sha = str(status_sha or pr_head_sha or "").strip()
     pr_url = str(pr.get("html_url") or f"https://github.com/{repo}/pull/{number}")
-    changed_paths = list_pr_files(repo, number, token=token)
+    if changed_paths is None:
+        changed_paths = list_pr_files(repo, number, token=token)
     provenance = pr_provenance_gate.evaluate_pr_provenance(
         pr, repo=repo, mode="enforce", changed_paths=changed_paths,
     )
@@ -435,15 +443,18 @@ def run_merge_authorization_for_pr(
     }
 
 
-def _claim_gate_targets(args: argparse.Namespace, primary_repo: str, token: str):
+def _claim_gate_targets(args: argparse.Namespace, primary_repo: str, token: str = ""):
     """Yield (repo, pr, mode) to claim-gate. For an explicit --pr set, only the named
-    PRs on the primary repo. Otherwise every project's canonical repo (registry-driven)."""
+    PRs on the primary repo. Otherwise every project's canonical repo (registry-driven).
+
+    ``token`` overrides the resolved credential (tests / one-off runs); left empty the
+    credential is resolved per repo, since App installation tokens are per-owner."""
     skip_drafts = os.environ.get("SWITCHBOARD_CI_SKIP_DRAFTS", "1") != "0"
     if args.pr:
         mode = pr_provenance_gate.resolve_mode(primary_repo, primary_repo)
         for number in args.pr:
             try:
-                pr = get_pr(primary_repo, number, token=token)
+                pr = get_pr(primary_repo, number, token=token or _token(primary_repo))
             except Exception as exc:
                 print(json.dumps({"repo": primary_repo, "pr": number, "context": "claim",
                                   "state": "error", "error": str(exc),
@@ -460,7 +471,7 @@ def _claim_gate_targets(args: argparse.Namespace, primary_repo: str, token: str)
         seen.add(repo)
         mode = pr_provenance_gate.resolve_mode(repo, primary_repo)
         try:
-            prs = list_open_prs(repo, token=token)
+            prs = list_open_prs(repo, token=token or _token(repo))
         except GateError as exc:
             print(json.dumps({"repo": repo, "context": "claim", "state": "error",
                               "error": str(exc)}, sort_keys=True))
@@ -500,18 +511,30 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "systemd timers should stay green when they successfully post red statuses.")
     args = parser.parse_args(argv)
 
-    token = _token()
+    token = _token(args.repo)
     if not token:
-        print("ERROR: set PM_GITHUB_TOKEN, GITHUB_TOKEN, or SWITCHBOARD_CI_GITHUB_TOKEN.",
+        print("ERROR: no GitHub credential. Configure the GitHub App "
+              f"({github_app_auth.APP_ID_ENV} + {github_app_auth.PRIVATE_KEY_PATH_ENV}) "
+              "or set SWITCHBOARD_CI_GITHUB_TOKEN, PM_GITHUB_TOKEN, or GITHUB_TOKEN.",
               file=sys.stderr)
         return 2
 
     results = []
-    for repo, pr, mode in _claim_gate_targets(args, args.repo, token):
+    for repo, pr, mode in _claim_gate_targets(args, args.repo):
+        repo_token = _token(repo)
+        # Both gates need the changed-file list and used to fetch it independently —
+        # two identical GETs per PR per sweep, 30 sweeps an hour, every repo. Fetch
+        # once here and hand it to both. On a failure leave it None so each gate
+        # falls back to its own fetch and reports its own error.
+        try:
+            changed_paths = list_pr_files(repo, int(pr["number"]), token=repo_token)
+        except Exception:  # noqa: BLE001 — the gates re-fetch and surface the reason
+            changed_paths = None
         if not args.no_claim_gate:
             try:
                 claim_result = run_claim_gate_for_pr(
-                    pr, repo=repo, token=token, context=args.claim_context, mode=mode)
+                    pr, repo=repo, token=repo_token, context=args.claim_context, mode=mode,
+                    changed_paths=changed_paths)
                 if claim_result:
                     print(json.dumps(claim_result, sort_keys=True))
                     results.append(claim_result)
@@ -522,7 +545,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 results.append(err)
         try:
             merge_result = run_merge_authorization_for_pr(
-                pr, repo=repo, token=token, context=args.merge_context)
+                pr, repo=repo, token=repo_token, context=args.merge_context,
+                changed_paths=changed_paths)
             print(json.dumps(merge_result, sort_keys=True))
             results.append(merge_result)
         except Exception as exc:  # pragma: no cover - defensive

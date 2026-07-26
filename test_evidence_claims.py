@@ -224,7 +224,7 @@ try:
         return out, {"github_prs_fetch": "mocked"}
 
     store._fetch_github_prs = fake_fetch_prs
-    store._github_token = lambda: "tok"
+    store._github_token = lambda repo="": "tok"
     # Keep this fixture focused on the recorded-PR backfill path.
     store._orphan_merge_discovery_findings = (
         lambda *a, **k: ([], [], {"orphan_merge_discovery": "skipped_test"})

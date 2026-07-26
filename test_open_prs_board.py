@@ -3,9 +3,12 @@
 the canonical repo with badge-ready CI/mergeable/queue/board-join status, classified
 under attention rule C, degraded (never erroring) without a token, and cached one
 GitHub sweep per bucket. All fetchers stubbed — no network."""
+import email.message
 import os
 import sys
 import tempfile
+import time
+import urllib.error
 
 _TMP = tempfile.mkdtemp(prefix="open-prs-board-")
 os.environ["PM_DB_PATH"] = os.path.join(_TMP, "maxwell.db")
@@ -200,6 +203,73 @@ out = open_prs.build_open_prs(
 reason = str(out.get("unavailable") or "")
 ok(reason.startswith("github_error:") and "502" in reason,
    "a persistent failure reports the real exception, not a blanket 'unreachable'")
+
+
+# Rate-limit exhaustion is its own reason, not a generic 403. The 2026-07-26 outage
+# spent hours reading as "GitHub did not answer" while the real cause was the fleet
+# having burned the shared PAT's whole 5,000/hr budget.
+class _FakeHTTPError(urllib.error.HTTPError):
+    def __init__(self, remaining, reset_offset=720):
+        headers = email.message.Message()
+        headers["x-ratelimit-limit"] = "5000"
+        headers["x-ratelimit-remaining"] = str(remaining)
+        headers["x-ratelimit-reset"] = str(int(time.time()) + reset_offset)
+        super().__init__("https://api.github.com/x", 403, "Forbidden", headers, None)
+
+
+calls = []
+
+try:
+    import urllib.request as _ur
+    _orig_urlopen = _ur.urlopen
+    _ur.urlopen = lambda *a, **k: (_ for _ in ()).throw(_FakeHTTPError(remaining=0))
+    try:
+        open_prs._github_request("https://api.github.com/x", "tok")
+        raised = None
+    except open_prs.RateLimitedError as exc:
+        raised = str(exc)
+    except Exception as exc:  # noqa: BLE001
+        raised = f"WRONG TYPE: {type(exc).__name__}"
+finally:
+    _ur.urlopen = _orig_urlopen
+ok(raised and raised.startswith("rate_limited:"),
+   "an exhausted budget raises RateLimitedError, not a bare HTTPError")
+ok(raised and "5000/5000" in raised and "resets in" in raised,
+   "the reason carries the budget and when it resets")
+
+
+def _rate_limited(r, t):
+    calls.append(r)
+    raise open_prs.RateLimitedError("rate_limited: 5000/5000 requests used this hour, resets in 12m")
+
+
+calls.clear()
+out = open_prs.build_open_prs(
+    "switchboard", repo=REPO, token="tok", now=NOW,
+    list_fn=_rate_limited,
+    detail_fn=lambda r, n, t: {},
+    ci_fn=lambda r, sha, t: {"state": "none", "failing": []},
+    queue_fn=lambda r, t: {},
+    get_task_fn=lambda *a, **k: None)
+ok(str(out.get("unavailable") or "").startswith("rate_limited:"),
+   "the dock payload reports rate_limited, so the UI can say so in plain language")
+ok(len(calls) == 1, "no pointless retry inside the exhausted window")
+
+# A 403 that is NOT budget exhaustion (bad token, SSO) keeps the generic path.
+try:
+    import urllib.request as _ur
+    _orig_urlopen = _ur.urlopen
+    _ur.urlopen = lambda *a, **k: (_ for _ in ()).throw(_FakeHTTPError(remaining=4999))
+    try:
+        open_prs._github_request("https://api.github.com/x", "tok")
+        kind = "no-raise"
+    except open_prs.RateLimitedError:
+        kind = "rate_limited"
+    except urllib.error.HTTPError:
+        kind = "http_error"
+finally:
+    _ur.urlopen = _orig_urlopen
+ok(kind == "http_error", "a 403 with budget remaining stays an ordinary HTTPError")
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

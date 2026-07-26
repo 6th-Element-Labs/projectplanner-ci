@@ -52,15 +52,16 @@ def canonical_repo(explicit: str = "") -> str:
     ).strip()
 
 
-def _token(explicit: str = "") -> str:
-    return (
-        explicit
-        or os.environ.get("SWITCHBOARD_CI_DISPATCH_TOKEN")
-        or os.environ.get("SWITCHBOARD_CI_GITHUB_TOKEN")
-        or os.environ.get("PM_GITHUB_TOKEN")
-        or os.environ.get("GITHUB_TOKEN")
-        or ""
-    ).strip()
+def _token(explicit: str = "", repo: str = "") -> str:
+    """Dispatch credential. A dedicated dispatch PAT still wins — it may be scoped to
+    a different repo than the App install — then the App token, then the PAT chain."""
+    dispatch = (explicit or os.environ.get("SWITCHBOARD_CI_DISPATCH_TOKEN") or "").strip()
+    if dispatch:
+        return dispatch
+    import github_app_auth
+    return github_app_auth.resolve_token(
+        repo=repo,
+        env_order=("SWITCHBOARD_CI_GITHUB_TOKEN", "PM_GITHUB_TOKEN", "GITHUB_TOKEN"))
 
 
 def normalize_commit_sha(sha: str) -> str:

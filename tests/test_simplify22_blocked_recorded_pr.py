@@ -60,7 +60,7 @@ class BlockedRecordedPrRecoveryTest(unittest.TestCase):
             return out, {"github_prs_fetch": "mocked"}
 
         store._fetch_github_prs = fake_fetch_prs
-        store._github_token = lambda: "tok"
+        store._github_token = lambda repo="": "tok"
         store._orphan_merge_discovery_findings = (
             lambda *a, **k: ([], [], {"orphan_merge_discovery": "skipped_test"})
         )

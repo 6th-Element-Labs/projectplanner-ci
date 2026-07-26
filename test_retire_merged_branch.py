@@ -22,7 +22,7 @@ def test_archive_then_delete():
         return (201 if method == "POST" else 204), None
 
     orig_w, orig_t = store._github_write, store._github_token
-    store._github_write, store._github_token = fake_write, (lambda: "tok")
+    store._github_write, store._github_token = fake_write, (lambda repo="": "tok")
     try:
         r = store.retire_merged_branch("owner/repo", "claude/FOO-1-x", "deadbeef")
     finally:
@@ -45,7 +45,7 @@ def test_no_delete_when_archive_fails():
         return (403, {"error": "forbidden"}) if method == "POST" else (204, None)
 
     orig_w, orig_t = store._github_write, store._github_token
-    store._github_write, store._github_token = fake_write, (lambda: "tok")
+    store._github_write, store._github_token = fake_write, (lambda repo="": "tok")
     try:
         r = store.retire_merged_branch("owner/repo", "b", "sha")
     finally:
@@ -62,7 +62,7 @@ def test_already_gone_is_success():
         return (201 if method == "POST" else 404), None  # branch already deleted
 
     orig_w, orig_t = store._github_write, store._github_token
-    store._github_write, store._github_token = fake_write, (lambda: "tok")
+    store._github_write, store._github_token = fake_write, (lambda repo="": "tok")
     try:
         r = store.retire_merged_branch("owner/repo", "b", "sha")
     finally:
@@ -74,7 +74,7 @@ def test_already_gone_is_success():
 def test_no_token_is_visible_noop():
     os.environ["PM_RETIRE_MERGED_BRANCHES"] = "1"
     orig_t = store._github_token
-    store._github_token = (lambda: "")
+    store._github_token = (lambda repo="": "")
     try:
         r = store.retire_merged_branch("owner/repo", "b", "sha")
     finally:
