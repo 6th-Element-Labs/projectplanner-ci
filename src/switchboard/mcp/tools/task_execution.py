@@ -15,6 +15,7 @@ from mcp.server.fastmcp import Context
 
 import auth
 from switchboard.application.commands import task_execution as task_execution_command
+from switchboard.mcp.tools import read_summaries
 
 
 @dataclass(frozen=True)
@@ -42,15 +43,16 @@ def _run(command: str, task_id: str, ctx: Context, project: str, **kwargs: Any) 
         principal_id=str(principal.get("id") or ""), **kwargs))
 
 
-def get_task_execution(task_id: str, project: str = "maxwell") -> str:
+def get_task_execution(task_id: str, project: str = "maxwell",
+                       full: bool = False) -> str:
     """The one authoritative answer to "what is running" for a task.
 
-    Returns {execution_id, lifecycle_phase, running, starting, execution, …} where
-    ``execution`` is the full wake/claim/Work Session/runner projection and
-    ``available_commands`` lists what is legal against the current state.
+    The default is a small operator projection. Pass ``full=True`` for the
+    complete wake/claim/Work Session/runner projection.
     Read-only: prefer this over assembling runner/wake/claim state yourself."""
-    return _services().dumps(task_execution_command.execute_mapping_result(
-        "get_task_execution", task_id, project=project))
+    result = task_execution_command.execute_mapping_result(
+        "get_task_execution", task_id, project=project)
+    return _services().dumps(result if full else read_summaries.task_execution(result))
 
 
 def start_task(task_id: str, ctx: Context, project: str = "maxwell",

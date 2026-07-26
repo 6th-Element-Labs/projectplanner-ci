@@ -16,6 +16,7 @@ from mcp.server.fastmcp import Context
 
 import auth
 from switchboard.application.commands import autopilot as autopilot_command
+from switchboard.mcp.tools import read_summaries
 
 
 @dataclass(frozen=True)
@@ -36,14 +37,15 @@ def _services() -> AutopilotToolServices:
 
 
 def get_autopilot(deliverable_id: str, project: str = "maxwell",
-                  profile_id: str = "autopilot-default") -> str:
+                  profile_id: str = "autopilot-default",
+                  full: bool = False) -> str:
     """List every live (active/paused) Autopilot scope for one deliverable.
 
-    Read-only. Returns {schema:"switchboard.autopilot.v1", deliverable_id,
-    scopes:[...]} — the same body the mission cockpit's GET returns. Prefer this
-    over reading autopilot_scopes state yourself."""
-    return _services().dumps(autopilot_command.execute_mapping_result(
-        "get_autopilot", deliverable_id, project=project, profile_id=profile_id))
+    Read-only. The default returns a compact status projection; pass
+    ``full=True`` for the complete mission-cockpit body."""
+    result = autopilot_command.execute_mapping_result(
+        "get_autopilot", deliverable_id, project=project, profile_id=profile_id)
+    return _services().dumps(result if full else read_summaries.autopilot(result))
 
 
 def control_autopilot(deliverable_id: str = "", ctx: Context = None, project: str = "maxwell",

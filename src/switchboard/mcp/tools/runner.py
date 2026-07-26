@@ -13,6 +13,7 @@ from mcp.server.fastmcp import Context
 
 import auth
 from switchboard.application.commands import runner_control as runner_control_command
+from switchboard.mcp.tools import read_summaries
 
 
 @dataclass(frozen=True)
@@ -32,11 +33,13 @@ def _services() -> RunnerToolServices:
 
 def list_runner_sessions(project: str = "maxwell", host_id: str = "",
                          runtime: str = "", task_id: str = "",
-                         status: str = "", include_stale: bool = False) -> str:
+                         status: str = "", include_stale: bool = False,
+                         full: bool = False) -> str:
     services = _services()
-    return services.dumps(runner_control_command.list_sessions(
+    result = runner_control_command.list_sessions(
         host_id=host_id, runtime=runtime, task_id=task_id, status=status,
-        include_stale=include_stale, project=project))
+        include_stale=include_stale, project=project)
+    return services.dumps(result if full else read_summaries.runner_sessions(result))
 
 
 def register_runner_session(runner_session_json: str, ctx: Context,

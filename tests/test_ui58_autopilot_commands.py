@@ -197,7 +197,8 @@ try:
                                 scope_type="deliverable", actor="ui58-test")
     status_code, rest_get = rest(
         "get", "/api/deliverables/ui58-deliv/autopilot", params={"project": P})
-    mcp_get = mcp(mcp_autopilot.get_autopilot("ui58-deliv", project=P))
+    mcp_get = mcp(mcp_autopilot.get_autopilot(
+        "ui58-deliv", project=P, full=True))
     ok(stable(rest_get) == stable(mcp_get),
        "REST and MCP agree on get_autopilot")
 

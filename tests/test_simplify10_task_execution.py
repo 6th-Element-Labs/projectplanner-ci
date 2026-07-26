@@ -186,14 +186,16 @@ try:
     equivalence = [
         ("get_task_execution", running_task,
          lambda t: rest_json("get", f"/api/tasks/{t}/execution", params={"project": P}),
-         lambda t: mcp_json(mcp_task_execution.get_task_execution(t, project=P))),
+         lambda t: mcp_json(mcp_task_execution.get_task_execution(
+             t, project=P, full=True))),
         ("get_execution_transcript", running_task,
          lambda t: rest_json("get", f"/api/tasks/{t}/execution/transcript",
                              params={"project": P}),
          lambda t: mcp_json(mcp_task_execution.get_execution_transcript(t, project=P))),
         ("get_task_execution/not_found", "SIMPLIFY-NOPE",
          lambda t: rest_json("get", f"/api/tasks/{t}/execution", params={"project": P}),
-         lambda t: mcp_json(mcp_task_execution.get_task_execution(t, project=P))),
+         lambda t: mcp_json(mcp_task_execution.get_task_execution(
+             t, project=P, full=True))),
         ("get_execution_transcript/no_execution", idle_task,
          lambda t: rest_json("get", f"/api/tasks/{t}/execution/transcript",
                              params={"project": P}),

@@ -19,6 +19,7 @@ from switchboard.application.commands import move_task as move_task_command
 from switchboard.application.commands import update_task as update_task_command
 from switchboard.application.queries import get_task as get_task_query
 from switchboard.application.queries import task_session as task_session_query
+from switchboard.mcp.tools import read_summaries
 
 
 @dataclass(frozen=True)
@@ -77,10 +78,14 @@ def get_task(task_id: str, project: str = "maxwell") -> str:
     return _services().dumps(agent._task_brief(task, full=True)) if task else "no such task"
 
 
-def get_task_session(task_id: str, project: str = "maxwell") -> str:
-    """Authoritative wake/claim/Work Session/runner projection for one task."""
+def get_task_session(task_id: str, project: str = "maxwell",
+                     full: bool = False) -> str:
+    """Authoritative task-session status; pass ``full=True`` for every detail."""
     projection = task_session_query.execute_for(task_id, project=project)
-    return _services().dumps(projection) if projection else "no such task"
+    if not projection:
+        return "no such task"
+    return _services().dumps(
+        projection if full else read_summaries.task_session(projection))
 
 
 def task_session_doctor(task_id: str, project: str = "maxwell") -> str:
