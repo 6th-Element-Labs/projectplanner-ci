@@ -18,7 +18,7 @@ COMPLETION_SNAPSHOT_SCHEMA = "switchboard.completion_snapshot.v1"
 COMPLETION_DECISION_SCHEMA = "switchboard.completion_decision.v1"
 # Stamped on every decision record so a replay (spec §8.2) can tell which classifier
 # produced a verdict. Bump when this module's routing changes observably.
-COMPLETION_CLASSIFIER_VERSION = "switchboard.completion_classifier.v2"
+COMPLETION_CLASSIFIER_VERSION = "switchboard.completion_classifier.v3"
 
 _PASS = {"success", "passed", "pass", "ok"}
 _POLICY_PASS = _PASS | {"neutral", "skipped"}
@@ -851,6 +851,16 @@ def classify_completion(
                          retry="bounded")
 
     ci_decision = _required_ci_decision(snap)
+    # Product / authority CI failures still outrank draft (code is wrong or policy
+    # blocked). Transient CI wait/hydration must not hide BREAKDOWN 5: undrafting
+    # is free and must surface as draft_ready_to_mark_ready while CI is pending.
+    if ci_decision and ci_decision.get("route") in {"remediation", "human"}:
+        return ci_decision
+
+    if pr.get("draft") is True:
+        return _decision("ready_to_queue", "review_merge", "draft_ready_to_mark_ready",
+                         role="review_merge", effect="mark_ready_then_reread")
+
     if ci_decision:
         return ci_decision
 
@@ -886,10 +896,6 @@ def classify_completion(
                          "pr_mergeability_unknown", retry="bounded")
     # BLOCKED and UNSTABLE have now been decomposed through exact-head CI,
     # review, findings, and conflicts. They are never decisions by themselves.
-
-    if pr.get("draft") is True:
-        return _decision("ready_to_queue", "review_merge", "draft_ready_to_mark_ready",
-                         role="review_merge", effect="mark_ready_then_reread")
 
     desired_role = None
     runner_role = _text(runner.get("role") or runner.get("execution_role"))

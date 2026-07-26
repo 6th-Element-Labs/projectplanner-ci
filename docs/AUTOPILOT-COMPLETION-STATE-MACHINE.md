@@ -224,11 +224,14 @@ completion run.
 | Draft state | Completion decision |
 |---|---|
 | `false` | Continue normal assessment |
-| `true`, with substantive failure | Route from the substantive failure |
-| `true`, with pending CI/review | `wait` or `review_merge` |
+| `true`, with substantive failure (e.g. red product CI) | Route from the substantive failure |
+| `true`, with pending CI | `review_merge` + mark ready (pending CI must not hide draft; BREAKDOWN 5) |
+| `true`, with missing/stale review after undraft path | `review_merge` |
 | `true`, all substantive gates green | `review_merge`, mark ready, re-read exact head |
 
-Draft is not a failure and is never an early-return condition.
+Draft is not a failure. It outranks pending/hydration CI wait so Autopilot tip
+reason names mark-ready instead of `required_exact_head_ci_pending`, but it
+never masks red product CI, conflicts, or requested changes (Invariant 7).
 
 ### Mergeability
 
@@ -592,6 +595,7 @@ Before rollout, tests must prove:
 
 - draft plus red CI routes to remediation;
 - draft plus green CI and passed review routes to mark-ready and enqueue;
+- draft plus pending CI routes to mark-ready (not CI wait);
 - pending CI waits without starting another generation;
 - product CI failure and infrastructure CI failure take different routes;
 - cancelled, stale, and startup-failed CI retry coordination;

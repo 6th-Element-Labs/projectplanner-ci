@@ -177,13 +177,24 @@ CATALOG: list[Row] = [
         "scar",
     ),
     Row(
+        "draft_pending_mark_ready",
+        _world(draft=True, ci="pending", merge_state_status="BLOCKED"),
+        "review_merge",
+        "Draft mapping: draft=true with pending CI -> review_merge mark ready "
+        "(BREAKDOWN 5 / COORD-56); pending CI wait must not hide draft",
+        "Draft plus pending CI marks ready immediately; red product CI still "
+        "outranks draft (see draft_red_ci).",
+        "scar",
+    ),
+    Row(
         "pending_ci_waits",
         _world(ci="pending"),
         "wait",
         "Required regression matrix: pending CI waits without starting "
         "another generation",
         "Alias of clean_ci_pending kept as its own id per the regression "
-        "matrix bullet it proves.",
+        "matrix bullet it proves. Non-draft only -- draft+pending is "
+        "draft_pending_mark_ready.",
         "scar",
     ),
     Row(
@@ -558,35 +569,40 @@ severity table. In the order actually checked:
    attribution of an `unmergeable` failure (product vs. infrastructure vs.
    policy) decides the route without ever consulting the CI checks
    underneath it.
-9. Required exact-head CI (`_required_ci_decision`) -- only reached once
-   conflict, queue-merged, changes-requested, and queue wait/unmergeable are
-   all clear.
-10. Review missing/stale -> `review_merge`.
-11. Merge-gate coded findings (`_finding_decision`) -- human / review /
+9. Required exact-head CI *failures* that route `remediation` or `human`
+   (`_required_ci_decision`) -- product/authority red CI still outranks
+   draft (Invariant 7 / `draft_red_ci`).
+10. **Draft mark-ready** -- when `pr.draft` is true and CI did not already
+    force remediation/human, return `draft_ready_to_mark_ready`. This
+    outranks pending/hydration CI wait so Autopilot tip reason cannot hide
+    BREAKDOWN 5 behind `required_exact_head_ci_pending` (COORD-56 /
+    `draft_pending_mark_ready`).
+11. Remaining required-CI wait / coordination_retry outcomes (pending,
+    cancelled, hydration missing).
+12. Review missing/stale -> `review_merge`.
+13. Merge-gate coded findings (`_finding_decision`) -- human / review /
     remediation / coordination_retry findings, keyed off the finding's own
     `code`/`failure_class`/`finding_class`, selected by
     `_select_decision`'s route-then-reason_code-then-role total order so
     source ordering can never pick the winner.
-12. Mergeability aggregate decomposition (`BEHIND` -> `coordination_retry`,
+14. Mergeability aggregate decomposition (`BEHIND` -> `coordination_retry`,
     `UNKNOWN`/`mergeable is None` -> `wait`). `BLOCKED`/`UNSTABLE` are
     intentionally *not* checked here -- they fall through as a no-op,
     which is exactly the spec's "never route directly from this aggregate
     alone" (see `aggregate_blocked_not_masking_green`).
-13. Draft, evaluated only now -- after every substantive failure above --
-    so draft can never mask red CI, conflicts, or requested changes
-    (Invariant 7).
-14. Live-runner fencing (role AND exact head must both match the desired
+15. Live-runner fencing (role AND exact head must both match the desired
     role for the current route, or the generation is fenced and replaced;
     Invariant 5) -- evaluated last, once the desired route/role are already
     known, per "Required precedence" in the spec doc.
 
 Net effect for this catalog: **conflict/DIRTY beats a failed required CI
-check**, and **an `unmergeable` queue's own attribution beats the CI axis
-entirely** (queue is decomposed before CI is even inspected). Both are
-deliberate, from the code, not a T1 harness quirk -- `queue_unmergeable_product`
-and `queue_unmergeable_infra` set both `ci` and `queue` dirty at once to prove
-the queue's attribution wins, and `merge_conflict` never touches CI at all
-because the conflict check does not look at it.
+check**, **an `unmergeable` queue's own attribution beats the CI axis
+entirely**, and **draft mark-ready beats pending CI wait** while still
+losing to red product CI. `queue_unmergeable_product` /
+`queue_unmergeable_infra` set both `ci` and `queue` dirty at once to prove
+the queue's attribution wins; `draft_pending_mark_ready` proves draft is
+not masked by CI lag; `merge_conflict` never touches CI at all because the
+conflict check does not look at it.
 """
 
 

@@ -92,6 +92,18 @@ def test_green_draft_and_passed_review_marks_ready_then_rereads():
     assert result["effect"] == "mark_ready_then_reread"
 
 
+def test_draft_outranks_pending_ci_so_wait_reason_is_not_ci():
+    """BREAKDOWN 5 / COORD-56: draft+pending CI must not hide behind CI wait.
+
+    Autopilot tip reason was ``required_exact_head_ci_pending`` while merge-auth
+    already said the PR was a draft. Mark-ready is free and must win over CI wait.
+    """
+    result = classify_completion(None, snapshot(draft=True, ci="IN_PROGRESS"))
+    assert result["reason_code"] == "draft_ready_to_mark_ready"
+    assert result["route"] == "review_merge"
+    assert result["effect"] == "mark_ready_then_reread"
+
+
 def test_ci_routes_are_attributed_not_collapsed():
     product = classify_completion(None, snapshot(ci="ERROR", attribution="product"))
     infra = classify_completion(None, snapshot(ci="ERROR", attribution="infrastructure"))

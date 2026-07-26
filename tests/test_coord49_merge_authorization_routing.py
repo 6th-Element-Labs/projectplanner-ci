@@ -130,6 +130,14 @@ ok(draft_decision["route"] == "review_merge",
 ok(draft_decision["state"] == "ready_to_queue",
    "draft PR is ready_to_queue, not blocked")
 
+# --- BREAKDOWN 5: draft outranks pending product CI (COORD-56 misread) --------
+draft_pending = classify_completion(
+    None, snapshot(draft=True, vm_gate="PENDING", findings=[finding("draft_pr")]))
+ok(draft_pending["reason_code"] == "draft_ready_to_mark_ready",
+   "draft PR + pending VM gate classifies draft_ready_to_mark_ready, not CI wait")
+ok(draft_pending["effect"] == "mark_ready_then_reread",
+   "draft + pending CI still yields mark_ready_then_reread")
+
 # --- Acceptance 2: missing exact-head verdict routes review, not remediation -
 missing_verdict = classify_completion(None, snapshot(
     review="", findings=[finding("review_verdict_missing")]))
