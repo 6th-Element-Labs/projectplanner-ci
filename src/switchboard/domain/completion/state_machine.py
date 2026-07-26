@@ -905,5 +905,23 @@ def classify_completion(
         # before queueing, but remains an orchestration repair rather than coding work.
         return _decision("blocked", "coordination_retry", "live_runner_not_desired",
                          retry="bounded", effect="fence_runner")
+
+    # Tip gates are green and there is no live queue entry. Distinguish
+    # "never queued" (enqueue once) from "GitHub ejected after a verified
+    # enqueue" (requeue). Treating eject as a fresh enqueue is a no-op under
+    # ONCE_ONLY / idempotent replay — that is the BREAKDOWN 38 / 40 jam.
+    removal = _text(queue.get("last_removal_reason") or queue.get("removal_reason"))
+    if (
+        not queue_state
+        and (
+            queue.get("prior_enqueue_verified") is True
+            or removal in {"failed_checks", "checks_timed_out"}
+        )
+    ):
+        return _decision(
+            "blocked", "coordination_retry", "merge_queue_ejected_tip_green",
+            retry="bounded", effect="requeue_merge_group",
+        )
+
     return _decision("ready_to_queue", "review_merge", "exact_head_gates_passed",
                      role="review_merge", effect="enqueue")

@@ -344,7 +344,8 @@ fence
 
 | Queue state | Completion decision |
 |---|---|
-| No entry, all exact-head gates green | Enqueue exactly once |
+| No entry, never queued, all exact-head gates green | Enqueue exactly once |
+| No entry after verified enqueue eject (`failed_checks` / `checks_timed_out`), tip still green | `coordination_retry` and `requeue_merge_group` (`merge_queue_ejected_tip_green`) — do **not** treat as a fresh enqueue; ONCE_ONLY / idempotent replay would no-op |
 | `QUEUED` | `wait` |
 | `AWAITING_CHECKS` | `wait` |
 | `MERGEABLE` | `wait` for canonical merge event |
@@ -355,7 +356,8 @@ fence
 | `UNMERGEABLE`, policy or authority failure | `human` |
 | Merged | `reconcile` |
 
-Merge-queue dwell is not Done.
+Merge-queue dwell is not Done. Tip-green after eject is still incomplete until
+canonical merge provenance — requeue until merged.
 
 ## Idempotency
 
@@ -555,8 +557,9 @@ Execute at most one idempotent effect:
 - queue COORD-20 remediation and start exact-head `remediation`;
 - repair hydration or dispatch;
 - mark a draft ready;
-- enqueue exactly once;
+- enqueue exactly once for a never-queued green tip;
 - requeue an infrastructure-failed merge group;
+- requeue when tip stays green after a verified enqueue was ejected;
 - reconcile canonical merge provenance;
 - emit one human escalation.
 
@@ -610,7 +613,8 @@ Before rollout, tests must prove:
 - same-decision replay is idempotent;
 - a new head or route produces a new effect key;
 - mark-ready is followed by an exact-head re-read;
-- enqueue happens exactly once;
+- enqueue happens exactly once for a never-queued green tip;
+- tip-green after queue eject (`failed_checks` / `checks_timed_out`) requeues rather than replaying enqueue;
 - merge-group product and infrastructure failures route differently;
 - a dropped merge webhook is recovered by reconciliation;
 - Done without canonical provenance is refused;

@@ -1,0 +1,30 @@
+{
+  "schema": "switchboard.completion_conformance.scenario.v1",
+  "id": "tip_green_after_checks_timed_out",
+  "expect": {
+    "terminal": "merged",
+    "reason_code": "merge_queue_ejected_tip_green",
+    "role_sequence": [],
+    "route": "coordination_retry",
+    "effect": "requeue_merge_group"
+  },
+  "world": {
+    "draft": false,
+    "ci": "pass",
+    "ci_context": "Switchboard CI / VM gate",
+    "ci_attribution": "product",
+    "review": "passed",
+    "mergeable": true,
+    "merge_state_status": "CLEAN",
+    "queue": "ejected",
+    "queue_removal_reason": "checks_timed_out",
+    "runner": {"live": false, "role": "none", "head": "none"}
+  },
+  "timing": {
+    "ci_delay_seconds": 0,
+    "never_report": false,
+    "hang_seconds": 0,
+    "close_pr_while_runner_live": false,
+    "move_head_during_assessment": false
+  }
+}
