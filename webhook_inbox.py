@@ -72,6 +72,42 @@ CREATE INDEX IF NOT EXISTS ix_webhook_inbox_status ON webhook_inbox(status, id);
 _ENSURED: Set[str] = set()
 
 
+class RetryableWebhookError(RuntimeError):
+    """A valid webhook whose required side effect did not complete.
+
+    Sync handlers normally return structured results instead of raising.  The inbox
+    must translate retryable merge-queue failures back into an exception, otherwise
+    ``drain`` records the delivery as applied and GitHub's temporary merge SHA can
+    wait forever without a required status.
+    """
+
+
+def _require_merge_group_side_effects(result: Mapping[str, Any]) -> None:
+    """Fail the inbox attempt when merge-group CI or authorization did not publish."""
+    verify = result.get("verify") or {}
+    if (
+        result.get("action") == "merge_group_ci_skipped"
+        and (
+            verify.get("ok") is False
+            or verify.get("failure_class") in {"mirror_sync_failed", "workflow_trigger_failed"}
+        )
+    ):
+        detail = (
+            result.get("scratchpad_skip_reason")
+            or verify.get("stall_detail")
+            or "merge-group CI dispatch did not complete"
+        )
+        raise RetryableWebhookError(f"merge_group_ci_dispatch_failed: {detail}")
+
+    authorization = result.get("merge_authorization") or {}
+    if (
+        authorization.get("published") is False
+        and authorization.get("skip_reason") == "merge_authorization_publish_failed"
+    ):
+        detail = authorization.get("error") or "merge authorization did not publish"
+        raise RetryableWebhookError(f"merge_group_authorization_failed: {detail}")
+
+
 def _ensure(project: str) -> None:
     """Idempotent, amortized-once-per-process schema guard for the inbox table."""
     if project in _ENSURED:
@@ -150,7 +186,9 @@ def _apply_row(row: Mapping[str, Any], project: str) -> Dict[str, Any]:
     if event == "pull_request":
         return github_sync.handle_pr(payload, project)
     if event == "merge_group":
-        return github_sync.handle_merge_group(payload, project)
+        result = github_sync.handle_merge_group(payload, project)
+        _require_merge_group_side_effects(result)
+        return result
     if event in {"check_run", "check_suite", "status"}:
         return organic_github_ci.handle_webhook(event, payload, project)
     return {"action": "ignored", "event": event}
