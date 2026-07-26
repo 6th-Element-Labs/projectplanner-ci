@@ -355,6 +355,76 @@ class DecisionCorpusStorageTest(unittest.TestCase):
                 "state": "blocked", "route": route,
                 "reason_code": reason_code, "desired_role": role}
 
+    def test_replay_reproduces_coord49_routing_and_bug184_state_changes(self):
+        coord49 = _snapshot(task_id="COORD-49", review="")
+        current_coord49 = state_machine.classify_completion(None, coord49)
+        self.assertEqual(current_coord49["reason_code"], "review_required")
+        self.assertEqual(current_coord49["state"], "assessing")
+        self._tick(coord49, self._verdict(
+            "required_exact_head_ci_failed", route="remediation",
+            role="remediation",
+        ), at=self.now)
+
+        bug184 = _snapshot(task_id="BUG-184", review="")
+        current_bug184 = state_machine.classify_completion(None, bug184)
+        recorded_bug184 = dict(current_bug184)
+        recorded_bug184["state"] = "blocked"
+        self._tick(bug184, recorded_bug184, at=self.now + 1)
+
+        before = self.db.total_changes
+        replay = decision_records.replay_decision_corpus(
+            project=self.project,
+            since=self.now - 1,
+            until=self.now + 2,
+        )
+        self.assertEqual(self.db.total_changes, before, "replay must be read-only")
+        self.assertTrue(replay["advisory"])
+        self.assertFalse(replay["mutates_state"])
+        self.assertEqual(replay["changed_verdicts"], 2)
+        self.assertEqual(replay["affected_tasks"], ["BUG-184", "COORD-49"])
+        by_task = {change["task_id"]: change for change in replay["changes"]}
+        self.assertEqual(
+            by_task["COORD-49"]["recorded_verdict"]["route"], "remediation")
+        self.assertEqual(
+            by_task["COORD-49"]["current_verdict"]["route"], "review_merge")
+        self.assertEqual(
+            by_task["BUG-184"]["recorded_verdict"]["state"], "blocked")
+        self.assertEqual(
+            by_task["BUG-184"]["current_verdict"]["state"], "assessing")
+        self.assertEqual(
+            replay["reason_code_movements"],
+            [
+                {
+                    "recorded_reason_code": "required_exact_head_ci_failed",
+                    "current_reason_code": "review_required",
+                    "episodes": 1,
+                    "tasks": ["COORD-49"],
+                },
+                {
+                    "recorded_reason_code": "review_required",
+                    "current_reason_code": "review_required",
+                    "episodes": 1,
+                    "tasks": ["BUG-184"],
+                },
+            ],
+        )
+
+    def test_replay_ignores_snapshot_churn_when_behavior_is_unchanged(self):
+        snapshot = _snapshot(task_id="COORD-60")
+        snapshot["task"]["updated_at"] = self.now
+        self._tick(snapshot)
+        # Classifier/version metadata changing is not itself behavioral drift.
+        self.db.execute(
+            "UPDATE decision_records SET classifier_version='old.classifier.v1'")
+        self.db.commit()
+
+        replay = decision_records.replay_decision_corpus(project=self.project)
+
+        self.assertEqual(replay["episodes_replayed"], 1)
+        self.assertEqual(replay["changed_verdicts"], 0)
+        self.assertEqual(replay["changes"], [])
+        self.assertEqual(replay["reason_code_movements"], [])
+
     # -- episode collapsing --------------------------------------------------
 
     def test_two_hundred_ticks_on_an_unchanged_head_are_one_episode(self):

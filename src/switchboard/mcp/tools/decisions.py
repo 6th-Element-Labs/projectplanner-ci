@@ -219,6 +219,26 @@ def list_decision_episodes(project: str = "maxwell", task_id: str = "",
     ))
 
 
+def replay_decision_corpus(project: str = "maxwell", window_hours: float = 168.0,
+                           task_id: str = "", limit: int = 1000) -> str:
+    """Replay recorded completion snapshots through the current classifier (COORD-60).
+
+    This is offline, read-only, and advisory. It never changes a decision, gate, or
+    route. The result includes every changed verdict with its original snapshot,
+    affected tasks, and reason-code movements. A classifier-version change that
+    produces the same decision returns ``changed_verdicts=0``.
+    project: 'maxwell' (default), 'helm', or 'switchboard'."""
+    from switchboard.storage.repositories import decision_records
+
+    since = (
+        time.time() - (float(window_hours) * 3600.0)
+        if float(window_hours or 0) > 0 else None
+    )
+    return _services().dumps(decision_records.replay_decision_corpus(
+        project=project, since=since, task_id=task_id, limit=limit,
+    ))
+
+
 DECISION_TOOL_NAMES = (
     "record_decision",
     "record_coordinator_decision",
@@ -227,6 +247,7 @@ DECISION_TOOL_NAMES = (
     "get_decision",
     "get_reason_code_counts",
     "list_decision_episodes",
+    "replay_decision_corpus",
 )
 
 

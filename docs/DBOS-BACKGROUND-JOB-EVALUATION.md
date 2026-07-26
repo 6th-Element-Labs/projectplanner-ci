@@ -35,7 +35,6 @@ The hot coordination kernel **does not** move onto DBOS:
 
 | Job | Steps | Mutates hot path? |
 |-----|-------|-------------------|
-| `replay_verify_batch` | `event_replay.verify_board` per project | No |
 | `audit_export_batch` | `store.audit_export` per project | No |
 | `receipt_projection_batch` | `coordination_receipts.list_*` per project | No |
 | `reconcile_alerts_resumable` | `store.run_reconcile_alerts` per project | No (alerts only) |
@@ -44,7 +43,7 @@ The hot coordination kernel **does not** move onto DBOS:
 
 1. **Crash/resume without protocol change** — `test_background_jobs.py` simulates crash after step 0 and proves resume skips completed steps; public MCP/REST contracts unchanged.
 2. **Hot path independence** — `FORBIDDEN_HOT_PATH_OPERATIONS` blocks scheduling kernel ops; `evaluate_dbos_runtime().hot_path_independent` is always true.
-3. **Receipt/replay integration** — replay and receipt jobs wrap RECON-8/9 modules read-only.
+3. **Receipt integration** — the receipt job wraps the RECON-9 module read-only.
 
 ## DBOS adoption criteria (future)
 
@@ -68,12 +67,12 @@ export SWITCHBOARD_JOB_RUNTIME=local_checkpoint
 export SWITCHBOARD_JOB_RUNTIME=dbos
 
 # jobs.py helper
-python jobs.py background_job replay_verify_batch
+python jobs.py background_job audit_export_batch
 ```
 
 ## Related tasks
 
-- `RECON-8` — replay harness (feeds `replay_verify_batch`)
+- `RECON-8` — retired by COORD-60; classifier-corpus replay supersedes generic event replay
 - `RECON-9` — coordination receipts (feeds `receipt_projection_batch`)
 - `HARDEN-13` — audit export (feeds `audit_export_batch`)
 - `TALLY-4` — provider cost reconciliation (future DBOS candidate)

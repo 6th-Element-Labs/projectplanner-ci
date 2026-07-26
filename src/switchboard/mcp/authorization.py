@@ -185,7 +185,7 @@ READ_TOOLS = frozenset({
     "get_work_session_health", "get_working_agreement", "host_status",
     "list_active_agents", "list_active_leases", "list_active_resource_leases",
     "list_agent_hosts", "list_background_job_runs", "list_coordinator_decisions",
-    "list_decision_episodes",
+    "list_decision_episodes", "replay_decision_corpus",
     "list_decisions", "list_deliverable_breakdown_proposals", "list_deliverables",
     "list_external_ci_runs", "list_external_effects", "list_monitors",
     "list_pending_acks", "list_project_boards", "list_projects",

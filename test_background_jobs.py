@@ -29,8 +29,8 @@ store.claim_task(alpha["task_id"], "agent/bg", actor="test", project=P)
 
 catalog = background_jobs.list_background_jobs()
 ok(catalog["schema"] == background_jobs.CATALOG_SCHEMA, "catalog schema")
-ok(any(j["job_name"] == "replay_verify_batch" for j in catalog["jobs"]),
-   "catalog includes replay_verify_batch")
+ok(not any(j["job_name"] == "replay_verify_batch" for j in catalog["jobs"]),
+   "retired replay_verify_batch is absent")
 ok("claim_next" in catalog["forbidden_hot_path_operations"],
    "claim_next is forbidden on hot path")
 
@@ -47,10 +47,9 @@ except background_jobs.JobBoundaryError:
     ok(True, "forbidden job raises JobBoundaryError")
 
 run = background_jobs.run_background_job(
-    P, "replay_verify_batch", params={"projects": P}, resume=False,
+    P, "audit_export_batch", params={"projects": P}, resume=False,
 )
-ok(run["status"] == "completed", "replay_verify_batch completes")
-ok(run["summary"]["ok"], "replay_verify_batch summary ok")
+ok(run["status"] == "completed", "audit_export_batch completes")
 run_id = run["run_id"]
 
 loaded = background_jobs.load_run(P, run_id)
@@ -58,7 +57,7 @@ ok(loaded["run_id"] == run_id, "load_run returns persisted manifest")
 
 try:
     background_jobs.run_background_job(
-        P, "replay_verify_batch",
+        P, "audit_export_batch",
         params={"projects": P},
         resume=True,
         crash_after_step=0,
@@ -68,7 +67,7 @@ except RuntimeError as exc:
     ok("simulated crash" in str(exc), "simulated crash after first step")
 
 resumed = background_jobs.run_background_job(
-    P, "replay_verify_batch", params={"projects": P}, resume=True,
+    P, "audit_export_batch", params={"projects": P}, resume=True,
 )
 ok(resumed["status"] == "completed", "resume completes after simulated crash")
 ok(resumed["steps"][0]["status"] == "completed", "resumed run skips completed step")

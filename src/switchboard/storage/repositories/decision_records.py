@@ -54,6 +54,7 @@ from switchboard.domain.decisions.reason_codes import (
 SCHEMA = "switchboard.decision_record.v1"
 COUNTS_SCHEMA = "switchboard.decision_reason_code_counts.v1"
 OUTCOME_SCHEMA = "switchboard.decision_episode_outcome.v1"
+REPLAY_SCHEMA = "switchboard.decision_corpus_replay.v1"
 
 DEFAULT_SNAPSHOT_TTL_DAYS = 90
 
@@ -584,6 +585,115 @@ def list_decision_episodes(
             (*params, max(int(limit or 0), 1)),
         ).fetchall()
     return [record for record in (_row(row) for row in rows) if record]
+
+
+def replay_decision_corpus(
+    *,
+    project: str = DEFAULT_PROJECT,
+    since: Optional[float] = None,
+    until: Optional[float] = None,
+    task_id: str = "",
+    limit: int = 1000,
+) -> dict[str, Any]:
+    """Replay retained snapshots through today's classifier without mutating state.
+
+    The comparison is decision-to-decision. Snapshot hashes, classifier versions,
+    timestamps, and feature projections are deliberately excluded: a newly hydrated
+    snapshot that produces the same verdict is not a behavioral change.
+    """
+    from switchboard.domain.completion.state_machine import (
+        COMPLETION_CLASSIFIER_VERSION,
+        classify_completion,
+    )
+
+    where, params = _window_clause(project, since, until, task_id, "", "")
+    with _conn(project) as c:
+        rows = c.execute(
+            "SELECT record_id, task_id, first_seen_at, last_seen_at, "
+            "snapshot_json, snapshot_retained, decision_json, classifier_version "
+            f"FROM decision_records WHERE {where} "
+            "ORDER BY first_seen_at ASC, record_id ASC LIMIT ?",
+            (*params, max(int(limit or 0), 1)),
+        ).fetchall()
+
+    changes: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    movements: dict[tuple[str, str], dict[str, Any]] = {}
+    replayed = 0
+    for row in rows:
+        if not bool(_int(row["snapshot_retained"])):
+            skipped.append({
+                "record_id": row["record_id"],
+                "task_id": row["task_id"],
+                "reason": "snapshot_compacted",
+            })
+            continue
+        snapshot = _map(row["snapshot_json"])
+        if snapshot.get("schema") != "switchboard.completion_snapshot.v1":
+            skipped.append({
+                "record_id": row["record_id"],
+                "task_id": row["task_id"],
+                "reason": "unsupported_snapshot_schema",
+                "snapshot_schema": snapshot.get("schema") or "",
+            })
+            continue
+        recorded = _map(row["decision_json"])
+        current = classify_completion(None, snapshot)
+        replayed += 1
+        if _canonical_json(recorded) == _canonical_json(current):
+            continue
+        old_code = canonical_reason_code(recorded.get("reason_code"))
+        new_code = canonical_reason_code(current.get("reason_code"))
+        movement = movements.setdefault((old_code, new_code), {
+            "recorded_reason_code": old_code,
+            "current_reason_code": new_code,
+            "episodes": 0,
+            "tasks": set(),
+        })
+        movement["episodes"] += 1
+        movement["tasks"].add(str(row["task_id"]))
+        changes.append({
+            "record_id": row["record_id"],
+            "task_id": row["task_id"],
+            "first_seen_at": row["first_seen_at"],
+            "last_seen_at": row["last_seen_at"],
+            "recorded_classifier_version": row["classifier_version"],
+            "current_classifier_version": COMPLETION_CLASSIFIER_VERSION,
+            "recorded_verdict": recorded,
+            "current_verdict": current,
+            "snapshot": snapshot,
+        })
+
+    reason_code_movements = []
+    for movement in movements.values():
+        reason_code_movements.append({
+            **movement,
+            "tasks": sorted(movement["tasks"]),
+        })
+    reason_code_movements.sort(key=lambda item: (
+        -item["episodes"],
+        item["recorded_reason_code"],
+        item["current_reason_code"],
+    ))
+    affected_tasks = sorted({item["task_id"] for item in changes})
+    return {
+        "schema": REPLAY_SCHEMA,
+        "advisory": True,
+        "mutates_state": False,
+        "project": project,
+        "window": {"since": since, "until": until},
+        "filter": {"task_id": str(task_id or "").strip().upper()},
+        "current_classifier_version": COMPLETION_CLASSIFIER_VERSION,
+        "episodes_considered": len(rows),
+        "episodes_replayed": replayed,
+        "episodes_skipped": len(skipped),
+        "changed_verdicts": len(changes),
+        "affected_task_count": len(affected_tasks),
+        "affected_tasks": affected_tasks,
+        "reason_code_movements": reason_code_movements,
+        "changes": changes,
+        "skipped": skipped,
+    }
 
 
 def export_projection(

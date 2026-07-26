@@ -68,13 +68,6 @@ JOB_CATALOG: Dict[str, JobSpec] = {
         task_anchors=("BUG-60", "UI-16"),
         description="Run Ask Taikun outside the HTTP/MCP request with a persisted checkpoint.",
     ),
-    "replay_verify_batch": JobSpec(
-        job_name="replay_verify_batch",
-        title="Replay verify across projects",
-        dbos_eligible=True,
-        task_anchors=("RECON-8", "RECON-10"),
-        description="Replay activity and verify derived board state per project.",
-    ),
     "audit_export_batch": JobSpec(
         job_name="audit_export_batch",
         title="Audit export across projects",
@@ -347,7 +340,6 @@ def list_job_runs(project: str, *, job_name: str = "", limit: int = 20) -> Dict[
 def _step_handler(job_name: str) -> Callable[[str, Mapping[str, Any]], Dict[str, Any]]:
     handlers = {
         "plan_agent_run": _step_plan_agent,
-        "replay_verify_batch": _step_replay_verify,
         "audit_export_batch": _step_audit_export,
         "receipt_projection_batch": _step_receipt_projection,
         "reconcile_alerts_resumable": _step_reconcile_alerts,
@@ -416,22 +408,6 @@ def _step_compact_decision_snapshots(
             else decision_records.DEFAULT_SNAPSHOT_TTL_DAYS
         ),
     )
-
-
-def _step_replay_verify(project_id: str, params: Mapping[str, Any]) -> Dict[str, Any]:
-    import event_replay
-    store.init_db(project_id)
-    result = event_replay.verify_board(
-        project_id,
-        from_cursor=int(params.get("from_cursor") or 0),
-        until_cursor=int(params["until_cursor"]) if params.get("until_cursor") else None,
-        task_id=str(params.get("task_id") or ""),
-    )
-    return {
-        "ok": bool(result.get("ok")),
-        "events_replayed": int(result.get("events_replayed") or 0),
-        "mismatches": len(result.get("mismatches") or []),
-    }
 
 
 def _step_audit_export(project_id: str, params: Mapping[str, Any]) -> Dict[str, Any]:
