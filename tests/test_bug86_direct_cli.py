@@ -247,6 +247,7 @@ renewal = next(row for row in heartbeat_calls
 ok(renewed == [{
        "runner_session_id": "run-direct-bug86", "task_id": task_id,
        "renewed": True, "error": None,
+       "renew_deferred": False,
        "relay_url_minted": False,
        "server_relay_error": None,
        "server_relay_missing": [],

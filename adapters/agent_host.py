@@ -1798,8 +1798,11 @@ def register_runner_session(rec, wake, inventory):
         "control": rec.get("control") or {"tier": "T3", "runner_kill": True,
                                            "managed_process": True},
         "metadata": metadata,
-        "heartbeat_ttl_s": (3600 if rec.get("cloud_session") else
-                            180 if rec.get("wake_mode") == "direct_task" else 60),
+        "heartbeat_ttl_s": (
+            3600 if rec.get("cloud_session") else
+            180 if rec.get("wake_mode") in {"direct_task", "connect"} else
+            60
+        ),
     }
     # Use hard POST when this registration claims to be claim-bound / watchable so
     # agent hosts fail closed instead of silently skipping (_try returns None).
@@ -2875,6 +2878,19 @@ def renew_live_direct_runners(inventory):
         if host_preflight:
             body["metadata"]["host_repo_preflight"] = host_preflight
         result = _try("POST", P_HEARTBEAT_RUNNER, body)
+        first_error = (
+            (result or {}).get("error") if isinstance(result, dict)
+            else "heartbeat_runner_session_failed"
+        )
+        if not result or first_error:
+            # A single transport blip must not unfairly consume a runner's
+            # lease. Retry once in this daemon tick; the next tick remains the
+            # deferred renewal boundary if both attempts fail.
+            result = _try("POST", P_HEARTBEAT_RUNNER, body)
+        final_error = (
+            (result or {}).get("error") if isinstance(result, dict)
+            else "heartbeat_runner_session_failed"
+        )
         _collect_companion_relay_auth_fault(session.get("runner_session_id"))
         requested_relay = _consume_host_relay_refresh_request(
             session.get("runner_session_id"), host_id)
@@ -2902,7 +2918,8 @@ def renew_live_direct_runners(inventory):
             "runner_session_id": session.get("runner_session_id"),
             "task_id": task_id,
             "renewed": bool(result and not result.get("error")),
-            "error": (result or {}).get("error") if isinstance(result, dict) else None,
+            "error": final_error,
+            "renew_deferred": bool(not result or final_error),
             "relay_url_minted": bool(server_relay.get("host_url")),
             **({
                 "server_relay_error": server_relay.get("error"),
