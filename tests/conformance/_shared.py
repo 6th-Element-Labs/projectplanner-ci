@@ -248,6 +248,13 @@ def hermetic_completion_patches(
             "get_active_completion_run",
             return_value=run,
         ))
+        # COORD-77: the executor counts stable replays for the convergence
+        # ladder on the verified-replay path; hermetic ticks must not open a DB.
+        stack.enter_context(patch(
+            "switchboard.storage.repositories.completion_runs."
+            "note_stable_replay",
+            return_value=1,
+        ))
         stack.enter_context(patch(
             "switchboard.application.completion_driver.ensure_completion_run",
             return_value=run,

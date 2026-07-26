@@ -353,6 +353,25 @@ def _execute_mutating_effect(
     )
     existing_effect = _map(ledger.get("effect"))
     if ledger.get("verified"):
+        # COORD-77: a verified replay of a mutating effect is the livelock
+        # loop point — a stable decision no-ops here forever while the task
+        # sits frozen. Count it so the classifier's convergence ladder can
+        # escalate deterministically instead of relying on someone noticing.
+        # The count is advisory pressure, never authority: a failure to count
+        # must not break the replay receipt, but it is reported on it — a
+        # discarded cause is the defect class this board keeps re-finding.
+        from switchboard.storage.repositories import completion_runs
+        stable_replay_error = None
+        try:
+            stable_replays = completion_runs.note_stable_replay(
+                str(plan.get("task_id") or ""),
+                str(plan.get("head_sha") or ""),
+                actor=actor,
+                project=project,
+            )
+        except Exception as exc:  # noqa: BLE001 - bookkeeping stays non-fatal
+            stable_replays = None
+            stable_replay_error = f"{type(exc).__name__}: {exc}"
         return {
             "effect": effect,
             "route": plan.get("route"),
@@ -367,6 +386,9 @@ def _execute_mutating_effect(
                 "verified": True,
                 "pending": False,
                 "idempotent_replay": True,
+                "stable_replays": stable_replays,
+                **({"stable_replay_error": stable_replay_error}
+                   if stable_replay_error else {}),
                 **_effect_diagnostics(existing_effect),
             },
         }

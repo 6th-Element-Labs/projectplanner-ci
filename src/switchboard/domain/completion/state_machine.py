@@ -18,7 +18,7 @@ COMPLETION_SNAPSHOT_SCHEMA = "switchboard.completion_snapshot.v1"
 COMPLETION_DECISION_SCHEMA = "switchboard.completion_decision.v1"
 # Stamped on every decision record so a replay (spec §8.2) can tell which classifier
 # produced a verdict. Bump when this module's routing changes observably.
-COMPLETION_CLASSIFIER_VERSION = "switchboard.completion_classifier.v3"
+COMPLETION_CLASSIFIER_VERSION = "switchboard.completion_classifier.v4"
 
 _PASS = {"success", "passed", "pass", "ok"}
 _POLICY_PASS = _PASS | {"neutral", "skipped"}
@@ -746,12 +746,12 @@ def _github_pr_hydration_unavailable(
     )
 
 
-def classify_completion(
+def _classify_completion_base(
     current_run: Mapping[str, Any] | None,
     snapshot: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Return one deterministic, side-effect-free decision for an exact-head snapshot."""
-    del current_run  # reserved for retry-budget/state-version policy; never mutated
+    del current_run  # the convergence ladder in classify_completion reads it; base never does
     snap = _map(snapshot)
     task_status = _text(snap.get("board_status") or _map(snap.get("task")).get("status"))
     provenance = _map(snap.get("merge_provenance"))
@@ -907,3 +907,96 @@ def classify_completion(
                          retry="bounded", effect="fence_runner")
     return _decision("ready_to_queue", "review_merge", "exact_head_gates_passed",
                      role="review_merge", effect="enqueue")
+
+
+#: Combined convergence pressure (decision churn + stable no-op replays at one
+#: head) after which a coordination_retry stops repeating itself. COORD-57
+#: (2026-07-26) reached decision_attempt=50; three identical outcomes is enough
+#: to know the current strategy is not converging.
+CONVERGENCE_LADDER_PRESSURE = 3
+
+
+def _convergence_ladder(
+    current_run: Mapping[str, Any] | None,
+    snap: Mapping[str, Any],
+    decision: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Bound non-converging coordination retries with a deterministic ladder.
+
+    COORD-77, forced by the COORD-57 incident: a coordination_retry that keeps
+    producing identical outcomes at one head has two shapes the single-tick
+    contract cannot see — oscillation (decision flips re-arm the same repair
+    with a fresh idem_key; prod reached attempt=50) and livelock (a stable
+    decision's verified effect replays as a no-op forever, the task frozen and
+    unreported). ``completion_runs`` counts both per head (``churn`` +
+    ``stable_replays``, reset on head movement, because a moved head IS
+    progress).
+
+    Once pressure reaches ``CONVERGENCE_LADDER_PRESSURE``, the ladder runs
+    exactly two deterministic rungs, then names the failure:
+
+      1. one forced ``reconcile`` (``completion_not_converging_reconcile``) —
+         a fresh authoritative re-read, the cheapest deterministic move when
+         staleness caused the churn;
+      2. if pressure persists after that, a NAMED ``human`` closeout
+         (``completion_not_converging``) carrying the original blocker. This is
+         the last rung, not the fix: by construction there is no deterministic
+         move left, and naming the stall beats spinning on it silently.
+
+    Never fires below pressure, on any non-coordination_retry route, or across
+    a head change — ordinary bounded retries and remediation loops that make
+    progress are untouched.
+    """
+    if _text(decision.get("route")) != "coordination_retry":
+        return dict(decision)
+    run = _map(current_run)
+    convergence = _map(_map(run.get("evidence_refs")).get("convergence"))
+    head = str(_map(snap).get("head_sha") or "").strip().lower()
+    if not convergence or not head:
+        return dict(decision)
+    if str(convergence.get("head_sha") or "").lower() != head:
+        return dict(decision)
+    pressure = (
+        int(convergence.get("churn") or 0)
+        + int(convergence.get("stable_replays") or 0)
+    )
+    if pressure < CONVERGENCE_LADDER_PRESSURE:
+        return dict(decision)
+    original_reason = str(decision.get("reason_code") or "")
+    if not convergence.get("reconcile_tried"):
+        escalated = _decision(
+            "reconciling", "reconcile", "completion_not_converging_reconcile",
+            retry="bounded", effect="reconcile_provenance")
+        escalated["convergence"] = {
+            "pressure": pressure, "original_reason_code": original_reason}
+        return escalated
+    escalated = _decision(
+        "blocked", "human", "completion_not_converging", board="Blocked")
+    escalated["convergence"] = {
+        "pressure": pressure, "original_reason_code": original_reason}
+    escalated["escalated_findings"] = [{
+        "code": "completion_not_converging",
+        "message": (
+            f"Completion did not converge: {pressure} identical outcomes at "
+            f"this head (original blocker: {original_reason or 'unknown'}); "
+            "a forced reconcile did not change the outcome."
+        ),
+        "original_reason_code": original_reason,
+        "blocking": True,
+    }]
+    return escalated
+
+
+def classify_completion(
+    current_run: Mapping[str, Any] | None,
+    snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Classify one exact-head snapshot, bounded by the convergence ladder.
+
+    The base classifier is pure world-in/decision-out. The ladder layers the
+    retry-budget policy ``current_run`` was always reserved for: identical
+    coordination_retry outcomes at one head escalate deterministically
+    (reconcile once, then a named human closeout) instead of repeating forever.
+    """
+    decision = _classify_completion_base(current_run, snapshot)
+    return _convergence_ladder(current_run, snapshot, decision)

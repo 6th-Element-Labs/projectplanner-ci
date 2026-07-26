@@ -93,7 +93,35 @@ def _canonical_merge_provenance(evidence_refs: Mapping[str, Any]) -> bool:
     return True
 
 
+#: COORD-77 convergence bookkeeping, kept under this one evidence_refs key.
+#: ``churn`` counts decision transitions at one head (the oscillation signal:
+#: COORD-57 reached attempt=50 through A->B->A flips, each re-arming the same
+#: repair with a fresh idem_key). ``stable_replays`` counts verified replays of
+#: a mutating effect while the decision stands still (the livelock signal: a
+#: frozen world replays the same no-op forever and nobody is told). Both reset
+#: when the head moves — real progress clears the pressure.
+CONVERGENCE_KEY = "convergence"
+
+
+def _fresh_convergence(head_sha: str) -> dict[str, Any]:
+    return {"head_sha": str(head_sha or "").lower(), "churn": 0,
+            "stable_replays": 0, "reconcile_tried": False}
+
+
+def _carried_convergence(current: Optional[Mapping[str, Any]],
+                         head_sha: str) -> dict[str, Any]:
+    conv = _object(_object((current or {}).get("evidence_refs")).get(CONVERGENCE_KEY))
+    if str(conv.get("head_sha") or "").lower() == str(head_sha or "").lower():
+        return {**_fresh_convergence(head_sha), **conv}
+    return _fresh_convergence(head_sha)
+
+
 def _decision_fingerprint(run: Mapping[str, Any]) -> tuple:
+    # Convergence counters are bookkeeping ABOUT decision repetition; letting
+    # them into the identity would make every counted repeat look like a new
+    # decision, which is exactly the churn they exist to measure.
+    evidence = _object(run.get("evidence_refs"))
+    evidence.pop(CONVERGENCE_KEY, None)
     return (
         str(run.get("pr_number") or 0),
         str(run.get("head_sha") or "").lower(),
@@ -102,7 +130,7 @@ def _decision_fingerprint(run: Mapping[str, Any]) -> tuple:
         str(run.get("reason_code") or ""),
         str(run.get("desired_role") or ""),
         str(run.get("board_status") or ""),
-        json.dumps(_object(run.get("evidence_refs")), sort_keys=True),
+        json.dumps(evidence, sort_keys=True),
     )
 
 
@@ -196,6 +224,42 @@ def get_active_completion_run(task_id: str, *,
     return _row(row)
 
 
+def note_stable_replay(task_id: str, head_sha: str, *,
+                       actor: str = "system",
+                       project: str = DEFAULT_PROJECT) -> int:
+    """Count one verified replay of a mutating effect at an unchanged head.
+
+    COORD-77: the executor calls this from the verified-replay branch — the
+    point where a stable decision's effect is a no-op forever in a world that
+    never changes. Transition churn cannot see that livelock (an identical
+    decision never transitions), so it is counted here and read by the
+    classifier's convergence ladder. Returns the new count; 0 when there is no
+    active run at this exact head (a moved head IS progress — nothing accrues).
+    """
+    task_id = str(task_id or "").strip().upper()
+    head = str(head_sha or "").strip().lower()
+    if not task_id or not head:
+        return 0
+    with _conn(project) as c:
+        row = c.execute(
+            "SELECT * FROM completion_runs WHERE task_id=?", (task_id,)
+        ).fetchone()
+        run = _row(row)
+        if not run or str(run.get("head_sha") or "").lower() != head:
+            return 0
+        evidence = _object(run.get("evidence_refs"))
+        convergence = _carried_convergence(run, head)
+        convergence["stable_replays"] = int(
+            convergence.get("stable_replays") or 0) + 1
+        evidence[CONVERGENCE_KEY] = convergence
+        c.execute(
+            "UPDATE completion_runs SET evidence_refs_json=?, updated_at=?, "
+            "actor=? WHERE task_id=?",
+            (json.dumps(evidence, sort_keys=True), time.time(),
+             str(actor or "system"), task_id))
+        return int(convergence["stable_replays"])
+
+
 def list_active_completion_runs(
         task_ids: Any, *,
         project: str = DEFAULT_PROJECT) -> dict[str, dict[str, Any]]:
@@ -268,9 +332,12 @@ def transition_completion_run_in(
         "board_status": board_status,
         "evidence_refs": evidence_refs,
     }
+    # Callers never own the convergence counters; they are maintained here.
+    evidence_refs.pop(CONVERGENCE_KEY, None)
     if current and _decision_fingerprint(current) == _decision_fingerprint(decision):
         return current
 
+    convergence = _carried_convergence(current, head_sha)
     if current:
         run_id = current["run_id"]
         created_at = current["created_at"]
@@ -297,12 +364,16 @@ def transition_completion_run_in(
             evidence_refs_final = dict(evidence_refs)
             if route_or_state_changed:
                 attempt += 1
+                convergence["churn"] = int(convergence.get("churn") or 0) + 1
     else:
         run_id = "completion-run-" + uuid.uuid4().hex[:16]
         created_at = now
         state_version = 1
         attempt = 1
         evidence_refs_final = dict(evidence_refs)
+    if route == "reconcile" and reason_code == "completion_not_converging_reconcile":
+        convergence["reconcile_tried"] = True
+    evidence_refs_final[CONVERGENCE_KEY] = convergence
 
     c.execute(
         "INSERT INTO completion_runs("

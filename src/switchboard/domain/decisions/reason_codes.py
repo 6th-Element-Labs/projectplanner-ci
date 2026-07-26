@@ -128,6 +128,12 @@ _ENTRIES: tuple[ReasonCode, ...] = (
     _code("exact_head_gates_passed", "mergeability", _COMPLETION, "transient", "agent"),
     # -- runner ----------------------------------------------------------------
     _code("live_runner_not_desired", "runner", _COMPLETION, "transient", "agent"),
+    # -- convergence ladder (COORD-77) -----------------------------------------
+    # Emitted when a coordination_retry decision keeps producing identical
+    # outcomes at one head: first a single forced reconcile (deterministic
+    # re-read of truth), then a NAMED human closeout. Never silent spin.
+    _code("completion_not_converging_reconcile", "runner", _COMPLETION, "transient", "infra"),
+    _code("completion_not_converging", "runner", _COMPLETION, "anomalous", "human"),
     # -- merge-gate findings promoted to a route -------------------------------
     _code("canonical_repo_missing", "placement", _MERGE_GATE, "anomalous", "human", False),
     _code("repo_role_cannot_merge", "placement", _MERGE_GATE, "anomalous", "human", False),
