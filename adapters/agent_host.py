@@ -153,6 +153,24 @@ def _csv(value):
     return [x.strip() for x in str(value or "").replace("\n", ",").split(",") if x.strip()]
 
 
+def _host_projects(inventory=None):
+    """Projects this host must poll, preserving configured priority."""
+    configured = ((inventory or {}).get("placement") or {}).get("projects")
+    projects = configured if isinstance(configured, list) else []
+    if not projects:
+        projects = _csv(os.environ.get("PM_HOST_PROJECTS", PROJECT))
+    return list(dict.fromkeys(str(project).strip() for project in projects
+                              if str(project).strip()))
+
+
+def _wake_project(wake):
+    """Return the project attached by the project-scoped wake poll."""
+    return str((wake or {}).get("_host_project")
+               or (wake or {}).get("project_id")
+               or (wake or {}).get("project")
+               or PROJECT)
+
+
 def _safe_identity(value):
     """Return a stable git-ref component for server-owned identifiers."""
     safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "")).strip(".-")
@@ -1767,7 +1785,7 @@ def register_runner_session(rec, wake, inventory):
     # Prefer explicit host/<instance-id> from inventory; never invent task-row EC2 ids.
     host_id = inventory.get("host_id") or ""
     body = {
-        "project": PROJECT,
+        "project": _wake_project(wake),
         "runner_session_id": rec.get("runner_session_id"),
         "host_id": host_id,
         "agent_id": rec.get("agent_id") or (wake.get("selector") or {}).get("agent_id"),
@@ -1872,7 +1890,7 @@ def report_cloud_usage(rec, wake):
     if not receipt:
         return None
     return _try("POST", P_TALLY_SPEND, {
-        "project": PROJECT,
+        "project": _wake_project(wake),
         "source": receipt.get("source") or "agent_report",
         "confidence": receipt.get("confidence") or "unknown",
         "task_id": receipt.get("task_id") or wake.get("task_id"),
@@ -3066,7 +3084,7 @@ def wait_for_runner_binding(wake, inventory, runner_session_id, timeout_s=None,
     last_exact_preclaim = False
     while monotonic() <= deadline:
         query = urllib.parse.urlencode({
-            "project": PROJECT,
+            "project": _wake_project(wake),
             "task_id": expected["task_id"],
             "host_id": expected["host_id"],
             "include_stale": "false",
@@ -3298,7 +3316,7 @@ def _finalize_bound_runner(wake, inventory, runner_session_id, rec):
         "binding_pending": False,
     }
     completion = _try("POST", P_COMPLETE_WAKE, {
-        "project": PROJECT,
+        "project": _wake_project(wake),
         "wake_id": wake.get("wake_id"),
         "runner_session_id": result["runner_session_id"],
         "agent_id": (wake.get("selector") or {}).get("agent_id"),
@@ -3343,7 +3361,7 @@ def _submit_bound_finalizer(wake, inventory, runner_session_id, rec):
                 },
             }, wake, inventory)
             _try("POST", P_COMPLETE_WAKE, {
-                "project": PROJECT,
+                "project": _wake_project(wake),
                 "wake_id": wake.get("wake_id"),
                 "runner_session_id": runner_session_id,
                 "agent_id": (wake.get("selector") or {}).get("agent_id"),
@@ -3534,12 +3552,23 @@ def run_once(inventory):
             "postprocessing_recovery": recovery,
         }
     controls = handle_runner_controls(inventory)
-    listed = _try("GET", f"{P_LIST_WAKES}?project={PROJECT}&status=pending") or {}
-    wakes = wakes_bound_to_host(listed.get("wake_intents") or listed.get("wakes") or [])
+    wakes = []
+    for project in _host_projects(inventory):
+        listed = _try(
+            "GET", f"{P_LIST_WAKES}?project={urllib.parse.quote(project, safe='')}"
+                   "&status=pending") or {}
+        project_wakes = listed.get("wake_intents") or listed.get("wakes") or []
+        wakes.extend({
+            **wake,
+            # Wake ids are project-local. Keep the poll's project authoritative
+            # even when an older server response omits project_id.
+            "_host_project": project,
+        } for wake in wakes_bound_to_host(project_wakes))
     acted = list(finalized)
     refused = []
     cap = inventory["limits"]["max_sessions"]
     for w in wakes:
+        wake_project = _wake_project(w)
         # The supervisor list already includes sessions launched earlier in this
         # tick. Adding len(acted) counts those children a second time (and also
         # counts failed launches), which silently cuts usable fanout roughly in
@@ -3656,7 +3685,7 @@ def run_once(inventory):
                 # Acknowledge only after the PTY is live and centrally visible.
                 # There is deliberately no ownership handshake before launch.
                 completion = _try("POST", P_COMPLETE_WAKE, {
-                    "project": PROJECT,
+                    "project": wake_project,
                     "wake_id": wake_id,
                     "runner_session_id": runner_session_id,
                     "agent_id": (w.get("selector") or {}).get("agent_id") or "",
@@ -3728,21 +3757,24 @@ def run_once(inventory):
             if not preclaim_registration or preclaim_registration.get("error"):
                 continue
         claimed = _try("POST", P_CLAIM_WAKE, {
-            "project": PROJECT,
+            "project": wake_project,
             "host_id": host_id,
             "wake_id": wake_id,
             "runner_session_id": runner_session_id,
         })
         if not claimed or not (claimed.get("claimed", True)):
             continue  # another host won it (atomic claim)
-        claimed_wake = claimed.get("wake") or w
+        claimed_wake = {
+            **(claimed.get("wake") or w),
+            "_host_project": wake_project,
+        }
         claimed_exact_binding = validate_personal_wake_binding(
             claimed_wake, inventory)
         if not claimed_exact_binding.get("valid"):
             refused.append({"wake_id": wake_id, "phase": "post_claim",
                             **claimed_exact_binding})
             _try("POST", P_COMPLETE_WAKE, {
-                "project": PROJECT,
+                "project": wake_project,
                 "wake_id": wake_id,
                 "runner_session_id": runner_session_id,
                 "agent_id": ((claimed_wake.get("selector") or {}).get("agent_id") or ""),
@@ -3971,7 +4003,7 @@ def run_once(inventory):
             # claimed Connect wake (COORD-48 "Starting" limbo). Exhaustion still
             # logs loudly; other one-shot _try complete_wake paths are unchanged.
             _complete_wake_with_retry({
-                "project": PROJECT,
+                "project": wake_project,
                 "wake_id": wake_id,
                 "runner_session_id": result["runner_session_id"],
                 "agent_id": (w.get("selector") or {}).get("agent_id"),

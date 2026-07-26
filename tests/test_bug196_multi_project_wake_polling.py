@@ -1,0 +1,95 @@
+from unittest import TestCase, main, mock
+
+from path_setup import ROOT  # noqa: F401
+
+from adapters import agent_host
+
+
+class MultiProjectWakePollingTests(TestCase):
+    def test_run_once_polls_every_registered_project(self):
+        calls = []
+
+        def fake_try(method, path, body=None):
+            calls.append((method, path, body or {}))
+            if path.startswith(agent_host.P_LIST_WAKES):
+                project = "atlas" if "project=atlas" in path else "switchboard"
+                return {"wake_intents": [{
+                    "wake_id": f"wake-{project}",
+                    "selector": {"host_id": "host/test"},
+                }]}
+            return {"ok": True}
+
+        inventory = {
+            "host_id": "host/test",
+            "placement": {"projects": ["atlas", "switchboard"]},
+            "limits": {"max_sessions": 0},
+        }
+        with (
+            mock.patch.object(agent_host, "_try", side_effect=fake_try),
+            mock.patch.object(agent_host.co_drain, "discover_request", return_value=None),
+            mock.patch.object(agent_host, "_reap_bound_finalizers", return_value=[]),
+            mock.patch.object(
+                agent_host, "heartbeat_capacity",
+                return_value={
+                    "active_sessions": 0,
+                    "local_auth": {"available": True},
+                },
+            ),
+            mock.patch.object(
+                agent_host, "apply_authoritative_execution_policy",
+                return_value=False,
+            ),
+            mock.patch.object(agent_host, "expire_runner_leases", return_value=[]),
+            mock.patch.object(
+                agent_host, "renew_live_direct_runners", return_value=[]),
+            mock.patch.object(agent_host, "handle_runner_controls", return_value=[]),
+            mock.patch.object(agent_host, "active_session_count", return_value=0),
+        ):
+            summary = agent_host.run_once(inventory)
+
+        list_paths = [
+            path for method, path, _body in calls
+            if method == "GET" and path.startswith(agent_host.P_LIST_WAKES)
+        ]
+        self.assertEqual(list_paths, [
+            f"{agent_host.P_LIST_WAKES}?project=atlas&status=pending",
+            f"{agent_host.P_LIST_WAKES}?project=switchboard&status=pending",
+        ])
+        self.assertEqual(summary["pending"], 2)
+
+    def test_wake_project_stays_bound_to_poll_source(self):
+        self.assertEqual(agent_host._wake_project({
+            "_host_project": "atlas",
+            "project": "switchboard",
+        }), "atlas")
+
+    def test_runner_registration_uses_wake_project(self):
+        calls = []
+
+        def fake_try(method, path, body=None):
+            calls.append((method, path, body or {}))
+            return {"ok": True}
+
+        wake = {
+            "_host_project": "atlas",
+            "wake_id": "wake-atlas",
+            "task_id": "CORE-6",
+            "selector": {"agent_id": "agent/codex/core-6", "runtime": "codex"},
+        }
+        rec = {"runner_session_id": "run-atlas", "status": "running"}
+        inventory = {"host_id": "host/test", "repo_root": "/tmp/atlas"}
+        with (
+            mock.patch.object(agent_host, "_try", side_effect=fake_try),
+            mock.patch.object(agent_host, "_host_repo_preflight", return_value=None),
+        ):
+            agent_host.register_runner_session(rec, wake, inventory)
+
+        register = next(
+            body for method, path, body in calls
+            if method == "POST" and path == agent_host.P_REGISTER_RUNNER
+        )
+        self.assertEqual(register["project"], "atlas")
+
+
+if __name__ == "__main__":
+    main()
