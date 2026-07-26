@@ -2947,12 +2947,28 @@ def run_mission_coordinator_tick(project: str = DEFAULT_PROJECT, deliverable_id:
     # "idempotency conflict" after a restart (a conflicted tick dispatches
     # nothing, so the wake generation could never advance the key either). A
     # restarted daemon replaying its durable key gets the stored receipt.
+    #
+    # ADAPTER-34: scope_authority also carries lease clocks (expires_at,
+    # heartbeat_at), lease_id, renewed, and holder_agent_id that churn on every
+    # Autopilot renew. Hashing those poisoned s15:...:wake-generation-N keys
+    # into "idempotency conflict" after kill/re-arm (DOGFOOD-25). Keep only
+    # fence identity fields in the durable hash.
+    _VOLATILE_SCOPE_AUTHORITY_KEYS = frozenset({
+        "expires_at", "heartbeat_at", "lease_id", "renewed", "holder_agent_id",
+    })
+    if isinstance(authority_obj, dict):
+        stable_authority = {
+            key: value for key, value in authority_obj.items()
+            if key not in _VOLATILE_SCOPE_AUTHORITY_KEYS
+        }
+    else:
+        stable_authority = authority_obj or {}
     payload = {
         "deliverable_id": (deliverable_id or "").strip(),
         "board_id": (board_id or "").strip(),
         "mission_id": (mission_id or "").strip(),
         "policy": policy_obj or {},
-        "scope_authority": authority_obj or {},
+        "scope_authority": stable_authority,
     }
     with _store_facade()._conn(project) as c:
         hit = _store_facade()._idem_hit(c, "run_mission_coordinator_tick", idem_key, actor, payload)

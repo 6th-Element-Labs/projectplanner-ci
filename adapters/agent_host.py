@@ -22,6 +22,7 @@ PM_HOST_MAX_SESSIONS, PM_AGENT_WORK_MODULE (real work_fn;
 absent -> --dry, which claims+abandons safely), PM_AGENT_HOST_ALLOW_WORK,
 PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM.
 """
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -1472,8 +1473,45 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
         task_id = str(wake.get("task_id") or "")
         try:
             workspace_request = connect_workspace_request(wake)
-            materialized_workspace = materialize_repository_workspace(
-                **workspace_request)
+            # ADAPTER-34: materialize can hang (network/git/fs). Bound it so
+            # claim→launch cannot sit forever before complete_wake(started=false).
+            # Server claim-hold sweep is the DHCP safety net if this host dies.
+            try:
+                materialize_timeout_s = float(
+                    os.environ.get("PM_CONNECT_MATERIALIZE_TIMEOUT_SECONDS")
+                    or "120")
+            except (TypeError, ValueError):
+                materialize_timeout_s = 120.0
+            materialize_timeout_s = max(0.1, materialize_timeout_s)
+            # Do not use `with Executor`: on timeout the hung worker would
+            # block __exit__ (wait=True). Fail the wake immediately; orphan
+            # the worker so DHCP complete_wake can run in this tick.
+            pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            fut = pool.submit(
+                materialize_repository_workspace, **workspace_request)
+            try:
+                materialized_workspace = fut.result(
+                    timeout=materialize_timeout_s)
+            except concurrent.futures.TimeoutError:
+                pool.shutdown(wait=False, cancel_futures=True)
+                return {
+                    "runner_session_id": runner_session_id or None,
+                    "started": False,
+                    "wake_mode": mode,
+                    "host_id": inventory.get("host_id"),
+                    "runtime": (wake.get("selector") or {}).get("runtime") or "",
+                    "task_id": task_id,
+                    "reason": "workspace_materialize_timeout",
+                    "failure_class": "failed_gate",
+                    "provider_error": (
+                        f"materialize exceeded {materialize_timeout_s}s"),
+                    "workspace_materialization": {
+                        "error": "workspace_materialize_timeout",
+                        "timeout_seconds": materialize_timeout_s,
+                    },
+                }
+            else:
+                pool.shutdown(wait=True, cancel_futures=False)
             workspace_path = str(materialized_workspace.path)
         except WorkspaceMaterializationError as exc:
             return {

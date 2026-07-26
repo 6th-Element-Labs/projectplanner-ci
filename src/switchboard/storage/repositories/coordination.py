@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import time
@@ -2440,6 +2441,22 @@ def cancel_wake(wake_id: str, reason: str = "cancelled", actor: str = "system",
         raise
     return _wake_row(row)
 
+def _connect_claim_hold_seconds() -> float:
+    """Max seconds a claimed Connect wake may sit without a runner before fail-closed.
+
+    Placement deadline (PM_CONNECT_PLACEMENT_DEADLINE_SECONDS, default 900) is the
+    outer pending/claimed lease. Claim-hold is the short post-claim spawn window —
+    host must complete_wake (with runner_session_id) or sweep fails the wake so
+    Autopilot can advance wake-generation. Live: wake-49a8279d444b41e4 sat claimed
+    with runner_session_id=NULL for ~10 minutes (ADAPTER-34).
+    """
+    raw = (os.environ.get("PM_CONNECT_CLAIM_HOLD_SECONDS") or "90").strip()
+    try:
+        return max(5.0, float(raw))
+    except (TypeError, ValueError):
+        return 90.0
+
+
 def sweep_wake_intents(project: str = DEFAULT_PROJECT,
                        now: Optional[float] = None) -> Dict[str, Any]:
     started_at = time.time()
@@ -2483,6 +2500,64 @@ def sweep_wake_intents(project: str = DEFAULT_PROJECT,
                 failed += 1
                 events.append({"wake_id": wake["wake_id"], "status": "failed",
                                "reason": "deadline_expired"})
+
+            # ADAPTER-34: claimed Connect limbo — do not wait the full placement
+            # deadline when the host never spawned (runner_session_id still null).
+            claim_hold_s = _connect_claim_hold_seconds()
+            hold_cutoff = now - claim_hold_s
+            hold_rows = c.execute(
+                "SELECT * FROM wake_intents WHERE status='claimed' "
+                "AND (runner_session_id IS NULL OR runner_session_id='') "
+                "AND claimed_at IS NOT NULL AND claimed_at<=? "
+                "AND (deadline IS NULL OR deadline>?)",
+                (hold_cutoff, now),
+            ).fetchall()
+            for row in hold_rows:
+                wake = _wake_row(row)
+                policy = dict(wake.get("policy") or {})
+                if str(policy.get("mode") or "").strip() != "connect":
+                    continue
+                result = dict(wake.get("result") or {})
+                result.update({
+                    "reason": "connect_claim_hold_expired",
+                    "claimed_at": wake.get("claimed_at"),
+                    "claim_hold_seconds": claim_hold_s,
+                    "claimed_by_host": wake.get("claimed_by_host"),
+                })
+                terminal = _terminalize_personal_connection_in(
+                    c, wake, target_status="failed", now=now)
+                if not terminal.get("ok"):
+                    events.append({"wake_id": wake["wake_id"], "status": wake["status"],
+                                   "reason": "personal_terminal_transition_denied",
+                                   "reason_code": terminal.get("reason_code")})
+                    continue
+                updated = c.execute(
+                    "UPDATE wake_intents SET status='failed', completed_at=?, result_json=? "
+                    "WHERE wake_id=? AND status='claimed' "
+                    "AND (runner_session_id IS NULL OR runner_session_id='')",
+                    (now, json.dumps(result, sort_keys=True), wake["wake_id"]),
+                )
+                if updated.rowcount == 0:
+                    continue
+                c.execute(
+                    "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                    "VALUES (?,?,?,?,?)",
+                    (wake.get("task_id"), "switchboard/wake", "wake.failed",
+                     json.dumps({"wake_id": wake["wake_id"],
+                                 "reason": "connect_claim_hold_expired",
+                                 "claim_hold_seconds": claim_hold_s},
+                                sort_keys=True), now))
+                if wake.get("effect_key"):
+                    _store_facade()._update_external_effect_in(
+                        c, wake["effect_key"], "failed",
+                        readback={"wake_id": wake["wake_id"], "status": "failed",
+                                  "reason": "connect_claim_hold_expired"},
+                        last_error="connect_claim_hold_expired",
+                        actor="switchboard/wake", task_id=wake.get("task_id"),
+                        project=project, now=now)
+                failed += 1
+                events.append({"wake_id": wake["wake_id"], "status": "failed",
+                               "reason": "connect_claim_hold_expired"})
 
             recovery_rows = c.execute(
                 "SELECT * FROM wake_intents WHERE status IN ('pending','claimed') "
