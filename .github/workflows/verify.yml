@@ -49,6 +49,7 @@ env:
   CANONICAL_REPO: 6th-Element-Labs/projectplanner
   # CI-6 required context; matches the retired on-box gate so branch protection is unchanged.
   STATUS_CONTEXT: Switchboard CI / VM gate
+  UI_STATUS_CONTEXT: Switchboard UI / Playwright
 
 jobs:
   verify:
@@ -123,6 +124,11 @@ jobs:
             -f context="$STATUS_CONTEXT" \
             -f description='pull-model verify: running full suite' \
             -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          gh api "repos/$CANONICAL_REPO/statuses/$HEAD_SHA" \
+            -f state=pending \
+            -f context="$UI_STATUS_CONTEXT" \
+            -f description='playwright: running required Chromium journey' \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
       - name: Check out private merge ref
         if: steps.coords.outputs.skip != 'true'
@@ -135,6 +141,13 @@ jobs:
           persist-credentials: false
           path: src
           fetch-depth: 0
+
+      - name: Assert required status-context vocabulary matches canonical workflow
+        if: steps.coords.outputs.skip != 'true'
+        run: |
+          python3 src/scripts/check_ci_workflow_contexts.py \
+            src/.github/workflows/verify.yml \
+            .github/workflows/verify.yml
 
       - name: Set up Python
         if: steps.coords.outputs.skip != 'true'
@@ -172,6 +185,7 @@ jobs:
           SWITCHBOARD_CI_STRICT: "1"
           SWITCHBOARD_CI_REQUIRE_NODE: "1"
           CONCURRENT_LOAD_REPORT: ".artifacts/concurrent-load-report.json"
+          UI_PLAYWRIGHT_REPORT: ".artifacts/ui-playwright-receipt.json"
         run: |
           unset GITHUB_REPOSITORY
           bash scripts/switchboard_ci.sh
@@ -183,6 +197,14 @@ jobs:
           name: concurrent-load-pr-${{ steps.coords.outputs.pr }}
           path: src/.artifacts/concurrent-load-report.json
           if-no-files-found: warn
+
+      - name: Upload UI Playwright receipt
+        if: always() && steps.coords.outputs.skip != 'true' && steps.checkout.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-playwright-pr-${{ steps.coords.outputs.pr }}
+          path: src/.artifacts/ui-playwright-receipt.json
+          if-no-files-found: error
 
       - name: Post required success status
         if: steps.coords.outputs.skip != 'true' && success()
@@ -196,6 +218,11 @@ jobs:
             -f context="$STATUS_CONTEXT" \
             -f description="tests: full suite passed (pull-model, PR #$PR)" \
             -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          gh api "repos/$CANONICAL_REPO/statuses/$HEAD_SHA" \
+            -f state=success \
+            -f context="$UI_STATUS_CONTEXT" \
+            -f description='playwright: Chromium journey passed with no skips' \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
       - name: Post tests failure status
         if: steps.coords.outputs.skip != 'true' && failure() && steps.checkout.outcome == 'success'
@@ -207,6 +234,11 @@ jobs:
             -f state=failure \
             -f context="$STATUS_CONTEXT" \
             -f description='tests: switchboard_ci.sh failed — see run log' \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" || true
+          gh api "repos/$CANONICAL_REPO/statuses/$HEAD_SHA" \
+            -f state=failure \
+            -f context="$UI_STATUS_CONTEXT" \
+            -f description='playwright: required Chromium journey failed' \
             -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" || true
 
       - name: Post infra failure status
@@ -220,4 +252,9 @@ jobs:
             -f state=failure \
             -f context="$STATUS_CONTEXT" \
             -f description="infra: unable to checkout refs/pull/${PR}/merge — see run log" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" || true
+          gh api "repos/$CANONICAL_REPO/statuses/$HEAD_SHA" \
+            -f state=failure \
+            -f context="$UI_STATUS_CONTEXT" \
+            -f description='infra: Playwright checkout/setup failed' \
             -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" || true
