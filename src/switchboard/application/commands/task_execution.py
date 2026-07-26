@@ -23,6 +23,7 @@ from switchboard.application.commands import runner_pty as runner_pty_command
 from switchboard.application.queries import task_session as task_session_query
 from switchboard.security import redact_provider_secrets
 from switchboard.storage.repositories import coordination as coordination_repo
+from switchboard.storage.repositories import external_effects as external_effects_repo
 from switchboard.storage.repositories import runner as runner_repo
 from switchboard.storage.repositories import task_completion as completion_repo
 
@@ -396,7 +397,7 @@ def _panel_projection(projection: dict[str, Any], *, project: str) -> dict[str, 
         detail = str(hint.get("detail") or "").strip()
         if not detail:
             detail = (
-                f"Queued — waiting for a host to claim"
+                "Queued — waiting for a host to claim"
                 + (f" ({hint_host})" if hint_host else "")
             )
         return {
@@ -457,6 +458,228 @@ def get_task_execution(task_id: Any, *, project: str = DEFAULT_PROJECT) -> dict[
             "retry_task",
         }),
     )
+
+
+def _message_from(value: Any) -> str:
+    """Return an original diagnostic without replacing it with a class name."""
+    if not isinstance(value, Mapping):
+        return ""
+    for key in ("message", "last_error", "error", "reason"):
+        candidate = value.get(key)
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    result = value.get("result")
+    return _message_from(result) if isinstance(result, Mapping) else ""
+
+
+def _claim_refusals(task: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Compact recent claim/start refusals retained in task activity."""
+    refusals: list[dict[str, Any]] = []
+    for event in reversed(list(task.get("activity") or [])):
+        if not isinstance(event, Mapping):
+            continue
+        kind = str(event.get("kind") or "").lower()
+        payload = event.get("payload")
+        payload = payload if isinstance(payload, Mapping) else {}
+        reason = str(payload.get("reason") or payload.get("error_code") or "")
+        refused = (
+            any(token in kind for token in ("refus", "denied", "failed"))
+            or payload.get("claimed") is False
+            or payload.get("refused") is True
+            or reason.endswith(("_denied", "_refused", "_failed"))
+        )
+        if not refused:
+            continue
+        refusals.append({
+            "kind": event.get("kind"),
+            "reason": reason or None,
+            "message": _message_from(payload) or reason or None,
+            "created_at": event.get("created_at"),
+        })
+        if len(refusals) == 5:
+            break
+    return refusals
+
+
+def explain_task_block(task_id: Any, *, project: str = DEFAULT_PROJECT) -> dict[str, Any]:
+    """Explain the furthest-along gate preventing one task from moving.
+
+    This deliberately joins existing read models. It creates no new gate,
+    coordination mechanism, authority, or durable record (ADR-0006).
+    """
+    task_id = _normalize(task_id)
+    projection = _projection(task_id, project)
+    task = projection.get("task") if isinstance(projection.get("task"), Mapping) else {}
+    completion = (
+        projection.get("completion_projection")
+        if isinstance(projection.get("completion_projection"), Mapping)
+        else task.get("completion_projection")
+    )
+    completion = completion if isinstance(completion, Mapping) else {}
+
+    decision = {
+        "state": completion.get("state"),
+        "route": completion.get("route"),
+        "reason_code": completion.get("reason_code"),
+        "planned_effect": completion.get("current_effect"),
+        "next_retry_at": completion.get("retry_deadline"),
+    }
+
+    effects = []
+    for row in external_effects_repo.list_external_effects(
+            project=project, task_id=task_id) or []:
+        if not isinstance(row, Mapping):
+            continue
+        effects.append({
+            "effect_type": row.get("effect_type"),
+            "resource": row.get("resource"),
+            "status": row.get("status"),
+            "retry_count": row.get("retry_count"),
+            "last_error": row.get("last_error"),
+            "next_retry_at": (
+                row.get("next_retry_at")
+                if row.get("next_retry_at") is not None
+                else completion.get("retry_deadline")
+                if row.get("effect_type") == "completion_effect"
+                else None
+            ),
+            "updated_at": row.get("updated_at"),
+        })
+        if len(effects) == 10:
+            break
+
+    active_runner = (
+        projection.get("active_runner")
+        if isinstance(projection.get("active_runner"), Mapping) else {}
+    )
+    metadata = (
+        active_runner.get("metadata")
+        if isinstance(active_runner.get("metadata"), Mapping) else {}
+    )
+    execution = (
+        active_runner.get("execution")
+        if isinstance(active_runner.get("execution"), Mapping) else {}
+    )
+    pr_head = str((task.get("git_state") or {}).get("head_sha") or "")
+    pinned_head = str(
+        execution.get("head_sha")
+        or metadata.get("execution_head_sha")
+        or metadata.get("source_sha")
+        or ""
+    )
+    fence_required = {
+        "assignment_id": (
+            execution.get("assignment_id") or metadata.get("assignment_id")),
+        "execution_id": (
+            execution.get("execution_id") or metadata.get("execution_id")),
+        "generation": (
+            execution.get("generation")
+            if execution.get("generation") is not None
+            else metadata.get("execution_generation")),
+        "role": execution.get("role") or metadata.get("execution_role"),
+    }
+    fence_missing = [key for key, value in fence_required.items()
+                     if value in (None, "")]
+    runner = {
+        "live": bool(active_runner),
+        "runner_session_id": active_runner.get("runner_session_id"),
+        "pinned_head": pinned_head or None,
+        "pr_head": pr_head or None,
+        "head_matches": (
+            pinned_head == pr_head if pinned_head and pr_head else None),
+        "fence_identity_complete": bool(active_runner) and not fence_missing,
+        "fence_identity_missing": fence_missing,
+    }
+
+    dependency_state = task.get("dependency_state")
+    dependency_state = (
+        dependency_state if isinstance(dependency_state, Mapping) else {})
+    refusals = _claim_refusals(task)
+    candidates: list[tuple[int, dict[str, Any]]] = []
+
+    blocking_dependencies = dependency_state.get("blocking") or []
+    if dependency_state.get("satisfied") is False:
+        names = [
+            str(item.get("task_id") if isinstance(item, Mapping) else item)
+            for item in blocking_dependencies
+        ]
+        candidates.append((10, {
+            "gate": "dependencies",
+            "message": "Task dependencies are unsatisfied: "
+                       + ", ".join(filter(None, names)) + ".",
+        }))
+    if refusals:
+        candidates.append((20, {
+            "gate": "claim_refusal",
+            "message": refusals[0].get("message") or "Task claim was refused.",
+        }))
+
+    # A persistence/classifier exception can predate a completion row entirely.
+    for event in reversed(list(task.get("activity") or [])):
+        payload = event.get("payload") if isinstance(event, Mapping) else {}
+        message = _message_from(payload)
+        if "unsupported completion state:" in message:
+            candidates.append((30, {
+                "gate": "classifier_persistence",
+                "message": message,
+            }))
+            break
+
+    failed_effects = [
+        effect for effect in effects
+        if effect.get("status") in {"failed", "dead_letter"}
+        and effect.get("last_error")
+    ]
+    if failed_effects:
+        newest = max(
+            failed_effects, key=lambda item: float(item.get("updated_at") or 0))
+        candidates.append((40, {
+            "gate": "external_effect",
+            "message": str(newest["last_error"]),
+            "resource": newest.get("resource"),
+        }))
+
+    outcome = projection.get("last_dispatch_outcome")
+    outcome = outcome if isinstance(outcome, Mapping) else {}
+    outcome_message = _message_from(outcome)
+    if outcome_message and (
+            projection.get("lifecycle_phase") == "start_failed_retry"
+            or outcome.get("refused") is True
+            or str(outcome.get("status") or "") in {"failed", "refused"}):
+        candidates.append((45, {
+            "gate": "runner_dispatch",
+            "message": outcome_message,
+        }))
+    if active_runner and (fence_missing or runner["head_matches"] is False):
+        message = (
+            "Runner fence identity is incomplete: " + ", ".join(fence_missing)
+            if fence_missing else
+            f"Runner pinned head {pinned_head} does not match PR head {pr_head}."
+        )
+        candidates.append((50, {"gate": "runner_fence", "message": message}))
+
+    if not candidates and completion.get("blocked_reason"):
+        candidates.append((35, {
+            "gate": "completion",
+            "message": str(completion["blocked_reason"]),
+        }))
+    blocked_by = max(candidates, key=lambda item: item[0])[1] if candidates else None
+
+    return {
+        "schema": "switchboard.task_block_explanation.v1",
+        "task_id": task_id,
+        "project": project,
+        "blocked": blocked_by is not None,
+        "blocked_by": blocked_by,
+        "classifier": decision,
+        "external_effects": effects,
+        "runner": runner,
+        "dependencies": {
+            "satisfied": dependency_state.get("satisfied"),
+            "blocking": blocking_dependencies,
+        },
+        "claim_refusals": refusals,
+    }
 
 
 # --------------------------------------------------------------------------

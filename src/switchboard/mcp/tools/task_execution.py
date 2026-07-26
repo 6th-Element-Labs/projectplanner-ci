@@ -55,6 +55,17 @@ def get_task_execution(task_id: str, project: str = "maxwell",
     return _services().dumps(result if full else read_summaries.task_execution(result))
 
 
+def explain_task_block(task_id: str, project: str = "maxwell") -> str:
+    """Explain why a task is not moving in one compact, read-only response.
+
+    Joins the completion classifier, external-effect ledger, runner fence,
+    dependencies, and recent claim refusals. ``blocked_by`` names the single
+    furthest-along failing gate and preserves that gate's original message.
+    """
+    return _services().dumps(
+        task_execution_command.explain_task_block(task_id, project=project))
+
+
 def start_task(task_id: str, ctx: Context, project: str = "maxwell",
                role: str = "implementation", runtime: str = "codex",
                agent_id: str = "") -> str:
@@ -126,7 +137,7 @@ def get_execution_transcript(task_id: str = "", execution_id: str = "",
 
 TASK_EXECUTION_TOOL_NAMES = (
     "get_task_execution", "start_task", "open_session", "send_message",
-    "stop_task", "retry_task", "get_execution_transcript",
+    "stop_task", "retry_task", "get_execution_transcript", "explain_task_block",
 )
 
 

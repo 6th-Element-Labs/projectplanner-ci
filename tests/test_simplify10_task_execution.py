@@ -147,8 +147,9 @@ try:
                 "stop_task", "retry_task", "get_execution_transcript"}
     ok(set(task_execution.COMMANDS) == expected,
        "the service declares all seven COORD-44 commands")
-    ok(set(mcp_task_execution.TASK_EXECUTION_TOOL_NAMES) == expected,
-       "MCP registers a tool for every command")
+    ok(set(mcp_task_execution.TASK_EXECUTION_TOOL_NAMES)
+       == expected | {"explain_task_block"},
+       "MCP registers the commands plus the compact diagnostic")
     routes = {(method, route.path)
               for route in expand_routes(app.routes) if hasattr(route, "path")
               for method in (getattr(route, "methods", None) or [])}
