@@ -176,6 +176,14 @@ def _fence_session_runner(session: Mapping[str, Any], *, project: str,
         runner_id = _text(env.get("runner_session_id"))
     if not runner_id:
         return None
+    from switchboard.storage.repositories import runner as runner_repo
+    if runner_repo.get_runner_session(runner_id, project=project) is None:
+        # No physical execution exists to contradict the sticky board state.
+        return {
+            "fenced": True,
+            "already_stopped": True,
+            "runner_session_id": runner_id,
+        }
     env = _map(session.get("env"))
     identity = {
         "runner_session_id": runner_id,
@@ -200,17 +208,26 @@ def _fence_session_runner(session: Mapping[str, Any], *, project: str,
                 actor=actor,
                 reason=reason,
             )
-    except Exception as exc:  # noqa: BLE001 - fence is best-effort on handoff
-        return {"fenced": False, "error": type(exc).__name__, "detail": str(exc)[:300]}
+    except Exception as exc:  # noqa: BLE001 - rendered as a typed refusal below
+        return {
+            "fenced": False,
+            "error": type(exc).__name__,
+            "error_code": _text(getattr(exc, "code", "")),
+            "detail": str(exc)[:300],
+            **_map(getattr(exc, "details", {})),
+        }
     try:
-        from switchboard.storage.repositories import runner as runner_repo
-        return runner_repo.make_runner_lease_due(
+        result = runner_repo.make_runner_lease_due(
             runner_id,
             reason=reason,
             authority="operator",
             actor=actor,
             project=project,
         )
+        return {
+            **result,
+            "fenced": bool(result.get("updated")),
+        }
     except Exception as exc:  # noqa: BLE001
         return {"fenced": False, "error": type(exc).__name__, "detail": str(exc)[:300]}
 
@@ -251,6 +268,24 @@ def promote_human_blocker(
             work_session_task_id=session_task,
         )
 
+    # Fence before committing any lifecycle projection. A stale generation must
+    # not yield a success receipt, a Needs-you item, or a Blocked board that still
+    # has a contradictory live execution/claim.
+    fence = _fence_session_runner(
+        session, project=project, actor=actor,
+        reason=f"human blocker: {reason}",
+    )
+    if fence is not None and not fence.get("fenced"):
+        return _error(
+            "human_blocker_fence_refused",
+            "The exact execution generation could not be fenced; no human "
+            "blocker state was recorded.",
+            failure_class="failed_gate",
+            task_id=task_id,
+            work_session_id=work_session_id,
+            fence=fence,
+        )
+
     hygiene = dict(_map(session.get("hygiene")))
     hygiene["blocker"] = dict(blocker)
     # Avoid re-entry: update_work_session watches status=blocked + route=human.
@@ -288,10 +323,6 @@ def promote_human_blocker(
             )
 
     attention = attention_repo._write_through(project, write)
-    fence = _fence_session_runner(
-        session, project=project, actor=actor,
-        reason=f"human blocker: {reason}",
-    )
     request = _map(attention.get("request"))
     return {
         "schema": RESULT_SCHEMA,

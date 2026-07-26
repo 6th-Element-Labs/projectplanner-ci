@@ -197,6 +197,7 @@ _EXCEPTIONAL_BLOCK_ACTIVITY_KINDS = frozenset({
     "git.pr_merged_semantic_blocked",
     "git.default_branch_semantic_blocked",
     "review.remediation_escalated",
+    "task.human_blocker",
 })
 
 
@@ -210,10 +211,14 @@ def _dependency_block_is_exceptional_in(
     status-only edit is also an explicit hold. A status edit that changed the
     dependency graph at the same time remains dependency-derived.
     """
+    exceptional_placeholders = ",".join(
+        "?" for _ in _EXCEPTIONAL_BLOCK_ACTIVITY_KINDS
+    )
     row = c.execute(
         "SELECT kind, payload FROM activity WHERE task_id=? "
-        "AND (kind IN (?,?,?) OR (kind IN ('create','edit') "
-        "AND payload LIKE '%\"status\"%')) ORDER BY id DESC LIMIT 1",
+        f"AND (kind IN ({exceptional_placeholders}) OR "
+        "(kind IN ('create','edit') AND payload LIKE '%\"status\"%')) "
+        "ORDER BY id DESC LIMIT 1",
         (task_id, *_EXCEPTIONAL_BLOCK_ACTIVITY_KINDS),
     ).fetchone()
     if not row:

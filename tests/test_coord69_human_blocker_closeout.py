@@ -28,6 +28,7 @@ from db.connection import _conn  # noqa: E402
 from switchboard.application.commands import human_blocker as human_blocker_cmd  # noqa: E402
 from switchboard.connect.execution_assignment import build_execution_assignment  # noqa: E402
 from switchboard.domain.completion import routing  # noqa: E402
+from switchboard.storage.repositories import tasks as tasks_repo  # noqa: E402
 
 P = "switchboard"
 HEAD = "a" * 40
@@ -172,6 +173,22 @@ try:
         ).fetchone()["n"]
     ok(n == 1, f"exactly one Needs-you request (n={n})")
 
+    # Dependency healing must not reinterpret an explicit human lifecycle block
+    # as a legacy dependency-derived block.
+    dep = _make_task("completed dependency", status="Done", agent="")
+    with _conn(P) as c:
+        c.execute(
+            "UPDATE tasks SET depends_on=? WHERE task_id=?",
+            (json.dumps([dep["task_id"]]), TASK),
+        )
+        healed = tasks_repo._heal_dependency_blocked_tasks_in(
+            c, task_ids=[TASK], actor="test/dependency-heal",
+        )
+    ok(TASK not in healed, "dependency healing preserves task.human_blocker")
+    task_after_heal = store.get_task(TASK, project=P)
+    ok(task_after_heal.get("status") == "Blocked",
+       f"dependency scan leaves board Blocked (got {task_after_heal.get('status')})")
+
     second = human_blocker_cmd.execute_mapping({
         "task_id": TASK,
         "work_session_id": ws_id,
@@ -194,6 +211,47 @@ try:
             (TASK,),
         ).fetchone()["n"]
     ok(n2 == 1, f"idempotent: still one attention request (n={n2})")
+
+    stale_task = _make_task(
+        "stale generation refuses human blocker",
+        agent="agent/codex/stale",
+    )
+    stale_session = _make_session(
+        stale_task["task_id"], "agent/codex/stale", "run_stale",
+    )
+    original_fence = human_blocker_cmd._fence_session_runner
+    human_blocker_cmd._fence_session_runner = lambda *args, **kwargs: {
+        "fenced": False,
+        "error_code": "stale_execution_generation",
+        "mismatched_fields": ["generation"],
+    }
+    try:
+        refused = human_blocker_cmd.execute_mapping({
+            "task_id": stale_task["task_id"],
+            "work_session_id": stale_session["work_session_id"],
+            "reason": "provider_acceptance_capacity_missing",
+        }, actor="agent/codex/stale", project=P)
+    finally:
+        human_blocker_cmd._fence_session_runner = original_fence
+    ok(refused.get("recorded") is False,
+       "stale execution generation fails closed")
+    ok(refused.get("error_code") == "human_blocker_fence_refused",
+       f"stale fence refusal is typed ({refused.get('error_code')})")
+    stale_task_row = store.get_task(stale_task["task_id"], project=P)
+    ok(stale_task_row.get("status") == "In Progress",
+       "stale fence refusal does not mutate board status")
+    stale_ws_row = store.get_work_session(
+        stale_session["work_session_id"], project=P,
+    )
+    ok(stale_ws_row.get("status") == "active",
+       "stale fence refusal does not block Work Session")
+    with _conn(P) as c:
+        stale_attention_count = c.execute(
+            "SELECT COUNT(*) AS n FROM attention_requests WHERE task_id=?",
+            (stale_task["task_id"],),
+        ).fetchone()["n"]
+    ok(stale_attention_count == 0,
+       "stale fence refusal creates no Needs-you side effect")
 
     abandoned = store.abandon_claim(
         claim_id, reason="provider_acceptance_capacity_missing",
