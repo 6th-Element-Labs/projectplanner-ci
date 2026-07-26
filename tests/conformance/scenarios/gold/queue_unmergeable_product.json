@@ -1,0 +1,35 @@
+{
+  "expect": {
+    "effect": "start_remediation",
+    "reason_code": "merge_queue_product_failure",
+    "role_sequence": [
+      "remediation"
+    ],
+    "route": "remediation",
+    "terminal": "blocked"
+  },
+  "id": "queue_unmergeable_product",
+  "schema": "switchboard.completion_conformance.scenario.v1",
+  "timing": {
+    "ci_delay_seconds": 0,
+    "close_pr_while_runner_live": false,
+    "hang_seconds": 0,
+    "move_head_during_assessment": false,
+    "never_report": false
+  },
+  "world": {
+    "ci": "fail",
+    "ci_attribution": "product",
+    "ci_context": "Switchboard CI / VM gate",
+    "draft": false,
+    "merge_state_status": "CLEAN",
+    "mergeable": true,
+    "queue": "unmergeable",
+    "review": "passed",
+    "runner": {
+      "head": "none",
+      "live": false,
+      "role": "none"
+    }
+  }
+}
