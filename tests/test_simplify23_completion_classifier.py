@@ -80,6 +80,15 @@ def test_red_ci_precedes_draft_and_live_review_runner():
     assert result["board_projection"] == "Blocked"
 
 
+def test_authority_ci_failure_precedes_draft():
+    result = classify_completion(
+        None,
+        snapshot(draft=True, ci="ACTION_REQUIRED", attribution="authority"),
+    )
+    assert (result["route"], result["reason_code"]) == (
+        "human", "required_ci_authority_failure")
+
+
 def test_green_draft_and_passed_review_marks_ready_then_rereads():
     value = snapshot(
         draft=True,

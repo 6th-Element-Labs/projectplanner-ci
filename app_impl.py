@@ -108,6 +108,7 @@ from switchboard.api.routers.coordination import create_router as _create_coordi
 from switchboard.api.routers.deliverables import create_router as _create_deliverables_router  # noqa: E402
 from switchboard.api.routers.spa import _asset_version  # noqa: E402,F401
 from switchboard.api.routers.spa import register_spa  # noqa: E402
+from switchboard.integrations.github_pull_requests import production_pr_ready_gateway  # noqa: E402
 from switchboard.domain.projects import ProjectLifecycleWriteBlocked  # noqa: E402
 
 configure_auth_ports()
@@ -258,6 +259,7 @@ else:
         resolve_project=_proj,
         resolve_principal=_principal,
         resolve_body_project=_body_project,
+        ensure_pr_ready=production_pr_ready_gateway,
     ))
 app.include_router(_create_wakes_router(
     resolve_project=_proj,

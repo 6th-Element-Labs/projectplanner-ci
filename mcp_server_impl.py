@@ -56,6 +56,7 @@ from switchboard.mcp.tools import runner as runner_tools  # noqa: E402
 from switchboard.mcp.tools import external_effects as external_effects_tools  # noqa: E402
 from switchboard.mcp.tools import autopilot as autopilot_tools  # noqa: E402
 from switchboard.mcp.tools import deliverables as deliverable_tools  # noqa: E402
+from switchboard.integrations.github_pull_requests import production_pr_ready_gateway  # noqa: E402
 
 store.init_project_registry()
 for _pid in store.project_ids():  # ensure every project's schema exists (the web app normally seeds them)
@@ -196,6 +197,7 @@ _claim_tool_functions = claim_tools.register_claim_tools(
         require_write=_require_write,
         resolve_write_actor=_resolve_write_actor,
         write_binding_comment=_write_binding_comment,
+        ensure_pr_ready=production_pr_ready_gateway,
     ),
 )
 globals().update(_claim_tool_functions)

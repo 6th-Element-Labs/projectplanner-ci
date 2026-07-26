@@ -22,6 +22,7 @@ from switchboard.api.idempotency import inject_idem_key, raise_if_idem_conflict
 from switchboard.application.commands import claim_next as claim_next_command
 from switchboard.application.commands import claim_task as claim_task_command
 from switchboard.application.commands import complete_claim as complete_claim_command
+from switchboard.application.pr_ready import PullRequestReadyGateway
 
 
 ProjectResolver = Callable[[str], str]
@@ -31,7 +32,8 @@ BodyProjectResolver = Callable[[dict], str]
 
 def create_router(*, resolve_project: ProjectResolver,
                   resolve_principal: PrincipalResolver,
-                  resolve_body_project: BodyProjectResolver) -> APIRouter:
+                  resolve_body_project: BodyProjectResolver,
+                  ensure_pr_ready: PullRequestReadyGateway) -> APIRouter:
     """Build the claim TXP router against the monolith's shared trust boundaries."""
     router = APIRouter()
 
@@ -90,7 +92,7 @@ def create_router(*, resolve_project: ProjectResolver,
             principal, binding, "complete_claim", project)
         body["project"] = project
         return raise_if_idem_conflict(complete_claim_command.execute_mapping_result(
-            body, actor=auth.actor(principal)))
+            body, actor=auth.actor(principal), ensure_ready=ensure_pr_ready))
 
     @router.post("/txp/v1/abandon_claim")
     async def txp_abandon_claim(request: Request, body: dict = Body(...)):

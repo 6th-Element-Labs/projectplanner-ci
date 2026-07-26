@@ -18,6 +18,7 @@ from switchboard.application.commands import claim_next as claim_next_command
 from switchboard.application.commands import claim_task as claim_task_command
 from switchboard.application.commands import complete_claim as complete_claim_command
 from switchboard.application.commands import executed_test_runs as executed_test_runs_command
+from switchboard.application.pr_ready import PullRequestReadyGateway
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,7 @@ class ClaimToolServices:
     require_write: Callable[..., dict[str, Any]]
     resolve_write_actor: Callable[..., dict[str, Any]]
     write_binding_comment: Callable[..., None]
+    ensure_pr_ready: PullRequestReadyGateway
 
 
 _SERVICES: ClaimToolServices | None = None
@@ -149,6 +151,7 @@ def complete_claim(claim_id: str, ctx: Context, evidence: str = "", final_status
             "mission_project": mission_project,
         },
         actor=binding["actor"],
+        ensure_ready=services.ensure_pr_ready,
     ))
 
 

@@ -4,24 +4,29 @@ REST and MCP adapters both call :func:`execute_mapping_result`. Authentication,
 write-actor binding, and response serialization stay at their edges.
 Persistence remains on ``store.complete_claim`` / :class:`ClaimsRepository`.
 
-BREAKDOWN 5: before persistence, mark any PR evidence non-draft (or fail closed)
-so MCP callers that bypass the local adapter cannot park a draft in In Review.
+BREAKDOWN 5: before persistence, require an injected SCM adapter to prove any PR
+evidence non-draft (or fail closed), so every transport enforces the same rule.
 """
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from pydantic import ValidationError
 
 import store
 
-from switchboard.application.pr_ready import attach_pr_ready_evidence, ensure_pr_ready
+from switchboard.application.pr_ready import (
+    PullRequestReadyGateway,
+    attach_pr_ready_evidence,
+    pr_number_from_evidence,
+    pr_ready_is_proven,
+    unavailable_pr_ready_result,
+)
 from switchboard.contracts import validation_error_message
 
 from ..contracts.claims import CompleteClaimCommand
 
 CompleteClaimFn = Callable[..., dict[str, Any]]
-EnsurePrReadyFn = Callable[..., dict[str, Any]]
 
 
 class CompleteClaimError(ValueError):
@@ -38,38 +43,57 @@ class CompleteClaimError(ValueError):
                 "message": self.message, **self.details}
 
 
-def _github_token_for_project(project: str) -> str:
-    del project  # token resolution is process-env / SCM lease scoped today
-    try:
-        from switchboard.storage.repositories import provenance
-        return str(provenance._github_token() or "")
-    except Exception:
-        return ""
-
-
 def execute(
         command: CompleteClaimCommand,
         *,
         actor: str,
         complete: Optional[CompleteClaimFn] = None,
-        ensure_ready: Optional[EnsurePrReadyFn] = None) -> dict[str, Any]:
+        ensure_ready: Optional[PullRequestReadyGateway] = None) -> dict[str, Any]:
     """Validate and complete one claim with optional evidence."""
     if not command.claim_id:
         raise CompleteClaimError("invalid_complete_claim", "claim_id is required")
 
-    ensure = ensure_ready or ensure_pr_ready
-    token = _github_token_for_project(command.project)
-    pr_ready = ensure(command.evidence, token=token)
-    # Defence-in-depth for BREAKDOWN 5: never hand a draft PR to merge authorization.
-    if pr_ready.get("pr_number") and pr_ready.get("is_draft"):
+    number = pr_number_from_evidence(command.evidence)
+    if number:
+        if ensure_ready is None:
+            pr_ready = unavailable_pr_ready_result(command.evidence)
+        else:
+            try:
+                pr_ready = ensure_ready(
+                    command.evidence, project=command.project, actor=actor)
+            except Exception:
+                pr_ready = {
+                    "schema": "switchboard.pr_ready.v1",
+                    "pr_number": number,
+                    "status": "error",
+                    "is_draft": None,
+                    "error_code": "pr_ready_adapter_failed",
+                    "failure_class": "provider_unavailable",
+                    "message": "The SCM readiness adapter failed before readiness was proven.",
+                }
+            if not isinstance(pr_ready, Mapping):
+                pr_ready = {
+                    "schema": "switchboard.pr_ready.v1",
+                    "pr_number": number,
+                    "status": "error",
+                    "is_draft": None,
+                    "error_code": "pr_ready_adapter_invalid_result",
+                    "failure_class": "missing_data",
+                    "message": "The SCM readiness adapter returned no valid readiness proof.",
+                }
+    else:
+        pr_ready = unavailable_pr_ready_result(command.evidence)
+    # Never persist PR completion unless the provider was re-read as non-draft.
+    if number and not pr_ready_is_proven(pr_ready, pr_number=number):
+        error_code = str(pr_ready.get("error_code") or "pr_ready_unproven")
         return {
             "completed": False,
-            "error": "pr_still_draft",
-            "error_code": "pr_still_draft",
-            "failure_class": "failed_gate",
+            "error": error_code,
+            "error_code": error_code,
+            "failure_class": str(pr_ready.get("failure_class") or "failed_gate"),
             "message": (
                 pr_ready.get("message")
-                or "Worker completion contract requires a non-draft PR before complete_claim."
+                or "Completion requires provider proof that the PR is non-draft."
             ),
             "pr_ready": pr_ready,
         }
@@ -89,7 +113,7 @@ def execute(
 
 def execute_mapping_result(data: dict[str, Any], *, actor: str,
                            complete: Optional[CompleteClaimFn] = None,
-                           ensure_ready: Optional[EnsurePrReadyFn] = None) -> dict[str, Any]:
+                           ensure_ready: Optional[PullRequestReadyGateway] = None) -> dict[str, Any]:
     """Execute adapter input and return the store result or a structured error."""
     try:
         return execute(CompleteClaimCommand.from_mapping(data), actor=actor,

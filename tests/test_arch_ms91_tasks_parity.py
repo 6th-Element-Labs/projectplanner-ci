@@ -86,6 +86,9 @@ def _make_baseline_client() -> TestClient:
             resolve_project=deps.resolve_project,
             resolve_principal=deps.resolve_principal,
             resolve_body_project=deps.resolve_body_project,
+            ensure_pr_ready=lambda evidence, **_kwargs: {
+                "status": "skipped_no_pr", "pr_number": None, "is_draft": None,
+            },
         )
     )
     return TestClient(app)

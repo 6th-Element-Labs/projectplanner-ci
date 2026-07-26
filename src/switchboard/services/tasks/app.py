@@ -25,6 +25,7 @@ from switchboard.api.tasks_port_adapters import (
     ensure_tasks_runtime,
     probe_tasks_readiness,
 )
+from switchboard.integrations.github_pull_requests import production_pr_ready_gateway
 
 from switchboard.services.tasks import health as health_router
 from switchboard.services.tasks.settings import TasksServiceSettings
@@ -79,6 +80,7 @@ def create_app(settings: TasksServiceSettings | None = None) -> FastAPI:
             resolve_project=deps.resolve_project,
             resolve_principal=deps.resolve_principal,
             resolve_body_project=deps.resolve_body_project,
+            ensure_pr_ready=production_pr_ready_gateway,
         )
     )
     return application
