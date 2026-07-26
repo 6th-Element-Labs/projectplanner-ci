@@ -1,7 +1,7 @@
 # Decision corpus spec — replay at n=1, pooled failure intelligence at n=many
 
-- **Status:** Phase 1 implemented (COORD-50); Phases 2–6 proposed and **blocked on ADR
-  ratification** (see §11 and §12)
+- **Status:** Phase 1 implemented (COORD-50); decision corpus ratified by
+  [ADR-0021](decisions/0021-ratify-decision-corpus-subtraction.md); Phases 2–6 proposed
 - **Date:** 2026-07-25
 - **Strategy anchors:** DOGFOOD-7 (open-core boundary), DOGFOOD-10
   ([`SWITCHBOARD-BACKEND-MOAT.md`](SWITCHBOARD-BACKEND-MOAT.md) §5–§7)
@@ -445,8 +445,8 @@ work the exception. This is not coordination-layer improvement; it is **H4 Produ
 commercial asset described in [`SWITCHBOARD-BACKEND-MOAT.md`](SWITCHBOARD-BACKEND-MOAT.md) §5–§7,
 whose implementation was assigned to RECON-8 and DISPATCH-7 and never built.
 
-Ratification: this needs to land as **ADR-0020** or as an amendment to ADR-0006's kill list. The
-spec should not be implemented past Phase 1 until that record exists.
+Ratification: [ADR-0021](decisions/0021-ratify-decision-corpus-subtraction.md) records the binding
+verdicts and numerical accounting. (ADR-0020 was already allocated before ratification landed.)
 
 ## 12. Phasing
 
