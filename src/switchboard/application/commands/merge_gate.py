@@ -380,6 +380,56 @@ def _merge_gate_context_passed(state: str) -> bool:
 _MERGE_GATE_SESSION_STATUSES = frozenset({"proposed", "active", "completed"})
 
 
+def _executed_test_gate_from_external_ci(external_ci: Dict[str, Any],
+                                         head_sha: str) -> Optional[Dict[str, Any]]:
+    """Derive the executed-test verdict from the gate's own CI receipt.
+
+    ENFORCE-16, forced by the 2026-07-26 COORD-57 incident: the completion
+    autopilot re-dispatched an evidence-repair runner 50 times for
+    ``missing_executed_test_run`` while ``Switchboard CI / VM gate`` was green
+    on the exact gated head. The refusal demanded an agent re-type a fact this
+    function's caller had already computed: ``external_ci_runs`` held a passing
+    full-suite run pinned to that commit. complete_claim adopted the doctrine
+    first (ADR-0008: "CI on the exact SHA is the executor of record for 'the
+    tests ran'"); this extends it to merge authorization, where the same
+    refusal was still a hard finding and the repair loop could never converge.
+
+    Fail-closed on everything that makes the receipt meaningful: the summary
+    must report ``passed`` (a run with status AND conclusion ``success``), and
+    the selected run's ``source_sha`` must match the gated head exactly (prefix
+    match, same rule as the external-CI repository). A run on any other head, a
+    failed or pending run, or no run at all derives nothing — evidence is read
+    from a real run or not at all (the #859 rule: never manufacture what the
+    gate exists to demand).
+    """
+    summary = external_ci or {}
+    if not summary.get("passed"):
+        return None
+    head = str(head_sha or "").strip().lower()
+    run = summary.get("latest") or {}
+    run_sha = str(
+        run.get("source_sha") or summary.get("source_sha") or ""
+    ).strip().lower()
+    if not head or not run_sha:
+        return None
+    if not (run_sha.startswith(head) or head.startswith(run_sha)):
+        return None
+    return {
+        "ok": True,
+        "source": "external_ci",
+        "derived_from_external_ci": True,
+        "run_id": str(run.get("run_id") or "") or None,
+        "run": {
+            "source_sha": run_sha,
+            "run_url": run.get("run_url") or summary.get("run_url"),
+            "status_context": (
+                run.get("status_context") or summary.get("status_context")),
+            "ci_repo": run.get("ci_repo") or summary.get("ci_repo"),
+            "status": "success",
+        },
+    }
+
+
 def _task_scoped_work_session(task_id: str, project: str,
                               head_sha: str = "") -> Optional[Dict[str, Any]]:
     """Resolve the canonical Work Session bound to a task.
@@ -953,12 +1003,25 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
     if profile_rules.get("requires_executed_tests"):
         executed_test_gate = _executed_test_run_gate(merged_payload, session)
         if not executed_test_gate.get("ok"):
-            findings.append(_merge_gate_finding(
-                executed_test_gate.get("reason") or "missing_executed_test_run",
-                "Merge gate requires a passing executed test run with output/log hash.",
-                "missing_data",
-                details={"executed_test_gate": executed_test_gate,
-                         "policy_profile": profile}))
+            derived_gate = _executed_test_gate_from_external_ci(
+                external_ci, review_head_sha)
+            if derived_gate:
+                executed_test_gate = derived_gate
+                findings.append(_merge_gate_finding(
+                    "executed_test_run_derived_from_external_ci",
+                    "Executed-test evidence derived from the recorded green "
+                    "external CI run on the exact head; no repair dispatch is "
+                    "needed.",
+                    "missing_data", severity="info", blocking=False,
+                    details={"executed_test_gate": derived_gate,
+                             "policy_profile": profile}))
+            else:
+                findings.append(_merge_gate_finding(
+                    executed_test_gate.get("reason") or "missing_executed_test_run",
+                    "Merge gate requires a passing executed test run with output/log hash.",
+                    "missing_data",
+                    details={"executed_test_gate": executed_test_gate,
+                             "policy_profile": profile}))
     hygiene = (session or {}).get("hygiene") or {}
     preflight = hygiene.get("repo_preflight") or {}
     changed_files = (
