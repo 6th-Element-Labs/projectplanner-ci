@@ -1944,6 +1944,7 @@ def _batch_enrich_mission_links(links: List[Dict[str, Any]]) -> List[Dict[str, A
     tasks_by_key: Dict[tuple, Dict[str, Any]] = {}
     claims_by_key: Dict[tuple, List[Dict[str, Any]]] = {}
     runners_by_key: Dict[tuple, List[Dict[str, Any]]] = {}
+    wakes_by_key: Dict[tuple, List[Dict[str, Any]]] = {}
     for proj, tids in by_project.items():
         if not _store_facade().has_project(proj):
             continue
@@ -2013,6 +2014,20 @@ def _batch_enrich_mission_links(links: List[Dict[str, Any]]) -> List[Dict[str, A
                 runner = _store_facade()._runner_session_row(
                     runner_row, now=runner_now, include_claim=False, c=c)
                 runners_by_key.setdefault((proj, runner.get("task_id")), []).append(runner)
+            try:
+                wake_rows = c.execute(
+                    f"SELECT wake_id, task_id, status FROM wake_intents "
+                    f"WHERE task_id IN ({placeholders}) "
+                    "AND status IN ('pending','claimed')",
+                    uniq,
+                ).fetchall()
+            except sqlite3.OperationalError:
+                # Partial/legacy read-model fixtures may predate wake_intents.
+                wake_rows = []
+            for wake_row in wake_rows:
+                wakes_by_key.setdefault(
+                    (proj, str(wake_row["task_id"] or "")), []
+                ).append(dict(wake_row))
 
     # COORD-46: the completion route decides whether a Blocked task is still a
     # dispatch candidate. Carrying it in the mission read model keeps one
@@ -2053,6 +2068,9 @@ def _batch_enrich_mission_links(links: List[Dict[str, Any]]) -> List[Dict[str, A
         narration = task.get("narration")
         narration_raw = task.get("narration_raw")
         narration_state = task.get("narration_state") or {}
+        active_runner = _live_execution_for(
+            runners_by_key.get((proj, tid)) or [], now=runner_now)
+        in_flight_wakes = wakes_by_key.get((proj, tid)) or []
         enriched["task_detail"] = {
             "task_id": task["task_id"],
             "title": task.get("title"),
@@ -2072,8 +2090,14 @@ def _batch_enrich_mission_links(links: List[Dict[str, Any]]) -> List[Dict[str, A
             # runner resolver. The rows above are already this task's execution
             # registry, so the one canonical predicate selects the live
             # generation -- no agent_state pointer, no re-query, no divergence.
-            "active_runner": _live_execution_for(
-                runners_by_key.get((proj, tid)) or [], now=runner_now),
+            "active_runner": active_runner,
+            "execution_coverage": {
+                "covered": bool(active_runner.get("active") or in_flight_wakes),
+                "live_execution": bool(active_runner.get("active")),
+                "start_in_flight": bool(in_flight_wakes),
+                "wake_ids": [row.get("wake_id") for row in in_flight_wakes],
+                "source": "runner_sessions_or_in_flight_wake",
+            },
             "active_claims": claims_by_key.get((proj, tid)) or [],
             "narration": narration,
             "narration_raw": narration_raw,
@@ -2323,6 +2347,8 @@ def _mission_next_actions(deliverable: Dict[str, Any],
             continue
         status = detail.get("status")
         claims = detail.get("active_claims") or []
+        coverage = detail.get("execution_coverage") or {}
+        execution_covered = bool(coverage.get("covered"))
         dep = detail.get("dependency_state") or {}
         remediation = (detail.get("review_remediation") or {}).get("current") or {}
         if (remediation.get("human_intervention_required")
@@ -2364,14 +2390,16 @@ def _mission_next_actions(deliverable: Dict[str, Any],
                     completion_route=completion_route,
                     head_sha=git_state.get("head_sha")))
         elif (automatic_eligible and status in READY_TASK_STATUSES
-                and dep.get("ready") and not claims):
+                and dep.get("ready") and not execution_covered):
             actions.append(_action(
                 "claim_task", owner="agent", automatic=True,
                 delivery_impact="blocking" if blocks_delivery or blocks else "none",
                 label="Agent will claim a ready task", reason="Ready and unclaimed",
                 project_id=link.get("project_id"), task_id=detail.get("task_id"),
                 title=detail.get("title"), lane=lane,
-                milestone_id=link.get("milestone_id")))
+                milestone_id=link.get("milestone_id"),
+                reason_code=(
+                    "orphan_claim_after_runner_lease_expiry" if claims else None)))
         elif automatic_eligible and status == "In Review":
             git_state = detail.get("git_state") or {}
             actions.append(_action(
@@ -2386,7 +2414,7 @@ def _mission_next_actions(deliverable: Dict[str, Any],
                 pr_number=git_state.get("pr_number"),
                 pr_url=git_state.get("pr_url"),
                 merged_sha=git_state.get("merged_sha")))
-        elif automatic_eligible and status == "In Progress" and not claims:
+        elif automatic_eligible and status == "In Progress" and not execution_covered:
             actions.append(_action(
                 "resume_or_claim", owner="agent", automatic=True,
                 delivery_impact="at_risk" if blocks_delivery or blocks else "none",
@@ -2394,7 +2422,9 @@ def _mission_next_actions(deliverable: Dict[str, Any],
                 reason="In progress without an active claim",
                 project_id=link.get("project_id"), task_id=detail.get("task_id"),
                 title=detail.get("title"), lane=lane,
-                milestone_id=link.get("milestone_id")))
+                milestone_id=link.get("milestone_id"),
+                reason_code=(
+                    "orphan_claim_after_runner_lease_expiry" if claims else None)))
         session_health = detail.get("session_health") or {}
         # A stale/unsafe Work Session is COORDINATOR housekeeping that resolves automatically. It only
         # touches delivery when the underlying task hasn't already merged — an unsafe session on an

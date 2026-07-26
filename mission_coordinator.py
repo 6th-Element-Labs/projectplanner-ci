@@ -131,6 +131,8 @@ def _explicit_target_actions(mission_status: Dict[str, Any],
             continue
         status = detail.get("status")
         claims = detail.get("active_claims") or []
+        execution_covered = bool(
+            (detail.get("execution_coverage") or {}).get("covered"))
         dependency = detail.get("dependency_state") or {}
         lane = detail.get("workstream") or detail.get("_wsId")
         common = {
@@ -164,17 +166,21 @@ def _explicit_target_actions(mission_status: Dict[str, Any],
                              "explicitly targeted task",
                     "reason": f"Automatic completion route: {route}",
                 })
-        elif status == "Not Started" and dependency.get("ready") and not claims:
+        elif status == "Not Started" and dependency.get("ready") and not execution_covered:
             actions.append({
                 **common, "action": "claim_task", "owner_type": "agent",
                 "label": "Agent will claim the explicitly targeted task",
                 "reason": "Explicit task/milestone policy opt-in",
+                "reason_code": (
+                    "orphan_claim_after_runner_lease_expiry" if claims else None),
             })
-        elif status == "In Progress" and not claims:
+        elif status == "In Progress" and not execution_covered:
             actions.append({
                 **common, "action": "resume_or_claim", "owner_type": "agent",
                 "label": "Agent will resume the explicitly targeted task",
                 "reason": "Explicit task/milestone policy opt-in",
+                "reason_code": (
+                    "orphan_claim_after_runner_lease_expiry" if claims else None),
             })
         elif status == "In Review":
             actions.append({
@@ -579,7 +585,8 @@ def run_coordinator_tick(
                 ensured = task_starter(
                     task_id, project=task_project, actor=actor,
                     principal_id=principal_id,
-                    agent_id=coordinator_agent_id, role=role)
+                    agent_id=coordinator_agent_id, role=role,
+                    reason_code=str(dispatch.get("reason_code") or ""))
             except Exception as exc:  # fail visibly; the next tick may retry
                 ensured = {"action": "refused", "error": type(exc).__name__,
                            "reason": str(exc), "task_id": task_id,

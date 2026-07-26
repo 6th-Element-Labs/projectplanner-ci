@@ -84,6 +84,8 @@ _ENTRIES: tuple[ReasonCode, ...] = (
     _code("merge_queue_merged", "terminal", _COMPLETION, "transient", "agent"),
     _code("pr_closed_unmerged", "terminal", _COMPLETION, "anomalous", "human"),
     _code("recovered_incomplete_run", "terminal", "completion_runs", "anomalous", "agent"),
+    _code("orphan_claim_after_runner_lease_expiry", "runner",
+          "mission_coordinator", "anomalous", "infra"),
     # -- exact-head identity ---------------------------------------------------
     _code("exact_head_pr_missing", "mergeability", _COMPLETION, "anomalous", "infra"),
     _code("exact_pr_identity_missing", "mergeability", _COMPLETION, "anomalous", "infra"),

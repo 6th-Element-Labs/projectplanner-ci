@@ -1554,9 +1554,45 @@ def _release_terminal_runner_ownership_in(
     task_id = str(record.get("task_id") or "").strip()
     claim_id = str(record.get("claim_id") or "").strip()
     agent_id = str(record.get("agent_id") or "").strip()
+    lease_expired = metadata.get("terminalized_by") == "runner_lease_expiry"
     if (status not in RUNNER_TERMINAL_STATUSES
             or not (task_id and claim_id and agent_id)):
         return None
+
+    # COORD-73: capacity owns liveness.  An old lease-expiry acknowledgement
+    # must never unwind ownership while a replacement generation is alive.
+    if lease_expired:
+        live_replacements = []
+        try:
+            rows = c.execute(
+                "SELECT * FROM runner_sessions WHERE task_id=? "
+                "AND runner_session_id<>?",
+                (task_id, runner_session_id),
+            ).fetchall()
+            for row in rows:
+                item = dict(row)
+                item["metadata"] = _json_obj(item.get("metadata_json", "{}"), {})
+                if execution_liveness.is_live(item, now=now):
+                    live_replacements.append(item)
+        except sqlite3.OperationalError:
+            # Small legacy unit-test schemas do not carry runner_sessions.
+            live_replacements = []
+        if live_replacements:
+            c.execute(
+                "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                "VALUES (?,?,?,?,?)",
+                (task_id, actor, "task.runner_lease_orphan_recovery_blocked",
+                 json.dumps({
+                     "reason_code": "orphan_claim_after_runner_lease_expiry",
+                     "needs_you": True,
+                     "runner_session_id": runner_session_id,
+                     "claim_id": claim_id,
+                     "live_runner_session_ids": [
+                         row.get("runner_session_id") for row in live_replacements
+                     ],
+                 }, sort_keys=True), now),
+            )
+            return None
 
     claim = c.execute(
         "SELECT * FROM task_claims WHERE id=?", (claim_id,),
@@ -1596,6 +1632,57 @@ def _release_terminal_runner_ownership_in(
         "SELECT * FROM work_sessions WHERE work_session_id=?",
         (work_session_id,),
     ).fetchone() if work_session_id else None
+    if lease_expired and not work_session:
+        # Older host payloads omitted work_session_id. Resolve the generation's
+        # session from strongest to weakest identity, accepting the weak
+        # task+agent tuple only when it is unique.
+        candidates: Dict[str, sqlite3.Row] = {}
+        try:
+            for row in c.execute(
+                    "SELECT * FROM work_sessions WHERE claim_id=? "
+                    "AND status IN ('active','proposed','blocked')",
+                    (claim_id,)).fetchall():
+                candidates[str(row["work_session_id"])] = row
+            if not candidates:
+                runner_row = c.execute(
+                    "SELECT principal_id FROM runner_sessions "
+                    "WHERE runner_session_id=?",
+                    (runner_session_id,),
+                ).fetchone()
+                principal_id = (
+                    str(runner_row["principal_id"] or "") if runner_row else ""
+                )
+                if principal_id:
+                    for row in c.execute(
+                            "SELECT * FROM work_sessions "
+                            "WHERE task_id=? AND principal_id=? "
+                            "AND status IN ('active','proposed','blocked')",
+                            (task_id, principal_id)).fetchall():
+                        candidates[str(row["work_session_id"])] = row
+            if not candidates:
+                for row in c.execute(
+                        "SELECT * FROM work_sessions WHERE task_id=? AND agent_id=? "
+                        "AND status IN ('active','proposed','blocked')",
+                        (task_id, agent_id)).fetchall():
+                    candidates[str(row["work_session_id"])] = row
+        except sqlite3.OperationalError:
+            candidates = {}
+        if len(candidates) == 1:
+            work_session_id, work_session = next(iter(candidates.items()))
+        elif len(candidates) > 1:
+            c.execute(
+                "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                "VALUES (?,?,?,?,?)",
+                (task_id, actor, "task.runner_lease_orphan_recovery_blocked",
+                 json.dumps({
+                     "reason_code": "orphan_claim_after_runner_lease_expiry",
+                     "needs_you": True,
+                     "runner_session_id": runner_session_id,
+                     "claim_id": claim_id,
+                     "ambiguous_work_session_ids": sorted(candidates),
+                 }, sort_keys=True), now),
+            )
+            return None
     git_state = c.execute(
         "SELECT branch, head_sha, pr_number, pr_url FROM task_git_state WHERE task_id=?",
         (task_id,),
@@ -1631,6 +1718,9 @@ def _release_terminal_runner_ownership_in(
         "pr_url": gs.get("pr_url") or None,
         "log_path": metadata.get("log_path") or None,
         "recorded_at": now,
+        "reason_code": (
+            "orphan_claim_after_runner_lease_expiry" if lease_expired else None
+        ),
     }
     task_state["switchboard/recovery_handoff"] = handoff
 
@@ -1661,6 +1751,25 @@ def _release_terminal_runner_ownership_in(
             "WHERE work_session_id=? AND status IN ('active','proposed','blocked')",
             (work_session_id,),
         )
+    elif lease_expired and work_session_id:
+        changed = c.execute(
+            "UPDATE work_sessions SET status='archived', "
+            "completed_at=COALESCE(completed_at,?), updated_at=?, updated_by=? "
+            "WHERE work_session_id=? AND status IN ('active','proposed','blocked')",
+            (now, now, actor, work_session_id),
+        )
+        if changed.rowcount:
+            c.execute(
+                "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                "VALUES (?,?,?,?,?)",
+                (task_id, actor, "work_session.archived_by_runner_lease_expiry",
+                 json.dumps({
+                     "runner_session_id": runner_session_id,
+                     "work_session_id": work_session_id,
+                     "runner_status": status,
+                     "reason_code": "orphan_claim_after_runner_lease_expiry",
+                 }, sort_keys=True), now),
+            )
     c.execute(
         "INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
         (task_id, actor, (
@@ -1668,7 +1777,8 @@ def _release_terminal_runner_ownership_in(
             if review_handoff_recovery
             else "task.claim.released_by_terminal_runner"),
          json.dumps({"claim_id": claim_id, "runner_session_id": runner_session_id,
-                     "runner_status": status, "recovery_handoff": handoff},
+                     "runner_status": status, "recovery_handoff": handoff,
+                     "reason_code": handoff.get("reason_code")},
                     sort_keys=True), now),
     )
     return handoff
