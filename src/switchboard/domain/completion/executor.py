@@ -351,6 +351,7 @@ def _execute_mutating_effect(
         actor=actor,
         project=project,
     )
+    existing_effect = _map(ledger.get("effect"))
     if ledger.get("verified"):
         return {
             "effect": effect,
@@ -366,9 +367,9 @@ def _execute_mutating_effect(
                 "verified": True,
                 "pending": False,
                 "idempotent_replay": True,
+                **_effect_diagnostics(existing_effect),
             },
         }
-    existing_effect = _map(ledger.get("effect"))
     if not ledger.get("claimed") and existing_effect.get("status") == "issued":
         # The adapter crossed its external boundary. Reissuing before
         # authoritative readback could duplicate a runner, merge-queue
@@ -463,7 +464,7 @@ def _execute_mutating_effect(
                     "pending": True,
                     "idempotent_replay": True,
                     "reason": "effect_retry_claim_lost",
-                **_effect_diagnostics(existing_effect),
+                    **_effect_diagnostics(existing_effect),
                 },
             }
     elif (

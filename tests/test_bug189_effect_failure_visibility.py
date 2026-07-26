@@ -51,15 +51,24 @@ ok(executor._effect_diagnostics(None) == {"retry_count": 0},
 ok(executor._effect_diagnostics({"retry_count": "not-a-number"}) == {"retry_count": 0},
    "a non-numeric retry_count degrades to 0 instead of raising")
 
-# Every suppressed-effect receipt must splice the diagnostics in. Pinned as a
-# source needle so a fifth early return cannot be added without carrying them.
+# Every replay/suppressed-effect receipt must splice the diagnostics in. Pinned
+# as a source needle so a new early return cannot be added without carrying them.
 src = (ROOT / "src/switchboard/domain/completion/executor.py").read_text()
 reasons = ["effect_issued_awaiting_readback", "effect_claim_in_flight",
            "effect_retry_backoff", "effect_retry_claim_lost"]
 ok(all(f'"reason": "{reason}"' in src for reason in reasons),
    "all four suppressed-effect reasons are still present")
-ok(src.count("**_effect_diagnostics(existing_effect)") == len(reasons),
-   "every suppressed-effect receipt carries the ledger diagnostics")
+ok(src.count("**_effect_diagnostics(existing_effect)") == len(reasons) + 1,
+   "verified replay and every suppressed-effect receipt carry ledger diagnostics")
+
+# The coordinator has two completion-tick catch sites (task scope and
+# deliverable scope). Both existing receipts must preserve the exception text;
+# the class name alone hid "unsupported completion state: assessing".
+coordinator_src = (ROOT / "scoped_completion_coordinator.py").read_text()
+ok(coordinator_src.count('"status": "completion_tick_failed"') == 2,
+   "both coordinator completion failure receipts are still present")
+ok(coordinator_src.count('"reason": str(exc)') >= 2,
+   "both coordinator completion failure receipts preserve exception text")
 
 # --- a dispatch bound to a dead wake is a failure, not a success -----------
 DEAD = {
