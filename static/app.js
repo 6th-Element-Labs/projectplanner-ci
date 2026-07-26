@@ -799,6 +799,15 @@ const TeepPlan = {
             prUnavailable || '', (deployments || {}).unavailable || '',
         ]);
     },
+    // A stalled request here used to hang forever (no timeout), which left
+    // _fleetLoadBusy stuck true — every later manual refresh click AND the 10s
+    // auto-poll silently no-op until the page was reloaded. Bound every dock
+    // request so the try/catch below always resolves within `ms`.
+    _fetchTimeout(url, opts, ms = 10000) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), ms);
+        return fetch(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(timer));
+    },
     async _loadFleetDock(force) {
         const host = document.getElementById('fleet-dock');
         if (!host || this._fleetLoadBusy) return;
@@ -812,8 +821,8 @@ const TeepPlan = {
             // GitHub sweep, open_prs.py), so the 10s poll only ever hits the cache.
             const [runnerList, pRes, dRes] = await Promise.all([
                 this._fetchFleetRunners(force),
-                fetch(`/ixp/v1/open_prs?${p}`, { cache: 'no-store' }),
-                fetch(`/ixp/v1/deployments?${p}`, { cache: 'no-store' }),
+                this._fetchTimeout(`/ixp/v1/open_prs?${p}`, { cache: 'no-store' }),
+                this._fetchTimeout(`/ixp/v1/deployments?${p}`, { cache: 'no-store' }),
             ]);
             runners = runnerList;
             prPayload = await pRes.json();
@@ -1992,7 +2001,7 @@ const TeepPlan = {
         const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&include_stale=false`;
         this._runnerFeedInflight = (async () => {
             try {
-                const sessions = (await (await fetch(`/ixp/v1/runner_sessions?${q}`, { cache: 'no-store' })).json()).sessions || [];
+                const sessions = (await (await this._fetchTimeout(`/ixp/v1/runner_sessions?${q}`, { cache: 'no-store' })).json()).sessions || [];
                 this._runnerFeed = { sessions, at: Date.now() };
                 return sessions;
             } finally { this._runnerFeedInflight = null; }
