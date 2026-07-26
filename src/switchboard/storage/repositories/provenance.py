@@ -1841,7 +1841,15 @@ def run_reconcile_alerts(project: str = DEFAULT_PROJECT,
                     if close_stale_inbox else
                     {"closed_count": 0, "message_ids": [], "monitor_ids": []})
     report = reconcile(project=project, incremental=incremental)
-    findings = [f for f in report["findings"]
+    # COORD-58: the corpus already records runner liveness and exact-head
+    # mismatch on every decision episode. Consume that projection here, through
+    # the established signature-dedupe path, without querying live runners.
+    corpus_findings = decision_records.find_stale_runner_signals(
+        project=project,
+        since=now - (24 * 60 * 60),
+        until=now,
+    )
+    findings = [f for f in [*report["findings"], *corpus_findings]
                 if _severity_value(str(f.get("severity") or "")) >= floor]
     if not findings:
         return {"project": project, "ok": True, "alert_sent": False, "deduped": False,

@@ -587,6 +587,100 @@ def list_decision_episodes(
     return [record for record in (_row(row) for row in rows) if record]
 
 
+def _snapshot_runner_head(snapshot: Mapping[str, Any]) -> str:
+    runner = snapshot.get("runner") or snapshot.get("runner_session") or {}
+    if not isinstance(runner, Mapping):
+        return ""
+    return str(
+        runner.get("head_sha")
+        or runner.get("execution_head_sha")
+        or runner.get("source_sha")
+        or ""
+    ).strip()
+
+
+def stale_runner_findings_from_episodes(
+    episodes: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Turn the corpus' existing stale-runner projection into reconcile findings.
+
+    Detection deliberately reads only the two projected feature flags. Snapshot
+    content is used afterwards to make the finding useful by naming the pinned
+    runner head; the episode's exact-head identity supplies the current PR head.
+    No runner/session query participates in either step.
+    """
+    grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for episode in episodes:
+        features = episode.get("features") or {}
+        if not isinstance(features, Mapping):
+            continue
+        if features.get("runner_live") is not True:
+            continue
+        if features.get("runner_head_matches_exact_head") is not False:
+            continue
+
+        task_id = str(episode.get("task_id") or "").strip().upper()
+        current_head = str(episode.get("head_sha") or "").strip()
+        snapshot = episode.get("snapshot") or {}
+        pinned_head = _snapshot_runner_head(
+            snapshot if isinstance(snapshot, Mapping) else {}
+        )
+        key = (task_id, pinned_head, current_head)
+        finding = grouped.setdefault(key, {
+            "severity": "high",
+            "task_id": task_id,
+            "code": "stale_runner_corpus_signal",
+            "failure_class": "stale_branch",
+            "pinned_head": pinned_head,
+            "current_pr_head": current_head,
+            "episode_count": 0,
+            "tick_count": 0,
+            "first_seen_at": episode.get("first_seen_at"),
+            "last_seen_at": episode.get("last_seen_at"),
+            "record_ids": [],
+            "source": "decision_records.features_json",
+            "live_runner_query_used": False,
+        })
+        # Recorded-window evidence may be a lossless aggregate exported from the
+        # live corpus rather than a copy of private snapshot bodies.
+        finding["episode_count"] += max(
+            int(episode.get("episode_count") or 1), 1
+        )
+        finding["tick_count"] += max(int(episode.get("tick_count") or 0), 0)
+        finding["record_ids"].append(str(episode.get("record_id") or ""))
+        first = episode.get("first_seen_at")
+        last = episode.get("last_seen_at")
+        if first is not None:
+            finding["first_seen_at"] = min(
+                value for value in (finding["first_seen_at"], first)
+                if value is not None
+            )
+        if last is not None:
+            finding["last_seen_at"] = max(
+                value for value in (finding["last_seen_at"], last)
+                if value is not None
+            )
+
+    findings = []
+    for finding in grouped.values():
+        finding["record_ids"] = [
+            record_id for record_id in finding["record_ids"] if record_id
+        ]
+        pinned = finding["pinned_head"] or "(none)"
+        current = finding["current_pr_head"] or "(none)"
+        finding["detail"] = (
+            f"Corpus observed a live runner for {finding['task_id']} pinned to "
+            f"{pinned} while the current PR head was {current}; "
+            f"{finding['episode_count']} episode(s), {finding['tick_count']} tick(s)."
+        )
+        findings.append(finding)
+    return sorted(findings, key=lambda item: (
+        float(item.get("first_seen_at") or 0.0),
+        item.get("task_id") or "",
+        item.get("pinned_head") or "",
+    ))
+
+
 def replay_decision_corpus(
     *,
     project: str = DEFAULT_PROJECT,
@@ -694,6 +788,25 @@ def replay_decision_corpus(
         "changes": changes,
         "skipped": skipped,
     }
+
+
+def find_stale_runner_signals(
+    *,
+    project: str = DEFAULT_PROJECT,
+    since: Optional[float] = None,
+    until: Optional[float] = None,
+    limit: int = 2000,
+) -> list[dict[str, Any]]:
+    """Read stale-runner signals from recorded decision episodes only."""
+    where, params = _window_clause(project, since, until, "", "", "")
+    with _conn(project) as c:
+        rows = c.execute(
+            f"SELECT * FROM decision_records WHERE {where} "
+            "ORDER BY first_seen_at ASC, record_id ASC LIMIT ?",
+            (*params, max(int(limit or 0), 1)),
+        ).fetchall()
+    episodes = [record for record in (_row(row) for row in rows) if record]
+    return stale_runner_findings_from_episodes(episodes)
 
 
 def export_projection(
@@ -1076,6 +1189,8 @@ __all__ = [
     "episode_hash",
     "export_projection",
     "list_decision_episodes",
+    "find_stale_runner_signals",
+    "stale_runner_findings_from_episodes",
     "mark_human_intervention",
     "mark_human_intervention_in",
     "record_decision_episode",

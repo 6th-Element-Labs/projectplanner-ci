@@ -1,0 +1,86 @@
+{
+  "schema": "switchboard.coord58.recorded_corpus_window.v1",
+  "source": "2026-07-25 decision_records replay and DOGFOOD-19 session-2 breakdown log",
+  "synthetic": false,
+  "occurrences": [
+    {
+      "label": "occurrence-1-0500",
+      "episodes": [
+        {
+          "record_id": "recorded-co20-0500",
+          "task_id": "CO-20",
+          "head_sha": "8a79c572037366f1b100531441b19908c4717b51",
+          "features": {
+            "runner_live": true,
+            "runner_head_matches_exact_head": false
+          },
+          "snapshot": {
+            "runner": {
+              "head_sha": "259812aad7e6cf2bef34dc4980d0c5c6e5dfbfb7"
+            }
+          },
+          "tick_count": 68,
+          "first_seen_at": 1784946342.746948,
+          "last_seen_at": 1784949325.453915
+        },
+        {
+          "record_id": "recorded-ui63-0500",
+          "task_id": "UI-63",
+          "head_sha": "915c2ee2",
+          "features": {
+            "runner_live": true,
+            "runner_head_matches_exact_head": false
+          },
+          "snapshot": {
+            "runner": {
+              "head_sha": "fb652f50"
+            }
+          },
+          "tick_count": 1,
+          "first_seen_at": 1784946000,
+          "last_seen_at": 1784949600
+        },
+        {
+          "record_id": "recorded-adapter27-0500",
+          "task_id": "ADAPTER-27",
+          "head_sha": "e49b68a8",
+          "features": {
+            "runner_live": true,
+            "runner_head_matches_exact_head": false
+          },
+          "snapshot": {
+            "runner": {
+              "head_sha": "cf496b36"
+            }
+          },
+          "tick_count": 1,
+          "first_seen_at": 1784946000,
+          "last_seen_at": 1784949600
+        }
+      ]
+    },
+    {
+      "label": "occurrence-2-0700",
+      "episodes": [
+        {
+          "record_id": "recorded-co20-0700-review-window",
+          "task_id": "CO-20",
+          "head_sha": "a894afc0ef8bb84dec565b7a8fe9b15b7dedaaaf",
+          "features": {
+            "runner_live": true,
+            "runner_head_matches_exact_head": false
+          },
+          "snapshot": {
+            "runner": {
+              "head_sha": "d150fd1b376f0b8e6c4b1e5125fb808d0b5ddcdf"
+            }
+          },
+          "episode_count": 5,
+          "tick_count": 584,
+          "first_seen_at": 1784953200,
+          "last_seen_at": 1784963280
+        }
+      ]
+    }
+  ]
+}
