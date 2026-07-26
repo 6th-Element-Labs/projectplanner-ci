@@ -1430,3 +1430,63 @@ runner"):
 
 **Fix (subtraction, not new machinery):** armed scope ⇒ admit; readiness refuses only
 opted-in policies; mint `agent/<runtime>/<task-id>` as the worker principal always.
+
+## BREAKDOWN 42 — `Blocked(route=remediation)` can never be re-selected: wrong `dependency_state.ready` field ⚠️
+
+**Severity:** high (COORD-46 "fix" is a no-op in production)
+**Code:**
+
+- `build_dependency_state` sets `ready = (status == "Not Started") and not blocking`
+  (`src/switchboard/domain/board/tasks.py`).
+- `satisfied = not blocking` is the real dependency signal.
+- `task_ready_for_dispatch` for `Blocked` requires `dependency_state.ready`
+  (`src/switchboard/domain/completion/routing.py`).
+- Therefore **any** `Blocked` task has `ready=False` forever, even with
+  `satisfied=True` and `route=remediation`.
+
+**Proof (this checkout):**
+
+```
+status       dep.ready  satisfied  task_ready_for_dispatch(route=remediation)
+Not Started  True       True       True
+In Progress  False      True       True   # special-cased; ignores ready
+In Review    False      True       True   # special-cased; ignores ready
+Blocked      False      True       False  # BUG: automatic remediation dead
+```
+
+**Why COORD-46 tests green:** `tests/test_coord46_route_aware_selection.py`
+injects `dependency_state.ready=True` for Blocked rows — a state
+`build_dependency_state` never produces. Contract tested ≠ contract shipped.
+
+**Live symptom (COORD-57 / #936):** classifier projects remediation → board
+`Blocked` → mission/daemon selection uses `task_ready_for_dispatch` → no
+candidate → Autopilot looks "alive" on `diagnostic-integrity` but never
+re-enters COORD-57. Matches activity: remediation `start_remediation` retries
+exhausted earlier; afterward selection cannot pick it up again.
+
+**Fix direction (not applied here):** for `ROUTE_KEYED_STATUSES`, gate on
+`dependency_state.satisfied` (or `blocked_by_count==0`), never on `ready`.
+Add a regression that builds dependency_state via `build_dependency_state`
+for status=`Blocked` and asserts dispatchable when route=`remediation`.
+
+**Not repaired.**
+
+
+### Observe tick — dual Autopilot (2026-07-26 19:09 UTC)
+
+- Queue empty; #940 still OPEN/CLEAN out. No new enqueue.
+
+
+### Observe tick — dual Autopilot (2026-07-26 19:11 UTC)
+
+- Queue empty; #940 still OPEN/CLEAN out. No new enqueue.
+
+
+### Observe tick — dual Autopilot (2026-07-26 19:14 UTC)
+
+- Queue empty; #940 still OPEN/CLEAN out. No new enqueue.
+
+
+### Observe tick — dual Autopilot (2026-07-26 19:15 UTC)
+
+- Queue empty; #940 still OPEN/CLEAN out. No new enqueue.

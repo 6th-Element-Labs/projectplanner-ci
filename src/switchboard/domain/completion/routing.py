@@ -9,12 +9,17 @@ completion routes both project onto board ``Blocked``:
 ``human``
     a sticky authority/policy blocker that must not be auto-dispatched.
 
-Selecting candidates by status alone cannot tell those apart, so it must treat
-every ``Blocked`` task the same way -- and today that means producing no
-candidate at all.  That is exactly why COORD-20 currently reopens remediation
-to ``Not Started``.  This module is the single predicate every candidate layer
-uses instead, so the ``In Review -> Blocked(route=remediation) -> In Progress``
-projection can land without silently stopping remediation dispatch.
+Selecting candidates by status alone cannot tell those apart.  This module is
+the single predicate every candidate layer uses so
+``In Review -> Blocked(route=remediation) -> In Progress`` can land without
+silently stopping remediation dispatch.
+
+Dependency fields on ``dependency_state`` are not interchangeable:
+
+* ``satisfied`` — deps are done (the gate for Blocked / automatic routes).
+* ``ready`` — claimable as fresh Not Started work
+  (``status == "Not Started" and satisfied``). Never use ``ready`` as a deps
+  check for ``Blocked``; production always has ``ready=False`` there.
 
 Fail-closed is the rule throughout: an unknown, absent, or unreadable route is
 never dispatchable.
@@ -41,6 +46,29 @@ ROUTE_KEYED_STATUSES = frozenset({"Blocked"})
 
 def _text(value: Any) -> str:
     return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _deps_satisfied(dependency_state: Mapping[str, Any] | None) -> bool:
+    """True when no unfinished dependency blocks the task.
+
+    Prefer ``satisfied``. Fall back to empty blocking / zero ``blocked_by_count``
+    for partial projections that omit the boolean.
+    """
+    dep = dependency_state if isinstance(dependency_state, Mapping) else {}
+    if "satisfied" in dep:
+        return bool(dep.get("satisfied"))
+    if "blocked_by_count" in dep:
+        try:
+            return int(dep.get("blocked_by_count") or 0) == 0
+        except (TypeError, ValueError):
+            return False
+    blocking = dep.get("blocking")
+    if isinstance(blocking, (list, tuple)):
+        return len(blocking) == 0
+    # Absent dependency projection: fail closed for route-keyed statuses that
+    # explicitly require a deps check; callers with empty maps treat as ok only
+    # when satisfied was set. Unknown shape → not satisfied.
+    return False
 
 
 def route_allows_dispatch(route: Any) -> bool:
@@ -113,8 +141,9 @@ def task_ready_for_dispatch(detail: Mapping[str, Any] | None, *,
     """The one predicate for "may Autopilot dispatch this task now?".
 
     Status keeps deciding the cases it can decide.  ``Blocked`` is decided by
-    the completion route, and still has to satisfy the same dependency and
-    claim safety checks as any other candidate.
+    the completion route, and still has to satisfy dependency and claim safety.
+    Dependency safety for route-keyed statuses uses ``satisfied``, not ``ready``
+    (BREAKDOWN 42).
     """
     from switchboard.domain.board.tasks import READY_TASK_STATUSES
 
@@ -127,14 +156,21 @@ def task_ready_for_dispatch(detail: Mapping[str, Any] | None, *,
         return False
     status = str(detail.get("status") or "").strip()
     claims = detail.get("active_claims") or []
-    ready = bool((detail.get("dependency_state") or {}).get("ready"))
+    dep = detail.get("dependency_state") or {}
+    dep = dep if isinstance(dep, Mapping) else {}
+    # Claimability (Not Started only). Do not use for Blocked.
+    ready = bool(dep.get("ready"))
 
     if status in ROUTE_KEYED_STATUSES:
         resolved = _text(route) if route is not None else resolve_completion_route(
             detail, store=store, project=project)
         # An automatic route makes a Blocked task visible again, but never
         # exempts it from dependency or ownership safety.
-        return bool(route_allows_dispatch(resolved) and ready and not claims)
+        return bool(
+            route_allows_dispatch(resolved)
+            and _deps_satisfied(dep)
+            and not claims
+        )
     if status in READY_TASK_STATUSES:
         return bool(ready and not claims)
     return bool(status == "In Review" or (status == "In Progress" and not claims))

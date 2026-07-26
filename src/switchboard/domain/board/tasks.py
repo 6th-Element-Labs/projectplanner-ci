@@ -71,7 +71,10 @@ def build_dependency_state(
         "blocking": blocking,
         "blocked_by_count": len(blocking),
         "missing": [row["task_id"] for row in rows if row.get("missing")],
+        # Dependency gate for Autopilot / Blocked(route=remediation) selection.
         "satisfied": not blocking,
+        # Claimability only: fresh Not Started work with deps done. Never treat
+        # this as a deps check for Blocked (BREAKDOWN 42).
         "ready": task.get("status") == "Not Started" and not blocking,
     }
 

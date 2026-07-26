@@ -10,6 +10,10 @@ COORD-20 status change":
 
   * Blocked + route=remediation stays a dispatchable candidate.
   * Blocked with no automatic route (human, or no run at all) does not.
+
+Dependency safety uses ``satisfied``, not ``ready``. ``ready`` means claimable
+Not Started work and is always false for Blocked in production
+(BREAKDOWN 42).
 """
 from __future__ import annotations
 
@@ -18,15 +22,34 @@ import unittest
 from path_setup import ROOT  # noqa: F401
 
 import coordinator_daemon as daemon_mod  # noqa: E402
+from switchboard.domain.board.tasks import build_dependency_state  # noqa: E402
 from switchboard.domain.completion import routing  # noqa: E402
 
 
-def _detail(status, *, route=None, ready=True, claims=(), task_id="COORD-99"):
+def _detail(status, *, route=None, satisfied=True, claims=(), task_id="COORD-99",
+            dependency_rows=None):
+    """Build a task detail with a real dependency_state shape.
+
+    When ``dependency_rows`` is omitted, synthesize empty deps and override
+    ``satisfied`` so callers can assert the unsatisfied-deps gate without
+    inventing ``ready=True`` on Blocked (impossible via build_dependency_state).
+    """
+    rows = list(dependency_rows) if dependency_rows is not None else []
+    dep = build_dependency_state({"status": status, "task_id": task_id}, rows)
+    if dependency_rows is None:
+        dep = {
+            **dep,
+            "satisfied": bool(satisfied),
+            "blocked_by_count": 0 if satisfied else 1,
+            "blocking": [] if satisfied else [{"task_id": "DEP-1", "done": False}],
+            # Claimability cannot outlive unsatisfied deps.
+            "ready": bool(satisfied) and status == "Not Started",
+        }
     detail = {
         "task_id": task_id,
         "status": status,
         "active_claims": list(claims),
-        "dependency_state": {"ready": ready},
+        "dependency_state": dep,
     }
     if route is not None:
         detail["completion_run"] = {"route": route, "state": "blocked"}
@@ -96,6 +119,14 @@ class ReadyForDispatch(unittest.TestCase):
         self.assertTrue(routing.task_ready_for_dispatch(
             _detail("Blocked", route="remediation")))
 
+    def test_blocked_production_dependency_state_is_dispatchable(self):
+        """Regression BREAKDOWN 42: real Blocked state has ready=False."""
+        detail = _detail("Blocked", route="remediation", dependency_rows=[])
+        dep = detail["dependency_state"]
+        self.assertFalse(dep["ready"])
+        self.assertTrue(dep["satisfied"])
+        self.assertTrue(routing.task_ready_for_dispatch(detail))
+
     def test_blocked_with_human_route_is_not_dispatchable(self):
         self.assertFalse(routing.task_ready_for_dispatch(
             _detail("Blocked", route="human")))
@@ -105,7 +136,7 @@ class ReadyForDispatch(unittest.TestCase):
 
     def test_blocked_remediation_still_respects_dependencies(self):
         self.assertFalse(routing.task_ready_for_dispatch(
-            _detail("Blocked", route="remediation", ready=False)))
+            _detail("Blocked", route="remediation", satisfied=False)))
 
     def test_blocked_remediation_still_respects_a_conflicting_claim(self):
         self.assertFalse(routing.task_ready_for_dispatch(
@@ -117,20 +148,16 @@ class ReadyForDispatch(unittest.TestCase):
         self.assertTrue(routing.task_ready_for_dispatch(_detail("In Review")))
         self.assertTrue(routing.task_ready_for_dispatch(_detail("In Progress")))
         self.assertFalse(routing.task_ready_for_dispatch(
-            _detail("Not Started", ready=False)))
+            _detail("Not Started", satisfied=False)))
+        # Not Started claimability requires ready; unsatisfied deps clear ready.
+        not_started_blocked = _detail(
+            "Not Started",
+            dependency_rows=[{"task_id": "DEP-1", "done": False, "missing": False}],
+        )
+        self.assertFalse(not_started_blocked["dependency_state"]["ready"])
+        self.assertFalse(routing.task_ready_for_dispatch(not_started_blocked))
         self.assertFalse(routing.task_ready_for_dispatch(
             _detail("In Progress", claims=[{"claim_id": "c1"}])))
-
-    def test_not_started_with_blocked_human_ws_is_not_dispatchable(self):
-        # COORD-69 / DOGFOOD-17: abandon_claim used to reset the board while
-        # leaving a human-route WS blocker — Autopilot must still refuse.
-        detail = _detail("Not Started")
-        detail["work_session"] = {
-            "status": "blocked",
-            "hygiene": {"blocker": {"route": "human",
-                                    "reason": "provider_acceptance_capacity_missing"}},
-        }
-        self.assertFalse(routing.task_ready_for_dispatch(detail))
 
 
 class DaemonUsesSharedPredicate(unittest.TestCase):

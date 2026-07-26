@@ -6,6 +6,8 @@ a task projected to ``Blocked(route=remediation)`` produces no action at all.
 The route reaches those layers through the mission read model, which keeps one
 classifier feeding both coordinator routing and operator projections
 (invariant 3) instead of giving the coordinator a private side-channel.
+
+Dependency safety uses ``satisfied``, not ``ready`` (BREAKDOWN 42).
 """
 from __future__ import annotations
 
@@ -14,17 +16,29 @@ import unittest
 from path_setup import ROOT  # noqa: F401
 
 import mission_coordinator as mc  # noqa: E402
+from switchboard.domain.board.tasks import build_dependency_state  # noqa: E402
 from switchboard.storage.repositories import completion_runs  # noqa: E402
 
 
-def _mission(status, *, route=None, ready=True, claims=(), task_id="COORD-99"):
+def _mission(status, *, route=None, satisfied=True, claims=(), task_id="COORD-99",
+             dependency_rows=None):
+    rows = list(dependency_rows) if dependency_rows is not None else []
+    dep = build_dependency_state({"status": status, "task_id": task_id}, rows)
+    if dependency_rows is None:
+        dep = {
+            **dep,
+            "satisfied": bool(satisfied),
+            "blocked_by_count": 0 if satisfied else 1,
+            "blocking": [] if satisfied else [{"task_id": "DEP-1", "done": False}],
+            "ready": bool(satisfied) and status == "Not Started",
+        }
     detail = {
         "task_id": task_id,
         "title": "route selection",
         "status": status,
         "workstream": "COORD",
         "active_claims": list(claims),
-        "dependency_state": {"ready": ready},
+        "dependency_state": dep,
         "git_state": {"head_sha": "c" * 40},
     }
     if route is not None:
@@ -54,6 +68,15 @@ class ExplicitTargetActions(unittest.TestCase):
         self.assertIn(actions[0]["action"], {"claim_task", "resume_or_claim"})
         self.assertEqual(actions[0].get("completion_route"), "remediation")
 
+    def test_blocked_production_state_produces_a_dispatch_action(self):
+        """BREAKDOWN 42: build_dependency_state(Blocked) has ready=False."""
+        mission = _mission("Blocked", route="remediation", dependency_rows=[])
+        dep = mission["linked_tasks"][0]["task_detail"]["dependency_state"]
+        self.assertFalse(dep["ready"])
+        self.assertTrue(dep["satisfied"])
+        actions = _explicit(mission)
+        self.assertEqual(len(actions), 1, actions)
+
     def test_blocked_remediation_carries_exact_head(self):
         actions = _explicit(_mission("Blocked", route="remediation"))
         self.assertEqual(actions[0].get("head_sha"), "c" * 40)
@@ -66,7 +89,7 @@ class ExplicitTargetActions(unittest.TestCase):
 
     def test_blocked_remediation_still_respects_dependencies(self):
         self.assertEqual(
-            _explicit(_mission("Blocked", route="remediation", ready=False)), [])
+            _explicit(_mission("Blocked", route="remediation", satisfied=False)), [])
 
     def test_blocked_remediation_still_respects_a_conflicting_claim(self):
         self.assertEqual(
@@ -84,8 +107,10 @@ class GenericPlannerActions(unittest.TestCase):
     """The deliverable drain (_mission_next_actions) is route-aware too."""
 
     @staticmethod
-    def _links(status, *, route=None, ready=True, claims=()):
-        mission = _mission(status, route=route, ready=ready, claims=claims)
+    def _links(status, *, route=None, satisfied=True, claims=(), dependency_rows=None):
+        mission = _mission(
+            status, route=route, satisfied=satisfied, claims=claims,
+            dependency_rows=dependency_rows)
         link = dict(mission["linked_tasks"][0])
         link["blocks_deliverable"] = True
         return [link]
@@ -106,6 +131,11 @@ class GenericPlannerActions(unittest.TestCase):
         actions = self._actions("Blocked", route="remediation")
         self.assertEqual([a["action"] for a in actions], ["resume_or_claim"])
         self.assertEqual(actions[0].get("completion_route"), "remediation")
+
+    def test_blocked_production_state_is_planned(self):
+        actions = self._actions(
+            "Blocked", route="remediation", dependency_rows=[])
+        self.assertEqual([a["action"] for a in actions], ["resume_or_claim"])
 
     def test_blocked_human_is_not_planned(self):
         self.assertEqual(self._actions("Blocked", route="human"), [])
