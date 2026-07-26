@@ -29,20 +29,44 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Assert private status callback token is configured
+      # The status callback used to run on a personal access token, whose 5,000/hr is
+      # billed to the whole GitHub account. On 2026-07-26 the fleet spent that budget
+      # and this very step started failing with `403 API rate limit exceeded` — so no
+      # PR could go green, including the one fixing the rate limit. An App installation
+      # token is billed to the installation instead. `continue-on-error` keeps the PAT
+      # path working until the App secrets are configured; see
+      # docs/GITHUB-APP-RATE-LIMIT.md.
+      - name: Mint status-callback token (GitHub App)
+        id: app_token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.SWITCHBOARD_APP_ID }}
+          private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
+          owner: 6th-Element-Labs
+          repositories: projectplanner
+
+      - name: Assert a status callback credential is available
         env:
+          APP_TOKEN: ${{ steps.app_token.outputs.token }}
           TOKEN: ${{ secrets.PRIVATE_READ_TOKEN }}
         run: |
-          if [ -z "$TOKEN" ]; then
-            echo "infra: private status callback token is not configured on projectplanner-ci." >&2
+          if [ -n "$APP_TOKEN" ]; then
+            echo "status callback: GitHub App installation token"
+          elif [ -n "$TOKEN" ]; then
+            echo "status callback: legacy PAT (shared account budget — migrate to the App)"
+          else
+            echo "infra: no status callback credential on projectplanner-ci. Set" >&2
+            echo "SWITCHBOARD_APP_ID + SWITCHBOARD_APP_PRIVATE_KEY (preferred)," >&2
+            echo "or PRIVATE_READ_TOKEN." >&2
             exit 1
           fi
 
       - name: Post pending required status
         env:
-          # Existing secret retained only for statuses:write callback compatibility.
-          # Scratchpad checkout below does not use it.
-          GH_TOKEN: ${{ secrets.PRIVATE_READ_TOKEN }}
+          # App token when configured, else the legacy PAT. The scratchpad checkout
+          # below uses neither (persist-credentials: false) — this is callback only.
+          GH_TOKEN: ${{ steps.app_token.outputs.token || secrets.PRIVATE_READ_TOKEN }}
         run: |
           gh api "repos/$CANONICAL_REPO/statuses/$GITHUB_SHA" \
             -f state=pending \
@@ -114,7 +138,7 @@ jobs:
       - name: Post required success status
         if: success()
         env:
-          GH_TOKEN: ${{ secrets.PRIVATE_READ_TOKEN }}
+          GH_TOKEN: ${{ steps.app_token.outputs.token || secrets.PRIVATE_READ_TOKEN }}
         run: |
           gh api "repos/$CANONICAL_REPO/statuses/$GITHUB_SHA" \
             -f state=success \
@@ -130,7 +154,7 @@ jobs:
       - name: Post tests failure status
         if: failure() && steps.checkout.outcome == 'success'
         env:
-          GH_TOKEN: ${{ secrets.PRIVATE_READ_TOKEN }}
+          GH_TOKEN: ${{ steps.app_token.outputs.token || secrets.PRIVATE_READ_TOKEN }}
         run: |
           gh api "repos/$CANONICAL_REPO/statuses/$GITHUB_SHA" \
             -f state=failure \
@@ -146,7 +170,7 @@ jobs:
       - name: Post infra failure status
         if: failure() && steps.checkout.outcome != 'success'
         env:
-          GH_TOKEN: ${{ secrets.PRIVATE_READ_TOKEN }}
+          GH_TOKEN: ${{ steps.app_token.outputs.token || secrets.PRIVATE_READ_TOKEN }}
         run: |
           gh api "repos/$CANONICAL_REPO/statuses/$GITHUB_SHA" \
             -f state=failure \

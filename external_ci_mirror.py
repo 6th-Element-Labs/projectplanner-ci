@@ -43,6 +43,20 @@ GITHUB_CREDENTIAL_ENV_VARS = (
 )
 
 
+def _canonical_repo_hint() -> str:
+    """An ``owner/repo`` slug good enough to pick the right App installation.
+
+    Installation tokens are per-installation, and an installation covers one owner —
+    so any repo under that owner resolves identically. Prefer the configured canonical
+    repo, then the mirror, then the org default."""
+    for name in ("SWITCHBOARD_CI_REPO", "PM_GITHUB_REPO_SWITCHBOARD", "PM_GITHUB_REPO",
+                 "SWITCHBOARD_CI_MIRROR_REPO"):
+        value = (os.environ.get(name) or "").strip()
+        if "/" in value:
+            return value
+    return "6th-Element-Labs/projectplanner"
+
+
 def _github_credential_error() -> str:
     """Return a human-actionable message if no GitHub credential is visible, else ''.
 
@@ -97,10 +111,28 @@ def _update_run(run: Dict[str, Any], fields: Dict[str, Any], actor: str,
 def _default_run(args: List[str], cwd: str) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     if not env.get("GH_TOKEN"):
-        for name in ("SWITCHBOARD_CI_GITHUB_TOKEN", "PM_GITHUB_TOKEN", "GITHUB_TOKEN"):
-            if env.get(name):
-                env["GH_TOKEN"] = env[name]
-                break
+        # Prefer a GitHub App installation token: `gh` and `git` accept one exactly
+        # like a PAT, but it is billed to the installation rather than to a human
+        # account whose 5,000/hr the whole fleet shares (see github_app_auth). Falls
+        # back to the historical PAT chain when no App is configured.
+        token = ""
+        try:
+            import github_app_auth
+            # Any repo under the same owner resolves to the same installation, and the
+            # mirror only ever touches repos owned by the canonical repo's owner — so
+            # the canonical slug is a sufficient hint for installation lookup.
+            token = github_app_auth.resolve_token(
+                repo=_canonical_repo_hint(),
+                env_order=("SWITCHBOARD_CI_GITHUB_TOKEN", "PM_GITHUB_TOKEN", "GITHUB_TOKEN"))
+        except Exception:  # noqa: BLE001 — never block a mirror on credential plumbing
+            token = ""
+        if not token:
+            for name in ("SWITCHBOARD_CI_GITHUB_TOKEN", "PM_GITHUB_TOKEN", "GITHUB_TOKEN"):
+                if env.get(name):
+                    token = env[name]
+                    break
+        if token:
+            env["GH_TOKEN"] = token
     return subprocess.run(args, cwd=cwd, text=True, capture_output=True, timeout=60, env=env)
 
 
