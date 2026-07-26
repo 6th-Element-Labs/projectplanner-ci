@@ -96,7 +96,7 @@ try:
 
     # 3. Every other identity field is still mandatory -- absence is refused.
     for field in ("runner_session_id", "execution_id", "generation",
-                  "fence_epoch", "role", "head_sha"):
+                  "fence_epoch", "role"):
         calls.clear()
         broken = {**CONNECT_IDENTITY, field: ""}
         try:
@@ -109,6 +109,20 @@ try:
                and field in (detail.get("missing") or [])
                and not calls,
                f"missing {field} still refuses with runner_bind_incomplete")
+
+    calls.clear()
+    missing_head = dict(CONNECT_IDENTITY)
+    missing_head.pop("head_sha")
+    try:
+        task_execution.fence_task_generation(
+            "CO-20", missing_head, project=P, actor="bug187-test")
+        ok(False, "omitted head_sha must still refuse the fence")
+    except task_execution.TaskExecutionError as exc:
+        detail = exc.as_dict()
+        ok(detail.get("error_code") == "runner_bind_incomplete"
+           and "head_sha" in (detail.get("missing") or [])
+           and not calls,
+           "omitted head_sha still refuses with runner_bind_incomplete")
 
     # 4. A missing task_id is still refused.
     calls.clear()

@@ -1178,7 +1178,9 @@ def fence_task_generation(
     )
     missing = [
         field for field in required
-        if expected.get(field) in (None, "")
+        if field not in expected
+        or (field != "head_sha" and expected.get(field) in (None, ""))
+        or (field == "head_sha" and expected.get(field) is None)
     ]
     if not task_id or missing:
         raise TaskExecutionError(

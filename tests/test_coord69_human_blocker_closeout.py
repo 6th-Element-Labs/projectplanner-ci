@@ -26,8 +26,10 @@ os.environ["PM_AUTH_MODE"] = "dev-open"
 import store  # noqa: E402
 from db.connection import _conn  # noqa: E402
 from switchboard.application.commands import human_blocker as human_blocker_cmd  # noqa: E402
+from switchboard.application.commands import task_execution  # noqa: E402
 from switchboard.connect.execution_assignment import build_execution_assignment  # noqa: E402
 from switchboard.domain.completion import routing  # noqa: E402
+from switchboard.storage.repositories import runner as runner_repo  # noqa: E402
 from switchboard.storage.repositories import tasks as tasks_repo  # noqa: E402
 
 P = "switchboard"
@@ -252,6 +254,71 @@ try:
         ).fetchone()["n"]
     ok(stale_attention_count == 0,
        "stale fence refusal creates no Needs-you side effect")
+
+    # BUG-200: a Work Session has a truthful repository head even when the
+    # immutable implementation execution was intentionally admitted headless.
+    # Fencing must compare the execution head (empty) with the execution lease,
+    # not substitute the Work Session commit and report a false stale-head race.
+    headless_task = _make_task(
+        "headless execution human blocker",
+        agent="agent/codex/headless",
+    )
+    headless_session = _make_session(
+        headless_task["task_id"], "agent/codex/headless", "run_headless",
+    )
+    with _conn(P) as c:
+        c.execute(
+            "UPDATE work_sessions SET env_json=? WHERE work_session_id=?",
+            (json.dumps({
+                **(headless_session.get("env") or {}),
+                "assignment_exact_head_sha": "",
+            }), headless_session["work_session_id"]),
+        )
+    headless_session = store.get_work_session(
+        headless_session["work_session_id"], project=P,
+    )
+    captured_identity = {}
+    original_get_runner = runner_repo.get_runner_session
+    original_fence_generation = task_execution.fence_task_generation
+    runner_repo.get_runner_session = lambda *args, **kwargs: {"live": True}
+
+    def capture_headless_identity(task_id, identity, **kwargs):
+        captured_identity.update(identity)
+        return {"fenced": True}
+
+    task_execution.fence_task_generation = capture_headless_identity
+    try:
+        headless_fence = human_blocker_cmd._fence_session_runner(
+            headless_session,
+            project=P,
+            actor="agent/codex/headless",
+            reason="human blocker: provider_acceptance_capacity_missing",
+        )
+    finally:
+        runner_repo.get_runner_session = original_get_runner
+        task_execution.fence_task_generation = original_fence_generation
+    ok(headless_fence.get("fenced") is True,
+       "headless implementation execution can be fenced")
+    ok(captured_identity.get("head_sha") == "",
+       "explicit empty execution head is preserved over Work Session head")
+
+    original_make_due = runner_repo.make_runner_lease_due
+    runner_repo.make_runner_lease_due = lambda *args, **kwargs: {
+        "updated": True,
+        "generation": 1,
+        "lease_epoch": 2,
+    }
+    try:
+        empty_head_fence = task_execution.fence_task_generation(
+            headless_task["task_id"],
+            captured_identity,
+            project=P,
+            actor="agent/codex/headless",
+        )
+    finally:
+        runner_repo.make_runner_lease_due = original_make_due
+    ok(empty_head_fence.get("fenced") is True,
+       "exact-generation fence accepts an empty-but-present execution head")
 
     abandoned = store.abandon_claim(
         claim_id, reason="provider_acceptance_capacity_missing",

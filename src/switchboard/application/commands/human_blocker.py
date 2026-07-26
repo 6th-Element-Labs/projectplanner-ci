@@ -185,6 +185,16 @@ def _fence_session_runner(session: Mapping[str, Any], *, project: str,
             "runner_session_id": runner_id,
         }
     env = _map(session.get("env"))
+    # The repository commit belongs to the Work Session; the execution head
+    # belongs to the server-owned execution lease.  Implementation assignments
+    # may intentionally be headless, so preserve an explicitly present empty
+    # execution head instead of replacing it with the Work Session head.
+    if "execution_head_sha" in env:
+        execution_head_sha = _text(env.get("execution_head_sha")).lower()
+    elif "assignment_exact_head_sha" in env:
+        execution_head_sha = _text(env.get("assignment_exact_head_sha")).lower()
+    else:
+        execution_head_sha = _text(session.get("head_sha")).lower()
     identity = {
         "runner_session_id": runner_id,
         "execution_id": _text(
@@ -196,7 +206,7 @@ def _fence_session_runner(session: Mapping[str, Any], *, project: str,
         "role": _text(
             session.get("execution_role") or env.get("execution_role")
             or "implementation").lower(),
-        "head_sha": _text(session.get("head_sha")).lower(),
+        "head_sha": execution_head_sha,
     }
     try:
         from switchboard.application.commands import task_execution
