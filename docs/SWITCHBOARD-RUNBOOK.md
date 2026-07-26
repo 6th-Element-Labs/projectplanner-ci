@@ -236,6 +236,9 @@ Operationally, this means:
 - a visible fallback is acceptable only if it keeps the original failure visible, names the
   fallback path, and preserves a red/yellow signal such as a PR status, reconcile finding, monitor
   event, or task comment;
+- a diagnostic may not become an agent- or operator-facing `error`, `reason`, or `status` without
+  its cause. Preserve both exception class and message. Where the message genuinely cannot cross a
+  trust boundary, emit a named `diagnostic_cause_waiver`; silent omission is not a waiver;
 - when a test or deploy gate exposes a real bug, fix the bug before treating the task as complete,
   even if the bug is in the environment or process rather than the first code change;
 - if the current agent cannot fix the issue safely, it must leave a precise blocker with the

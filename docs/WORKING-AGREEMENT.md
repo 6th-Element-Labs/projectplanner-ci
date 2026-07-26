@@ -46,6 +46,10 @@ session so the fleet stays in sync.
   task comment, reconcile finding, monitor event, or explicit blocker.
 - Fallbacks are allowed only when they are visible and named. A fallback must preserve the failing
   signal and explain what it replaced; it must not make the workflow look green.
+- A diagnostic may not be summarized into an agent- or operator-facing `error`, `reason`, or
+  `status` without preserving its cause. Exception summaries must carry the exception message as
+  well as its class. If the message cannot cross a trust boundary, include a named, auditable
+  `diagnostic_cause_waiver` instead of silently discarding it.
 - Testing is a discovery loop. When a gate uncovers an environment, ingestion, normalization,
   protocol, auth, or workflow problem, treat the discovered problem as part of the task until it is
   repaired or deliberately handed off.

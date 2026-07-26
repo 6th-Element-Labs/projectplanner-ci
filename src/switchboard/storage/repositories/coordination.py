@@ -1886,6 +1886,7 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
                         "claimed": False,
                         "reason": exc.code,
                         "reason_codes": [exc.code],
+                        "message": str(exc),
                         "failure_class": "stale_branch",
                         "wake_id": wake_id,
                     }

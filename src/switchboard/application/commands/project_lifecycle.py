@@ -184,7 +184,11 @@ def restore_project(
     try:
         topology = dict(repo_topology_provider(project_id) or {})
     except Exception as exc:  # noqa: BLE001 - validation must fail closed
-        topology = {"valid": False, "error": type(exc).__name__}
+        topology = {
+            "valid": False,
+            "error": type(exc).__name__,
+            "message": str(exc)[:300],
+        }
     # A project may intentionally have no code repository. Validation rejects malformed
     # topology, while the existing code_repo_gate continues to expose a missing canonical
     # repo for workflows that actually require merge provenance.

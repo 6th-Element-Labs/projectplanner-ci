@@ -149,6 +149,12 @@ def execute(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
                 "original failing signal with an auditable red/yellow status, monitor event, "
                 "reconcile finding, task comment, or blocker."
             ),
+            "diagnostic_cause_rule": (
+                "A diagnostic may not become an agent- or operator-facing error, reason, or "
+                "status without preserving its cause. Exception summaries carry the exception "
+                "message as well as its class; a trust-boundary omission requires a named, "
+                "auditable diagnostic_cause_waiver."
+            ),
             "agent_rule": (
                 "When a gate uncovers an environment, ingestion, normalization, protocol, "
                 "auth, or workflow problem, treat the discovered problem as part of the task "
