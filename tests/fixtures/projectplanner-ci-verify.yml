@@ -1,0 +1,8 @@
+# Contract snapshot of 6th-Element-Labs/projectplanner-ci:.github/workflows/verify.yml.
+# The live workflow is reconciled by COORD-57. Keep this vocabulary snapshot in sync
+# with that workflow so the canonical workflow cannot silently grow a third context.
+name: public-ci-verify-context-contract
+
+env:
+  STATUS_CONTEXT: Switchboard CI / VM gate
+  UI_STATUS_CONTEXT: Switchboard UI / Playwright
