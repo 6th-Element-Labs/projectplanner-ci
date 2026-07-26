@@ -1,6 +1,6 @@
 # ADR-0019 — Repo constitution: layout truth distinct from repo topology
 
-- **Status:** Accepted when REPO-6 merges.
+- **Status:** Accepted — REPO-6 merged as PR #844 on 2026-07-23.
 - **Date:** 2026-07-24
 - **Author:** REPO-6 birth-to-merge session (Cursor)
 - **Relates to:** [ADR-0007](0007-application-shell-cleanup.md) (target tree / growth redirect) ·

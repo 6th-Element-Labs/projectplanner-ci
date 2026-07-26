@@ -2,6 +2,7 @@
 
 - **Status:** Accepted contract; implementation staged in NARRATE-8 through NARRATE-14
 - **Date:** 2026-07-11
+- **Canonical reference:** `ADR-0008/narration-event`
 - **Owner:** Narrative / Control Plane
 - **Task:** NARRATE-7
 - **Depends on:** NARRATE-2, BUG-44

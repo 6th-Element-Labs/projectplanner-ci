@@ -1,6 +1,7 @@
 # ADR-0007 — The application shell: hold the line (keep Caddy, ratchet the monoliths, redirect new growth, census the surfaces)
 
-- **Status:** Proposed — accepted when the operator merges this PR. Board task **ARCH-20**.
+- **Status:** Accepted — ARCH-20 merged as PR #260. Decision 2 was later retired by
+  ADR-0009/ADR-0010; the remaining decisions stay active.
 - **Date:** 2026-07-11
 - **Author:** application-shell audit session (Claude Code / Fable 5) — four parallel audit
   threads (app/MCP surface, store.py regrowth, frontend/polling, repo hygiene) plus a

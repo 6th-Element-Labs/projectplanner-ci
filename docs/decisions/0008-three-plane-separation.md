@@ -2,9 +2,13 @@
 
 - Status: **Accepted** by the operator
 - Date: 2026-07-23
+- Canonical reference: **`ADR-0008/three-plane`**
 - Board authority: **decision-849**, which supersedes decision-845
 - Amends: decision-779 (DHCP-style execution leases)
-- Companions: [ADR-0006](0006-control-plane-done-enough.md) (subtraction rule), [ADR-0007](0007-application-shell-cleanup.md) (application shell)
+- Companions: [ADR-0006](0006-control-plane-done-enough.md) (subtraction rule),
+  [ADR-0007](0007-application-shell-cleanup.md) (application shell), and the
+  [Mermaid lifecycle explainer](../COMPLETION-LIFECYCLE-PIPELINE.md) (visual model of
+  C1-C3, M1-M3, and W1-W4)
 
 ## Decision
 

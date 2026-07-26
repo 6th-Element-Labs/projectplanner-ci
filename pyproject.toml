@@ -54,8 +54,9 @@ dev = [
 ]
 
 [tool.uv]
-# This project is an application, not a distributable package: there is no src/ layout or
-# build backend, so lock/sync must not try to build it into a wheel.
+# This project is an application, not a distributable package. Product code uses
+# `src/switchboard/`, while grandfathered root modules remain compatibility entrypoints; there
+# is no package build backend, so lock/sync must not try to build the app into a wheel.
 package = false
 # Regenerating the checked-in exports after any dependency change (run from repo root):
 #   uv lock

@@ -3,6 +3,7 @@
 - **Status:** Proposed — plan-of-record for deliverable `data-port-storage-abstraction`
   (operator accepts when the deliverable is scoped on the board).
 - **Date:** 2026-07-21
+- **Canonical reference:** `ADR-0018/storage-ports`
 - **Author:** Data abstraction lane (DATA-PORT) — charter session
 - **Relates to:** [ADR-0007](0007-application-shell-cleanup.md) (ARCH-19 SQLite-vs-Postgres SLO
   gate — **unchanged by this ADR**) · [ADR-0009](0009-microservices-modernization.md) ·

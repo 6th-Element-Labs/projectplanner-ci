@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-07-21
+- **Canonical reference:** `ADR-0018/connect-communicate`
 - **Author:** Codex with operator direction
 - **Relates to:** [`SWITCHBOARD-CONNECT-COMMUNICATE-PRD.md`](../SWITCHBOARD-CONNECT-COMMUNICATE-PRD.md) ·
   [`AGENT-HOST-SPEC.md`](../AGENT-HOST-SPEC.md) ·

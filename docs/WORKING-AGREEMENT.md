@@ -107,7 +107,8 @@ session so the fleet stays in sync.
 ## Coordination
 - `claim`/`check` a file or resource before your first write to it; `release` when done.
 - Use `claim_next(lane)` to get your next task atomically (don't hand-pick).
-- Ports: see [`docs/PORTS.md`](PORTS.md). Never bind another service's canonical port.
+- Ports: see the [`docs/INDEX.md` architecture map](INDEX.md#current-architecture) and
+  [`deploy/Caddyfile`](../deploy/Caddyfile). Never bind another service's canonical port.
 
 ## Data
 - **Bring your own data** — charts/ENC/basemaps/weather are user-provided and never committed.
