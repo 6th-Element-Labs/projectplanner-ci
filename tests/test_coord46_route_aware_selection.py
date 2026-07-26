@@ -121,6 +121,17 @@ class ReadyForDispatch(unittest.TestCase):
         self.assertFalse(routing.task_ready_for_dispatch(
             _detail("In Progress", claims=[{"claim_id": "c1"}])))
 
+    def test_not_started_with_blocked_human_ws_is_not_dispatchable(self):
+        # COORD-69 / DOGFOOD-17: abandon_claim used to reset the board while
+        # leaving a human-route WS blocker — Autopilot must still refuse.
+        detail = _detail("Not Started")
+        detail["work_session"] = {
+            "status": "blocked",
+            "hygiene": {"blocker": {"route": "human",
+                                    "reason": "provider_acceptance_capacity_missing"}},
+        }
+        self.assertFalse(routing.task_ready_for_dispatch(detail))
+
 
 class DaemonUsesSharedPredicate(unittest.TestCase):
     """Wiring: the daemon must not keep its own status-only copy."""

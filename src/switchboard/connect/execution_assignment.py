@@ -72,6 +72,13 @@ def build_execution_assignment(
             "work_session_required": True,
             "role": role,
         },
+        # Sibling of claim_expectations (not nested): the Connect claim bind
+        # hard-compares claim_expectations to a fixed three-key shape. Typed
+        # tool names live here so agents see them without breaking that bind.
+        "typed_tools": {
+            "executed_test_run": "record_executed_test_run",
+            "human_blocker": "record_human_blocker",
+        },
         "reason_code": str(lifecycle.get("reason_code") or ""),
         "route": str(lifecycle.get("route") or ""),
         "acceptance_findings": list(lifecycle.get("acceptance_findings") or []),

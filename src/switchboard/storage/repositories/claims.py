@@ -1821,6 +1821,8 @@ def abandon_claim(claim_id: str, reason: str,
                   actor: str = "system",
                   project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     now = time.time()
+    human_closeout_preserved = False
+    runner_fence = None
     with _conn(project) as c:
         row = c.execute("SELECT * FROM task_claims WHERE id=?", (claim_id,)).fetchone()
         if not row:
@@ -1828,19 +1830,99 @@ def abandon_claim(claim_id: str, reason: str,
         if row["status"] != "active":
             return {"error": "claim is not active", "claim_id": claim_id,
                     "status": row["status"]}
+        task_id = row["task_id"]
+        # COORD-69: sticky human closeout must survive claim abandon. A WS
+        # blocked with hygiene.blocker.route=human (or an active completion_run
+        # route=human) means Autopilot must keep the board Blocked, not reset
+        # to Not Started (DOGFOOD-17).
+        ws_row = c.execute(
+            "SELECT * FROM work_sessions WHERE claim_id=? "
+            "ORDER BY updated_at DESC LIMIT 1",
+            (claim_id,),
+        ).fetchone()
+        if ws_row is None:
+            ws_row = c.execute(
+                "SELECT * FROM work_sessions WHERE task_id=? AND agent_id=? "
+                "ORDER BY updated_at DESC LIMIT 1",
+                (task_id, row["agent_id"]),
+            ).fetchone()
+        human_ws = False
+        if ws_row is not None:
+            try:
+                hygiene = json.loads(ws_row["hygiene_json"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                hygiene = {}
+            blocker = (hygiene or {}).get("blocker") or {}
+            human_ws = (
+                str(ws_row["status"] or "").lower() == "blocked"
+                and str(blocker.get("route") or "").lower() == "human"
+            )
+        completion_human = False
+        try:
+            run = c.execute(
+                "SELECT route FROM completion_runs WHERE task_id=?",
+                (task_id,),
+            ).fetchone()
+            completion_human = bool(
+                run and str(run["route"] or "").lower() == "human")
+        except sqlite3.OperationalError:
+            completion_human = False
+        task_blocked = False
+        task_row = c.execute(
+            "SELECT status FROM tasks WHERE task_id=?", (task_id,)
+        ).fetchone()
+        if task_row and str(task_row["status"] or "") == "Blocked":
+            task_blocked = True
+        human_closeout_preserved = bool(
+            human_ws or completion_human or task_blocked)
+
         c.execute("UPDATE task_claims SET status='abandoned', abandon_reason=? WHERE id=?",
                   (reason, claim_id))
         c.execute("UPDATE resource_leases SET released_at=? WHERE resource_type='task' "
                   "AND task_id=? AND agent_id=? AND released_at IS NULL",
-                  (now, row["task_id"], row["agent_id"]))
-        c.execute("UPDATE tasks SET status='Not Started', "
-                  "assignee=CASE WHEN assignee=? THEN NULL ELSE assignee END, "
-                  "updated_at=? WHERE task_id=? AND status='In Progress'",
-                  (row["agent_id"], now, row["task_id"]))
+                  (now, task_id, row["agent_id"]))
+        if human_closeout_preserved:
+            c.execute(
+                "UPDATE tasks SET status='Blocked', "
+                "assignee=CASE WHEN assignee=? THEN NULL ELSE assignee END, "
+                "updated_at=? WHERE task_id=?",
+                (row["agent_id"], now, task_id))
+        else:
+            c.execute("UPDATE tasks SET status='Not Started', "
+                      "assignee=CASE WHEN assignee=? THEN NULL ELSE assignee END, "
+                      "updated_at=? WHERE task_id=? AND status='In Progress'",
+                      (row["agent_id"], now, task_id))
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
-                  (row["task_id"], actor, "task.claim.abandoned",
-                   json.dumps({"claim_id": claim_id, "reason": reason}, sort_keys=True), now))
-    return {"abandoned": True, "claim_id": claim_id, "task_id": row["task_id"]}
+                  (task_id, actor, "task.claim.abandoned",
+                   json.dumps({
+                       "claim_id": claim_id, "reason": reason,
+                       "human_closeout_preserved": human_closeout_preserved,
+                   }, sort_keys=True), now))
+        runner_session_id = (
+            str((ws_row["runner_session_id"] if ws_row else "") or "").strip())
+    if human_closeout_preserved and runner_session_id:
+        try:
+            from switchboard.storage.repositories import runner as runner_repo
+            runner_fence = runner_repo.make_runner_lease_due(
+                runner_session_id,
+                reason=f"abandon with human blocker: {reason}",
+                authority="operator",
+                actor=actor,
+                project=project,
+            )
+        except Exception as exc:  # noqa: BLE001
+            runner_fence = {
+                "updated": False,
+                "error": type(exc).__name__,
+                "detail": str(exc)[:300],
+            }
+    return {
+        "abandoned": True,
+        "claim_id": claim_id,
+        "task_id": task_id,
+        "human_closeout_preserved": human_closeout_preserved,
+        "runner_fence": runner_fence,
+    }
 
 def _verify_completion_push(evidence_obj: Dict[str, Any],
                             project: str) -> Optional[Dict[str, Any]]:

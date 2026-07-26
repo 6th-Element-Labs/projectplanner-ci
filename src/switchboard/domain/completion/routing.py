@@ -91,6 +91,22 @@ def resolve_completion_route(detail: Mapping[str, Any] | None, *,
     return _text(run.get("route")) if isinstance(run, Mapping) else ""
 
 
+def _human_work_session_blocker(detail: Mapping[str, Any]) -> bool:
+    """COORD-69: a blocked WS with route=human is sticky — never auto-dispatch."""
+    session = detail.get("work_session")
+    if not isinstance(session, Mapping):
+        session = (detail.get("session_health") or {}).get("latest_sessions")
+        if isinstance(session, list) and session:
+            session = session[0]
+    if not isinstance(session, Mapping):
+        return False
+    if _text(session.get("status")) != "blocked":
+        return False
+    hygiene = session.get("hygiene") if isinstance(session.get("hygiene"), Mapping) else {}
+    blocker = hygiene.get("blocker") if isinstance(hygiene.get("blocker"), Mapping) else {}
+    return _text(blocker.get("route")) == "human"
+
+
 def task_ready_for_dispatch(detail: Mapping[str, Any] | None, *,
                             route: str | None = None,
                             store: Any = None, project: str = "") -> bool:
@@ -103,6 +119,11 @@ def task_ready_for_dispatch(detail: Mapping[str, Any] | None, *,
     from switchboard.domain.board.tasks import READY_TASK_STATUSES
 
     if not isinstance(detail, Mapping):
+        return False
+    # COORD-69 / DOGFOOD-17: abandon_claim used to reset a human-blocked WS to
+    # Not Started. Even if board status is wrong, a human-route WS blocker must
+    # fail closed for Autopilot dispatch.
+    if _human_work_session_blocker(detail):
         return False
     status = str(detail.get("status") or "").strip()
     claims = detail.get("active_claims") or []

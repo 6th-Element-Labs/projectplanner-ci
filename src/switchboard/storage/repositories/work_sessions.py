@@ -1027,11 +1027,14 @@ def update_work_session(work_session_id: str, payload: Dict[str, Any], actor: st
     existing = get_work_session(work_session_id, project=project)
     if not existing:
         return {"error": "work_session_not_found", "work_session_id": work_session_id}
-    data, errors = _validate_work_session_payload(payload or {}, project, partial=True)
+    payload = dict(payload or {})
+    # COORD-69: internal re-entry guard used by promote_human_blocker.
+    promoting = payload.pop("_human_blocker_promoting", False) is True
+    data, errors = _validate_work_session_payload(payload, project, partial=True)
     if errors:
         return {"error": "invalid_work_session", "errors": errors,
                 "contract": work_session_contract(project)}
-    write_warnings = _executed_test_run_write_warnings(payload or {})
+    write_warnings = _executed_test_run_write_warnings(payload)
     if not data:
         response = {"updated": False, "work_session": existing}
         if write_warnings:
@@ -1063,6 +1066,20 @@ def update_work_session(work_session_id: str, payload: Dict[str, Any], actor: st
     response = {"updated": True, "work_session": _work_session_row(row)}
     if write_warnings:
         response["warnings"] = write_warnings
+    if not promoting:
+        try:
+            from switchboard.application.commands import human_blocker as human_blocker_cmd
+            promoted = human_blocker_cmd.maybe_promote_from_work_session_update(
+                work_session_id, payload, existing=existing, actor=actor,
+                project=project)
+            if promoted and promoted.get("recorded"):
+                response["human_blocker"] = promoted
+                if promoted.get("work_session"):
+                    response["work_session"] = promoted["work_session"]
+        except Exception as exc:  # noqa: BLE001 - update must still land
+            response["human_blocker_error"] = {
+                "error": type(exc).__name__, "detail": str(exc)[:300],
+            }
     return response
 
 

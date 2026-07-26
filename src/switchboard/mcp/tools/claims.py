@@ -206,9 +206,45 @@ def verify_offline_completion(task_id: str, ctx: Context, evidence: str = "",
 
 
 
+def record_human_blocker(blocker_json: str, ctx: Context,
+                         project: str = "maxwell") -> str:
+    """Record a sticky human-capacity blocker (COORD-69 / DOGFOOD-17 DHCP).
+
+    blocker_json: task_id, work_session_id, reason, plus closeout fields
+    (completed_work, minimum_human_action, resume_condition,
+    next_automatic_step, evidence). Atomically marks the Work Session blocked,
+    sets the board Blocked(route=human), creates one PROTO-7 Needs-you item,
+    and fences the bound runner when possible.
+    """
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:ixp",))
+    try:
+        payload = json.loads(blocker_json or "{}")
+    except json.JSONDecodeError:
+        return services.dumps({"error": "blocker_json must be valid JSON"})
+    if not isinstance(payload, dict):
+        return services.dumps({"error": "blocker_json must be a JSON object"})
+    task_id = str(payload.get("task_id") or "").strip()
+    binding = services.resolve_write_actor(
+        principal, project=project, task_id=task_id, agent_id="")
+    if not binding.get("ok"):
+        return services.dumps(binding)
+    from switchboard.application.commands import human_blocker as human_blocker_cmd
+    result = human_blocker_cmd.execute_mapping(
+        payload, actor=binding["actor"], project=project,
+    )
+    if result.get("recorded"):
+        services.write_binding_comment(task_id, binding, project)
+    return services.dumps(result)
+
+
 def abandon_claim(claim_id: str, reason: str, ctx: Context,
                   project: str = "maxwell") -> str:
-    """Abandon a task claim, release its task lease, and return the task to the ready queue."""
+    """Abandon a task claim, release its task lease, and return the task to the ready queue.
+
+    When the claim's Work Session is blocked with route=human (COORD-69), the
+    board stays Blocked — abandon does not wipe sticky human closeout.
+    """
     services = _services()
     principal = services.require_write(ctx, project, ("write:ixp",))
     return services.dumps(store.abandon_claim(claim_id, reason=reason,
@@ -243,7 +279,7 @@ def revoke_claim(claim_id: str, reason: str, ctx: Context,
 
 
 CLAIM_TOOL_NAMES = ("claim_next", "claim_task", "complete_claim",
-                    "record_executed_test_run",
+                    "record_executed_test_run", "record_human_blocker",
                     'verify_offline_completion', 'abandon_claim', 'revoke_claim')
 
 
