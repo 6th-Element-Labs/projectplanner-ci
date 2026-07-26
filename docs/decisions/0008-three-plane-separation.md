@@ -8,7 +8,8 @@
 - Companions: [ADR-0006](0006-control-plane-done-enough.md) (subtraction rule),
   [ADR-0007](0007-application-shell-cleanup.md) (application shell), and the
   [Mermaid lifecycle explainer](../COMPLETION-LIFECYCLE-PIPELINE.md) (visual model of
-  C1-C3, M1-M3, and W1-W4)
+  C1-C3, M1-M3, and W1-W4). [ADR-0009](0009-microservices-modernization.md) owns the
+  separate modularity and service-extraction rule.
 
 ## Decision
 

@@ -182,6 +182,11 @@ ratchet depends on:
   place and OpenAPI/MCP parity is mechanical — this is the same move that lets REST and MCP
   become thin adapters over one typed service (Decision 4's duplication fix, Decision 7's
   `application/` layer).
+- **Boundaries are real in review.** A feature outside a bounded context uses that context's
+  declared application interface; it does not reach into another context's tables, repositories,
+  or internal modules. A justified transitional exception names the owner, the temporary seam,
+  and its removal path. Physical service extraction follows the evidence rule in
+  [ADR-0009](0009-microservices-modernization.md), not a preference for network hops.
 
 Cross-cutting infrastructure (lock-retry shims, cache plumbing — the BUG-31/32 class of work)
 is the recognized exception that may edit the monoliths in place, under the ratchet, using

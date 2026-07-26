@@ -149,6 +149,24 @@ Physical process split (separate Uvicorn/service units) is **not** Phase 0. The 
 **package + API boundary** first; deploy boundary follows when a slice has tests, contracts, and
 an operator-approved cutover plan.
 
+### Service-boundary rule
+
+Every new capability first has one bounded owner and an explicit in-process interface. A
+separate deployable service is justified only by a stated operational need: independent scaling,
+security isolation, failure isolation, a distinct release cadence, or an external-runtime
+requirement. Do not turn ordinary in-process coupling into network coupling.
+
+An extraction proposal must identify:
+
+1. the bounded context and accountable owner;
+2. its API or event contract and compatibility plan;
+3. data ownership, including any migration and rollback path;
+4. the code or responsibility removed from the previous boundary; and
+5. the operational reason the in-process boundary is insufficient.
+
+Review rejects a proposed process cut that lacks this evidence. The package boundary remains the
+right outcome when the evidence does not justify the added distributed-system cost.
+
 ---
 
 ## Decision 5 — Phase 0 exit criteria (ARCH-MS-24)
