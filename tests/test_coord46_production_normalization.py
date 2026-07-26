@@ -472,8 +472,22 @@ class Pr834RawFixture(unittest.TestCase):
             ["S16-CENSUS-2", "S16-LIVE-3", "S16-LIVE-4"],
         )
 
-    def test_missing_ci_without_actionable_findings_stays_coordination_retry(self):
+    def test_draft_without_actionable_findings_marks_ready_before_ci_hydration(self):
         snapshot = self._snapshot()
+        snapshot["review"] = {
+            "status": "passed",
+            "head_sha": self.HEAD,
+            "pr_url": self.PR_URL,
+        }
+        decision = classify_completion(None, snapshot)
+        self.assertEqual(decision["route"], "review_merge")
+        self.assertEqual(decision["reason_code"], "draft_ready_to_mark_ready")
+        self.assertEqual(decision["desired_role"], "review_merge")
+        self.assertEqual(decision["effect"], "mark_ready_then_reread")
+
+    def test_non_draft_missing_ci_without_findings_stays_coordination_retry(self):
+        snapshot = self._snapshot()
+        snapshot["github_pr"]["draft"] = False
         snapshot["review"] = {
             "status": "passed",
             "head_sha": self.HEAD,
