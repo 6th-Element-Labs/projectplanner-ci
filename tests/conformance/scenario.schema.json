@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "switchboard.completion_conformance.scenario.v1",
+  "title": "Switchboard completion conformance scenario",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "id", "expect", "world", "timing"],
+  "properties": {
+    "schema": {
+      "const": "switchboard.completion_conformance.scenario.v1"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]*$"
+    },
+    "expect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["terminal", "reason_code", "role_sequence", "route", "effect"],
+      "properties": {
+        "terminal": {
+          "enum": ["merged", "blocked", "human", "reconcile_done"]
+        },
+        "reason_code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role_sequence": {
+          "type": "array",
+          "items": {
+            "enum": ["review_merge", "remediation"]
+          }
+        },
+        "route": {
+          "enum": [
+            "none",
+            "wait",
+            "reconcile",
+            "human",
+            "remediation",
+            "review_merge",
+            "coordination_retry"
+          ]
+        },
+        "effect": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "world": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "draft",
+        "ci",
+        "ci_context",
+        "ci_attribution",
+        "review",
+        "mergeable",
+        "merge_state_status",
+        "queue",
+        "runner"
+      ],
+      "properties": {
+        "draft": {"type": "boolean"},
+        "ci": {
+          "enum": ["pass", "fail", "pending", "missing", "error"]
+        },
+        "ci_context": {"type": "string", "minLength": 1},
+        "ci_attribution": {
+          "enum": ["product", "infrastructure", "unknown"]
+        },
+        "review": {
+          "enum": ["passed", "missing", "changes_requested"]
+        },
+        "mergeable": {
+          "type": ["boolean", "null"]
+        },
+        "merge_state_status": {
+          "enum": ["CLEAN", "BLOCKED", "DIRTY", "BEHIND", "UNKNOWN"]
+        },
+        "queue": {
+          "enum": ["none", "queued", "unmergeable"]
+        },
+        "runner": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["live", "role", "head"],
+          "properties": {
+            "live": {"type": "boolean"},
+            "role": {
+              "enum": ["none", "review_merge", "remediation"]
+            },
+            "head": {
+              "enum": ["same", "stale", "none"]
+            }
+          }
+        }
+      }
+    },
+    "timing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ci_delay_seconds",
+        "never_report",
+        "hang_seconds",
+        "close_pr_while_runner_live",
+        "move_head_during_assessment"
+      ],
+      "properties": {
+        "ci_delay_seconds": {"type": "number", "minimum": 0},
+        "never_report": {"type": "boolean"},
+        "hang_seconds": {"type": "number", "minimum": 0},
+        "close_pr_while_runner_live": {"type": "boolean"},
+        "move_head_during_assessment": {"type": "boolean"}
+      }
+    }
+  }
+}
