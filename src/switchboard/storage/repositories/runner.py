@@ -2145,6 +2145,7 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
             metadata[key] = record.get(key)
     # WATCH-19: stamp/clear progress_fault from host-reported last_output_at.
     # Escalation only — never auto-kill; lease expiry remains the stop clock.
+    new_progress_fault = False
     try:
         import runner_progress_monitor as _progress_monitor
 
@@ -2158,6 +2159,9 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
         }
         _progress_monitor.apply_progress_fault(progress_row, now=now)
         metadata = dict(progress_row.get("metadata") or metadata)
+        if (metadata.get("progress_fault")
+                and not previous_metadata.get("progress_fault")):
+            new_progress_fault = True
     except Exception:
         pass
     record = {**record, "host_id": host_id, "metadata": metadata,
@@ -2316,6 +2320,8 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
     row = c.execute("SELECT * FROM runner_sessions WHERE runner_session_id=?",
                     (runner_session_id,)).fetchone()
     session = _runner_session_row(row, now=now, include_claim=True, c=c)
+    if new_progress_fault:
+        session["_new_progress_fault"] = True
     if completion_resume and completion_resume.get("completion"):
         session["_completion_resume"] = completion_resume
     if (not missing_runner_bind_fields(record)
@@ -2342,6 +2348,10 @@ def upsert_runner_session(record: Dict[str, Any], principal_id: str = "",
         result["completion"] = _finalize_complete_claim_response(
             resume["completion"], resume.get("evidence") or {},
             project, "", actor)
+    if isinstance(result, dict) and result.pop("_new_progress_fault", False):
+        from switchboard.application.attention_push import deliver_runner_fault
+        result["push_delivery"] = deliver_runner_fault(
+            result, project=project, actor=actor)
     return result
 
 

@@ -1528,8 +1528,13 @@ class AttentionRepository:
 
     def create_request(self, data: Mapping[str, Any], *, actor: str,
                        project: str = DEFAULT_PROJECT) -> dict[str, Any]:
-        return _write_through(
+        result = _write_through(
             project, lambda: self._create_request(data, actor=actor, project=project))
+        if result.get("created") and isinstance(result.get("request"), Mapping):
+            from switchboard.application.attention_push import deliver_attention_request
+            result["push_delivery"] = deliver_attention_request(
+                result["request"], project=project, actor=actor)
+        return result
 
     @staticmethod
     def _create_request(data: Mapping[str, Any], *, actor: str,

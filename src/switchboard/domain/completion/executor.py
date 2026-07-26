@@ -199,6 +199,10 @@ def _escalate_human(
 
     persisted, durable_plan, attention = attention_store._write_through(
         project, write)
+    if attention.get("created") and isinstance(attention.get("request"), Mapping):
+        from switchboard.application.attention_push import deliver_attention_request
+        attention["push_delivery"] = deliver_attention_request(
+            attention["request"], project=project, actor=actor)
     fenced_generation = None
     # Terminalize the live generation once when the human closeout is first
     # persisted. Replays must not re-fence Watch/session evidence.

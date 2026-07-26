@@ -10,7 +10,7 @@
     'use strict';
 
     let items = [];
-    let sel = null;
+    let sel = new URLSearchParams(window.location.search).get('attention');
     let filter = 'all';
     let tracked = null;
     let delivering = false;

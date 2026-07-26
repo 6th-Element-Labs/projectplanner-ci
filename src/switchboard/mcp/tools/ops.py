@@ -87,14 +87,11 @@ def generate_digest(ctx: Context, project: str = "maxwell") -> str:
 def notify(subject: str, text: str, ctx: Context, project: str = "maxwell") -> str:
     """Send a message to the wired channels (Slack + Email). Unconfigured channels are dry-run."""
     services = _services()
-    if project != "maxwell":
-        return services.dumps({
-            "error": "project_not_supported",
-            "project": project,
-            "message": "notify is still a Maxwell-only compatibility adapter",
-        })
     services.require_write(ctx, project)
-    return services.dumps(notify_mod.send(subject, text))
+    return services.dumps({
+        "project": project,
+        "results": notify_mod.send(subject, text, project=project, kind="notify"),
+    })
 
 
 def ingest_and_triage(kind: str, title: str, text: str, ctx: Context, project: str = "maxwell") -> str:
