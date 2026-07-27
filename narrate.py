@@ -43,22 +43,35 @@ def _trigger_statuses() -> Optional[set]:
 
 
 _SYSTEM = (
-    "You are a marketing manager briefing a CEO. In 3-4 plain-English sentences, narrate this "
-    "one task. If it is DONE: say what the feature is and what was delivered, in business terms "
-    "a CEO cares about. If it is NOT done: say what the feature is and what will be delivered. "
-    "No jargon, no headers, no bullet points, no task IDs. Output ONLY the paragraph."
+    "Write a short user story for this one task, using ONLY the facts given. "
+    "Format exactly:\n"
+    "As a <who>, I want <what>, so that <why>.\n\n"
+    "Then 2-3 plain sentences: current status, what is done or left, and the outcome when shipped. "
+    "No jargon, no headers, no bullet points, no task IDs. Output ONLY the user story and follow-on."
 )
 
 _DELIVERABLE_SYSTEM = (
-    "You are a marketing manager briefing a CEO on one deliverable. In 3-4 plain-English "
-    "sentences answer, in order: what this deliverable is; how far along we are; what has been "
-    "done so far; what is still to do; and what it gives us once shipped. Base it ONLY on the "
-    "structured brief below — do not invent progress. No jargon, no headers, no bullet points. "
-    "Output ONLY the paragraph."
+    "Write a short user story for this one deliverable, using ONLY the facts given. "
+    "Format exactly:\n"
+    "As a <who>, I want <what>, so that <why>.\n\n"
+    "Then 2-3 plain sentences covering progress, what is done, what remains, and what shipping "
+    "unlocks. Prefer As a from the operator/CEO audience; I want from the end state; so that from "
+    "why it matters. Do not invent progress. No jargon, no headers, no bullets. "
+    "Output ONLY the user story and follow-on."
 )
 
 
+def _gateway() -> tuple[str, str]:
+    """Read gateway URL/key at call time (not import time) so systemd/.env stays authoritative."""
+    base = (os.environ.get("PM_LLM_BASE_URL") or BASE or "http://127.0.0.1:8095/v1").rstrip("/")
+    key = (os.environ.get("PM_LLM_KEY") or os.environ.get("LLM_GATEWAY_MASTER_KEY") or KEY or "").strip()
+    return base, key
+
+
 def _llm(context: str, system: str = _SYSTEM, meta: Optional[dict] = None) -> str:
+    base, key = _gateway()
+    if not key:
+        raise RuntimeError("missing_llm_gateway_key")
     body = {"model": NARRATE_MODEL,
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": context}],
@@ -68,13 +81,22 @@ def _llm(context: str, system: str = _SYSTEM, meta: Optional[dict] = None) -> st
         # roll this call's provider-actual spend onto the right task/deliverable.
         body["metadata"] = meta
     r = httpx.post(
-        f"{BASE}/chat/completions",
-        headers={"Authorization": f"Bearer {KEY}"},
+        f"{base}/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
         json=body,
         timeout=30,
     )
-    r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"].strip()
+    if r.status_code >= 400:
+        detail = (r.text or "").strip().replace("\n", " ")[:180]
+        raise RuntimeError(f"llm_http_{r.status_code}:{detail or r.reason_phrase}")
+    data = r.json()
+    choices = data.get("choices") or []
+    if not choices:
+        raise RuntimeError("llm_empty_choices")
+    text = ((choices[0].get("message") or {}).get("content") or "").strip()
+    if not text:
+        raise RuntimeError("llm_empty_content")
+    return text
 
 
 def _task_context(t: dict) -> str:

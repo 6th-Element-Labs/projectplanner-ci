@@ -31,7 +31,7 @@ from typing import Any, Callable, Dict, Mapping, Optional
 import narration_events
 import narration_outbox
 
-PROMPT_VERSION = "narrate.v1"
+PROMPT_VERSION = "narrate.v2"
 DEFAULT_MODEL = "taikun-summarize"
 
 # Per-project defaults; override via store.get_meta("narration_generation_config").
@@ -103,6 +103,9 @@ def content_signature(projection: Mapping[str, Any]) -> str:
         items = filtered.get(nested)
         if isinstance(items, list):
             filtered[nested] = [strip(it) if isinstance(it, Mapping) else it for it in items]
+    # Prompt bumps are material: a new prompt version must re-invoke the LLM, not the
+    # status-only deterministic template keyed off an older delivered signature.
+    filtered["_prompt_version"] = PROMPT_VERSION
     return narration_events.canonical_source_hash(filtered)
 
 
@@ -140,24 +143,53 @@ def _last_delivered_signature(project: str, entity_type: str, entity_id: str) ->
 
 def deterministic_narration(projection: Mapping[str, Any]) -> str:
     """The versioned deterministic template for a routine state transition (no LLM)."""
-    title = (projection.get("title") or "").strip()
+    title = (projection.get("title") or "").strip() or "This item"
     status = (projection.get("status") or "updated").strip()
+    why = (projection.get("why_it_matters") or projection.get("exit_criteria") or "").strip()
     if projection.get("entity") == "deliverable":
         linked = projection.get("linked_tasks") or []
+        if not isinstance(linked, list):
+            linked = []
         done = sum(1 for lt in linked
                    if str((lt or {}).get("status", "")).strip().lower() in {"done", "complete", "completed"})
-        subject = title or "This deliverable"
-        return f"**{subject}** is now _{status}_ — {done} of {len(linked)} linked tasks complete."
-    subject = title or "This task"
-    return f"**{subject}** is now _{status}_."
+        so_that = why[:220] if why else "the mission outcome stays clear"
+        return (
+            f"As an operator, I want {title}, so that {so_that}.\n\n"
+            f"Status _{status}_ — {done} of {len(linked)} linked tasks complete."
+        )
+    so_that = why[:220] if why else "the work lands with clear proof"
+    return (
+        f"As an operator, I want {title}, so that {so_that}.\n\n"
+        f"Status _{status}_."
+    )
 
 
 def fallback_narration(projection: Mapping[str, Any], reason: str) -> str:
-    """Explicit, visible fallback text — names the reason and points at the ground truth."""
+    """Explicit, visible fallback — user-story shape from board fields when the LLM is down."""
     subject = (projection.get("title") or "This item").strip()
     status = (projection.get("status") or "updated").strip()
-    return (f"**{subject}** is _{status}_. CEO narration is temporarily unavailable "
-            f"({reason}); trust the status, provenance, and progress above.")
+    why = (projection.get("why_it_matters") or projection.get("exit_criteria") or "").strip()
+    target = (projection.get("end_state") or projection.get("deliverable")
+              or projection.get("description") or "").strip()
+    linked = projection.get("linked_tasks") or []
+    if not isinstance(linked, list):
+        linked = []
+    done = sum(
+        1 for lt in linked
+        if str((lt or {}).get("status", "")).strip().lower() in {"done", "complete", "completed"}
+    )
+    story = (
+        f"As an operator, I want {subject}, "
+        f"so that {why[:280] if why else 'the outcome is clear and executable'}."
+    )
+    progress = f"{done} of {len(linked)} linked tasks complete" if linked else f"status _{status}_"
+    target_line = f" Target: {target[:320]}." if target else ""
+    return (
+        f"{story}\n\n"
+        f"Progress: {progress}.{target_line} "
+        f"CEO narration is temporarily unavailable ({reason}); "
+        f"trust the status, provenance, and progress above."
+    )
 
 
 def build_prompt(projection: Mapping[str, Any]) -> str:
@@ -165,7 +197,8 @@ def build_prompt(projection: Mapping[str, Any]) -> str:
     lines = [f"prompt_version: {PROMPT_VERSION}",
              f"Entity: {projection.get('entity')}",
              f"Title: {projection.get('title') or ''}",
-             f"Status: {projection.get('status') or ''}"]
+             f"Status: {projection.get('status') or ''}",
+             "Output shape: As a <who>, I want <what>, so that <why>. then short progress sentences."]
     for key in ("description", "deliverable", "exit_criteria", "end_state", "why_it_matters"):
         val = projection.get(key)
         if val:
@@ -219,16 +252,34 @@ def _default_llm_fn(prompt: str, *, model: str, prompt_version: str, max_tokens:
     from the response when the gateway returns it. Injected in tests, so kept import-light."""
     import narrate
     import httpx
+
+    base, key = narrate._gateway()
+    if not key:
+        raise RuntimeError("missing_llm_gateway_key")
+    # Prefer the labeled Entity header line from build_prompt; never scan free-text fields.
+    entity_line = ""
+    for line in prompt.splitlines():
+        if line.startswith("Entity:"):
+            entity_line = line.split(":", 1)[1].strip().lower()
+            break
+    system = (narrate._DELIVERABLE_SYSTEM if entity_line == "deliverable" else narrate._SYSTEM)
     body = {"model": model,
-            "messages": [{"role": "system", "content": narrate._SYSTEM},
+            "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": prompt}],
             "max_tokens": max_tokens,
             "metadata": {"source": "narrator", "prompt_version": prompt_version}}
-    r = httpx.post(f"{narrate.BASE}/chat/completions",
-                   headers={"Authorization": f"Bearer {narrate.KEY}"}, json=body, timeout=30)
-    r.raise_for_status()
+    r = httpx.post(f"{base}/chat/completions",
+                   headers={"Authorization": f"Bearer {key}"}, json=body, timeout=30)
+    if r.status_code >= 400:
+        detail = (r.text or "").strip().replace("\n", " ")[:180]
+        raise RuntimeError(f"llm_http_{r.status_code}:{detail or r.reason_phrase}")
     data = r.json()
-    text = (data["choices"][0]["message"]["content"] or "").strip()
+    choices = data.get("choices") or []
+    if not choices:
+        raise RuntimeError("llm_empty_choices")
+    text = ((choices[0].get("message") or {}).get("content") or "").strip()
+    if not text:
+        raise RuntimeError("llm_empty_content")
     usage = data.get("usage") or {}
     hidden = data.get("_hidden_params") or {}
     return {

@@ -82,8 +82,9 @@ try:
     ok(r2["mode"] == "deterministic" and r2["outcome"] == "delivered" and llm2.calls == 0
        and r2["cost_usd"] == 0.0,
        "a routine status-only transition uses a deterministic template with zero LLM charge")
-    ok(r2["narration"] == "**Ship the widget** is now _In Review_.",
-       "deterministic template matches the exact golden string")
+    ok((r2["narration"] or "").startswith("As an operator, I want Ship the widget")
+       and "Status _In Review_." in (r2["narration"] or ""),
+       "deterministic template matches the user-story golden shape")
 
     # 3. a material change (description) -> LLM again.
     store.update_task(tid, {"description": "Build the thing, now with telemetry"},
@@ -101,8 +102,9 @@ try:
     r4 = gen.generate(event_for(tid, 4), llm_fn=outage)
     ok(r4["mode"] == "fallback" and r4["outcome"] == "fallback"
        and r4["fallback_reason"].startswith("provider_error")
-       and "temporarily unavailable" in (r4["narration"] or ""),
-       "a provider outage yields an explicit visible fallback narration")
+       and "temporarily unavailable" in (r4["narration"] or "")
+       and (r4["narration"] or "").startswith("As an operator, I want"),
+       "a provider outage yields an explicit visible user-story fallback narration")
     ok(len(gen.list_receipts(PROJECT, entity_id=tid)) == receipts_before + 1
        and r3["receipt_id"] in [x["id"] for x in gen.list_receipts(PROJECT, entity_id=tid)],
        "the fallback is a new receipt row; the prior delivered receipt is not overwritten")

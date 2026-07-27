@@ -11,10 +11,9 @@ receipts but never write the visible narration. Here we:
   out-of-order delivery can never clobber a newer published revision.
 - ``run_recovery_sweep`` — the SLOW recovery backstop the systemd timer runs: drain every project's
   outbox through the worker + publish boundary. Idempotent; safe to poll.
-- ``register_production_wake_sink`` — register the post-commit wake accelerator so a healthy web
-  process delivers within seconds of an emit (the primary trigger) instead of waiting for the sweep.
-  The wake runs a bounded, debounced drain on a background thread so no LLM work lands on the request
-  path, and a failed/missed wake never loses work (the durable outbox + sweep are the source of truth).
+- ``register_production_wake_sink`` — optional post-commit accelerator. Provider calls stay on the
+  batch-slice ``narrate_events`` timer by default (``PM_NARRATION_WAKE_LLM`` off). A missed wake
+  never loses work — the durable outbox + batch sweep remain the source of truth.
 
 **Operator gate — merging this is a no-op in production.** Everything here is inert until
 ``PM_NARRATION_EVENT_PRIMARY`` is enabled. Until then the legacy ``pending_narrations`` timer stays
@@ -33,10 +32,22 @@ import narration_generate
 import narration_outbox
 import narration_worker
 
-# Bounded drain sizes. The wake accelerator runs inside the web process, so it stays small and
-# yields quickly; the recovery sweep runs in the batch cgroup slice and can clear a larger backlog.
+# Bounded drain sizes. LLM generation belongs on the batch-slice narrate_events timer by default
+# (projectplanner-batch.slice). The in-process wake may optionally accelerate, but must not be the
+# primary provider path on the interactive web process.
 DEFAULT_WAKE_MAX_ITEMS = int(os.environ.get("PM_NARRATION_WAKE_MAX_ITEMS") or 12)
 DEFAULT_SWEEP_MAX_ITEMS = int(os.environ.get("PM_NARRATION_SWEEP_MAX_ITEMS") or 100)
+
+
+def wake_llm_enabled() -> bool:
+    """Whether the interactive web wake may call the LLM provider.
+
+    Default OFF: durable outbox + ``jobs.py narrate_events`` on ``projectplanner-batch.slice``
+    own provider spend. Set ``PM_NARRATION_WAKE_LLM=1`` only if near-real-time wake generation is
+    explicitly wanted (and accept interactive-process provider load).
+    """
+    raw = (os.environ.get("PM_NARRATION_WAKE_LLM") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 _PUBLISHABLE_OUTCOMES = ("delivered", "fallback")
 
@@ -208,7 +219,7 @@ _SINK_REGISTERED = False
 
 def _drain_once_bg(project: str) -> None:
     try:
-        if not event_primary_enabled():
+        if not event_primary_enabled() or not wake_llm_enabled():
             return
         import store
         store.init_db(project)
@@ -216,8 +227,9 @@ def _drain_once_bg(project: str) -> None:
         narration_worker.drain(project, worker_id=_worker_id(), generate=gen,
                                max_items=DEFAULT_WAKE_MAX_ITEMS)
     except Exception:
-        # Best-effort acceleration only. The recovery sweep is the durable backstop, so a failed
-        # wake drain must never raise into the emitter's post-commit path or crash the web process.
+        # Best-effort acceleration only. The batch-slice recovery sweep is the durable owner of
+        # LLM work, so a failed wake drain must never raise into the emitter's post-commit path
+        # or crash the web process.
         pass
     finally:
         with _WAKE_LOCK:
@@ -225,12 +237,14 @@ def _drain_once_bg(project: str) -> None:
 
 
 def _wake_sink(project: str, **context: Any) -> None:
-    """Post-commit wake sink: schedule one bounded background drain per project (debounced).
+    """Post-commit wake sink.
 
-    Debounced because the outbox is the source of truth — a burst of emits needs at most one
-    in-flight drain, and any request that lands after the drain started is caught by the next wake
-    or the recovery sweep. No-op unless the cutover is enabled, so it is inert until flip."""
-    if not event_primary_enabled():
+    By default this is a no-op for provider work: LLM narration is owned by the batch-slice
+    ``narrate_events`` timer. When ``PM_NARRATION_WAKE_LLM=1``, schedule one bounded background
+    drain per project (debounced) as an accelerator. Outbox rows remain the source of truth either
+    way — a missed wake only delays delivery to the next batch sweep.
+    """
+    if not event_primary_enabled() or not wake_llm_enabled():
         return
     with _WAKE_LOCK:
         if project in _WAKE_INFLIGHT:

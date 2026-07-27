@@ -15,7 +15,7 @@ with the provider injected, proving the exit criteria that can be shown without 
   revision, and an error receipt never publishes;
 - **rollback** — with ``PM_NARRATION_EVENT_PRIMARY`` off the recovery sweep and wake accelerator are
   inert (the instant rollback lever), and the legacy path stays primary;
-- **wake accelerator** — a post-commit emit drives a bounded background drain that publishes;
+- **batch LLM ownership** — wake does not call the provider by default; the batch-slice sweep publishes;
 - **SLO report** — request-to-delivery freshness p95, fallback rate, cost reconciliation, and
   dead-letter health compute correctly and gate on the <=60s freshness target.
 """
@@ -211,16 +211,31 @@ def run():
     os.environ["PM_NARRATION_EVENT_PRIMARY"] = "1"
     ok(narration_cutover.event_primary_enabled() is True, "rollback: re-enabling the cutover works")
 
-    # ---- Drill 7: wake accelerator — a post-commit emit drives a bounded drain --------------
+    # ---- Drill 7: LLM narration is batch-owned; wake is opt-in only --------------------------
+    os.environ.pop("PM_NARRATION_WAKE_LLM", None)
+    ok(narration_cutover.wake_llm_enabled() is False,
+       "batch ownership: wake LLM is off by default")
     narration_cutover.register_production_wake_sink()
-    wake_id = mk_task(SWEEP_PROJECT, "wake")  # create_task -> request_wake -> background drain
+    wake_id = mk_task(SWEEP_PROJECT, "wake")  # create_task -> request_wake (no provider call)
+    time.sleep(0.1)
+    ok(SWEEP_PROJECT not in narration_cutover._WAKE_INFLIGHT,
+       "batch ownership: default wake does not start an in-process LLM drain")
+    ok(store.get_task_narration(wake_id, project=SWEEP_PROJECT) is None,
+       "batch ownership: wake alone does not publish; outbox waits for the batch sweep")
+    sweep = narration_cutover.run_recovery_sweep(
+        projects=[SWEEP_PROJECT], llm_fn=fake_llm, max_items=20)
+    ok((sweep.get("projects") or {}).get(SWEEP_PROJECT, {}).get("total", 0) >= 1
+       and store.get_task_narration(wake_id, project=SWEEP_PROJECT) is not None,
+       "batch ownership: narrate_events sweep publishes the waiting narration")
+    os.environ["PM_NARRATION_WAKE_LLM"] = "1"
+    opt_id = mk_task(SWEEP_PROJECT, "wake-opt-in")
     deadline = time.time() + 10.0
     while SWEEP_PROJECT in narration_cutover._WAKE_INFLIGHT and time.time() < deadline:
         time.sleep(0.02)
-    # Give the daemon thread a beat to finish its settle after leaving the in-flight set.
     time.sleep(0.1)
-    ok(store.get_task_narration(wake_id, project=SWEEP_PROJECT) is not None,
-       "wake accelerator: an emit drives a background drain that publishes the narration")
+    ok(store.get_task_narration(opt_id, project=SWEEP_PROJECT) is not None,
+       "opt-in wake LLM: PM_NARRATION_WAKE_LLM=1 still accelerates in-process when set")
+    os.environ.pop("PM_NARRATION_WAKE_LLM", None)
     narration_outbox.register_wake_sink(None)  # unregister so later work is deterministic
 
     # ---- Drill 8: SLO / reconciliation report ----------------------------------------------

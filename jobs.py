@@ -119,12 +119,12 @@ def narrate_pending():
 
 
 def narrate_events():
-    """NARRATE-14 event-driven narration recovery sweep — the SLOW backstop timer.
+    """NARRATE-14 event-driven narration drain — primary LLM owner on the batch slice.
 
     Drains every project's durable narration outbox through the NARRATE-9 worker and the
-    compare-and-swap publish boundary. In production the post-commit wake accelerator (registered in
-    the web process) is the primary, near-real-time trigger; this timer only catches missed/failed
-    wakes, so it runs on a slow cadence and is idempotent. No-op unless PM_NARRATION_EVENT_PRIMARY is
+    compare-and-swap publish boundary. Runs under ``projectplanner-batch.slice`` so provider
+    spend stays off the interactive web/MCP process. The in-process wake is opt-in
+    (``PM_NARRATION_WAKE_LLM``) and off by default. No-op unless PM_NARRATION_EVENT_PRIMARY is
     enabled, so the timer is safe to install before the operator flips the cutover on."""
     import narration_cutover
     result = narration_cutover.run_recovery_sweep()

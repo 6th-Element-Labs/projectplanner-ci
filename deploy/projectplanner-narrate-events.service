@@ -1,11 +1,10 @@
 # /etc/systemd/system/projectplanner-narrate-events.service
-# NARRATE-14: event-driven narration recovery sweep — the SLOW backstop.
+# NARRATE-14: event-driven narration batch drain — primary LLM owner.
 # Drains the durable narration outbox through the worker + compare-and-swap publish boundary
-# (jobs.py narrate_events). In production the in-process wake accelerator is the primary trigger;
-# this sweep only catches missed/failed wakes, so it runs on a slow cadence (see the .timer).
-# No-op unless PM_NARRATION_EVENT_PRIMARY is enabled — safe to install before the cutover.
+# (jobs.py narrate_events) under projectplanner-batch.slice. Interactive wake LLM is opt-in
+# (PM_NARRATION_WAKE_LLM). No-op unless PM_NARRATION_EVENT_PRIMARY is enabled.
 [Unit]
-Description=ProjectPlanner event-driven narration recovery sweep (NARRATE-14 backstop)
+Description=ProjectPlanner event-driven narration batch drain (NARRATE-14)
 After=network.target
 
 [Service]
