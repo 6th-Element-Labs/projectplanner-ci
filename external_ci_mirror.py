@@ -221,7 +221,10 @@ def _workflow_inputs_args(inputs: Dict[str, Any]) -> List[str]:
 def _workflow_inputs_for_run(run: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]:
     inputs = dict(request.get("workflow_inputs") or {})
     inputs.setdefault("source_sha", run.get("source_sha"))
-    if run.get("status_context"):
+    # The trusted tag workflow owns its one callback context and deliberately
+    # exposes no caller-selectable status_context input. Preserve the legacy
+    # injection only for branch-based consumers that still declare it.
+    if run.get("status_context") and _mirror_ref_kind(request) != "tag":
         inputs.setdefault("status_context", run.get("status_context"))
     return inputs
 

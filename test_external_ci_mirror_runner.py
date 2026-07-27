@@ -244,6 +244,8 @@ try:
        and trusted_dispatch[trusted_dispatch.index("--ref") + 1] == "master"
        and trusted_poll[trusted_poll.index("--branch") + 1] == "master",
        "trusted workflow dispatch and polling use the public default branch")
+    ok(not any(arg.startswith("status_context=") for arg in trusted_dispatch),
+       "trusted tag workflow owns its callback context instead of accepting an input")
     ok(any(cmd[:2] == ["git", "push"]
            and cmd[-1].endswith(":refs/tags/" + trusted["mirror_branch"])
            for cmd in trusted_runner.commands),
