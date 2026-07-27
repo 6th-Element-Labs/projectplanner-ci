@@ -268,15 +268,24 @@ def create_external_ci_run(data: Dict[str, Any], actor: str = "system",
         data.get("_execution_lease_seconds")
         or EXTERNAL_CI_EXECUTION_LEASE_SECONDS)
     run_id = (data.get("run_id") or "ecir-" + uuid.uuid4().hex[:16]).strip()
-    # Dispatch identity is the canonical source repository plus exact source SHA.
-    # Branch labels, tasks, claims, and webhook/manual callers are observations
-    # of that dispatch, not reasons to issue another push-triggered workflow.
+    # Ordinary dispatch identity is the canonical source repository plus exact
+    # source SHA. A ci_repair request is intentionally distinct: its dedicated
+    # workflow run and purpose label are part of the administrator repair audit,
+    # so it must never coalesce into an ordinary head run for the same SHA.
+    request_metadata = normalized["request"] or {}
+    verification_purpose = str(
+        request_metadata.get("purpose")
+        or (request_metadata.get("workflow_inputs") or {}).get("purpose")
+        or ""
+    ).strip().lower()
     side_payload = {
         "source_project": normalized["source_project"],
         "source_repo": normalized["source_repo"],
         "source_sha": normalized["source_sha"],
         "evidence_only": True,
     }
+    if verification_purpose == "ci_repair":
+        side_payload["verification_purpose"] = "ci_repair"
     request_payload = {
         **(normalized["request"] or {}),
         "source_repo": normalized["source_repo"],

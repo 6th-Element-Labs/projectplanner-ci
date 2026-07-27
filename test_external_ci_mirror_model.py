@@ -120,6 +120,31 @@ try:
     ok(duplicate["run_id"] == created["run_id"] and duplicate["idempotent"] is True,
        "manual/webhook variants for the same source repo and SHA coalesce")
 
+    repair = store.create_external_ci_run(
+        {
+            "source_project": "private-product",
+            "source_sha": source_sha,
+            "mirror_repo": "6th-Element-Labs/public-ci",
+            "mirror_branch": "ci/repair/abcdef123456",
+            "workflow": "strict.yml",
+            "task_id": task["task_id"],
+            "request": {
+                "purpose": "ci_repair",
+                "audit_reason": "repair the CI control path",
+            },
+        },
+        actor="operator",
+        project="switchboard",
+    )
+    ok(repair["run_id"] != created["run_id"] and not repair.get("idempotent"),
+       "ci-repair purpose reserves a distinct exact-SHA workflow run")
+    repair_effects = store.list_external_effects(
+        effect_type="external_ci_mirror", task_id=task["task_id"],
+        project="switchboard")
+    ok(any(effect["payload"].get("verification_purpose") == "ci_repair"
+           for effect in repair_effects),
+       "ci-repair side-effect identity records its audit purpose")
+
     updated = store.update_external_ci_run(
         created["run_id"],
         {
@@ -140,7 +165,7 @@ try:
        "result artifacts and readback evidence round-trip")
 
     listed = store.list_external_ci_runs(task_id=task["task_id"], project="switchboard")
-    ok(len(listed) == 2 and any(r["run_id"] == created["run_id"] for r in listed),
+    ok(len(listed) == 3 and any(r["run_id"] == created["run_id"] for r in listed),
        "list_external_ci_runs filters by task")
 
     unknown_project = store.create_external_ci_run(
@@ -193,7 +218,7 @@ try:
        "wrong public CI repo fails closed when topology declares the role")
 
     export = store.audit_export(project="switchboard")
-    ok(export["summary"]["external_ci_run_count"] == 2 and
+    ok(export["summary"]["external_ci_run_count"] == 3 and
        any(r["source_sha"] == source_sha for r in export["external_ci_runs"]),
        "audit export includes external CI mirror runs")
 finally:
