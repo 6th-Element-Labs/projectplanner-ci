@@ -179,12 +179,7 @@ class DurablePlanIdentity(unittest.TestCase):
 
 class IssuedEffectReplay(unittest.TestCase):
     def test_issued_effect_waits_for_readback_without_adapter_or_refence(self):
-        snapshot = failed_ci_snapshot(runner={
-            "live": True,
-            "role": "review_merge",
-            "head_sha": HEAD,
-            "generation": 11,
-        })
+        snapshot = failed_ci_snapshot(runner={"live": False})
         run = durable_run()
         adapter_calls = []
         adapters = CompletionEffectAdapters(

@@ -379,6 +379,13 @@ def enqueue_task(
         # decode the Assignment byte-for-byte.
         "lifecycle": lifecycle,
     }
+    policy["coordination_scope"] = {
+        "schema": "switchboard.scoped_start_request.v1",
+        "scope_type": "task",
+        "task_project": project,
+        "task_id": task_id,
+        "runtime": runtime_name,
+    }
     policy["execution_context"] = context
     # The external effect represents one durable completion decision, not the
     # coordinator/lease that happened to request it. Generation and fence are
@@ -445,6 +452,7 @@ def enqueue_task(
             "wake_id": wake["wake_id"],
             "wake_status": "failed",
             "placement": placement,
+            "scope": wake.get("scope"),
         }
     capacity = capacity_readback(
         wake, project=project, runtime=runtime_name, lane=lane)
@@ -459,4 +467,5 @@ def enqueue_task(
         "provider": provider,
         "execution_mode": CONNECT_WAKE_MODE,
         "capacity": capacity,
+        "scope": wake.get("scope"),
     }

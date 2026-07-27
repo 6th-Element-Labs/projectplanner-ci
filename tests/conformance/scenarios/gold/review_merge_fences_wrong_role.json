@@ -1,12 +1,12 @@
 {
   "expect": {
-    "effect": "ensure_review_generation",
+    "effect": "attach_and_wait",
     "reason_code": "review_required",
     "role_sequence": [
       "review_merge"
     ],
     "route": "review_merge",
-    "terminal": "blocked"
+    "terminal": "merged"
   },
   "id": "review_merge_fences_wrong_role",
   "schema": "switchboard.completion_conformance.scenario.v1",

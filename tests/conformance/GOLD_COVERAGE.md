@@ -100,15 +100,15 @@ conflict check does not look at it.
 | `queue_locked_retry_exhausted` | `coordination_retry` | gold | Merge queue mapping: LOCKED with retry exhausted -> coordination_retry (merge_queue_locked) |
 | `review_retry_budget_exhausted` | `human` | gold | Review mapping: CHANGES_REQUESTED with retry budget exhausted -> human via review_retry_budget_exhausted |
 | `changes_requested_automatic_remediation` | `remediation` | gold | Review mapping: CHANGES_REQUESTED with automatic findings -> remediation; Required regression matrix: automatic requested changes start remediation |
-| `live_wrong_role_fence` | `coordination_retry` | gold | Runner mapping: Running with wrong role -> fence exact generation, then start desired role; Invariant 5: only the generation matching desired role and exact head may be attached |
+| `live_wrong_role_fence` | `coordination_retry` | gold | Historical scenario id: a live non-desired generation makes coordination wait; Capacity alone surrenders/reaps it, and a later tick may request the desired role through `start_task` |
 | `mergeability_behind` | `human` | gold | mergeStateStatus mapping: BEHIND -> owned block until a truthful head-changing command can invalidate and replace exact-head evidence |
 | `mergeability_unknown` | `wait` | gold | Mergeability mapping / mergeStateStatus mapping: UNKNOWN -> bounded wait, then coordination_retry |
 | `aggregate_blocked_not_masking_green` | `review_merge` | gold | mergeStateStatus mapping: BLOCKED -- decompose through CI, review, draft, policy, and conflict; never route directly from this aggregate; Invariant: only a clean, green, exact-head snapshot advances to READY_TO_QUEUE |
-| `remediation_fences_live_review_merge` | `remediation` | gold | Required regression matrix: a live review_merge is fenced when remediation becomes higher priority |
+| `remediation_fences_live_review_merge` | `remediation` | gold | Historical scenario id: remediation attaches and waits while Capacity owns the live review generation; coordination does not select a fence effect |
 | `remediation_attaches_matching_generation` | `remediation` | gold | Runner mapping: Starting or running with desired role and exact head -> Attach and wait |
 | `remediation_attaches_stale_head_matching_role` | `remediation` | gold | Required regression matrix: matching-role remediation survives its own head advance |
 | `review_merge_attaches_matching_generation` | `review_merge` | gold | Runner mapping: Starting or running with desired role and exact head -> Attach and wait |
-| `review_merge_fences_wrong_role` | `review_merge` | gold | Runner mapping: Running with wrong role -> fence exact generation, then start desired role |
+| `review_merge_fences_wrong_role` | `review_merge` | gold | Historical scenario id: review attaches and waits while Capacity owns the live remediation generation; coordination does not select a fence effect |
 | `evidence_derived_from_exact_head_ci_receipt` | `review_merge` | gold | ADR-0008 / ENFORCE-16: CI on the exact SHA is the executor of record for 'the tests ran' |
 | `evidence_missing_no_ci_receipt` | `coordination_retry` | gold | #859: evidence is derived from a real run or not at all |
 | `evidence_ci_receipt_other_head_refused` | `coordination_retry` | gold | ENFORCE-16: the selected run's source_sha must match the gated head exactly |

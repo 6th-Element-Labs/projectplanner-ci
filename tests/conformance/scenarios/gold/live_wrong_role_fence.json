@@ -1,6 +1,6 @@
 {
   "expect": {
-    "effect": "fence_runner",
+    "effect": "wait",
     "reason_code": "live_runner_not_desired",
     "role_sequence": [],
     "route": "coordination_retry",

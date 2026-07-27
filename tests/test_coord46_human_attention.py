@@ -192,10 +192,9 @@ class HumanAttentionCloseout(unittest.TestCase):
             "SELECT status FROM tasks WHERE task_id=?", ("COORD-20",)
         ).fetchone()["status"]
         self.assertEqual(board, "Blocked")
-        self.assertEqual(len(self.fenced), 1)
-        self.assertEqual(self.fenced[0]["runner_session_id"], "runner-812")
-        self.assertEqual(self.fenced[0]["generation"], 4)
-        self.assertEqual(self.fenced[0]["fence_epoch"], 7)
+        # ADR-0008: Coordination may block its own completion run, but it does
+        # not fence the live Capacity generation.
+        self.assertEqual(self.fenced, [])
 
         request = first["attention"]["request"]
         ctx = request["context"]

@@ -455,7 +455,7 @@ class Pr834RawFixture(unittest.TestCase):
             ["S16-CENSUS-2", "S16-LIVE-3", "S16-LIVE-4"],
         )
 
-    def test_planner_fences_review_and_issues_a_new_complete_contract(self):
+    def test_planner_waits_for_live_review_before_remediation(self):
         snapshot = self._snapshot()
         decision = classify_completion(None, snapshot)
         plan = effects.plan_effect(
@@ -463,9 +463,9 @@ class Pr834RawFixture(unittest.TestCase):
             snapshot,
             {"run_id": "run-834", "state_version": 4, "attempt": 2},
         )
-        self.assertEqual(plan["effect"], "start_remediation")
-        self.assertTrue(plan["fence_required"])
-        self.assertEqual(plan["fence_generation"], 4)
+        self.assertEqual(plan["effect"], "attach_and_wait")
+        self.assertFalse(plan["fence_required"])
+        self.assertIsNone(plan["fence_generation"])
         self.assertEqual(plan["head_sha"], self.HEAD)
         self.assertEqual(
             [row["id"] for row in plan["acceptance_findings"]],

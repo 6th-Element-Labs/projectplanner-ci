@@ -76,7 +76,14 @@ assert captured[0]["policy"]["mode"] == "connect"
 assert set(captured[0]["policy"]) == {
     "mode", "assignment", "lifecycle", "effect_identity",
     "placement", "scheduler", "execution_context",
-    "no_eligible_host", "deadline_seconds"}
+    "no_eligible_host", "deadline_seconds", "coordination_scope"}
+assert captured[0]["policy"]["coordination_scope"] == {
+    "schema": "switchboard.scoped_start_request.v1",
+    "scope_type": "task",
+    "task_project": "switchboard",
+    "task_id": "WATCH-16",
+    "runtime": "codex",
+}
 assert captured[0]["idem_key"] == captured[1]["idem_key"]
 assert captured[0]["policy"] == captured[1]["policy"]
 assert captured[2]["idem_key"] != captured[0]["idem_key"]

@@ -648,11 +648,18 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
             execution_lease = None
             lifecycle = dict(policy.get("lifecycle") or {})
             if lifecycle.get("schema") == "switchboard.execution_lifecycle.v1":
+                wake_ttl = int(
+                    policy.get("deadline_seconds")
+                    or policy.get("claim_timeout_s")
+                    or policy.get("ttl_s")
+                    or lifecycle.get("ttl_seconds")
+                    or 900
+                )
                 execution_lease = _acquire_execution_lease_in(
                     c, task_id=str(task_id or ""),
                     role=str(lifecycle.get("role") or "implementation"),
                     head_sha=str(lifecycle.get("head_sha") or ""),
-                    ttl_seconds=int(lifecycle.get("ttl_seconds") or 7200),
+                    ttl_seconds=wake_ttl,
                     agent_id=str(selector.get("agent_id") or ""),
                     principal_id=principal_id, now=now)
                 if (execution_lease.get("wake_id")
@@ -703,16 +710,46 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
             wake_id = (
                 str((execution_lease or {}).get("wake_id") or "")
                 or "wake-" + uuid.uuid4().hex[:16])
+            scope: Dict[str, Any] = {}
+            scope_request = dict(policy.get("coordination_scope") or {})
+            if (execution_lease
+                    and scope_request.get("schema")
+                    == "switchboard.scoped_start_request.v1"):
+                from switchboard.storage.repositories import autopilot_scopes
+                wake_deadline = now + float(
+                    policy.get("deadline_seconds")
+                    or policy.get("claim_timeout_s")
+                    or policy.get("ttl_s")
+                    or execution_lease["ttl_seconds"]
+                )
+                scope = autopilot_scopes.start_task_scope_in(
+                    c, project=project, task_id=str(task_id or ""),
+                    runtime=str(scope_request.get("runtime") or "codex"),
+                    actor=actor,
+                    execution_lease=execution_lease,
+                    wake_deadline=wake_deadline, now=now,
+                )
             policy, binding_errors = _bind_personal_wake_policy(
                 c, wake_id=wake_id, selector=selector, policy=policy,
                 task_id=task_id, project=project, now=now,
                 request_principal_id=principal_id)
             if binding_errors:
+                if execution_lease:
+                    _surrender_execution_lease_for_wake_in(
+                        c, wake_id, now=now)
                 out = {
                     "requested": False,
                     "error": "invalid_personal_execution_binding",
                     "reason_codes": binding_errors,
                 }
+                if scope:
+                    out["scope"] = {
+                        "scope_id": scope.get("scope_id"),
+                        "scope_type": scope.get("scope_type"),
+                        "already_started": bool(scope.get("already_started")),
+                        "start_provenance": (
+                            (scope.get("last_result") or {}).get("latest_start")),
+                    }
                 _store_facade()._idem_store(
                     c, "request_wake", idem_key, actor, idem_payload, out)
                 return out
@@ -732,6 +769,9 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
                 idem_key=idem_key, actor=actor, principal_id=principal_id,
                 project=project, now=now)
             if not effect_claim.get("claimed"):
+                if execution_lease:
+                    _surrender_execution_lease_for_wake_in(
+                        c, wake_id, now=now)
                 execution = dict(policy.get("execution_binding") or {})
                 if execution.get("execution_connection_id"):
                     c.execute(
@@ -755,6 +795,17 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
                 principal_id=principal_id, actor=actor, now=now, idem_key=idem_key,
                 effect_key=effect_claim["effect_key"], project=project,
                 wake_id=wake_id)
+            if wake["status"] in _LEASE_TERMINAL_WAKE_STATUSES:
+                _surrender_execution_lease_for_wake_in(
+                    c, wake["wake_id"], now=now)
+            if scope:
+                wake["scope"] = {
+                    "scope_id": scope.get("scope_id"),
+                    "scope_type": scope.get("scope_type"),
+                    "already_started": bool(scope.get("already_started")),
+                    "start_provenance": (
+                        (scope.get("last_result") or {}).get("latest_start")),
+                }
             _store_facade()._update_external_effect_in(
                 c, effect_claim["effect_key"], "issued",
                 readback={"wake_id": wake["wake_id"], "wake_status": wake["status"]},
@@ -791,6 +842,18 @@ def _lease_wake_is_terminal(c: sqlite3.Connection,
     if row is None:
         return False
     return str(row["status"] or "") in _LEASE_TERMINAL_WAKE_STATUSES
+
+
+def _surrender_execution_lease_for_wake_in(
+        c: sqlite3.Connection, wake_id: str, *, now: float) -> int:
+    """Fence and release the exact capacity reservation owned by a dead wake."""
+    cursor = c.execute(
+        "UPDATE resource_leases SET released_at=?,lease_state='expired',"
+        "fence_epoch=COALESCE(fence_epoch,0)+1 "
+        "WHERE resource_type='execution' AND wake_id=? AND released_at IS NULL",
+        (now, str(wake_id or "")),
+    )
+    return int(cursor.rowcount or 0)
 
 
 def _acquire_execution_lease_in(
@@ -1994,6 +2057,8 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
                     "WHERE wake_id=? AND status='pending'",
                     (now, json.dumps(result, sort_keys=True), wake_id),
                 )
+                _surrender_execution_lease_for_wake_in(
+                    c, wake_id, now=now)
                 return {"claimed": False, "reason": "deadline_expired", "wake_id": wake_id}
             binding_error = _personal_exact_binding_error(
                 c, wake, host_id=host_id, principal_id=principal_id,
@@ -2484,6 +2549,8 @@ def cancel_wake(wake_id: str, reason: str = "cancelled", actor: str = "system",
             c.execute("UPDATE wake_intents SET status='cancelled', completed_at=?, result_json=? "
                       "WHERE wake_id=?",
                       (now, json.dumps(result, sort_keys=True), wake_id))
+            _surrender_execution_lease_for_wake_in(
+                c, wake_id, now=now)
             c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                       (wake.get("task_id"), actor, "wake.cancelled",
                        json.dumps({"wake_id": wake_id, "reason": reason}, sort_keys=True), now))
@@ -2543,6 +2610,8 @@ def sweep_wake_intents(project: str = DEFAULT_PROJECT,
                 c.execute("UPDATE wake_intents SET status='failed', completed_at=?, result_json=? "
                           "WHERE wake_id=?",
                           (now, json.dumps(result, sort_keys=True), wake["wake_id"]))
+                released = _surrender_execution_lease_for_wake_in(
+                    c, wake["wake_id"], now=now)
                 c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                           (wake.get("task_id"), "switchboard/wake", "wake.failed",
                            json.dumps({"wake_id": wake["wake_id"], "reason": "deadline_expired"},
@@ -2557,7 +2626,8 @@ def sweep_wake_intents(project: str = DEFAULT_PROJECT,
                         project=project, now=now)
                 failed += 1
                 events.append({"wake_id": wake["wake_id"], "status": "failed",
-                               "reason": "deadline_expired"})
+                               "reason": "deadline_expired",
+                               "execution_leases_released": released})
 
             # ADAPTER-34: claimed Connect limbo — do not wait the full placement
             # deadline when the host never spawned (runner_session_id still null).
@@ -2597,6 +2667,8 @@ def sweep_wake_intents(project: str = DEFAULT_PROJECT,
                 )
                 if updated.rowcount == 0:
                     continue
+                released = _surrender_execution_lease_for_wake_in(
+                    c, wake["wake_id"], now=now)
                 c.execute(
                     "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
                     "VALUES (?,?,?,?,?)",
@@ -2615,7 +2687,8 @@ def sweep_wake_intents(project: str = DEFAULT_PROJECT,
                         project=project, now=now)
                 failed += 1
                 events.append({"wake_id": wake["wake_id"], "status": "failed",
-                               "reason": "connect_claim_hold_expired"})
+                               "reason": "connect_claim_hold_expired",
+                               "execution_leases_released": released})
 
             recovery_rows = c.execute(
                 "SELECT * FROM wake_intents WHERE status IN ('pending','claimed') "
@@ -2652,15 +2725,20 @@ def sweep_wake_intents(project: str = DEFAULT_PROJECT,
                         "lost_host_id": host_id,
                         "attempts": recovery_count,
                     }
-                    c.execute(
+                    updated = c.execute(
                         "UPDATE wake_intents SET status='failed', completed_at=?, result_json=? "
                         "WHERE wake_id=? AND status=?",
                         (now, json.dumps(result, sort_keys=True), wake["wake_id"],
                          original_status),
                     )
+                    if updated.rowcount == 0:
+                        continue
+                    released = _surrender_execution_lease_for_wake_in(
+                        c, wake["wake_id"], now=now)
                     failed += 1
                     events.append({"wake_id": wake["wake_id"], "status": "failed",
-                                   "reason": "host_loss_recovery_exhausted"})
+                                   "reason": "host_loss_recovery_exhausted",
+                                   "execution_leases_released": released})
                     continue
 
                 policy = dict(wake.get("policy") or {})

@@ -68,6 +68,13 @@ try:
     policy = wake["policy"]
     assignment = policy["assignment"]
     contract = policy["execution_assignment"]
+    assert policy["coordination_scope"] == {
+        "schema": "switchboard.scoped_start_request.v1",
+        "scope_type": "task",
+        "task_project": P,
+        "task_id": task["task_id"],
+        "runtime": "codex",
+    }
     policy["execution_context"] = with_generation({
         "schema": "switchboard.execution_context.v1",
         "project_id": P,

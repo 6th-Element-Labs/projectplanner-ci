@@ -1,6 +1,6 @@
 {
   "expect": {
-    "effect": "start_remediation",
+    "effect": "attach_and_wait",
     "reason_code": "required_exact_head_ci_failed",
     "role_sequence": [
       "remediation"

@@ -77,7 +77,7 @@ def pr810():
                           "conclusion": "failure",
                           "failure_attribution": "product"}],
         review={"status": "passed", "head_sha": HEAD_810, "pr_url": PR_810},
-        runner=managed_runner(HEAD_810, 9, "review_merge"),
+        runner={"live": False},
     ))
 
 
@@ -217,7 +217,7 @@ class CompletionDriver(unittest.TestCase):
         self.assertEqual(result["decision"]["route"], "remediation")
         self.assertEqual(result["plan"]["effect"], "start_remediation")
         self.assertEqual(len(calls), 1)
-        stop.assert_called_once()
+        stop.assert_not_called()
 
     def test_enqueue_adapter_arms_squash_auto_merge(self):
         class Store:

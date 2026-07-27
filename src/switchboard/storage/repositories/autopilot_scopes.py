@@ -480,6 +480,82 @@ def start_autopilot_scope(*, project: str = DEFAULT_PROJECT,
         return _row(row)
 
 
+def start_task_scope_in(
+        connection: Any, *, project: str, task_id: str, runtime: str,
+        actor: str, execution_lease: Dict[str, Any],
+        wake_deadline: float, now: float,
+        profile_id: str = "autopilot-default") -> Dict[str, Any]:
+    """Establish operator Start authority inside the capacity transaction.
+
+    ``start_task`` used to request capacity and only then open a second
+    transaction to arm the task scope.  A crash between those commits produced
+    a runner with no coordination authority.  This helper deliberately accepts
+    the caller's connection so scope provenance, execution generation, and the
+    reserved wake share one commit.
+    """
+    canonical_task = str(task_id or "").strip().upper()
+    if not canonical_task:
+        raise ValueError("task_id is required for a task scope")
+    runtime = str(runtime or "codex").strip().lower()
+    if runtime not in SUPPORTED_RUNTIMES:
+        raise ValueError(f"unsupported autopilot runtime: {runtime}")
+    existing = connection.execute(
+        "SELECT * FROM autopilot_scopes WHERE profile_id=? AND scope_type='task' "
+        "AND deliverable_id='' AND task_project=? AND task_id=? "
+        "AND status IN ('active','paused') ORDER BY updated_at DESC LIMIT 1",
+        (profile_id, project, canonical_task),
+    ).fetchone()
+    provenance = {
+        "schema": "switchboard.scoped_start_provenance.v1",
+        "actor": actor,
+        "started_at": now,
+        "execution_id": execution_lease["id"],
+        "execution_generation": execution_lease["execution_generation"],
+        "execution_fence_epoch": execution_lease["fence_epoch"],
+        "wake_id": execution_lease["wake_id"],
+        "wake_deadline": wake_deadline,
+    }
+    if existing:
+        scope_id = existing["scope_id"]
+        result = json.loads(existing["last_result_json"] or "{}")
+        result = result if isinstance(result, dict) else {}
+        result["latest_start"] = provenance
+        connection.execute(
+            "UPDATE autopilot_scopes SET status='active',runtime=?,updated_at=?,"
+            "last_result_json=? WHERE scope_id=?",
+            (runtime, now, json.dumps(result, sort_keys=True), scope_id),
+        )
+        row = connection.execute(
+            "SELECT * FROM autopilot_scopes WHERE scope_id=?", (scope_id,),
+        ).fetchone()
+        item = _row(row)
+        item["already_started"] = True
+        return item
+    scope_id = "autopilot-" + uuid.uuid4().hex[:16]
+    connection.execute(
+        "INSERT INTO autopilot_scopes(scope_id,profile_id,scope_type,deliverable_id,"
+        "task_project,task_id,runtime,status,requested_by,generation,fence_epoch,"
+        "created_at,updated_at,last_result_json,started_by,started_at) "
+        "VALUES (?,?,?,'',?,?,?,?,?,1,1,?,?,?,?,?)",
+        (scope_id, profile_id, "task", project, canonical_task, runtime,
+         "active", actor, now, now,
+         json.dumps({"latest_start": provenance}, sort_keys=True), actor, now),
+    )
+    connection.execute(
+        "INSERT INTO activity(task_id,actor,kind,payload,created_at) "
+        "VALUES (?,?,?,?,?)",
+        (canonical_task, actor, "autopilot.scope_started",
+         json.dumps({
+             "scope_id": scope_id, "scope_type": "task",
+             "task_project": project, "task_id": canonical_task,
+             "runtime": runtime, "start_provenance": provenance,
+         }, sort_keys=True), now),
+    )
+    return _row(connection.execute(
+        "SELECT * FROM autopilot_scopes WHERE scope_id=?", (scope_id,),
+    ).fetchone())
+
+
 def acquire_autopilot_scope_lease(
         scope_id: str, *, holder_agent_id: str,
         project: str = DEFAULT_PROJECT, ttl_seconds: int = 120,
