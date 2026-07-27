@@ -1,223 +1,238 @@
-# CI-6 — Plane A pull-model verification.
+# Trusted public-mirror verification.
 #
-# Public hosted runners check out the PRIVATE canonical repo at refs/pull/N/merge
-# (will-it-merge-cleanly coverage), run scripts/switchboard_ci.sh, and post a
-# required commit status on the PR head SHA.
-#
-# Triggers:
-#   repository_dispatch type verify-pr (primary — Plan VM PR webhook relay, CI-3)
-#   workflow_dispatch (manual / acceptance drill)
-#   schedule (cron backstop when dispatch is delayed or disabled)
-#
-# Failure legibility (2026-07-12 lesson): checkout/ref/auth failures post
-# "infra: ..."; suite failures post "tests: ...".
-#
-# Shadow context during soak: projectplanner-ci/full-suite
-# CI-6 flips STATUS_CONTEXT to "Switchboard CI / VM gate" (same string as the
-# on-box gate) so branch protection is untouched when the required check moves.
-#
-# Requires secret PRIVATE_READ_TOKEN on this repo (CI-1): read private contents +
-# write commit statuses on 6th-Element-Labs/projectplanner.
+# This file is installed on projectplanner-ci's default branch. The canonical
+# dispatcher first mirrors an exact SHA to a disposable ci/** branch, then
+# invokes this workflow on the trusted default branch with that ref as input.
+# Agent-authored workflow files on the mirrored branch are never executed.
 name: verify
+run-name: verify ${{ inputs.source_sha }} (${{ inputs.validation_mode }})
 
 on:
-  repository_dispatch:
-    types: [verify-pr]
-  schedule:
-    # Backstop: re-verify the oldest open PR head missing a recent green required check.
-    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
     inputs:
-      pr:
-        description: "Canonical PR number"
+      source_ref:
+        description: "Disposable projectplanner-ci branch containing the exact canonical SHA"
         required: true
         type: string
-      head_sha:
-        description: "PR head commit SHA to stamp"
+      source_sha:
+        description: "Exact canonical SHA to verify and stamp"
         required: true
+        type: string
+      validation_mode:
+        description: "Fast PR-head admission or full merge-group verification"
+        required: true
+        default: head
+        type: choice
+        options:
+          - head
+          - merge_group
+          - full
+      base_sha:
+        description: "Optional merge-base SHA used for impacted-test selection"
+        required: false
         type: string
 
 permissions: {}
 
-# cancel-in-progress: duplicate dispatches for the same PR supersede in-flight
-# runs; the latest dispatch wins and posts the authoritative status.
 concurrency:
-  group: verify-pr-${{ github.event.client_payload.pr || inputs.pr || 'cron' }}
+  group: verify-${{ inputs.source_sha }}
   cancel-in-progress: true
 
 env:
   CANONICAL_REPO: 6th-Element-Labs/projectplanner
-  # CI-6 required context; matches the retired on-box gate so branch protection is unchanged.
   STATUS_CONTEXT: Switchboard CI / VM gate
+  TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
 jobs:
-  verify:
+  announce:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 5
     steps:
-      - name: Resolve PR + head SHA
-        id: coords
+      - name: Validate exact-SHA request
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          DISPATCH_PR: ${{ github.event.client_payload.pr }}
-          DISPATCH_SHA: ${{ github.event.client_payload.head_sha }}
-          INPUT_PR: ${{ inputs.pr }}
-          INPUT_SHA: ${{ inputs.head_sha }}
-          GH_TOKEN: ${{ secrets.PRIVATE_READ_TOKEN }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          VALIDATION_MODE: ${{ inputs.validation_mode }}
+          BASE_SHA: ${{ inputs.base_sha }}
         run: |
           set -euo pipefail
-          PR=""
-          SHA=""
-          if [ "$EVENT_NAME" = "repository_dispatch" ]; then
-            PR="$DISPATCH_PR"
-            SHA="$DISPATCH_SHA"
-          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            PR="$INPUT_PR"
-            SHA="$INPUT_SHA"
-          elif [ "$EVENT_NAME" = "schedule" ]; then
-            # Pick the oldest open PR head missing a green required check.
-            mapfile -t rows < <(gh pr list -R "$CANONICAL_REPO" --state open \
-              --json number,headRefOid,isDraft \
-              --jq '.[] | select(.isDraft | not) | "\(.number) \(.headRefOid)"')
-            for row in "${rows[@]}"; do
-              pr="${row%% *}"
-              sha="${row#* }"
-              state=$(gh api "repos/$CANONICAL_REPO/commits/$sha/status" \
-                --jq '.statuses[] | select(.context=="'"$STATUS_CONTEXT"'") | .state' \
-                | head -1 || true)
-              if [ "$state" != "success" ]; then
-                PR="$pr"
-                SHA="$sha"
-                break
-              fi
-            done
+          [[ "$SOURCE_REF" =~ ^ci/[A-Za-z0-9._/-]+$ ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$VALIDATION_MODE" =~ ^(head|merge_group|full)$ ]]
+          if [ -n "$BASE_SHA" ]; then
+            [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           fi
-          if [ -z "$PR" ] || [ -z "$SHA" ]; then
-            echo "No PR/SHA to verify for event=$EVENT_NAME — exiting cleanly."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "pr=$PR" >> "$GITHUB_OUTPUT"
-          echo "head_sha=$SHA" >> "$GITHUB_OUTPUT"
-          echo "skip=false" >> "$GITHUB_OUTPUT"
-          echo "Verifying PR #$PR at head $SHA"
 
-      - name: Assert PRIVATE_READ_TOKEN is configured
-        if: steps.coords.outputs.skip != 'true'
-        env:
-          TOKEN: ${{ secrets.PRIVATE_READ_TOKEN }}
-        run: |
-          if [ -z "$TOKEN" ]; then
-            echo "infra: PRIVATE_READ_TOKEN is not configured on projectplanner-ci (CI-1 operator step)." >&2
-            exit 1
-          fi
+      - name: Mint status-callback token
+        id: app_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.SWITCHBOARD_APP_ID }}
+          private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
+          owner: 6th-Element-Labs
+          repositories: projectplanner
 
       - name: Post pending required status
-        if: steps.coords.outputs.skip != 'true'
         env:
-          GH_TOKEN: ${{ secrets.PRIVATE_READ_TOKEN }}
-          HEAD_SHA: ${{ steps.coords.outputs.head_sha }}
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          VALIDATION_MODE: ${{ inputs.validation_mode }}
         run: |
-          gh api "repos/$CANONICAL_REPO/statuses/$HEAD_SHA" \
+          gh api "repos/$CANONICAL_REPO/statuses/$SOURCE_SHA" \
             -f state=pending \
             -f context="$STATUS_CONTEXT" \
-            -f description='pull-model verify: running full suite' \
-            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            -f description="CI: ${VALIDATION_MODE} verification running" \
+            -f target_url="$TARGET_URL"
 
-      - name: Check out private merge ref
-        if: steps.coords.outputs.skip != 'true'
+  suite:
+    needs: announce
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      failure_class: ${{ steps.classify.outputs.failure_class }}
+      summary: ${{ steps.classify.outputs.summary }}
+    steps:
+      - name: Check out exact scratchpad ref
         id: checkout
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.CANONICAL_REPO }}
-          ref: refs/pull/${{ steps.coords.outputs.pr }}/merge
-          token: ${{ secrets.PRIVATE_READ_TOKEN }}
-          persist-credentials: false
-          path: src
+          ref: ${{ inputs.source_ref }}
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact mirrored SHA
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
       - name: Set up Python
-        if: steps.coords.outputs.skip != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: |
-            src/requirements.txt
-            src/requirements-ci.txt
+            requirements.txt
+            requirements-ci.txt
 
       - name: Set up Node
-        if: steps.coords.outputs.skip != 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "22"
 
       - name: Install Python dependencies
-        if: steps.coords.outputs.skip != 'true'
-        working-directory: src
         run: |
           python -m pip install --upgrade pip
           pip install --disable-pip-version-check -r requirements.txt -r requirements-ci.txt
 
-      - name: Install Chromium
-        if: steps.coords.outputs.skip != 'true'
-        working-directory: src
+      - name: Install Chromium for full verification
+        if: inputs.validation_mode != 'head'
         run: python -m playwright install --with-deps chromium
 
-      - name: Run Switchboard CI suite
-        if: steps.coords.outputs.skip != 'true'
-        id: suite
-        working-directory: src
+      - name: Run Switchboard CI
+        id: tests
+        continue-on-error: true
         env:
           SWITCHBOARD_CI_STRICT: "1"
           SWITCHBOARD_CI_REQUIRE_NODE: "1"
+          SWITCHBOARD_CI_SCOPE: ${{ inputs.validation_mode == 'head' && 'fast' || 'full' }}
+          SWITCHBOARD_CI_BASE_SHA: ${{ inputs.base_sha }}
+          SWITCHBOARD_CI_FAIL_FAST: "1"
           CONCURRENT_LOAD_REPORT: ".artifacts/concurrent-load-report.json"
+          CROSS_PROCESS_LOAD_REPORT: ".artifacts/cross-process-load-report.json"
+          UI_PLAYWRIGHT_REPORT: ".artifacts/ui-playwright-receipt.json"
+          CI_RESULT_REPORT: ".artifacts/ci-result.json"
         run: |
           unset GITHUB_REPOSITORY
           bash scripts/switchboard_ci.sh
 
-      - name: Upload concurrent-load SLO report
-        if: always() && steps.coords.outputs.skip != 'true' && steps.checkout.outcome == 'success'
+      - name: Upload CI result
+        if: always() && steps.checkout.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
-          name: concurrent-load-pr-${{ steps.coords.outputs.pr }}
-          path: src/.artifacts/concurrent-load-report.json
+          name: ci-result-${{ inputs.source_sha }}
+          path: .artifacts/ci-result.json
           if-no-files-found: warn
 
-      - name: Post required success status
-        if: steps.coords.outputs.skip != 'true' && success()
-        env:
-          GH_TOKEN: ${{ secrets.PRIVATE_READ_TOKEN }}
-          HEAD_SHA: ${{ steps.coords.outputs.head_sha }}
-          PR: ${{ steps.coords.outputs.pr }}
-        run: |
-          gh api "repos/$CANONICAL_REPO/statuses/$HEAD_SHA" \
-            -f state=success \
-            -f context="$STATUS_CONTEXT" \
-            -f description="tests: full suite passed (pull-model, PR #$PR)" \
-            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+      - name: Upload load reports
+        if: always() && steps.checkout.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-reports-${{ inputs.source_sha }}
+          path: |
+            .artifacts/concurrent-load-report.json
+            .artifacts/cross-process-load-report.json
+          if-no-files-found: warn
 
-      - name: Post tests failure status
-        if: steps.coords.outputs.skip != 'true' && failure() && steps.checkout.outcome == 'success'
-        env:
-          GH_TOKEN: ${{ secrets.PRIVATE_READ_TOKEN }}
-          HEAD_SHA: ${{ steps.coords.outputs.head_sha }}
-        run: |
-          gh api "repos/$CANONICAL_REPO/statuses/$HEAD_SHA" \
-            -f state=failure \
-            -f context="$STATUS_CONTEXT" \
-            -f description='tests: switchboard_ci.sh failed — see run log' \
-            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" || true
+      - name: Upload Playwright receipt
+        if: always() && inputs.validation_mode != 'head' && steps.checkout.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-playwright-${{ inputs.source_sha }}
+          path: .artifacts/ui-playwright-receipt.json
+          if-no-files-found: warn
 
-      - name: Post infra failure status
-        if: steps.coords.outputs.skip != 'true' && failure() && steps.checkout.outcome != 'success'
+      - name: Classify result
+        id: classify
+        if: always()
         env:
-          GH_TOKEN: ${{ secrets.PRIVATE_READ_TOKEN }}
-          HEAD_SHA: ${{ steps.coords.outputs.head_sha }}
-          PR: ${{ steps.coords.outputs.pr }}
+          CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
+          TEST_OUTCOME: ${{ steps.tests.outcome }}
+          VALIDATION_MODE: ${{ inputs.validation_mode }}
         run: |
-          gh api "repos/$CANONICAL_REPO/statuses/$HEAD_SHA" \
-            -f state=failure \
+          if [ "$CHECKOUT_OUTCOME" != "success" ]; then
+            echo "failure_class=infra" >> "$GITHUB_OUTPUT"
+            echo "summary=infra: exact scratchpad checkout failed" >> "$GITHUB_OUTPUT"
+          elif [ "$TEST_OUTCOME" != "success" ]; then
+            echo "failure_class=tests" >> "$GITHUB_OUTPUT"
+            echo "summary=tests: ${VALIDATION_MODE} verification failed" >> "$GITHUB_OUTPUT"
+          else
+            echo "failure_class=" >> "$GITHUB_OUTPUT"
+            echo "summary=tests: ${VALIDATION_MODE} verification passed" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Enforce suite result
+        if: always() && steps.tests.outcome != 'success'
+        run: exit 1
+
+  report:
+    if: always()
+    needs:
+      - announce
+      - suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Mint status-callback token
+        id: app_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.SWITCHBOARD_APP_ID }}
+          private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
+          owner: 6th-Element-Labs
+          repositories: projectplanner
+
+      - name: Post one terminal required status
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SUITE_RESULT: ${{ needs.suite.result }}
+          FAILURE_CLASS: ${{ needs.suite.outputs.failure_class }}
+          SUMMARY: ${{ needs.suite.outputs.summary }}
+        run: |
+          set -euo pipefail
+          state=failure
+          description="${SUMMARY:-infra: verification did not start}"
+          if [ "$SUITE_RESULT" = "success" ]; then
+            state=success
+          elif [ -z "$FAILURE_CLASS" ]; then
+            description="infra: verification job did not complete"
+          fi
+          gh api "repos/$CANONICAL_REPO/statuses/$SOURCE_SHA" \
+            -f state="$state" \
             -f context="$STATUS_CONTEXT" \
-            -f description="infra: unable to checkout refs/pull/${PR}/merge — see run log" \
-            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" || true
+            -f description="$description" \
+            -f target_url="$TARGET_URL"
