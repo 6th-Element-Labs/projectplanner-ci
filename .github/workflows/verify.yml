@@ -5,7 +5,7 @@
 # invokes this workflow on the trusted default branch with that ref as input.
 # Agent-authored workflow files on the mirrored branch are never executed.
 name: verify
-run-name: verify ${{ inputs.source_sha }} (${{ inputs.purpose || inputs.validation_mode || 'head' }})
+run-name: verify ${{ inputs.source_sha }} (${{ inputs.purpose }})
 
 on:
   workflow_dispatch:
@@ -20,24 +20,13 @@ on:
         type: string
       purpose:
         description: "Audit label only; every purpose runs the identical full gate"
-        required: false
+        required: true
+        default: head
         type: choice
         options:
           - head
           - merge_group
           - ci_repair
-      validation_mode:
-        description: "Temporary compatibility input for the pre-ADR-0023 dispatcher"
-        required: false
-        type: choice
-        options:
-          - head
-          - merge_group
-          - full
-      base_sha:
-        description: "Temporary ignored compatibility input"
-        required: false
-        type: string
 
 permissions: {}
 
@@ -59,16 +48,12 @@ jobs:
         env:
           SOURCE_REF: ${{ inputs.source_ref }}
           SOURCE_SHA: ${{ inputs.source_sha }}
-          PURPOSE: ${{ inputs.purpose || inputs.validation_mode || 'head' }}
-          VALIDATION_MODE: ${{ inputs.validation_mode }}
+          PURPOSE: ${{ inputs.purpose }}
         run: |
           set -euo pipefail
           [[ "$SOURCE_REF" =~ ^refs/tags/ci/[A-Za-z0-9._/-]+$ ]]
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$PURPOSE" =~ ^(head|merge_group|ci_repair|full)$ ]]
-          if [ -n "$VALIDATION_MODE" ]; then
-            [[ "$VALIDATION_MODE" =~ ^(head|merge_group|full)$ ]]
-          fi
+          [[ "$PURPOSE" =~ ^(head|merge_group|ci_repair)$ ]]
 
       - name: Mint status-callback token
         id: app_token
