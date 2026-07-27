@@ -745,6 +745,30 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
         raise
 
 
+#: A wake in one of these states will never run again. The lease that minted it
+#: is finished with it, whatever its own TTL still says.
+_LEASE_TERMINAL_WAKE_STATUSES = frozenset(
+    {"failed", "cancelled", "completed", "expired"})
+
+
+def _lease_wake_is_terminal(c: sqlite3.Connection,
+                            lease: Dict[str, Any]) -> bool:
+    """Report whether this lease's bound wake has already reached a terminal state.
+
+    A freshly minted lease RESERVES a wake id before the row exists, so a
+    missing row means "not started yet", never "finished" — returning True
+    there would release a lease mid-launch and let a second runner boot.
+    """
+    wake_id = str(lease.get("wake_id") or "").strip()
+    if not wake_id:
+        return False
+    row = c.execute(
+        "SELECT status FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
+    if row is None:
+        return False
+    return str(row["status"] or "") in _LEASE_TERMINAL_WAKE_STATUSES
+
+
 def _acquire_execution_lease_in(
         c: sqlite3.Connection, *, task_id: str, role: str, head_sha: str,
         ttl_seconds: int, agent_id: str, principal_id: str,
@@ -761,8 +785,18 @@ def _acquire_execution_lease_in(
     for row in rows:
         lease = dict(row)
         expires_at = float(lease["claimed_at"]) + int(lease["ttl_seconds"])
-        if expires_at > now and str(lease.get("lease_state") or "active") in {
-                "reserved", "starting", "active", "stopping"}:
+        # A lease is live only while the execution it represents is live. Its
+        # own TTL is not that answer: leases run 7200s while a Connect wake
+        # deadline is 900s, so a wake that died at 15 minutes left the lease
+        # "live" for another 1h45m. request_wake coalesces onto this lease's
+        # wake_id, so during that window every retry was handed the corpse and
+        # replayed its stale placement verdict instead of planning again —
+        # COORD-79/80 on 2026-07-27 kept reporting a capacity refusal from
+        # before the fix that removed it. Terminal wake, finished lease.
+        if (expires_at > now
+                and str(lease.get("lease_state") or "active") in {
+                    "reserved", "starting", "active", "stopping"}
+                and not _lease_wake_is_terminal(c, lease)):
             return lease
         c.execute(
             "UPDATE resource_leases SET released_at=?,lease_state='expired',"
