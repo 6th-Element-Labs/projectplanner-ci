@@ -27,7 +27,38 @@ def _text(value: Any) -> str:
     return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
 
 
-_QUEUE_EFFECTS = frozenset({"enqueue"})
+_QUEUE_EFFECTS = frozenset({"enqueue", "requeue_merge_group"})
+
+#: GitHub's refusal when the PR is *already* in the merge queue. That is the
+#: desired end state of enqueue/requeue_merge_group, not a failure.
+_ALREADY_QUEUED_MARKERS = (
+    "already in the queue",
+    "already queued",
+    "pull request is already in a merge queue",
+)
+
+
+def _normalize_already_queued(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Report "the state you asked for already holds" as success.
+
+    A non-zero ``gh`` exit whose message is "Pull request is already in the
+    queue" was recorded as a FAILED completion effect. Each such tick counted as
+    non-progress, and enough of them tripped COORD-77's no-spin ladder into
+    ``human(completion_not_converging)`` — pulling an operator in to resolve a
+    healthy, correctly-queued PR (AUTOPILOT-BREAKDOWNS 59, live on COORD-68).
+
+    An effect is idempotent precisely when a replay that changes nothing still
+    leaves the world in the requested state, so this must converge, not escalate.
+    """
+    out = dict(result or {})
+    if int(out.get("returncode") or 0) == 0:
+        return out
+    haystack = f"{out.get('stderr') or ''}\n{out.get('stdout') or ''}".lower()
+    if not any(marker in haystack for marker in _ALREADY_QUEUED_MARKERS):
+        return out
+    out["returncode"] = 0
+    out["idempotent_already_queued"] = True
+    return out
 
 
 def _merge_queue_snapshot(
@@ -40,8 +71,8 @@ def _merge_queue_snapshot(
     """Project live GitHub queue state plus Autopilot enqueue provenance.
 
     When GitHub has no ``mergeQueueEntry`` but completion already verified an
-    enqueue for this exact head, surface ``prior_enqueue_verified`` so a later
-    queue eject becomes an explicit operator decision instead of a custom loop.
+    enqueue/requeue for this exact head, surface ``prior_enqueue_verified`` so
+    the classifier can requeue instead of replaying once-only enqueue.
     """
     queue = _map(merge_queue_entry)
     head = str(head_sha or "").strip().lower()
@@ -252,25 +283,13 @@ def production_effect_adapters(
             ["pr", "ready", str(number), "--repo", repo], token=token,
         )
 
-    def update_branch(plan: Mapping[str, Any]) -> dict[str, Any]:
-        """Advance one behind PR, then stop.
-
-        The next Autopilot tick rehydrates the new head. CI and exact-head
-        review must pass again before the classifier can emit ``enqueue``.
-        """
-        number = int(plan.get("pr_number") or 0)
-        return _github_command(
-            ["api", "-X", "PUT", f"repos/{repo}/pulls/{number}/update-branch"],
-            token=token,
-        )
-
     def enqueue(plan: Mapping[str, Any]) -> dict[str, Any]:
         number = int(plan.get("pr_number") or 0)
         pr = provenance._github_pr(repo, number, token) or {}
         node_id = str(pr.get("node_id") or "")
         if not node_id:
             return {"returncode": 1, "stderr": "pull request node_id unavailable"}
-        return _github_command(
+        result = _github_command(
             [
                 "api", "graphql",
                 "-f",
@@ -283,6 +302,7 @@ def production_effect_adapters(
             ],
             token=token,
         )
+        return _normalize_already_queued(result)
 
     def reconcile(_: Mapping[str, Any]) -> dict[str, Any]:
         return provenance.reconcile(project=project, incremental=True)
@@ -298,8 +318,8 @@ def production_effect_adapters(
         ensure_review_generation=start,
         start_remediation=start,
         mark_ready=mark_ready,
-        update_branch=update_branch,
         enqueue=enqueue,
+        requeue_merge_group=enqueue,
         repair_dispatch=start,
         fence_runner=fence_only,
         reconcile_provenance=reconcile,
