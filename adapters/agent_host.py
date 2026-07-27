@@ -72,9 +72,11 @@ from repository_workspace import (  # noqa: E402
     MaterializedWorkspace,
     WorkspaceMaterializationError,
     materialize as materialize_repository_workspace,
+    materialize_host_worktree,
     revoke as revoke_repository_workspace,
     safe_receipt as safe_workspace_receipt,
     verify as verify_repository_workspace,
+    verify_host_worktree,
 )
 
 PROJECT = os.environ.get("PM_PROJECT", "switchboard")
@@ -1167,11 +1169,13 @@ def _agent_host_state_root():
     )).expanduser()
 
 
-def connect_workspace_request(wake):
+def connect_workspace_request(wake, inventory):
     """The exact materialize/verify arguments for one Connect wake.
 
     Materialization, pre-process verification, and revocation all address the
-    same workspace, so they all derive their arguments here.
+    same private workspace, so they all derive their arguments here.  A
+    context-less wake uses the enrolled checkout only as a local git source;
+    the resulting binding has the same lifecycle as a contextual workspace.
     """
     policy = wake.get("policy") or {}
     context = dict(policy.get("execution_context") or {})
@@ -1180,19 +1184,30 @@ def connect_workspace_request(wake):
     task_id = str(wake.get("task_id") or "")
     generation = int(lifecycle.get("generation") or 0)
     state_root = _agent_host_state_root()
-    return {
-        "execution_context": context,
+    project_id = str(context.get("project_id") or _wake_project(wake))
+    common = {
         "task_id": task_id,
         "execution_id": execution_id,
         "branch": (
-            f"agent/{_safe_identity(context.get('project_id'))}/"
+            f"agent/{_safe_identity(project_id)}/"
             f"{_safe_identity(task_id)}/{_safe_identity(execution_id)}-g{generation}"
         ),
-        "cache_root": os.environ.get(
-            "PM_AGENT_HOST_REPO_CACHE_ROOT",
-            str(state_root / "repository-cache")),
         "workspace_root": os.environ.get(
             "PM_AGENT_HOST_WORKSPACE_ROOT", str(state_root / "workspaces")),
+    }
+    if context:
+        return {
+            "execution_context": context,
+            **common,
+            "cache_root": os.environ.get(
+                "PM_AGENT_HOST_REPO_CACHE_ROOT",
+                str(state_root / "repository-cache")),
+        }
+    return {
+        "project_id": project_id,
+        "generation": generation,
+        "source_repo_root": str((inventory or {}).get("repo_root") or ""),
+        **common,
     }
 
 
@@ -1394,19 +1409,31 @@ def launch_command(wake, inventory, runner_session_id="", workspace_path=""):
         execution_assignment = dict(
             connect_policy.get("execution_assignment") or {})
         execution_context = dict(connect_policy.get("execution_context") or {})
-        if execution_context.get("schema") != "switchboard.execution_context.v1":
+        has_execution_context = bool(execution_context)
+        if (has_execution_context and execution_context.get("schema")
+                != "switchboard.execution_context.v1"):
             raise ValueError("connect execution context contract is invalid")
-        if int(execution_context.get("generation") or 0) != int(
+        if has_execution_context and int(
+                execution_context.get("generation") or 0) != int(
                 execution_assignment.get("generation") or 0):
             raise ValueError("connect execution context generation mismatch")
         context_runtime = str(
             (execution_context.get("runtime") or {}).get("registry_name") or "")
-        if context_runtime not in {
+        if has_execution_context and context_runtime not in {
                 runtime, "claude_code" if runtime == "claude-code" else runtime}:
             raise ValueError("connect execution context runtime mismatch")
         if not execution_assignment:
             raise ValueError("connect execution assignment contract is missing")
-        require_connect_generation_binding(wake)
+        # One generation owns the workspace, the provider credential, and the
+        # control-plane identity (runner/claim/Work Session/MCP principal). If
+        # any of them describes a different generation, or the provider
+        # connection was revoked since the wake was queued, nothing launches.
+        # A wake WITHOUT an Execution Context is the compatibility source path
+        # for projects that have not opted into an execution policy.  It still
+        # has the server-owned lifecycle and execution-assignment generation;
+        # only provider/SCM context binding remains conditional.
+        if has_execution_context:
+            require_connect_generation_binding(wake)
         from switchboard.connect.execution_assignment import (
             ExecutionAssignmentError,
             build_execution_assignment,
@@ -1430,6 +1457,9 @@ def launch_command(wake, inventory, runner_session_id="", workspace_path=""):
                 "connect execution assignment disagrees with persisted lease: "
                 f"{exc.code}") from exc
         now = time.time()
+        if not str(workspace_path or "").strip():
+            raise ValueError(
+                "connect launch requires a verified private workspace")
         spec = build_launch_spec(
             Ack(
                 lease_id=str(wake.get("wake_id") or assignment.assignment_id),
@@ -1443,7 +1473,7 @@ def launch_command(wake, inventory, runner_session_id="", workspace_path=""):
                 last_heartbeat_at=now,
             ),
             config,
-            workspace_path=str(workspace_path or ""),
+            workspace_path=str(workspace_path),
             completion_contract=execution_assignment,
         )
         child = list(spec.argv)
@@ -1512,12 +1542,21 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
         return rec
     materialized_workspace = None
     workspace_request = None
+    verify_workspace = None
     mode = wake_mode(wake, inventory)
     workspace_path = ""
     if mode == "connect":
+        execution_context = dict(
+            (wake.get("policy") or {}).get("execution_context") or {})
         task_id = str(wake.get("task_id") or "")
         try:
-            workspace_request = connect_workspace_request(wake)
+            workspace_request = connect_workspace_request(wake, inventory)
+            materialize_workspace = (
+                materialize_repository_workspace
+                if execution_context else materialize_host_worktree)
+            verify_workspace = (
+                verify_repository_workspace
+                if execution_context else verify_host_worktree)
             # ADAPTER-34: materialize can hang (network/git/fs). Bound it so
             # claim→launch cannot sit forever before complete_wake(started=false).
             # Server claim-hold sweep is the DHCP safety net if this host dies.
@@ -1533,7 +1572,7 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
             # the worker so DHCP complete_wake can run in this tick.
             pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
             fut = pool.submit(
-                materialize_repository_workspace, **workspace_request)
+                materialize_workspace, **workspace_request)
             try:
                 materialized_workspace = fut.result(
                     timeout=materialize_timeout_s)
@@ -1620,8 +1659,7 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
             # path, and a deleted or rewound workspace would surface as an
             # unexplained provider crash instead of a named refusal.
             try:
-                materialized_workspace = verify_repository_workspace(
-                    **workspace_request)
+                materialized_workspace = verify_workspace(**workspace_request)
             except WorkspaceMaterializationError as exc:
                 return {
                     "runner_session_id": runner_session_id or None,
@@ -1822,6 +1860,9 @@ def register_runner_session(rec, wake, inventory):
         metadata["host_repo_preflight"] = host_preflight
     # Prefer explicit host/<instance-id> from inventory; never invent task-row EC2 ids.
     host_id = inventory.get("host_id") or ""
+    reported_cwd = str(rec.get("cwd") or "")
+    if not reported_cwd and wake_mode(wake, inventory) != "connect":
+        reported_cwd = str(inventory.get("repo_root") or "")
     body = {
         "project": _wake_project(wake),
         "runner_session_id": rec.get("runner_session_id"),
@@ -1832,7 +1873,9 @@ def register_runner_session(rec, wake, inventory):
         "claim_id": rec.get("claim_id") or binding.get("claim_id") or "",
         "pid": rec.get("pid"),
         "status": rec.get("status") or "running",
-        "cwd": rec.get("cwd") or inventory.get("repo_root"),
+        # A Connect row without a materialized cwd is honestly "not started".
+        # Never make its preclaim projection impersonate a process in repo_root.
+        "cwd": reported_cwd,
         "control": rec.get("control") or {"tier": "T3", "runner_kill": True,
                                            "managed_process": True},
         "metadata": metadata,
@@ -3096,6 +3139,9 @@ def _reuse_inflight_bound_runner(wake, inventory, runner_session_id,
     rec = dict(health or {}) if local_alive else {}
     if not finalizer_active:
         _submit_bound_finalizer(wake, inventory, runner_session_id, rec)
+    reported_cwd = str(rec.get("cwd") or "")
+    if not reported_cwd and wake_mode(wake, inventory) != "connect":
+        reported_cwd = str(inventory.get("repo_root") or "")
     return {
         "wake_id": wake.get("wake_id"),
         "started": True,
@@ -3103,7 +3149,7 @@ def _reuse_inflight_bound_runner(wake, inventory, runner_session_id,
         "wake_mode": rec.get("wake_mode") or wake_mode(wake, inventory),
         "reason": "runner_binding_pending_reused",
         "pid": rec.get("pid"),
-        "cwd": rec.get("cwd") or inventory.get("repo_root"),
+        "cwd": reported_cwd,
         "task_id": rec.get("task_id") or wake.get("task_id"),
         "claim_id": None,
         "work_session_id": None,
@@ -3132,7 +3178,7 @@ def _register_preclaim_runner(wake, inventory, runner_session_id, *, renewal=Fal
         "task_id": wake.get("task_id"),
         "claim_id": binding.get("claim_id"),
         "status": "starting",
-        "cwd": inventory.get("repo_root"),
+        "cwd": "",
         "control": {"tier": "T3", "runner_kill": True, "managed_process": True},
         "metadata": {
             "credential_admission_phase": "preclaim",

@@ -8,6 +8,7 @@ the workspace; ``lsof``/``/proc`` can.
 
     python3 scripts/adapter28_workspace_launch_smoke.py            # stub CLI
     ADAPTER28_REAL_CLI=codex python3 scripts/...smoke.py           # real codex
+    ADAPTER28_CONTEXTLESS=1 python3 scripts/...smoke.py             # host worktree
 
 The default runs a tiny recording executable so the smoke is hermetic and safe
 to run in CI.  ``ADAPTER28_REAL_CLI`` substitutes the operator's actual provider
@@ -32,6 +33,7 @@ sys.path.insert(0, str(HERE / "src"))
 
 SLUG = "6th-Element-Labs/ActionEngine"
 REAL_CLI = os.environ.get("ADAPTER28_REAL_CLI", "").strip()
+CONTEXTLESS = os.environ.get("ADAPTER28_CONTEXTLESS", "").strip() == "1"
 
 
 def git(*args, cwd=None):
@@ -107,15 +109,18 @@ def main() -> int:
     os.environ["PM_AGENT_HOST_RUNNER_DIR"] = str(state / "runner")
 
     remote, sha = action_engine_remote(root)
+    source_checkout = root / "sources" / "ActionEngine"
+    git("remote", "add", "origin", remote, cwd=source_checkout)
     executable = REAL_CLI or str(recording_cli(root))
     os.environ["PM_CONNECT_CODEX_EXECUTABLE"] = executable
     if not REAL_CLI:
         os.environ["PM_CONNECT_CODEX_ARGS"] = "--smoke"
 
+    task_id = "ADAPTER-36" if CONTEXTLESS else "ADAPTER-28"
     context = with_generation({
         "schema": "switchboard.execution_context.v1",
         "project_id": "switchboard",
-        "task_id": "ADAPTER-28",
+        "task_id": task_id,
         "repo_role": "canonical",
         "repository": SLUG,
         "default_branch": "main",
@@ -141,29 +146,32 @@ def main() -> int:
         "schema": "switchboard.connect.assignment.v1",
         "assignment_id": "assignment-smoke",
         "principal_ref": "agent/codex/adapter-28-smoke",
-        "work_ref": "task:switchboard:ADAPTER-28",
+        "work_ref": f"task:switchboard:{task_id}",
         "runtime": "codex", "provider": "openai",
         "workspace_ref": "repo:canonical", "queued_at": time.time(),
         "limits": {"max_runtime_seconds": 600, "spend_limit_microunits": 0,
                    "memory_limit_bytes": 0},
     }
     wake = {
-        "wake_id": "wake-smoke", "task_id": "ADAPTER-28",
-        "selector": {"runtime": "codex", "task_id": "ADAPTER-28",
+        "wake_id": "wake-smoke", "task_id": task_id,
+        "selector": {"runtime": "codex", "task_id": task_id,
                      "agent_id": "agent/codex/adapter-28-smoke"},
         "policy": {
             "mode": "connect", "assignment": assignment, "lifecycle": lifecycle,
             "execution_context": context,
             "execution_assignment": build_execution_assignment(
-                task_id="ADAPTER-28", assignment=assignment,
+                task_id=task_id, assignment=assignment,
                 lifecycle=lifecycle),
             "account_binding": {"credential_reference": "provider-smoke",
                                 "provider": "openai-codex"},
         },
     }
+    if CONTEXTLESS:
+        wake["policy"].pop("execution_context")
+        wake["policy"].pop("account_binding")
     inventory = {
         "host_id": "host/adapter28-smoke",
-        "repo_root": str(HERE),
+        "repo_root": str(source_checkout if CONTEXTLESS else HERE),
         "policy": {"allow_work": True, "lane_mode": "all_project_lanes"},
         "runtimes": [{
             "runtime": "codex", "provider": "openai", "lanes": ["ADAPTER"],
@@ -205,12 +213,16 @@ def main() -> int:
         check(bool(actual) and Path(actual).resolve() == workspace.resolve(),
               f"the running CLI's own cwd is the isolated workspace "
               f"(kernel says {actual!r})")
-        check(Path(actual).resolve() != HERE.resolve(),
+        check(Path(actual).resolve() != Path(inventory["repo_root"]).resolve(),
               "the running CLI is not in the host application checkout")
         check(git("rev-parse", "HEAD", cwd=workspace) == sha,
-              "the running CLI sees the exact Execution Context base SHA")
+              ("the running CLI sees the host-observed source SHA"
+               if CONTEXTLESS else
+               "the running CLI sees the exact Execution Context base SHA"))
         check(git("remote", "get-url", "origin", cwd=workspace) == remote,
-              "the running CLI sees the Execution Context origin")
+              ("the running CLI sees the host checkout origin"
+               if CONTEXTLESS else
+               "the running CLI sees the Execution Context origin"))
         check((workspace / "src" / "actionengine" / "engine.py").is_file(),
               "the ActionEngine-shaped repository is present in the workspace")
 
@@ -244,9 +256,10 @@ def main() -> int:
                        capture_output=True)
         shutil.rmtree(root, ignore_errors=True)
 
-    mode = f"real CLI ({REAL_CLI})" if REAL_CLI else "recording stub CLI"
-    print(f"\nADAPTER-28 launch smoke [{mode}]: "
-          f"{'PASS' if not failures else 'FAIL'}")
+    cli_mode = f"real CLI ({REAL_CLI})" if REAL_CLI else "recording stub CLI"
+    source_mode = "context-less host worktree" if CONTEXTLESS else "Execution Context"
+    print(f"\nADAPTER-28 launch smoke [{source_mode}; {cli_mode}]: "
+           f"{'PASS' if not failures else 'FAIL'}")
     return 1 if failures else 0
 
 

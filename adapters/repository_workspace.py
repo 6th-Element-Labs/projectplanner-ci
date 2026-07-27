@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Host-local, project-independent repository workspace materialization.
 
-Execution Context is the only authority accepted here.  The application checkout,
-current git root, and legacy PM_REPO_* variables are deliberately irrelevant.
+An Execution Context is authoritative when present.  Context-less compatibility
+wakes may use the enrolled host checkout only as a git object/source repository;
+the provider CLI never runs in that shared checkout.  Both inputs produce the
+same verified ``MaterializedWorkspace`` and use the same receipt and teardown
+lifecycle.
 """
 from __future__ import annotations
 
@@ -86,6 +89,29 @@ def _inside(root: Path, candidate: Path) -> Path:
             "workspace_path_escape", "workspace path escapes configured root",
             root=str(root), path=str(candidate)) from exc
     return candidate
+
+
+def _require_disjoint_roots(source_root: Path, workspace_root: Path) -> None:
+    """Refuse a private-workspace root that overlaps the shared source checkout."""
+    source_root = source_root.expanduser().resolve()
+    workspace_root = workspace_root.expanduser().resolve()
+    try:
+        workspace_root.relative_to(source_root)
+    except ValueError:
+        pass
+    else:
+        raise WorkspaceMaterializationError(
+            "connect_workspace_root_overlaps_repo",
+            "private Connect workspace root is inside the host checkout",
+            source_root=str(source_root), workspace_root=str(workspace_root))
+    try:
+        source_root.relative_to(workspace_root)
+    except ValueError:
+        return
+    raise WorkspaceMaterializationError(
+        "connect_workspace_root_overlaps_repo",
+        "host checkout is inside the private Connect workspace root",
+        source_root=str(source_root), workspace_root=str(workspace_root))
 
 
 def _redacted_remote(remote: str) -> str:
@@ -215,7 +241,7 @@ def _check_workspace(path: Path, receipt_path: Path,
         if receipt.get(key) != value:
             raise WorkspaceMaterializationError(
                 "workspace_receipt_mismatch",
-                "workspace receipt disagrees with the Execution Context",
+                "workspace receipt disagrees with the launch workspace identity",
                 field=key)
     if not path.is_dir():
         raise WorkspaceMaterializationError(
@@ -237,6 +263,283 @@ def _check_workspace(path: Path, receipt_path: Path,
             "workspace_origin_mismatch",
             "workspace origin disagrees with the Execution Context repository")
     return receipt
+
+
+def _git_common_dir(path: Path) -> Path:
+    raw = _run(["git", "rev-parse", "--git-common-dir"], cwd=path).stdout.strip()
+    common = Path(raw)
+    if not common.is_absolute():
+        common = path / common
+    return common.resolve()
+
+
+def _host_worktree_static_identity(
+    *, project_id: str, task_id: str, execution_id: str, generation: int,
+    branch: str, source_repo_root: str | Path, workspace_root: str | Path,
+) -> dict[str, Any]:
+    """Validate the host-derived compatibility input and resolve private paths."""
+    project = _safe_part(project_id, "project_id")
+    task_id = str(task_id or "").strip().upper()
+    if not task_id:
+        raise WorkspaceMaterializationError(
+            "invalid_workspace_identity", "task_id is required")
+    execution_id = str(execution_id or "").strip()
+    execution_part = _safe_part(execution_id, "execution_id")
+    try:
+        generation = int(generation)
+    except (TypeError, ValueError) as exc:
+        raise WorkspaceMaterializationError(
+            "invalid_execution_generation",
+            "Connect execution generation must be an integer") from exc
+    if generation <= 0:
+        raise WorkspaceMaterializationError(
+            "invalid_execution_generation",
+            "Connect execution generation must be positive")
+    workspace_part = f"{execution_part}-g{generation}"
+    branch = str(branch or "").strip()
+    if not branch or branch.startswith("-") or ".." in branch or " " in branch:
+        raise WorkspaceMaterializationError(
+            "invalid_workspace_branch", "workspace branch is unsafe")
+
+    if not str(source_repo_root or "").strip():
+        raise WorkspaceMaterializationError(
+            "legacy_source_repo_invalid",
+            "host checkout path is required")
+    if not str(workspace_root or "").strip():
+        raise WorkspaceMaterializationError(
+            "workspace_root_missing",
+            "private Connect workspace root is required")
+    source_root = Path(source_repo_root).expanduser().resolve()
+    workspace_root_path = Path(workspace_root).expanduser().resolve()
+    _require_disjoint_roots(source_root, workspace_root_path)
+    if not source_root.is_dir():
+        raise WorkspaceMaterializationError(
+            "legacy_source_repo_invalid",
+            "host checkout is not an available directory",
+            source_repo_root=str(source_root))
+    try:
+        source_common_dir = _git_common_dir(source_root)
+        source_head = _run(
+            ["git", "rev-parse", "HEAD"], cwd=source_root).stdout.strip().lower()
+        remote = _run(
+            ["git", "remote", "get-url", "origin"], cwd=source_root).stdout.strip()
+    except WorkspaceMaterializationError as exc:
+        raise WorkspaceMaterializationError(
+            "legacy_source_repo_invalid",
+            "host checkout is not a usable git worktree",
+            source_repo_root=str(source_root), cause=exc.code) from exc
+    if not _SHA.fullmatch(source_head):
+        raise WorkspaceMaterializationError(
+            "legacy_source_repo_invalid",
+            "host checkout HEAD is not a full commit SHA",
+            source_repo_root=str(source_root))
+    _redacted_remote(remote)
+
+    workspace_path = _inside(
+        workspace_root_path,
+        workspace_root_path / project / _safe_part(task_id, "task_id")
+        / workspace_part,
+    )
+    receipt_path = _inside(
+        workspace_root_path,
+        workspace_root_path / ".receipts" / project
+        / _safe_part(task_id, "task_id") / f"{workspace_part}.json",
+    )
+    return {
+        "project_id": str(project_id),
+        "task_id": task_id,
+        "execution_id": execution_id,
+        "generation": generation,
+        "branch": branch,
+        "source_root": source_root,
+        "source_common_dir": source_common_dir,
+        "source_head": source_head,
+        "remote": remote,
+        "workspace_root": workspace_root_path,
+        "workspace_path": workspace_path,
+        "receipt_path": receipt_path,
+    }
+
+
+def _host_worktree_expected(
+    resolved: Mapping[str, Any], *, base_sha: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "project_id": resolved["project_id"],
+        "task_id": resolved["task_id"],
+        "execution_id": resolved["execution_id"],
+        "generation": resolved["generation"],
+        "source": "repo_root",
+        "isolation": "host_worktree",
+        "workspace_backend": "git_worktree",
+        "source_repo_root": str(resolved["source_root"]),
+        "source_git_common_dir": str(resolved["source_common_dir"]),
+        "remote": resolved["remote"],
+        "base_sha": str(base_sha or resolved["source_head"]),
+        "branch": resolved["branch"],
+    }
+
+
+def _verify_host_worktree_common_dir(
+    workspace_path: Path, expected: Mapping[str, Any],
+) -> None:
+    common = _git_common_dir(workspace_path)
+    if common != Path(str(expected["source_git_common_dir"])).resolve():
+        raise WorkspaceMaterializationError(
+            "workspace_git_common_dir_mismatch",
+            "private workspace is not a worktree of the enrolled host checkout")
+
+
+def _remove_host_worktree(source_root: Path, workspace_path: Path) -> None:
+    """Remove one registered worktree without deleting its task branch."""
+    result = subprocess.run(
+        ["git", "worktree", "remove", "--force", str(workspace_path)],
+        cwd=str(source_root), text=True, capture_output=True, check=False,
+        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+    )
+    if result.returncode and workspace_path.exists():
+        raise WorkspaceMaterializationError(
+            "git_worktree_remove_failed",
+            "private Connect worktree could not be removed",
+            returncode=result.returncode, stderr=(result.stderr or "")[-2000:])
+    _run(["git", "worktree", "prune"], cwd=source_root)
+
+
+def materialize_host_worktree(
+    *, project_id: str, task_id: str, execution_id: str, generation: int,
+    branch: str, source_repo_root: str | Path, workspace_root: str | Path,
+) -> MaterializedWorkspace:
+    """Create or recover a private worktree for a context-less Connect wake.
+
+    ``source_repo_root`` contributes committed git objects only.  It grants no
+    execution, coordination, provider, SCM, or Done authority.
+    """
+    resolved = _host_worktree_static_identity(
+        project_id=project_id, task_id=task_id, execution_id=execution_id,
+        generation=generation, branch=branch,
+        source_repo_root=source_repo_root, workspace_root=workspace_root)
+    workspace_path = resolved["workspace_path"]
+    receipt_path = resolved["receipt_path"]
+    workspace_root_path = resolved["workspace_root"]
+    quarantine_root = _inside(
+        workspace_root_path, workspace_root_path / ".quarantine")
+    lock_key = hashlib.sha256(
+        str(resolved["source_common_dir"]).encode()).hexdigest()[:20]
+    lock_path = workspace_root_path / ".locks" / f"{lock_key}.lock"
+
+    with _locked(lock_path):
+        existing_receipt: dict[str, Any] = {}
+        try:
+            parsed = json.loads(receipt_path.read_text(encoding="utf-8"))
+            if isinstance(parsed, dict):
+                existing_receipt = parsed
+        except (OSError, ValueError):
+            pass
+        base_sha = str(existing_receipt.get("base_sha") or resolved["source_head"])
+        if not _SHA.fullmatch(base_sha):
+            raise WorkspaceMaterializationError(
+                "workspace_receipt_invalid",
+                "host worktree receipt has an invalid base SHA")
+        expected = _host_worktree_expected(resolved, base_sha=base_sha)
+        if workspace_path.exists():
+            if _workspace_valid(workspace_path, receipt_path, expected):
+                _verify_host_worktree_common_dir(workspace_path, expected)
+                return MaterializedWorkspace(
+                    workspace_path, resolved["branch"], base_sha,
+                    resolved["source_common_dir"], receipt_path,
+                    existing_receipt, reused=True,
+                    workspace_root=workspace_root_path)
+            try:
+                _remove_host_worktree(resolved["source_root"], workspace_path)
+            except WorkspaceMaterializationError:
+                _quarantine(
+                    workspace_path, quarantine_root, "stale-host-worktree")
+        workspace_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            branch_exists = subprocess.run(
+                ["git", "show-ref", "--verify", "--quiet",
+                 f"refs/heads/{resolved['branch']}"],
+                cwd=str(resolved["source_root"]), check=False,
+                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            ).returncode == 0
+            if branch_exists:
+                branch_sha = _run(
+                    ["git", "rev-parse", resolved["branch"]],
+                    cwd=resolved["source_root"]).stdout.strip()
+                if branch_sha != base_sha:
+                    raise WorkspaceMaterializationError(
+                        "workspace_branch_base_mismatch",
+                        "existing execution branch is not at the recorded base SHA",
+                        branch=resolved["branch"], base_sha=base_sha)
+                args = [
+                    "git", "worktree", "add", str(workspace_path),
+                    resolved["branch"],
+                ]
+            else:
+                args = [
+                    "git", "worktree", "add", "-b", resolved["branch"],
+                    str(workspace_path), base_sha,
+                ]
+            _run(args, cwd=resolved["source_root"], timeout=600)
+            receipt = {
+                "schema": RECEIPT_SCHEMA,
+                **expected,
+                "workspace_path": str(workspace_path),
+                "created_at": time.time(),
+            }
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = receipt_path.with_suffix(".tmp")
+            temporary.write_text(
+                json.dumps(receipt, sort_keys=True), encoding="utf-8")
+            temporary.replace(receipt_path)
+            checked = _check_workspace(workspace_path, receipt_path, expected)
+            _verify_host_worktree_common_dir(workspace_path, expected)
+            return MaterializedWorkspace(
+                workspace_path, resolved["branch"], base_sha,
+                resolved["source_common_dir"], receipt_path, checked,
+                workspace_root=workspace_root_path)
+        except Exception:
+            if workspace_path.exists():
+                try:
+                    _remove_host_worktree(
+                        resolved["source_root"], workspace_path)
+                except WorkspaceMaterializationError:
+                    _quarantine(
+                        workspace_path, quarantine_root,
+                        "host-materialization-failed")
+            raise
+
+
+def verify_host_worktree(
+    *, project_id: str, task_id: str, execution_id: str, generation: int,
+    branch: str, source_repo_root: str | Path, workspace_root: str | Path,
+) -> MaterializedWorkspace:
+    """Re-prove the private host worktree immediately before process spawn."""
+    resolved = _host_worktree_static_identity(
+        project_id=project_id, task_id=task_id, execution_id=execution_id,
+        generation=generation, branch=branch,
+        source_repo_root=source_repo_root, workspace_root=workspace_root)
+    try:
+        receipt = json.loads(
+            resolved["receipt_path"].read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise WorkspaceMaterializationError(
+            "workspace_receipt_unreadable",
+            "workspace receipt is missing or unreadable",
+            receipt_path=str(resolved["receipt_path"])) from exc
+    base_sha = str((receipt or {}).get("base_sha") or "")
+    if not _SHA.fullmatch(base_sha):
+        raise WorkspaceMaterializationError(
+            "workspace_receipt_invalid",
+            "host worktree receipt has an invalid base SHA")
+    expected = _host_worktree_expected(resolved, base_sha=base_sha)
+    receipt = _check_workspace(
+        resolved["workspace_path"], resolved["receipt_path"], expected)
+    _verify_host_worktree_common_dir(resolved["workspace_path"], expected)
+    return MaterializedWorkspace(
+        resolved["workspace_path"], resolved["branch"], base_sha,
+        resolved["source_common_dir"], resolved["receipt_path"], receipt,
+        reused=True, workspace_root=resolved["workspace_root"])
 
 
 def _workspace_valid(path: Path, receipt_path: Path,
@@ -466,7 +769,7 @@ def safe_receipt(receipt: Mapping[str, Any]) -> dict[str, Any]:
             "schema", "project_id", "task_id", "execution_id", "generation",
             "authority_digest", "context_digest", "repository", "base_sha",
             "branch", "workspace_path", "created_at", "revoked_at",
-            "revoked_reason",
+            "revoked_reason", "source", "isolation", "workspace_backend",
         ) if receipt.get(key) is not None
     }
     remote = str(receipt.get("remote") or "")
@@ -492,6 +795,25 @@ def cleanup(workspace: MaterializedWorkspace, *, quarantine: bool = False,
     root = (Path(workspace.workspace_root) if workspace.workspace_root
             else workspace.path.parents[2])
     path = _inside(root, workspace.path)
+    try:
+        receipt = json.loads(
+            workspace.receipt_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        receipt = dict(workspace.receipt or {})
+    if receipt.get("workspace_backend") == "git_worktree":
+        source_root = Path(str(receipt.get("source_repo_root") or "")).resolve()
+        expected_common = Path(
+            str(receipt.get("source_git_common_dir") or "")).resolve()
+        if not str(receipt.get("source_repo_root") or "") or not source_root.is_dir():
+            raise WorkspaceMaterializationError(
+                "legacy_source_repo_invalid",
+                "host checkout is unavailable during worktree teardown")
+        if _git_common_dir(source_root) != expected_common:
+            raise WorkspaceMaterializationError(
+                "workspace_git_common_dir_mismatch",
+                "host checkout changed before worktree teardown")
+        _remove_host_worktree(source_root, path)
+        return {"cleaned": True, "quarantined": None}
     if quarantine:
         target = _quarantine(path, root / ".quarantine", reason)
         return {"cleaned": False, "quarantined": str(target) if target else None}

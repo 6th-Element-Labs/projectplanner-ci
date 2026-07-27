@@ -520,21 +520,124 @@ def test_only_supported_provider_clis_launch(root):
        "the supported provider CLI set is explicit")
 
 
-def test_wake_without_context_fails_closed(root):
-    """A Connect wake cannot fall back to the Agent Host application checkout."""
+def test_legacy_wake_without_context_launches_from_private_worktree(root):
+    """The compatibility source path still launches, but never in repo_root.
+
+    switchboard has never configured a project execution policy, so the server
+    dispatches its Connect wakes WITHOUT an execution_context by design
+    (connect_dispatch.enqueue_task's restored COORD-47 contract). The enrolled
+    checkout supplies committed git objects, not a process cwd or an invented
+    Execution Context.
+    """
     remote, sha = action_engine_remote(root)
+    source = root / "sources" / "ActionEngine"
+    git("remote", "add", "origin", remote, cwd=source)
     wake = connect_wake(context(sha), execution_id="execlease-legacy")
     del wake["policy"]["execution_context"]
     wake["policy"].pop("account_binding", None)
+    inventory = host_inventory()
+    inventory["repo_root"] = str(source)
     with Launcher(remote) as launcher:
         rec = agent_host.launch(
-            wake, host_inventory(), runner_session_id="run_legacy")
-    ok(rec.get("started") is False
-       and rec.get("reason") in {"invalid_execution_identity",
-                                 "execution_context_invalid"},
-       f"a context-less wake is refused (got {rec.get('reason')})")
-    ok(launcher.last is None,
-       "a context-less wake starts no process in the host checkout")
+            wake, inventory, runner_session_id="run_legacy")
+    ok(bool(rec.get("pid"))
+       and rec.get("started") is not False
+       and rec.get("reason") not in {"invalid_execution_identity",
+                                     "execution_context_invalid"},
+       f"a context-less legacy wake launches (got {rec.get('reason')})")
+    workspace = Path(rec["cwd"]).resolve()
+    private_root = Path(os.environ["PM_AGENT_HOST_WORKSPACE_ROOT"]).resolve()
+    ok(launcher.last is not None and cwd_of(launcher.last) == str(workspace),
+       "the context-less launch uses the materialized private cwd")
+    ok(workspace.is_relative_to(private_root)
+       and workspace != source.resolve()
+       and not workspace.is_relative_to(source.resolve()),
+       "the context-less cwd is inside the private root and outside repo_root")
+    receipt = rec["metadata"]["workspace_receipt"]
+    ok(receipt["source"] == "repo_root"
+       and receipt["isolation"] == "host_worktree"
+       and receipt["generation"] == 1,
+       "the receipt truthfully names host-derived isolation without context authority")
+    ok("SWITCHBOARD_WORKSPACE_RECEIPT" in (launcher.last or {}).get("env", {}),
+       "the compatibility workspace uses the same durable receipt lifecycle")
+
+
+def test_legacy_worktrees_dedupe_isolate_and_teardown(root):
+    remote, sha = action_engine_remote(root)
+    source = root / "sources" / "ActionEngine"
+    git("remote", "add", "origin", remote, cwd=source)
+    inventory = host_inventory()
+    inventory["repo_root"] = str(source)
+
+    def legacy_wake(generation):
+        wake = connect_wake(
+            context(sha, generation=generation),
+            execution_id="execlease-legacy-shared",
+            generation=generation,
+        )
+        wake["policy"].pop("execution_context")
+        wake["policy"].pop("account_binding", None)
+        return wake
+
+    with Launcher(remote):
+        first = agent_host.launch(
+            legacy_wake(1), inventory, runner_session_id="run_legacy_g1")
+        retry = agent_host.launch(
+            legacy_wake(1), inventory, runner_session_id="run_legacy_g1")
+        second_generation = agent_host.launch(
+            legacy_wake(2), inventory, runner_session_id="run_legacy_g2")
+    ok(first["cwd"] == retry["cwd"]
+       and first["metadata"]["workspace_receipt"]["created_at"]
+       == retry["metadata"]["workspace_receipt"]["created_at"],
+       "a retry of one context-less generation reuses its private worktree")
+    ok(first["cwd"] != second_generation["cwd"]
+       and first["metadata"]["workspace_receipt"]["generation"] == 1
+       and second_generation["metadata"]["workspace_receipt"]["generation"] == 2,
+       "distinct generations receive distinct private worktrees")
+
+    first_path = Path(first["cwd"])
+    removed = agent_host.revoke_runner_workspace(
+        "run_legacy_g1", "runner_lease_terminal")
+    ok(removed and removed.get("revoked") is True and not first_path.exists(),
+       "lease-owned teardown removes the registered host worktree")
+    worktree_list = git("worktree", "list", "--porcelain", cwd=source)
+    ok(str(first_path) not in worktree_list
+       and str(second_generation["cwd"]) in worktree_list,
+       "teardown prunes only the exact generation from git worktree metadata")
+
+
+def test_legacy_workspace_failures_start_no_process(root):
+    remote, sha = action_engine_remote(root)
+    source = root / "sources" / "ActionEngine"
+    git("remote", "add", "origin", remote, cwd=source)
+    wake = connect_wake(context(sha), execution_id="execlease-unsafe-root")
+    wake["policy"].pop("execution_context")
+    wake["policy"].pop("account_binding", None)
+    inventory = host_inventory()
+    inventory["repo_root"] = str(source)
+
+    saved_root = os.environ["PM_AGENT_HOST_WORKSPACE_ROOT"]
+    os.environ["PM_AGENT_HOST_WORKSPACE_ROOT"] = str(source / "workspaces")
+    try:
+        with Launcher(remote) as launcher:
+            refused = agent_host.launch(
+                wake, inventory, runner_session_id="run_unsafe_root")
+    finally:
+        os.environ["PM_AGENT_HOST_WORKSPACE_ROOT"] = saved_root
+    ok(refused.get("started") is False
+       and refused.get("reason") == "connect_workspace_root_overlaps_repo",
+       "a private root overlapping repo_root refuses with a named reason")
+    ok(launcher.calls == [], "overlap refusal starts no supervisor process")
+
+    inventory["repo_root"] = str(root / "not-a-git-repository")
+    Path(inventory["repo_root"]).mkdir()
+    with Launcher(remote) as launcher:
+        refused = agent_host.launch(
+            wake, inventory, runner_session_id="run_invalid_source")
+    ok(refused.get("started") is False
+       and refused.get("reason") == "legacy_source_repo_invalid",
+       "an invalid host source checkout fails closed by name")
+    ok(launcher.calls == [], "invalid source refusal starts no supervisor process")
 
 
 def test_launch_has_no_repo_root_fallback_for_connect():
@@ -542,9 +645,10 @@ def test_launch_has_no_repo_root_fallback_for_connect():
         encoding="utf-8")
     connect_block = source[source.index("def launch_command("):
                            source.index("def launch(")]
-    ok('inventory["repo_root"]' in connect_block
-       and 'spec.cwd if mode == "connect"' in connect_block,
-       "repo_root remains the cwd only for non-Connect modes")
+    ok("if not str(workspace_path or \"\").strip()" in connect_block
+       and "connect launch requires a verified private workspace" in connect_block
+       and "if not execution_context else" not in connect_block,
+       "Connect launch requires a private workspace and has no repo_root fallback")
 
 
 with tempfile.TemporaryDirectory(prefix="adapter28-") as temporary:
@@ -557,7 +661,9 @@ with tempfile.TemporaryDirectory(prefix="adapter28-") as temporary:
     test_retries_dedupe_and_teardown_revokes(base / "retry")
     test_one_generation_owns_workspace_credential_and_identity(base / "generation")
     test_only_supported_provider_clis_launch(base / "runtimes")
-    test_wake_without_context_fails_closed(base / "legacy")
+    test_legacy_wake_without_context_launches_from_private_worktree(base / "legacy")
+    test_legacy_worktrees_dedupe_isolate_and_teardown(base / "legacy-lifecycle")
+    test_legacy_workspace_failures_start_no_process(base / "legacy-failures")
 test_launch_has_no_repo_root_fallback_for_connect()
 
 print(f"\nADAPTER-28 workspace launch: {passed} passed, {failed} failed")
