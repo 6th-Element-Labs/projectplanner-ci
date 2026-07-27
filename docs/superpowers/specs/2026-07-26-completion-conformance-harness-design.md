@@ -1,6 +1,7 @@
 # Completion Conformance Harness
 
-- **Status:** T1 landed; T2 Observe harness landed under `COORD-66` (see
+- **Status:** T1 landed; T2 Observe landed under `COORD-66`; T3 bounded full-loop
+  orchestration landed under `COORD-67` (see
   [`docs/superpowers/plans/2026-07-26-completion-conformance-t2-observe.md`](../plans/2026-07-26-completion-conformance-t2-observe.md)
   and [`docs/COMPLETION-CONFORMANCE-OPERATOR.md`](../../COMPLETION-CONFORMANCE-OPERATOR.md))
 - **Date:** 2026-07-26
@@ -11,7 +12,8 @@
     workflow + live wiring are follow-on work (see the T2 plan doc)
   - Task: `COORD-78` (evidence axis) — `world.evidence` through the real
     `merge_gate`; see "`world.evidence`" under Scenario contract below
-  - T3 Full: follow-on task after T2's sandbox workflow exists
+  - Task: `COORD-67` (T3 Full) — curated, isolated, concurrency-capped, and
+    protected by a hard spend envelope
 - **Related:** [AUTOPILOT-COMPLETION-STATE-MACHINE.md](../../AUTOPILOT-COMPLETION-STATE-MACHINE.md),
   [COMPLETION-LIFECYCLE-PIPELINE.md](../../COMPLETION-LIFECYCLE-PIPELINE.md),
   ADR-0008 three-plane separation
