@@ -1,0 +1,39 @@
+{
+  "expect": {
+    "effect": "repair_dispatch",
+    "reason_code": "invalid_executed_test_run",
+    "role_sequence": [],
+    "route": "coordination_retry",
+    "terminal": "blocked"
+  },
+  "id": "evidence_test_run_stale_head",
+  "schema": "switchboard.completion_conformance.scenario.v1",
+  "timing": {
+    "ci_delay_seconds": 0,
+    "close_pr_while_runner_live": false,
+    "hang_seconds": 0,
+    "move_head_during_assessment": false,
+    "never_report": false
+  },
+  "world": {
+    "ci": "pass",
+    "ci_attribution": "product",
+    "ci_context": "Switchboard CI / VM gate",
+    "draft": false,
+    "evidence": {
+      "executed_test_run": "stale_head",
+      "external_ci": "none",
+      "review_verdict": "pass",
+      "work_session": "present"
+    },
+    "merge_state_status": "CLEAN",
+    "mergeable": true,
+    "queue": "none",
+    "review": "passed",
+    "runner": {
+      "head": "none",
+      "live": false,
+      "role": "none"
+    }
+  }
+}

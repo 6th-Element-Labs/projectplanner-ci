@@ -40,6 +40,7 @@ for _entry in (str(ROOT), str(SRC)):
     if _entry not in sys.path:
         sys.path.insert(0, _entry)
 
+from tests.conformance import _evidence  # noqa: E402
 from tests.conformance import _gold_shared  # noqa: E402
 from tests.conformance import _shared  # noqa: E402
 
@@ -78,9 +79,20 @@ TIMING: dict[str, Any] = {
 def _world(**overrides: Any) -> dict[str, Any]:
     world = copy.deepcopy(BASE_WORLD)
     runner_override = overrides.pop("runner", None)
+    evidence_override = overrides.pop("evidence", None)
     world.update(overrides)
     if runner_override is not None:
         world["runner"] = {**world["runner"], **runner_override}
+    if evidence_override is not None:
+        # COORD-78: an evidence row states only the axis it exercises, and the
+        # rest of the evidence world is filled from the same derived default a
+        # scenario that declares no evidence at all would get. Written out in
+        # full so the gold file records the complete world the gate ran against
+        # rather than a diff against a default that could later move.
+        world["evidence"] = {
+            **_evidence.default_evidence(world),
+            **evidence_override,
+        }
     return world
 
 
@@ -477,6 +489,151 @@ CATALOG: list[Row] = [
         "matches.",
         "scar",
     ),
+
+    # --- G. Board evidence (COORD-78) --------------------------------------
+    #
+    # Every row below has a clean PR world on purpose. `_finding_decision` is
+    # evaluated AFTER draft, exact-head CI and review in
+    # `_classify_completion_base`, so evidence findings only ever decide when
+    # the PR itself is green -- which is exactly the state COORD-57 was in for
+    # 50 attempts. A red-CI evidence row would grade the CI branch and say
+    # nothing about evidence.
+    Row(
+        "evidence_derived_from_exact_head_ci_receipt",
+        _world(evidence={"executed_test_run": "missing"}),
+        "review_merge",
+        "ADR-0008 / ENFORCE-16: CI on the exact SHA is the executor of record "
+        "for 'the tests ran'",
+        "The COORD-57 shape, post-fix (PR #955): no agent-recorded "
+        "executed_test_run, but a green external CI run pinned to the exact "
+        "gated head. The gate derives the verdict and reports it as a "
+        "NON-BLOCKING finding, so completion proceeds to enqueue instead of "
+        "dispatching an agent to re-type a fact the server already holds.",
+        "scar",
+    ),
+    Row(
+        "evidence_missing_no_ci_receipt",
+        _world(evidence={"executed_test_run": "missing", "external_ci": "none"}),
+        "coordination_retry",
+        "#859: evidence is derived from a real run or not at all",
+        "The COORD-57 shape as it actually ran: nothing to derive from, so "
+        "the refusal stands. This is the negative control for the row above "
+        "-- without it, 'derives' and 'never demanded it' are "
+        "indistinguishable.",
+        "scar",
+    ),
+    Row(
+        "evidence_ci_receipt_other_head_refused",
+        _world(evidence={"executed_test_run": "missing",
+                         "external_ci": "green_other_head"}),
+        "coordination_retry",
+        "ENFORCE-16: the selected run's source_sha must match the gated head "
+        "exactly",
+        "A green run on a DIFFERENT head must not authorize this head. The "
+        "fail-closed edge of the derivation above.",
+        "scar",
+    ),
+    Row(
+        "evidence_near_miss_key_co21",
+        _world(evidence={"executed_test_run": "near_miss_key",
+                         "external_ci": "none"}),
+        "coordination_retry",
+        "COORD-61 / COORD-51 s3.3: the refusal carries what was required and "
+        "what nearly matched",
+        "CO-21, 2026-07-25: a runner had executed five real suites and "
+        "written them under `executed_tests`, one key away from the "
+        "contract, inside its Work Session hygiene. The repair dispatch was "
+        "handed only the reason code, wrote nothing, and exited. This row "
+        "pins the named near-miss key onto the decision, not just the "
+        "reason_code -- the reason_code was already correct during the "
+        "outage.",
+        "scar",
+    ),
+    Row(
+        "evidence_test_run_failed",
+        _world(evidence={"executed_test_run": "failed", "external_ci": "none"}),
+        "coordination_retry",
+        "code_strict completion_evidence requires a PASSING executed test run",
+        "A recorded run that did not pass is invalid evidence, not absent "
+        "evidence -- distinct reason_code, same family.",
+        "matrix",
+    ),
+    Row(
+        "evidence_test_run_stale_head",
+        _world(evidence={"executed_test_run": "stale_head",
+                         "external_ci": "none"}),
+        "coordination_retry",
+        "Exact-head contract: evidence for another commit cannot authorize "
+        "this one",
+        "The run is real and passing but pinned to a different head than the "
+        "Work Session -- the same staleness rule the CI receipt derivation "
+        "enforces, on the agent-recorded path.",
+        "matrix",
+    ),
+    Row(
+        "evidence_work_session_missing",
+        _world(evidence={"work_session": "missing"}),
+        "coordination_retry",
+        "code_strict: merge_requires_work_session",
+        "No canonical Work Session for the task and none on the branch at "
+        "this head -- the gate refuses, and the refusal is bounded "
+        "coordination work rather than a human handoff.",
+        "matrix",
+    ),
+    Row(
+        "evidence_work_session_borrowed",
+        _world(evidence={"work_session": "borrowed"}),
+        "review_merge",
+        "BUG-176: a Work Session proves workspace hygiene for a branch at a "
+        "head, which is a property of the commit",
+        "A co-resolved task on a PR whose work happened in ANOTHER task's "
+        "session on the same branch and head. The borrow is legitimate and "
+        "must not block: PR #859 had to be landed by operator bypass because "
+        "it did. Auditable via work_session_borrowed_from_task.",
+        "scar",
+    ),
+    Row(
+        "evidence_review_verdict_missing",
+        _world(evidence={"review_verdict": "missing"}),
+        "review_merge",
+        "COORD-18 exact-head review gate; ADR-0021 permits self-certification",
+        "No verdict has EVER been recorded for this exact head. Routes to "
+        "review_merge, not human: per the safe-merge protocol the same agent "
+        "may record its own passing verdict, so waiting for an independent "
+        "reviewer is the wrong move.",
+        "matrix",
+    ),
+    Row(
+        "evidence_review_verdict_stale",
+        _world(evidence={"review_verdict": "stale"}),
+        "review_merge",
+        "COORD-18: a verdict is valid only for the exact head it was recorded "
+        "against",
+        "A passing verdict exists, but for a different head than the board "
+        "records as current -- re-review, do not escalate.",
+        "matrix",
+    ),
+    Row(
+        "evidence_review_verdict_open_findings",
+        _world(evidence={"review_verdict": "open_findings"}),
+        "human",
+        "COORD-18: open findings at the gated head block merge",
+        "A passing verdict carrying an unresolved finding. Unlike a missing "
+        "verdict this is not self-serviceable by re-review, so it leaves the "
+        "review_merge lane.",
+        "matrix",
+    ),
+    Row(
+        "evidence_review_verdict_not_passed",
+        _world(evidence={"review_verdict": "not_passed"}),
+        "human",
+        "COORD-18: pass is required",
+        "A recorded changes_requested verdict at the exact head. Contrast "
+        "with changes_requested_judgment_human, which drives the same "
+        "conclusion through the PR review payload instead of the board's "
+        "verdict store -- two independent surfaces, one policy.",
+        "matrix",
+    ),
 ]
 
 _seen_ids = [row.id for row in CATALOG]
@@ -555,13 +712,15 @@ def build() -> dict[str, Any]:
         actual_roles = (
             [decision["desired_role"]] if decision.get("desired_role") else []
         )
-        expect = {
-            "terminal": _shared.terminal_for(first),
-            "reason_code": decision.get("reason_code"),
-            "role_sequence": actual_roles,
-            "route": actual_route,
-            "effect": plan.get("effect"),
-        }
+        # Locked from the observed tick through the SAME projection
+        # gold_decisions.py re-checks with, so the builder cannot write a field
+        # the gate does not compare (or omit one it does). COORD-78 added
+        # missing_artifact_near_miss_keys through that projection.
+        expect = _gold_shared.decision_expect(first)
+        assert expect["route"] == actual_route
+        assert expect["role_sequence"] == actual_roles
+        assert expect["effect"] == plan.get("effect")
+        assert expect["reason_code"] == decision.get("reason_code")
         scenario_doc = {
             "schema": _shared.SCHEMA,
             "id": row.id,

@@ -1,0 +1,36 @@
+{
+  "schema": "switchboard.completion_conformance.scenario.v1",
+  "id": "co21_evidence_near_miss_key",
+  "expect": {
+    "terminal": "blocked",
+    "reason_code": "missing_executed_test_run",
+    "role_sequence": [],
+    "route": "coordination_retry",
+    "effect": "repair_dispatch",
+    "missing_artifact_near_miss_keys": ["executed_tests"]
+  },
+  "world": {
+    "draft": false,
+    "ci": "pass",
+    "ci_context": "Switchboard CI / VM gate",
+    "ci_attribution": "product",
+    "review": "passed",
+    "mergeable": true,
+    "merge_state_status": "CLEAN",
+    "queue": "none",
+    "runner": {"live": false, "role": "none", "head": "none"},
+    "evidence": {
+      "executed_test_run": "near_miss_key",
+      "external_ci": "none",
+      "work_session": "present",
+      "review_verdict": "pass"
+    }
+  },
+  "timing": {
+    "ci_delay_seconds": 0,
+    "never_report": false,
+    "hang_seconds": 0,
+    "close_pr_while_runner_live": false,
+    "move_head_during_assessment": false
+  }
+}

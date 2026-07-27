@@ -27,6 +27,8 @@ mutating effect reaches `task_execution.start_task` or `gh`. The stop is enforce
 tests/conformance/
   _shared.py                 # scenario load/validate, snapshot builder, hermetic patches
                               #   (shared by T1 and T2 fixture mode; not a test itself)
+  _evidence.py                # COORD-78 world.evidence axis — runs the REAL merge_gate
+                              #   with only DB/GitHub seams stubbed
   scenario.schema.json        # scenario.v1 JSON Schema
   scenarios/*.json             # the seed catalog (T1 + T2 fixture mode both read these)
   test_completion_conformance.py   # T1 — run standalone or via pytest
@@ -82,6 +84,70 @@ only on what it currently is.
 ```bash
 python3.11 -m scripts.completion_conformance matrix-seed --emit /tmp/conformance-draft
 ```
+
+## The evidence axis: `world.evidence` (COORD-78)
+
+The six axes above are all PR-world. The **board-evidence** family — the one the
+last three completion outages came from — lives in an optional `world.evidence`
+block:
+
+| axis | values |
+|---|---|
+| `executed_test_run` | `valid` · `missing` · `near_miss_key` · `failed` · `stale_head` |
+| `external_ci` | `green_exact_head` · `green_other_head` · `failed` · `pending` · `none` |
+| `work_session` | `present` · `missing` · `borrowed` |
+| `review_verdict` | `pass` · `missing` · `stale` · `open_findings` · `not_passed` |
+
+```json
+"world": {
+  "draft": false, "ci": "pass", "review": "passed", "...": "...",
+  "evidence": {
+    "executed_test_run": "missing",
+    "external_ci": "green_exact_head",
+    "work_session": "present",
+    "review_verdict": "pass"
+  }
+}
+```
+
+Two rules make this an axis rather than a label:
+
+1. **The findings come from the real gate.** `_shared.build_snapshot` runs
+   `switchboard.application.commands.merge_gate` for every scenario and passes
+   its *actual* result into `build_completion_snapshot`. Only DB and GitHub
+   seams are stubbed, at `merge_gate`'s own `_store_facade` indirection layer.
+   Findings are **never** hand-built: `_merge_gate_finding` splats its `details`
+   onto the finding, and two shipped-dead consumers (COORD-61, BUG-182) came
+   from tests that hand-built the nested shape the gate never emits. Before
+   COORD-78 this argument was the literal `{"findings": []}`.
+2. **Omitting the block is an assertion, not a gap.** A scenario with no
+   `evidence` gets the world derived by `_evidence.default_evidence` — clean
+   evidence, with `external_ci` following `world.ci` so a red-CI scenario never
+   claims a green receipt. That is why the 27 pre-COORD-78 scenarios still
+   validate unchanged while now being graded against real gate output.
+
+`world.evidence` only decides an outcome when the PR world is otherwise green:
+`_finding_decision` runs after draft, exact-head CI and review in
+`_classify_completion_base`. That is deliberate — it is exactly the state
+COORD-57 sat in for 50 attempts. Write evidence scenarios on a clean PR world.
+
+Per-axis coverage prints on every T1 run as `EVIDENCE_COVERAGE` lines (scored
+over the seeds *and* the gold catalog), summarised as
+`EVIDENCE_COVERAGE SUMMARY undefined=N`.
+
+The three incident shapes are merge-gated T1 seeds, not gold-only:
+
+- `coord57_evidence_derived_from_ci_receipt` — no agent-recorded run, green CI
+  receipt on the exact head → derives, non-blocking, routes `review_merge`
+  (ENFORCE-16 / PR #955);
+- `coord57_evidence_missing_no_ci_receipt` — the negative control, without
+  which "derives" is indistinguishable from "never demanded it";
+- `co21_evidence_near_miss_key` — five suites recorded under `executed_tests`;
+  asserts the decision *names* the near-miss key, which the reason code alone
+  did not during the outage.
+
+`tests/test_coord78_conformance_evidence_axis.py` guards the contract itself
+(real gate, real finding shape, axis wired, schema matches the code).
 
 ## Live mode (CLI only — never merge-gate CI)
 

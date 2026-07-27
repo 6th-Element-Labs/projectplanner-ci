@@ -26,6 +26,7 @@ import _shared  # noqa: E402
 
 
 SCENARIO_DIR = HERE / "scenarios"
+GOLD_DIR = SCENARIO_DIR / "gold"
 AXES = _shared.AXES
 
 
@@ -133,7 +134,18 @@ def run_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
             second["execution"]["receipt"].get("idempotent_replay") is True,
             f"{scenario['id']}: second tick was not a verified replay",
         )
-    return {
+    # COORD-78/CO-21: when a scenario declares near-miss keys, the refusal must
+    # still be NAMING them by the time it reaches a repair dispatch. The reason
+    # code alone passed all the way through the CO-21 outage.
+    near_miss = _shared.missing_artifact_near_miss_keys(first["decision"])
+    expected_near_miss = expect.get("missing_artifact_near_miss_keys")
+    if expected_near_miss is not None:
+        _shared.require(
+            near_miss == sorted(expected_near_miss),
+            f"{scenario['id']}: near-miss keys {near_miss!r} != "
+            f"{sorted(expected_near_miss)!r}",
+        )
+    result = {
         "scenario_id": scenario["id"],
         "terminal": _shared.terminal_for(first),
         "route": first["decision"]["route"],
@@ -142,6 +154,9 @@ def run_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
         "roles": actual_roles,
         "second_tick": "idempotent_replay",
     }
+    if near_miss:
+        result["missing_artifact_near_miss_keys"] = near_miss
+    return result
 
 
 def coverage_report(scenarios: list[dict[str, Any]]) -> dict[str, int]:
@@ -181,6 +196,43 @@ def coverage_report(scenarios: list[dict[str, Any]]) -> dict[str, int]:
     return {"defined": len(covered), "undefined": undefined, "total": total}
 
 
+def evidence_coverage_report(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
+    """Report the COORD-78 evidence axes one axis at a time.
+
+    Not crossed into the PR-world product above: 810 PR cells x 375 evidence
+    combinations is ~304,000 rows, and a coverage table nobody reads proves
+    nothing. Per-axis is what an operator can act on — "no scenario reaches
+    external_ci=green_other_head" is a to-do; a quarter-million-row table is
+    not. Every value is reported against the EFFECTIVE evidence world (defaults
+    applied), because that is the world the real merge gate was run against.
+
+    Scored over the T1 seeds AND the gold catalog. The PR-world table above is
+    deliberately scored over the three seeds alone — its job is to keep 807
+    undefined cells visible — but an evidence axis reported as uncovered while
+    a gold scenario covers it would be a false to-do, and a coverage report
+    that cries wolf gets ignored.
+    """
+    report = _shared.evidence_coverage(scenarios + _shared.load_scenarios(GOLD_DIR))
+    for axis, values in report["covered"].items():
+        for value, ids in values.items():
+            # Named examples, not the full list: the default evidence world is
+            # shared by every PR-world scenario, so `valid`/`pass` would print
+            # forty ids and bury the cells that have one or none.
+            shown = sorted(ids)[:3]
+            status = (
+                f"SCENARIO_DEFINED:{len(ids)}:{','.join(shown)}"
+                if ids
+                else "NO_SCENARIO_DEFINED"
+            )
+            print(f"EVIDENCE_COVERAGE {axis}={value!r} status={status}")
+    print(
+        "EVIDENCE_COVERAGE SUMMARY "
+        f"undefined={len(report['undefined'])} "
+        f"cells={sum(len(v) for v in report['covered'].values())}"
+    )
+    return report
+
+
 def main() -> int:
     passed = failed = 0
     scenarios = load_scenarios()
@@ -198,9 +250,11 @@ def main() -> int:
         coverage["undefined"] > 0,
         "coverage must expose undefined cells, not grade only known scenarios",
     )
+    evidence = evidence_coverage_report(scenarios)
     print(
         f"\nCompletion conformance: {passed} passed, {failed} failed; "
-        f"{coverage['undefined']} undefined cells"
+        f"{coverage['undefined']} undefined cells; "
+        f"{len(evidence['undefined'])} undefined evidence cells"
     )
     return 1 if failed else 0
 

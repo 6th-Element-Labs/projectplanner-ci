@@ -16,10 +16,21 @@ from contextlib import ExitStack, contextmanager
 from itertools import product
 import json
 from pathlib import Path
+import sys
 from typing import Any, Iterator
 from unittest.mock import patch
 
 from switchboard.domain.completion.state_machine import build_completion_snapshot
+
+# This module is imported both flat (``import _shared``, from T1 and
+# _gold_shared) and as a package module (``from tests.conformance import
+# _shared``, from scripts/completion_conformance). Bootstrap our own directory
+# so the sibling import below resolves either way, exactly as _gold_shared does.
+_HERE = str(Path(__file__).resolve().parent)
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+import _evidence  # noqa: E402
 
 
 SCHEMA = "switchboard.completion_conformance.scenario.v1"
@@ -91,6 +102,16 @@ def validate_scenario(value: Any, source: Any) -> dict[str, Any]:
         isinstance(expect.get("role_sequence"), list),
         f"{source}: expect.role_sequence must be an array",
     )
+    near_miss = expect.get("missing_artifact_near_miss_keys")
+    require(
+        near_miss is None or (
+            isinstance(near_miss, list)
+            and bool(near_miss)
+            and all(isinstance(item, str) and item for item in near_miss)
+        ),
+        f"{source}: expect.missing_artifact_near_miss_keys must be a non-empty "
+        "array of strings when present",
+    )
     require(world.get("draft") in AXES["draft"], f"{source}: invalid draft")
     require(world.get("ci") in CI_VALUES, f"{source}: invalid ci")
     require(
@@ -157,6 +178,10 @@ def validate_scenario(value: Any, source: Any) -> dict[str, Any]:
         runner.get("role") in {"none", "review_merge", "remediation"},
         f"{source}: invalid runner.role",
     )
+    # COORD-78: the board-evidence axis. Optional, because a scenario that
+    # declares no evidence world is asserting the derived default one
+    # (_evidence.default_evidence) — not "evidence is unmodelled".
+    _evidence.validate_evidence(world.get("evidence"), source, require)
     return value
 
 
@@ -269,6 +294,25 @@ def build_snapshot(
         github_pr["merged"] = True
     if pr_state == "CLOSED" and world.get("reopen_authorized") is True:
         github_pr["reopen_authorized"] = True
+    # COORD-78: this used to be `merge_gate={"findings": []}`. A hardcoded empty
+    # finding list made the whole evidence family — the family the last three
+    # completion incidents came from — unrepresentable, and it asserted a fact
+    # about production (that the gate has nothing to say) rather than reading
+    # one. The findings below are whatever the REAL merge gate returns for this
+    # world; see tests/conformance/_evidence.py for why they are never
+    # hand-built. The gate is handed the same PR object and the same required
+    # contexts the snapshot gets, so the two views of one world can never
+    # disagree for a reason the scenario did not declare.
+    merge_gate = _evidence.merge_gate_result(
+        scenario["id"], world,
+        task_id=task_id,
+        head_sha=HEAD,
+        pr_url=PR_URL,
+        pr_number=PR_NUMBER,
+        github_pr=github_pr,
+        required_status_contexts=required_contexts,
+        status_contexts=contexts,
+    )
     return build_completion_snapshot(
         task={
             "task_id": task_id,
@@ -283,7 +327,7 @@ def build_snapshot(
         required_status_contexts=required_contexts,
         status_contexts=contexts,
         review=review,
-        merge_gate={"findings": []},
+        merge_gate=merge_gate,
         merge_queue=queue,
         runner=runner,
     )
@@ -411,10 +455,27 @@ def coverage_cells() -> Any:
     return product(*(AXES[name] for name in AXES))
 
 
+#: The board-evidence axes, re-exported so callers do not have to know whether
+#: an axis lives in the PR world or the evidence world. ``AXES`` stays the PR
+#: world alone: it is the key space of the ``coverage_cells`` cartesian product,
+#: and crossing four evidence axes into it would produce ~243,000 cells.
+#: Evidence coverage is reported per axis by ``_evidence.evidence_coverage``.
+#: Re-exported in full so a caller never needs to import ``_evidence``
+#: separately — it caches an in-memory database, and a second module instance
+#: (flat vs ``tests.conformance``) would quietly build a second one.
+EVIDENCE_AXES = _evidence.EVIDENCE_AXES
+default_evidence = _evidence.default_evidence
+effective_evidence = _evidence.effective_evidence
+evidence_coverage = _evidence.evidence_coverage
+missing_artifact_near_miss_keys = _evidence.missing_artifact_near_miss_keys
+
+
 __all__ = [
     "SCHEMA", "HEAD", "PR_NUMBER", "PR_URL", "AXES", "CI_STATE",
     "CI_VALUES", "QUEUE_VALUES", "PR_STATE_VALUES", "REVIEW_FINDINGS_VALUES",
-    "require", "validate_scenario", "load_scenarios", "build_snapshot",
-    "EffectLedger", "terminal_for", "hermetic_completion_patches",
-    "coverage_cells",
+    "EVIDENCE_AXES", "require", "validate_scenario", "load_scenarios",
+    "build_snapshot", "EffectLedger", "terminal_for",
+    "hermetic_completion_patches", "coverage_cells", "default_evidence",
+    "effective_evidence", "evidence_coverage",
+    "missing_artifact_near_miss_keys",
 ]
