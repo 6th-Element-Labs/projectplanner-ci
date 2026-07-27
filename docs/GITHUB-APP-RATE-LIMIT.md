@@ -59,7 +59,8 @@ That compatibility statement applies to the fleet REST clients described here. I
 `switchboard-ci-status` App, installed only on the canonical projectplanner repository,
 with metadata read and commit-status read/write permissions. Its
 `SWITCHBOARD_APP_ID` and `SWITCHBOARD_APP_PRIVATE_KEY` secrets are mandatory; token
-minting fails closed and there is no PAT fallback.
+minting fails closed and there is no PAT fallback. Only the trusted default-branch
+announce/report jobs can access those secrets; the scratchpad suite job is secret-free.
 
 ## Operator cutover
 
@@ -81,7 +82,7 @@ Repository permissions:
 | Metadata | Read | required by GitHub |
 | Pull requests | Read | dock, gates, merge coordinator |
 | Contents | Read | commit / branch checks, push verification |
-| Commit statuses | **Read & write** | the claim + merge-authorization statuses |
+| Commit statuses | **Read & write** | the claim advisory and required CI callback |
 | Checks | Read | CI state on PR cards |
 
 Keep the **App ID**, and **Generate a private key** — the `.pem` downloads once.

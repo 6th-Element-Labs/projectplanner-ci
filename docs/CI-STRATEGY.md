@@ -1,6 +1,6 @@
 # Switchboard CI Strategy — Provenance-Safe, Fleet-Universal CI Routing
 
-- **Status:** Active. **projectplanner** verification is push-triggered scratchpad CI on `projectplanner-ci` (CI-10…CI-14); **Helm** and other push-path repos use the same [`external_ci_mirror.py`](../external_ci_mirror.py) engine (REPO-1…4 / CI-MIRROR-2). Spec: [`EXTERNAL-CI-MIRROR-SPEC.md`](EXTERNAL-CI-MIRROR-SPEC.md).
+- **Status:** Active. **projectplanner** mirrors exact SHAs to `projectplanner-ci` and dispatches one trusted default-branch workflow; **Helm** and other push-path repos use the same [`external_ci_mirror.py`](../external_ci_mirror.py) engine (REPO-1…4 / CI-MIRROR-2). Spec: [`EXTERNAL-CI-MIRROR-SPEC.md`](EXTERNAL-CI-MIRROR-SPEC.md).
 - **Scope:** How CI runs for every repo Switchboard coordinates — our own (`Helm`, `projectplanner`) and customer projects — as one uniform, declarative capability.
 - **Relates to:** [ADR-0003 work-provenance](decisions/0003-work-provenance-and-reconciliation.md) · [ADR-0010 CI concurrency (2026-07-12 post-mortem context)](decisions/0010-ci-concurrency.md) · `repo_topology` in `store.py` · `external_ci_mirror.py`
 
@@ -13,7 +13,6 @@
 | Route | Runs where | Code stays private? | Cost | Handles macOS/heavy? | Default for |
 |---|---|---|---|---|---|
 | **A-push. Public CI scratchpad** (`external_ci_mirror`) | free GitHub-hosted runners on a **public** mirror repo | no (ephemeral, test-only branch) | **$0**, any account | **yes** (free hosted macOS) | small-budget / expensive-CI / open-source repos → **incl. projectplanner and Helm** |
-| **A-pull. Private checkout bridge** (`ci_verify_dispatch`) | free GitHub-hosted runners; workflow checks out a private canonical ref | **yes** | **$0**, any account | Linux today | manual rollback bridge only; not projectplanner's primary path |
 | **B. Self-hosted runner** | standard GitHub Actions on **our own dedicated runner box** | **yes** | $0 minutes (our compute) | Linux yes; macOS needs Mac hardware | **enterprise clients who refuse public code** |
 | **C. Hosted on canonical** | GitHub-hosted runners on the private repo | **yes** | draws the account's included minutes | yes (billed) | orgs with ample allowance + cheap CI |
 
@@ -40,7 +39,7 @@ Before CI-6/CI-7, **projectplanner** used Route A-push like Helm: the Plan VM ra
 - The **bare mirror + git checkout on the prod VM** tied verification to disk, SSH/HTTPS auth, and cgroup contention on the same host that serves `plan.taikunai.com` — the failure class called out in [`ci_verify_dispatch.py`](../ci_verify_dispatch.py) as the **2026-07-12 bare-mirror outage**.
 - **Push-path mirror sync** briefly published source to a public `ci/…` branch; acceptable for Helm economics, unnecessary for an org repo that can keep code private.
 
-The CI-6 pull model was a useful bridge: it moved the suite off the production VM and stabilized the required check. CI-10…CI-16 retain the public runner, exact-SHA contract, failure labels, and evidence model while replacing the trigger, checkout, and callback seams. The canonical webhook calls `external_ci_mirror.request_external_ci_mirror_run`, fetches the exact PR head, and pushes it to a disposable `ci/**` branch. That push starts `verify.yml`; the workflow checks out the public scratchpad directly and uses a dedicated GitHub App installation token to post one required verdict back to the canonical SHA. There is no PAT fallback. `SWITCHBOARD_CI_PULL_MODEL` is no longer the primary route.
+The CI-6 pull model was a useful bridge: it moved the suite off the production VM and stabilized the required check. CI-10…CI-17 retain the public runner, exact-SHA contract, failure labels, and evidence model while deleting that bridge and replacing the unsafe trigger seam. The canonical webhook calls `external_ci_mirror.request_external_ci_mirror_run`, fetches the exact PR head, and pushes it to a disposable `refs/tags/ci/**` tag. It then dispatches `verify.yml` from `projectplanner-ci`'s trusted default branch. Tags cannot satisfy a legacy `branches: ci/**` push trigger, mirrored agent code never chooses the workflow, and the secret-free suite job never shares a runner with the App callback credential. There is no PAT fallback.
 
 ---
 
@@ -76,17 +75,18 @@ Route A-push is implemented by the first-class **`external_ci_mirror`** runner +
 
 Flow:
 
-1. Canonical PR `opened` / `reopened` / `ready_for_review` / `synchronize` webhook → [`github_sync.py`](../github_sync.py) → `external_ci_mirror.request_external_ci_mirror_run(..., push_triggered=True)`.
-2. The runner fetches `refs/pull/<n>/head`, verifies the exact webhook head SHA, and pushes that commit to a deterministic disposable `ci/<task>/<sha>` branch on `6th-Element-Labs/projectplanner-ci`.
-3. The branch push starts **`verify.yml`**. It checks out the public scratchpad directly, runs the full `scripts/switchboard_ci.sh` suite and Playwright, and posts the single required context **`Switchboard CI / VM gate`** on the identical canonical SHA. The callback uses only `SWITCHBOARD_APP_ID` plus `SWITCHBOARD_APP_PRIVATE_KEY`; checkout needs no credential.
-4. Plan VM **`switchboard_pr_gate.py` posts advisory board-backed PR statuses**: SESSION-12 `Switchboard / claim gate` plus `Switchboard / merge authorization`. They provide coordination visibility but are not GitHub merge gates. It never runs the suite or mirrors source.
+1. Canonical PR `opened` / `reopened` / `ready_for_review` / `synchronize` webhook → [`github_sync.py`](../github_sync.py) → `external_ci_mirror.request_external_ci_mirror_run`.
+2. The runner fetches `refs/pull/<n>/head`, verifies the live GitHub head and merge-base SHAs, and pushes the exact head to a deterministic disposable `refs/tags/ci/<task>/<sha>` tag on `6th-Element-Labs/projectplanner-ci`. The tag transport cannot trigger a branch-authored workflow.
+3. The runner dispatches **`master:verify.yml`** with the scratchpad ref, exact SHA, merge base, and `head` mode. The trusted workflow runs impacted admission tests in a secret-free job; isolated App jobs post the one required context **`Switchboard CI / VM gate`**.
+4. GitHub's merge queue creates a temporary merge-group SHA. The same route dispatches `merge_group` mode, which runs the full suite plus Playwright before landing.
+5. Plan VM **`switchboard_pr_gate.py` posts only SESSION-12 `Switchboard / claim gate`** as advisory coordination visibility. Merge authorization remains internal Switchboard state.
 
 **Trigger decision (projectplanner):**
 
 | Layer | Mechanism | Role |
 |---|---|---|
-| **Primary** | exact-SHA push to `ci/**` from canonical PR webhook | Instant verification when the webhook fires |
-| **Rollback bridge** | manual [`ci_verify_dispatch.py`](../ci_verify_dispatch.py) invocation | Temporary operator escape hatch; not webhook primary |
+| **Primary** | exact-SHA mirror plus trusted `workflow_dispatch` | Fast PR admission; full merge-group verification |
+| **Manual recovery** | trusted `workflow_dispatch` with `source_ref`, `source_sha`, and mode | Re-run one exact mirrored SHA without another trigger path |
 | **Heartbeat** | [`docs/UPTIME-MONITORING.md`](UPTIME-MONITORING.md) off-box probe (5-min) | Separate liveness probe for `plan.taikunai.com`; does not run the suite |
 
 Failure legibility (2026-07-12 lesson): checkout/setup failures post `infra: …`; suite failures post `tests: …`.
@@ -124,7 +124,7 @@ Helm routing is **unchanged**. projectplanner now uses the same push mirror engi
 **Built + shipped:**
 - `repo_topology` schema — roles, authority, `required_status_contexts`, `claim_gate`; MCP tools (`set_project_repo_topology`, …); agent session-prompt guidance ("public_ci = verification evidence only").
 - **`external_ci_mirror` engine** — push/dispatch/poll/record for Route A-push (Helm and MCP-driven mirrors).
-- **Scratchpad verification (CI-10…CI-14):** push-triggered `verify.yml` on `projectplanner-ci`; webhook routing through `external_ci_mirror`; exact-SHA status evidence; Plan VM claim and merge-authorization [`switchboard_pr_gate.py`](../scripts/switchboard_pr_gate.py). The CI-6 pull relay remains only as a manual rollback bridge.
+- **Scratchpad verification (CI-10…CI-17):** exact-SHA mirror plus trusted default-branch `verify.yml`; secret-free suite execution; fast PR admission; full merge-group verification; one required status; Plan VM claim advisory. The pull relay and duplicate backend/sharded workflows are retired.
 - **Off-box uptime probe (HARDEN-44):** [`UPTIME-MONITORING.md`](UPTIME-MONITORING.md) on `projectplanner-ci`.
 
 **To build (turns the capability into a one-click product):**
@@ -139,7 +139,8 @@ Helm routing is **unchanged**. projectplanner now uses the same push mirror engi
 - **Phase 0 — Proven:** Route A validated on projectplanner; live on Helm.
 - **Phase 1 — Consolidate (DONE):** topology-driven verification; on-box venv test-runner retired; duplicate `run_sandbox_gate` + `ci-sandbox.sh` removed.
 - **Phase 1b — Pull bridge (DONE, CI-6…CI-9):** projectplanner VM gate moved to `verify.yml`; suite and legacy bare-mirror units retired from the box.
-- **Phase 1c — Scratchpad route (CI-10…CI-14):** reuse the mirror engine, push exact PR heads to disposable branches, and keep the required status contract.
+- **Phase 1c — Scratchpad route (CI-10…CI-17):** reuse the mirror engine, push exact projectplanner PR heads to non-triggering disposable tags, and keep the required status contract. Other mirror consumers retain their declared ref strategy.
+- **Phase 1d — Trusted fast/full route (CI-16…CI-17):** one App-authenticated verdict, trusted workflow authority, secret/job separation, fast head admission, full queue verification, and no pull fallback.
 - **Phase 2 — Automate provisioning:** opt-in creates + wires a mirror or pull workflow from the topology.
 - **Phase 3 — Route B:** dedicated/autoscaling self-hosted runner as the private fallback.
 - **Phase 4 — UI:** project-settings strategy selector + status.
@@ -150,17 +151,17 @@ Helm routing is **unchanged**. projectplanner now uses the same push mirror engi
 
 - **Route A-push briefly exposes source on a public repo.** Mitigations: ephemeral `ci/…` branches, terminal cleanup, a secrets/history scan gate before first push, and **Route B/C for anyone who can't accept it.** This exposure is explicit and accepted for the projectplanner scratchpad route.
 - **Route A-push needs authenticated source fetch and mirror push credentials on the caller.** For projectplanner the Plan VM performs only this coordination step; the suite still runs off-box.
-- **projectplanner-ci uses a dedicated App for commit-status writeback.** Both App secrets are mandatory and token minting fails closed; the retired `PRIVATE_READ_TOKEN` must not be restored. Scratchpad checkout is public and credential-free.
+- **projectplanner-ci uses a dedicated App for commit-status writeback.** `SWITCHBOARD_APP_ID` and `SWITCHBOARD_APP_PRIVATE_KEY` are mandatory and token minting fails closed; the retired `PRIVATE_READ_TOKEN` must not be restored. Only isolated announce/report jobs can read those secrets. The suite job checks out public scratchpad code with no credential.
 - **Self-hosted (B) is standard GitHub Actions on a *separate* machine** — never the prod web box (that was the HARDEN-32 mistake).
 - **Free macOS only exists on public runners**, so macOS-heavy private repos either accept Route A-push or pay for Mac hardware under B.
 
 ## Native merge queue
 
-GitHub's native merge queue tests merge-group head SHAs, not PR heads. The canonical `merge_group/checks_requested` webhook sends that exact temporary SHA through the same mirror route, and **`verify.yml` posts only `Switchboard CI / VM gate` to it**. Advisory merge authorization remains PR-scoped; projecting it onto a temporary merge-group SHA adds a second lifecycle and can strand the queue. See [`SWITCHBOARD-RUNBOOK.md`](SWITCHBOARD-RUNBOOK.md) → "Native merge queue".
+GitHub's native merge queue tests merge-group head SHAs, not PR heads. The canonical `merge_group/checks_requested` webhook sends that exact temporary SHA through the same mirror route in full mode, and **`verify.yml` posts only `Switchboard CI / VM gate` to it** after the full suite and Playwright. PR-head green means safe to enqueue, not safe to bypass this landing gate. See [`SWITCHBOARD-RUNBOOK.md`](SWITCHBOARD-RUNBOOK.md) → "Native merge queue".
 
 ## Non-goals
 
-- Open-sourcing the products (Route A-push publishes test-only, ephemerally — not a release; the rollback A-pull bridge does not publish source).
+- Open-sourcing the products (Route A-push publishes test-only, ephemerally — not a release).
 - Running CI on the production web box, ever.
 - Letting any non-canonical repo speak for "Done."
-- A second CI-mirror mechanism for projectplanner. **`external_ci_mirror` is the one primary push engine; pull-model dispatch is rollback-only.**
+- A second CI-mirror mechanism for projectplanner. **`external_ci_mirror` plus one trusted workflow is the complete route.**

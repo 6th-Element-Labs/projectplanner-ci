@@ -31,6 +31,8 @@ MI = {
     "test_deliverables_model.py": {"store"},
     "test_comma.py": {"os", "signals"},          # comma-import edge (import os, signals)
     "test_widget.py": {"widgets.parser", "widgets"},
+    "test_frontend_shell.py": set(),
+    "tests/test_ui_card.py": set(),
 }
 ALL = [f for f in MI if os.path.basename(f).startswith("test_")]
 
@@ -91,6 +93,18 @@ try:
        and sizes[-1] - sizes[0] <= 1,
        "shard partitions all items exactly once, balanced within 1, deterministic")
     ok(sel.shard(items, 1, 0) == sorted(items), "shards=1 returns the whole sorted set")
+
+    # 10. PR-head admission narrows static UI changes and directly changed tests.
+    admission_ui = sel.impacted_tests(
+        ["static/app.js"], ALL, module_imports=MI, admission=True)
+    ok("test_frontend_shell.py" in admission_ui
+       and "tests/test_ui_card.py" in admission_ui
+       and "test_narration_ops.py" not in admission_ui,
+       "fast admission maps static UI changes to the bounded UI test family")
+    ok(sel.impacted_tests(
+        ["tests/test_ui_card.py"], ALL, module_imports=MI, admission=True)
+       == ["tests/test_ui_card.py"],
+       "fast admission runs a directly changed test without forcing the full suite")
 
 except Exception as exc:  # pragma: no cover
     import traceback

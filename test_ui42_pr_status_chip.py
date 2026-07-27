@@ -23,6 +23,7 @@ import tempfile
 from pathlib import Path
 
 APP = Path(__file__).resolve().parent / "static" / "app.js"
+FLEET_DOCK = Path(__file__).resolve().parent / "static" / "js" / "fleet-dock.js"
 START, END = "    _dockBadge(text, tone, icon, title) {", "    _renderFleetDock("
 
 FAILED = []
@@ -39,6 +40,8 @@ def render(prs):
     src = APP.read_text(encoding="utf-8")
     body = src[src.index(START):src.index(END)]
     harness = """
+const window = {};
+%s
 const T = {
     esc: (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
         (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),
@@ -50,7 +53,7 @@ const out = INPUT.map((x) => ({
     html: T._dockPrHtml(x),
 }));
 console.log(JSON.stringify(out));
-""" % body
+""" % (FLEET_DOCK.read_text(encoding="utf-8"), body)
     tmp = Path(tempfile.mkdtemp(prefix="ui42-"))
     try:
         script = tmp / "run.js"

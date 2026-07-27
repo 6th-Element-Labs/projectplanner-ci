@@ -2,9 +2,9 @@
 """Guard the current Switchboard CI policy.
 
 The single required verdict (`Switchboard CI / VM gate`) runs on
-projectplanner-ci via the scratchpad push workflow. It covers the full suite and
-Playwright. Pull-model dispatch remains a temporary rollback bridge when
-``SWITCHBOARD_CI_SCRATCHPAD=0``. The Plan VM posts advisory coordination gates.
+projectplanner-ci from a trusted default-branch workflow. PR heads receive a
+fast admission pass; merge-group SHAs receive the full suite and Playwright.
+The Plan VM posts only the advisory claim status.
 """
 from pathlib import Path
 
@@ -29,36 +29,37 @@ web_unit = Path("deploy/projectplanner.service").read_text(encoding="utf-8")
 least_privilege = Path("deploy/apply-least-privilege.sh").read_text(encoding="utf-8")
 mcp_unit = Path("deploy/projectplanner-mcp.service").read_text(encoding="utf-8")
 
-backend_tests = actions_dir / "backend-tests.yml"
-_bt = backend_tests.read_text(encoding="utf-8") if backend_tests.exists() else ""
 verify = actions_dir / "verify.yml"
 _verify = verify.read_text(encoding="utf-8") if verify.exists() else ""
-ok(backend_tests.exists()
-   and "workflow_dispatch" in _bt
-   and "scripts/switchboard_ci.sh" in _bt,
-   "backend-tests workflow runs the full suite on the public projectplanner-ci sandbox")
+ok(not (actions_dir / "backend-tests.yml").exists()
+   and not (actions_dir / "ci-sharded.yml").exists(),
+   "retired parallel CI workflows cannot create a second verification path")
 ok(verify.exists()
-   and 'branches:' in _verify
-   and '"ci/**"' in _verify
+   and "workflow_dispatch:" in _verify
+   and '"ci/**"' not in _verify
+   and "refs/tags/ci/" in _verify
    and "scripts/switchboard_ci.sh" in _verify,
-   "scratchpad verify workflow runs the full suite on pushed ci/** branches")
+   "trusted default-branch workflow accepts tags, not mirrored branch pushes")
 ok("SWITCHBOARD_APP_ID" in _verify
    and "SWITCHBOARD_APP_PRIVATE_KEY" in _verify
    and "PRIVATE_READ_TOKEN" not in _verify
-   and "repository:" not in _verify
    and "refs/pull/" not in _verify,
    "scratchpad status callback is App-only and checkout remains public")
 ok("Switchboard CI / VM gate" in _verify
    and "Switchboard UI / Playwright" not in _verify
    and "scripts/run_ui_playwright.py" in ci_suite
    and "SWITCHBOARD_CI_STRICT" in _verify
-   and "infra:" in _verify
-   and "tests:" in _verify,
-   "one required context covers the full suite and Playwright with legible failures")
+   and "validation_mode" in _verify
+   and "SWITCHBOARD_CI_SCOPE" in _verify,
+   "one context covers fast head admission and full merge-group verification")
+ok("jobs:\n  announce:" in _verify
+   and "\n  suite:" in _verify
+   and "\n  report:" in _verify,
+   "credentials and untrusted test execution live in separate jobs")
 ok('DEFAULT_CLAIM_CONTEXT = "Switchboard / claim gate"' in pr_gate,
    "claim gate posts a stable PR-visible commit status context")
-ok('DEFAULT_MERGE_CONTEXT = "Switchboard / merge authorization"' in pr_gate,
-   "merge authorization posts a stable PR-visible commit status context")
+ok("run_merge_authorization_for_pr(" not in pr_gate[pr_gate.index("def main("):],
+   "claim-gate timer no longer publishes advisory merge-authorization statuses")
 ok("import subprocess" not in pr_gate and "import external_ci_mirror" not in pr_gate,
    "switchboard_pr_gate.py has no git/subprocess/external_ci_mirror imports")
 ok("projectplanner-claim-gate.timer" in provision and "switchboard_ci.sh" in provision,
@@ -89,6 +90,13 @@ ok("run_discovered_tests" in ci_suite and "TEST_DENYLIST" in ci_suite
    "CI gate discovers every Python test unless the documented denylist excludes it")
 ok(not any(line.startswith("run_test test_") for line in ci_suite.splitlines()),
    "CI gate cannot silently regress to a hand-maintained per-test allowlist")
+ok("SWITCHBOARD_CI_SCOPE" in ci_suite
+   and "select_impacted_tests.py" in ci_suite
+   and "SWITCHBOARD_CI_FAIL_FAST" in ci_suite,
+   "fast admission selects impacted tests and stops scheduling after a known failure")
+ok("app.js composition root stays below 5,000 lines" not in
+   Path("test_arch_ms21_frontend_modules.py").read_text(encoding="utf-8"),
+   "retired global app.js line counter is no longer a blocking test")
 
 print("\n%d passed, %d failed" % (passed, failed))
 raise SystemExit(1 if failed else 0)

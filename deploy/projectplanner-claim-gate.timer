@@ -1,7 +1,7 @@
 # /etc/systemd/system/projectplanner-claim-gate.timer
-# Poll open fleet PRs and refresh claim and merge-authorization statuses.
+# Poll open fleet PRs and refresh the advisory claim status.
 [Unit]
-Description=ProjectPlanner Switchboard PR authorization gates (every 2 minutes)
+Description=ProjectPlanner Switchboard PR claim advisory (every 2 minutes)
 
 [Timer]
 OnBootSec=60s

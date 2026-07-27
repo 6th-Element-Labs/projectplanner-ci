@@ -1,21 +1,41 @@
-# CI-14 — push-triggered scratchpad verification.
+# Trusted public-mirror verification.
 #
-# external_ci_mirror pushes an exact canonical projectplanner SHA to a disposable
-# ci/** branch in the public projectplanner-ci repository. This workflow runs the
-# mirrored checkout directly, reports the required status to that same canonical
-# SHA, and leaves branch deletion to the CI-11 terminal cleanup path.
+# This file is installed on projectplanner-ci's default branch. The canonical
+# dispatcher first mirrors an exact SHA to a disposable ci/** branch, then
+# invokes this workflow on the trusted default branch with that ref as input.
+# Agent-authored workflow files on the mirrored branch are never executed.
 name: verify
+run-name: verify ${{ inputs.source_sha }} (${{ inputs.validation_mode }})
 
 on:
-  push:
-    branches:
-      - "ci/**"
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Disposable projectplanner-ci tag containing the exact canonical SHA"
+        required: true
+        type: string
+      source_sha:
+        description: "Exact canonical SHA to verify and stamp"
+        required: true
+        type: string
+      validation_mode:
+        description: "Fast PR-head admission or full merge-group verification"
+        required: true
+        default: head
+        type: choice
+        options:
+          - head
+          - merge_group
+          - full
+      base_sha:
+        description: "Optional merge-base SHA used for impacted-test selection"
+        required: false
+        type: string
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
-  group: verify-${{ github.ref }}
+  group: verify-${{ inputs.source_sha }}
   cancel-in-progress: true
 
 env:
@@ -24,13 +44,26 @@ env:
   TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
 jobs:
-  verify:
+  announce:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 5
     steps:
-      # The dedicated App is the only callback credential. A missing or malformed App
-      # key fails here before CI can pretend it has a usable status path.
-      - name: Mint status-callback token (GitHub App)
+      - name: Validate exact-SHA request
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          VALIDATION_MODE: ${{ inputs.validation_mode }}
+          BASE_SHA: ${{ inputs.base_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_REF" =~ ^refs/tags/ci/[A-Za-z0-9._/-]+$ ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$VALIDATION_MODE" =~ ^(head|merge_group|full)$ ]]
+          if [ -n "$BASE_SHA" ]; then
+            [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          fi
+
+      - name: Mint status-callback token
         id: app_token
         uses: actions/create-github-app-token@v2
         with:
@@ -42,19 +75,39 @@ jobs:
       - name: Post pending required status
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          VALIDATION_MODE: ${{ inputs.validation_mode }}
         run: |
-          gh api "repos/$CANONICAL_REPO/statuses/$GITHUB_SHA" \
+          gh api "repos/$CANONICAL_REPO/statuses/$SOURCE_SHA" \
             -f state=pending \
             -f context="$STATUS_CONTEXT" \
-            -f description='scratchpad: running full suite + Playwright' \
+            -f description="CI: ${VALIDATION_MODE} verification running" \
             -f target_url="$TARGET_URL"
 
-      - name: Check out scratchpad branch
+  suite:
+    needs: announce
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      failure_class: ${{ steps.classify.outputs.failure_class }}
+      summary: ${{ steps.classify.outputs.summary }}
+    steps:
+      - name: Check out exact scratchpad ref
         id: checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.source_ref }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Verify exact mirrored SHA
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -75,65 +128,112 @@ jobs:
           python -m pip install --upgrade pip
           pip install --disable-pip-version-check -r requirements.txt -r requirements-ci.txt
 
-      - name: Install required Chromium service-cut browser
+      - name: Install Chromium
+        # Admission can select browser tests (or safely expand to the full suite).
+        # Keep the runner contract uniform instead of predicting that selection twice.
         run: python -m playwright install --with-deps chromium
 
-      - name: Run Switchboard CI suite
-        id: suite
+      - name: Run Switchboard CI
+        id: tests
+        continue-on-error: true
         env:
           SWITCHBOARD_CI_STRICT: "1"
           SWITCHBOARD_CI_REQUIRE_NODE: "1"
+          SWITCHBOARD_CI_SCOPE: ${{ inputs.validation_mode == 'head' && 'fast' || 'full' }}
+          SWITCHBOARD_CI_BASE_SHA: ${{ inputs.base_sha }}
+          SWITCHBOARD_CI_FAIL_FAST: "1"
           CONCURRENT_LOAD_REPORT: ".artifacts/concurrent-load-report.json"
+          CROSS_PROCESS_LOAD_REPORT: ".artifacts/cross-process-load-report.json"
           UI_PLAYWRIGHT_REPORT: ".artifacts/ui-playwright-receipt.json"
+          CI_RESULT_REPORT: ".artifacts/ci-result.json"
         run: |
           unset GITHUB_REPOSITORY
           bash scripts/switchboard_ci.sh
 
-      - name: Upload concurrent-load SLO report
+      - name: Upload CI result
         if: always() && steps.checkout.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
-          name: concurrent-load-${{ github.sha }}
-          path: .artifacts/concurrent-load-report.json
+          name: ci-result-${{ inputs.source_sha }}
+          path: .artifacts/ci-result.json
           if-no-files-found: warn
 
-      - name: Upload UI Playwright receipt
+      - name: Upload load reports
         if: always() && steps.checkout.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
-          name: ui-playwright-${{ github.sha }}
+          name: load-reports-${{ inputs.source_sha }}
+          path: |
+            .artifacts/concurrent-load-report.json
+            .artifacts/cross-process-load-report.json
+          if-no-files-found: warn
+
+      - name: Upload Playwright receipt
+        if: always() && inputs.validation_mode != 'head' && steps.checkout.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-playwright-${{ inputs.source_sha }}
           path: .artifacts/ui-playwright-receipt.json
-          if-no-files-found: error
+          if-no-files-found: warn
 
-      - name: Post required success status
-        if: success()
+      - name: Classify result
+        id: classify
+        if: always()
+        env:
+          CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
+          TEST_OUTCOME: ${{ steps.tests.outcome }}
+          VALIDATION_MODE: ${{ inputs.validation_mode }}
+        run: |
+          if [ "$CHECKOUT_OUTCOME" != "success" ]; then
+            echo "failure_class=infra" >> "$GITHUB_OUTPUT"
+            echo "summary=infra: exact scratchpad checkout failed" >> "$GITHUB_OUTPUT"
+          elif [ "$TEST_OUTCOME" != "success" ]; then
+            echo "failure_class=tests" >> "$GITHUB_OUTPUT"
+            echo "summary=tests: ${VALIDATION_MODE} verification failed" >> "$GITHUB_OUTPUT"
+          else
+            echo "failure_class=" >> "$GITHUB_OUTPUT"
+            echo "summary=tests: ${VALIDATION_MODE} verification passed" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Enforce suite result
+        if: always() && steps.tests.outcome != 'success'
+        run: exit 1
+
+  report:
+    if: always()
+    needs:
+      - announce
+      - suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Mint status-callback token
+        id: app_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.SWITCHBOARD_APP_ID }}
+          private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
+          owner: 6th-Element-Labs
+          repositories: projectplanner
+
+      - name: Post one terminal required status
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SUITE_RESULT: ${{ needs.suite.result }}
+          FAILURE_CLASS: ${{ needs.suite.outputs.failure_class }}
+          SUMMARY: ${{ needs.suite.outputs.summary }}
         run: |
-          gh api "repos/$CANONICAL_REPO/statuses/$GITHUB_SHA" \
-            -f state=success \
+          set -euo pipefail
+          state=failure
+          description="${SUMMARY:-infra: verification did not start}"
+          if [ "$SUITE_RESULT" = "success" ]; then
+            state=success
+          elif [ -z "$FAILURE_CLASS" ]; then
+            description="infra: verification job did not complete"
+          fi
+          gh api "repos/$CANONICAL_REPO/statuses/$SOURCE_SHA" \
+            -f state="$state" \
             -f context="$STATUS_CONTEXT" \
-            -f description='tests: full suite + Playwright passed (scratchpad)' \
-            -f target_url="$TARGET_URL"
-
-      - name: Post tests failure status
-        if: failure() && steps.checkout.outcome == 'success'
-        env:
-          GH_TOKEN: ${{ steps.app_token.outputs.token }}
-        run: |
-          gh api "repos/$CANONICAL_REPO/statuses/$GITHUB_SHA" \
-            -f state=failure \
-            -f context="$STATUS_CONTEXT" \
-            -f description='tests: full suite or Playwright failed — see run log' \
-            -f target_url="$TARGET_URL"
-
-      - name: Post infra failure status
-        if: failure() && steps.checkout.outcome != 'success'
-        env:
-          GH_TOKEN: ${{ steps.app_token.outputs.token }}
-        run: |
-          gh api "repos/$CANONICAL_REPO/statuses/$GITHUB_SHA" \
-            -f state=failure \
-            -f context="$STATUS_CONTEXT" \
-            -f description='infra: scratchpad checkout/setup failed — see run log' \
+            -f description="$description" \
             -f target_url="$TARGET_URL"

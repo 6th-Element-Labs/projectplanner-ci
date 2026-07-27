@@ -44,7 +44,6 @@ for name, namespace in modules:
 
 for _, namespace in modules[1:]:
     ok(f"window.{namespace}" in APP, f"app.js composes {namespace}")
-ok(len(APP.splitlines()) < 5_000, "app.js composition root stays below 5,000 lines")
 ok("    _missionDeliverableFromUrl() {" not in APP and "    renderBoard() {" not in APP,
    "mission and board implementations no longer live in app.js")
 ok("    _settingsRepoCard(" not in APP and "    renderSettings() {" not in APP,

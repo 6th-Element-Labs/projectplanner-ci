@@ -1,6 +1,6 @@
 # ADR-0022 — One fail-closed CI verdict
 
-- **Status:** Accepted (operator decision, 2026-07-27)
+- **Status:** Accepted (operator decision, 2026-07-27; amended by CI-17)
 - **Date:** 2026-07-27
 - **Author:** CI-16 simplification
 - **Amends:** [ADR-0020 — Merge gates observe](0020-merge-gates-observe-not-enforce.md)
@@ -24,19 +24,26 @@ the redundant paths available to recreate the incident.
 ## Decision
 
 1. GitHub requires one technical verdict: **`Switchboard CI / VM gate`**.
-2. That verdict is successful only after the exact SHA passes the full
-   `scripts/switchboard_ci.sh` suite and Playwright. Playwright remains mandatory
-   evidence, including its uploaded receipt; only its duplicate GitHub status is
-   removed.
+2. A PR head earns admission to the native merge queue through the fast,
+   impacted-test scope. The queue-generated merge-group SHA earns the same verdict
+   only after the full `scripts/switchboard_ci.sh` suite and Playwright. The
+   canonical merged SHA therefore always has full exact-SHA evidence without
+   duplicating the full suite before queue admission.
 3. The public workflow mints a dedicated GitHub App installation token. App ID and
    private key are mandatory. There is no PAT fallback.
-4. A merge-group webhook dispatches the temporary exact SHA through the same
-   technical CI route. Advisory claim and merge-authorization statuses remain
-   PR-scoped and are not projected onto merge-group SHAs.
-5. `external_ci_mirror` remains the single primary mirror engine. The older pull
-   route remains a short-lived rollback bridge and is deleted separately after
-   the push route proves stable under real queue traffic.
-6. The existing context name is retained to avoid a simultaneous rename migration.
+4. The executable workflow comes only from `projectplanner-ci`'s trusted default
+   branch. Mirrored agent branches supply code, never workflow authority. A
+   secret-free suite job checks out the exact scratchpad ref; separate announce
+   and report jobs mint the status-only App credential.
+5. A merge-group webhook dispatches the temporary exact SHA through the same
+   technical route in full mode. The claim status remains a PR-scoped advisory.
+   Merge authorization stays internal to Switchboard instead of publishing a
+   misleading second GitHub status lifecycle.
+6. `external_ci_mirror` remains the single mirror engine. The older private
+   checkout/repository-dispatch pull route and duplicate backend/sharded workflows
+   are retired. `workflow_dispatch` on the trusted workflow is the manual exact-SHA
+   recovery path.
+7. The existing context name is retained to avoid a simultaneous rename migration.
    Its description and evidence define the broader full-suite-plus-Playwright
    meaning.
 
@@ -47,18 +54,21 @@ The required path is:
 ```text
 exact canonical SHA
   -> external_ci_mirror
-  -> public verify.yml
-  -> full suite + Playwright
-  -> one App-authenticated status
+  -> disposable public code ref
+  -> trusted default-branch verify.yml
+  -> fast impacted admission (PR head)
   -> native merge queue
+  -> full suite + Playwright (merge-group SHA)
+  -> one App-authenticated status
+  -> canonical merge provenance
 ```
 
 Credential failure is visible and terminal instead of silently selecting another
-identity. A merge group has one technical completion condition, so the queue and
-autopilot observe the same verdict. UI failures remain blocking and retain their
-receipt; they no longer need a second status lifecycle.
+identity. Untrusted tests never share a job with callback credentials. A merge
+group has one technical completion condition, so the queue and Autopilot observe
+the same verdict. The suite writes a structured `switchboard.ci_result.v1`
+artifact and stops scheduling new test files after the first known failure.
 
-Branch protection must require only `Switchboard CI / VM gate`. The merge queue
-remains ALLGREEN and tests its generated merge-group SHA before landing. Queue
-timeout reduction is a later operational change based on observed latency, not
-part of this decision.
+Branch protection requires only `Switchboard CI / VM gate`. The merge queue remains
+ALLGREEN and runs full verification on its generated merge-group SHA before
+landing. A green PR head means safe to enqueue, never safe to bypass the queue.

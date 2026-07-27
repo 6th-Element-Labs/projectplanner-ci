@@ -1,9 +1,9 @@
 # /etc/systemd/system/projectplanner-claim-gate.service
-# One-shot: post claim and merge-authorization statuses for open fleet PRs.
-# Triggered by projectplanner-claim-gate.timer. No git/checkout — VM verification
-# runs on projectplanner-ci via the pull-model verify workflow.
+# One-shot: post the advisory claim status for open fleet PRs.
+# Triggered by projectplanner-claim-gate.timer. No git/checkout — required verification
+# runs in projectplanner-ci's trusted default-branch workflow.
 [Unit]
-Description=ProjectPlanner Switchboard PR authorization gates
+Description=ProjectPlanner Switchboard PR claim advisory
 After=network.target
 
 [Service]

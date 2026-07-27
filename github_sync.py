@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import ci_scratchpad_dispatch
-import ci_verify_dispatch
 import organic_github_ci
 import store
 import task_id_parser
@@ -190,14 +189,6 @@ def handle_push(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
             "changed_files": len(changed_files), "notified_agents": notified}
 
 
-def _maybe_dispatch_pull_model_ci(repo: str, pr_number: Any, head_sha: str) -> Dict[str, Any]:
-    """CI-3/CI-6 pull-model relay: ``repository_dispatch`` to projectplanner-ci so
-    verify.yml runs on free hosted runners. Best-effort — must never break provenance."""
-    if pr_number is None:
-        return {"dispatched": False, "skip_reason": "missing_pr_number"}
-    return ci_verify_dispatch.try_dispatch_verify(int(pr_number), repo=repo, head_sha=head_sha)
-
-
 def _maybe_refresh_claim_gate(repo: str, pr_number: Any, project: str = "") -> Dict[str, Any]:
     """Post claim-gate status for one PR immediately (CI-11 — no 2-min timer wait)."""
     if pr_number is None:
@@ -252,7 +243,7 @@ def _maybe_dispatch_scratchpad_ci(
 
 
 def _maybe_trigger_ci(repo: str, pr_number: Any, head_sha: str, project: str = "") -> Dict[str, Any]:
-    """Trigger scratchpad or pull-model CI + claim gate for one PR update."""
+    """Trigger the one trusted scratchpad CI route + advisory claim refresh."""
     if ci_scratchpad_dispatch.is_scratchpad_enabled():
         dispatch = _maybe_dispatch_scratchpad_ci(repo, pr_number, head_sha, project=project)
         verification = {
@@ -265,15 +256,14 @@ def _maybe_trigger_ci(repo: str, pr_number: Any, head_sha: str, project: str = "
             "pull_model_head_sha": None,
         }
     else:
-        dispatch = _maybe_dispatch_pull_model_ci(repo, pr_number, head_sha)
         verification = {
             "scratchpad_dispatched": False,
             "scratchpad_skip_reason": "scratchpad_disabled",
             "scratchpad_head_sha": None,
             "scratchpad_run_id": None,
-            "pull_model_dispatched": bool(dispatch.get("dispatched")),
-            "pull_model_skip_reason": dispatch.get("skip_reason"),
-            "pull_model_head_sha": dispatch.get("head_sha"),
+            "pull_model_dispatched": False,
+            "pull_model_skip_reason": "pull_model_retired",
+            "pull_model_head_sha": None,
         }
     claim = _maybe_refresh_claim_gate(repo, pr_number, project=project)
     return {

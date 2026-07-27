@@ -184,7 +184,10 @@ Boot sequence already scoped: working agreement → register → inbox drain →
 
 Invariant: **where tests run ≠ what is trusted.** Verification can be public/ephemeral; only the **canonical private repo** stamps Done / merge provenance.
 
-`projectplanner` uses pull-model verify (`projectplanner-ci`); Helm can use push-path mirror economics. Enterprise “no public code” → self-hosted / hosted-on-canonical routes — same contract, different `repo_topology` route.
+`projectplanner` mirrors exact source commits into `projectplanner-ci`, then dispatches a
+trusted default-branch workflow there; Helm can use the same public-scratchpad economics.
+Enterprise “no public code” → self-hosted / hosted-on-canonical routes — same contract,
+different `repo_topology` route.
 
 ---
 

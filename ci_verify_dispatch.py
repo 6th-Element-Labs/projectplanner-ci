@@ -1,19 +1,13 @@
-"""Pull-model CI dispatch relay (CI-3 / CI-6).
+"""Canonical GitHub coordinate helpers for trusted scratchpad CI.
 
-On PR open/update the canonical webhook handler fires one authenticated
-``repository_dispatch`` to the public CI repo carrying ``{pr, head_sha}``.
-Stateless — no git, no disk on the Plan VM — so it cannot reproduce the
-2026-07-12 bare-mirror failure class.
-
-Feature-flagged via ``SWITCHBOARD_CI_PULL_MODEL`` until CI-6 flip is complete.
+The old private-checkout ``repository_dispatch`` route is retired. This
+compatibility module now only resolves and validates canonical PR SHAs for
+``ci_scratchpad_dispatch``.
 """
 from __future__ import annotations
 
-import argparse
-import json
 import os
 import re
-import sys
 import urllib.error
 import urllib.request
 from typing import Any, Dict, Optional, Tuple
@@ -21,17 +15,11 @@ from typing import Any, Dict, Optional, Tuple
 SCHEMA = "switchboard.ci_verify_dispatch.v1"
 DEFAULT_CI_REPO = "6th-Element-Labs/projectplanner-ci"
 DEFAULT_CANONICAL_REPO = "6th-Element-Labs/projectplanner"
-DEFAULT_EVENT_TYPE = "verify-pr"
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 class CiVerifyDispatchError(RuntimeError):
     """Operator-facing dispatch failure (invalid input, missing token, API error)."""
-
-
-def is_pull_model_enabled() -> bool:
-    return (os.environ.get("SWITCHBOARD_CI_PULL_MODEL") or "").strip().lower() in (
-        "1", "true", "yes", "on")
 
 
 def ci_repo(explicit: str = "") -> str:
@@ -116,6 +104,40 @@ def fetch_pr_head_sha(pr_number: int, *, repo: str = "", token: str = "") -> str
     return normalize_commit_sha(head_sha)
 
 
+def fetch_pr_merge_base_sha(pr_number: int, head_sha: str, *,
+                            repo: str = "", token: str = "") -> str:
+    """Resolve the PR's canonical merge base for public impacted-test selection.
+
+    The current base branch tip may have advanced beyond the PR and therefore may
+    not be reachable from the mirrored head commit. GitHub's compare response
+    supplies the actual merge-base object, which is reachable in the pushed
+    history and can be verified without exposing a private checkout credential.
+    """
+    source_repo = canonical_repo(repo)
+    tok = _token(token)
+    if not tok:
+        raise CiVerifyDispatchError("A GitHub token is required to resolve PR merge base.")
+    owner, name = source_repo.split("/", 1)
+    pr = _github_request("GET", f"repos/{owner}/{name}/pulls/{int(pr_number)}", token=tok)
+    base_sha = ((pr.get("base") or {}).get("sha") or "").strip()
+    if not base_sha:
+        raise CiVerifyDispatchError(
+            f"PR #{pr_number} on {source_repo} returned no base.sha from GitHub."
+        )
+    compare = _github_request(
+        "GET",
+        f"repos/{owner}/{name}/compare/{normalize_commit_sha(base_sha)}..."
+        f"{normalize_commit_sha(head_sha)}",
+        token=tok,
+    )
+    merge_base = ((compare.get("merge_base_commit") or {}).get("sha") or "").strip()
+    if not merge_base:
+        raise CiVerifyDispatchError(
+            f"PR #{pr_number} on {source_repo} returned no merge_base_commit.sha."
+        )
+    return normalize_commit_sha(merge_base)
+
+
 def verify_commit_exists(sha: str, *, repo: str = "", token: str = "") -> None:
     """Raise if the commit is not reachable on the canonical repo."""
     source_repo = canonical_repo(repo)
@@ -153,171 +175,3 @@ def resolve_head_sha(
         if webhook != live:
             stale = webhook
     return live, "github_pr_api", stale
-
-
-def dispatch_verify(
-    pr_number: int,
-    *,
-    head_sha: str = "",
-    repo: str = "",
-    ci_repo_name: str = "",
-    token: str = "",
-    event_type: str = "",
-    dry_run: bool = False,
-    strict_explicit: bool = False,
-) -> Dict[str, Any]:
-    """Fire ``repository_dispatch`` on the public CI repo for one PR head."""
-    pr = int(pr_number)
-    source_repo = canonical_repo(repo)
-    target = ci_repo(ci_repo_name)
-    tok = _token(token)
-    if not tok:
-        raise CiVerifyDispatchError("A GitHub token is required to dispatch pull-model CI.")
-    sha, sha_source, stale_webhook_sha = resolve_head_sha(
-        pr, head_sha, repo=source_repo, token=tok, strict_explicit=strict_explicit)
-    verify_commit_exists(sha, repo=source_repo, token=tok)
-    evt = (event_type or os.environ.get("SWITCHBOARD_CI_VERIFY_EVENT")
-           or DEFAULT_EVENT_TYPE).strip()
-    owner, name = target.split("/", 1)
-    payload = {
-        "event_type": evt,
-        "client_payload": {
-            "schema": SCHEMA,
-            "pr": pr,
-            "head_sha": sha,
-            "repo": source_repo,
-        },
-    }
-    result = {
-        "schema": SCHEMA,
-        "dispatched": False,
-        "dry_run": dry_run,
-        "ci_repo": target,
-        "canonical_repo": source_repo,
-        "pr": pr,
-        "head_sha": sha,
-        "head_sha_source": sha_source,
-        "stale_webhook_sha": stale_webhook_sha,
-        "event_type": evt,
-    }
-    if dry_run:
-        result["message"] = "validated only — no repository_dispatch sent"
-        return result
-    _github_request(
-        "POST",
-        f"repos/{owner}/{name}/dispatches",
-        token=tok,
-        body=payload,
-    )
-    result["dispatched"] = True
-    result["message"] = f"repository_dispatch {evt!r} sent to {target}"
-    return result
-
-
-def try_dispatch_verify(
-    pr_number: int,
-    *,
-    head_sha: str = "",
-    repo: str = "",
-    ci_repo_name: str = "",
-    token: str = "",
-    event_type: str = "",
-) -> Dict[str, Any]:
-    """Best-effort dispatch for webhook handlers — never raises."""
-    if not is_pull_model_enabled():
-        return {
-            "dispatched": False,
-            "skip_reason": "pull_model_disabled",
-            "pr": int(pr_number),
-        }
-    try:
-        out = dispatch_verify(
-            pr_number,
-            head_sha=head_sha,
-            repo=repo,
-            ci_repo_name=ci_repo_name,
-            token=token,
-            event_type=event_type,
-            dry_run=False,
-        )
-        out["skip_reason"] = None
-        return out
-    except Exception as exc:
-        return {
-            "dispatched": False,
-            "skip_reason": str(exc),
-            "pr": int(pr_number),
-            "head_sha": (head_sha or "").strip() or None,
-        }
-
-
-def _cli(argv: Optional[list] = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Dispatch pull-model CI verify (repository_dispatch → projectplanner-ci).",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=(
-            "Examples:\n"
-            "  python ci_verify_dispatch.py --pr 400 --dry-run\n"
-            "  python ci_verify_dispatch.py --pr 400 --dispatch\n"
-            "  python jobs.py dispatch_ci -- --pr 400 --dispatch\n"
-        ),
-    )
-    parser.add_argument("--pr", type=int, required=True, help="Canonical PR number")
-    parser.add_argument("--head-sha", default="", help="40-char commit SHA (resolved from GitHub if omitted)")
-    parser.add_argument("--repo", default="", help=f"Canonical repo (default {DEFAULT_CANONICAL_REPO})")
-    parser.add_argument("--ci-repo", default="", help=f"Public CI repo (default {DEFAULT_CI_REPO})")
-    parser.add_argument("--event-type", default="", help=f"repository_dispatch event (default {DEFAULT_EVENT_TYPE})")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Validate token + SHA + payload only; do not POST")
-    parser.add_argument("--dispatch", action="store_true",
-                        help="Actually send repository_dispatch (default without this flag is dry-run)")
-    parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON only")
-    args = parser.parse_args(argv)
-
-    dry_run = args.dry_run or not args.dispatch
-    try:
-        result = dispatch_verify(
-            args.pr,
-            head_sha=args.head_sha,
-            repo=args.repo,
-            ci_repo_name=args.ci_repo,
-            token="",
-            event_type=args.event_type,
-            dry_run=dry_run,
-            strict_explicit=bool((args.head_sha or "").strip()),
-        )
-    except CiVerifyDispatchError as exc:
-        if args.json:
-            print(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True))
-        else:
-            print(f"error: {exc}", file=sys.stderr)
-        return 1
-
-    if not is_pull_model_enabled() and not args.json:
-        print("note: SWITCHBOARD_CI_PULL_MODEL is off — dispatch still works for manual operator use")
-
-    if args.json:
-        print(json.dumps({"ok": True, **result}, sort_keys=True))
-        return 0
-
-    mode = "dry-run" if dry_run else "dispatched"
-    print(f"ok ({mode})")
-    print(f"  pr            {result['pr']}")
-    print(f"  head_sha      {result['head_sha']} ({result['head_sha_source']})")
-    if result.get("stale_webhook_sha"):
-        print(f"  stale_webhook ignored {result['stale_webhook_sha']}")
-    print(f"  canonical     {result['canonical_repo']}")
-    print(f"  ci_repo       {result['ci_repo']}")
-    print(f"  event_type    {result['event_type']}")
-    print(f"  {result.get('message', '')}")
-    if dry_run:
-        print("\nRe-run with --dispatch to fire repository_dispatch.")
-    return 0
-
-
-def main(argv: Optional[list] = None) -> int:
-    return _cli(argv)
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

@@ -47,6 +47,7 @@ class FakeRunner:
         self.commands = []
         self.run_list_calls = 0
         self.remote_read_calls = 0
+        self.last_source_sha = ""
 
     def __call__(self, args, cwd):
         self.commands.append(args)
@@ -57,25 +58,26 @@ class FakeRunner:
                 args, 0, "abcdef1234567890abcdef1234567890abcdef12\n", "")
         if args[:3] == ["git", "fetch", "--no-tags"]:
             return subprocess.CompletedProcess(args, 0, "", "fetched")
-        if args[:3] == ["git", "ls-remote", "--heads"]:
+        if args[:2] == ["git", "ls-remote"]:
             self.remote_read_calls += 1
+            remote_ref = args[-1]
             if self.mode == "race_same" and self.remote_read_calls == 1:
                 return subprocess.CompletedProcess(args, 0, "", "")
             if self.mode == "same_ref":
                 return subprocess.CompletedProcess(
                     args, 0,
                     "abcdef1234567890abcdef1234567890abcdef12\t"
-                    "refs/heads/ci/existing/ref\n", "")
+                    f"{remote_ref}\n", "")
             if self.mode == "race_same":
                 return subprocess.CompletedProcess(
                     args, 0,
                     "abcdef1234567890abcdef1234567890abcdef12\t"
-                    "refs/heads/ci/existing/ref\n", "")
+                    f"{remote_ref}\n", "")
             if self.mode == "different_ref":
                 return subprocess.CompletedProcess(
                     args, 0,
                     "1111111111111111111111111111111111111111\t"
-                    "refs/heads/ci/existing/ref\n", "")
+                    f"{remote_ref}\n", "")
             return subprocess.CompletedProcess(args, 0, "", "")
         if args[:2] == ["git", "push"]:
             if self.mode in {"push_fail", "race_same"}:
@@ -84,6 +86,9 @@ class FakeRunner:
         if args[:3] == ["gh", "workflow", "run"]:
             if self.mode == "trigger_fail":
                 return subprocess.CompletedProcess(args, 1, "", "workflow does not have workflow_dispatch")
+            for arg in args:
+                if str(arg).startswith("source_sha="):
+                    self.last_source_sha = str(arg).split("=", 1)[1]
             return subprocess.CompletedProcess(args, 0, "queued\n", "")
         if args[:3] == ["gh", "run", "list"]:
             self.run_list_calls += 1
@@ -95,6 +100,8 @@ class FakeRunner:
                 "conclusion": None if status != "completed" else conclusion,
                 "url": "https://github.com/6th-Element-Labs/public-ci/actions/runs/42",
                 "headSha": "1234567public",
+                "displayTitle": f"verify {self.last_source_sha} (head)",
+                "event": "workflow_dispatch",
             }]
             return subprocess.CompletedProcess(args, 0, external_ci_mirror.json.dumps(payload), "")
         if args[:2] == ["gh", "api"]:
@@ -214,6 +221,42 @@ try:
        "status_context=public-ci/full-suite" in workflow_runs[0],
        "workflow dispatch receives canonical source SHA and status context")
 
+    trusted_task = store.create_task(
+        {"workstream_id": "CIQA", "title": "trusted default workflow"}, actor="test", project=P)
+    trusted_request = make_request(trusted_task["task_id"])
+    trusted_request["source_sha"] = "1212121212121212121212121212121212121212"
+    trusted_request["workflow_ref"] = "master"
+    trusted_request["mirror_ref_kind"] = "tag"
+    trusted_request["cleanup_mirror_branch"] = True
+    trusted_request["workflow_inputs"] = {
+        "source_ref": "refs/tags/ci/trusted/121212121212",
+        "validation_mode": "head",
+    }
+    trusted_runner = FakeRunner()
+    trusted = external_ci_mirror.request_external_ci_mirror_run(
+        trusted_request, source_path, actor="test", project=P,
+        runner=trusted_runner, sleep_fn=clock.sleep, now_fn=clock.time)
+    trusted_dispatch = next(
+        cmd for cmd in trusted_runner.commands if cmd[:3] == ["gh", "workflow", "run"])
+    trusted_poll = next(
+        cmd for cmd in trusted_runner.commands if cmd[:3] == ["gh", "run", "list"])
+    ok(trusted["ok"] is True
+       and trusted_dispatch[trusted_dispatch.index("--ref") + 1] == "master"
+       and trusted_poll[trusted_poll.index("--branch") + 1] == "master",
+       "trusted workflow dispatch and polling use the public default branch")
+    ok(any(cmd[:2] == ["git", "push"]
+           and cmd[-1].endswith(":refs/tags/" + trusted["mirror_branch"])
+           for cmd in trusted_runner.commands),
+       "trusted scratchpad uses a tag that cannot satisfy branch-push triggers")
+    ok(any(cmd[:2] == ["git", "push"]
+           and cmd[-1] == ":refs/tags/" + trusted["mirror_branch"]
+           for cmd in trusted_runner.commands)
+       and trusted["result"]["branch_cleanup"]["mirror_ref_kind"] == "tag",
+       "terminal trusted run deletes its disposable mirror tag")
+    ok(trusted["result"]["tested_public_sha"] == trusted_request["source_sha"]
+       and trusted["result"]["workflow_head_sha"] == "1234567public",
+       "evidence separates the exact tested SHA from the trusted workflow commit")
+
     push_task = store.create_task({"workstream_id": "CIQA", "title": "push trigger"},
                                   actor="test", project=P)
     push_request = make_request(push_task["task_id"])
@@ -234,7 +277,8 @@ try:
     ok(any(cmd[:3] == ["git", "fetch", "--no-tags"] and
            cmd[-1] == "refs/pull/42/head" for cmd in push_runner.commands),
        "push trigger mode fetches the canonical PR head before mirroring its exact SHA")
-    ok(any(cmd[:2] == ["git", "push"] and "--delete" in cmd
+    ok(any(cmd[:2] == ["git", "push"] and
+           cmd[-1].startswith(":refs/heads/")
            for cmd in push_runner.commands) and
        push_success["result"]["branch_cleanup"]["status"] == "deleted",
        "terminal scratchpad run deletes its disposable mirror branch")

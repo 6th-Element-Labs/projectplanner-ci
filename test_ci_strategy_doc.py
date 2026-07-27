@@ -24,25 +24,25 @@ This is why Route A is safe for private code: the public mirror is a disposable 
 """
 
 ok(INVARIANT in doc, "provenance invariant section is preserved verbatim")
-ok("push-triggered scratchpad" in doc
+ok("trusted default-branch" in doc
    and "verify.yml" in doc
    and "SWITCHBOARD_APP_PRIVATE_KEY" in doc
    and "There is no PAT fallback" in doc,
-   "projectplanner scratchpad route and fail-closed App callback are documented")
+   "trusted scratchpad workflow and fail-closed App callback are documented")
 ok("Helm routing is **unchanged**" in doc or "Helm keeps Route A-push unchanged" in doc,
    "Helm push-path routing called out as unchanged")
 ok("0010-ci-concurrency.md" in doc and "2026-07-12" in doc and "bare-mirror" in doc.lower(),
    "2026-07-12 post-mortem context cross-linked")
-ok("push_triggered=True" in doc and "Rollback bridge" in doc and "Heartbeat" in doc,
-   "trigger decision records push-primary, rollback bridge, and heartbeat")
+ok("Manual recovery" in doc and "workflow_dispatch" in doc and "Heartbeat" in doc,
+   "one trusted trigger also provides exact-SHA manual recovery")
 ok("bare mirror" not in doc.lower() or "retired" in doc.lower(),
    "push-path/bare-mirror is retired narrative, not active instructions")
-ok("Switchboard / merge authorization" in doc,
-   "Plan VM projects the exact-head merge gate as a PR status")
+ok("Merge authorization remains internal Switchboard state" in doc,
+   "merge authorization is internal instead of a second advisory GitHub lifecycle")
 ok("external_ci_mirror` (Helm" in doc or "A-push" in doc,
    "push-path engine retained for Helm")
-ok("SWITCHBOARD_CI_PULL_MODEL` is no longer the primary route" in doc,
-   "pull-model feature flag is explicitly retired as projectplanner primary")
+ok("pull relay and duplicate backend/sharded workflows are retired" in doc,
+   "retired CI paths are explicitly removed rather than retained as fallbacks")
 
 print(f"\n{passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CI-7 operator teardown: retire on-box VM CI apparatus after pull-model verify holds.
+# CI-7 operator teardown: retire on-box VM CI apparatus after public scratchpad CI holds.
 #
 # Run on the Plan VM as a user with sudo (ubuntu). Idempotent — safe to re-run.
 # Keeps .bak unit copies in deploy/retired/ for one week rollback.

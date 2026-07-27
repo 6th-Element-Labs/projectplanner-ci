@@ -1,7 +1,7 @@
 """External CI mirror runner.
 
 This module turns Switchboard's external_ci_runs model into provider action:
-push an exact source SHA to a disposable public CI branch, dispatch a workflow,
+push an exact source SHA to a disposable public CI ref, dispatch a workflow,
 poll the run, and write the result back to Switchboard. The private/source repo
 remains the source of truth; the public repo is only verification infrastructure.
 """
@@ -181,10 +181,25 @@ def _mirror_url(mirror_repo: str, mirror_remote_url: str = "") -> str:
     return f"https://github.com/{mirror_repo}.git"
 
 
-def _remote_branch_sha(remote_url: str, branch_ref: str, cwd: str,
-                       runner: Optional[CommandRunner] = None) -> str:
+def _mirror_ref_kind(request: Dict[str, Any]) -> str:
+    kind = str((request or {}).get("mirror_ref_kind") or "branch").strip().lower()
+    if kind not in {"branch", "tag"}:
+        raise ExternalCiError(
+            "mirror_sync_failed",
+            f"unsupported mirror_ref_kind {kind!r}; expected branch or tag",
+        )
+    return kind
+
+
+def _mirror_remote_ref(mirror_name: str, request: Dict[str, Any]) -> str:
+    namespace = "tags" if _mirror_ref_kind(request) == "tag" else "heads"
+    return f"refs/{namespace}/{mirror_name}"
+
+
+def _remote_ref_sha(remote_url: str, remote_ref: str, cwd: str,
+                    runner: Optional[CommandRunner] = None) -> str:
     readback = _check(
-        ["git", "ls-remote", "--heads", remote_url, branch_ref],
+        ["git", "ls-remote", remote_url, remote_ref],
         cwd, "mirror_sync_failed", "mirror ref readback", runner)
     lines = [
         line.split(None, 1) for line in (readback.stdout or "").splitlines()
@@ -211,12 +226,20 @@ def _workflow_inputs_for_run(run: Dict[str, Any], request: Dict[str, Any]) -> Di
     return inputs
 
 
-def _select_run(runs: Any, triggered_after: float = 0.0) -> Optional[Dict[str, Any]]:
+def _select_run(runs: Any, triggered_after: float = 0.0,
+                source_sha: str = "") -> Optional[Dict[str, Any]]:
     if not isinstance(runs, list):
         return None
     candidates = [r for r in runs if isinstance(r, dict)]
     if not candidates:
         return None
+    if source_sha:
+        exact = [
+            r for r in candidates
+            if source_sha in str(r.get("displayTitle") or r.get("name") or "")
+        ]
+        if exact:
+            candidates = exact
     # gh returns newest first; keep that behavior but tolerate fake/test order.
     return candidates[0]
 
@@ -282,15 +305,18 @@ def _cleanup_terminal_mirror_branch(run: Dict[str, Any], source_path: str,
     """Best-effort CI-11 cleanup without changing the workflow verdict."""
     branch = run.get("mirror_branch") or ""
     mirror_repo = run.get("mirror_repo") or ""
+    remote_ref = _mirror_remote_ref(branch, request)
     cleanup: Dict[str, Any] = {
         "attempted": True,
         "mirror_repo": mirror_repo,
         "mirror_branch": branch,
+        "mirror_ref": remote_ref,
+        "mirror_ref_kind": _mirror_ref_kind(request),
     }
     try:
         deleted = _check(
             ["git", "push", _mirror_url(mirror_repo, request.get("mirror_remote_url") or ""),
-             "--delete", branch],
+             f":{remote_ref}"],
             source_path, "mirror_cleanup_failed", "terminal mirror branch cleanup", runner)
         cleanup.update({
             "status": "deleted",
@@ -474,7 +500,7 @@ def poll_external_ci_mirror_run(run_id: str, source_path: str,
             {"run_id": run_id}, actor=actor, project=project)
     try:
         return _poll_run(run, source_path, actor, project, runner, sleep_fn, now_fn,
-                         poll_interval_seconds, timeout_seconds)
+                         poll_interval_seconds, timeout_seconds, run.get("request") or {})
     except ExternalCiError as e:
         return _update_failure(run, e.failure_class, e.message, e.result,
                                actor=actor, project=project)
@@ -501,8 +527,9 @@ def _execute_run(run: Dict[str, Any], source_path: str, actor: str,
                       source_path, "mirror_sync_failed", "source SHA validation", runner)
     resolved_sha = (resolved.stdout or "").strip() or source_sha
 
-    remote_ref = f"refs/heads/{mirror_branch}"
-    remote_sha = _remote_branch_sha(
+    remote_ref = _mirror_remote_ref(mirror_branch, request)
+    mirror_ref_kind = _mirror_ref_kind(request)
+    remote_sha = _remote_ref_sha(
         mirror_remote_url, remote_ref, source_path, runner)
     if remote_sha and remote_sha != resolved_sha:
         raise ExternalCiError(
@@ -511,6 +538,8 @@ def _execute_run(run: Dict[str, Any], source_path: str, actor: str,
             {
                 "mirror_repo": mirror_repo,
                 "mirror_branch": mirror_branch,
+                "mirror_ref": remote_ref,
+                "mirror_ref_kind": mirror_ref_kind,
                 "remote_sha": remote_sha,
                 "expected_sha": resolved_sha,
             },
@@ -527,7 +556,7 @@ def _execute_run(run: Dict[str, Any], source_path: str, actor: str,
         except ExternalCiError:
             # Close the ls-remote/push race: another caller may have created
             # the deterministic ref after our first readback.
-            raced_sha = _remote_branch_sha(
+            raced_sha = _remote_ref_sha(
                 mirror_remote_url, remote_ref, source_path, runner)
             if raced_sha != resolved_sha:
                 raise
@@ -547,6 +576,8 @@ def _execute_run(run: Dict[str, Any], source_path: str, actor: str,
                 "ci_repo": mirror_repo,
                 "mirror_remote_url": mirror_remote_url,
                 "mirror_branch": mirror_branch,
+                "mirror_ref": remote_ref,
+                "mirror_ref_kind": mirror_ref_kind,
                 "mirror_ref_reused": reused_ref,
                 "status_context": run.get("status_context"),
                 "mirror_push_stdout": (push.stdout or "").strip(),
@@ -562,6 +593,8 @@ def _execute_run(run: Dict[str, Any], source_path: str, actor: str,
             {
                 "mirror_repo": mirror_repo,
                 "mirror_branch": mirror_branch,
+                "mirror_ref": remote_ref,
+                "mirror_ref_kind": mirror_ref_kind,
                 "status_context": run.get("status_context"),
                 "source_repo": run.get("source_repo"),
                 "ci_repo": mirror_repo,
@@ -592,18 +625,21 @@ def _execute_run(run: Dict[str, Any], source_path: str, actor: str,
         return _poll_run({**run, "status": "triggered"}, source_path, actor, project,
                          runner, sleep_fn, now_fn,
                          float(request.get("poll_interval_seconds") or 15),
-                         float(request.get("timeout_seconds") or 1800))
+                         float(request.get("timeout_seconds") or 1800), request)
 
-    trigger_args = ["gh", "workflow", "run", workflow, "--repo", mirror_repo, "--ref", mirror_branch]
+    workflow_ref = str(request.get("workflow_ref") or mirror_branch).strip()
+    trigger_args = ["gh", "workflow", "run", workflow, "--repo", mirror_repo,
+                    "--ref", workflow_ref]
     trigger_args.extend(_workflow_inputs_args(_workflow_inputs_for_run(run, request)))
     trigger = _check(trigger_args, source_path, "workflow_trigger_failed",
                      "workflow dispatch", runner)
-    _update_run(
+    updated = _update_run(
         run,
         {
             "status": "triggered",
             "result": {
                 **result_payload,
+                "workflow_ref": workflow_ref,
                 "workflow_dispatch_stdout": (trigger.stdout or "").strip(),
                 "workflow_dispatch_stderr": (trigger.stderr or "").strip(),
             },
@@ -611,33 +647,39 @@ def _execute_run(run: Dict[str, Any], source_path: str, actor: str,
         actor=actor,
         project=project,
     )
+    if not poll_after_push:
+        updated["ok"] = True
+        return updated
     return _poll_run({**run, "status": "triggered"}, source_path, actor, project,
                      runner, sleep_fn, now_fn,
                      float(request.get("poll_interval_seconds") or 15),
-                     float(request.get("timeout_seconds") or 1800))
+                     float(request.get("timeout_seconds") or 1800), request)
 
 
 def _poll_run(run: Dict[str, Any], source_path: str, actor: str,
               project: str, runner: Optional[CommandRunner],
               sleep_fn: SleepFn, now_fn: NowFn,
-              poll_interval_seconds: float, timeout_seconds: float) -> Dict[str, Any]:
+              poll_interval_seconds: float, timeout_seconds: float,
+              request: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     deadline = now_fn() + max(1.0, timeout_seconds)
     mirror_repo = run["mirror_repo"]
     mirror_branch = run["mirror_branch"]
     workflow = run["workflow"]
+    workflow_ref = str((request or {}).get("workflow_ref") or mirror_branch).strip()
     selected: Optional[Dict[str, Any]] = None
     while now_fn() <= deadline:
         runs = _json(
             ["gh", "run", "list", "--repo", mirror_repo, "--workflow", workflow,
-             "--branch", mirror_branch,
-             "--json", "databaseId,status,conclusion,url,headSha,createdAt,updatedAt",
+             "--branch", workflow_ref,
+             "--json",
+             "databaseId,status,conclusion,url,headSha,createdAt,updatedAt,displayTitle,event",
              "--limit", "20"],
             source_path,
             "workflow_poll_failed",
             "workflow run list",
             runner,
         )
-        selected = _select_run(runs)
+        selected = _select_run(runs, source_sha=run["source_sha"])
         if not selected:
             _update_run(
                 run, {"status": "triggered", "result": {"poll": "no_run_yet"}},
@@ -662,7 +704,9 @@ def _poll_run(run: Dict[str, Any], source_path: str, actor: str,
         artifacts = _artifact_list(mirror_repo, run_id, source_path, runner)
         result = {
             "provider_run": selected,
-            "tested_public_sha": selected.get("headSha"),
+            "tested_public_sha": run["source_sha"],
+            "workflow_head_sha": selected.get("headSha"),
+            "workflow_ref": workflow_ref,
             "source_repo": run.get("source_repo"),
             "source_sha": run["source_sha"],
             "ci_repo": mirror_repo,

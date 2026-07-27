@@ -12,11 +12,15 @@ moves under an open PR. Two levers cut it:
   selected iff it **transitively** imports a changed module — so a leaf change that a non-test
   module re-exports still pulls in every test that reaches it. A gate that skips a
   regression-catching test is worse than a slow gate; we only narrow when it's provably safe.
-- **Sharding** — split the selected tests into N deterministic, balanced shards so a matrix of
-  ephemeral off-box runners executes them in parallel (see `.github/workflows/ci-sharded.yml`).
+- **Sharding primitive** — split a selected set deterministically when a future runner budget
+  justifies it. The active workflow stays single-path; there is no second sharded gate.
 
 `impacted_tests` and `shard` are pure and unit-tested. `main()` wires them to git + the tree:
-  python scripts/select_impacted_tests.py --base origin/master [--shards N --index I] [--json]
+  python scripts/select_impacted_tests.py --base origin/master [--admission] [--json]
+
+`--admission` is the deliberately smaller PR-head gate. The native merge queue still runs the
+full suite on its generated merge-group SHA before landing, so admission may select a bounded
+frontend test family instead of duplicating the entire suite for a static-only change.
 """
 from __future__ import annotations
 
@@ -38,6 +42,10 @@ BROAD_PREFIXES = (
 # non-Python (JSON/SQL/HTML/CSV/fixtures/config) forces the full suite (it may feed a test).
 IRRELEVANT_SUFFIXES = (".md",)
 IRRELEVANT_PREFIXES = ("docs/",)
+UI_PREFIXES = ("static/", "templates/")
+UI_TEST_MARKERS = (
+    "browser", "frontend", "mission", "playwright", "screen", "ui", "watch",
+)
 
 
 def _is_broad(path: str, broad_prefixes) -> bool:
@@ -119,7 +127,8 @@ def _reachable_files(start: Set[str], module_imports: Dict[str, Set[str]],
 
 def impacted_tests(changed_files: List[str], all_tests: List[str], *,
                    module_imports: Dict[str, Set[str]],
-                   broad_prefixes=BROAD_PREFIXES) -> Optional[List[str]]:
+                   broad_prefixes=BROAD_PREFIXES,
+                   admission: bool = False) -> Optional[List[str]]:
     """Tests a PR's diff can affect, or **None** = "run the full suite" (fail-safe).
 
     ``module_imports`` maps EVERY repo ``.py`` file to the module aliases it imports. A test is
@@ -131,6 +140,21 @@ def impacted_tests(changed_files: List[str], all_tests: List[str], *,
     impacted: Set[str] = set()
     changed_py: Set[str] = set()
     for f in changed_files:
+        if admission and f in all_set:
+            # A changed test proves its own direct coverage. The full merge-group
+            # gate remains authoritative for the rest of the suite.
+            impacted.add(f)
+            continue
+        normalized = f.replace("\\", "/")
+        if admission and normalized.startswith(UI_PREFIXES):
+            ui_tests = {
+                t for t in all_tests
+                if any(marker in t.lower() for marker in UI_TEST_MARKERS)
+            }
+            if not ui_tests:
+                return None
+            impacted.update(ui_tests)
+            continue
         if _is_broad(f, broad_prefixes):
             return None
         if f in all_set:                      # a changed test runs itself
@@ -214,6 +238,7 @@ def main(argv=None) -> int:
     ap.add_argument("--root", default=".")
     ap.add_argument("--shards", type=int, default=1)
     ap.add_argument("--index", type=int, default=0)
+    ap.add_argument("--admission", action="store_true")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
     root = os.path.abspath(args.root)
@@ -224,7 +249,12 @@ def main(argv=None) -> int:
         changed = changed_files(args.base, root)
     except subprocess.CalledProcessError:
         changed = None  # can't diff -> run everything
-    selected = impacted_tests(changed, tests, module_imports=build_module_imports(root, py_files)) \
+    selected = impacted_tests(
+        changed,
+        tests,
+        module_imports=build_module_imports(root, py_files),
+        admission=args.admission,
+    ) \
         if changed is not None else None
 
     run_all = selected is None

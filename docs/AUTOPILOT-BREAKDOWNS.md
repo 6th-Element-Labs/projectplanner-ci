@@ -809,7 +809,7 @@ on write. Highest diagnostic-value-per-line fix in this log.
 
 ## BREAKDOWN 15 — the documented CI recovery path posts only one of two required contexts ⚠️
 
-**Severity: HIGH (process). STATUS: FIXED by COORD-57.**
+**Severity: HIGH (process). STATUS: SUPERSEDED by CI-17.**
 
 `master` branch protection requires three contexts: `Switchboard CI / VM gate`,
 `Switchboard UI / Playwright`, and `Switchboard / merge authorization`. There are two verify
@@ -835,12 +835,13 @@ git push <ci-repo> <HEAD_SHA>:refs/heads/ci/verify-<slug>-<sha8>
 mirror path. Two copies of a required-context list drifted apart — the same class of defect as
 BREAKDOWN 11, one layer out.
 
-**Resolution:** the public-CI workflow now posts both the VM and Playwright contexts on
-pending, success, test failure, and infrastructure failure. A conformance test compares
-the canonical workflow with the public-CI workflow contract and fails with the missing
-and extra context names when they drift. The public-CI run also compares its live
-workflow with the canonical workflow it checked out before running the suite. See
-`docs/SHARED-VOCABULARY-CONFORMANCE.md`.
+**Current resolution:** CI-17 deleted both workflow-selection paths. Canonical code is
+mirrored to a disposable public branch, but only `projectplanner-ci`'s trusted
+default-branch workflow can execute. It posts one required lifecycle,
+`Switchboard CI / VM gate`; the claim timer posts only the advisory
+`Switchboard / claim gate`. Head admission is bounded and the native merge group runs the
+full suite. There is no `repository_dispatch`, mirrored workflow, PAT, or second required
+context list to drift. See `docs/CI-STRATEGY.md`.
 
 ---
 

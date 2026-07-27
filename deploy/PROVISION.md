@@ -335,17 +335,18 @@ journalctl -u projectplanner-narrate.service -n 40 --no-pager
 cd /opt/projectplanner && sudo -u projectplanner .venv/bin/python jobs.py narrate_pending
 ```
 
-## Scratchpad VM verification (CI-12) + claim gate (CI-7)
+## Scratchpad GitHub verification (CI-17) + claim gate (CI-7)
 
 **VM verification** (`Switchboard CI / VM gate`) runs on `6th-Element-Labs/projectplanner-ci`
-via the push-triggered scratchpad `verify.yml` workflow — not on the Plan VM. The canonical
-PR webhook uses a service-owned coordination checkout to fetch the exact PR head and mirror it
-to `ci/**`.
+via the trusted default-branch `verify.yml` workflow — not on the Plan VM. The canonical
+PR webhook uses a service-owned coordination checkout to fetch the exact PR head, mirror it
+to `refs/tags/ci/**`, and dispatch that trusted workflow with the exact source SHA. Tags are
+intentional: they cannot satisfy a legacy `branches: ci/**` workflow trigger.
 Because `/opt/projectplanner` is root-owned and read-only, `apply-least-privilege.sh` seeds a
 writable coordination clone at `/var/lib/projectplanner/ci-source` and configures its GitHub
 credential helper. Ensure `PM_GITHUB_TOKEN`, `SWITCHBOARD_CI_GITHUB_TOKEN`, or `GITHUB_TOKEN`
 can fetch canonical PR refs, push to `projectplanner-ci`, and poll Actions. The runner promotes
-that token to `GH_TOKEN` for `git`/`gh` subprocesses. The old pull relay flag is not primary:
+that token to `GH_TOKEN` for `git`/`gh` subprocesses. The old pull relay is retired:
 
 ```bash
 sudo systemctl restart projectplanner
@@ -369,7 +370,7 @@ After scratchpad verification holds, retire the old on-box VM gate with
 
 VM verification (`Switchboard CI / VM gate`) runs on projectplanner-ci via the scratchpad
 `verify.yml` workflow. The Plan VM separately posts the SESSION-12 claim gate
-and the exact-head merge-authorization status:
+as the only advisory GitHub status:
 
 ```bash
 /opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py claim_gate_prs
@@ -382,8 +383,9 @@ write in `PM_GITHUB_TOKEN`, `GITHUB_TOKEN`, or `SWITCHBOARD_CI_GITHUB_TOKEN`.
 VM verification on projectplanner-ci runs `scripts/switchboard_ci.sh` inside `verify.yml` (see
 [`docs/CI-STRATEGY.md`](../docs/CI-STRATEGY.md)).
 
-The old CI-6 `SWITCHBOARD_CI_PULL_MODEL` dispatch remains a manual rollback bridge only.
-After scratchpad CI holds, run `sudo bash deploy/ci7-teardown-box-ci.sh` to retire the old
+The CI-6 `SWITCHBOARD_CI_PULL_MODEL` dispatch is retired; manual recovery uses
+`jobs.py dispatch_scratchpad` and the same trusted workflow. After scratchpad CI holds,
+run `sudo bash deploy/ci7-teardown-box-ci.sh` to retire the old
 on-box VM gate units and `/var/lib/projectplanner/ci-gate` state. Rollback copies live under
 `deploy/retired/` for one week.
 

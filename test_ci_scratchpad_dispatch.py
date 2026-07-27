@@ -37,7 +37,6 @@ store.set_project_repo_topology(
 )
 
 os.environ.pop("SWITCHBOARD_CI_SCRATCHPAD", None)
-os.environ.pop("SWITCHBOARD_CI_PULL_MODEL", None)
 ok(csd.is_scratchpad_enabled(), "scratchpad enabled by default (CI-12 primary)")
 os.environ["SWITCHBOARD_CI_SCRATCHPAD"] = "0"
 ok(not csd.is_scratchpad_enabled(), "scratchpad can be disabled explicitly")
@@ -74,9 +73,11 @@ source_path = os.path.join(_TMP, "checkout")
 os.makedirs(source_path)
 
 orig_resolve = csd.cvd.resolve_head_sha
+orig_merge_base = csd.cvd.fetch_pr_merge_base_sha
 orig_verify = csd.cvd.verify_commit_exists
 orig_mirror = csd.external_ci_mirror.request_external_ci_mirror_run
 csd.cvd.resolve_head_sha = lambda *a, **k: (VALID_SHA, "test", None)
+csd.cvd.fetch_pr_merge_base_sha = lambda *a, **k: VALID_SHA
 csd.cvd.verify_commit_exists = lambda *a, **k: None
 csd.cvd._token = lambda *a, **k: "tok"
 mirror_calls = []
@@ -95,9 +96,17 @@ result = csd.dispatch_scratchpad(
     dry_run=False,
 )
 ok(result["dispatched"] and result["mirror_branch"].startswith("ci/pr-412/"),
-   "dispatch_scratchpad records a disposable ci/pr-* branch run")
-ok(mirror_calls and mirror_calls[0].get("push_triggered") is True,
-   "scratchpad mirror request is push-triggered (no workflow_dispatch)")
+   "dispatch_scratchpad records a disposable ci/pr-* mirror name")
+ok(mirror_calls and not mirror_calls[0].get("push_triggered"),
+   "scratchpad mirror push cannot execute an agent-authored workflow")
+ok(mirror_calls[0].get("mirror_ref_kind") == "tag",
+   "projectplanner scratchpad transport uses non-triggering tags")
+ok(mirror_calls[0].get("workflow_ref") == "master"
+   and mirror_calls[0].get("workflow_inputs", {}).get("validation_mode") == "head",
+   "PR heads dispatch the trusted default-branch workflow in fast admission mode")
+ok(mirror_calls[0].get("workflow_inputs", {}).get("source_ref")
+   == f"refs/tags/{result['mirror_branch']}",
+   "trusted workflow receives the exact disposable scratchpad ref")
 ok(mirror_calls[0].get("poll_after_push") is True,
    "scratchpad waits for a terminal external_ci_run instead of leaving triggered evidence")
 ok(mirror_calls[0].get("source_fetch_ref") == "refs/pull/412/head",
@@ -120,8 +129,13 @@ ok(mirror_calls[0].get("poll_after_push") is False,
    "merge-group webhook dispatch does not poll CI before returning")
 ok(mirror_calls[0].get("source_sha") == VALID_SHA,
    "merge-group dispatch preserves the exact requested SHA")
+ok(mirror_calls[0].get("workflow_ref") == "master"
+   and mirror_calls[0].get("workflow_inputs", {}).get("validation_mode") == "merge_group"
+   and mirror_calls[0].get("mirror_ref_kind") == "tag",
+   "merge groups dispatch full verification through the trusted default-branch workflow")
 
 csd.cvd.resolve_head_sha = orig_resolve
+csd.cvd.fetch_pr_merge_base_sha = orig_merge_base
 csd.cvd.verify_commit_exists = orig_verify
 csd.external_ci_mirror.request_external_ci_mirror_run = orig_mirror
 
@@ -148,19 +162,12 @@ github_sync.verify_ci_command.verify = orig_verify
 github_sync._maybe_refresh_claim_gate = orig_claim
 
 os.environ["SWITCHBOARD_CI_SCRATCHPAD"] = "0"
-os.environ["SWITCHBOARD_CI_PULL_MODEL"] = "1"
-orig_pull = github_sync._maybe_dispatch_pull_model_ci
-github_sync._maybe_dispatch_pull_model_ci = lambda *a, **k: {
-    "dispatched": True,
-    "skip_reason": None,
-    "head_sha": VALID_SHA,
-}
 ci_pull = github_sync._maybe_trigger_ci("6th-Element-Labs/projectplanner", 412, VALID_SHA, P)
-ok(ci_pull["pull_model_dispatched"] and ci_pull["scratchpad_skip_reason"] == "scratchpad_disabled",
-   "pull-model remains available when scratchpad is disabled")
-github_sync._maybe_dispatch_pull_model_ci = orig_pull
+ok(not ci_pull["pull_model_dispatched"]
+   and ci_pull["pull_model_skip_reason"] == "pull_model_retired"
+   and ci_pull["scratchpad_skip_reason"] == "scratchpad_disabled",
+   "disabling scratchpad fails closed instead of reviving the retired pull route")
 os.environ["SWITCHBOARD_CI_SCRATCHPAD"] = "1"
-os.environ.pop("SWITCHBOARD_CI_PULL_MODEL", None)
 
 print(f"\nci_scratchpad_dispatch: {passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)

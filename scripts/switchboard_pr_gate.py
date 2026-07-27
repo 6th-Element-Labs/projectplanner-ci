@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Switchboard PR gates — claim provenance and merge authorization statuses.
+"""Switchboard PR gate — lightweight claim provenance status.
 
 VM verification (`Switchboard CI / VM gate`) runs on projectplanner-ci via the
-pull-model verify workflow. This runner reads the production board and posts both
-`Switchboard / claim gate` and `Switchboard / merge authorization` on each open
-fleet PR head SHA. No git, worktrees, venvs, or external_ci_mirror calls live here.
+trusted public-mirror workflow. This runner reads the production board and posts
+only `Switchboard / claim gate` on each open fleet PR head SHA. Merge authorization
+remains internal Switchboard state; publishing it as another advisory red/green
+GitHub lifecycle confused operators and Autopilot without protecting the branch.
 """
 from __future__ import annotations
 
@@ -496,16 +497,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Commit-status context for the SESSION-12 provenance/claim gate. "
                              "Per-repo mode comes from project repo_topology.roles.canonical.claim_gate "
                              "(off|warn|enforce; default warn).")
-    parser.add_argument("--merge-context",
-                        default=os.environ.get(
-                            "SWITCHBOARD_MERGE_STATUS_CONTEXT",
-                            DEFAULT_MERGE_CONTEXT,
-                        ),
-                        help="Required commit-status context backed by merge_gate.")
     parser.add_argument("--no-claim-gate", action="store_true",
                         default=os.environ.get("SWITCHBOARD_CI_NO_CLAIM_GATE", "").lower()
                         in ("1", "true", "yes"),
-                        help="Disable only the legacy claim status; merge authorization remains active.")
+                        help="Disable the advisory claim status.")
     parser.add_argument("--fail-on-red", action="store_true",
                         help="Return nonzero when any PR gate posts failure. Manual use only; "
                              "systemd timers should stay green when they successfully post red statuses.")
@@ -543,18 +538,6 @@ def main(argv: Optional[List[str]] = None) -> int:
                        "state": "error", "error": str(exc)}
                 print(json.dumps(err, sort_keys=True))
                 results.append(err)
-        try:
-            merge_result = run_merge_authorization_for_pr(
-                pr, repo=repo, token=repo_token, context=args.merge_context,
-                changed_paths=changed_paths)
-            print(json.dumps(merge_result, sort_keys=True))
-            results.append(merge_result)
-        except Exception as exc:  # pragma: no cover - defensive
-            err = {"repo": repo, "pr": pr.get("number"), "context": args.merge_context,
-                   "state": "error", "error": str(exc)}
-            print(json.dumps(err, sort_keys=True))
-            results.append(err)
-
     failed = [r for r in results if r.get("state") not in ("success", None)]
     return 1 if args.fail_on_red and failed else 0
 

@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""CI's status callback must not depend on a shared personal access token.
-
-On 2026-07-26 a shared bot PAT exhausted its 5,000/hr budget and verify.yml's
-first status callback returned `403 API rate limit exceeded`. Runs died before
-executing tests, so no PR could go green, including the repair. These checks make
-the dedicated App installation token the only callback credential. Missing or
-broken App configuration must fail loudly at token minting; there is no PAT
-fallback capable of silently recreating the outage.
-"""
+"""The public CI trust boundary keeps agent code and callback credentials apart."""
 import os
 import sys
 from pathlib import Path
@@ -16,75 +8,75 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import yaml  # noqa: E402
 
-WORKFLOW = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        ".github", "workflows", "verify.yml")
-APP_TOKEN_EXPR = "steps.app_token.outputs.token"
+WORKFLOW = Path(__file__).resolve().parent / ".github" / "workflows" / "verify.yml"
 passed = failed = 0
 
 
 def ok(condition, message):
     global passed, failed
     print(("  PASS  " if condition else "  FAIL  ") + message)
-    if condition:
-        passed += 1
-    else:
-        failed += 1
+    passed += int(bool(condition))
+    failed += int(not condition)
 
 
-with open(WORKFLOW, "r", encoding="utf-8") as handle:
-    workflow = yaml.safe_load(handle)
+workflow_source = WORKFLOW.read_text(encoding="utf-8")
+workflow = yaml.safe_load(workflow_source)
+jobs = workflow["jobs"]
 
-steps = workflow["jobs"]["verify"]["steps"]
-by_name = {str(s.get("name") or ""): s for s in steps}
+print("\n-- workflow authority is trusted and manually dispatched --")
+ok("workflow_dispatch:" in workflow_source and '"ci/**"' not in workflow_source,
+   "mirrored branch pushes cannot select or execute their own workflow")
+ok("source_ref:" in workflow_source and "source_sha:" in workflow_source
+   and "refs/tags/ci/" in workflow_source,
+   "trusted workflow accepts only an exact scratchpad tag and canonical SHA")
 
-print("\n-- the callback token is minted from the GitHub App --")
-mint = next((s for s in steps if s.get("id") == "app_token"), None)
-ok(mint is not None, "verify.yml has an app_token minting step")
-ok(mint and str(mint.get("uses") or "").startswith("actions/create-github-app-token"),
-   "it uses the official create-github-app-token action")
-ok(mint and not mint.get("continue-on-error", False),
-   "App token minting is fail-closed")
-with_block = (mint or {}).get("with") or {}
-ok("SWITCHBOARD_APP_ID" in str(with_block.get("app-id")),
-   "app id comes from the SWITCHBOARD_APP_ID secret")
-ok("SWITCHBOARD_APP_PRIVATE_KEY" in str(with_block.get("private-key")),
-   "private key comes from the SWITCHBOARD_APP_PRIVATE_KEY secret")
+print("\n-- untrusted code executes in a secret-free job --")
+suite = jobs["suite"]
+suite_source = str(suite)
+ok("secrets." not in suite_source and "GH_TOKEN" not in suite_source,
+   "suite job has no secret or callback-token expression")
+checkout = next(s for s in suite["steps"] if s.get("id") == "checkout")
+ok(checkout.get("with", {}).get("persist-credentials") is False,
+   "scratchpad checkout persists no credential")
+ok(any(s.get("name") == "Verify exact mirrored SHA" for s in suite["steps"]),
+   "suite verifies checkout HEAD equals the requested canonical SHA")
 
-print("\n-- the App token is minted BEFORE the first callback --")
-mint_index = next(i for i, s in enumerate(steps) if s.get("id") == "app_token")
-first_callback = next(i for i, s in enumerate(steps)
-                      if "GH_TOKEN" in ((s.get("env") or {})))
-ok(mint_index < first_callback,
-   "the mint step precedes every step that posts a status")
+print("\n-- only isolated callback jobs mint the dedicated App token --")
+for job_name in ("announce", "report"):
+    steps = jobs[job_name]["steps"]
+    mint = next((s for s in steps if s.get("id") == "app_token"), None)
+    ok(mint is not None, f"{job_name} has an App token minting step")
+    ok(mint and str(mint.get("uses") or "").startswith(
+        "actions/create-github-app-token"), f"{job_name} uses the official App action")
+    with_block = (mint or {}).get("with") or {}
+    ok("SWITCHBOARD_APP_ID" in str(with_block.get("app-id")),
+       f"{job_name} reads the dedicated App id")
+    ok("SWITCHBOARD_APP_PRIVATE_KEY" in str(with_block.get("private-key")),
+       f"{job_name} reads the dedicated App private key")
 
-print("\n-- every status callback uses only the dedicated App --")
-callbacks = [(name, s) for name, s in by_name.items()
-             if "GH_TOKEN" in ((s.get("env") or {}))]
-ok(len(callbacks) >= 4,
-   f"all four callback steps are covered (found {len(callbacks)})")
-for name, step in callbacks:
-    expr = str((step["env"])["GH_TOKEN"])
-    ok(expr == f"${{{{ {APP_TOKEN_EXPR} }}}}",
-       f"{name!r} uses exactly the App token")
-workflow_source = Path(WORKFLOW).read_text(encoding="utf-8")
+callbacks = []
+for job_name in ("announce", "report"):
+    callbacks.extend(
+        (job_name, step) for step in jobs[job_name]["steps"]
+        if "GH_TOKEN" in (step.get("env") or {})
+    )
+ok(len(callbacks) == 2, "one pending and one terminal callback remain")
+for job_name, step in callbacks:
+    ok(str(step["env"]["GH_TOKEN"]) == "${{ steps.app_token.outputs.token }}",
+       f"{job_name} callback uses only its job-local App token")
+
 ok("PRIVATE_READ_TOKEN" not in workflow_source,
-   "the retired PAT secret is absent from the workflow")
+   "the retired PAT secret is absent from the trusted workflow")
 
-print("\n-- the checkout still carries no credential --")
-checkout = by_name.get("Check out scratchpad branch")
-ok((checkout or {}).get("with", {}).get("persist-credentials") is False,
-   "the scratchpad checkout stays credential-free (public mirror, nothing to read)")
-
-print("\n-- the mirror's subprocess credential prefers the App too --")
+print("\n-- the mirror dispatcher also prefers GitHub App identity --")
 import external_ci_mirror  # noqa: E402
-source = open(external_ci_mirror.__file__, "r", encoding="utf-8").read()
+
+source = Path(external_ci_mirror.__file__).read_text(encoding="utf-8")
 default_run = source[source.index("def _default_run"):source.index("def _run(")]
 ok("github_app_auth" in default_run,
    "_default_run resolves GH_TOKEN through github_app_auth")
-ok(default_run.index("github_app_auth") < default_run.index("SWITCHBOARD_CI_GITHUB_TOKEN"),
-   "it tries the App before the PAT chain")
-hint = external_ci_mirror._canonical_repo_hint()
-ok("/" in hint, f"the installation hint is a real owner/repo slug ({hint})")
+ok(default_run.index("github_app_auth") < default_run.index(
+    "SWITCHBOARD_CI_GITHUB_TOKEN"), "it tries the App before the PAT chain")
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

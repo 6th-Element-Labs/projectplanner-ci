@@ -1,8 +1,9 @@
 """Scratchpad CI dispatch (CI-12).
 
-On canonical PR open/sync, push the exact head SHA to a disposable ``ci/**`` branch on
-``projectplanner-ci``. The push-triggered ``verify`` workflow (CI-14) runs the suite and
-posts ``Switchboard CI / VM gate`` on the private canonical SHA.
+On canonical PR open/sync, push the exact head SHA to a disposable ``ci/**`` tag on
+``projectplanner-ci``. Then dispatch the trusted ``verify`` workflow from the public
+repository's default branch. Tags do not satisfy legacy branch-push triggers, so mirrored
+agent code cannot select or execute a workflow.
 
 Replaces pull-model ``repository_dispatch`` as the primary projectplanner verification path.
 """
@@ -20,6 +21,7 @@ import store
 
 SCHEMA = "switchboard.ci_scratchpad_dispatch.v1"
 DEFAULT_WORKFLOW = "verify"
+DEFAULT_WORKFLOW_REF = "master"
 
 
 def is_scratchpad_enabled() -> bool:
@@ -47,6 +49,10 @@ def mirror_branch_for_pr(pr_number: int, source_sha: str) -> str:
     return store.default_external_ci_mirror_branch(f"pr-{int(pr_number)}", source_sha)
 
 
+def mirror_tag_ref(mirror_name: str) -> str:
+    return f"refs/tags/{mirror_name}"
+
+
 def dispatch_scratchpad(
     pr_number: int,
     *,
@@ -68,6 +74,8 @@ def dispatch_scratchpad(
     sha, sha_source, stale_webhook_sha = cvd.resolve_head_sha(
         pr, head_sha, repo=source_repo, token=tok, strict_explicit=strict_explicit)
     cvd.verify_commit_exists(sha, repo=source_repo, token=tok)
+    merge_base_sha = cvd.fetch_pr_merge_base_sha(
+        pr, sha, repo=source_repo, token=tok)
     checkout = (source_path or source_checkout_path()).strip()
     mirror_branch = mirror_branch_for_pr(pr, sha)
     result: Dict[str, Any] = {
@@ -82,6 +90,8 @@ def dispatch_scratchpad(
         "stale_webhook_sha": stale_webhook_sha,
         "mirror_branch": mirror_branch,
         "workflow": DEFAULT_WORKFLOW,
+        "workflow_ref": DEFAULT_WORKFLOW_REF,
+        "merge_base_sha": merge_base_sha,
         "source_path": checkout,
     }
     if dry_run:
@@ -98,15 +108,27 @@ def dispatch_scratchpad(
         "source_fetch_ref": f"refs/pull/{pr}/head",
         "mirror_repo": cvd.ci_repo(),
         "mirror_branch": mirror_branch,
+        "mirror_ref_kind": "tag",
         "workflow": DEFAULT_WORKFLOW,
-        "push_triggered": True,
+        "workflow_ref": DEFAULT_WORKFLOW_REF,
+        "workflow_inputs": {
+            "source_ref": mirror_tag_ref(mirror_branch),
+            "validation_mode": "head",
+            "base_sha": merge_base_sha,
+        },
         # A terminal external_ci_run is the durable evidence/cleanup handoff.
         "poll_after_push": True,
         "cleanup_mirror_branch": True,
         "request": {
             "pr": pr,
             "schema": SCHEMA,
-            "push_triggered": True,
+            "workflow_ref": DEFAULT_WORKFLOW_REF,
+            "mirror_ref_kind": "tag",
+            "workflow_inputs": {
+                "source_ref": mirror_tag_ref(mirror_branch),
+                "validation_mode": "head",
+                "base_sha": merge_base_sha,
+            },
             "cleanup_mirror_branch": True,
             "source_fetch_ref": f"refs/pull/{pr}/head",
         },
@@ -121,7 +143,8 @@ def dispatch_scratchpad(
         result["message"] = str(mirror["error"])
     else:
         result["message"] = (
-            f"scratchpad push sent to {cvd.ci_repo()}:{mirror_branch} "
+            f"scratchpad mirrored to {cvd.ci_repo()}:{mirror_branch}; "
+            f"trusted {DEFAULT_WORKFLOW_REF}:{DEFAULT_WORKFLOW} dispatched "
             f"(run_id={mirror.get('run_id')})"
         )
     return result
@@ -201,6 +224,7 @@ def dispatch_scratchpad_ref(
         "source_fetch_ref": fetch_ref,
         "mirror_branch": mirror_branch,
         "workflow": DEFAULT_WORKFLOW,
+        "workflow_ref": DEFAULT_WORKFLOW_REF,
         "source_path": checkout,
     }
     if dry_run:
@@ -216,8 +240,14 @@ def dispatch_scratchpad_ref(
         "source_fetch_ref": fetch_ref,
         "mirror_repo": cvd.ci_repo(),
         "mirror_branch": mirror_branch,
+        "mirror_ref_kind": "tag",
         "workflow": DEFAULT_WORKFLOW,
-        "push_triggered": True,
+        "workflow_ref": DEFAULT_WORKFLOW_REF,
+        "workflow_inputs": {
+            "source_ref": mirror_tag_ref(mirror_branch),
+            "validation_mode": "merge_group",
+            "base_sha": "",
+        },
         # Webhook delivery only owns the durable push/dispatch handoff.  CI
         # completion is asynchronous and may exceed GitHub's webhook deadline.
         "poll_after_push": False,
@@ -231,7 +261,13 @@ def dispatch_scratchpad_ref(
         "request": {
             "label": label,
             "schema": SCHEMA,
-            "push_triggered": True,
+            "workflow_ref": DEFAULT_WORKFLOW_REF,
+            "mirror_ref_kind": "tag",
+            "workflow_inputs": {
+                "source_ref": mirror_tag_ref(mirror_branch),
+                "validation_mode": "merge_group",
+                "base_sha": "",
+            },
             "cleanup_mirror_branch": True,
             "source_fetch_ref": fetch_ref,
         },
@@ -246,7 +282,8 @@ def dispatch_scratchpad_ref(
         result["message"] = str(mirror["error"])
     else:
         result["message"] = (
-            f"scratchpad push sent to {cvd.ci_repo()}:{mirror_branch} "
+            f"scratchpad mirrored to {cvd.ci_repo()}:{mirror_branch}; "
+            f"trusted {DEFAULT_WORKFLOW_REF}:{DEFAULT_WORKFLOW} dispatched "
             f"(run_id={mirror.get('run_id')})")
     # A refused resume (previous_run_failed / retry_reset_failed) must reach the caller.
     # Losing it is what let handle_merge_group report dispatched=True with a dead run id
@@ -290,7 +327,7 @@ def try_dispatch_merge_group(
 
 def _cli(argv: Optional[list] = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Dispatch scratchpad CI (push ci/** branch on projectplanner-ci).",
+        description="Dispatch scratchpad CI (push refs/tags/ci/** on projectplanner-ci).",
     )
     parser.add_argument("--pr", type=int, required=True)
     parser.add_argument("--head-sha", default="")

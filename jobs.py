@@ -291,7 +291,7 @@ def coordinator_audit():
 
 
 def claim_gate_prs():
-    """Post claim and merge-authorization statuses for open fleet PRs.
+    """Post the advisory claim status for open fleet PRs.
 
     VM verification (`Switchboard CI / VM gate`) runs on projectplanner-ci via the
     scratchpad verify workflow. This job performs no git checkout.
@@ -299,13 +299,6 @@ def claim_gate_prs():
     cmd = [sys.executable, str(Path(__file__).parent / "scripts" / "switchboard_pr_gate.py"),
            "--once-open-prs"]
     subprocess.run(cmd, check=True, cwd=Path(__file__).parent)
-
-
-def dispatch_ci():
-    """Rollback-only operator CLI for the retired primary pull route."""
-    import ci_verify_dispatch
-    args = sys.argv[2:] if len(sys.argv) > 2 else ["--help"]
-    raise SystemExit(ci_verify_dispatch.main(args))
 
 
 def dispatch_scratchpad():
@@ -433,7 +426,6 @@ JOBS = {"weekly_digest": weekly_digest, "poll_inbox": poll_inbox,
         "reconcile_alerts": reconcile_alerts,
         "coordinator_audit": coordinator_audit,
         "claim_gate_prs": claim_gate_prs,
-        "dispatch_ci": dispatch_ci,
         "dispatch_scratchpad": dispatch_scratchpad,
         "verify": verify,
         "merge_coordinator_plan": merge_coordinator_plan,

@@ -130,11 +130,11 @@ nor offline evidence.
 Runner bootstrap exception: if `Switchboard CI / VM gate` is missing on a PR, check the
 projectplanner-ci `verify` workflow run and the corresponding Switchboard `external_ci_run` —
 do not treat a missing status as a pass. Re-open or synchronize the PR to request a fresh
-exact-SHA scratchpad branch through the Plan VM webhook.
+exact-SHA scratchpad tag through the Plan VM webhook.
 
-The Plan VM posts SESSION-12 **`Switchboard / claim gate`** and the required
-**`Switchboard / merge authorization`** exact-head projection via
-`projectplanner-claim-gate.timer`:
+The Plan VM posts only the advisory SESSION-12 **`Switchboard / claim gate`**
+via `projectplanner-claim-gate.timer`. Merge authorization remains visible
+inside Switchboard; it is not another GitHub status lifecycle:
 
 ```bash
 /opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py claim_gate_prs
@@ -146,12 +146,15 @@ Manual claim-gate for one PR:
 PM_GITHUB_TOKEN=... scripts/switchboard_pr_gate.py --pr 18
 ```
 
-### Scratchpad CI (CI-12) + box teardown (CI-7)
+### Trusted scratchpad CI (CI-12/CI-17) + box teardown (CI-7)
 
 **Required VM verification** runs on `6th-Element-Labs/projectplanner-ci` (`verify.yml`), posting
 `Switchboard CI / VM gate`. Canonical PR open/sync webhooks call `external_ci_mirror`, fetch the
-exact `refs/pull/<n>/head` SHA, and push it to a disposable `ci/**` branch. That push triggers
-the workflow. The Plan VM coordinates the mirror from the service-owned
+exact `refs/pull/<n>/head` SHA, and push it to a disposable `refs/tags/ci/**` tag. The dispatcher
+then invokes `master:verify.yml`; the tag cannot satisfy a branch-push trigger and mirrored
+agent code never supplies workflow authority.
+PR heads run fast impacted admission, while merge-group SHAs run the full suite and Playwright.
+The Plan VM coordinates the mirror from the service-owned
 `/var/lib/projectplanner/ci-source` clone but never runs the test suite. If mirroring fails,
 verify that path is a Git checkout owned by `projectplanner` and that the service token can
 fetch the canonical repo, push to `projectplanner-ci`, and poll Actions.
@@ -160,7 +163,14 @@ Confirm the service account can fetch the private canonical repo, push to projec
 and poll Actions with `gh`. Confirm projectplanner-ci has `SWITCHBOARD_APP_ID` and
 `SWITCHBOARD_APP_PRIVATE_KEY` for canonical commit-status writeback. The callback is App-only
 and fails closed; do not restore `PRIVATE_READ_TOKEN`. Scratchpad checkout is public and
-credential-free.
+credential-free. The suite job contains no secret expressions; isolated announce/report jobs
+mint the App token and publish one pending/terminal status.
+
+Manual exact-head recovery uses the same route, not a second pull workflow:
+
+```bash
+python ci_scratchpad_dispatch.py --pr <PR> --head-sha <SHA> --dispatch --json
+```
 
 **Retire on-box VM CI** after scratchpad verification holds (operator script — reversible via
 `deploy/retired/*.bak` for one week):
@@ -181,8 +191,8 @@ re-enable the old timers, and disable `projectplanner-claim-gate.timer`.
 The active native merge queue sends `merge_group/checks_requested` webhooks. Switchboard mirrors
 the exact temporary head SHA through the same scratchpad route, and `verify.yml` posts the single
 required `Switchboard CI / VM gate` verdict after the full suite and Playwright. A transient
-dispatch failure keeps the webhook delivery retryable. Advisory claim and merge-authorization
-statuses stay PR-scoped and are not projected onto merge-group SHAs.
+dispatch failure keeps the webhook delivery retryable. No advisory status is projected onto
+merge-group SHAs; only the claim advisory is posted on PR heads.
 
 Verifier resume rule: review/audit workflows that spawn skeptic verifier agents should write a
 `switchboard.review_verifier_run.v1` checkpoint with one deterministic job per
