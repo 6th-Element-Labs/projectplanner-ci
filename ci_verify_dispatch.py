@@ -6,6 +6,7 @@ compatibility module now only resolves and validates canonical PR SHAs for
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import urllib.error

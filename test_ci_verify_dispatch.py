@@ -40,6 +40,25 @@ def _fake_request(method, path, *, token, body=None):
 orig = cvd._github_request
 cvd._github_request = _fake_request
 
+
+class _JsonResponse:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self):
+        return b'{"ok":true}'
+
+
+orig_urlopen = cvd.urllib.request.urlopen
+cvd.urllib.request.urlopen = lambda *_args, **_kwargs: _JsonResponse()
+ok(orig("POST", "https://api.github.test/proof", token="tok", body={"x": 1})
+   == {"ok": True},
+   "real GitHub request helper encodes and decodes JSON")
+cvd.urllib.request.urlopen = orig_urlopen
+
 ok(cvd.normalize_commit_sha(VALID_SHA) == VALID_SHA, "normalize accepts a full SHA")
 try:
     cvd.normalize_commit_sha("mhead")
