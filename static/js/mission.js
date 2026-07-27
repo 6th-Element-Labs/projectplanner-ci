@@ -460,7 +460,7 @@
                 this.loadDependencyGraph(this.selectedDeliverableId),
                 this.loadAutopilotScopes(this.selectedDeliverableId),
                 this.loadBreakdownProposals(this.selectedDeliverableId),
-                this.loadKpisAndOutcomes(), this.loadClosureReport(this.selectedDeliverableId),
+                this.loadKpisAndOutcomes(),
             ]);
             this._setMissionDeliverableInUrl(this.selectedDeliverableId);
             // UI-17: when ?proof=1 / mode=proof, load bind + provider state before render.
@@ -768,17 +768,7 @@
             // had it (captured in renderMissionPage before the re-render).
             const _sc = this._missionDagScroll;
             if (_sc) { host.scrollLeft = _sc.left; host.scrollTop = _sc.top; }
-            // Keep the frozen min-height until the new SVG has a real size, then release so
-            // the map can shrink if the graph genuinely got smaller.
-            if (host.offsetHeight > 0) host.style.minHeight = `${host.offsetHeight}px`;
             this._wireMissionGraphClicks(host);
-            if (this._missionPageScrollY != null) {
-                const y = this._missionPageScrollY;
-                if ((window.scrollY || window.pageYOffset || 0) !== y) window.scrollTo(0, y);
-                requestAnimationFrame(() => {
-                    if ((window.scrollY || window.pageYOffset || 0) !== y) window.scrollTo(0, y);
-                });
-            }
         } catch (e) {
             host.innerHTML = `<div class="alert alert-warning mb-2">Could not render graph: ${this.esc(e.message)}</div>
                 <pre class="small mb-0" style="white-space:pre-wrap">${this.esc(g.mermaid)}</pre>`;
@@ -838,8 +828,7 @@
         const nodeSig = (g.nodes || []).map((n) => `${n.id}:${n.state}`).sort();
         const active = (s.active_work || []).map((w) => `${w.task_id}:${w.status}:${(w.active_claims || []).length}`).sort();
         const blockers = (s.blockers || []).map((b) => `${b.kind || ''}:${b.task_id || ''}`).sort();
-        // Status only — autopilot heartbeats bump updated_at and must not force a remount.
-        const scopes = (this.autopilotScopes || []).map((scope) => `${scope.scope_id}:${scope.status}`).sort();
+        const scopes = (this.autopilotScopes || []).map((scope) => `${scope.scope_id}:${scope.status}:${scope.updated_at}`).sort();
         // UI-60: re-render when tooltip prose or who's-working changes, even if status didn't.
         const narration = (s.linked_tasks || []).map((link) => {
             const d = link.task_detail || {};
@@ -847,7 +836,7 @@
         }).sort();
         const agents = (s.active_agents || []).map((a) =>
             `${a.task_id}:${a.agent_id}:${a.runtime || ''}:${a.stale ? 1 : 0}`).sort();
-        return JSON.stringify([nodeSig, active, blockers, scopes, narration, agents, s.progress || {}, g.stats || {}, (s.deliverable || {}).status, ((this.missionClosure || {}).report || {}).report_id, ((this.missionClosure || {}).report || {}).grade]);
+        return JSON.stringify([nodeSig, active, blockers, scopes, narration, agents, s.progress || {}, g.stats || {}, (s.deliverable || {}).status]);
     },
 
     _missionLiveStamp(changed) {
@@ -869,7 +858,7 @@
         if (!id || this._missionLiveBusy) return;
         this._missionLiveBusy = true;
         try {
-            await Promise.all([this.loadMissionStatus(id), this.loadDependencyGraph(id), this.loadAutopilotScopes(id), this.loadClosureReport(id)]);
+            await Promise.all([this.loadMissionStatus(id), this.loadDependencyGraph(id), this.loadAutopilotScopes(id)]);
         } catch (e) {
             this._missionLiveBusy = false;
             return;   // transient (agent mid-write, network blip) — try again next tick
@@ -951,7 +940,7 @@
             <h2 class="mb-2">${this.esc(d.title || s.deliverable_id || 'Mission')}</h2>
             <div class="btn-list">${this._missionBadge(d.status, this.DELIVERABLE_STATUS_COLOR)} ${this._missionConfidence(board.confidence)} ${proofToggle}</div>
         </div>
-        <div class="text-end"><div class="mb-2">${this._missionAutopilotControlsHtml()}</div><div class="mb-2">${this._missionClosureActionHtml()}</div>
+        <div class="text-end"><div class="mb-2">${this._missionAutopilotControlsHtml()}</div>
             <span class="badge bg-green-lt" title="Live — auto-refreshes as agents update tasks"><span class="status-dot status-dot-animated bg-green me-1"></span>Live</span>
             <div id="mission-live-stamp" class="text-secondary small mt-1"></div>
         </div></div>
@@ -1019,19 +1008,12 @@
         // container below and again by _renderMissionMermaid once the fresh SVG mounts.
         const _prevGraphEl = el.querySelector('#mission-dag-graph');
         this._missionDagScroll = _prevGraphEl ? { left: _prevGraphEl.scrollLeft, top: _prevGraphEl.scrollTop } : null;
-        // Freeze the map's pixel height across the wipe — an empty host only has min-height
-        // 8rem, so without this the page content below the map jumps down on every live tick.
-        const _prevGraphH = _prevGraphEl ? _prevGraphEl.offsetHeight : 0;
-        // Page scroll (not just the graph scroller) — remounts must not move the viewport.
-        // Kept on `this` so the async mermaid SVG swap can restore again after layout.
-        const _pageScrollY = window.scrollY || window.pageYOffset || 0;
-        this._missionPageScrollY = _pageScrollY;
         const _prevDetail = el.querySelector('#mission-detail');
         const detailOpen = _prevDetail ? _prevDetail.open : !!this._missionDetailOpen;
         this._missionDetailOpen = detailOpen;
         // Lead with the story: headline → plain-English → what's blocked → the map →
         // breakdown/outcomes review → next action.
-        const essentials = header + proofHtml + this._missionClosureHtml() + this._missionCeoHeaderHtml(s) + blockerHtml
+        const essentials = header + proofHtml + this._missionCeoHeaderHtml(s) + blockerHtml
             + this._missionDependencyGraphHtml() + workLedger + this._missionBreakdownHtml() + nextActions;
         // The rest (KPIs, brief, milestones, work tables, agents, linked tasks, policy) folds
         // into a disclosure so it's there when you want it, not a wall of ~15 cards up front.
@@ -1047,18 +1029,9 @@
                 <div class="pt-3">${detail}</div>
             </details>`;
         const _gh = el.querySelector('#mission-dag-graph');
-        if (_gh && _prevGraphH > 0) _gh.style.minHeight = `${_prevGraphH}px`;
         if (_prevGraphSvg && _gh && !_gh.querySelector('svg')) _gh.appendChild(_prevGraphSvg);
         if (_gh && this._missionDagScroll) { _gh.scrollLeft = this._missionDagScroll.left; _gh.scrollTop = this._missionDagScroll.top; }
         this._renderMissionMermaid();
-        // Restore page scroll after the wipe (and again after paint / mermaid swap).
-        const _restorePageScroll = () => {
-            if ((window.scrollY || window.pageYOffset || 0) !== _pageScrollY) {
-                window.scrollTo(0, _pageScrollY);
-            }
-        };
-        _restorePageScroll();
-        requestAnimationFrame(_restorePageScroll);
         // Re-baseline the live signature so the poller only re-renders on the NEXT
         // real change, and stamp the freshly-rendered "updated" time.
         this._missionSig = this._missionSignature();
@@ -1212,8 +1185,6 @@
             case 'approve': return this.approveProposal(ds.proposal);
             case 'reject': return this.rejectProposal(ds.proposal);
             case 'defer': return this.deferProposal(ds.proposal);
-            case 'closure-request': return this.requestClosureVerification();
-            case 'closure-dismiss': return this.dismissClosure();
             // UI-2: KPIs & outcomes
             case 'kpi-new': return this.openKpiModal();
             case 'kpi-edit': return this.updateKpiValue(ds.kpi);

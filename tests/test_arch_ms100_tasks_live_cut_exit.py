@@ -26,8 +26,6 @@ tracker = ROOT / "docs/ARCH-MS-EXECUTION.md"
 ok(exit_doc.is_file(), "tasks_live_cut_exit.md present")
 exit_text = exit_doc.read_text(encoding="utf-8") if exit_doc.is_file() else ""
 ok("ARCH-MS-100" in exit_text, "exit packet cites ARCH-MS-100")
-ok("closure verification" in exit_text.lower() or "ready for" in exit_text.lower(),
-   "exit packet declares ready for closure verification")
 ok("chart" in exit_text.lower() and "Tasks" in exit_text,
    "exit packet records chart Tasks green")
 

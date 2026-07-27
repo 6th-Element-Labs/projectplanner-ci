@@ -19,10 +19,6 @@ DELIVERABLE_MILESTONE_STATUSES = frozenset({
     "not_started", "in_progress", "blocked", "in_review", "done", "skipped",
 })
 BREAKDOWN_PROPOSAL_STATUSES = frozenset({"proposed", "approved", "rejected", "superseded", "deferred"})
-DONE_CLOSURE_GRADES = frozenset({"pass", "waive"})
-CLOSURE_METADATA_KEYS = frozenset({
-    "closure_reports", "last_closure_report", "last_closure_grade", "last_closure_at",
-})
 
 
 def _slug(value: str) -> str:
@@ -73,32 +69,4 @@ def validate_milestone_status(status: str) -> dict[str, Any] | None:
     return None
 
 
-def merge_deliverable_metadata(
-        prior_metadata: Mapping[str, Any],
-        incoming_metadata: Mapping[str, Any]) -> dict[str, Any]:
-    merged = dict(incoming_metadata)
-    for key in CLOSURE_METADATA_KEYS:
-        if key in prior_metadata:
-            merged[key] = prior_metadata[key]
-        else:
-            merged.pop(key, None)
-    return merged
 
-
-def done_requires_closure_grade(
-        *,
-        deliverable_id: str,
-        requested_status: str,
-        last_closure_grade: str | None) -> dict[str, Any] | None:
-    grade = str(last_closure_grade or "").lower()
-    if requested_status == "done" and grade not in DONE_CLOSURE_GRADES:
-        return {
-            "error": "deliverable closure grade required",
-            "deliverable_id": deliverable_id,
-            "requested_status": requested_status,
-            "last_closure_grade": grade or None,
-            "allowed_closure_grades": sorted(DONE_CLOSURE_GRADES),
-            "action": "run verify_deliverable_closure and persist a pass or waive grade",
-            "spec": "docs/DELIVERABLE-CLOSURE-GATE.md",
-        }
-    return None

@@ -76,7 +76,6 @@ The cornerstone lifecycle material is the
 [`decision register`](docs/decisions/INDEX.md) distinguishes current authority, program
 history, proposals, and explicitly superseded material.
 
-Public protocol packaging and the open/commercial boundary remain defined by
-[`docs/IXP-PUBLIC-PACKAGE.md`](docs/IXP-PUBLIC-PACKAGE.md), with compatibility
-levels and test expectations in
+Public protocol packaging:
+[`docs/IXP-PUBLIC-PACKAGE.md`](docs/IXP-PUBLIC-PACKAGE.md) and
 [`docs/IXP-CONFORMANCE.md`](docs/IXP-CONFORMANCE.md).

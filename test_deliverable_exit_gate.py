@@ -36,12 +36,6 @@ env_example = (ROOT / ".env.example").read_text()
 ok("\nPM_ENFORCE_DELIVERABLE_INTAKE=1\n" in env_example,
    ".env.example enables intake enforcement for non-systemd installs")
 
-runbook = (ROOT / "docs/DELIVERABLE-CLOSURE-GATE.md").read_text()
-for phrase in ("Operator rollout and closeout runbook", "pending_contract", "grandfathered",
-               "--require-clean", "systemctl restart projectplanner projectplanner-mcp",
-               "DELIVERABLES-12 through DELIVERABLES-21", "after DELIVERABLES-22 reaches Done"):
-    ok(phrase in runbook, f"runbook documents {phrase!r}")
-
 project = "qa-exit-gate"
 store.init_project_registry()
 store.create_project("Exit gate QA", project_id=project, actor="test")

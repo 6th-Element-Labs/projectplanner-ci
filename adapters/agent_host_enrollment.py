@@ -266,12 +266,6 @@ def create_signed_bundle(source_root: Path, output_dir: Path, version: str,
     candidates.extend(sorted(
         path for path in source_root.glob("*.py") if path.is_file()
     ))
-    for package in ("deliverable_gates", "deliverable_closure"):
-        candidates.extend(sorted(
-            path for path in (source_root / package).rglob("*")
-            if path.is_file() and "__pycache__" not in path.parts
-            and path.suffix in {".py", ".json"}
-        ))
     candidates.extend(path for path in (
         source_root / "constants.py",
         source_root / "store.py",

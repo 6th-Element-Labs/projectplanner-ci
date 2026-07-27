@@ -7,15 +7,6 @@ cd "$ROOT"
 PYTHON="${PYTHON:-python3}"
 STRICT="${SWITCHBOARD_CI_STRICT:-0}"
 REQUIRE_NODE="${SWITCHBOARD_CI_REQUIRE_NODE:-0}"
-SCOPE="${SWITCHBOARD_CI_SCOPE:-full}"
-BASE_SHA="${SWITCHBOARD_CI_BASE_SHA:-}"
-FAIL_FAST="${SWITCHBOARD_CI_FAIL_FAST:-1}"
-RESULT_REPORT="${CI_RESULT_REPORT:-.artifacts/ci-result.json}"
-
-if [ "$SCOPE" != "fast" ] && [ "$SCOPE" != "full" ]; then
-  echo "Unsupported SWITCHBOARD_CI_SCOPE=$SCOPE (expected fast or full)." >&2
-  exit 2
-fi
 
 # Managed CI can run inside a live Agent Host process.  Keep its routing, wake,
 # account, and credential context out of repository tests while preserving the
@@ -58,12 +49,6 @@ _run_one_test() {
       printf '%s\n' "$out"
     } > "${SWITCHBOARD_CI_RESULTS:?SWITCHBOARD_CI_RESULTS must be set}/$safe.fail"
     printf 'FAIL  %s (exit %s)\n' "$test_file" "$rc"
-    if [ "${SWITCHBOARD_CI_FAIL_FAST:-1}" = "1" ]; then
-      # GNU/BSD xargs both stop scheduling new work when a child exits 255.
-      # Already-running workers finish, but a known-red gate no longer burns
-      # minutes executing hundreds of additional files.
-      return 255
-    fi
   fi
   return 0
 }
@@ -72,10 +57,6 @@ _run_one_test() {
 # adding its repo-relative path here with a reason that can survive code review.
 TEST_DENYLIST=(
   ""  # Empty sentinel keeps macOS Bash 3 + `set -u` happy when nothing is denied.
-  # Wall-clock ratchets are monitored by the scheduled performance workflow.
-  # They are deliberately non-blocking for PR and merge-group verification.
-  "test_concurrent_load_ratchet.py"
-  "test_cross_process_load_ratchet.py"
   # "test_example.py"  # Example: requires a provider fixture unavailable in hermetic CI.
 )
 
@@ -85,21 +66,16 @@ run_discovered_tests() {
   results_dir="$(mktemp -d "${TMPDIR:-/tmp}/switchboard-ci-results.XXXXXX")"
   list="$(mktemp "${TMPDIR:-/tmp}/switchboard-ci-tests.XXXXXX")"
 
-  if [ "$SCOPE" = "fast" ] && [ -n "$BASE_SHA" ] && \
-      git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-    "$PYTHON" scripts/select_impacted_tests.py \
-      --base "$BASE_SHA" --admission > "$list"
-  else
-    if [ "$SCOPE" = "fast" ]; then
-      echo "fast gate could not verify its base SHA; failing safe to the full test list."
-    fi
-    # Discover every test file (repo-relative, stable order).
-    find . \
-      -path './.git' -prune -o \
-      -path './.venv' -prune -o \
-      -type f \( -name 'test_*.py' -o -name '*_test.py' \) -print \
-      | sed 's#^\./##' | LC_ALL=C sort > "$list"
-  fi
+  # Discover every test file (repo-relative, stable order).
+  find . \
+    -path './.git' -prune -o \
+    -path './.venv' -prune -o \
+    -path './base-check' -prune -o \
+    -path './.worktrees' -prune -o \
+    -path './.claude' -prune -o \
+    -path './.artifacts' -prune -o \
+    -type f \( -name 'test_*.py' -o -name '*_test.py' \) -print \
+    | sed 's#^\./##' | LC_ALL=C sort > "$list"
 
   # Drop denylisted tests (announced — a skip is never silent).
   for denied in "${TEST_DENYLIST[@]}"; do
@@ -112,23 +88,15 @@ run_discovered_tests() {
 
   total="$(wc -l < "$list" | tr -d ' ')"
   if [ "$total" -eq 0 ]; then
-    if [ "$SCOPE" = "fast" ]; then
-      echo "No Python tests selected for this documentation-only admission."
-      CI_FAILURE_SUMMARY="tests: no impacted Python tests"
-      rm -rf "$results_dir" "$list"
-      return 0
-    fi
     echo "No Python tests discovered." >&2
-    CI_FAILURE_SUMMARY="tests: discovery returned no files"
     rm -rf "$results_dir" "$list"
     return 1
   fi
 
-  section "Python tests — ${total} files, ${JOBS}-way parallel (${SCOPE})"
+  section "Python tests — ${total} files, ${JOBS}-way parallel"
   # One worker process per file, JOBS at a time. Workers self-report and always exit 0
   # (recording failures as files), so the whole suite runs even when some tests are red.
   SWITCHBOARD_CI_RESULTS="$results_dir" \
-  SWITCHBOARD_CI_FAIL_FAST="$FAIL_FAST" \
     xargs -P "$JOBS" -I {} bash "$SELF" __run_one {} < "$list" || xrc=$?
 
   failed="$(find "$results_dir" -name '*.fail' | wc -l | tr -d ' ')"
@@ -137,17 +105,14 @@ run_discovered_tests() {
     cat "$results_dir"/*.fail 2>/dev/null || true
     if [ "$xrc" -ne 0 ] && [ "$failed" -eq 0 ]; then
       printf 'tests: worker scheduler exited %s with no per-test failure recorded (crash/OOM?).\n' "$xrc" >&2
-      CI_FAILURE_SUMMARY="tests: worker scheduler failed before recording a test"
     else
       printf 'tests: %d of %d Python test file(s) FAILED (see above).\n' "$failed" "$total" >&2
-      CI_FAILURE_SUMMARY="tests: ${failed} of ${total} Python test files failed"
     fi
     rm -rf "$results_dir" "$list"
     return 1
   fi
 
   rm -rf "$results_dir" "$list"
-  CI_FAILURE_SUMMARY="tests: ${total} Python test files passed"
   printf '\nAll %d Python test files passed (%s-way parallel).\n' "$total" "$JOBS"
 }
 
@@ -157,39 +122,6 @@ if [ "${1:-}" = "__run_one" ]; then
   _run_one_test "${2:?usage: __run_one <test_file>}"
   exit $?
 fi
-
-CI_FAILURE_SUMMARY="gate failed before test completion"
-write_ci_result() {
-  local rc="$1" status="failure"
-  [ "$rc" -eq 0 ] && status="success"
-  CI_RESULT_STATUS="$status" \
-  CI_RESULT_EXIT_CODE="$rc" \
-  CI_RESULT_SCOPE="$SCOPE" \
-  CI_RESULT_SUMMARY="$CI_FAILURE_SUMMARY" \
-  CI_RESULT_REPORT_PATH="$RESULT_REPORT" \
-    "$PYTHON" - <<'PY'
-import json
-import os
-from pathlib import Path
-
-path = Path(os.environ["CI_RESULT_REPORT_PATH"])
-path.parent.mkdir(parents=True, exist_ok=True)
-path.write_text(json.dumps({
-    "schema": "switchboard.ci_result.v1",
-    "status": os.environ["CI_RESULT_STATUS"],
-    "exit_code": int(os.environ["CI_RESULT_EXIT_CODE"]),
-    "scope": os.environ["CI_RESULT_SCOPE"],
-    "summary": os.environ["CI_RESULT_SUMMARY"],
-}, sort_keys=True) + "\n", encoding="utf-8")
-PY
-}
-on_exit() {
-  local rc=$?
-  trap - EXIT
-  write_ci_result "$rc"
-  exit "$rc"
-}
-trap on_exit EXIT
 
 section "Python runtime"
 "$PYTHON" --version
@@ -218,9 +150,8 @@ if missing:
 print("Required dependency modules importable: " + ", ".join(required))
 PY
 
-  if [ "$SCOPE" = "full" ]; then
-    section "Required Chromium service-cut browser"
-    "$PYTHON" - <<'PY'
+  section "Required Chromium service-cut browser"
+  "$PYTHON" - <<'PY'
 from playwright.sync_api import sync_playwright
 
 with sync_playwright() as runtime:
@@ -228,11 +159,18 @@ with sync_playwright() as runtime:
     browser.close()
 print("Playwright Chromium launch: PASS")
 PY
-  fi
 fi
 
 section "Python compile"
 "$PYTHON" -m compileall -q . -x '(^|/)(\.git|\.venv|__pycache__)(/|$)|(^|/)\._'
+
+section "Concurrent agent-path SLO gate"
+CONCURRENT_LOAD_REPORT="${CONCURRENT_LOAD_REPORT:-${TMPDIR:-/tmp}/switchboard-concurrent-load-report.json}" \
+  "$PYTHON" scripts/concurrent_load_gate.py
+
+section "Cross-process SQLite contention SLO gate (ARCH-19)"
+CROSS_PROCESS_LOAD_REPORT="${CROSS_PROCESS_LOAD_REPORT:-${TMPDIR:-/tmp}/switchboard-cross-process-load-report.json}" \
+  "$PYTHON" scripts/cross_process_load_gate.py
 
 section "CI hermeticity gate (tests must not read live host state)"
 # A flaky test blocks the whole merge-queue train, not just one PR. Fail before the suite runs
@@ -241,8 +179,8 @@ section "CI hermeticity gate (tests must not read live host state)"
 
 run_discovered_tests
 
-if [ "$STRICT" = "1" ] && [ "$SCOPE" = "full" ]; then
-  section "Mandatory Playwright evidence"
+if [ "$STRICT" = "1" ]; then
+  section "Dedicated Switchboard UI / Playwright gate"
   "$PYTHON" scripts/run_ui_playwright.py \
     --task-id "${SWITCHBOARD_TASK_ID:-CI-UI}" \
     --work-session-id "${SWITCHBOARD_WORK_SESSION_ID:-}" \
@@ -267,5 +205,4 @@ else
   echo "SKIP  Node.js not found; JavaScript syntax check is optional outside strict CI."
 fi
 
-CI_FAILURE_SUMMARY="gate: ${SCOPE} verification passed"
 section "Switchboard CI gate complete"

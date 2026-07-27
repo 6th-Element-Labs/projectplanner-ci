@@ -19,8 +19,6 @@ import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-import deliverable_gates
-import deliverable_policy
 import evidence_claims
 import narration_outbox
 from constants import *  # noqa: F401,F403
@@ -57,6 +55,44 @@ def _dispatch_neutral_metadata(value: Any) -> Dict[str, Any]:
     metadata = json.loads(_store_facade()._json_object_field(value))
     metadata.pop("dispatch_eligible", None)
     return metadata
+
+
+# Retired DELIVERABLES-12..23 closure-stamp keys. Stripped from incoming metadata
+# so old persisted reports/grades never resurface once the closure system is gone.
+_LEGACY_CLOSURE_METADATA_KEYS = (
+    "closure_reports", "last_closure_report", "last_closure_grade", "last_closure_at",
+)
+
+
+def _coerce_metadata_dict(value: Any) -> Dict[str, Any]:
+    """Match the store's permissive JSON-object coercion for upsert metadata."""
+    if value in (None, ""):
+        parsed: Any = {}
+    elif isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            parsed = {"text": value}
+    else:
+        parsed = value
+    return parsed if isinstance(parsed, dict) else {"value": parsed}
+
+
+def _prepare_deliverable_upsert(
+        connection: sqlite3.Connection, deliverable_id: str,
+        metadata_value: Any) -> Tuple[Any, Dict[str, Any]]:
+    """Load the prior row and sanitize incoming metadata for an upsert.
+
+    No closure grade gate: status=done is allowed freely now that the
+    closure stamp/grade system is retired.
+    """
+    prior = connection.execute(
+        "SELECT status, metadata_json FROM deliverables WHERE id=?", (deliverable_id,)
+    ).fetchone()
+    incoming_metadata = _coerce_metadata_dict(metadata_value)
+    for key in _LEGACY_CLOSURE_METADATA_KEYS:
+        incoming_metadata.pop(key, None)
+    return prior, incoming_metadata
 
 
 def _deliverable_row(row: sqlite3.Row) -> Dict[str, Any]:
@@ -211,10 +247,9 @@ def _deliverable_milestone_exists_in(
 
 
 # DELIVERABLES-13: intake contract enforced when a deliverable ENTERS in_progress.
-# See docs/DELIVERABLE-CLOSURE-GATE.md ("Intake at creation"). Gated off by default so
-# existing deliverables and legacy flows are unaffected until operators opt in per-prod
-# (mirrors PM_VERIFY_COMPLETION_PUSH / PM_RETIRE_MERGED_BRANCHES rollout style); DELIVERABLES-22
-# flips it on after backfill.
+# Gated off by default so existing deliverables and legacy flows are unaffected until
+# operators opt in per-prod (mirrors PM_VERIFY_COMPLETION_PUSH / PM_RETIRE_MERGED_BRANCHES
+# rollout style).
 PROOF_REQUIREMENTS_SCHEMA = "switchboard.deliverable_proof_requirements.v1"
 
 
@@ -250,11 +285,6 @@ def _validate_proof_requirements(proof: Any) -> List[str]:
             seen.add(gid)
         if not isinstance(gate.get("required"), bool):
             errors.append(f"proof_requirements.gates[{i}].required must be true or false")
-    if not errors:
-        try:
-            deliverable_gates.resolve_gates(proof)
-        except deliverable_gates.GateResolutionError as exc:
-            errors.append(str(exc))
     return errors
 
 
@@ -277,7 +307,7 @@ def _validate_deliverable_intake(data: Dict[str, Any]) -> Optional[Dict[str, Any
             "details": details,
             "required": ["end_state", "acceptance_criteria", "proof_requirements"],
             "proof_requirements_schema": PROOF_REQUIREMENTS_SCHEMA,
-            "spec": "docs/DELIVERABLE-CLOSURE-GATE.md",
+            "spec": "docs/DELIVERABLES-MISSION-MODEL.md",
         }
     return None
 
@@ -311,10 +341,8 @@ def _create_deliverable_impl(data: Dict[str, Any], actor: str = "user",
     with _store_facade()._conn(project) as c:
         if board_id and not _project_board_exists_in(c, board_id):
             return {"error": "unknown board", "board_id": board_id, "project_id": project}
-        prior, incoming_metadata, policy_error = deliverable_policy.prepare_upsert(
-            c, deliverable_id, status, data.get("metadata", data.get("metadata_json")))
-        if policy_error:
-            return policy_error
+        prior, incoming_metadata = _prepare_deliverable_upsert(
+            c, deliverable_id, data.get("metadata", data.get("metadata_json")))
         incoming_metadata = _dispatch_neutral_metadata(incoming_metadata)
         # DELIVERABLES-13: validate the intake contract only when entering in_progress.
         if status == "in_progress" and _enforce_deliverable_intake():
@@ -420,10 +448,7 @@ def update_deliverable(deliverable_id: str, updates: Dict[str, Any],
         replacement_deliverable_id = str(
             updates.get("replacement_deliverable_id") or "").strip()
         metadata_value = updates.get("metadata", prior.get("metadata", {}))
-        _, safe_metadata, policy_error = deliverable_policy.prepare_upsert(
-            c, deliverable_id, requested_status, metadata_value)
-        if policy_error:
-            return policy_error
+        _, safe_metadata = _prepare_deliverable_upsert(c, deliverable_id, metadata_value)
         safe_metadata = _dispatch_neutral_metadata(safe_metadata)
         if replacement_deliverable_id:
             safe_metadata = dict(safe_metadata)
@@ -1413,102 +1438,6 @@ def update_mission_narrative(deliverable_id: str, narrative: str, actor: str = "
     return get_deliverable(deliverable_id, project=project) or {"error": "deliverable not found"}
 
 
-# DELIVERABLES-16: persisted closure reports live in deliverable metadata. We keep
-# the newest N full reports plus a last_closure_* summary for the mission header;
-# grading itself happens in deliverable_closure (this only stores the graded result).
-CLOSURE_REPORT_HISTORY_LIMIT = 10
-
-
-def _closure_report_id(report: Dict[str, Any], now: float) -> str:
-    existing = (report.get("report_id") or "").strip()
-    if existing:
-        return existing
-    stamp = int(report.get("generated_at") or now)
-    digest = (report.get("evidence_hash") or "").split(":")[-1][:12] or f"{stamp:x}"
-    return f"closure-{stamp}-{digest}"
-
-
-def _closure_summary(report: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "report_id": report.get("report_id"),
-        "grade": report.get("grade"),
-        "recommendation": report.get("recommendation"),
-        "generated_at": report.get("generated_at"),
-        "generated_by": report.get("generated_by"),
-        "evidence_hash": report.get("evidence_hash"),
-    }
-
-
-def _record_deliverable_closure_impl(deliverable_id: str, report: Dict[str, Any],
-                                     actor: str, project: str) -> Dict[str, Any]:
-    if not _store_facade().has_project(project):
-        return {"error": f"unknown project: {project}"}
-    if not isinstance(report, dict) or not report.get("grade"):
-        return {"error": "report must be a closure report object with a grade"}
-    now = time.time()
-    report = dict(report)
-    report["report_id"] = _closure_report_id(report, now)
-    with _store_facade()._conn(project) as c:
-        row = c.execute("SELECT metadata_json FROM deliverables WHERE id=?",
-                        (deliverable_id,)).fetchone()
-        if not row:
-            return {"error": "unknown deliverable", "deliverable_id": deliverable_id}
-        metadata = _store_facade()._json_payload(row["metadata_json"])
-        history = [r for r in (metadata.get("closure_reports") or [])
-                   if isinstance(r, dict) and r.get("report_id") != report["report_id"]]
-        metadata["closure_reports"] = ([report] + history)[:CLOSURE_REPORT_HISTORY_LIMIT]
-        metadata["last_closure_report"] = report
-        metadata["last_closure_grade"] = report.get("grade")
-        metadata["last_closure_at"] = now
-        c.execute("UPDATE deliverables SET metadata_json=?, updated_at=? WHERE id=?",
-                  (json.dumps(metadata, sort_keys=True), now, deliverable_id))
-        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
-                  (None, actor, "deliverable.closure_verified",
-                   json.dumps({"deliverable_id": deliverable_id, **_closure_summary(report)},
-                              sort_keys=True), now))
-    return {"ok": True, "deliverable_id": deliverable_id, "report_id": report["report_id"],
-            "grade": report.get("grade"), "recommendation": report.get("recommendation"),
-            "report": report}
-
-
-def record_deliverable_closure(deliverable_id: str, report: Dict[str, Any],
-                               actor: str = "verifier",
-                               project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
-    """Persist a graded closure report on the deliverable and stamp
-    ``deliverable.closure_verified``. Retains the newest
-    ``CLOSURE_REPORT_HISTORY_LIMIT`` full reports plus a ``last_closure_*`` summary
-    for the mission header. Atomic (report write + audit stamp) via _write_through.
-    Grading lives in :mod:`deliverable_closure`; this only stores the result."""
-    return _store_facade()._write_through(project,
-        lambda: _store_facade()._record_deliverable_closure_impl(
-            deliverable_id, report, actor, project))
-
-
-def get_deliverable_closure_report(deliverable_id: str, project: str = DEFAULT_PROJECT,
-                                   report_id: str = "") -> Dict[str, Any]:
-    """Return the latest (or a specific ``report_id``) persisted closure report plus
-    a summary of the retained grade history."""
-    if not _store_facade().has_project(project):
-        return {"error": f"unknown project: {project}"}
-    with _store_facade()._conn(project) as c:
-        row = c.execute("SELECT metadata_json FROM deliverables WHERE id=?",
-                        (deliverable_id,)).fetchone()
-    if not row:
-        return {"error": "unknown deliverable", "deliverable_id": deliverable_id}
-    metadata = _store_facade()._json_payload(row["metadata_json"])
-    reports = [r for r in (metadata.get("closure_reports") or []) if isinstance(r, dict)]
-    history = [_closure_summary(r) for r in reports]
-    if report_id:
-        report = next((r for r in reports if r.get("report_id") == report_id), None)
-        if report is None:
-            return {"error": "closure report not found", "deliverable_id": deliverable_id,
-                    "report_id": report_id, "history": history}
-    else:
-        report = metadata.get("last_closure_report") or (reports[0] if reports else None)
-    return {"deliverable_id": deliverable_id, "report": report,
-            "grade": (report or {}).get("grade"), "history": history, "count": len(reports)}
-
-
 def propose_deliverable_breakdown(deliverable_id: str, payload: Any, actor: str = "user",
                                   project: str = DEFAULT_PROJECT,
                                   proposal_id: str = "",
@@ -1944,7 +1873,6 @@ def _batch_enrich_mission_links(links: List[Dict[str, Any]]) -> List[Dict[str, A
     tasks_by_key: Dict[tuple, Dict[str, Any]] = {}
     claims_by_key: Dict[tuple, List[Dict[str, Any]]] = {}
     runners_by_key: Dict[tuple, List[Dict[str, Any]]] = {}
-    wakes_by_key: Dict[tuple, List[Dict[str, Any]]] = {}
     for proj, tids in by_project.items():
         if not _store_facade().has_project(proj):
             continue
@@ -2014,20 +1942,6 @@ def _batch_enrich_mission_links(links: List[Dict[str, Any]]) -> List[Dict[str, A
                 runner = _store_facade()._runner_session_row(
                     runner_row, now=runner_now, include_claim=False, c=c)
                 runners_by_key.setdefault((proj, runner.get("task_id")), []).append(runner)
-            try:
-                wake_rows = c.execute(
-                    f"SELECT wake_id, task_id, status FROM wake_intents "
-                    f"WHERE task_id IN ({placeholders}) "
-                    "AND status IN ('pending','claimed')",
-                    uniq,
-                ).fetchall()
-            except sqlite3.OperationalError:
-                # Partial/legacy read-model fixtures may predate wake_intents.
-                wake_rows = []
-            for wake_row in wake_rows:
-                wakes_by_key.setdefault(
-                    (proj, str(wake_row["task_id"] or "")), []
-                ).append(dict(wake_row))
 
     # COORD-46: the completion route decides whether a Blocked task is still a
     # dispatch candidate. Carrying it in the mission read model keeps one
@@ -2068,9 +1982,6 @@ def _batch_enrich_mission_links(links: List[Dict[str, Any]]) -> List[Dict[str, A
         narration = task.get("narration")
         narration_raw = task.get("narration_raw")
         narration_state = task.get("narration_state") or {}
-        active_runner = _live_execution_for(
-            runners_by_key.get((proj, tid)) or [], now=runner_now)
-        in_flight_wakes = wakes_by_key.get((proj, tid)) or []
         enriched["task_detail"] = {
             "task_id": task["task_id"],
             "title": task.get("title"),
@@ -2090,14 +2001,8 @@ def _batch_enrich_mission_links(links: List[Dict[str, Any]]) -> List[Dict[str, A
             # runner resolver. The rows above are already this task's execution
             # registry, so the one canonical predicate selects the live
             # generation -- no agent_state pointer, no re-query, no divergence.
-            "active_runner": active_runner,
-            "execution_coverage": {
-                "covered": bool(active_runner.get("active") or in_flight_wakes),
-                "live_execution": bool(active_runner.get("active")),
-                "start_in_flight": bool(in_flight_wakes),
-                "wake_ids": [row.get("wake_id") for row in in_flight_wakes],
-                "source": "runner_sessions_or_in_flight_wake",
-            },
+            "active_runner": _live_execution_for(
+                runners_by_key.get((proj, tid)) or [], now=runner_now),
             "active_claims": claims_by_key.get((proj, tid)) or [],
             "narration": narration,
             "narration_raw": narration_raw,
@@ -2347,8 +2252,6 @@ def _mission_next_actions(deliverable: Dict[str, Any],
             continue
         status = detail.get("status")
         claims = detail.get("active_claims") or []
-        coverage = detail.get("execution_coverage") or {}
-        execution_covered = bool(coverage.get("covered"))
         dep = detail.get("dependency_state") or {}
         remediation = (detail.get("review_remediation") or {}).get("current") or {}
         if (remediation.get("human_intervention_required")
@@ -2390,16 +2293,14 @@ def _mission_next_actions(deliverable: Dict[str, Any],
                     completion_route=completion_route,
                     head_sha=git_state.get("head_sha")))
         elif (automatic_eligible and status in READY_TASK_STATUSES
-                and dep.get("ready") and not execution_covered):
+                and dep.get("ready") and not claims):
             actions.append(_action(
                 "claim_task", owner="agent", automatic=True,
                 delivery_impact="blocking" if blocks_delivery or blocks else "none",
                 label="Agent will claim a ready task", reason="Ready and unclaimed",
                 project_id=link.get("project_id"), task_id=detail.get("task_id"),
                 title=detail.get("title"), lane=lane,
-                milestone_id=link.get("milestone_id"),
-                reason_code=(
-                    "orphan_claim_after_runner_lease_expiry" if claims else None)))
+                milestone_id=link.get("milestone_id")))
         elif automatic_eligible and status == "In Review":
             git_state = detail.get("git_state") or {}
             actions.append(_action(
@@ -2414,7 +2315,7 @@ def _mission_next_actions(deliverable: Dict[str, Any],
                 pr_number=git_state.get("pr_number"),
                 pr_url=git_state.get("pr_url"),
                 merged_sha=git_state.get("merged_sha")))
-        elif automatic_eligible and status == "In Progress" and not execution_covered:
+        elif automatic_eligible and status == "In Progress" and not claims:
             actions.append(_action(
                 "resume_or_claim", owner="agent", automatic=True,
                 delivery_impact="at_risk" if blocks_delivery or blocks else "none",
@@ -2422,9 +2323,7 @@ def _mission_next_actions(deliverable: Dict[str, Any],
                 reason="In progress without an active claim",
                 project_id=link.get("project_id"), task_id=detail.get("task_id"),
                 title=detail.get("title"), lane=lane,
-                milestone_id=link.get("milestone_id"),
-                reason_code=(
-                    "orphan_claim_after_runner_lease_expiry" if claims else None)))
+                milestone_id=link.get("milestone_id")))
         session_health = detail.get("session_health") or {}
         # A stale/unsafe Work Session is COORDINATOR housekeeping that resolves automatically. It only
         # touches delivery when the underlying task hasn't already merged — an unsafe session on an
@@ -2977,28 +2876,12 @@ def run_mission_coordinator_tick(project: str = DEFAULT_PROJECT, deliverable_id:
     # "idempotency conflict" after a restart (a conflicted tick dispatches
     # nothing, so the wake generation could never advance the key either). A
     # restarted daemon replaying its durable key gets the stored receipt.
-    #
-    # ADAPTER-34: scope_authority also carries lease clocks (expires_at,
-    # heartbeat_at), lease_id, renewed, and holder_agent_id that churn on every
-    # Autopilot renew. Hashing those poisoned s15:...:wake-generation-N keys
-    # into "idempotency conflict" after kill/re-arm (DOGFOOD-25). Keep only
-    # fence identity fields in the durable hash.
-    _VOLATILE_SCOPE_AUTHORITY_KEYS = frozenset({
-        "expires_at", "heartbeat_at", "lease_id", "renewed", "holder_agent_id",
-    })
-    if isinstance(authority_obj, dict):
-        stable_authority = {
-            key: value for key, value in authority_obj.items()
-            if key not in _VOLATILE_SCOPE_AUTHORITY_KEYS
-        }
-    else:
-        stable_authority = authority_obj or {}
     payload = {
         "deliverable_id": (deliverable_id or "").strip(),
         "board_id": (board_id or "").strip(),
         "mission_id": (mission_id or "").strip(),
         "policy": policy_obj or {},
-        "scope_authority": stable_authority,
+        "scope_authority": authority_obj or {},
     }
     with _store_facade()._conn(project) as c:
         hit = _store_facade()._idem_hit(c, "run_mission_coordinator_tick", idem_key, actor, payload)
@@ -3233,29 +3116,35 @@ def list_task_deliverable_links(task_id: str, project: str = DEFAULT_PROJECT) ->
     for deliverable_project in _store_facade().project_ids():
         if not _store_facade().has_project(deliverable_project):
             continue
-        with _store_facade()._conn(deliverable_project) as c:
-            try:
-                rows = c.execute(query, (tid, task_project)).fetchall()
-            except sqlite3.OperationalError:
-                continue
-            for row in rows:
-                link_id = row["id"]
-                dedupe = (deliverable_project, link_id)
-                if dedupe in seen:
+        # Ghost/orphan registry rows can pass has_project while the DB file (or its
+        # parent directory) is missing. Skip those homes — a create_task on another
+        # project must not die while scanning for optional deliverable links.
+        try:
+            with _store_facade()._conn(deliverable_project) as c:
+                try:
+                    rows = c.execute(query, (tid, task_project)).fetchall()
+                except sqlite3.OperationalError:
                     continue
-                seen.add(dedupe)
-                link = _deliverable_link_row(row)
-                link["deliverable_home_project"] = deliverable_project
-                link["deliverable_title"] = row["deliverable_title"]
-                link["deliverable_status"] = row["deliverable_status"]
-                if link.get("board_id"):
-                    board_row = c.execute("SELECT * FROM project_boards WHERE id=?",
-                                          (link["board_id"],)).fetchone()
-                    link["board"] = (_project_board_row(board_row, project=deliverable_project)
-                                     if board_row else {"error": "unknown board",
-                                                        "board_id": link["board_id"],
-                                                        "project_id": deliverable_project})
-                links.append(link)
+                for row in rows:
+                    link_id = row["id"]
+                    dedupe = (deliverable_project, link_id)
+                    if dedupe in seen:
+                        continue
+                    seen.add(dedupe)
+                    link = _deliverable_link_row(row)
+                    link["deliverable_home_project"] = deliverable_project
+                    link["deliverable_title"] = row["deliverable_title"]
+                    link["deliverable_status"] = row["deliverable_status"]
+                    if link.get("board_id"):
+                        board_row = c.execute("SELECT * FROM project_boards WHERE id=?",
+                                              (link["board_id"],)).fetchone()
+                        link["board"] = (_project_board_row(board_row, project=deliverable_project)
+                                         if board_row else {"error": "unknown board",
+                                                            "board_id": link["board_id"],
+                                                            "project_id": deliverable_project})
+                    links.append(link)
+        except sqlite3.OperationalError:
+            continue
     links.sort(key=lambda item: (-(item.get("updated_at") or 0), item.get("id") or ""))
     return links
 
@@ -3321,9 +3210,6 @@ class StoreDeliverablesRepository:
     def get_deliverable_breakdown_proposal(self, *args, **kwargs):
         return get_deliverable_breakdown_proposal(*args, **kwargs)
 
-    def get_deliverable_closure_report(self, *args, **kwargs):
-        return get_deliverable_closure_report(*args, **kwargs)
-
     def get_deliverable_dependency_graph(self, *args, **kwargs):
         return get_deliverable_dependency_graph(*args, **kwargs)
 
@@ -3357,9 +3243,6 @@ class StoreDeliverablesRepository:
     def propose_deliverable_breakdown(self, *args, **kwargs):
         return propose_deliverable_breakdown(*args, **kwargs)
 
-    def record_deliverable_closure(self, *args, **kwargs):
-        return record_deliverable_closure(*args, **kwargs)
-
     def reject_deliverable_breakdown(self, *args, **kwargs):
         return reject_deliverable_breakdown(*args, **kwargs)
 
@@ -3390,7 +3273,6 @@ __all__ = [
     "StoreDeliverablesRepository",
     "default_deliverables_repository",
     "PROOF_REQUIREMENTS_SCHEMA",
-    "CLOSURE_REPORT_HISTORY_LIMIT",
     "create_project_board",
     "get_project_board",
     "list_project_boards",
@@ -3406,8 +3288,6 @@ __all__ = [
     "deliverable_progress",
     "unlink_task_from_deliverable",
     "update_mission_narrative",
-    "record_deliverable_closure",
-    "get_deliverable_closure_report",
     "propose_deliverable_breakdown",
     "get_deliverable_breakdown_proposal",
     "list_deliverable_breakdown_proposals",
@@ -3446,9 +3326,6 @@ __all__ = [
     "_breakdown_proposal_row",
     "_validate_breakdown_task_spec",
     "_validate_breakdown_payload",
-    "_closure_report_id",
-    "_closure_summary",
-    "_record_deliverable_closure_impl",
     "_finalize_breakdown_review",
     "_resolve_mission_deliverable",
     "_registry_project_ids",

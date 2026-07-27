@@ -122,12 +122,10 @@ saved_projection = task_execution._projection
 saved_ticket = task_execution.runner_pty_command.mint_ticket_for_session
 saved_enqueue = connect_dispatch.enqueue_task
 saved_live_executions = task_execution.runner_repo.task_live_executions
-saved_arm_scope = task_execution._arm_task_scope
 unexpected_launches: list[dict] = []
 try:
     task_execution.runner_pty_command.mint_ticket_for_session = lambda **_kwargs: {}
     task_execution.runner_repo.task_live_executions = lambda *_args, **_kwargs: []
-    task_execution._arm_task_scope = lambda *_args, **_kwargs: {}
     connect_dispatch.enqueue_task = (
         lambda *args, **kwargs: unexpected_launches.append(kwargs) or {
             "dispatched": True, "wake_id": "wake-unexpected"})
@@ -151,24 +149,11 @@ try:
        and starting.get("wake_id") == "wake-existing"
        and not unexpected_launches,
        "Start dedupes an in-flight assignment instead of creating another wake")
-
-    task_execution._projection = lambda *_args, **_kwargs: {
-        "task": {"task_id": "DISPATCH-12"},
-        "active_attempt": {"wake_id": "wake-newer-cancelled",
-                           "status": "cancelled"},
-        "last_dispatch_outcome": {"wake_id": "wake-older-failure"},
-    }
-    restarted = task_execution.start_task("DISPATCH-12", project="switchboard")
-    ok(restarted.get("action") == "started"
-       and unexpected_launches[-1].get("predecessor_wake_id")
-       == "wake-newer-cancelled",
-       "Start advances from the newest terminal attempt, not an older dispatch")
 finally:
     task_execution._projection = saved_projection
     task_execution.runner_pty_command.mint_ticket_for_session = saved_ticket
     connect_dispatch.enqueue_task = saved_enqueue
     task_execution.runner_repo.task_live_executions = saved_live_executions
-    task_execution._arm_task_scope = saved_arm_scope
 
 saved_projection = task_execution._projection
 saved_cancel = task_execution.coordination_repo.cancel_wake
@@ -195,9 +180,13 @@ ok(bool(retry_launches) and retry_launches[0].get("runtime") == "claude-code",
    "Retry preserves the provider runtime instead of silently switching to Codex")
 
 legacy_calls = []
+_skip_prefixes = (
+    "tests/", "scripts/", ".worktrees/", ".claude/", "base-check/", ".venv/",
+    ".artifacts/",
+)
 for path in ROOT.rglob("*.py"):
     rel = path.relative_to(ROOT).as_posix()
-    if (rel == "dispatch.py" or rel.startswith(("tests/", "scripts/"))
+    if (rel == "dispatch.py" or rel.startswith(_skip_prefixes)
             or path.name.startswith("test_")):
         continue
     text = path.read_text(encoding="utf-8", errors="ignore")

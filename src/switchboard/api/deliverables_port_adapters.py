@@ -73,14 +73,6 @@ class RepositoryDeliverablesQueries:
             )
         )
 
-    def closure_report(
-        self, project: str, deliverable_id: str, *, report_id: str = ""
-    ) -> dict[str, Any]:
-        return dict(
-            deliverables_repo.get_deliverable_closure_report(
-                deliverable_id, project=project, report_id=report_id
-            )
-        )
 
     def list_breakdown_proposals(
         self,

@@ -35,7 +35,6 @@ from switchboard.domain.coordination.terminal import (
 )
 from switchboard.domain.deliverables.lifecycle import (
     DELIVERABLE_STATUSES,
-    done_requires_closure_grade,
     normalize_deliverable_id,
     normalize_project_board_id,
     validate_deliverable_status,
@@ -150,10 +149,6 @@ ok(normalize_project_board_id("", title="Helm Mission").startswith("mission-"),
 ok(validate_deliverable_status("proposed") is None, "valid deliverable status accepted")
 bad = validate_deliverable_status("bogus")
 ok(bad and bad["error"] == "invalid status", "invalid deliverable status rejected")
-closure = done_requires_closure_grade(
-    deliverable_id="d-1", requested_status="done", last_closure_grade=None)
-ok(closure and closure["error"] == "deliverable closure grade required",
-   "done deliverable requires closure grade")
 ok("done" in DELIVERABLE_STATUSES, "deliverable lifecycle statuses exported")
 
 # --- provenance --------------------------------------------------------------

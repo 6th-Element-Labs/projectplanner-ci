@@ -13,14 +13,13 @@ ProjectResolver = Callable[[str], str]
 EtagJson = Callable[..., Any]
 
 
-def _read_error(result: dict[str, Any], *, closure: bool = False) -> None:
+def _read_error(result: dict[str, Any]) -> None:
     error = str(result.get("error") or "")
     if not error:
         return
     missing = (
         "unknown" in error
         or "no deliverable" in error
-        or (closure and "not found" in error)
     )
     raise HTTPException(404 if missing else 400, error)
 
@@ -144,19 +143,5 @@ def create_router(
         result = query_port.dependency_graph(resolved, deliverable_id)
         _read_error(result)
         return etag_json(request, result, max_age=5)
-
-    @router.get("/api/deliverables/{deliverable_id}/closure_report")
-    def closure_report(
-        request: Request,
-        deliverable_id: str,
-        project: str = Query(...),
-        report_id: str = "",
-    ):
-        resolved = project_for(request, project)
-        result = query_port.closure_report(
-            resolved, deliverable_id, report_id=report_id
-        )
-        _read_error(result, closure=True)
-        return result
 
     return router

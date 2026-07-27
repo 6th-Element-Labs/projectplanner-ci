@@ -18,7 +18,6 @@ STATE_JS = (ROOT / "static" / "js" / "state.js").read_text(encoding="utf-8")
 STUBS = """
 window.SwitchboardBoard = { methods: {} };
 window.SwitchboardPlanChat = { methods: {} };
-window.SwitchboardClosure = { methods: {} };
 window.SwitchboardMission = { methods: {} };
 window.SwitchboardRunnerSession = { methods: {} };
 window.SwitchboardProofConsole = { methods: {} };

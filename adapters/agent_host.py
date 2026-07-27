@@ -82,7 +82,6 @@ from repository_workspace import (  # noqa: E402
 PROJECT = os.environ.get("PM_PROJECT", "switchboard")
 SUPERVISOR = os.path.join(_HERE, "codex", "supervisor.py")
 RUN_AGENT = os.path.join(_HERE, "run_agent.py")
-CLOSURE_VERIFIER = os.path.join(_HERE, "closure_verifier.py")
 DIRECT_CODEX_SESSION = os.path.join(_HERE, "direct_codex_session.py")
 
 # Spec operation → REST path. Centralized so Codex's published paths get pinned in ONE place.
@@ -1015,9 +1014,6 @@ def wake_mode(wake, inventory=None):
 
     Lane-scoped wakes may enter the claim_next loop. Lane-less wakes are message-only by
     construction: they can register and read inbox, but must never ask for global work.
-    A closure_verification wake is a special case of message-only: still lane-less (never
-    a claim_next grab), but instead of the inbox-only ack stub it runs the deterministic
-    closure engine (DELIVERABLES-23) — bounded gate checks, not an open-ended agent.
     """
     policy = (wake or {}).get("policy") or {}
     selector = (wake or {}).get("selector") or {}
@@ -1028,8 +1024,6 @@ def wake_mode(wake, inventory=None):
         return "direct_task"
     if explicit == "cloud_execution" or policy.get("kind") == "cloud_execution":
         return "cloud_execution"
-    if policy.get("kind") == "closure_verification" and policy.get("deliverable_id"):
-        return "closure_verify"
     if explicit in ("inbox_only", "message_only"):
         return "inbox_only"
     if explicit == "claim_next" and selector.get("lane"):
@@ -1480,13 +1474,6 @@ def launch_command(wake, inventory, runner_session_id="", workspace_path=""):
         if runtime != "codex" or not wake.get("task_id"):
             raise ValueError("direct task assignment requires a task-bound Codex runtime")
         child = [sys.executable, DIRECT_CODEX_SESSION]
-    elif mode == "closure_verify":
-        policy = wake.get("policy") or {}
-        child = [sys.executable, CLOSURE_VERIFIER, "--project", PROJECT,
-                 "--deliverable-id", policy.get("deliverable_id"),
-                 "--host-id", inventory.get("host_id", "")]
-        if wake.get("wake_id"):
-            child += ["--wake-id", wake.get("wake_id")]
     elif mode == "inbox_only":
         idle = os.environ.get("PM_AGENT_HOST_INBOX_IDLE_SECONDS", "6")
         child = [sys.executable, RUN_AGENT, "--runtime", runtime,
@@ -1767,29 +1754,6 @@ def _tail_json_result(log_path):
     except json.JSONDecodeError:
         return None
     return result if isinstance(result, dict) else None
-
-
-def confirm_closure_verified(rec, grace_s=4.0):
-    """Like confirm_started, but for the closure_verify job: it is deterministic and
-    often finishes within confirm_started's own liveness window on success (a
-    scope-only gate resolves in well under a second) — 'no longer alive' must not be
-    conflated with 'crashed', or the daemon logs launch_failed for jobs that actually
-    ran fine and persisted a report. Still-alive at the deadline is success (matches
-    confirm_started). Once it has exited, trust its own last-line JSON verdict
-    (adapters/closure_verifier.py always prints one) rather than raw process liveness.
-    """
-    pid = (rec or {}).get("pid")
-    if not pid:
-        return False
-    deadline = time.time() + grace_s
-    while time.time() < deadline:
-        try:
-            os.kill(int(pid), 0)
-        except (OSError, ValueError):
-            result = _tail_json_result((rec or {}).get("log_path"))
-            return bool(result) and not result.get("error")
-        time.sleep(0.5)
-    return True
 
 
 def register_runner_session(rec, wake, inventory):
@@ -3988,8 +3952,7 @@ def run_once(inventory):
                 "provider_error": str(exc)[:500],
             }
         rec_mode = (rec or {}).get("wake_mode") or wake_mode(w, inventory)
-        started = (confirm_closure_verified(rec) if rec_mode == "closure_verify"
-                  else confirm_started(rec))
+        started = confirm_started(rec)
         # BYOA runners rebind this preclaim row themselves after claim_next has
         # produced the active task claim and Work Session. A generic post-launch
         # upsert here would race that update and erase the exact binding.

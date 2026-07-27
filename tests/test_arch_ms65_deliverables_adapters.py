@@ -45,9 +45,6 @@ EXTRACTED_MCP = {
     "get_deliverable_dependency_graph": deliverable_tools,
     "mission_status": deliverable_tools,
     "update_mission_narrative": deliverable_tools,
-    "verify_deliverable_closure": deliverable_tools,
-    "get_deliverable_closure_report": deliverable_tools,
-    "request_deliverable_closure_verification": deliverable_tools,
     "generate_mission_brief": deliverable_tools,
     "run_mission_coordinator": deliverable_tools,
     "get_mission_brief": deliverable_tools,
@@ -65,7 +62,6 @@ REST_RESIDUALS = (
     "async def create_deliverable",
     "async def list_deliverable_breakdown_proposals",
     "def mission_status_query",
-    "async def verify_deliverable_closure_route",
     "async def defer_deliverable_breakdown",
 )
 
@@ -77,9 +73,6 @@ DELIVERABLE_PATHS = {
     "/api/mission_status",
     "/api/deliverables/{deliverable_id}/mission_status",
     "/api/deliverables/{deliverable_id}/dependency_graph",
-    "/api/deliverables/{deliverable_id}/closure_verify",
-    "/api/deliverables/{deliverable_id}/closure_report",
-    "/api/deliverables/{deliverable_id}/closure_request",
     "/api/deliverables/{deliverable_id}/coordinator_tick",
     "/api/deliverables/{deliverable_id}/mission_brief",
     "/api/deliverables/{deliverable_id}/narrative",

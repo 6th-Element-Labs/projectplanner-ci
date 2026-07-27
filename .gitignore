@@ -33,3 +33,6 @@ teep-project-plan.xml
 # by .git/info/exclude, which is per-clone and never shared.
 .worktrees/
 **/.claude/worktrees/
+
+# Local rescued/snapshot trees — not product source; CI must not discover their tests.
+/base-check/

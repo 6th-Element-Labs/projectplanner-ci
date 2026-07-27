@@ -28,7 +28,8 @@ Environment=PM_DELIVERABLES_HTTP_PRIMARY=service
 # ARCH-MS-121: only GET /api/inbox and POST /api/intake are owned by :8126.
 # Upload, confirm/dismiss, simulate, and poll siblings remain on this process.
 Environment=PM_INGEST_HTTP_PRIMARY=service
-# DELIVERABLES-22: every REST-created deliverable must carry its closure contract.
+# Every REST-created deliverable must carry intake shape (end_state, acceptance_criteria,
+# proof_requirements).
 Environment=PM_ENFORCE_DELIVERABLE_INTAKE=1
 # Code tree is read-only; don't try to write .pyc back into it.
 Environment=PYTHONDONTWRITEBYTECODE=1

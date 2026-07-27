@@ -258,7 +258,7 @@ plan.taikunai.com {
     # excludes writes and non-chartered siblings, which continue to the monolith.
     @deliverables_day_one_reads {
         method GET
-        path_regexp deliverables_day_one ^/api/(?:mission_status|deliverables(?:/breakdown_proposals(?:/[^/]+)?|/[^/]+(?:/(?:mission_status|dependency_graph|closure_report))?)?)$
+        path_regexp deliverables_day_one ^/api/(?:mission_status|deliverables(?:/breakdown_proposals(?:/[^/]+)?|/[^/]+(?:/(?:mission_status|dependency_graph))?)?)$
     }
     handle @deliverables_day_one_reads {
         reverse_proxy 127.0.0.1:8124 {

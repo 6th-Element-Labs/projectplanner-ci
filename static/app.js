@@ -775,7 +775,7 @@ const TeepPlan = {
         document.addEventListener('hidden.bs.modal', sync);
         sync();
     },
-    _fleetSignature(runners, prs, deployments, prUnavailable, autopilotCoverage) {
+    _fleetSignature(runners, prs, deployments, prUnavailable) {
         const r = (runners || []).map((s) => [
             s.runner_session_id || '', s.status || '', s.stale ? 1 : 0,
             ((s.last_snapshot || {}).captured_at) || 0,
@@ -794,25 +794,10 @@ const TeepPlan = {
         ]).sort((a, b) => Number(a[0]) - Number(b[0]));
         // Include unavailable flags so a recovery (auth_required → ok, or
         // http_503 → no_github_token) re-renders instead of keeping a stale message.
-        // UI-66: a coverage change (armed -> live, live -> stale) must re-render
-        // the pills even when nothing about the PRs themselves moved.
-        const a = Object.entries(autopilotCoverage || {}).map(([task, cov]) => [
-            task, (cov || {}).coverage || '', (cov || {}).liveness || '',
-            (cov || {}).scope_id || '',
-        ]).sort((x, y) => String(x[0]).localeCompare(String(y[0])));
         return JSON.stringify([
             r, p, d, Number((deployments || {}).undeployed_count || 0),
-            prUnavailable || '', (deployments || {}).unavailable || '', a,
+            prUnavailable || '', (deployments || {}).unavailable || '',
         ]);
-    },
-    // A stalled request here used to hang forever (no timeout), which left
-    // _fleetLoadBusy stuck true — every later manual refresh click AND the 10s
-    // auto-poll silently no-op until the page was reloaded. Bound every dock
-    // request so the try/catch below always resolves within `ms`.
-    _fetchTimeout(url, opts, ms = 10000) {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), ms);
-        return fetch(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(timer));
     },
     async _loadFleetDock(force) {
         const host = document.getElementById('fleet-dock');
@@ -827,8 +812,8 @@ const TeepPlan = {
             // GitHub sweep, open_prs.py), so the 10s poll only ever hits the cache.
             const [runnerList, pRes, dRes] = await Promise.all([
                 this._fetchFleetRunners(force),
-                this._fetchTimeout(`/ixp/v1/open_prs?${p}`, { cache: 'no-store' }),
-                this._fetchTimeout(`/ixp/v1/deployments?${p}`, { cache: 'no-store' }),
+                fetch(`/ixp/v1/open_prs?${p}`, { cache: 'no-store' }),
+                fetch(`/ixp/v1/deployments?${p}`, { cache: 'no-store' }),
             ]);
             runners = runnerList;
             prPayload = await pRes.json();
@@ -847,13 +832,10 @@ const TeepPlan = {
             }
         } catch (e) { this._fleetLoadBusy = false; return; }
         const prs = prPayload.prs || [];
-        // UI-66: batched autopilot coverage per board task (js/fleet-dock.js).
-        this._dockAutopilot = await window.SwitchboardFleetDock.loadCoverage(this, prs);
         this._dockPrUnavailable = prPayload.unavailable || '';
         this._dockDeploymentUnavailable = deploymentPayload.unavailable || '';
         const sig = this._fleetSignature(
-            runners, prs, deploymentPayload, this._dockPrUnavailable,
-            this._dockAutopilot);
+            runners, prs, deploymentPayload, this._dockPrUnavailable);
         const changed = sig !== this._fleetSig;
         this._fleetLoadBusy = false;
         if (force || changed) {
@@ -1090,13 +1072,44 @@ const TeepPlan = {
             </div>
         </div>`;
     },
-    // Fleet-dock presentation (PR condition ladder + the UI-66 autopilot pill)
-    // lives in js/fleet-dock.js (window.SwitchboardFleetDock) — ARCH-MS-21
-    // keeps this composition root under its line ceiling.
-    _prConditions(x) { return window.SwitchboardFleetDock.prConditions(this, x); },
-    _dockAutopilotHtml(x) { return window.SwitchboardFleetDock.autopilotHtml(this, x); },
-    _dockAutopilotAction(taskId, action) {
-        return window.SwitchboardFleetDock.autopilotAction(this, taskId, action);
+    // A PR is usually several things at once (red CI *and* conflicting *and* draft). Rank every
+    // condition that holds by how much it blocks the merge and return them worst-first, so the card
+    // can show one authoritative chip instead of a badge strip whose contents move around. The
+    // ladder deliberately outranks `draft` with every real problem: a broken build on a draft is
+    // still a broken build, and burying it under "Draft" is what made the old strip unscannable.
+    _prConditions(x) {
+        const out = [];
+        const p = x.completion_projection || {};
+        // GitHub check names are often workflow-qualified ("Switchboard CI / VM gate"); the job name
+        // is the part that identifies the failure, and the full name stays in the chip's tooltip.
+        const failing = String((x.ci_failing || [])[0] || '').split(' / ').pop().trim();
+        if (x.ci_state === 'failure') {
+            out.push({ key: 'ci_failed', label: failing ? `${failing} failed` : 'CI failed',
+                       tone: 'red', icon: 'x', title: (x.ci_failing || [])[0] || '' });
+        }
+        if (p.route === 'remediation') out.push({ key: 'remediation', label: 'Remediation owner', tone: 'red', icon: 'tool' });
+        else if (p.route === 'coordination_retry') out.push({ key: 'coordination_retry', label: 'Coordination retry', tone: 'yellow', icon: 'refresh' });
+        else if (p.route === 'review_merge') out.push({ key: 'review_merge', label: 'Review / merge', tone: 'azure', icon: 'git-merge' });
+        else if (p.route === 'human') out.push({ key: 'human', label: 'Needs you', tone: 'orange', icon: 'user-exclamation' });
+        else if (p.route === 'reconcile') out.push({ key: 'reconcile', label: 'Reconciling', tone: 'purple', icon: 'refresh' });
+        if (x.mergeable_state === 'dirty') out.push({ key: 'conflicts', label: 'Conflicts', tone: 'yellow', icon: 'git-merge' });
+        if (x.mergeable_state === 'blocked') out.push({ key: 'merge_blocked', label: 'Merge blocked', tone: 'yellow', icon: 'lock' });
+        if (x.ci_state === 'pending') out.push({ key: 'checks_running', label: 'Checks running', tone: 'yellow', icon: 'loader' });
+        if (x.queue_position) out.push({ key: 'queued', label: `Queued #${x.queue_position}`, tone: 'azure', icon: 'clock' });
+        else if (x.auto_merge) out.push({ key: 'auto_merge', label: 'Auto-merge armed', tone: 'azure', icon: 'clock' });
+        // Stalled ranks above "ready" on purpose: a green PR nobody has touched in days is the
+        // green-but-stuck case the dock already raises its red pill for, so it must be visible on
+        // the card face rather than buried in the footer line it used to live in.
+        if (x.stalled) out.push({ key: 'stalled', label: `Stalled ${this._fleetAge(x.updated_at)}`, tone: 'yellow', icon: 'zzz' });
+        if (x.ci_state === 'success' && x.mergeable_state !== 'dirty' && x.mergeable_state !== 'blocked') {
+            out.push({ key: 'ready', label: 'Ready to merge', tone: 'green', icon: 'check' });
+        }
+        if (x.draft) out.push({ key: 'draft', label: 'Draft', tone: 'secondary', icon: 'pencil' });
+        if (x.ci_state !== 'success' && x.ci_state !== 'failure' && x.ci_state !== 'pending') {
+            out.push({ key: 'no_checks', label: 'No checks', tone: 'secondary', icon: 'minus' });
+        }
+        if (!out.length) out.push({ key: 'open', label: 'Open', tone: 'secondary', icon: 'git-pull-request' });
+        return out;
     },
     _dockPrHtml(x) {
         // Winner takes the fixed top-left slot and tints the card's left edge; the runner-up gets a
@@ -1106,7 +1119,6 @@ const TeepPlan = {
         const tasks = (x.tasks || []).length
             ? (x.tasks || []).map((t) => `${this.esc(t.task_id)}${t.status ? ` (${this.esc(t.status)})` : ''}`).join(', ')
             : '';
-        const autopilot = this._dockAutopilotHtml(x);
         return `<div class="p-2 border rounded mb-2" style="border-left:2px solid ${accent} !important;border-top-left-radius:0;border-bottom-left-radius:0;">
             <div class="d-flex align-items-center gap-2">
                 ${this._dockBadge(primary.label, primary.tone, primary.icon, primary.title)}
@@ -1114,9 +1126,8 @@ const TeepPlan = {
                 <span class="ms-auto text-secondary font-monospace" style="font-size:12px;flex:none;white-space:nowrap;">#${this.esc(String(x.number))} · ${this.esc(this._fleetAge(x.updated_at))}</span>
             </div>
             <a href="${this.esc(x.url)}" target="_blank" rel="noopener" class="d-block mt-1 text-reset text-truncate" style="font-size:13px;">${this.esc(x.title || `PR #${x.number}`)} <i class="ti ti-external-link text-secondary" style="font-size:12px;"></i></a>
-            <div class="mt-1 text-secondary font-monospace d-flex align-items-center gap-2" style="font-size:11px;">
-                <span class="text-truncate"><span class="text-green">+${this.esc(String(x.additions || 0))}</span> <span class="text-red">−${this.esc(String(x.deletions || 0))}</span> · ${this.esc(String(x.changed_files || 0))} files · ${tasks ? tasks : 'no board task'} · ${this.esc(x.author || '')}</span>
-                ${autopilot ? `<span class="ms-auto"></span>${autopilot}` : ''}
+            <div class="mt-1 text-secondary text-truncate font-monospace" style="font-size:11px;">
+                <span class="text-green">+${this.esc(String(x.additions || 0))}</span> <span class="text-red">−${this.esc(String(x.deletions || 0))}</span> · ${this.esc(String(x.changed_files || 0))} files · ${tasks ? tasks : 'no board task'} · ${this.esc(x.author || '')}
             </div>
         </div>`;
     },
@@ -1207,7 +1218,7 @@ const TeepPlan = {
         if (!this._dockTab) this._dockTab = (blockedPrs.length && !deadRunners.length) ? 'prs' : 'runners';
         const tab = this._dockTab;
         const tabBtn = (key, label, count) =>
-            `<button class="btn btn-sm dock-tab ${tab === key ? '' : 'btn-ghost-secondary'}" data-dock-tab="${key}" style="border-radius:0;border:0;border-bottom:2px solid ${tab === key ? 'var(--tblr-primary)' : 'transparent'};">${label}<span class="text-secondary ms-1">${count}</span></button>`;
+            `<button class="btn btn-sm ${tab === key ? '' : 'btn-ghost-secondary'}" data-dock-tab="${key}" style="border-radius:0;border:0;border-bottom:2px solid ${tab === key ? 'var(--tblr-primary)' : 'transparent'};">${label}<span class="text-secondary ms-1">${count}</span></button>`;
         let body;
         if (tab === 'runners') {
             body = runners.length
@@ -1223,10 +1234,7 @@ const TeepPlan = {
             const raw = String(this._dockPrUnavailable || '');
             const detail = raw.startsWith('github_error:')
                 ? raw.slice('github_error:'.length).trim() : '';
-            const why = raw.startsWith('rate_limited:')
-                ? `GitHub's hourly request budget for this server is spent (${raw.slice('rate_limited:'.length).trim()}). `
-                  + 'PR status returns when it resets — see docs/GITHUB-APP-RATE-LIMIT.md.'
-                : (raw === 'no_github_token'
+            const why = raw === 'no_github_token'
                 ? 'The server has no GitHub token configured, so PR status is unavailable.'
                 : (raw === 'no_canonical_repo'
                     ? 'This project has no canonical GitHub repo configured.'
@@ -1234,7 +1242,7 @@ const TeepPlan = {
                         ? 'Sign in again to load PR status.'
                         : (detail
                             ? `GitHub did not answer: ${detail}. Status will return on the next refresh.`
-                            : `PR status is unavailable (${raw}). Status will return on the next refresh.`))));
+                            : `PR status is unavailable (${raw}). Status will return on the next refresh.`)));
             body = `<div class="p-3 text-secondary small">${this.esc(why)}</div>`;
         } else if (tab === 'prs') {
             body = prs.length
@@ -1275,9 +1283,6 @@ const TeepPlan = {
         host.querySelectorAll('[data-deploy-pr]').forEach((b) =>
             b.addEventListener('click', () => this._requestDeployment(
                 b.getAttribute('data-deploy-pr'), b.getAttribute('data-deploy-title'))));
-        host.querySelectorAll('[data-ap-task]').forEach((b) =>
-            b.addEventListener('click', () => this._dockAutopilotAction(
-                b.getAttribute('data-ap-task'), b.getAttribute('data-ap-action'))));
         document.getElementById('fleet-dock-min').addEventListener('click', () => { this._dockCollapsed = true; rerender(); });
         document.getElementById('fleet-dock-refresh').addEventListener('click', () => this._loadFleetDock(true));
     },
@@ -1984,7 +1989,7 @@ const TeepPlan = {
         const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&include_stale=false`;
         this._runnerFeedInflight = (async () => {
             try {
-                const sessions = (await (await this._fetchTimeout(`/ixp/v1/runner_sessions?${q}`, { cache: 'no-store' })).json()).sessions || [];
+                const sessions = (await (await fetch(`/ixp/v1/runner_sessions?${q}`, { cache: 'no-store' })).json()).sessions || [];
                 this._runnerFeed = { sessions, at: Date.now() };
                 return sessions;
             } finally { this._runnerFeedInflight = null; }
@@ -4601,7 +4606,6 @@ const TeepPlan = {
         return `api/export.${kind}` + (qs ? `?${qs}` : '');
     },
 
-    ...window.SwitchboardClosure.methods,
     ...window.SwitchboardMission.methods,
     ...window.SwitchboardRunnerSession.methods,
     ...window.SwitchboardProofConsole.methods,
