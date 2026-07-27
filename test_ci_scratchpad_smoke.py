@@ -77,6 +77,21 @@ ok(opened["action"] == "pr_review_recorded"
    and opened["pull_model_skip_reason"] == "scratchpad_primary",
    "PR webhook triggers verify_ci ensure path and keeps claim gate refresh")
 
+# Required CI cannot depend on a task id being present in the PR. Ordinary
+# canonical PRs still need the required status or branch protection wedges them.
+pr_payload["pull_request"].update({
+    "number": 1000,
+    "title": "fix: canonical PR without a board task",
+    "body": "",
+    "html_url": "https://github.com/6th-Element-Labs/projectplanner/pull/1000",
+    "head": {"ref": "fix/no-task-id", "sha": VALID_SHA},
+})
+untracked = github_sync.handle_pr(pr_payload, P)
+ok(untracked["in_review_tasks"] == []
+   and untracked["scratchpad_dispatched"]
+   and untracked["scratchpad_run_id"] == "run-smoke",
+   "canonical PR without a task id still receives required CI")
+
 runs = store.list_external_ci_runs(task_id=task["task_id"], project=P)
 ok(isinstance(runs, list), "external_ci_runs list API remains available for board evidence")
 

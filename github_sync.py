@@ -377,15 +377,11 @@ def handle_pr(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
             else:
                 touched.append(task_id)
                 organic_github_ci.invalidate_prior_head(task_id, head_sha, project)
-        # Event-driven CI: pull-model dispatch and/or on-box gate marker (no 5-min wait).
-        ci = (_maybe_trigger_ci(repo, pr_num, head_sha, project) if touched else {
-            "scratchpad_dispatched": False,
-            "scratchpad_skip_reason": "execution_publication_rejected",
-            "pull_model_dispatched": False,
-            "pull_model_skip_reason": "execution_publication_rejected",
-            "claim_gate_refreshed": False,
-            "claim_gate_skip_reason": "execution_publication_rejected",
-        })
+        # Required CI belongs to the canonical PR, not to board-task publication.
+        # A PR with no parseable task id still has to receive the required context
+        # or branch protection leaves it pending forever. Task provenance remains
+        # independent: only `touched` tasks move to In Review.
+        ci = _maybe_trigger_ci(repo, pr_num, head_sha, project)
         return {"action": "pr_review_recorded", "repo": repo, "pr": pr_num,
                 "in_review_tasks": touched, "skipped_tasks": skipped,
                 "scratchpad_dispatched": ci.get("scratchpad_dispatched"),
