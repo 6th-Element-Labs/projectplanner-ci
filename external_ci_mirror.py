@@ -241,8 +241,9 @@ def _select_run(runs: Any, triggered_after: float = 0.0,
             r for r in candidates
             if source_sha in str(r.get("displayTitle") or r.get("name") or "")
         ]
-        if exact:
-            candidates = exact
+        if not exact:
+            return None
+        candidates = exact
     # gh returns newest first; keep that behavior but tolerate fake/test order.
     return candidates[0]
 

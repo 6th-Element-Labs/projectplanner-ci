@@ -912,6 +912,12 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
 
             predecessor = str(
                 ((projection.get("last_dispatch_outcome") or {}).get("wake_id")) or "")
+            attempt = projection.get("active_attempt") or {}
+            if str(attempt.get("status") or "") in {
+                    "failed", "cancelled", "completed"}:
+                attempt_wake = str(attempt.get("wake_id") or "")
+                if attempt_wake:
+                    predecessor = attempt_wake
             result = connect_dispatch.enqueue_task(
                 task, project=project, actor=actor, runtime=runtime,
                 predecessor_wake_id=predecessor,

@@ -268,6 +268,7 @@ try:
     push_request["cleanup_mirror_branch"] = True
     push_request["source_fetch_ref"] = "refs/pull/42/head"
     push_runner = FakeRunner()
+    push_runner.last_source_sha = push_request["source_sha"]
     push_success = external_ci_mirror.request_external_ci_mirror_run(
         push_request, source_path, actor="test", project=P,
         runner=push_runner, sleep_fn=clock.sleep, now_fn=clock.time)
@@ -375,6 +376,17 @@ ok('request.pop("_execution_owner_id", None)' in _mirror_src,
    "a caller-supplied execution owner id is dropped, never honoured")
 ok("execution_owner_id = \"ecio-\" + uuid.uuid4().hex" in _mirror_src,
    "the execution owner identity is always generated server-side")
+
+_wanted_sha = "abcdef1234567890abcdef1234567890abcdef12"
+_unrelated_runs = [{
+    "databaseId": 41,
+    "status": "completed",
+    "conclusion": "success",
+    "displayTitle": "verify 1111111111111111111111111111111111111111 (head)",
+}]
+ok(external_ci_mirror._select_run(
+       _unrelated_runs, source_sha=_wanted_sha) is None,
+   "polling waits for the exact dispatched SHA instead of adopting an older run")
 
 print("\n%d passed, %d failed" % (passed, failed))
 sys.exit(1 if failed else 0)
