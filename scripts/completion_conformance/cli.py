@@ -15,6 +15,8 @@ Subcommands:
   reaper           Close PRs / delete branches / archive tasks tagged with a
                    run_id from a live T2 sweep. Prints a dry report if `gh`
                    is unavailable.
+  burst-fixture    Run N observe-cut fixture ticks concurrently and print the
+                   burst scoreboard. No PRs, network, or capacity.
 
 ``observe-fixture`` and ``matrix-seed`` never touch the network. Live T2
 sweeps (opening real sandbox PRs, running ``run_observe_tick_live``) are a
@@ -181,6 +183,55 @@ def _cmd_reaper(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_burst_fixture(args: argparse.Namespace) -> int:
+    from switchboard.domain.completion.effects import plan_effect
+    from switchboard.domain.completion.state_machine import classify_completion
+
+    from tests.conformance._shared import build_snapshot, load_scenarios
+    from tests.conformance.observe.assignment_preview import (
+        preview_execution_assignment,
+    )
+    from tests.conformance.observe.burst import BurstCase, run_burst
+
+    scenarios = load_scenarios(Path(args.dir))
+    if not scenarios:
+        print("burst-fixture requires at least one scenario", file=sys.stderr)
+        return 1
+    cases = [
+        BurstCase(
+            case_id=f"{args.run_id}-{index:03}",
+            scenario=scenarios[index % len(scenarios)],
+        )
+        for index in range(args.count)
+    ]
+
+    def worker(case: dict[str, Any]) -> dict[str, Any]:
+        snapshot = build_snapshot(case["scenario"], task_id=case["case_id"])
+        decision = classify_completion({}, snapshot)
+        plan = plan_effect(decision, snapshot, {})
+        preview = preview_execution_assignment({
+            **decision,
+            **plan,
+        })
+        return {
+            "task_id": case["case_id"],
+            "boots_requested": int(bool(preview["launches_runner"])),
+            "boots_admitted": 0,
+            "boots_completed": 0,
+            "coordinator_tick_ids": [f"{args.run_id}:{case['case_id']}"],
+        }
+
+    scoreboard = run_burst(
+        cases,
+        run_id=args.run_id,
+        worker=worker,
+        canary_probe=lambda: True,
+        concurrency=args.concurrency,
+    )
+    print(json.dumps(scoreboard, indent=2, sort_keys=True))
+    return 0 if scoreboard["passed"] else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m scripts.completion_conformance",
@@ -219,6 +270,16 @@ def build_parser() -> argparse.ArgumentParser:
     reaper.add_argument("--task-id", dest="task_id", action="append", default=[])
     reaper.add_argument("--dry-run", action="store_true")
     reaper.set_defaults(func=_cmd_reaper)
+
+    burst = sub.add_parser(
+        "burst-fixture",
+        help="Run a hermetic concurrent Observe burst + scoreboard.",
+    )
+    burst.add_argument("--dir", default=str(DEFAULT_SCENARIO_DIR))
+    burst.add_argument("--run-id", default="fixture-burst")
+    burst.add_argument("--count", type=int, default=40)
+    burst.add_argument("--concurrency", type=int, default=40)
+    burst.set_defaults(func=_cmd_burst_fixture)
 
     return parser
 
