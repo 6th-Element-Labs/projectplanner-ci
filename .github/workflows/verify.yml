@@ -57,7 +57,7 @@ jobs:
 
       - name: Mint status-callback token
         id: app_token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.SWITCHBOARD_APP_ID }}
           private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
@@ -87,7 +87,7 @@ jobs:
     steps:
       - name: Check out exact scratchpad ref
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ inputs.source_ref }}
           fetch-depth: 0
@@ -101,7 +101,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -110,7 +110,7 @@ jobs:
             requirements-ci.txt
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "22"
 
@@ -139,7 +139,7 @@ jobs:
 
       - name: Upload CI result
         if: always() && steps.checkout.outcome == 'success'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ci-result-${{ inputs.source_sha }}
           path: .artifacts/ci-result.json
@@ -147,7 +147,7 @@ jobs:
 
       - name: Upload Playwright receipt
         if: always() && steps.checkout.outcome == 'success'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ui-playwright-${{ inputs.source_sha }}
           path: .artifacts/ui-playwright-receipt.json
@@ -185,7 +185,7 @@ jobs:
     steps:
       - name: Mint status-callback token
         id: app_token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.SWITCHBOARD_APP_ID }}
           private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
