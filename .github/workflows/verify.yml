@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: "Disposable projectplanner-ci branch containing the exact canonical SHA"
+        description: "Disposable projectplanner-ci tag containing the exact canonical SHA"
         required: true
         type: string
       source_sha:
@@ -56,7 +56,7 @@ jobs:
           BASE_SHA: ${{ inputs.base_sha }}
         run: |
           set -euo pipefail
-          [[ "$SOURCE_REF" =~ ^ci/[A-Za-z0-9._/-]+$ ]]
+          [[ "$SOURCE_REF" =~ ^refs/tags/ci/[A-Za-z0-9._/-]+$ ]]
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$VALIDATION_MODE" =~ ^(head|merge_group|full)$ ]]
           if [ -n "$BASE_SHA" ]; then
