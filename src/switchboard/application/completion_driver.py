@@ -2,16 +2,28 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
+import time
+import uuid
 from typing import Any, Callable, Mapping, Optional
 
+from switchboard.application.commands.completion_orchestration import (
+    execute_normalized_command,
+)
 from switchboard.domain.completion.effects import plan_effect
 from switchboard.domain.completion.executor import (
     CompletionEffectAdapters,
     ensure_completion_run,
-    execute_effect,
 )
 from switchboard.domain.completion.normalize import normalize_snapshot
+from switchboard.domain.completion.normalization_law import (
+    FreshTick,
+    LAW_BY_ACTION,
+    NORMALIZATION_TABLE_VERSION,
+    NormalizedAction,
+    normalize_fresh_tick,
+)
 from switchboard.domain.completion.state_machine import (
     COMPLETION_CLASSIFIER_VERSION,
     build_completion_snapshot,
@@ -25,6 +37,17 @@ def _map(value: Any) -> dict[str, Any]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _fresh_decision_context(current: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Exclude every stored completion-run outcome from decision authority.
+
+    ``completion_runs`` remains durable audit history during migration.  Retry
+    and WAIT bounds come from fresh GitHub run history and immutable source
+    timestamps, never from its mutable churn or replay counters.
+    """
+    del current
+    return {}
 
 
 _QUEUE_EFFECTS = frozenset({"enqueue"})
@@ -164,10 +187,29 @@ def hydrate_completion_snapshot(
         get_repo = store_mod.get_project_github_repo
     from switchboard.application.commands import merge_gate as merge_gate_command
     from switchboard.application.queries import task_session
-    from switchboard.storage.repositories import provenance
+    from switchboard.storage.repositories import autopilot_scopes, provenance
 
+    hydration_started_at = time.time()
+    source_observed_at: dict[str, float] = {}
     task_id = str(task_id or "").strip().upper()
     task = get_task(task_id, project=project) or {}
+    task_observed_at = time.time()
+    source_observed_at.update({
+        "task": task_observed_at,
+        "canonical_github_provenance": task_observed_at,
+    })
+    active_scopes = autopilot_scopes.list_autopilot_scopes(
+        project=project, status="active,paused", limit=500,
+    )
+    task_scope = next(
+        (
+            _map(scope) for scope in active_scopes
+            if _text(_map(scope).get("scope_type")) == "task"
+            and _text(_map(scope).get("task_id")).upper() == task_id
+        ),
+        {},
+    )
+    source_observed_at["autopilot_scope"] = time.time()
     git_state = _map(task.get("git_state"))
     pr_number = int(git_state.get("pr_number") or 0)
     pr_url = str(git_state.get("pr_url") or "")
@@ -181,6 +223,8 @@ def hydrate_completion_snapshot(
         provenance._github_pr(repo, pr_number, token)
         if repo and pr_number else {}
     ) or {}
+    github_pr_observed_at = time.time()
+    source_observed_at["github_pr"] = github_pr_observed_at
     gate_payload: dict[str, Any] = {
         "task_id": task_id,
         "pr_number": pr_number,
@@ -195,6 +239,13 @@ def hydrate_completion_snapshot(
         project=project,
         record=False,
     )
+    gate_observed_at = time.time()
+    source_observed_at.update({
+        "github_check_runs": gate_observed_at,
+        "required_status_contexts": gate_observed_at,
+        "review_verdict": gate_observed_at,
+        "merge_gate": gate_observed_at,
+    })
     # Prefer the PR merge_gate resolved so a successful gate fetch still reaches
     # the classifier when the hydrator's direct call returned empty.
     resolved_pr = _map(gate.get("github_pr")) or github_pr
@@ -203,6 +254,8 @@ def hydrate_completion_snapshot(
     sessions = list(session_health.get("latest_sessions") or [])
     work_session = _map(sessions[0]) if sessions else {}
     runner_view = task_session.execute_for(task_id, project=project, task=task) or {}
+    runner_observed_at = time.time()
+    source_observed_at["runner_sessions"] = runner_observed_at
     active_runner = _map(runner_view.get("active_runner"))
     identity = _map(active_runner.get("execution"))
     runner = {
@@ -224,6 +277,17 @@ def hydrate_completion_snapshot(
         or git_state.get("head_sha")
         or ""
     ).strip()
+    merge_queue = _merge_queue_snapshot(
+        resolved_pr.get("mergeQueueEntry"),
+        task_id=task_id,
+        head_sha=head_sha,
+        project=project,
+    )
+    external_effects_observed_at = time.time()
+    source_observed_at.update({
+        "merge_queue": external_effects_observed_at,
+        "external_effects": external_effects_observed_at,
+    })
     snapshot = build_completion_snapshot(
         task=task,
         github_pr=resolved_pr,
@@ -231,17 +295,26 @@ def hydrate_completion_snapshot(
         status_contexts=gate.get("status_contexts"),
         review=verdict or _map(gate.get("review_gate")),
         merge_gate=gate,
-        merge_queue=_merge_queue_snapshot(
-            resolved_pr.get("mergeQueueEntry"),
-            task_id=task_id,
-            head_sha=head_sha,
-            project=project,
-        ),
+        merge_queue=merge_queue,
         work_session=work_session,
         runner=runner,
         merge_provenance=_map(task.get("provenance")),
     )
-    return normalize_snapshot(snapshot)
+    normalized = normalize_snapshot(snapshot)
+    observed_at = time.time()
+    normalized["snapshot_id"] = f"snapshot-{uuid.uuid4().hex}"
+    normalized["observed_at"] = observed_at
+    normalized["hydration_started_at"] = hydration_started_at
+    normalized["autopilot_scope"] = task_scope
+    source_observed_at["live_authority_evidence"] = observed_at
+    normalized["source_observed_at"] = source_observed_at
+    normalized["controller_build_sha"] = str(
+        os.environ.get("SWITCHBOARD_BUILD_SHA")
+        or os.environ.get("GIT_COMMIT")
+        or "unavailable"
+    ).strip()
+    normalized["table_version"] = NORMALIZATION_TABLE_VERSION
+    return normalized
 
 
 def production_effect_adapters(
@@ -296,6 +369,56 @@ def production_effect_adapters(
             token=token,
         )
 
+    def retry_ci(plan: Mapping[str, Any]) -> dict[str, Any]:
+        """Rerun one identified Actions run only when it still names this head."""
+        url = str(plan.get("failing_check_url") or "")
+        match = re.search(r"/actions/runs/(\d+)(?:/|$)", url)
+        if not match:
+            return {
+                "returncode": 2,
+                "stderr": "CI retry requires an identified GitHub Actions run",
+            }
+        run_id = match.group(1)
+        readback = _github_command(
+            ["api", f"repos/{repo}/actions/runs/{run_id}"], token=token,
+        )
+        if int(readback.get("returncode") or 0) != 0:
+            return readback
+        import json
+        try:
+            observed = json.loads(str(readback.get("stdout") or "{}"))
+        except (TypeError, ValueError):
+            return {"returncode": 2, "stderr": "CI run readback was not JSON"}
+        expected_head = str(plan.get("head_sha") or "").strip().lower()
+        observed_head = str(observed.get("head_sha") or "").strip().lower()
+        if not expected_head or observed_head != expected_head:
+            return {
+                "returncode": 2,
+                "stderr": (
+                    "CI run head does not match the normalized exact head"
+                ),
+            }
+        try:
+            run_attempt = int(observed.get("run_attempt") or 0)
+        except (TypeError, ValueError):
+            run_attempt = 0
+        if run_attempt < 1:
+            return {
+                "returncode": 2,
+                "stderr": "CI run history does not expose an immutable attempt",
+            }
+        if run_attempt > 1:
+            return {
+                "returncode": 2,
+                "stderr": "identical-head CI retry bound is exhausted",
+            }
+        result = _github_command(
+            ["run", "rerun", run_id, "--repo", repo], token=token,
+        )
+        result["run_id"] = run_id
+        result["head_sha"] = observed_head
+        return result
+
     def enqueue(plan: Mapping[str, Any]) -> dict[str, Any]:
         """Arm squash auto-merge; GitHub's native queue owns serialization."""
         number = int(plan.get("pr_number") or 0)
@@ -333,6 +456,7 @@ def production_effect_adapters(
         start_remediation=start,
         mark_ready=mark_ready,
         update_branch=update_branch,
+        retry_ci=retry_ci,
         enqueue=enqueue,
         repair_dispatch=start,
         fence_runner=fence_only,
@@ -360,7 +484,8 @@ def run_completion_tick(
     current = completion_runs.get_active_completion_run(
         task_id, project=project,
     ) or {}
-    decision = classify_completion(current, snapshot)
+    completion_run_observed_at = time.time()
+    decision = classify_completion(_fresh_decision_context(current), snapshot)
     # COORD-50: retain the classifier's input and output on EVERY tick, not only
     # the ones that pull a human in. completion_runs overwrites reason_code in
     # place, so this append-only episode is the only durable timeline. advice_version
@@ -388,6 +513,78 @@ def run_completion_tick(
         )
     )
     plan = plan_effect(decision, snapshot, persisted)
+    effect = str(plan.get("effect") or "")
+    action_by_effect = {
+        "wait": NormalizedAction.WAIT,
+        "attach_and_wait": NormalizedAction.WAIT,
+        "none": NormalizedAction.WAIT,
+        "ensure_review_generation": NormalizedAction.START,
+        "start_remediation": NormalizedAction.START,
+        "repair_dispatch": NormalizedAction.RETRY_CI,
+        "mark_ready": NormalizedAction.MARK_READY,
+        "enqueue": NormalizedAction.ARM_MERGE,
+        "escalate_human": NormalizedAction.BLOCK,
+        "fence_runner": NormalizedAction.BLOCK,
+        "reconcile_provenance": NormalizedAction.MERGED,
+    }
+    if effect not in action_by_effect:
+        raise ValueError(
+            f"completion effect {effect!r} has no truthful normalized action"
+        )
+    action = action_by_effect[effect]
+    observed_at = float(snapshot.get("observed_at") or time.time())
+    hydration_started_at = float(
+        snapshot.get("hydration_started_at") or observed_at
+    )
+    row = LAW_BY_ACTION[action]
+    if observed_at - hydration_started_at > row.live_clock_bound_s:
+        raise ValueError("authoritative snapshot hydration exceeded action bound")
+    source_observed_at = _map(snapshot.get("source_observed_at"))
+    source_observed_at["completion_run"] = completion_run_observed_at
+    missing_sources = [
+        source for source in row.authoritative_sources
+        if source not in source_observed_at
+    ]
+    if missing_sources:
+        raise ValueError(
+            "authoritative snapshot is missing source observation timestamps: "
+            + ", ".join(missing_sources)
+        )
+    wait_started_at: float | None = None
+    if action is NormalizedAction.WAIT:
+        if snapshot.get("wait_started_at") is None:
+            raise ValueError(
+                "WAIT snapshot is missing authoritative wait_started_at"
+            )
+        wait_started_at = float(snapshot["wait_started_at"])
+    normalized = normalize_fresh_tick(
+        decision=decision,
+        plan=plan,
+        snapshot=snapshot,
+        tick=FreshTick(
+            observed_at=observed_at,
+            live_clock_at=time.time(),
+            source_observed_at={
+                source: float(source_observed_at[source])
+                for source in row.authoritative_sources
+            },
+            head_sha=str(snapshot.get("head_sha") or ""),
+            prior_head_sha=str(current.get("head_sha") or ""),
+            wait_started_at=wait_started_at,
+            snapshot_id=str(
+                snapshot.get("snapshot_id") or f"snapshot-{uuid.uuid4().hex}"
+            ),
+            controller_build_sha=str(
+                snapshot.get("controller_build_sha")
+                or os.environ.get("SWITCHBOARD_BUILD_SHA")
+                or os.environ.get("GIT_COMMIT")
+                or "unavailable"
+            ),
+            table_version=str(
+                snapshot.get("table_version") or NORMALIZATION_TABLE_VERSION
+            ),
+        ),
+    )
 
     def fence(identity: Any) -> Any:
         return task_execution.fence_task_generation(
@@ -401,8 +598,9 @@ def run_completion_tick(
             ),
         )
 
-    result = execute_effect(
-        plan,
+    result = execute_normalized_command(
+        normalized,
+        legacy_plan=plan,
         decision=decision,
         snapshot=snapshot,
         run=persisted,
@@ -420,6 +618,7 @@ def run_completion_tick(
         "snapshot": snapshot,
         "decision": decision,
         "plan": plan,
+        "normalized": normalized,
         "execution": result,
         "decision_record": {
             "record_id": episode.get("record_id"),
@@ -431,6 +630,7 @@ def run_completion_tick(
 
 
 __all__ = [
+    "_fresh_decision_context",
     "hydrate_completion_snapshot",
     "production_effect_adapters",
     "run_completion_tick",

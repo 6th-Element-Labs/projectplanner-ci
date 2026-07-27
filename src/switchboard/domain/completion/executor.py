@@ -27,6 +27,7 @@ class CompletionEffectAdapters:
     start_remediation: Optional[EffectFn] = None
     mark_ready: Optional[EffectFn] = None
     update_branch: Optional[EffectFn] = None
+    retry_ci: Optional[EffectFn] = None
     enqueue: Optional[EffectFn] = None
     repair_dispatch: Optional[EffectFn] = None
     fence_runner: Optional[EffectFn] = None
@@ -67,6 +68,7 @@ def _completion_run_data(
                 "idem_key": plan.get("idem_key"),
                 "head_sha": plan.get("head_sha"),
                 "effect": plan.get("effect"),
+                "normalized_command": _map(plan.get("normalized_command")),
             },
             "ci": {
                 "head_sha": plan.get("head_sha"),
@@ -336,6 +338,8 @@ def _execute_mutating_effect(
         "role": plan.get("role"),
         "head_sha": plan.get("head_sha"),
         "pr_number": plan.get("pr_number"),
+        "failing_contexts": list(plan.get("failing_contexts") or []),
+        "failing_check_url": plan.get("failing_check_url"),
         "fence_identity": _map(plan.get("fence_identity")),
         "acceptance_findings": canonical_findings(
             plan.get("acceptance_findings")),
@@ -620,7 +624,7 @@ def execute_effect(
         }
     if effect in {
         "ensure_review_generation", "start_remediation", "mark_ready",
-        "update_branch", "enqueue", "repair_dispatch", "fence_runner",
+        "update_branch", "retry_ci", "enqueue", "repair_dispatch", "fence_runner",
         "reconcile_provenance",
     }:
         return _execute_mutating_effect(

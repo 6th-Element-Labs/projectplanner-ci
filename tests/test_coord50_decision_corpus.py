@@ -16,6 +16,7 @@ import ast
 import json
 import pathlib
 import sqlite3
+import time
 import unittest
 from unittest.mock import patch
 
@@ -24,6 +25,7 @@ from path_setup import ROOT  # noqa: F401
 from switchboard.application import completion_driver
 from switchboard.domain.completion import state_machine
 from switchboard.domain.completion.executor import CompletionEffectAdapters
+from switchboard.domain.completion.normalization_law import LAW_ROWS
 from switchboard.domain.decisions import features as features_mod
 from switchboard.domain.decisions import reason_codes
 from switchboard.storage.migrations import runner as migrations
@@ -713,6 +715,16 @@ class DecisionCorpusStorageTest(unittest.TestCase):
         was already being pulled in, and was discarded for the automated majority.
         """
         snapshot = _snapshot(ci="failure")
+        observed_at = time.time()
+        snapshot.update({
+            "observed_at": observed_at,
+            "hydration_started_at": observed_at,
+            "source_observed_at": {
+                source: observed_at
+                for row in LAW_ROWS
+                for source in row.authoritative_sources
+            },
+        })
         adapters = CompletionEffectAdapters(
             ensure_review_generation=lambda plan: {"ok": True},
             start_remediation=lambda plan: {"ok": True},

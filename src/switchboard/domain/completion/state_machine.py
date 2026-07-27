@@ -548,6 +548,15 @@ def _failing_check_identity(
     )
     if url:
         identity["failing_check_url"] = url
+    run_attempt = representative.get("run_attempt")
+    if run_attempt is None:
+        run_attempt = representative.get("runAttempt")
+    try:
+        parsed_attempt = int(run_attempt)
+    except (TypeError, ValueError):
+        parsed_attempt = 0
+    if parsed_attempt > 0:
+        identity["failing_run_attempt"] = parsed_attempt
     summary = _text_raw(
         representative.get("description") or representative.get("summary")
         or representative.get("output_title")
@@ -888,8 +897,11 @@ def _classify_completion_base(
         pr.get("mergeStateStatus") or pr.get("mergeable_state") or pr.get("merge_state")
     )
     if merge_state == "behind":
-        return _decision("blocked", "coordination_retry", "pr_branch_behind",
-                         retry="bounded", effect="update_branch")
+        # Updating the branch changes the exact head and invalidates all CI,
+        # review, queue, and retry evidence. Until that transition has its own
+        # truthful head-changing command, fail closed to an owned blocker.
+        return _decision(
+            "blocked", "human", "pr_branch_behind", board="Blocked")
     if merge_state == "unknown" or mergeable is None:
         route = "coordination_retry" if snap.get("mergeability_retry_exhausted") else "wait"
         return _decision("blocked" if route != "wait" else "waiting", route,

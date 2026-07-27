@@ -154,7 +154,8 @@ def test_merge_states_are_decomposed_and_aggregate_states_do_not_mask_green():
     unstable_red = classify_completion(
         None, snapshot(merge_state="UNSTABLE", ci="FAILURE"))
     assert conflict["route"] == "remediation"
-    assert behind["route"] == "coordination_retry"
+    assert behind["route"] == "human"
+    assert behind["reason_code"] == "pr_branch_behind"
     assert unknown["route"] == "wait"
     assert blocked_green["reason_code"] == "exact_head_gates_passed"
     assert unstable_red["route"] == "remediation"

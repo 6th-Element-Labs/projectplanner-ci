@@ -101,7 +101,7 @@ conflict check does not look at it.
 | `review_retry_budget_exhausted` | `human` | gold | Review mapping: CHANGES_REQUESTED with retry budget exhausted -> human via review_retry_budget_exhausted |
 | `changes_requested_automatic_remediation` | `remediation` | gold | Review mapping: CHANGES_REQUESTED with automatic findings -> remediation; Required regression matrix: automatic requested changes start remediation |
 | `live_wrong_role_fence` | `coordination_retry` | gold | Runner mapping: Running with wrong role -> fence exact generation, then start desired role; Invariant 5: only the generation matching desired role and exact head may be attached |
-| `mergeability_behind` | `coordination_retry` | gold | mergeStateStatus mapping: BEHIND -> coordination_retry to update the branch (merge queue owns it when available) |
+| `mergeability_behind` | `human` | gold | mergeStateStatus mapping: BEHIND -> owned block until a truthful head-changing command can invalidate and replace exact-head evidence |
 | `mergeability_unknown` | `wait` | gold | Mergeability mapping / mergeStateStatus mapping: UNKNOWN -> bounded wait, then coordination_retry |
 | `aggregate_blocked_not_masking_green` | `review_merge` | gold | mergeStateStatus mapping: BLOCKED -- decompose through CI, review, draft, policy, and conflict; never route directly from this aggregate; Invariant: only a clean, green, exact-head snapshot advances to READY_TO_QUEUE |
 | `remediation_fences_live_review_merge` | `remediation` | gold | Required regression matrix: a live review_merge is fenced when remediation becomes higher priority |

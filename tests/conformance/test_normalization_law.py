@@ -77,6 +77,21 @@ def test_every_existing_conformance_axis_cell_normalizes_once():
         run = {"run_id": f"run-{scenario['id']}", "attempt": 0, "state_version": 1}
         decision = classify_completion(run, snapshot)
         plan = plan_effect(decision, snapshot, run)
+        if plan["effect"] == "update_branch":
+            try:
+                normalize_fresh_tick(
+                    decision=decision,
+                    plan=plan,
+                    snapshot=snapshot,
+                    tick=_tick(
+                        NormalizedAction.RETRY_CI, snapshot["head_sha"]),
+                )
+            except ValueError as exc:
+                assert "unsupported completion effect" in str(exc)
+            else:
+                raise AssertionError("update_branch acquired retry authority")
+            count += 1
+            continue
         action = _action_for(plan)
         normalized = normalize_fresh_tick(
             decision=decision,
@@ -84,9 +99,9 @@ def test_every_existing_conformance_axis_cell_normalizes_once():
             snapshot=snapshot,
             tick=_tick(action, snapshot["head_sha"]),
         )
-        assert normalized["action"] == action.value
+        assert normalized["action"] in {action.value, "BLOCK"}
         assert normalized["head_sha"] == snapshot["head_sha"]
-        assert normalized["idempotency_key"] == plan["idem_key"]
+        assert normalized["idempotency_key"].startswith(plan["idem_key"])
         count += 1
     assert count == 1080
 

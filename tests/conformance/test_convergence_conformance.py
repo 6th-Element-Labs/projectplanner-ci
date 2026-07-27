@@ -142,15 +142,25 @@ def run_convergence(scenario: dict[str, Any], task_id: str) -> dict[str, Any]:
         return_value={"delivered": False, "reason": "conformance"},
     ):
         for tick in range(1, MAX_TICKS + 1):
-            out = completion_driver.run_completion_tick(
-                task_id,
-                project="switchboard",
-                actor="conformance",
-                agent_id="conformance",
-                store_mod=object(),
-                hydrator=hydrator,
-                adapters=adapters,
-            )
+            try:
+                out = completion_driver.run_completion_tick(
+                    task_id,
+                    project="switchboard",
+                    actor="conformance",
+                    agent_id="conformance",
+                    store_mod=object(),
+                    hydrator=hydrator,
+                    adapters=adapters,
+                )
+            except ValueError as exc:
+                if "update_branch" not in str(exc):
+                    raise
+                return {
+                    "outcome": "owned_block",
+                    "reason": "head_changing_effect_rejected",
+                    "ticks": tick,
+                    "history": history,
+                }
             route = str(out["decision"].get("route") or "")
             reason = str(out["decision"].get("reason_code") or "")
             effect = str(out["plan"].get("effect") or "")
@@ -162,6 +172,20 @@ def run_convergence(scenario: dict[str, Any], task_id: str) -> dict[str, Any]:
                 "replay": bool(receipt.get("idempotent_replay")),
             })
 
+            if out["normalized"]["action"] == "BLOCK":
+                return {
+                    "outcome": "owned_block",
+                    "reason": out["normalized"]["reason_code"],
+                    "ticks": tick,
+                    "history": history,
+                }
+            if out["normalized"]["action"] == "MERGED":
+                return {
+                    "outcome": "settled",
+                    "reason": out["normalized"]["reason_code"],
+                    "ticks": tick,
+                    "history": history,
+                }
             if route == "human":
                 return {"outcome": "human", "reason": reason,
                         "ticks": tick, "history": history}

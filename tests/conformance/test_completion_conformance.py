@@ -124,7 +124,10 @@ def run_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
     # Wait/none and human escalation do not call an effect adapter. Human
     # escalation uses the transactional attention-request boundary instead.
     # Other mutating effects fire exactly once, then replay their ledger proof.
-    if expect["effect"] in {"wait", "none", "attach_and_wait", "escalate_human"}:
+    if (
+        first["normalized"]["action"] in {"WAIT", "BLOCK", "MERGED"}
+        or expect["effect"] in {"wait", "none", "attach_and_wait", "escalate_human"}
+    ):
         _shared.require(
             len(calls) == 0,
             f"{scenario['id']}: {expect['effect']} must not fire adapters "

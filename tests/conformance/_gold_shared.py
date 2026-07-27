@@ -186,7 +186,14 @@ def run_world(
             second = _tick()
 
     effect_name = str(first["plan"].get("effect") or "")
-    expected_calls = 1 if effect_name in _LEDGER_EFFECTS else 0
+    expected_calls = (
+        1
+        if (
+            effect_name in _LEDGER_EFFECTS
+            and first["normalized"]["action"] not in {"WAIT", "BLOCK", "MERGED"}
+        )
+        else 0
+    )
     _shared.require(
         first["decision"] == second["decision"],
         f"{scenario_id}: second tick changed the decision",

@@ -21,7 +21,7 @@ EFFECT_SCHEMA = "switchboard.completion_effect.v1"
 #: Effects that change something outside the completion run itself.
 MUTATING_EFFECTS = frozenset({
     "ensure_review_generation", "start_remediation", "mark_ready", "enqueue",
-    "update_branch", "repair_dispatch", "fence_runner", "escalate_human",
+    "update_branch", "retry_ci", "repair_dispatch", "fence_runner", "escalate_human",
     "reconcile_provenance",
 })
 
@@ -206,6 +206,11 @@ def plan_effect(decision: Mapping[str, Any], snapshot: Mapping[str, Any],
         "board_projection": decision.get("board_projection"),
         "acceptance_findings": acceptance_findings,
         "escalated_findings": escalated_findings,
+        "failing_contexts": list(decision.get("failing_contexts") or []),
+        "failing_check_url": str(decision.get("failing_check_url") or ""),
+        "failing_run_attempt": int(decision.get("failing_run_attempt") or 0),
+        "failing_check_summary": str(
+            decision.get("failing_check_summary") or ""),
         "fence_required": fence_required,
         "fence_generation": (
             fence_identity.get("generation") if fence_required else None

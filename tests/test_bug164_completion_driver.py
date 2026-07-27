@@ -2,6 +2,7 @@
 """BUG-164: public production completion driver and effect ports."""
 from __future__ import annotations
 
+import time
 import unittest
 from unittest.mock import patch
 
@@ -9,6 +10,7 @@ from path_setup import ROOT  # noqa: F401
 
 from switchboard.application import completion_driver
 from switchboard.domain.completion.executor import CompletionEffectAdapters
+from switchboard.domain.completion.normalization_law import LAW_ROWS
 from switchboard.domain.completion.state_machine import build_completion_snapshot
 
 
@@ -47,8 +49,22 @@ def managed_runner(head: str, generation: int, role: str) -> dict:
     }
 
 
+def fresh_snapshot(snapshot: dict) -> dict:
+    observed_at = time.time()
+    snapshot.update({
+        "observed_at": observed_at,
+        "hydration_started_at": observed_at,
+        "source_observed_at": {
+            source: observed_at
+            for row in LAW_ROWS
+            for source in row.authoritative_sources
+        },
+    })
+    return snapshot
+
+
 def pr810():
-    return build_completion_snapshot(
+    return fresh_snapshot(build_completion_snapshot(
         task={"task_id": "COORD-41", "status": "In Review",
               "git_state": {"head_sha": HEAD_810, "pr_number": 810,
                             "pr_url": PR_810}},
@@ -62,11 +78,11 @@ def pr810():
                           "failure_attribution": "product"}],
         review={"status": "passed", "head_sha": HEAD_810, "pr_url": PR_810},
         runner=managed_runner(HEAD_810, 9, "review_merge"),
-    )
+    ))
 
 
 def pr812():
-    return build_completion_snapshot(
+    return fresh_snapshot(build_completion_snapshot(
         task={"task_id": "ADAPTER-25", "status": "In Review",
               "git_state": {"head_sha": HEAD_812, "pr_number": 812,
                             "pr_url": PR_812}},
@@ -88,7 +104,7 @@ def pr812():
             ],
         },
         runner={"live": False},
-    )
+    ))
 
 
 class CompletionDriver(unittest.TestCase):
@@ -152,6 +168,11 @@ class CompletionDriver(unittest.TestCase):
         self.assertEqual(snapshot["head_sha"], HEAD_810)
         self.assertEqual(snapshot["task_id"], "COORD-41")
         self.assertEqual(snapshot["status_contexts"]["ci"]["state"], "success")
+        self.assertGreater(len(set(snapshot["source_observed_at"].values())), 1)
+        self.assertNotEqual(
+            set(snapshot["source_observed_at"].values()),
+            {snapshot["observed_at"]},
+        )
         self.assertFalse(merge_gate.call_args.kwargs["record"])
 
     def test_public_tick_routes_pr810_and_executes_one_effect(self):

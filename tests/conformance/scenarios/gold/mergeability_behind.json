@@ -1,10 +1,10 @@
 {
   "expect": {
-    "effect": "update_branch",
+    "effect": "escalate_human",
     "reason_code": "pr_branch_behind",
     "role_sequence": [],
-    "route": "coordination_retry",
-    "terminal": "blocked"
+    "route": "human",
+    "terminal": "human"
   },
   "id": "mergeability_behind",
   "schema": "switchboard.completion_conformance.scenario.v1",

@@ -24,6 +24,7 @@ import ast
 import json
 import pathlib
 import sqlite3
+import time
 import unittest
 from unittest.mock import patch
 
@@ -32,6 +33,7 @@ from path_setup import ROOT  # noqa: F401
 from switchboard.application import completion_driver
 from switchboard.domain.completion import state_machine
 from switchboard.domain.completion.executor import CompletionEffectAdapters
+from switchboard.domain.completion.normalization_law import LAW_ROWS
 from switchboard.domain.decisions import features as features_mod
 from switchboard.domain.decisions import outcomes as outcomes_mod
 from switchboard.domain.decisions import reason_codes
@@ -808,6 +810,16 @@ class DecisionOutcomeStorageTest(unittest.TestCase):
         )
 
         def tick(snapshot):
+            observed_at = time.time()
+            snapshot.update({
+                "observed_at": observed_at,
+                "hydration_started_at": observed_at,
+                "source_observed_at": {
+                    source: observed_at
+                    for row in LAW_ROWS
+                    for source in row.authoritative_sources
+                },
+            })
             with patches[0], patches[1], patches[2], patches[3], patches[4]:
                 return completion_driver.run_completion_tick(
                     "CO-20", project=self.project, actor="test",

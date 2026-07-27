@@ -17,9 +17,11 @@ from itertools import product
 import json
 from pathlib import Path
 import sys
+import time
 from typing import Any, Iterator
 from unittest.mock import patch
 
+from switchboard.domain.completion.normalization_law import LAW_ROWS
 from switchboard.domain.completion.state_machine import build_completion_snapshot
 
 # This module is imported both flat (``import _shared``, from T1 and
@@ -313,7 +315,7 @@ def build_snapshot(
         required_status_contexts=required_contexts,
         status_contexts=contexts,
     )
-    return build_completion_snapshot(
+    snapshot = build_completion_snapshot(
         task={
             "task_id": task_id,
             "status": "In Review",
@@ -331,6 +333,18 @@ def build_snapshot(
         merge_queue=queue,
         runner=runner,
     )
+    observed_at = time.time()
+    snapshot.update({
+        "observed_at": observed_at,
+        "hydration_started_at": observed_at,
+        "wait_started_at": observed_at - 1,
+        "source_observed_at": {
+            source: observed_at
+            for row in LAW_ROWS
+            for source in row.authoritative_sources
+        },
+    })
+    return snapshot
 
 
 class EffectLedger:

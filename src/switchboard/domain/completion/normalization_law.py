@@ -19,6 +19,7 @@ from typing import Any, Mapping, Sequence
 
 NORMALIZATION_LAW_SCHEMA = "switchboard.completion_normalization_law.v1"
 NORMALIZED_TICK_SCHEMA = "switchboard.completion_normalized_tick.v1"
+NORMALIZATION_TABLE_VERSION = "1"
 
 
 class NormalizedAction(str, Enum):
@@ -63,6 +64,9 @@ class FreshTick:
     head_sha: str
     prior_head_sha: str = ""
     wait_started_at: float | None = None
+    snapshot_id: str = ""
+    controller_build_sha: str = ""
+    table_version: str = NORMALIZATION_TABLE_VERSION
 
 
 @dataclass(frozen=True)
@@ -178,7 +182,6 @@ _PLAN_ACTIONS = {
     "ensure_review_generation": NormalizedAction.START,
     "start_remediation": NormalizedAction.START,
     "repair_dispatch": NormalizedAction.RETRY_CI,
-    "update_branch": NormalizedAction.RETRY_CI,
     "mark_ready": NormalizedAction.MARK_READY,
     "enqueue": NormalizedAction.ARM_MERGE,
     "escalate_human": NormalizedAction.BLOCK,
@@ -330,10 +333,17 @@ def normalize_fresh_tick(
             if attributions and attributions <= _INFRASTRUCTURE_ATTRIBUTIONS:
                 raise ValueError("infrastructure classes may not select remediation")
 
+    missing_merge_provenance = False
     if action is NormalizedAction.MERGED:
         github_pr = _map(snapshot_map.get("github_pr"))
-        if _text(github_pr.get("state")).upper() != "MERGED":
-            raise ValueError("MERGED requires observed canonical GitHub provenance")
+        provenance = _map(snapshot_map.get("merge_provenance"))
+        missing_merge_provenance = (
+            _text(github_pr.get("state")).upper() != "MERGED"
+            and not _text(
+                provenance.get("merged_sha")
+                or provenance.get("canonical_merged_sha")
+            )
+        )
 
     normalized: dict[str, Any] = {
         "schema": NORMALIZED_TICK_SCHEMA,
@@ -346,7 +356,10 @@ def normalize_fresh_tick(
         "idempotency_key": _text(plan_map.get("idem_key")),
         "receipt_contract": row.receipt,
         "owner": row.owner,
+        "snapshot_id": _text(tick.snapshot_id),
         "observed_at": tick.observed_at,
+        "controller_build_sha": _text(tick.controller_build_sha),
+        "table_version": _text(tick.table_version),
         "live_clock_at": tick.live_clock_at,
         "source_observed_at": dict(tick.source_observed_at),
         "head_changed": head_changed,
@@ -355,6 +368,18 @@ def normalize_fresh_tick(
     }
     if not normalized["task_id"] or not normalized["idempotency_key"]:
         raise ValueError("normalized tick requires task_id and idempotency_key")
+    supplied_tick_identity = bool(
+        tick.snapshot_id or tick.controller_build_sha
+        or tick.table_version != NORMALIZATION_TABLE_VERSION
+    )
+    if supplied_tick_identity and not all(
+        normalized[field]
+        for field in ("snapshot_id", "controller_build_sha", "table_version")
+    ):
+        raise ValueError(
+            "fresh tick identity requires snapshot_id, controller_build_sha, "
+            "and table_version"
+        )
     if action is NormalizedAction.WAIT and not wait_expired:
         normalized["wait"] = asdict(wait)
     if action is NormalizedAction.WAIT and wait_expired:
@@ -380,6 +405,54 @@ def normalize_fresh_tick(
         })
     if action is NormalizedAction.BLOCK:
         normalized["block"] = asdict(_block_evidence(reason=reason, row=row))
+    retry_block_reason = ""
+    if action is NormalizedAction.RETRY_CI:
+        if reason != "required_ci_infrastructure_failure":
+            retry_block_reason = "coordination_retry_live_evidence_missing"
+        elif not _text(plan_map.get("failing_check_url")):
+            retry_block_reason = "ci_retry_identity_missing"
+        else:
+            try:
+                run_attempt = int(plan_map.get("failing_run_attempt") or 0)
+            except (TypeError, ValueError):
+                run_attempt = 0
+            if run_attempt < 1:
+                retry_block_reason = "ci_retry_history_missing"
+            elif run_attempt > 1:
+                retry_block_reason = "ci_retry_bound_exhausted"
+    if retry_block_reason:
+        block_row = LAW_BY_ACTION[NormalizedAction.BLOCK]
+        normalized.update({
+            "action": NormalizedAction.BLOCK.value,
+            "reason_code": retry_block_reason,
+            "effect": block_row.effect,
+            "idempotency_key": (
+                f"{normalized['idempotency_key']}:{retry_block_reason}"
+            ),
+            "receipt_contract": block_row.receipt,
+            "owner": block_row.owner,
+            "block": asdict(_block_evidence(
+                reason=retry_block_reason,
+                row=block_row,
+            )),
+        })
+    if missing_merge_provenance:
+        block_row = LAW_BY_ACTION[NormalizedAction.BLOCK]
+        normalized.update({
+            "action": NormalizedAction.BLOCK.value,
+            "reason_code": "canonical_merge_provenance_missing",
+            "effect": block_row.effect,
+            "idempotency_key": (
+                f"{normalized['idempotency_key']}:"
+                "canonical_merge_provenance_missing"
+            ),
+            "receipt_contract": block_row.receipt,
+            "owner": block_row.owner,
+            "block": asdict(_block_evidence(
+                reason="canonical_merge_provenance_missing",
+                row=block_row,
+            )),
+        })
     return normalized
 
 
@@ -389,6 +462,7 @@ __all__ = [
     "LAW_BY_ACTION",
     "LAW_ROWS",
     "NORMALIZATION_LAW_SCHEMA",
+    "NORMALIZATION_TABLE_VERSION",
     "NORMALIZED_TICK_SCHEMA",
     "NormalizedAction",
     "NormalizationLawRow",

@@ -14,6 +14,7 @@ from switchboard.domain.completion.executor import (
     CompletionEffectAdapters,
     execute_effect,
 )
+from switchboard.domain.completion.normalization_law import LAW_ROWS
 from switchboard.domain.completion.state_machine import build_completion_snapshot
 
 
@@ -38,7 +39,7 @@ PR_URL = "https://github.com/example/projectplanner/pull/810"
 
 
 def failed_ci_snapshot(*, runner=None):
-    return build_completion_snapshot(
+    snapshot = build_completion_snapshot(
         task={
             "task_id": "COORD-41",
             "status": "In Review",
@@ -66,6 +67,17 @@ def failed_ci_snapshot(*, runner=None):
         review={"status": "passed", "head_sha": HEAD, "pr_url": PR_URL},
         runner=runner or {"live": False},
     )
+    observed_at = time.time()
+    snapshot.update({
+        "observed_at": observed_at,
+        "hydration_started_at": observed_at,
+        "source_observed_at": {
+            source: observed_at
+            for row in LAW_ROWS
+            for source in row.authoritative_sources
+        },
+    })
+    return snapshot
 
 
 def durable_run():
