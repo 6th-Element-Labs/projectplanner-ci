@@ -138,6 +138,30 @@ def test_wrong_role_runner_waits_without_borrowing_capacity_authority():
     assert waiting["command"]["fence_identity"] is None
 
 
+def test_live_implementation_owns_capacity_during_pr_ci_hydration():
+    waiting = reduce(
+        {
+            "route": "human",
+            "effect": "escalate_human",
+            "reason_code": "required_ci_hydration_missing",
+        },
+        snapshot={
+            "runner": {
+                "live": True,
+                "role": "implementation",
+                "runner_session_id": "run-live",
+            },
+            "github_pr": {"state": "OPEN", "draft": False},
+            "status_contexts": {},
+        },
+    )
+    assert waiting["action"] == "WAIT"
+    assert waiting["reason_code"] == "required_ci_hydration_missing"
+    assert waiting["command"]["effect"] == "attach_and_wait"
+    assert waiting["command"]["mutates"] is False
+    assert "block" not in waiting
+
+
 def test_ready_queue_and_merge_observation_stay_mechanical():
     ready = reduce({
         "route": "review_merge",
@@ -163,6 +187,7 @@ def test_ready_queue_and_merge_observation_stay_mechanical():
         snapshot={
             "github_pr": {"state": "MERGED"},
             "merge_provenance": {"merged_sha": "c" * 40},
+            "runner": {"live": True, "role": "implementation"},
         },
     )
     assert merged["action"] == "MERGED"

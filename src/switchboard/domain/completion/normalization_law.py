@@ -383,7 +383,17 @@ def reduce_fresh_tick(
         effect = "wait"
 
     runner = _map(snapshot_map.get("runner"))
-    if action is NormalizedAction.START and runner.get("live"):
+    live_implementation = (
+        bool(runner.get("live"))
+        and _text(runner.get("role")).lower() == "implementation"
+    )
+    if live_implementation and action is not NormalizedAction.MERGED:
+        # Capacity still belongs to the implementation generation.  A PR may
+        # become observable before its required CI contexts hydrate, but that
+        # partial publication cannot grant Coordination mutation authority.
+        action = NormalizedAction.WAIT
+        effect = "attach_and_wait"
+    elif action is NormalizedAction.START and runner.get("live"):
         action = NormalizedAction.WAIT
         effect = "attach_and_wait"
 
