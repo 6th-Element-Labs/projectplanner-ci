@@ -27,20 +27,36 @@ HEAD = "c" * 40
 PR_NUMBER = 650
 PR_URL = f"https://github.com/6th-Element-Labs/projectplanner/pull/{PR_NUMBER}"
 
+#: Coverage product axes — keep this set stable so T1's undefined-cell report
+#: stays readable. Extended GitHub values are accepted by validate/build but
+#: are not multiplied into every coverage cell.
 AXES = {
     "draft": (False, True),
     "ci": ("pass", "fail", "pending", "missing", "error"),
     "mergeability": (True, False, None),
     "review": ("passed", "missing", "changes_requested"),
-    "queue": ("none", "queued", "unmergeable"),
+    "queue": ("none", "queued", "unmergeable", "ejected"),
     "runner": ("none", "review_merge", "remediation"),
 }
+
+CI_VALUES = (
+    "pass", "fail", "pending", "missing", "error",
+    "timed_out", "action_required", "cancelled", "stale", "startup_failure",
+)
+QUEUE_VALUES = ("none", "queued", "unmergeable", "ejected", "locked")
+PR_STATE_VALUES = ("open", "merged", "closed")
+REVIEW_FINDINGS_VALUES = ("none", "automatic", "judgment")
 
 CI_STATE = {
     "pass": "SUCCESS",
     "fail": "FAILURE",
     "pending": "IN_PROGRESS",
     "error": "ERROR",
+    "timed_out": "TIMED_OUT",
+    "action_required": "ACTION_REQUIRED",
+    "cancelled": "CANCELLED",
+    "stale": "STALE",
+    "startup_failure": "STARTUP_FAILURE",
 }
 
 
@@ -76,13 +92,65 @@ def validate_scenario(value: Any, source: Any) -> dict[str, Any]:
         f"{source}: expect.role_sequence must be an array",
     )
     require(world.get("draft") in AXES["draft"], f"{source}: invalid draft")
-    require(world.get("ci") in AXES["ci"], f"{source}: invalid ci")
+    require(world.get("ci") in CI_VALUES, f"{source}: invalid ci")
     require(
         world.get("mergeable") in AXES["mergeability"],
         f"{source}: invalid mergeable",
     )
     require(world.get("review") in AXES["review"], f"{source}: invalid review")
-    require(world.get("queue") in AXES["queue"], f"{source}: invalid queue")
+    require(world.get("queue") in QUEUE_VALUES, f"{source}: invalid queue")
+    removal = world.get("queue_removal_reason")
+    if removal is not None:
+        require(
+            world.get("queue") == "ejected",
+            f"{source}: queue_removal_reason requires queue=ejected",
+        )
+        require(
+            removal in {"failed_checks", "checks_timed_out"},
+            f"{source}: invalid queue_removal_reason",
+        )
+    also_pending = world.get("also_pending_contexts")
+    if also_pending is not None:
+        require(
+            isinstance(also_pending, list)
+            and all(isinstance(item, str) and item.strip() for item in also_pending),
+            f"{source}: also_pending_contexts must be a list of non-empty strings",
+        )
+    pr_state = world.get("pr_state", "open")
+    require(pr_state in PR_STATE_VALUES, f"{source}: invalid pr_state")
+    if world.get("reopen_authorized") is not None:
+        require(
+            isinstance(world.get("reopen_authorized"), bool),
+            f"{source}: reopen_authorized must be a boolean",
+        )
+        require(
+            pr_state == "closed",
+            f"{source}: reopen_authorized requires pr_state=closed",
+        )
+    if world.get("review_retry_exhausted") is not None:
+        require(
+            isinstance(world.get("review_retry_exhausted"), bool),
+            f"{source}: review_retry_exhausted must be a boolean",
+        )
+    if world.get("queue_retry_exhausted") is not None:
+        require(
+            isinstance(world.get("queue_retry_exhausted"), bool),
+            f"{source}: queue_retry_exhausted must be a boolean",
+        )
+        require(
+            world.get("queue") == "locked",
+            f"{source}: queue_retry_exhausted requires queue=locked",
+        )
+    findings_class = world.get("review_findings", "none")
+    require(
+        findings_class in REVIEW_FINDINGS_VALUES,
+        f"{source}: invalid review_findings",
+    )
+    if findings_class != "none":
+        require(
+            world.get("review") == "changes_requested",
+            f"{source}: review_findings requires review=changes_requested",
+        )
     runner = world.get("runner")
     require(isinstance(runner, dict), f"{source}: runner must be an object")
     require(
@@ -121,12 +189,35 @@ def build_snapshot(
             "state": CI_STATE[ci],
             "failure_attribution": world["ci_attribution"],
         })
+    also_pending = [
+        str(name).strip()
+        for name in list(world.get("also_pending_contexts") or [])
+        if str(name).strip()
+    ]
+    for name in also_pending:
+        contexts.append({
+            "context": name,
+            "state": CI_STATE["pending"],
+            "failure_attribution": world["ci_attribution"],
+        })
+    required_contexts = [world["ci_context"], *also_pending]
     review = {
         "status": "" if world["review"] == "missing" else world["review"],
         "head_sha": HEAD,
         "number": PR_NUMBER,
         "pr_url": PR_URL,
     }
+    if world.get("review_retry_exhausted") is True:
+        review["retry_exhausted"] = True
+    findings_class = world.get("review_findings", "none")
+    if findings_class == "automatic":
+        review["findings"] = [
+            {"finding_class": "automatic", "code": "style_violation"},
+        ]
+    elif findings_class == "judgment":
+        review["findings"] = [
+            {"finding_class": "judgment", "code": "design_concern"},
+        ]
     queue: dict[str, Any] = {}
     if world["queue"] == "queued":
         queue = {"state": "AWAITING_CHECKS"}
@@ -134,6 +225,22 @@ def build_snapshot(
         queue = {
             "state": "UNMERGEABLE",
             "failure_attribution": world["ci_attribution"],
+        }
+    elif world["queue"] == "locked":
+        queue = {"state": "LOCKED"}
+        if world.get("queue_retry_exhausted") is True:
+            queue["retry_exhausted"] = True
+    elif world["queue"] == "ejected":
+        # Not currently in the queue (no mergeQueueEntry), but completion already
+        # verified an enqueue for this exact head and GitHub later removed it.
+        # Tip gates remain green — this is the BREAKDOWN 38 / 40 jam shape.
+        queue = {
+            "prior_enqueue_verified": True,
+            "prior_enqueue_effect_key": f"effect-enqueue-{scenario['id']}",
+            "verified_queue_effect_count": 1,
+            "last_removal_reason": (
+                world.get("queue_removal_reason") or "failed_checks"
+            ),
         }
     runner_world = world["runner"]
     runner: dict[str, Any] = {"live": False}
@@ -148,6 +255,20 @@ def build_snapshot(
             "role": runner_world["role"],
             "head_sha": HEAD if runner_world["head"] == "same" else "d" * 40,
         }
+    pr_state = str(world.get("pr_state") or "open").upper()
+    github_pr: dict[str, Any] = {
+        "number": PR_NUMBER,
+        "state": pr_state,
+        "draft": world["draft"],
+        "url": PR_URL,
+        "mergeable": world["mergeable"],
+        "mergeStateStatus": world["merge_state_status"],
+        "head": {"sha": HEAD},
+    }
+    if pr_state == "MERGED":
+        github_pr["merged"] = True
+    if pr_state == "CLOSED" and world.get("reopen_authorized") is True:
+        github_pr["reopen_authorized"] = True
     return build_completion_snapshot(
         task={
             "task_id": task_id,
@@ -158,16 +279,8 @@ def build_snapshot(
                 "pr_url": PR_URL,
             },
         },
-        github_pr={
-            "number": PR_NUMBER,
-            "state": "OPEN",
-            "draft": world["draft"],
-            "url": PR_URL,
-            "mergeable": world["mergeable"],
-            "mergeStateStatus": world["merge_state_status"],
-            "head": {"sha": HEAD},
-        },
-        required_status_contexts=[world["ci_context"]],
+        github_pr=github_pr,
+        required_status_contexts=required_contexts,
         status_contexts=contexts,
         review=review,
         merge_gate={"findings": []},
@@ -217,6 +330,11 @@ class EffectLedger:
 def terminal_for(result: dict[str, Any]) -> str:
     """Collapse one completion-tick result to the scenario's terminal vocabulary."""
     route = result["decision"]["route"]
+    effect = result["plan"]["effect"]
+    # Still on the merge path: tip green after eject / infra unmergeable requeue
+    # must not collapse to "blocked" just because the route is coordination_retry.
+    if effect == "requeue_merge_group":
+        return "merged"
     if route == "human":
         return "human"
     if route == "reconcile":
@@ -227,7 +345,7 @@ def terminal_for(result: dict[str, Any]) -> str:
         return "blocked"
     if (
         route == "review_merge"
-        and result["plan"]["effect"] in {"enqueue", "attach_and_wait"}
+        and effect in {"enqueue", "attach_and_wait"}
     ):
         return "merged"
     return "blocked"
@@ -295,6 +413,7 @@ def coverage_cells() -> Any:
 
 __all__ = [
     "SCHEMA", "HEAD", "PR_NUMBER", "PR_URL", "AXES", "CI_STATE",
+    "CI_VALUES", "QUEUE_VALUES", "PR_STATE_VALUES", "REVIEW_FINDINGS_VALUES",
     "require", "validate_scenario", "load_scenarios", "build_snapshot",
     "EffectLedger", "terminal_for", "hermetic_completion_patches",
     "coverage_cells",

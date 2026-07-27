@@ -150,10 +150,19 @@ class ObserveMatchesT1SeedsWithoutSpendingCapacity(unittest.TestCase):
                 self.assertEqual(
                     first["plan"]["effect"], expect["effect"], scenario_id,
                 )
-                self.assertTrue(
-                    outcome["receipts"],
-                    f"{scenario_id}: observe cut captured no effect",
-                )
+                # Wait/none are non-mutating: the observe cut may capture no
+                # adapter receipt. Mutating effects must still prove a receipt.
+                if expect["effect"] in {"wait", "none"}:
+                    self.assertEqual(
+                        outcome["receipts"],
+                        [],
+                        f"{scenario_id}: wait/none must not fire adapters",
+                    )
+                else:
+                    self.assertTrue(
+                        outcome["receipts"],
+                        f"{scenario_id}: observe cut captured no effect",
+                    )
                 for receipt in outcome["receipts"]:
                     self.assertEqual(receipt["action"], "observe_cut")
                     self.assertTrue(receipt["observed"])

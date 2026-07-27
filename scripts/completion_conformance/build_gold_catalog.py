@@ -211,11 +211,8 @@ CATALOG: list[Row] = [
         "human",
         "Review mapping: CHANGES_REQUESTED with judgment or authority "
         "findings -> human",
-        "This fixture carries no review findings at all (T1's world/review "
-        "axis has no findings sub-field), so every changes_requested verdict "
-        "here takes the judgment path -- documented, not a T1 gap to fix "
-        "silently. An automatic-findings variant needs a richer review.findings "
-        "axis; see unreachable_in_t1_axes.",
+        "Empty review findings (review_findings omitted/none) take the "
+        "judgment/human path. Contrast changes_requested_automatic_remediation.",
         "scar",
     ),
     Row(
@@ -253,6 +250,125 @@ CATALOG: list[Row] = [
         "coordination_retry and requeue",
         "Queue attributes the failure to infrastructure -> requeue, not a "
         "remediation coder.",
+        "scar",
+    ),
+    Row(
+        "tip_green_after_queue_eject",
+        _world(queue="ejected", queue_removal_reason="failed_checks"),
+        "coordination_retry",
+        "Merge queue mapping: No entry after verified enqueue eject "
+        "(failed_checks / checks_timed_out), tip still green -> "
+        "coordination_retry and requeue_merge_group "
+        "(merge_queue_ejected_tip_green)",
+        "BREAKDOWN 38/40: tip CLEAN after GitHub ejected a prior verified "
+        "enqueue must requeue, not replay once-only enqueue.",
+        "scar",
+    ),
+    Row(
+        "tip_green_after_checks_timed_out",
+        _world(queue="ejected", queue_removal_reason="checks_timed_out"),
+        "coordination_retry",
+        "Merge queue mapping: No entry after verified enqueue eject "
+        "(failed_checks / checks_timed_out), tip still green -> "
+        "coordination_retry and requeue_merge_group "
+        "(merge_queue_ejected_tip_green)",
+        "Same eject→requeue contract with checks_timed_out removal reason.",
+        "scar",
+    ),
+    Row(
+        "pr_merged_reconcile",
+        _world(pr_state="merged"),
+        "reconcile",
+        "Required regression matrix / terminal mapping: merged PR -> "
+        "reconcile via canonical_pr_merged",
+        "PR lifecycle MERGED with else-clean gates routes to provenance "
+        "reconcile, not enqueue.",
+        "scar",
+    ),
+    Row(
+        "pr_closed_unmerged_human",
+        _world(pr_state="closed"),
+        "human",
+        "Required regression matrix: CLOSED unmerged without reopen "
+        "authorization -> human",
+        "Closed, not merged, reopen not authorized.",
+        "scar",
+    ),
+    Row(
+        "pr_closed_unmerged_reopen",
+        _world(pr_state="closed", reopen_authorized=True),
+        "coordination_retry",
+        "Required regression matrix: CLOSED unmerged with reopen "
+        "authorization -> coordination_retry",
+        "Authorized reopen is orchestration repair, not human escalation.",
+        "scar",
+    ),
+    Row(
+        "clean_ci_timed_out",
+        _world(ci="timed_out", ci_attribution="infrastructure",
+               merge_state_status="BLOCKED"),
+        "coordination_retry",
+        "CI mapping: TIMED_OUT with infrastructure attribution -> "
+        "coordination_retry",
+        "Distinct from ERROR: same route, different GitHub conclusion string.",
+        "scar",
+    ),
+    Row(
+        "clean_ci_action_required",
+        _world(ci="action_required", merge_state_status="BLOCKED"),
+        "human",
+        "CI mapping: ACTION_REQUIRED -> human via "
+        "required_ci_authority_failure",
+        "Authority/policy CI conclusion is never a coder remediation.",
+        "scar",
+    ),
+    Row(
+        "clean_ci_cancelled",
+        _world(ci="cancelled", ci_attribution="infrastructure",
+               merge_state_status="BLOCKED"),
+        "coordination_retry",
+        "CI mapping / Required regression matrix: cancelled CI retries "
+        "coordination",
+        "cancelled/stale/startup_failure share coordination_retry; this "
+        "row locks the cancelled reason code.",
+        "scar",
+    ),
+    Row(
+        "queue_locked_waits",
+        _world(queue="locked"),
+        "wait",
+        "Merge queue mapping: LOCKED -> Bounded wait, then "
+        "coordination_retry",
+        "Locked without retry_exhausted stays on the wait path.",
+        "scar",
+    ),
+    Row(
+        "queue_locked_retry_exhausted",
+        _world(queue="locked", queue_retry_exhausted=True),
+        "coordination_retry",
+        "Merge queue mapping: LOCKED with retry exhausted -> "
+        "coordination_retry (merge_queue_locked)",
+        "Exhausted locked dwell escalates coordination repair.",
+        "scar",
+    ),
+    Row(
+        "review_retry_budget_exhausted",
+        _world(review="changes_requested", review_retry_exhausted=True),
+        "human",
+        "Review mapping: CHANGES_REQUESTED with retry budget exhausted -> "
+        "human via review_retry_budget_exhausted",
+        "Exhausted review rounds are never another automatic remediation.",
+        "scar",
+    ),
+    Row(
+        "changes_requested_automatic_remediation",
+        _world(review="changes_requested", review_findings="automatic"),
+        "remediation",
+        "Review mapping: CHANGES_REQUESTED with automatic findings -> "
+        "remediation; Required regression matrix: automatic requested "
+        "changes start remediation",
+        "Contrast to changes_requested_judgment_human: automatic findings "
+        "dispatch a remediation coder.",
         "scar",
     ),
     Row(
@@ -371,78 +487,14 @@ assert len(_seen_ids) == len(set(_seen_ids)), "duplicate catalog id"
 
 UNREACHABLE_AXES: list[dict[str, str]] = [
     {
-        "topic": "MERGED PR (route=reconcile via canonical_pr_merged)",
+        "topic": "STALE / STARTUP_FAILURE CI check states as distinct gold "
+                 "rows (route=coordination_retry)",
         "reason": (
-            "_shared.build_snapshot always sets github_pr.state=\"OPEN\". "
-            "world schema has no PR-lifecycle-state axis, so a merged or "
-            "closed PR cannot be expressed by a T1 world."
-        ),
-    },
-    {
-        "topic": "CLOSED, unmerged PR (route=coordination_retry or human via "
-                 "pr_closed_unmerged)",
-        "reason": "Same root cause as MERGED PR above -- pr.state is fixed to OPEN.",
-    },
-    {
-        "topic": "TIMED_OUT CI conclusion",
-        "reason": (
-            "world.ci enum is {pass, fail, pending, missing, error}; "
-            "_shared.CI_STATE only maps those four non-missing values. "
-            "\"timed_out\" cannot be produced without extending both the "
-            "axis and the mapping."
-        ),
-    },
-    {
-        "topic": "Review retry-budget exhausted (route=human via "
-                 "review_retry_budget_exhausted)",
-        "reason": (
-            "_shared.build_snapshot's review payload has no "
-            "retry_exhausted field and the world schema has no axis to "
-            "drive one."
-        ),
-    },
-    {
-        "topic": "Merge-queue LOCKED state, including "
-                 "locked+retry_exhausted -> coordination_retry "
-                 "(merge_queue_locked)",
-        "reason": (
-            "world.queue enum is {none, queued, unmergeable}; "
-            "_shared.build_snapshot's \"queued\" branch only ever produces "
-            "queue.state=AWAITING_CHECKS. LOCKED is unreachable without a "
-            "new queue axis value, and retry_exhausted is unreachable for "
-            "the same reason as the review case above."
-        ),
-    },
-    {
-        "topic": "CANCELLED / STALE / STARTUP_FAILURE CI check states "
-                 "(route=coordination_retry)",
-        "reason": (
-            "These map to the same coordination_retry route as ci=\"error\" "
-            "with infrastructure attribution, which is already gold "
-            "(clean_ci_error). The distinct GitHub check *state* string "
-            "itself is not reachable through world.ci's five-value enum, "
-            "so the state-specific reason codes (required_ci_cancelled, "
-            "required_ci_stale, required_ci_startup_failure) are not "
-            "separately provable in T1 -- only their shared route is."
-        ),
-    },
-    {
-        "topic": "ACTION_REQUIRED CI conclusion (route=human via "
-                 "required_ci_authority_failure)",
-        "reason": (
-            "world.ci's enum has no action_required value, and "
-            "_shared.CI_STATE cannot produce that GitHub check conclusion."
-        ),
-    },
-    {
-        "topic": "CHANGES_REQUESTED with automatic findings (route=remediation "
-                 "via automatic_review_findings)",
-        "reason": (
-            "_shared.build_snapshot's review payload never carries a "
-            "findings list (world.review is a bare enum with no nested "
-            "findings axis), so _changes_requested_decision always sees an "
-            "empty findings list and takes the judgment/human branch. See "
-            "changes_requested_judgment_human's note."
+            "world.ci now accepts cancelled/stale/startup_failure and "
+            "clean_ci_cancelled locks the cancelled reason. stale and "
+            "startup_failure share the same coordination_retry route; "
+            "add dedicated gold rows only if operators need the distinct "
+            "reason codes in the scoreboard."
         ),
     },
 ]
@@ -693,16 +745,18 @@ def render_coverage_doc(result: dict[str, Any]) -> str:
     lines.append("```bash")
     lines.append("python3.11 scripts/completion_conformance/build_gold_catalog.py")
     lines.append("python3.11 tests/conformance/gold_decisions.py")
+    lines.append("# CI merge gate (auto-discovered by switchboard_ci.sh):")
+    lines.append("python3.11 tests/conformance/test_gold_decisions.py")
     lines.append("```")
     lines.append("")
     lines.append(
         "The builder is re-runnable: every run wipes "
         "`tests/conformance/scenarios/gold/*.json` and this file, then "
-        "regenerates both from the catalog above. `gold_decisions.py` is an "
-        "optional local/diagnostic suite — **not** merge-gated (`switchboard_ci.sh` "
-        "does not auto-discover it). Run manually when changing completion routing. "
-        "It is intentionally separate from `test_completion_conformance.py` (T1's "
-        "3-seed axis-coverage CI) so neither suite's stability depends on the other."
+        "regenerates both from the catalog above. `test_gold_decisions.py` is "
+        "merge-gated via `switchboard_ci.sh` discovery and delegates to "
+        "`gold_decisions.py`. It is intentionally separate from "
+        "`test_completion_conformance.py` (T1 seed / axis-coverage) so neither "
+        "suite's stability depends on the other."
     )
     lines.append("")
     return "\n".join(lines)

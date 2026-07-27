@@ -9,9 +9,10 @@ route was predicted from ``docs/AUTOPILOT-COMPLETION-STATE-MACHINE.md``
 before the tick ran (see ``tests/conformance/GOLD_COVERAGE.md``). This suite
 re-proves the same tick still produces that locked decision.
 
-Deliberately separate from ``test_completion_conformance.py`` (T1's 3-seed
-axis-coverage CI): a decision-quality regression here must never destabilize
-T1's coverage gate, and vice versa.
+Deliberately separate from ``test_completion_conformance.py`` (T1 seed /
+axis-coverage): a decision-quality regression here must never destabilize
+T1's coverage gate, and vice versa. CI discovers
+``test_gold_decisions.py``, which delegates here.
 """
 from __future__ import annotations
 

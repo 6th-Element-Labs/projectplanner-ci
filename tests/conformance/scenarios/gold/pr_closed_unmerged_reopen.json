@@ -1,12 +1,12 @@
 {
   "expect": {
-    "effect": "requeue_merge_group",
-    "reason_code": "merge_queue_infrastructure_failure",
+    "effect": "repair_dispatch",
+    "reason_code": "pr_closed_unmerged",
     "role_sequence": [],
     "route": "coordination_retry",
-    "terminal": "merged"
+    "terminal": "blocked"
   },
-  "id": "queue_unmergeable_infra",
+  "id": "pr_closed_unmerged_reopen",
   "schema": "switchboard.completion_conformance.scenario.v1",
   "timing": {
     "ci_delay_seconds": 0,
@@ -16,13 +16,15 @@
     "never_report": false
   },
   "world": {
-    "ci": "error",
-    "ci_attribution": "infrastructure",
+    "ci": "pass",
+    "ci_attribution": "product",
     "ci_context": "Switchboard CI / VM gate",
     "draft": false,
     "merge_state_status": "CLEAN",
     "mergeable": true,
-    "queue": "unmergeable",
+    "pr_state": "closed",
+    "queue": "none",
+    "reopen_authorized": true,
     "review": "passed",
     "runner": {
       "head": "none",

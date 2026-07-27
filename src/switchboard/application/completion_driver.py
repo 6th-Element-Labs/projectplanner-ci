@@ -23,6 +23,76 @@ def _map(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+def _text(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+_QUEUE_EFFECTS = frozenset({"enqueue", "requeue_merge_group"})
+
+
+def _merge_queue_snapshot(
+    merge_queue_entry: Mapping[str, Any] | None,
+    *,
+    task_id: str,
+    head_sha: str,
+    project: str,
+) -> dict[str, Any]:
+    """Project live GitHub queue state plus Autopilot enqueue provenance.
+
+    When GitHub has no ``mergeQueueEntry`` but completion already verified an
+    enqueue/requeue for this exact head, surface ``prior_enqueue_verified`` so
+    the classifier can requeue instead of replaying once-only enqueue.
+    """
+    queue = _map(merge_queue_entry)
+    head = str(head_sha or "").strip().lower()
+    task = str(task_id or "").strip().upper()
+    if not task or not head:
+        return queue
+    try:
+        from switchboard.storage.repositories import external_effects
+        rows = list(
+            external_effects.list_external_effects(
+                effect_type="completion_effect",
+                status="verified",
+                task_id=task,
+                project=project,
+            )
+            or []
+        )
+    except Exception:
+        return queue
+    matched: list[dict[str, Any]] = []
+    for row in rows:
+        item = _map(row)
+        if _text(item.get("resource")) not in _QUEUE_EFFECTS:
+            continue
+        payload = _map(item.get("payload"))
+        effect_head = str(payload.get("head_sha") or "").strip().lower()
+        # Exact-head only: a missing ledger head_sha is not provenance for the
+        # current tip (stale or under-hydrated rows must not invent eject state).
+        if not effect_head or effect_head != head:
+            continue
+        matched.append(item)
+    if not matched:
+        return queue
+    newest = max(
+        matched,
+        key=lambda item: float(_map(item).get("updated_at") or 0),
+    )
+    enriched = dict(queue)
+    enriched["prior_enqueue_verified"] = True
+    enriched["prior_enqueue_effect_key"] = str(newest.get("effect_key") or "")
+    enriched["verified_queue_effect_count"] = len(matched)
+    removal = (
+        enriched.get("last_removal_reason")
+        or enriched.get("removal_reason")
+        or _map(newest.get("readback")).get("removal_reason")
+    )
+    if removal and not enriched.get("last_removal_reason"):
+        enriched["last_removal_reason"] = removal
+    return enriched
+
+
 def _github_command(args: list[str], *, token: str) -> dict[str, Any]:
     env = dict(os.environ)
     if token:
@@ -117,6 +187,11 @@ def hydrate_completion_snapshot(
         "role": identity.get("role") or active_runner.get("execution_role"),
         "head_sha": identity.get("head_sha") or active_runner.get("head_sha"),
     }
+    head_sha = str(
+        _map(resolved_pr.get("head")).get("sha")
+        or git_state.get("head_sha")
+        or ""
+    ).strip()
     snapshot = build_completion_snapshot(
         task=task,
         github_pr=resolved_pr,
@@ -124,7 +199,12 @@ def hydrate_completion_snapshot(
         status_contexts=gate.get("status_contexts"),
         review=verdict or _map(gate.get("review_gate")),
         merge_gate=gate,
-        merge_queue=_map(resolved_pr.get("mergeQueueEntry")),
+        merge_queue=_merge_queue_snapshot(
+            resolved_pr.get("mergeQueueEntry"),
+            task_id=task_id,
+            head_sha=head_sha,
+            project=project,
+        ),
         work_session=work_session,
         runner=runner,
         merge_provenance=_map(task.get("provenance")),

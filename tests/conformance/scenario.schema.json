@@ -65,7 +65,18 @@
       "properties": {
         "draft": {"type": "boolean"},
         "ci": {
-          "enum": ["pass", "fail", "pending", "missing", "error"]
+          "enum": [
+            "pass",
+            "fail",
+            "pending",
+            "missing",
+            "error",
+            "timed_out",
+            "action_required",
+            "cancelled",
+            "stale",
+            "startup_failure"
+          ]
         },
         "ci_context": {"type": "string", "minLength": 1},
         "ci_attribution": {
@@ -74,14 +85,44 @@
         "review": {
           "enum": ["passed", "missing", "changes_requested"]
         },
+        "review_findings": {
+          "enum": ["none", "automatic", "judgment"],
+          "description": "Optional findings class when review=changes_requested. Default none (empty findings -> human judgment path)."
+        },
+        "review_retry_exhausted": {
+          "type": "boolean",
+          "description": "When true, review payload carries retry_exhausted for the human exhausted-budget route."
+        },
         "mergeable": {
           "type": ["boolean", "null"]
         },
         "merge_state_status": {
           "enum": ["CLEAN", "BLOCKED", "DIRTY", "BEHIND", "UNKNOWN"]
         },
+        "pr_state": {
+          "enum": ["open", "merged", "closed"],
+          "description": "GitHub PR lifecycle. Default open."
+        },
+        "reopen_authorized": {
+          "type": "boolean",
+          "description": "Only for pr_state=closed. When true, closed unmerged routes to coordination_retry."
+        },
         "queue": {
-          "enum": ["none", "queued", "unmergeable"]
+          "enum": ["none", "queued", "unmergeable", "ejected", "locked"],
+          "description": "none=never queued; queued=in merge queue; unmergeable=GitHub UNMERGEABLE entry; ejected=tip still green but removed from queue after a prior enqueue (failed_checks / checks_timed_out); locked=merge queue LOCKED"
+        },
+        "queue_removal_reason": {
+          "enum": ["failed_checks", "checks_timed_out"],
+          "description": "Only for queue=ejected. Which RemovedFromMergeQueueEvent reason GitHub recorded."
+        },
+        "queue_retry_exhausted": {
+          "type": "boolean",
+          "description": "Only for queue=locked. When true, locked dwell escalates to coordination_retry."
+        },
+        "also_pending_contexts": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "description": "Extra required contexts that are still pending while ci_context uses world.ci (BREAKDOWN 15 / tip UNSTABLE)."
         },
         "runner": {
           "type": "object",

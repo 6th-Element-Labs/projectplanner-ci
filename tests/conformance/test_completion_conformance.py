@@ -105,7 +105,8 @@ def run_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
     )
     _shared.require(
         first["plan"]["effect"] == expect["effect"],
-        f"{scenario['id']}: effect mismatch",
+        f"{scenario['id']}: effect mismatch "
+        f"(got {first['plan']['effect']!r})",
     )
     _shared.require(
         first["decision"] == second["decision"],
@@ -115,14 +116,23 @@ def run_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
         first["plan"]["idem_key"] == second["plan"]["idem_key"],
         f"{scenario['id']}: second tick changed effect identity",
     )
-    _shared.require(
-        len(calls) == 1,
-        f"{scenario['id']}: effect adapter fired {len(calls)} times",
-    )
-    _shared.require(
-        second["execution"]["receipt"].get("idempotent_replay") is True,
-        f"{scenario['id']}: second tick was not a verified replay",
-    )
+    # Wait/none are non-mutating: the executor does not call an effect adapter.
+    # Mutating effects must fire exactly once, then verify as idempotent replay.
+    if expect["effect"] in {"wait", "none"}:
+        _shared.require(
+            len(calls) == 0,
+            f"{scenario['id']}: wait/none must not fire adapters "
+            f"(fired {len(calls)})",
+        )
+    else:
+        _shared.require(
+            len(calls) == 1,
+            f"{scenario['id']}: effect adapter fired {len(calls)} times",
+        )
+        _shared.require(
+            second["execution"]["receipt"].get("idempotent_replay") is True,
+            f"{scenario['id']}: second tick was not a verified replay",
+        )
     return {
         "scenario_id": scenario["id"],
         "terminal": _shared.terminal_for(first),

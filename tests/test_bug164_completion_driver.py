@@ -352,6 +352,48 @@ class CompletionDriver(unittest.TestCase):
             "effect_claim_in_flight",
         )
 
+    def test_empty_queue_hydrates_prior_enqueue_from_verified_ledger(self):
+        with patch(
+            "switchboard.storage.repositories.external_effects."
+            "list_external_effects",
+            return_value=[{
+                "effect_key": "effect-enqueue-1",
+                "resource": "enqueue",
+                "updated_at": 100.0,
+                "payload": {"head_sha": HEAD_810, "effect": "enqueue"},
+                "readback": {},
+            }],
+        ):
+            queue = completion_driver._merge_queue_snapshot(
+                {},
+                task_id="COORD-41",
+                head_sha=HEAD_810,
+                project="switchboard",
+            )
+        self.assertTrue(queue["prior_enqueue_verified"])
+        self.assertEqual(queue["prior_enqueue_effect_key"], "effect-enqueue-1")
+        self.assertEqual(queue["verified_queue_effect_count"], 1)
+
+    def test_ledger_enqueue_without_head_sha_is_not_tip_provenance(self):
+        with patch(
+            "switchboard.storage.repositories.external_effects."
+            "list_external_effects",
+            return_value=[{
+                "effect_key": "effect-enqueue-old",
+                "resource": "enqueue",
+                "updated_at": 100.0,
+                "payload": {"effect": "enqueue"},
+                "readback": {},
+            }],
+        ):
+            queue = completion_driver._merge_queue_snapshot(
+                {},
+                task_id="COORD-41",
+                head_sha=HEAD_810,
+                project="switchboard",
+            )
+        self.assertEqual(queue, {})
+
 
 if __name__ == "__main__":
     unittest.main()

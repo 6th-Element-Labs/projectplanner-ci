@@ -111,7 +111,9 @@ _ENTRIES: tuple[ReasonCode, ...] = (
     _code("merge_queue_product_failure", "merge_queue", _COMPLETION, "anomalous", "agent"),
     _code("merge_queue_authority_failure", "merge_queue", _COMPLETION, "anomalous", "human"),
     _code("merge_queue_infrastructure_failure", "merge_queue", _COMPLETION, "transient", "infra"),
+    _code("merge_queue_ejected_tip_green", "merge_queue", _COMPLETION, "transient", "infra"),
     # -- review ----------------------------------------------------------------
+
     _code("review_required", "review", _COMPLETION, "transient", "agent"),
     _code("review_verdict_stale", "review", _COMPLETION, "transient", "agent"),
     _code("review_verdict_missing", "review", _MERGE_GATE, "transient", "agent"),

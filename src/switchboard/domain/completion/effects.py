@@ -53,6 +53,8 @@ def _effect_for(route: str, decision_effect: str,
                 snapshot: Mapping[str, Any]) -> str:
     if decision_effect == "fence_runner":
         return "fence_runner"
+    if decision_effect == "requeue_merge_group":
+        return "requeue_merge_group"
     if route == "none":
         return "none"
     if route == "wait":
@@ -74,6 +76,10 @@ def _effect_for(route: str, decision_effect: str,
         if _text(queue.get("state") or queue.get("status")) == "unmergeable":
             # An infrastructure-failed merge group is requeued, not rebuilt.
             return "requeue_merge_group"
+        # Tip-green eject requeue is selected only when the classifier sets
+        # decision.effect=requeue_merge_group (handled above). Do not infer
+        # requeue from ledger provenance alone — that would steal unrelated
+        # coordination_retry repairs (behind, locked, cancelled CI, etc.).
         return "repair_dispatch"
     return "repair_dispatch"
 
@@ -132,11 +138,36 @@ def _fence(snapshot: Mapping[str, Any], desired_role: str,
     return True, _runner_fence_identity(runner)
 
 
+def _queue_requeue_identity(snapshot: Mapping[str, Any], effect: str) -> dict[str, Any]:
+    """Cycle identity so eject→requeue→eject does not forever replay one key.
+
+    ``verified_queue_effect_count`` advances each time Autopilot verifies an
+    enqueue/requeue for this exact head. Including it in the key lets the next
+    tip-green eject fire a fresh requeue instead of an idempotent no-op.
+    """
+    if effect != "requeue_merge_group":
+        return {}
+    queue = _map(snapshot.get("merge_queue"))
+    try:
+        count = int(queue.get("verified_queue_effect_count") or 0)
+    except (TypeError, ValueError):
+        count = 0
+    return {
+        "verified_queue_effect_count": count,
+        "prior_enqueue_effect_key": str(
+            queue.get("prior_enqueue_effect_key") or ""),
+        "last_removal_reason": _text(
+            queue.get("last_removal_reason") or queue.get("removal_reason")
+        ),
+    }
+
+
 def effect_key(run: Mapping[str, Any], snapshot: Mapping[str, Any],
                route: str, desired_role: str, *,
                acceptance_findings: Any = None,
                escalated_findings: Any = None,
-               fence_identity: Any = None) -> str:
+               fence_identity: Any = None,
+               effect: str = "") -> str:
     """Stable for one repair contract; changes with findings or execution identity.
 
     Deliberately excludes every continuously changing liveness value (lease
@@ -157,6 +188,7 @@ def effect_key(run: Mapping[str, Any], snapshot: Mapping[str, Any],
         # Immutable execution identity is part of a stop/replace decision.
         # Heartbeats and expiry are intentionally absent.
         "fence_identity": _map(fence_identity),
+        "queue_requeue_identity": _queue_requeue_identity(snapshot, _text(effect)),
     }
     digest = hashlib.sha256(
         json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
@@ -221,6 +253,7 @@ def plan_effect(decision: Mapping[str, Any], snapshot: Mapping[str, Any],
             acceptance_findings=acceptance_findings,
             escalated_findings=escalated_findings,
             fence_identity=fence_identity if fence_required else None,
+            effect=effect,
         ),
     }
 
