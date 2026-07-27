@@ -18,7 +18,7 @@ SCHEMA = "switchboard.deployments.v1"
 # Match open_prs: the Fleet dock polls ~10s; GitHub pulls/commits are expensive
 # on cache miss and must not contend with interactive get_task.
 CACHE_SECONDS = 60
-TERMINAL_STATUSES = {"Done", "Cancelled"}
+TERMINAL_STATUSES = {"Done", "Cancelled", "Blocked"}
 
 
 def _deployment_tasks(project: str) -> Dict[str, Mapping[str, Any]]:
@@ -115,7 +115,10 @@ def build_deployments(
         status = "deployed" if deployed else (
             "deploying" if request_status == "In Progress"
             else "queued" if request_task and request_status not in TERMINAL_STATUSES
-            else "failed" if health.get("last_deploy_ok") is False
+            else "failed" if (
+                request_status == "Blocked"
+                or health.get("last_deploy_ok") is False
+            )
             else "undeployed"
         )
         rows.append({

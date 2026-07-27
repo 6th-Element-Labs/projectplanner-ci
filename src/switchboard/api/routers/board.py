@@ -8,6 +8,7 @@ saturation snapshot / ETag helpers.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from typing import Any, Callable
 
@@ -19,6 +20,7 @@ import signals
 import store
 from switchboard.application.commands import create_task as create_task_command
 from switchboard.application.commands import task_execution as task_execution_command
+from switchboard.application.commands import update_task as update_task_command
 
 
 ProjectResolver = Callable[[str], str]
@@ -175,8 +177,27 @@ def create_router(*, resolve_project: ProjectResolver,
                 role="implementation", runtime="codex",
             )
             if result.get("error_code"):
+                receipt = {
+                    "error_code": result.get("error_code"),
+                    "start_error": result.get("start_error"),
+                    "message": result.get("message"),
+                }
+                store.add_comment(
+                    task["task_id"], actor,
+                    json.dumps(receipt, sort_keys=True),
+                    kind="deployment.start_refused", project=project,
+                    hydrate_task=False,
+                )
+                blocked = update_task_command.execute_mapping_result(
+                    task["task_id"], {"status": "Blocked"},
+                    actor=actor, project=project,
+                )
                 raise HTTPException(
-                    task_execution_command.error_status(result), result)
+                    task_execution_command.error_status(result), {
+                        **result,
+                        "deployment_task_id": task["task_id"],
+                        "deployment_task_status": blocked.get("status"),
+                    })
             return {
                 "status": "queued",
                 "task_id": task["task_id"],
