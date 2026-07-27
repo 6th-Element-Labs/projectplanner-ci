@@ -85,7 +85,8 @@ res = github_sync.handle_merge_group(mg_payload, P)
 ok(res["action"] == "merge_group_ci_dispatched"
    and res["scratchpad_dispatched"] is True
    and res["scratchpad_run_id"] == "run-mg"
-   and res["merge_group_head_sha"] == VALID_SHA,
+   and res["merge_group_head_sha"] == VALID_SHA
+   and "merge_authorization" not in res,
    "checks_requested on the canonical repo verifies the merge-group head SHA")
 ok(captured.get("sha") == VALID_SHA
    and captured.get("ensure") is True

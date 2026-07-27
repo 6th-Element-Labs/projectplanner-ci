@@ -3,6 +3,7 @@
 - **Status:** Accepted (operator decision, 2026-07-25). Ruleset change already applied.
 - **Date:** 2026-07-25
 - **Author:** ADAPTER-28 birth-to-merge session (Claude), operator-approved
+- **Amended by:** [ADR-0022 — one fail-closed CI verdict](0022-one-fail-closed-ci-verdict.md)
 - **Relates to:** [AUTOPILOT-COMPLETION-STATE-MACHINE.md](../AUTOPILOT-COMPLETION-STATE-MACHINE.md)
   (the approved design this ADR restores) · PR #902 (the merge that surfaced the failure) ·
   the fail-fix visible-fallback rule in the working agreement

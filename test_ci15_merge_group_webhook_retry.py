@@ -67,11 +67,6 @@ try:
             "stall": "dispatch",
             "failure_class": "mirror_sync_failed",
         },
-        "merge_authorization": {
-            "published": False,
-            "skip_reason": "merge_authorization_publish_failed",
-            "error": "GitHub API rate limit exceeded: HTTP 403",
-        },
     }
     webhook_inbox.enqueue_event(
         P,
@@ -91,37 +86,12 @@ try:
         "action": "merge_group_ci_dispatched",
         "scratchpad_dispatched": True,
         "verify": {"ok": True, "status": "pending"},
-        "merge_authorization": {"published": True, "state": "success"},
     }
     second = webhook_inbox.drain(P)
     recovered_row = row("ci15-rate-limit")
     ok(second["applied"] == 1, "a later drain retries the same delivery")
     ok(recovered_row["status"] == "applied", "successful retry becomes applied")
     ok(recovered_row["last_error"] is None, "successful retry clears the transient error")
-
-    # Authorization is independently required.  A successful CI dispatch must not
-    # conceal a failed authorization callback.
-    webhook_inbox.github_sync.handle_merge_group = lambda *_args, **_kwargs: {
-        "action": "merge_group_ci_dispatched",
-        "scratchpad_dispatched": True,
-        "verify": {"ok": True, "status": "pending"},
-        "merge_authorization": {
-            "published": False,
-            "skip_reason": "merge_authorization_publish_failed",
-            "error": "GitHub API rate limit exceeded: HTTP 403",
-        },
-    }
-    webhook_inbox.enqueue_event(
-        P,
-        delivery_guid="ci15-auth-rate-limit",
-        event="merge_group",
-        payload_bytes=json.dumps(payload),
-    )
-    third = webhook_inbox.drain(P)
-    auth_row = row("ci15-auth-rate-limit")
-    ok(third["retry_pending"] == 1, "authorization callback failure is retryable")
-    ok("merge_group_authorization_failed" in auth_row["last_error"],
-       "retry reason identifies the missing authorization status")
 finally:
     webhook_inbox.github_sync.handle_merge_group = original
     shutil.rmtree(TMP, ignore_errors=True)

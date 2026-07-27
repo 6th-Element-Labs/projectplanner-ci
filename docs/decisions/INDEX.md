@@ -3,7 +3,7 @@
 This register answers which decisions govern work now and which records are retained for
 rationale, program history, or a proposal. It does not rewrite ADR history.
 
-Statuses below describe the current repository audit as of 2026-07-26. Where file metadata
+Statuses below describe the current repository audit as of 2026-07-27. Where file metadata
 and repository evidence disagree, the register calls for reconciliation instead of inventing
 authority.
 
@@ -31,6 +31,7 @@ supersession link; do not delete or silently rewrite it.
 | [ADR-0008/three-plane](0008-three-plane-separation.md) | Owns capacity, communication, and coordination authority. This is the normative half of the protected [three-plane architecture packet](../COMPLETION-LIFECYCLE-PIPELINE.md). |
 | [ADR-0019: repo constitution](0019-repo-constitution.md) | Owns code layout and front doors. REPO-6 merged and its required front doors now exist. |
 | [ADR-0020: merge gates observe](0020-merge-gates-observe-not-enforce.md) | Owns the “enforce at dispatch, observe at merge, stamp at Done” authority boundary. |
+| [ADR-0022: one fail-closed CI verdict](0022-one-fail-closed-ci-verdict.md) | Owns the single App-authenticated technical verdict and PR-scoped advisory-status boundary. |
 
 ## Active or partly active decisions
 

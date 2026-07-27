@@ -54,6 +54,13 @@ redundant-call fix in the gate still matters: headroom is not a licence to waste
 Nothing is required to keep working: with no App configured, every caller resolves the
 same PAT chain it always did.
 
+That compatibility statement applies to the fleet REST clients described here. It does
+**not** apply to the public CI callback. `projectplanner-ci/verify.yml` uses the dedicated
+`switchboard-ci-status` App, installed only on the canonical projectplanner repository,
+with metadata read and commit-status read/write permissions. Its
+`SWITCHBOARD_APP_ID` and `SWITCHBOARD_APP_PRIVATE_KEY` secrets are mandatory; token
+minting fails closed and there is no PAT fallback.
+
 ## Operator cutover
 
 ### 1. Create the App (org owner, once)
@@ -125,10 +132,10 @@ on that owner.
 
 ### 5. Retire the PAT
 
-Once the doctor is green and a sweep has run clean, the old PAT is only a fallback.
-Keep it while the `gh`-subprocess paths (`external_ci_mirror`, the CI dispatch route)
-still shell out with `GH_TOKEN` — those are low-volume and were **not** migrated in
-this change. Revoking the PAT before they move would break them.
+Once the doctor is green and a sweep has run clean, the old fleet PAT is only a
+fallback for remaining host-side subprocess paths. This is separate from the public
+workflow callback: `PRIVATE_READ_TOKEN` has been removed from projectplanner-ci and
+must stay removed.
 
 ## Rotation
 

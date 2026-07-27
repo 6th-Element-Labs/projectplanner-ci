@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """CI's status callback must not depend on a shared personal access token.
 
-On 2026-07-26 the fleet spent the whole 5,000/hr budget of the account that owns
-`PRIVATE_READ_TOKEN`, and verify.yml's very first step — posting the pending
-status — started returning `403 API rate limit exceeded`. Runs died in 60s having
-executed no tests, so no PR in the fleet could go green, including the PR that
-fixed the rate limit. These checks keep the callback on an App installation token
-(its own budget) and keep the PAT strictly as a fallback.
+On 2026-07-26 a shared bot PAT exhausted its 5,000/hr budget and verify.yml's
+first status callback returned `403 API rate limit exceeded`. Runs died before
+executing tests, so no PR could go green, including the repair. These checks make
+the dedicated App installation token the only callback credential. Missing or
+broken App configuration must fail loudly at token minting; there is no PAT
+fallback capable of silently recreating the outage.
 """
 import os
 import sys
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -41,8 +42,8 @@ mint = next((s for s in steps if s.get("id") == "app_token"), None)
 ok(mint is not None, "verify.yml has an app_token minting step")
 ok(mint and str(mint.get("uses") or "").startswith("actions/create-github-app-token"),
    "it uses the official create-github-app-token action")
-ok(mint and mint.get("continue-on-error") is True,
-   "minting is continue-on-error, so a repo without the App secrets still runs on the PAT")
+ok(mint and not mint.get("continue-on-error", False),
+   "App token minting is fail-closed")
 with_block = (mint or {}).get("with") or {}
 ok("SWITCHBOARD_APP_ID" in str(with_block.get("app-id")),
    "app id comes from the SWITCHBOARD_APP_ID secret")
@@ -56,25 +57,18 @@ first_callback = next(i for i, s in enumerate(steps)
 ok(mint_index < first_callback,
    "the mint step precedes every step that posts a status")
 
-print("\n-- every status callback prefers the App and only falls back to the PAT --")
+print("\n-- every status callback uses only the dedicated App --")
 callbacks = [(name, s) for name, s in by_name.items()
              if "GH_TOKEN" in ((s.get("env") or {}))]
 ok(len(callbacks) >= 4,
    f"all four callback steps are covered (found {len(callbacks)})")
 for name, step in callbacks:
     expr = str((step["env"])["GH_TOKEN"])
-    ok(APP_TOKEN_EXPR in expr, f"{name!r} uses the App token")
-    ok(expr.index(APP_TOKEN_EXPR) < expr.index("PRIVATE_READ_TOKEN")
-       if "PRIVATE_READ_TOKEN" in expr else True,
-       f"{name!r} prefers the App token over the PAT")
-
-print("\n-- a run with no credential at all fails loudly, not silently --")
-assertion = by_name.get("Assert a status callback credential is available")
-ok(assertion is not None, "there is an explicit credential preflight")
-body = str((assertion or {}).get("run") or "")
-ok("exit 1" in body, "it exits nonzero when neither credential is present")
-ok("SWITCHBOARD_APP_ID" in body and "PRIVATE_READ_TOKEN" in body,
-   "its message names both credentials so the operator knows what to set")
+    ok(expr == f"${{{{ {APP_TOKEN_EXPR} }}}}",
+       f"{name!r} uses exactly the App token")
+workflow_source = Path(WORKFLOW).read_text(encoding="utf-8")
+ok("PRIVATE_READ_TOKEN" not in workflow_source,
+   "the retired PAT secret is absent from the workflow")
 
 print("\n-- the checkout still carries no credential --")
 checkout = by_name.get("Check out scratchpad branch")

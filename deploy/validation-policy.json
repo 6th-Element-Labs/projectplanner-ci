@@ -3,7 +3,7 @@
   "project": "switchboard",
   "classification_required": true,
   "allowed_ui_impact": ["yes", "no"],
-  "required_status_context": "Switchboard UI / Playwright",
+  "required_status_context": "Switchboard CI / VM gate",
   "runner": {
     "command": "python3 scripts/run_ui_playwright.py",
     "browser": "chromium",

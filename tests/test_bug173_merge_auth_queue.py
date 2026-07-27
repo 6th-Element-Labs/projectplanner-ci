@@ -5,7 +5,7 @@ Acceptance pinned here:
 1. hydrate current exact-head contexts before classification (even with supplied evidence)
 2. never overwrite a valid authorization from an empty/stale payload
 3. durably publish gate results with readback + retry
-4. authorize the temporary merge-group SHA automatically
+4. keep advisory authorization PR-scoped; merge-group SHAs run technical CI only
 5. failure injection: delayed, duplicate, stale, credential-failure
 """
 from __future__ import annotations
@@ -66,7 +66,6 @@ class SuppliedEvidenceHydration(unittest.TestCase):
         statuses = {
             "statuses": [
                 {"context": "Switchboard CI / VM gate", "state": "success"},
-                {"context": "Switchboard UI / Playwright", "state": "success"},
             ],
         }
         with mock.patch.object(
@@ -87,7 +86,6 @@ class SuppliedEvidenceHydration(unittest.TestCase):
             row["context"]: row["state"] for row in hydrated["status_contexts"]
         }
         self.assertEqual(contexts["Switchboard CI / VM gate"], "success")
-        self.assertEqual(contexts["Switchboard UI / Playwright"], "success")
 
     def test_empty_status_contexts_list_still_hydrates(self):
         supplied = {
@@ -251,26 +249,8 @@ class PreserveValidAuthorization(unittest.TestCase):
         self.assertEqual(posts, [])
 
 
-class MergeGroupAuthorization(unittest.TestCase):
-    def test_handle_merge_group_publishes_merge_authorization_on_temp_sha(self):
-        published = {}
-
-        def _publish(repo, head_sha, head_ref, project=""):
-            published.update({
-                "repo": repo,
-                "head_sha": head_sha,
-                "head_ref": head_ref,
-                "project": project,
-                "pr_number": 849,
-            })
-            return {
-                "published": True,
-                "pr": 849,
-                "sha": head_sha,
-                "state": "success",
-                "context": MERGE_CONTEXT,
-            }
-
+class MergeGroupTechnicalCI(unittest.TestCase):
+    def test_handle_merge_group_dispatches_only_exact_sha_technical_ci(self):
         with (
             mock.patch.object(
                 github_sync.verify_ci_command,
@@ -294,11 +274,6 @@ class MergeGroupAuthorization(unittest.TestCase):
                 "_repo_role",
                 return_value={"canonical": True, "role": "canonical", "repo": REPO},
             ),
-            mock.patch.object(
-                github_sync,
-                "_maybe_publish_merge_group_authorization",
-                side_effect=_publish,
-            ),
         ):
             res = github_sync.handle_merge_group(
                 {
@@ -319,15 +294,8 @@ class MergeGroupAuthorization(unittest.TestCase):
             )
 
         self.assertEqual(res["action"], "merge_group_ci_dispatched")
-        self.assertEqual(published["head_sha"], MERGE_GROUP_SHA)
-        self.assertEqual(published["pr_number"], 849)
-        self.assertTrue((res.get("merge_authorization") or {}).get("published"))
-
-    def test_parse_merge_group_pr_number_from_head_ref(self):
-        pr = github_sync._merge_group_pr_number(
-            f"refs/heads/gh-readonly-queue/master/pr-849-{MERGE_GROUP_SHA}"
-        )
-        self.assertEqual(pr, 849)
+        self.assertEqual(res["merge_group_head_sha"], MERGE_GROUP_SHA)
+        self.assertNotIn("merge_authorization", res)
 
 
 class ProtectedPrIntegrationShape(unittest.TestCase):
@@ -354,10 +322,9 @@ class ProtectedPrIntegrationShape(unittest.TestCase):
             },
             repo=REPO,
             token="t",
-            status_sha=MERGE_GROUP_SHA,
         )
         self.assertEqual(result["state"], "success")
-        self.assertEqual(posts[-1]["sha"], MERGE_GROUP_SHA)
+        self.assertEqual(posts[-1]["sha"], HEAD)
         self.assertEqual(posts[-1]["context"], MERGE_CONTEXT)
         self.assertEqual(posts[-1]["state"], "success")
 

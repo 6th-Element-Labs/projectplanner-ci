@@ -15,7 +15,10 @@ from typing import Any, Iterable, Mapping
 
 VALIDATION_POLICY_SCHEMA = "switchboard.validation_policy.v1"
 UI_PLAYWRIGHT_KIND = "ui_playwright"
-UI_CONTEXT = "Switchboard UI / Playwright"
+# Playwright remains mandatory evidence for UI-impacting work, but it is executed by
+# the same hermetic suite and has the same fate as the rest of CI. Keep one GitHub
+# verdict instead of a second coupled required status.
+UI_CONTEXT = "Switchboard CI / VM gate"
 
 _ROOT = Path(__file__).resolve().parents[3]
 _POLICY_PATH = _ROOT / "deploy" / "validation-policy.json"

@@ -520,9 +520,9 @@ are present, deferring to the branches that already own those cases (review,
 findings, mergeability, draft). It **fails closed**: with no typed findings —
 hydrate failed, or the gate returned nothing — the context is classified exactly
 as before, so a genuinely blocked PR can never read clean. The deferral is
-scoped to this context alone; every other required context, including
-`Switchboard CI / VM gate` and `Switchboard UI / Playwright`, still routes to
-remediation when it goes red.
+scoped to this context alone. The single required `Switchboard CI / VM gate`
+verdict covers the full suite and Playwright and still routes to remediation
+when it goes red.
 
 For operator visibility the published authorization decision — state, reason
 code, and every blocking code — is recorded as a `merge.authorization.published`

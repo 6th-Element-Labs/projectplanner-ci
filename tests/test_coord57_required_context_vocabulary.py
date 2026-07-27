@@ -17,7 +17,6 @@ CANONICAL_VERIFY = ROOT / ".github" / "workflows" / "verify.yml"
 PUBLIC_CI_VERIFY = ROOT / "tests" / "fixtures" / "projectplanner-ci-verify.yml"
 REQUIRED = frozenset({
     "Switchboard CI / VM gate",
-    "Switchboard UI / Playwright",
 })
 
 

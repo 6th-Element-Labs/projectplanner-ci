@@ -157,8 +157,10 @@ verify that path is a Git checkout owned by `projectplanner` and that the servic
 fetch the canonical repo, push to `projectplanner-ci`, and poll Actions.
 
 Confirm the service account can fetch the private canonical repo, push to projectplanner-ci,
-and poll Actions with `gh`. Confirm `PRIVATE_READ_TOKEN` is installed on projectplanner-ci for
-canonical commit-status writeback only; scratchpad checkout does not use it.
+and poll Actions with `gh`. Confirm projectplanner-ci has `SWITCHBOARD_APP_ID` and
+`SWITCHBOARD_APP_PRIVATE_KEY` for canonical commit-status writeback. The callback is App-only
+and fails closed; do not restore `PRIVATE_READ_TOKEN`. Scratchpad checkout is public and
+credential-free.
 
 **Retire on-box VM CI** after scratchpad verification holds (operator script — reversible via
 `deploy/retired/*.bak` for one week):
@@ -176,10 +178,11 @@ re-enable the old timers, and disable `projectplanner-claim-gate.timer`.
 
 ### Native merge queue
 
-Merge-queue gating is not yet covered by the PR-head scratchpad trigger. If you enable GitHub's
-native merge queue, add a mirror trigger for merge-group head SHAs and ensure `verify.yml` posts
-`Switchboard CI / VM gate` to those SHAs. The disabled ruleset 18821466 was dead config removed
-in CI-7.
+The active native merge queue sends `merge_group/checks_requested` webhooks. Switchboard mirrors
+the exact temporary head SHA through the same scratchpad route, and `verify.yml` posts the single
+required `Switchboard CI / VM gate` verdict after the full suite and Playwright. A transient
+dispatch failure keeps the webhook delivery retryable. Advisory claim and merge-authorization
+statuses stay PR-scoped and are not projected onto merge-group SHAs.
 
 Verifier resume rule: review/audit workflows that spawn skeptic verifier agents should write a
 `switchboard.review_verifier_run.v1` checkpoint with one deterministic job per

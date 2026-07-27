@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Guard the current Switchboard CI policy.
 
-VM verification (`Switchboard CI / VM gate`) runs on projectplanner-ci via the
-scratchpad push workflow (CI-12/CI-14) by default. Pull-model dispatch remains as
-fallback when ``SWITCHBOARD_CI_SCRATCHPAD=0``. The Plan VM posts the claim gate
-and the non-bypassable merge-authorization projection.
+The single required verdict (`Switchboard CI / VM gate`) runs on
+projectplanner-ci via the scratchpad push workflow. It covers the full suite and
+Playwright. Pull-model dispatch remains a temporary rollback bridge when
+``SWITCHBOARD_CI_SCRATCHPAD=0``. The Plan VM posts advisory coordination gates.
 """
 from pathlib import Path
 
@@ -42,14 +42,19 @@ ok(verify.exists()
    and '"ci/**"' in _verify
    and "scripts/switchboard_ci.sh" in _verify,
    "scratchpad verify workflow runs the full suite on pushed ci/** branches")
-ok("PRIVATE_READ_TOKEN" in _verify
+ok("SWITCHBOARD_APP_ID" in _verify
+   and "SWITCHBOARD_APP_PRIVATE_KEY" in _verify
+   and "PRIVATE_READ_TOKEN" not in _verify
    and "repository:" not in _verify
    and "refs/pull/" not in _verify,
-   "scratchpad workflow uses the private token only for status, not checkout")
+   "scratchpad status callback is App-only and checkout remains public")
 ok("Switchboard CI / VM gate" in _verify
+   and "Switchboard UI / Playwright" not in _verify
+   and "scripts/run_ui_playwright.py" in ci_suite
+   and "SWITCHBOARD_CI_STRICT" in _verify
    and "infra:" in _verify
    and "tests:" in _verify,
-   "scratchpad workflow posts the required context with legible failure classes")
+   "one required context covers the full suite and Playwright with legible failures")
 ok('DEFAULT_CLAIM_CONTEXT = "Switchboard / claim gate"' in pr_gate,
    "claim gate posts a stable PR-visible commit status context")
 ok('DEFAULT_MERGE_CONTEXT = "Switchboard / merge authorization"' in pr_gate,

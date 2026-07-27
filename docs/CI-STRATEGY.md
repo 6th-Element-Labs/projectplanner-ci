@@ -40,7 +40,7 @@ Before CI-6/CI-7, **projectplanner** used Route A-push like Helm: the Plan VM ra
 - The **bare mirror + git checkout on the prod VM** tied verification to disk, SSH/HTTPS auth, and cgroup contention on the same host that serves `plan.taikunai.com` — the failure class called out in [`ci_verify_dispatch.py`](../ci_verify_dispatch.py) as the **2026-07-12 bare-mirror outage**.
 - **Push-path mirror sync** briefly published source to a public `ci/…` branch; acceptable for Helm economics, unnecessary for an org repo that can keep code private.
 
-The CI-6 pull model was a useful bridge: it moved the suite off the production VM and stabilized the required check. CI-10…CI-14 retain that harness, public runner, status contract, claim gate, failure labels, and evidence model while replacing the trigger and checkout seams. The canonical webhook now calls `external_ci_mirror.request_external_ci_mirror_run`, fetches the exact PR head, and pushes it to a disposable `ci/**` branch. That push starts `verify.yml`; the workflow checks out the scratchpad directly and uses `PRIVATE_READ_TOKEN` only to post the required status back to the canonical SHA. `SWITCHBOARD_CI_PULL_MODEL` is no longer the primary route.
+The CI-6 pull model was a useful bridge: it moved the suite off the production VM and stabilized the required check. CI-10…CI-16 retain the public runner, exact-SHA contract, failure labels, and evidence model while replacing the trigger, checkout, and callback seams. The canonical webhook calls `external_ci_mirror.request_external_ci_mirror_run`, fetches the exact PR head, and pushes it to a disposable `ci/**` branch. That push starts `verify.yml`; the workflow checks out the public scratchpad directly and uses a dedicated GitHub App installation token to post one required verdict back to the canonical SHA. There is no PAT fallback. `SWITCHBOARD_CI_PULL_MODEL` is no longer the primary route.
 
 ---
 
@@ -78,8 +78,8 @@ Flow:
 
 1. Canonical PR `opened` / `reopened` / `ready_for_review` / `synchronize` webhook → [`github_sync.py`](../github_sync.py) → `external_ci_mirror.request_external_ci_mirror_run(..., push_triggered=True)`.
 2. The runner fetches `refs/pull/<n>/head`, verifies the exact webhook head SHA, and pushes that commit to a deterministic disposable `ci/<task>/<sha>` branch on `6th-Element-Labs/projectplanner-ci`.
-3. The branch push starts **`verify.yml`**. It checks out the public scratchpad directly, runs `scripts/switchboard_ci.sh`, and posts required context **`Switchboard CI / VM gate`** on the identical canonical SHA. `PRIVATE_READ_TOKEN` is used only for that status callback, not checkout.
-4. Plan VM **`switchboard_pr_gate.py` posts board-backed PR authorization statuses**: SESSION-12 `Switchboard / claim gate` plus `Switchboard / merge authorization`, the branch-protection projection of the exact-head merge gate. It never runs the suite or mirrors source.
+3. The branch push starts **`verify.yml`**. It checks out the public scratchpad directly, runs the full `scripts/switchboard_ci.sh` suite and Playwright, and posts the single required context **`Switchboard CI / VM gate`** on the identical canonical SHA. The callback uses only `SWITCHBOARD_APP_ID` plus `SWITCHBOARD_APP_PRIVATE_KEY`; checkout needs no credential.
+4. Plan VM **`switchboard_pr_gate.py` posts advisory board-backed PR statuses**: SESSION-12 `Switchboard / claim gate` plus `Switchboard / merge authorization`. They provide coordination visibility but are not GitHub merge gates. It never runs the suite or mirrors source.
 
 **Trigger decision (projectplanner):**
 
@@ -150,13 +150,13 @@ Helm routing is **unchanged**. projectplanner now uses the same push mirror engi
 
 - **Route A-push briefly exposes source on a public repo.** Mitigations: ephemeral `ci/…` branches, terminal cleanup, a secrets/history scan gate before first push, and **Route B/C for anyone who can't accept it.** This exposure is explicit and accepted for the projectplanner scratchpad route.
 - **Route A-push needs authenticated source fetch and mirror push credentials on the caller.** For projectplanner the Plan VM performs only this coordination step; the suite still runs off-box.
-- **projectplanner-ci needs `PRIVATE_READ_TOKEN` only for commit-status writeback.** The scratchpad checkout is public and does not use the token.
+- **projectplanner-ci uses a dedicated App for commit-status writeback.** Both App secrets are mandatory and token minting fails closed; the retired `PRIVATE_READ_TOKEN` must not be restored. Scratchpad checkout is public and credential-free.
 - **Self-hosted (B) is standard GitHub Actions on a *separate* machine** — never the prod web box (that was the HARDEN-32 mistake).
 - **Free macOS only exists on public runners**, so macOS-heavy private repos either accept Route A-push or pay for Mac hardware under B.
 
 ## Native merge queue
 
-GitHub's native merge queue tests merge-group head SHAs, not PR heads. Before enabling merge queue on the canonical repo, add a mirror trigger for merge-group SHAs and ensure **`verify.yml` posts `Switchboard CI / VM gate` to those SHAs** — otherwise the queue hangs. See [`SWITCHBOARD-RUNBOOK.md`](SWITCHBOARD-RUNBOOK.md) → "Native merge queue".
+GitHub's native merge queue tests merge-group head SHAs, not PR heads. The canonical `merge_group/checks_requested` webhook sends that exact temporary SHA through the same mirror route, and **`verify.yml` posts only `Switchboard CI / VM gate` to it**. Advisory merge authorization remains PR-scoped; projecting it onto a temporary merge-group SHA adds a second lifecycle and can strand the queue. See [`SWITCHBOARD-RUNBOOK.md`](SWITCHBOARD-RUNBOOK.md) → "Native merge queue".
 
 ## Non-goals
 

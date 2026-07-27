@@ -24,8 +24,11 @@ This is why Route A is safe for private code: the public mirror is a disposable 
 """
 
 ok(INVARIANT in doc, "provenance invariant section is preserved verbatim")
-ok("push-triggered scratchpad" in doc and "verify.yml" in doc and "PRIVATE_READ_TOKEN" in doc,
-   "projectplanner scratchpad route is documented")
+ok("push-triggered scratchpad" in doc
+   and "verify.yml" in doc
+   and "SWITCHBOARD_APP_PRIVATE_KEY" in doc
+   and "There is no PAT fallback" in doc,
+   "projectplanner scratchpad route and fail-closed App callback are documented")
 ok("Helm routing is **unchanged**" in doc or "Helm keeps Route A-push unchanged" in doc,
    "Helm push-path routing called out as unchanged")
 ok("0010-ci-concurrency.md" in doc and "2026-07-12" in doc and "bare-mirror" in doc.lower(),

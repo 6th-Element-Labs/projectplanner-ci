@@ -176,7 +176,7 @@ section "CI hermeticity gate (tests must not read live host state)"
 run_discovered_tests
 
 if [ "$STRICT" = "1" ]; then
-  section "Dedicated Switchboard UI / Playwright gate"
+  section "Mandatory Playwright evidence"
   "$PYTHON" scripts/run_ui_playwright.py \
     --task-id "${SWITCHBOARD_TASK_ID:-CI-UI}" \
     --work-session-id "${SWITCHBOARD_WORK_SESSION_ID:-}" \

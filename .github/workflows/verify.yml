@@ -21,7 +21,6 @@ concurrency:
 env:
   CANONICAL_REPO: 6th-Element-Labs/projectplanner
   STATUS_CONTEXT: Switchboard CI / VM gate
-  UI_STATUS_CONTEXT: Switchboard UI / Playwright
   TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
 jobs:
@@ -29,16 +28,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      # The status callback used to run on a personal access token, whose 5,000/hr is
-      # billed to the whole GitHub account. On 2026-07-26 the fleet spent that budget
-      # and this very step started failing with `403 API rate limit exceeded` — so no
-      # PR could go green, including the one fixing the rate limit. An App installation
-      # token is billed to the installation instead. `continue-on-error` keeps the PAT
-      # path working until the App secrets are configured; see
-      # docs/GITHUB-APP-RATE-LIMIT.md.
+      # The dedicated App is the only callback credential. A missing or malformed App
+      # key fails here before CI can pretend it has a usable status path.
       - name: Mint status-callback token (GitHub App)
         id: app_token
-        continue-on-error: true
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.SWITCHBOARD_APP_ID }}
@@ -46,37 +39,14 @@ jobs:
           owner: 6th-Element-Labs
           repositories: projectplanner
 
-      - name: Assert a status callback credential is available
-        env:
-          APP_TOKEN: ${{ steps.app_token.outputs.token }}
-          TOKEN: ${{ secrets.PRIVATE_READ_TOKEN }}
-        run: |
-          if [ -n "$APP_TOKEN" ]; then
-            echo "status callback: GitHub App installation token"
-          elif [ -n "$TOKEN" ]; then
-            echo "status callback: legacy PAT (shared account budget — migrate to the App)"
-          else
-            echo "infra: no status callback credential on projectplanner-ci. Set" >&2
-            echo "SWITCHBOARD_APP_ID + SWITCHBOARD_APP_PRIVATE_KEY (preferred)," >&2
-            echo "or PRIVATE_READ_TOKEN." >&2
-            exit 1
-          fi
-
       - name: Post pending required status
         env:
-          # App token when configured, else the legacy PAT. The scratchpad checkout
-          # below uses neither (persist-credentials: false) — this is callback only.
-          GH_TOKEN: ${{ steps.app_token.outputs.token || secrets.PRIVATE_READ_TOKEN }}
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
         run: |
           gh api "repos/$CANONICAL_REPO/statuses/$GITHUB_SHA" \
             -f state=pending \
             -f context="$STATUS_CONTEXT" \
-            -f description='scratchpad: running full suite' \
-            -f target_url="$TARGET_URL"
-          gh api "repos/$CANONICAL_REPO/statuses/$GITHUB_SHA" \
-            -f state=pending \
-            -f context="$UI_STATUS_CONTEXT" \
-            -f description='playwright: running required Chromium journey' \
+            -f description='scratchpad: running full suite + Playwright' \
             -f target_url="$TARGET_URL"
 
       - name: Check out scratchpad branch
@@ -138,47 +108,32 @@ jobs:
       - name: Post required success status
         if: success()
         env:
-          GH_TOKEN: ${{ steps.app_token.outputs.token || secrets.PRIVATE_READ_TOKEN }}
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
         run: |
           gh api "repos/$CANONICAL_REPO/statuses/$GITHUB_SHA" \
             -f state=success \
             -f context="$STATUS_CONTEXT" \
-            -f description='tests: full suite passed (scratchpad)' \
-            -f target_url="$TARGET_URL"
-          gh api "repos/$CANONICAL_REPO/statuses/$GITHUB_SHA" \
-            -f state=success \
-            -f context="$UI_STATUS_CONTEXT" \
-            -f description='playwright: Chromium journey passed with no skips' \
+            -f description='tests: full suite + Playwright passed (scratchpad)' \
             -f target_url="$TARGET_URL"
 
       - name: Post tests failure status
         if: failure() && steps.checkout.outcome == 'success'
         env:
-          GH_TOKEN: ${{ steps.app_token.outputs.token || secrets.PRIVATE_READ_TOKEN }}
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
         run: |
           gh api "repos/$CANONICAL_REPO/statuses/$GITHUB_SHA" \
             -f state=failure \
             -f context="$STATUS_CONTEXT" \
-            -f description='tests: switchboard_ci.sh failed — see run log' \
-            -f target_url="$TARGET_URL" || true
-          gh api "repos/$CANONICAL_REPO/statuses/$GITHUB_SHA" \
-            -f state=failure \
-            -f context="$UI_STATUS_CONTEXT" \
-            -f description='playwright: required Chromium journey failed' \
-            -f target_url="$TARGET_URL" || true
+            -f description='tests: full suite or Playwright failed — see run log' \
+            -f target_url="$TARGET_URL"
 
       - name: Post infra failure status
         if: failure() && steps.checkout.outcome != 'success'
         env:
-          GH_TOKEN: ${{ steps.app_token.outputs.token || secrets.PRIVATE_READ_TOKEN }}
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
         run: |
           gh api "repos/$CANONICAL_REPO/statuses/$GITHUB_SHA" \
             -f state=failure \
             -f context="$STATUS_CONTEXT" \
             -f description='infra: scratchpad checkout/setup failed — see run log' \
-            -f target_url="$TARGET_URL" || true
-          gh api "repos/$CANONICAL_REPO/statuses/$GITHUB_SHA" \
-            -f state=failure \
-            -f context="$UI_STATUS_CONTEXT" \
-            -f description='infra: Playwright checkout/setup failed' \
-            -f target_url="$TARGET_URL" || true
+            -f target_url="$TARGET_URL"

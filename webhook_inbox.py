@@ -83,7 +83,7 @@ class RetryableWebhookError(RuntimeError):
 
 
 def _require_merge_group_side_effects(result: Mapping[str, Any]) -> None:
-    """Fail the inbox attempt when merge-group CI or authorization did not publish."""
+    """Fail the inbox attempt when the merge-group CI dispatch did not complete."""
     verify = result.get("verify") or {}
     if (
         result.get("action") == "merge_group_ci_skipped"
@@ -98,14 +98,6 @@ def _require_merge_group_side_effects(result: Mapping[str, Any]) -> None:
             or "merge-group CI dispatch did not complete"
         )
         raise RetryableWebhookError(f"merge_group_ci_dispatch_failed: {detail}")
-
-    authorization = result.get("merge_authorization") or {}
-    if (
-        authorization.get("published") is False
-        and authorization.get("skip_reason") == "merge_authorization_publish_failed"
-    ):
-        detail = authorization.get("error") or "merge authorization did not publish"
-        raise RetryableWebhookError(f"merge_group_authorization_failed: {detail}")
 
 
 def _ensure(project: str) -> None:
