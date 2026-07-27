@@ -128,8 +128,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install --disable-pip-version-check -r requirements.txt -r requirements-ci.txt
 
-      - name: Install Chromium for full verification
-        if: inputs.validation_mode != 'head'
+      - name: Install Chromium
+        # Admission can select browser tests (or safely expand to the full suite).
+        # Keep the runner contract uniform instead of predicting that selection twice.
         run: python -m playwright install --with-deps chromium
 
       - name: Run Switchboard CI
