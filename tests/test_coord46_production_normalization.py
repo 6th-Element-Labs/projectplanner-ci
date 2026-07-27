@@ -472,14 +472,10 @@ class Pr834RawFixture(unittest.TestCase):
             ["S16-CENSUS-2", "S16-LIVE-3", "S16-LIVE-4"],
         )
 
-<<<<<<< HEAD
-    def test_draft_without_actionable_findings_marks_ready_before_ci_hydration(self):
-=======
     def test_draft_outranks_missing_ci_hydration_without_actionable_findings(self):
         # BREAKDOWN-5: undrafting is free and must surface while CI is still
         # hydrating. Product/authority CI failures still outrank draft; missing
         # hydration does not.
->>>>>>> cf287c76 (fix(COORD-76): align CI suites with draft/wait observe contracts)
         snapshot = self._snapshot()
         snapshot["review"] = {
             "status": "passed",
@@ -489,7 +485,6 @@ class Pr834RawFixture(unittest.TestCase):
         decision = classify_completion(None, snapshot)
         self.assertEqual(decision["route"], "review_merge")
         self.assertEqual(decision["reason_code"], "draft_ready_to_mark_ready")
-<<<<<<< HEAD
         self.assertEqual(decision["desired_role"], "review_merge")
         self.assertEqual(decision["effect"], "mark_ready_then_reread")
 
@@ -504,8 +499,6 @@ class Pr834RawFixture(unittest.TestCase):
         decision = classify_completion(None, snapshot)
         self.assertEqual(decision["route"], "coordination_retry")
         self.assertEqual(decision["reason_code"], "required_ci_hydration_missing")
-=======
->>>>>>> cf287c76 (fix(COORD-76): align CI suites with draft/wait observe contracts)
 
     def test_terminal_merge_queue_truth_outranks_review_remediation(self):
         snapshot = self._snapshot()
