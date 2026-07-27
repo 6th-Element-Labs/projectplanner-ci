@@ -1491,3 +1491,744 @@ for status=`Blocked` and asserts dispatchable when route=`remediation`.
 ### Observe tick — dual Autopilot (2026-07-26 19:15 UTC)
 
 - Queue empty; #940 still OPEN/CLEAN out. No new enqueue.
+
+---
+
+# SESSION 4 — 2026-07-27, fleet-down repair (claude/steve-desktop-operator)
+
+**Run date:** 2026-07-27
+**Operator:** claude/steve-desktop-operator (**intervention session** — the operator
+directed repair, so this section is written *after* the fixes, per the "STATUS: FIXED"
+convention. Breakdowns 49-52 and 54 were observed and deliberately **not** repaired.)
+**Host:** `host/steve-mbp-co16`, bundles 0.4.2 → 0.4.8 over the session
+**Presenting symptom:** no CLI runner would launch from either MCP or the UI, all day.
+
+> Context for the reader: this session started from "CLI runners aren't working, launched
+> from either MCP or UI". It was not one defect. It was **six**, stacked, each hidden
+> behind the one in front of it. Every fix revealed the next. The order below is the
+> order they surfaced, which is also the order a future debugger will hit them.
+
+---
+
+## BREAKDOWN 43 — the launch gate re-derives a contract it was told to echo
+
+**Severity:** critical (every retry/remediation launch, fleet-wide)
+**Observed:** every Connect wake for a task *with execution history* died on the host:
+
+```
+"reason": "runtime_launch_configuration_error",
+"provider_error": "connect execution assignment disagrees with persisted lease:
+                   execution_assignment_contract_mismatch",
+"runner_registered": false, "pid": null
+```
+
+then rotted until `connect_claim_hold_expired` (90s), and Autopilot re-queued into the
+same wall. ADAPTER-36 reached attempt 9 this way; COORD-57 reached 50.
+
+**Root cause:** COORD-52 mints `prior_attempts` into the execution assignment **once, at
+dispatch**, carried verbatim. The contract's own docstring states the rule: every
+verification-path caller must **echo** the stored value, never re-derive it, because the
+decision corpus is append-only and moves between dispatch and claim. The server claim
+path obeys this (`storage/repositories/claims.py:186`). `adapters/agent_host.py`'s launch
+gate did not — its re-derived `expected` had no `prior_attempts` key, and
+`require_exact_execution_assignment` is exact dict equality, so it refused.
+
+**Why it matters:** it presents as intermittent. A *first* attempt carries no history and
+launches fine; only retries and remediations die. So the fleet looks "mostly working"
+while every self-healing path is dead.
+
+**Diagnostic-discard note:** the failure summary named the contract but not the differing
+key. One line of "expected keys vs observed keys" would have ended this in a minute.
+
+**STATUS: FIXED** — PR #961, `adapters/agent_host.py` now passes
+`prior_attempts=execution_assignment.get("prior_attempts")`. Regression:
+`tests/test_adr008_connect_prior_attempts_launch.py` (reproduces the live error pre-fix,
+pins that tampering any *other* field still refuses, and that first-ever dispatches with
+no key still launch).
+
+---
+
+## BREAKDOWN 44 — the signed bundle ships a facade without its imports
+
+**Severity:** critical (any clean host install)
+**Observed:** after cutting a bundle from clean master, *every* launch failed:
+
+```
+"provider_error": "No module named 'evidence_claims'"
+"provider_error": "No module named 'push_verification'"
+"provider_error": "No module named 'deliverable_gates'"
+```
+
+one module at a time, each install revealing the next missing one.
+
+**Root cause:** `create_signed_bundle` copies `adapters/`, `src/switchboard/`, `db/`,
+`constants.py`, and `store.py`. But `store.py` is a facade over the legacy repo-root
+modules, and the Connect launch path imports it. The bundle shipped the facade without
+its import closure. Bundle 0.4.2 had 319 root files; a clean rebuild produced 8.
+
+**Why it matters:** this is the defect that proves the *real* problem (breakdown 45).
+0.4.2 worked only because the missing files had been **hand-copied into the installed
+release directory**. The packaging bug was invisible for as long as nobody rebuilt.
+
+**STATUS: FIXED** — PR #961, the bundle spec now ships all repo-root modules plus the
+`deliverable_gates` / `deliverable_closure` packages (8 files → 724).
+
+---
+
+## BREAKDOWN 45 — production ran code that existed nowhere in git ⚠️
+
+**Severity:** critical (process, not code — and the root cause of this whole session)
+**Observed:** yesterday's outage (2026-07-25, breakdown 22) was "fixed" by editing files
+**directly inside the installed release directory** `~/.local/share/switchboard-agent-host/releases/0.4.2/`,
+plus uncommitted changes left sitting in the shared Dropbox checkout. Neither was ever
+committed. Diffing the installed 0.4.2 against master showed 20+ files differing.
+
+The moment anything rebuilt from master — which this session did, to ship breakdown 43's
+fix — **every un-landed fix silently reverted at once**. Breakdowns 44, 46, and 47 are all
+"a hand-patch that was never landed, resurrecting."
+
+**Why it matters:** it makes the fleet's behaviour unreproducible and undebuggable. The
+host was running a build that no commit describes, so "does master work?" and "does the
+fleet work?" had different answers, and nobody could tell which was authoritative. It also
+guarantees the next clean rebuild re-breaks production.
+
+**Fix direction (process):** never hand-edit a release directory. Land the fix, rebuild,
+reinstall. Worth an automated check: on install, compare the bundle manifest hash against
+the installed tree and refuse/warn on drift, so a hand-patched release announces itself.
+
+**STATUS: FIXED (this instance)** — all hand-patches landed in PR #961; host reinstalled
+from merged master as 0.4.8, so host and server are byte-identical again. The *class* is
+not prevented — no drift check exists yet.
+
+---
+
+## BREAKDOWN 46 — the credential vocabulary disagrees with itself
+
+**Severity:** critical (every Connect launch, once 45 reverted it)
+**Observed:**
+
+```
+"provider_error": "connect generation binding refused: provider_connection_revoked"
+```
+
+on a credential that was demonstrably healthy and in use.
+
+**Root cause:** `application/commands/execution_context.require_generation_binding`
+accepted `revocation_state` in `{none, active, valid}`. The provider inventory and every
+Connect execution context write **`not_revoked`**. So the validator rejected the emitter's
+own word and read a healthy credential as revoked.
+
+**Why it matters:** classic shared-vocabulary drift between emitter and validator — the
+exact class COORD-57 exists to catch. A conformance test between the two would have caught
+it at author time.
+
+**STATUS: FIXED** — PR #961 admits `not_revoked`. (This fix had been hand-patched into
+0.4.2 and never landed — see breakdown 45.)
+
+---
+
+## BREAKDOWN 47 — Autopilot cannot answer a trust prompt
+
+**Severity:** high (silently converts a launch into a dead session)
+**Observed:** operator opened a freshly-booted DOGFOOD-17 session and found Codex sitting
+at its interactive workspace-trust TUI, waiting for a `1` or `2` keypress. The runner was
+"running" and heartbeating; it just wasn't doing anything, and never would.
+
+**Root cause (two layers):**
+1. Codex prompts for trust **per exact cwd**. Parent-directory trust does not cover a new
+   per-execution worktree, and every Connect launch creates one.
+2. The seeding helper that was supposed to prevent this resolved `CODEX_HOME` from the
+   environment **only**, and returned early when unset. launchd starts the Agent Host with
+   a minimal environment that has no `CODEX_HOME`, so the helper silently no-opped in
+   exactly the context it existed for.
+
+**Why it matters:** "Autopilot just needs to boot" — a prompt that requires a human at the
+keyboard is a total defeat of hands-off operation, and it is invisible from the control
+plane: lease healthy, heartbeats green, zero progress.
+
+**STATUS: FIXED** — PR #961 seeds exact-path trust before launch and defaults to
+`~/.codex` when the env var is absent. Verified in the host log:
+`[agent_host] seeded Codex trust for .../DOGFOOD-17/execlease-...`, and the rebooted
+session came up with no prompt.
+
+---
+
+## BREAKDOWN 48 — the completion planner kills a remediation runner for doing its job ⚠️
+
+**Severity:** critical (ADR-0008 C2 violation; the "long-running windows" killer)
+**Observed:** remediation sessions launched, worked for minutes, then died. ADAPTER-36 sat
+at attempt 9; COORD-57 reached attempt 50 with an empty merge queue.
+
+**Root cause:** `domain/completion/effects.py::_fence` — *"A live generation may be kept
+only if role AND exact head both match."* A remediation runner's entire purpose is to
+**push a new commit**. The instant it pushes, the PR head advances past its pinned head,
+the next completion tick fences it, and the host kills the PTY. A fresh generation is
+dispatched, pushes, and meets the same fate. Two changes armed it: COORD-77 (#956) made
+completion ticks continuous, and BUG-175's "kill surrendered runners even if heartbeat is
+still fresh" made the host execute the kill instantly.
+
+**Why it matters:** ADR-0008 C2 permits exactly two ways for a lease to become due — TTL
+expiry, or the holder's own surrender at a role boundary — and states plainly that no task
+status, claim status, coordinator, or steward may kill a process. A classifier fencing a
+live, renewing, correct-role generation because the head moved is a **coordinator kill
+wearing a lease costume**. It is also unnecessary: the stale-head *write* gate in claim
+verification already fail-closes an obsolete completion. Process death adds no safety.
+
+**STATUS: FIXED** — PR #961. Head drift alone no longer fences a live matching-role
+remediation generation; it attaches and waits. `review_merge` still requires the exact
+decided head (that role never advances the head itself), role mismatch still fences, and
+terminal-task cleanup is unchanged. Regression added in
+`tests/test_coord46_effect_planner.py::test_live_remediation_survives_advancing_its_own_head`.
+**Not yet proven end-to-end live** — no runner has completed a full push→survive→review→merge
+loop since the fix deployed.
+
+---
+
+## BREAKDOWN 49 — a failed launch is not allowed to say it failed
+
+**Severity:** high (turns every launch failure into a 90-second stall)
+**Observed:**
+
+```
+POST /txp/v1/complete_wake unavailable (RuntimeError: HTTP 403 /txp/v1/complete_wake:
+  detail={"allowed": false,
+          "error_code": "direct_task_completion_binding_denied",
+          "reason_codes": ["direct_runner_not_found"]}); skipping
+POST /txp/v1/complete_wake incomplete; retry 1/3
+... retry 2/3 ...
+POST /txp/v1/complete_wake exhausted retries; wake may remain claimed wake_id=wake-980e27bafc274136
+```
+
+**Root cause:** when a Connect launch fails **before** `register_runner_session` succeeds,
+there is no bound runner — but the completion-binding gate requires one. So the host's
+honest "this failed" report is refused, ADAPTER-32's retry loop exhausts, and the wake
+sits claimed until `connect_claim_hold_expired` burns the full 90s hold.
+
+**Why it matters:** it multiplies every other breakdown's cost by 90 seconds and makes the
+board lie (`Starting`) about a launch that is already dead. Per ADR-0008 M2, delivery state
+must be explicit and terminal; a host that cannot report a terminal failure violates that.
+
+**Not repaired.** Fix direction: allow the claiming host to record a failed start for the
+wake it claimed when `started=false` and no runner ever bound, without weakening the gate
+for `started=true` completions.
+
+---
+
+## BREAKDOWN 50 — a failed effect is terminal to the operator, with no way out
+
+**Severity:** high (operator cannot start a task, and is not told why)
+**Observed:** after a failed launch, `start_task` and `retry_task` both refuse:
+
+```
+{"error": "effect is failed", "error_code": "start_refused",
+ "start_error": "effect is failed", "failure_class": "failed_gate"}
+```
+
+forever. Observed on ADAPTER-36 and COORD-76.
+
+**Root cause:** `storage/repositories/external_effects.py:97` — a `failed` effect is
+terminal to ordinary `claim_external_effect` callers. Only the completion executor's
+bounded compare-and-swap (`retry_external_effect`) may reissue it, and that never runs for
+a task parked outside an active completion run.
+
+**Why it matters:** two failures compound. The task is wedged, *and* the refusal names
+neither the effect key nor the retry path — "effect is failed" is the whole message. The
+operator has no move. (Same diagnostic-discard signature as breakdown 43.)
+
+**Not repaired.** Fix direction: let an explicit operator `start_task` reclaim a failed
+start-effect through the same audited CAS, and make the refusal name the `effect_key` and
+the path out.
+
+---
+
+## BREAKDOWN 51 — closing a PR as "superseded" strands its task forever ⚠️
+
+**Severity:** high (silent; blocks every downstream dependent)
+**Observed:** COORD-66 sat at **In Review** indefinitely. `explain_task_block`:
+
+```
+"classifier": {"route": "wait", "state": "waiting",
+               "reason_code": "recovered_incomplete_run",
+               "planned_effect": "wait", "next_retry_at": null}
+```
+
+**Root cause:** its PR #927 was closed **unmerged** as "superseded — already incorporated";
+the work had been absorbed as the first commit of PR #931, which **squash-merged**. A
+squash discards the original SHA, so the task's exact head is not an ancestor of master and
+no merge-provenance webhook can ever fire. The classifier parked it at `route=wait` with
+**`next_retry_at=null`** — nothing will ever wake it again.
+
+**Why it matters:** the work shipped; only the paperwork was lost. Meanwhile COORD-67 and
+COORD-68 sat Not Started behind it as dependents — *two runners' worth of idle capacity for
+a full day*. Nobody was told: no Needs-you, no finding, no retry. This is precisely the
+livelock class COORD-77 was written to catch ("a stable decision's verified effect replays
+as a no-op forever — task frozen, nobody told"); the trigger simply is not covered.
+
+**Not repaired** (the *instance* was cleared: COORD-66 stamped Done via verifier offline
+evidence pointing at squash `0ac1c415`; COORD-67/68 dispatched hands-off within minutes and
+are running as of this entry). Fix direction: closing a PR as superseded should either
+transfer provenance to the absorbing PR or park the task as a visible Needs-you — never
+freeze it with no scheduled retry.
+
+---
+
+## BREAKDOWN 52 — the board asks for a session policy no host has ⚠️
+
+**Severity:** critical (silently undispatchable tasks, fleet-wide)
+**Observed:** COORD-78's wake sat pending and was never claimed. Placement refused **all
+six** candidate hosts. For the one healthy host:
+
+```
+"host_id": "host/steve-mbp-co16",
+"reason_codes": ["session_policy_not_supported"],
+"physical_capacity": {"active_sessions": 1, "available_sessions": 15, "max_sessions": 16}
+...
+"eligible_host_count": 0, "reason_code": "no_eligible_persistent_capacity"
+```
+
+with the wake requesting `"session_policy": "docs_review"`.
+
+**Root cause:** the switchboard board's defaults set **both** `default_profile` and
+`code_task_default_profile` to `docs_review` (`storage/repositories/projects.py:294-296`,
+noted in-code as a legacy fixture). Every Agent Host advertises only `code_strict`
+(`adapters/agent_host.py:412`, `PM_HOST_SESSION_POLICIES` default). So **any task whose
+description lacks an explicit `policy_profile:`/`session_profile:` tag is undispatchable by
+construction.** COORD-76 and DOGFOOD-17 launched because they carry the tag; COORD-78 has
+none.
+
+**Why it matters:** it fails *silently* on both sides. Server-side the wake just never
+places and expires; host-side `eligible_runtime` returns falsy and the host `continue`s
+with **no entry in `refused`** — the tick reports `pending: 3, acted: [], refused: []`,
+which reads as "nothing to do" rather than "I skipped three wakes I can never run."
+
+**Not repaired.** Fix direction: reconcile the vocabulary at the board default rather than
+tagging tasks one at a time, and make a policy-mismatch skip *recorded* host-side instead
+of a silent `continue`.
+
+---
+
+## BREAKDOWN 53 — host presence reaches only one of the boards it serves
+
+**Severity:** high (a whole board's Autopilot dies quietly)
+**Observed:** atlas wakes DIST-1 and DIST-4 sat pending all day. `host_status(project=atlas)`
+reported the host `stale: true`, `agent_host_version: 0.4.1` (26 hours out of date), while
+`project=switchboard` showed it healthy and current. Placement refused it with
+`host_unavailable`.
+
+**Root cause:** the host polls wakes for every project in `_host_projects` (DOGFOOD-25
+multi-project support) but posts `heartbeat_host` / `register_host` for `PM_PROJECT` only.
+Every other served board therefore holds a permanently stale host row.
+
+**Why it matters:** the board looks like it has no capacity when a healthy host is sitting
+idle beside it, and nothing on either side reports the contradiction.
+
+**STATUS: FIXED (pending merge)** — PR #973 posts presence per served project;
+execution-policy authority stays bound to the primary project's response so per-board
+policies cannot flap host config.
+
+---
+
+## BREAKDOWN 54 — the classifier acts on a resolved conflict
+
+**Severity:** medium (wasted dispatch; masks true state)
+**Observed:** COORD-78's classifier held `reason_code: pr_merge_conflict`, `route:
+remediation`, and issued a remediation wake — while GitHub reported the PR
+`mergeStateStatus: CLEAN` with both gates green and a passing review verdict. The conflict
+had already been resolved by the working agent minutes earlier.
+
+**Why it matters:** the stale decision spends capacity on a repair that is not needed, and
+(combined with breakdown 52) the wake it dispatched could never be claimed anyway. It also
+misreports the task's real state to any operator reading the classifier.
+
+**Not repaired.** Fix direction: re-hydrate PR mergeability before acting on a
+conflict-derived route, or expire conflict decisions on head change.
+
+---
+
+## THE GOOD PATH (recorded, per the file's own rule)
+
+- **Lease survival now holds.** DOGFOOD-17's runner ran ~90 minutes continuously *through
+  two signed-bundle swaps and host restarts*, renewing cleanly the whole time
+  (`"renewed": true, "renew_deferred": false`). The lease-survival work is doing its job.
+- **Dependency unblock → dispatch is genuinely hands-off.** Clearing COORD-66 freed
+  COORD-67 and COORD-68; Autopilot dispatched both within minutes with no operator action,
+  and both booted, registered, and are running as of this entry.
+- **Trust seeding works.** A rebooted DOGFOOD-17 came up with no interactive prompt, with
+  the seeding line visible in the host log.
+- **The merge queue held under load.** Three PRs (#961, #946, #948) merged in one window;
+  the group CI caught real reds rather than rubber-stamping.
+
+## SESSION 4 SUMMARY
+
+| # | Breakdown | Severity | Status |
+|---|---|---|---|
+| 43 | launch gate re-derives instead of echoing `prior_attempts` | critical | FIXED #961 |
+| 44 | signed bundle ships `store.py` without its import closure | critical | FIXED #961 |
+| 45 | production ran hand-patched code that existed nowhere in git | critical | FIXED (instance) |
+| 46 | `not_revoked` rejected by the binding validator | critical | FIXED #961 |
+| 47 | Codex trust prompt blocks the PTY; seeding no-ops under launchd | high | FIXED #961 |
+| 48 | planner kills a live remediation runner for advancing the head | critical | FIXED #961 |
+| 49 | failed launch cannot report failure (`complete_wake` 403) | high | open |
+| 50 | failed start-effect is terminal to the operator | high | open |
+| 51 | superseded-PR close strands its task forever | high | open |
+| 52 | board default session policy no host advertises | critical | open |
+| 53 | host presence reaches only `PM_PROJECT` | high | FIXED #973 |
+| 54 | classifier acts on an already-resolved merge conflict | medium | open |
+
+**Pattern of the day:** six of these (43, 44, 46, 47, 49, 52) are *silent* failures — the
+control plane reported healthy or reported nothing while the fleet was dead. The single
+highest-leverage change is not any one fix; it is that **a skip must be recorded**. Three
+separate paths (`eligible_runtime` returning falsy, a policy mismatch, a
+never-registered runner) drop work on the floor with no refusal, no finding, and no
+counter. Breakdown 43's cause was named in an error message that omitted the one field
+that differed. The diagnostic-discard pattern is still the dominant bug class on this board.
+
+---
+
+## BREAKDOWN 55 — an admin merge bypassed a red gate and put conflict markers on master ⚠️
+
+**Severity:** critical (master red; operator-caused)
+**Recorded against this session's own operator.** The gate worked; it was overridden.
+
+**Observed:** PR #948 (COORD-76) was merged with `gh pr merge 948 --merge --admin`,
+bypassing the merge queue. Its branch head `7183e28c` carried **committed conflict
+markers**:
+
+```
+$ git show 7183e28c:tests/test_coord46_production_normalization.py | grep -n '^<<<<<<<\|^>>>>>>>'
+475:<<<<<<< HEAD
+482:>>>>>>> cf287c76 (fix(COORD-76): align CI suites with draft/wait observe contracts)
+492:<<<<<<< HEAD
+508:>>>>>>> cf287c76 (fix(COORD-76): align CI suites with draft/wait observe contracts)
+```
+
+Its `Switchboard CI / VM gate` status was **`failure`** at the time of the merge. Master
+carried 4 conflict markers for ~6 minutes until emergency repair PR #972 ("PR #948 landed
+unresolved conflict markers in tests/test_coord46_production_normalization.py").
+
+**Why it matters:** three separate defences existed and all were skipped by one flag — the
+VM gate (red, and correct), the merge queue's group CI (never ran), and the conflict-marker
+scan. The bypass was requested by the operator to unblock a stalled board; the mistake was
+executing it **without surfacing that the gate was red and what it was red about**. A
+bypass is a legitimate escape hatch; a *silent* bypass is not.
+
+**Second-order cost:** the resulting master churn (#972 plus the other merges) is what made
+PR #963 go `DIRTY` and get ejected from the queue minutes later — see the observation below.
+
+**Fix direction (process, and tooling):** when `--admin` is used, print the gate states
+being overridden and refuse on a *red required* check unless a second explicit confirm is
+given. Cheap, and it converts a silent override into an informed one. Worth noting the
+board's own rule already covers this: ADR-0020's bar is CI + Playwright + queue, and
+admin-merge routes around all three at once.
+
+**Not repaired** (the instance was repaired by #972, not by this session).
+
+---
+
+### Observation — PR #963 (COORD-78) ejected from the merge queue (2026-07-27 ~03:46 UTC)
+
+Not a defect in itself; recorded because it is the live test of two things that landed
+today.
+
+- Both required gates were **green** on head `c54b98fe`, review verdict pass, 7 test suites
+  recorded passing, PR ready and not draft. It entered the queue at position 1.
+- Master then advanced (#972 emergency repair plus the day's merges) and #963 became
+  `mergeStateStatus: DIRTY` — a **genuine** conflict, not a flaky-CI eject.
+- Note the distinction from COORD-76's fix, which covers *tip-green* ejects
+  (`failed_checks` / `checks_timed_out`). A DIRTY eject is a real rebase, i.e. remediation
+  work — which makes this the first live opportunity to prove **breakdown 48's fix**:
+  a remediation runner that pushes a rebase must now survive its own push instead of being
+  fenced the instant the head moves.
+
+Watching, not repairing. Outcome to be appended.
+
+---
+
+### BREAKDOWN 55 — addendum: the bypass cost two emergency repairs, not one
+
+Appended after further observation. The `--admin` merge of PR #948 required **two**
+follow-up repairs to master, not just the conflict-marker cleanup:
+
+1. **PR #972** — "remove conflict markers merged by PR 948". Four markers in
+   `tests/test_coord46_production_normalization.py`.
+2. **PR #974** — "restore completion conformance after PR 948", whose stated root cause is
+   that *"PR #948 ... overwrote the newer expectation"* of **the ADR-0008 matching-role
+   remediation contract**, and which also had to bound a reconciliation livelock in the
+   convergence ladder.
+
+The second is the sharper lesson. PR #948's branch predated breakdown 48's fix (landed in
+#961 barely an hour earlier). Because it was merged with `--merge --admin` — no squash, no
+merge-queue group build, no rebase onto current master — **it silently reverted a contract
+that had just been established**, along with its gold catalog expectation. The merge queue
+exists precisely to build each entry against current tip; bypassing it converted a stale
+branch into a regression on master.
+
+**Combined cost of one `--admin` flag:** master red with syntax-breaking conflict markers,
+one just-landed ADR-0008 contract regressed, two emergency PRs, and a livelock that had to
+be separately bounded.
+
+---
+
+## BREAKDOWN 56 — a stale-base PR fails conformance and nothing tells it to rebase
+
+**Severity:** medium (wasted CI, misread as a real defect)
+**Observed:** PR #975 (COORD-67, authored hands-off by an Autopilot runner minutes earlier)
+came back red:
+
+```
+== FAILED: 2 of 573 Python test file(s) ==
+FAIL  remediation_fences_stale_head_matching_role:
+        effect 'attach_and_wait' != 'start_remediation'
+FAIL  pr_merged_reconcile: FAIL_livelock
+```
+
+Run against **current master** the same two suites are green:
+
+```
+Completion gold decisions: 36 passed, 0 failed (of 36 gold scenarios)
+Convergence conformance: 40 passed, 0 failed (of 40 scenarios, budget 12 ticks)
+```
+
+**Root cause:** the PR is based on a master that predates #961 (the matching-role
+remediation contract) and #974 (the regenerated gold catalog, where the scenario was
+renamed `remediation_fences_stale_head_matching_role` →
+`remediation_attaches_stale_head_matching_role` with the new expected effect). The branch
+therefore carries the *old* gold expectation while the code under test has the *new*
+behaviour. PR #973 is red for the same reason.
+
+**Why it matters:** the red is indistinguishable, from the board's point of view, from a
+genuine defect — the completion classifier will route it to remediation and spend a runner
+on a "bug" whose entire fix is `git rebase`. On a day when a contract changes, every
+in-flight PR becomes a false positive at once. Nothing in the failure output says
+"your base is behind"; a reader has to independently run the suite against master to find
+out, which is what happened here.
+
+**Fix direction:** when a required-check failure is confined to conformance/gold suites and
+the same suites pass on the merge-base's tip, classify as `base_stale` and route to a
+rebase, not a remediation of the task's own code. The signal is cheap — the merge queue
+already builds against tip; the classifier just never compares.
+
+**Not repaired.**
+
+---
+
+### Observation — the conformance harness earned its keep (2026-07-27)
+
+Recorded because it is the counter-example to most of this file.
+
+The gold catalog **caught a real contract regression in production CI**: when PR #948's
+stale branch overwrote the ADR-0008 matching-role remediation expectation, the gold suite
+failed and PR #974 was raised to restore it. That is exactly what COORD-71 built it for —
+*"so future regressions fail merge CI, not live boards."* It worked, on its first real
+adversarial event, against a regression introduced by the operator.
+
+### Observation — first clean hands-off loop since the repairs (2026-07-27 ~03:46-03:55 UTC)
+
+COORD-67 and COORD-68 ran the **full loop with zero operator action**: dependency cleared
+(COORD-66 stamped Done) → Autopilot dispatched both within minutes → both booted with no
+trust prompt → worked ~9 minutes → pushed branches → opened PRs #975 and #976 → called
+`complete_claim` → surrendered the lease (fence_epoch 1→2) → capacity reaper stopped the
+process → tasks exposed **In Review**.
+
+The `LEASE-EXPIRED` events this produced are the **correct** ADR-0008 C3 terminal path, not
+a failure. Worth stating plainly because they are indistinguishable in the host log from
+breakdown 21's immortal-zombie expiry and from breakdown 48's wrongful fence — three very
+different events, one message. A `reason` that distinguished *surrendered-after-completion*
+from *TTL-expired* from *fenced-by-coordinator* would make this log a lot shorter.
+
+**Still open at time of writing:** the fence fix (breakdown 48) has **not** yet been proven
+end-to-end by a live Autopilot remediation runner. PR #963's rebase — the obvious candidate
+— was pushed by an interactive agent session, not a Connect runner, so it does not count as
+proof.
+
+---
+
+## BREAKDOWN 57 — the dead runner's task claim outlives it and blocks its own remediation ⚠️
+
+**Severity:** critical (remediation cannot be dispatched; retries forever)
+**Observed live on COORD-67 and COORD-68**, both simultaneously, immediately after the
+successful hands-off loop recorded above.
+
+The completion classifier does the **right** thing:
+
+```
+"classifier": {"route": "remediation", "planned_effect": "start_remediation",
+               "reason_code": "required_exact_head_ci_failed", "state": "blocked"}
+```
+
+and the effect fails, over and over:
+
+```
+"external_effects": [{"effect_type": "completion_effect", "resource": "start_remediation",
+                      "status": "failed", "retry_count": 6,
+                      "last_error": "Another agent owns this task.",
+                      "next_retry_at": null}]
+"claim_refusals": [ 5 × {"kind": "side_effect.failed",
+                         "message": "Another agent owns this task."} ]
+```
+
+**Root cause:** the implementation runner's **task claim survives its own completion**.
+
+```
+"active_claims": [{"claim_id": "taskclaim-c7da4880105341a9",
+                   "agent_id": "agent/codex/coord-67",
+                   "principal_id": "direct-session/run_bf392438d0cc6d02",
+                   "status": "active",
+                   "claimed_at": 1785124095, "expires_at": 1785127695}]
+```
+
+`run_bf392438d0cc6d02` is the runner that **already completed, surrendered its lease
+(fence_epoch 1→2), and was reaped**. Its claim keeps `status='active'` on a one-hour TTL.
+`start_task` refuses any caller that is not the claim owner
+(`application/commands/task_execution.py:751-760` →
+`coordination.task_start_ownership` → `_active_task_claim_in`, which matches on
+`status='active' AND expires_at > now`). The completion owner is not
+`agent/codex/coord-67`, so **every** remediation dispatch is refused for up to an hour.
+
+**Why it matters:** this is the failure the whole day's work was meant to eliminate — a
+task that cannot get a runner. It is worse than the earlier ones because *nothing is
+broken*: the classifier is right, the host is healthy, capacity is free (15 of 16 slots),
+the fix from breakdown 48 is deployed. The work is simply un-dispatchable because a dead
+agent still owns the task. The retry loop burns a dispatch every ~35-100s and records
+`next_retry_at: null`, so it also lands in breakdown 50's terminal-effect wedge.
+
+**Fix direction:** `complete_claim` already surrenders the execution lease at the role
+boundary; it must release the **task claim** in the same transaction. Failing that, the
+completion owner must be recognised as an authorised successor for a task whose claim
+holder's execution generation is terminal — a dead generation's claim is not ownership.
+
+**Not repaired** (observed under standing instruction not to intervene).
+
+---
+
+## BREAKDOWN 58 — the dependency healer overwrites `Blocked(route=remediation)` ⚠️
+
+**Severity:** critical (the janitor mutates work state; ADR-0008 W3)
+**Observed:** COORD-67's activity feed, six times in a row:
+
+```
+{"actor": "switchboard/mission-status", "kind": "task.dependency_status_healed",
+ "text": {"previous_status": "Blocked", "status": "Not Started",
+          "reason": "all_dependencies_done", "depends_on": ["COORD-66"],
+          "schema": "switchboard.dependency_status_healed.v1"}}
+```
+
+The result is a task that reads as two contradictory things at once:
+
+| Surface | Says |
+|---|---|
+| `get_task.status` | **"Not Started"** |
+| `get_task_execution.lifecycle_phase` | `review` |
+| `active_claims` | 1 active claim |
+| `session_health.active_session_count` | 1 |
+| `git_state` | PR #975 open, head `92cf9a61` |
+| `review_verdict.current_verdict` | `null` (**"missing"**) |
+| classifier | `route=remediation`, `state=blocked` |
+
+**Root cause:** `storage/repositories/tasks.py:255-290`. The healer selects on the status
+string alone —
+
+```sql
+SELECT * FROM tasks WHERE status='Blocked' ...
+UPDATE tasks SET status='Not Started', assignee=NULL, updated_at=? WHERE task_id=? AND status='Blocked'
+```
+
+— and only skips a task whose block is "exceptional", where exceptional is a fixed
+allowlist of four activity kinds (`tasks.py:196-201`):
+
+```
+git.pr_merged_semantic_blocked, git.default_branch_semantic_blocked,
+review.remediation_escalated, task.human_blocker
+```
+
+**The completion classifier's own `Blocked(route=remediation)` is not in that list.** So
+the janitor sees `Blocked` + dependencies satisfied, concludes "stale dependency block",
+resets the task to `Not Started`, **and clears the assignee** — destroying the completion
+owner's live routing state and the task's ownership record, repeatedly.
+
+**Why it matters:** two different meanings are crammed into one `Blocked` string —
+*blocked on dependencies* and *blocked pending remediation* — and a janitor with no
+authority over the second is allowed to overwrite it. ADR-0008 W3 gives the roaming daemon
+a narrow bookkeeping allowlist (sweep expired wakes and leases, reconcile provenance,
+regenerate briefs, publish findings) and states it "may not ... advance completion phases".
+Rewriting a task's status and nulling its assignee is squarely outside that.
+
+It also compounds breakdown 57: the healer clears `assignee` while the stale task claim
+survives, so the task simultaneously has **no assignee** and **an owner that blocks
+dispatch**. And it makes the board actively lie — `Not Started` on a task with a pushed PR,
+477 lines of finished work, and a live work session.
+
+**Fix direction:** the healer must key off the *cause* of the block, not the string. Either
+the completion owner writes a durable block-cause marker that joins the exceptional
+allowlist, or — better, and in the ADR's spirit — dependency-blocked becomes a distinct
+state from completion-route-blocked so no janitor can confuse them.
+
+**Not repaired.**
+
+---
+
+### Observation — what the pair actually costs (2026-07-27 ~04:00-04:25 UTC)
+
+COORD-67 and COORD-68 are, at time of writing, in a stable wedge that no component will
+escape on its own:
+
+1. runner finishes, opens a PR, `complete_claim` → In Review — **claim not released** (57);
+2. PR is red on a **stale base** (56), so the classifier correctly routes to remediation
+   and sets `Blocked`;
+3. the janitor "heals" that `Blocked` back to `Not Started` and clears the assignee (58);
+4. `start_remediation` is refused by the dead runner's surviving claim (57);
+5. the effect goes terminal with `next_retry_at: null` (50) — no scheduled escape;
+6. goto 3.
+
+Six breakdowns interlocking, of which **five are already in this file**. The originating
+defect — the stale base — has a one-command fix. Nothing in the loop can apply it.
+
+**No intervention taken.** Both tasks left in this state deliberately so the evidence
+survives.
+
+---
+
+### Observation — BREAKDOWN 52 confirmed live on COORD-79 / COORD-80 (2026-07-27 ~04:35 UTC)
+
+Operator question: *"why didn't autopilot launch runners for 79 and 80 yet?"* It did. The
+wakes cannot be claimed by anything in the fleet.
+
+Both tasks' dependencies are satisfied — COORD-77 and COORD-78 are Done (`844e974c`
+merged) — and `explain_task_block` reports `blocked: false` for both. Autopilot's scope is
+`active` (generation 3, ticking). It issued a wake for each:
+
+```
+COORD-79  effect_type=wake  status=issued  updated_at=1785125492
+COORD-80  effect_type=wake  status=issued  updated_at=1785125492
+```
+
+Both then sat pending. The placement decision on COORD-79's wake:
+
+```
+"placement": { "session_policy": "docs_review", ... }
+candidates:
+  host/steve-mbp-co16   eligible=false  reason_codes=["session_policy_not_supported"]
+                        physical_capacity={"active_sessions": 0, "available_sessions": 16,
+                                           "max_sessions": 16}
+  host/plan-vm-message-wake   eligible=false  [... session_policy_not_supported ...]
+  4 × ephemeral               eligible=false  [... session_policy_not_supported ...]
+"eligible_host_count": 0
+"reason_code": "no_eligible_persistent_capacity"
+```
+
+**Sixteen of sixteen slots free on a healthy host, and the fleet reports "no eligible
+persistent capacity."** COORD-79 and COORD-80 carry no explicit
+`policy_profile:`/`session_profile:` tag, so they resolve to the switchboard board default
+`docs_review` (breakdown 52), which no host advertises. COORD-67 and COORD-68 launched
+earlier today only because their descriptions do carry `session_profile:code_strict`.
+
+The loop from here is deterministic: the wake expires at its 900s deadline, the scope ticks,
+a fresh wake is issued against the same wall, forever — burning a dispatch every 15 minutes
+against capacity that is sitting idle. Nothing in the chain reports a policy mismatch as a
+refusal; the host tick still reads `pending: N, acted: [], refused: []`.
+
+This is the second live confirmation today that the highest-leverage missing behaviour is
+**a recorded skip**. The information needed to diagnose this in one read already exists in
+the placement decision — it simply never reaches an operator surface or a finding.
+
+**Not repaired** (observed under standing instruction not to intervene).
