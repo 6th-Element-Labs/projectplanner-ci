@@ -620,7 +620,7 @@ def build_evidence(
                 # leaves Deliverables mutations on the monolith.
                 checks.append(check_live_route_owner(
                     base_url=edge_base_url,
-                    path=("/api/deliverables/__runtime_probe_missing__/closure_request"
+                    path=("/api/deliverables/__runtime_probe_missing__/mission_brief"
                           "?project=switchboard"),
                     method="POST", token=bearer_token,
                     owner_port=8110, other_port=8124, json_body=b"{}",

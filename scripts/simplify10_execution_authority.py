@@ -33,7 +33,8 @@ BASELINE = ROOT / "perf" / "simplify10_execution_authority_baseline.json"
 #: Directories that are never production execution paths.
 EXCLUDED_PREFIXES = (
     "tests/", "docs/", "deploy/", "scripts/", "perf/", "adr/", ".github/",
-    "node_modules/", ".venv/",
+    "node_modules/", ".venv/", ".worktrees/", ".claude/", "base-check/",
+    ".artifacts/",
 )
 EXCLUDED_NAMES = ("conftest.py",)
 

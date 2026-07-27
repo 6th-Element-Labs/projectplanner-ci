@@ -97,6 +97,10 @@ run_discovered_tests() {
     find . \
       -path './.git' -prune -o \
       -path './.venv' -prune -o \
+      -path './base-check' -prune -o \
+      -path './.worktrees' -prune -o \
+      -path './.claude' -prune -o \
+      -path './.artifacts' -prune -o \
       -type f \( -name 'test_*.py' -o -name '*_test.py' \) -print \
       | sed 's#^\./##' | LC_ALL=C sort > "$list"
   fi

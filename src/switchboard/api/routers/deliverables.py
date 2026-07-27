@@ -12,7 +12,6 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 import auth
-import deliverable_closure
 import store
 from switchboard.application.commands import autopilot as autopilot_command
 from switchboard.application.commands import create_deliverable as create_deliverable_command
@@ -280,49 +279,6 @@ def create_router(*, resolve_project: ProjectResolver,
             runtime=body.runtime, profile_id=body.profile_id,
             actor=auth.actor(principal), agent_id=body.agent_id))
 
-    @router.post("/api/deliverables/{deliverable_id}/closure_verify")
-    async def verify_deliverable_closure_route(request: Request, deliverable_id: str,
-                                               body: dict = Body(...), project: str = Query(...)):
-        project = resolve_project(project)
-        principal = resolve_principal(request, project, ("write:tasks",), dev_actor="web")
-        payload = body or {}
-        result = deliverable_closure.verify_and_record_closure(
-            deliverable_id, project, actor=auth.actor(principal),
-            report=payload.get("report"),
-            submitted_functional=payload.get("submitted_functional"),
-            waivers=payload.get("waivers"),
-            generated_by=payload.get("generated_by") or auth.actor(principal))
-        if isinstance(result, dict) and result.get("error"):
-            code = 404 if "unknown deliverable" in result["error"] else 400
-            raise HTTPException(code, result["error"])
-        return result
-
-    @router.get("/api/deliverables/{deliverable_id}/closure_report")
-    def get_deliverable_closure_report_route(deliverable_id: str, report_id: str = "",
-                                             project: str = Query(...)):
-        project = resolve_project(project)
-        result = store.get_deliverable_closure_report(
-            deliverable_id, project=project, report_id=report_id)
-        if result.get("error"):
-            code = 404 if ("unknown" in result["error"] or "not found" in result["error"]) else 400
-            raise HTTPException(code, result["error"])
-        return result
-
-    @router.post("/api/deliverables/{deliverable_id}/closure_request")
-    async def request_deliverable_closure_verification_route(request: Request, deliverable_id: str,
-                                                             body: dict = Body(default={}),
-                                                             project: str = Query(...)):
-        project = resolve_project(project)
-        principal = resolve_principal(request, project, ("write:tasks",), dev_actor="web")
-        payload = body or {}
-        result = deliverable_closure.request_closure_verification(
-            deliverable_id, project, agent_id=payload.get("agent_id") or "",
-            actor=auth.actor(principal), waivers=payload.get("waivers"))
-        if isinstance(result, dict) and result.get("error"):
-            code = 404 if "not found" in result["error"] else 400
-            raise HTTPException(code, result["error"])
-        return result
-
     @router.post("/api/deliverables/{deliverable_id}/coordinator_tick")
     async def run_mission_coordinator_tick(request: Request, deliverable_id: str,
                                            project: str = Query(...)):
@@ -499,7 +455,6 @@ def create_router(*, resolve_project: ProjectResolver,
             "/api/mission_status",
             "/api/deliverables/{deliverable_id}/mission_status",
             "/api/deliverables/{deliverable_id}/dependency_graph",
-            "/api/deliverables/{deliverable_id}/closure_report",
         }
         router.routes[:] = [
             route for route in router.routes

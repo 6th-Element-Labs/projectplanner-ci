@@ -71,7 +71,6 @@ methods_by_path = {
 cut_reads = (
     "/api/deliverables", "/api/deliverables/{deliverable_id}",
     "/api/mission_status", "/api/deliverables/{deliverable_id}/mission_status",
-    "/api/deliverables/{deliverable_id}/closure_report",
     "/api/deliverables/{deliverable_id}/dependency_graph",
     "/api/deliverables/breakdown_proposals",
     "/api/deliverables/breakdown_proposals/{proposal_id}",
@@ -81,7 +80,6 @@ for path in cut_reads:
 for path, method in (
     ("/api/deliverables", "POST"),
     ("/api/deliverables/{deliverable_id}/milestones", "POST"),
-    ("/api/deliverables/{deliverable_id}/closure_request", "POST"),
 ):
     ok((path, method) in methods_by_path, f"dual-strip preserves {method} {path}")
 

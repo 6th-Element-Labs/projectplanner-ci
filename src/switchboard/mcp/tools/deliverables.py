@@ -12,7 +12,6 @@ from typing import Any, Callable
 from mcp.server.fastmcp import Context
 
 import auth
-import deliverable_closure
 import store
 from switchboard.application.commands import create_deliverable as create_deliverable_command
 from switchboard.application.commands import update_deliverable as update_deliverable_command
@@ -50,7 +49,7 @@ def create_deliverable(title: str, ctx: Context, project: str = "maxwell",
     If board_id/mission_id is supplied it must already exist in the owning project.
     When PM_ENFORCE_DELIVERABLE_INTAKE is on, moving a deliverable into status=in_progress
     requires end_state + acceptance_criteria + a well-formed proof_requirements
-    (schema switchboard.deliverable_proof_requirements.v1); see docs/DELIVERABLE-CLOSURE-GATE.md.
+    (schema switchboard.deliverable_proof_requirements.v1).
     """
     services = _services()
     principal = services.require_write(ctx, project, ("write:tasks",))
@@ -286,68 +285,6 @@ def update_mission_narrative(deliverable_id: str, narrative: str, ctx: Context,
     return services.dumps(result)
 
 
-def verify_deliverable_closure(deliverable_id: str, ctx: Context, project: str = "maxwell",
-                               report_json: str = "", submitted_functional_json: str = "",
-                               waivers_json: str = "", generated_by: str = "") -> str:
-    """Run scope + functional closure gates for a deliverable (or accept an agent-submitted
-    switchboard.deliverable_closure_report.v1), grade it, persist the report, and stamp
-    deliverable.closure_verified. Pass submitted_functional_json for verifier-run script/pytest
-    gate results ({gate_id: {pass, duration_s?, artifact_hash?}}) and waivers_json for
-    operator task waivers; the server never executes heavy gates in-process."""
-    services = _services()
-    principal = services.require_write(ctx, project, ("write:tasks",))
-    parsed = {}
-    for name, raw in (("report", report_json),
-                      ("submitted_functional", submitted_functional_json),
-                      ("waivers", waivers_json)):
-        if not raw:
-            continue
-        try:
-            parsed[name] = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            return services.dumps({"error": f"invalid {name}_json: {exc}"})
-    return services.dumps(deliverable_closure.verify_and_record_closure(
-        deliverable_id, project, actor=auth.actor(principal),
-        report=parsed.get("report"),
-        submitted_functional=parsed.get("submitted_functional"),
-        waivers=parsed.get("waivers"),
-        generated_by=generated_by or auth.actor(principal)))
-
-
-def get_deliverable_closure_report(deliverable_id: str, project: str = "maxwell",
-                                   report_id: str = "") -> str:
-    """Fetch the latest (or a specific report_id) persisted deliverable closure report
-    plus its retained grade history."""
-    services = _services()
-    return services.dumps(store.get_deliverable_closure_report(
-        deliverable_id, project=project, report_id=report_id))
-
-
-def request_deliverable_closure_verification(deliverable_id: str, ctx: Context,
-                                             project: str = "maxwell",
-                                             agent_id: str = "",
-                                             waivers_json: str = "") -> str:
-    """Operator "Verify & stamp closure" dispatch: assemble the deliverable's context,
-    its resolved scope+functional gate list, and a closure prompt template, then dispatch a
-    verifier agent (directed inbox message + lane-less inbox wake) to run the gates and record
-    a graded switchboard.deliverable_closure_report.v1 via verify_deliverable_closure. The
-    verifier never sets status=done. Pass agent_id to target a specific verifier and
-    waivers_json ([{task_id, reason}]) for operator task waivers. Returns {dispatched, wake_id,
-    message_id, agent_id, gates, prompt, work_hosts_online, queued, …}; queues until a
-    work-capable host is online (mirrors dispatch_to_claude_code for tasks)."""
-    services = _services()
-    principal = services.require_write(ctx, project, ("write:tasks",))
-    waivers = None
-    if waivers_json:
-        try:
-            waivers = json.loads(waivers_json)
-        except json.JSONDecodeError as exc:
-            return services.dumps({"error": f"invalid waivers_json: {exc}"})
-    return services.dumps(deliverable_closure.request_closure_verification(
-        deliverable_id, project, agent_id=agent_id,
-        actor=auth.actor(principal), waivers=waivers))
-
-
 def generate_mission_brief(deliverable_id: str, ctx: Context, project: str = "maxwell",
                            board_id: str = "", mission_id: str = "",
                            persist: bool = True) -> str:
@@ -560,9 +497,6 @@ DELIVERABLE_TOOL_NAMES = (
     "get_deliverable_dependency_graph",
     "mission_status",
     "update_mission_narrative",
-    "verify_deliverable_closure",
-    "get_deliverable_closure_report",
-    "request_deliverable_closure_verification",
     "generate_mission_brief",
     "run_mission_coordinator",
     "get_mission_brief",

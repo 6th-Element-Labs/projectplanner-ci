@@ -34,7 +34,6 @@ DELIVERABLES_PACKAGE = ROOT / "src" / "switchboard" / "services" / "deliverables
 FORBIDDEN_ROOTS = frozenset({
     "app_impl",
     "auth",
-    "deliverable_closure",
     "mcp_server",
     "mcp_server_impl",
     "store",
@@ -160,7 +159,7 @@ try:
         "title": "MS110 Deliverables cut",
         "status": "proposed",
         "end_state": "Read parity is exact",
-        "acceptance_criteria": ["status, revision, and closure parity"],
+        "acceptance_criteria": ["status and revision parity"],
     }, actor="test", project=PROJECT)
     ok(deliverable.get("id") == DELIVERABLE_ID, "deliverable fixture created")
 
@@ -188,21 +187,6 @@ try:
     proposal_id = (proposal.get("proposal") or {}).get("id") or ""
     ok(bool(proposal_id), "breakdown proposal fixture created")
 
-    closure = store.record_deliverable_closure(
-        DELIVERABLE_ID,
-        {
-            "schema": "switchboard.deliverable_closure_report.v1",
-            "report_id": "report-ms110-parity",
-            "evidence_hash": "sha256:ms110-parity",
-            "grade": "pass",
-            "recommendation": "close",
-            "generated_at": 1784300000.0,
-        },
-        actor="test-verifier",
-        project=PROJECT,
-    )
-    ok(closure.get("ok") is True, "committed closure fixture created")
-
     baseline = baseline_client()
     settings = DeliverablesServiceSettings(
         service_name="arch-ms110-test", host="127.0.0.1", port=8124
@@ -227,7 +211,6 @@ try:
         ("mission status", "/api/mission_status", {"deliverable_id": DELIVERABLE_ID}, True),
         ("deliverable mission status", f"/api/deliverables/{DELIVERABLE_ID}/mission_status", {}, True),
         ("dependency graph", f"/api/deliverables/{DELIVERABLE_ID}/dependency_graph", {}, True),
-        ("closure report", f"/api/deliverables/{DELIVERABLE_ID}/closure_report", {}, False),
         ("breakdown proposals", "/api/deliverables/breakdown_proposals", {}, False),
         ("breakdown proposal", f"/api/deliverables/breakdown_proposals/{proposal_id}", {}, False),
     ]
@@ -252,17 +235,6 @@ try:
     )
     ok(mission_etag and unchanged.status_code == 304,
        "mission revision binding preserves conditional 304")
-
-    closure_body = cut.get(
-        f"/api/deliverables/{DELIVERABLE_ID}/closure_report",
-        params={"project": PROJECT},
-    ).json()
-    report = closure_body.get("report") or {}
-    ok(
-        report.get("report_id") == "report-ms110-parity"
-        and report.get("evidence_hash") == "sha256:ms110-parity",
-        "closure read preserves immutable report/revision identity",
-    )
 
     ok(cut.get("/api/deliverables").status_code == 422,
        "explicit project is required")
@@ -363,8 +335,6 @@ try:
 
     for method, path in (
         ("post", "/api/deliverables"),
-        ("post", f"/api/deliverables/{DELIVERABLE_ID}/closure_verify"),
-        ("post", f"/api/deliverables/{DELIVERABLE_ID}/closure_request"),
         ("post", f"/api/deliverables/{DELIVERABLE_ID}/archive"),
         ("post", f"/api/deliverables/{DELIVERABLE_ID}/coordinator_tick"),
         ("patch", f"/api/deliverables/{DELIVERABLE_ID}/narrative"),

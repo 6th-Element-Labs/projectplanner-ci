@@ -23,7 +23,6 @@ modules = (
     ("state", "SwitchboardState"),
     ("board", "SwitchboardBoard"),
     ("plan-chat", "SwitchboardPlanChat"),
-    ("closure", "SwitchboardClosure"),
     ("mission", "SwitchboardMission"),
     ("runner-session", "SwitchboardRunnerSession"),
     ("proof-console", "SwitchboardProofConsole"),

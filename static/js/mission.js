@@ -460,7 +460,7 @@
                 this.loadDependencyGraph(this.selectedDeliverableId),
                 this.loadAutopilotScopes(this.selectedDeliverableId),
                 this.loadBreakdownProposals(this.selectedDeliverableId),
-                this.loadKpisAndOutcomes(), this.loadClosureReport(this.selectedDeliverableId),
+                this.loadKpisAndOutcomes(),
             ]);
             this._setMissionDeliverableInUrl(this.selectedDeliverableId);
             // UI-17: when ?proof=1 / mode=proof, load bind + provider state before render.
@@ -847,7 +847,7 @@
         }).sort();
         const agents = (s.active_agents || []).map((a) =>
             `${a.task_id}:${a.agent_id}:${a.runtime || ''}:${a.stale ? 1 : 0}`).sort();
-        return JSON.stringify([nodeSig, active, blockers, scopes, narration, agents, s.progress || {}, g.stats || {}, (s.deliverable || {}).status, ((this.missionClosure || {}).report || {}).report_id, ((this.missionClosure || {}).report || {}).grade]);
+        return JSON.stringify([nodeSig, active, blockers, scopes, narration, agents, s.progress || {}, g.stats || {}, (s.deliverable || {}).status]);
     },
 
     _missionLiveStamp(changed) {
@@ -869,7 +869,7 @@
         if (!id || this._missionLiveBusy) return;
         this._missionLiveBusy = true;
         try {
-            await Promise.all([this.loadMissionStatus(id), this.loadDependencyGraph(id), this.loadAutopilotScopes(id), this.loadClosureReport(id)]);
+            await Promise.all([this.loadMissionStatus(id), this.loadDependencyGraph(id), this.loadAutopilotScopes(id)]);
         } catch (e) {
             this._missionLiveBusy = false;
             return;   // transient (agent mid-write, network blip) — try again next tick
@@ -951,7 +951,7 @@
             <h2 class="mb-2">${this.esc(d.title || s.deliverable_id || 'Mission')}</h2>
             <div class="btn-list">${this._missionBadge(d.status, this.DELIVERABLE_STATUS_COLOR)} ${this._missionConfidence(board.confidence)} ${proofToggle}</div>
         </div>
-        <div class="text-end"><div class="mb-2">${this._missionAutopilotControlsHtml()}</div><div class="mb-2">${this._missionClosureActionHtml()}</div>
+        <div class="text-end"><div class="mb-2">${this._missionAutopilotControlsHtml()}</div><div class="mb-2"></div>
             <span class="badge bg-green-lt" title="Live — auto-refreshes as agents update tasks"><span class="status-dot status-dot-animated bg-green me-1"></span>Live</span>
             <div id="mission-live-stamp" class="text-secondary small mt-1"></div>
         </div></div>
@@ -1031,7 +1031,7 @@
         this._missionDetailOpen = detailOpen;
         // Lead with the story: headline → plain-English → what's blocked → the map →
         // breakdown/outcomes review → next action.
-        const essentials = header + proofHtml + this._missionClosureHtml() + this._missionCeoHeaderHtml(s) + blockerHtml
+        const essentials = header + proofHtml + this._missionCeoHeaderHtml(s) + blockerHtml
             + this._missionDependencyGraphHtml() + workLedger + this._missionBreakdownHtml() + nextActions;
         // The rest (KPIs, brief, milestones, work tables, agents, linked tasks, policy) folds
         // into a disclosure so it's there when you want it, not a wall of ~15 cards up front.
@@ -1212,8 +1212,6 @@
             case 'approve': return this.approveProposal(ds.proposal);
             case 'reject': return this.rejectProposal(ds.proposal);
             case 'defer': return this.deferProposal(ds.proposal);
-            case 'closure-request': return this.requestClosureVerification();
-            case 'closure-dismiss': return this.dismissClosure();
             // UI-2: KPIs & outcomes
             case 'kpi-new': return this.openKpiModal();
             case 'kpi-edit': return this.updateKpiValue(ds.kpi);

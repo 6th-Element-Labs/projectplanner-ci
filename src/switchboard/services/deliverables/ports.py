@@ -31,9 +31,6 @@ class DeliverablesQueryPort(Protocol):
         self, project: str, deliverable_id: str
     ) -> dict[str, Any]: ...
 
-    def closure_report(
-        self, project: str, deliverable_id: str, *, report_id: str = ""
-    ) -> dict[str, Any]: ...
 
     def list_breakdown_proposals(
         self,

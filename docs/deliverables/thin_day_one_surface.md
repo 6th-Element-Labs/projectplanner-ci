@@ -12,7 +12,6 @@
 | GET | `/api/deliverables/{deliverable_id}` | Deliverable detail |
 | GET | `/api/mission_status` | Mission cockpit status |
 | GET | `/api/deliverables/{deliverable_id}/mission_status` | Per-deliverable mission status |
-| GET | `/api/deliverables/{deliverable_id}/closure_report` | Closure report **read** |
 | GET | `/api/deliverables/{deliverable_id}/dependency_graph` | Dependency graph read |
 | GET | `/api/deliverables/breakdown_proposals` | Breakdown proposals list |
 | GET | `/api/deliverables/breakdown_proposals/{proposal_id}` | Breakdown proposal get |
@@ -22,7 +21,6 @@
 
 - `POST /api/deliverables` (create), archive, outcome
 - Milestone / task_link mutate
-- `POST …/closure_verify`, `POST …/closure_request`
 - `POST …/coordinator_tick`, `POST …/mission_brief`, `PATCH …/narrative`
 - Breakdown create / approve / reject / defer / patch
 - MCP (`:8111`)

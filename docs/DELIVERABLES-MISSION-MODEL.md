@@ -283,6 +283,7 @@ The DELIVERABLES workstream (D1–D11) is complete. Follow-on policy enforcement
 POLICY workstream. Agent startup from `deliverable_id` / `mission_id` is documented in
 [`DELIVERABLE-FIRST-STARTUP.md`](DELIVERABLE-FIRST-STARTUP.md).
 
-Deliverable closure verification (verify, grade, stamp before archive) is scoped in
-[`DELIVERABLE-CLOSURE-GATE.md`](DELIVERABLE-CLOSURE-GATE.md) — board deliverable
-`deliverable-closure-gate`, tasks DELIVERABLES-12 … DELIVERABLES-22.
+Deliverable closure verification (verify, grade, stamp before archive) was scoped under
+board deliverable `deliverable-closure-gate` (tasks DELIVERABLES-12 … DELIVERABLES-22) and
+has since been removed (DELIVERABLES-42). Deliverable intake validation (`end_state`,
+`acceptance_criteria`, `proof_requirements` shape) remains in force.

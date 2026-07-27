@@ -66,8 +66,6 @@ _EXPORT_MODULES: Tuple[str, ...] = (
 )
 
 _MODULE_EXPORTS: Dict[str, str] = {
-    "deliverable_gates": "deliverable_gates",
-    "deliverable_policy": "deliverable_policy",
     "narration_outbox": "narration_outbox",
     "push_verification": "push_verification",
     "hashlib": "hashlib",

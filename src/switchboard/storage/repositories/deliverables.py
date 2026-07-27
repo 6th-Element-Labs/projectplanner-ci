@@ -19,8 +19,6 @@ import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-import deliverable_gates
-import deliverable_policy
 import evidence_claims
 import narration_outbox
 from constants import *  # noqa: F401,F403
@@ -218,6 +216,36 @@ def _deliverable_milestone_exists_in(
 PROOF_REQUIREMENTS_SCHEMA = "switchboard.deliverable_proof_requirements.v1"
 
 
+
+_LEGACY_CLOSURE_METADATA_KEYS = (
+    "closure_reports", "last_closure_report", "last_closure_grade", "last_closure_at",
+)
+
+
+def _metadata_object(value):
+    """Match the store's permissive JSON-object coercion for upsert metadata."""
+    if value in (None, ""):
+        parsed = {}
+    elif isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            parsed = {"text": value}
+    else:
+        parsed = value
+    return parsed if isinstance(parsed, dict) else {"value": parsed}
+
+
+def _prepare_deliverable_upsert(connection, deliverable_id, status, metadata_value):
+    """Load prior row and normalize metadata; no closure grade gate."""
+    prior = connection.execute(
+        "SELECT status, metadata_json FROM deliverables WHERE id=?", (deliverable_id,)
+    ).fetchone()
+    incoming = _metadata_object(metadata_value)
+    for key in _LEGACY_CLOSURE_METADATA_KEYS:
+        incoming.pop(key, None)
+    return prior, incoming, None
+
 def _enforce_deliverable_intake() -> bool:
     return (os.environ.get("PM_ENFORCE_DELIVERABLE_INTAKE") or "").strip().lower() in (
         "1", "true", "yes", "on")
@@ -250,11 +278,6 @@ def _validate_proof_requirements(proof: Any) -> List[str]:
             seen.add(gid)
         if not isinstance(gate.get("required"), bool):
             errors.append(f"proof_requirements.gates[{i}].required must be true or false")
-    if not errors:
-        try:
-            deliverable_gates.resolve_gates(proof)
-        except deliverable_gates.GateResolutionError as exc:
-            errors.append(str(exc))
     return errors
 
 
@@ -277,7 +300,7 @@ def _validate_deliverable_intake(data: Dict[str, Any]) -> Optional[Dict[str, Any
             "details": details,
             "required": ["end_state", "acceptance_criteria", "proof_requirements"],
             "proof_requirements_schema": PROOF_REQUIREMENTS_SCHEMA,
-            "spec": "docs/DELIVERABLE-CLOSURE-GATE.md",
+            "spec": "docs/DELIVERABLES-MISSION-MODEL.md",
         }
     return None
 
@@ -311,7 +334,7 @@ def _create_deliverable_impl(data: Dict[str, Any], actor: str = "user",
     with _store_facade()._conn(project) as c:
         if board_id and not _project_board_exists_in(c, board_id):
             return {"error": "unknown board", "board_id": board_id, "project_id": project}
-        prior, incoming_metadata, policy_error = deliverable_policy.prepare_upsert(
+        prior, incoming_metadata, policy_error = _prepare_deliverable_upsert(
             c, deliverable_id, status, data.get("metadata", data.get("metadata_json")))
         if policy_error:
             return policy_error
@@ -420,7 +443,7 @@ def update_deliverable(deliverable_id: str, updates: Dict[str, Any],
         replacement_deliverable_id = str(
             updates.get("replacement_deliverable_id") or "").strip()
         metadata_value = updates.get("metadata", prior.get("metadata", {}))
-        _, safe_metadata, policy_error = deliverable_policy.prepare_upsert(
+        _, safe_metadata, policy_error = _prepare_deliverable_upsert(
             c, deliverable_id, requested_status, metadata_value)
         if policy_error:
             return policy_error
@@ -1416,97 +1439,11 @@ def update_mission_narrative(deliverable_id: str, narrative: str, actor: str = "
 # DELIVERABLES-16: persisted closure reports live in deliverable metadata. We keep
 # the newest N full reports plus a last_closure_* summary for the mission header;
 # grading itself happens in deliverable_closure (this only stores the graded result).
-CLOSURE_REPORT_HISTORY_LIMIT = 10
 
 
-def _closure_report_id(report: Dict[str, Any], now: float) -> str:
-    existing = (report.get("report_id") or "").strip()
-    if existing:
-        return existing
-    stamp = int(report.get("generated_at") or now)
-    digest = (report.get("evidence_hash") or "").split(":")[-1][:12] or f"{stamp:x}"
-    return f"closure-{stamp}-{digest}"
 
 
-def _closure_summary(report: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "report_id": report.get("report_id"),
-        "grade": report.get("grade"),
-        "recommendation": report.get("recommendation"),
-        "generated_at": report.get("generated_at"),
-        "generated_by": report.get("generated_by"),
-        "evidence_hash": report.get("evidence_hash"),
-    }
 
-
-def _record_deliverable_closure_impl(deliverable_id: str, report: Dict[str, Any],
-                                     actor: str, project: str) -> Dict[str, Any]:
-    if not _store_facade().has_project(project):
-        return {"error": f"unknown project: {project}"}
-    if not isinstance(report, dict) or not report.get("grade"):
-        return {"error": "report must be a closure report object with a grade"}
-    now = time.time()
-    report = dict(report)
-    report["report_id"] = _closure_report_id(report, now)
-    with _store_facade()._conn(project) as c:
-        row = c.execute("SELECT metadata_json FROM deliverables WHERE id=?",
-                        (deliverable_id,)).fetchone()
-        if not row:
-            return {"error": "unknown deliverable", "deliverable_id": deliverable_id}
-        metadata = _store_facade()._json_payload(row["metadata_json"])
-        history = [r for r in (metadata.get("closure_reports") or [])
-                   if isinstance(r, dict) and r.get("report_id") != report["report_id"]]
-        metadata["closure_reports"] = ([report] + history)[:CLOSURE_REPORT_HISTORY_LIMIT]
-        metadata["last_closure_report"] = report
-        metadata["last_closure_grade"] = report.get("grade")
-        metadata["last_closure_at"] = now
-        c.execute("UPDATE deliverables SET metadata_json=?, updated_at=? WHERE id=?",
-                  (json.dumps(metadata, sort_keys=True), now, deliverable_id))
-        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
-                  (None, actor, "deliverable.closure_verified",
-                   json.dumps({"deliverable_id": deliverable_id, **_closure_summary(report)},
-                              sort_keys=True), now))
-    return {"ok": True, "deliverable_id": deliverable_id, "report_id": report["report_id"],
-            "grade": report.get("grade"), "recommendation": report.get("recommendation"),
-            "report": report}
-
-
-def record_deliverable_closure(deliverable_id: str, report: Dict[str, Any],
-                               actor: str = "verifier",
-                               project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
-    """Persist a graded closure report on the deliverable and stamp
-    ``deliverable.closure_verified``. Retains the newest
-    ``CLOSURE_REPORT_HISTORY_LIMIT`` full reports plus a ``last_closure_*`` summary
-    for the mission header. Atomic (report write + audit stamp) via _write_through.
-    Grading lives in :mod:`deliverable_closure`; this only stores the result."""
-    return _store_facade()._write_through(project,
-        lambda: _store_facade()._record_deliverable_closure_impl(
-            deliverable_id, report, actor, project))
-
-
-def get_deliverable_closure_report(deliverable_id: str, project: str = DEFAULT_PROJECT,
-                                   report_id: str = "") -> Dict[str, Any]:
-    """Return the latest (or a specific ``report_id``) persisted closure report plus
-    a summary of the retained grade history."""
-    if not _store_facade().has_project(project):
-        return {"error": f"unknown project: {project}"}
-    with _store_facade()._conn(project) as c:
-        row = c.execute("SELECT metadata_json FROM deliverables WHERE id=?",
-                        (deliverable_id,)).fetchone()
-    if not row:
-        return {"error": "unknown deliverable", "deliverable_id": deliverable_id}
-    metadata = _store_facade()._json_payload(row["metadata_json"])
-    reports = [r for r in (metadata.get("closure_reports") or []) if isinstance(r, dict)]
-    history = [_closure_summary(r) for r in reports]
-    if report_id:
-        report = next((r for r in reports if r.get("report_id") == report_id), None)
-        if report is None:
-            return {"error": "closure report not found", "deliverable_id": deliverable_id,
-                    "report_id": report_id, "history": history}
-    else:
-        report = metadata.get("last_closure_report") or (reports[0] if reports else None)
-    return {"deliverable_id": deliverable_id, "report": report,
-            "grade": (report or {}).get("grade"), "history": history, "count": len(reports)}
 
 
 def propose_deliverable_breakdown(deliverable_id: str, payload: Any, actor: str = "user",
@@ -3321,8 +3258,6 @@ class StoreDeliverablesRepository:
     def get_deliverable_breakdown_proposal(self, *args, **kwargs):
         return get_deliverable_breakdown_proposal(*args, **kwargs)
 
-    def get_deliverable_closure_report(self, *args, **kwargs):
-        return get_deliverable_closure_report(*args, **kwargs)
 
     def get_deliverable_dependency_graph(self, *args, **kwargs):
         return get_deliverable_dependency_graph(*args, **kwargs)
@@ -3357,8 +3292,6 @@ class StoreDeliverablesRepository:
     def propose_deliverable_breakdown(self, *args, **kwargs):
         return propose_deliverable_breakdown(*args, **kwargs)
 
-    def record_deliverable_closure(self, *args, **kwargs):
-        return record_deliverable_closure(*args, **kwargs)
 
     def reject_deliverable_breakdown(self, *args, **kwargs):
         return reject_deliverable_breakdown(*args, **kwargs)
@@ -3406,8 +3339,6 @@ __all__ = [
     "deliverable_progress",
     "unlink_task_from_deliverable",
     "update_mission_narrative",
-    "record_deliverable_closure",
-    "get_deliverable_closure_report",
     "propose_deliverable_breakdown",
     "get_deliverable_breakdown_proposal",
     "list_deliverable_breakdown_proposals",
@@ -3446,9 +3377,6 @@ __all__ = [
     "_breakdown_proposal_row",
     "_validate_breakdown_task_spec",
     "_validate_breakdown_payload",
-    "_closure_report_id",
-    "_closure_summary",
-    "_record_deliverable_closure_impl",
     "_finalize_breakdown_review",
     "_resolve_mission_deliverable",
     "_registry_project_ids",

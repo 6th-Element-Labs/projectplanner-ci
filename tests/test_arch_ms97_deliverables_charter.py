@@ -41,13 +41,10 @@ ok(":8124" in surf or "8124" in surf, "thin surface names :8124")
 for route in (
     "/api/deliverables",
     "/api/mission_status",
-    "/closure_report",
     "/dependency_graph",
     "/breakdown_proposals",
 ):
     ok(route in surf, f"thin surface lists {route}")
-ok("closure_verify" in surf and "stay" in surf.lower(),
-   "thin surface keeps closure write off day-one")
 ok("coordinator_tick" in surf, "thin surface keeps coordinator tick off day-one")
 ok("PM_DELIVERABLES_HTTP_PRIMARY" in surf or "dual-strip" in surf.lower(),
    "thin surface names dual-strip analogue")

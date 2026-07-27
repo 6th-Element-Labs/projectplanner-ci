@@ -20,13 +20,12 @@ DAY_ONE = {
     ("GET", "/api/deliverables/{deliverable_id}"),
     ("GET", "/api/mission_status"),
     ("GET", "/api/deliverables/{deliverable_id}/mission_status"),
-    ("GET", "/api/deliverables/{deliverable_id}/closure_report"),
     ("GET", "/api/deliverables/{deliverable_id}/dependency_graph"),
     ("GET", "/api/deliverables/breakdown_proposals"),
     ("GET", "/api/deliverables/breakdown_proposals/{proposal_id}"),
 }
 REQUIRED_GATES = {
-    "G1_route_repository_transaction_inventory", "G2_closure_transaction_boundary",
+    "G1_route_repository_transaction_inventory",
     "G3_auth_project_scope", "G4_revision_drift_binding",
     "G5_sqlite_contention", "G6_resource_budget",
 }
@@ -56,7 +55,7 @@ def router_inventory(path: Path) -> list[dict[str, Any]]:
         for call in ast.walk(node):
             if (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
                     and isinstance(call.func.value, ast.Name)
-                    and call.func.value.id in {"store", "deliverable_closure",
+                    and call.func.value.id in {"store",
                                                "create_deliverable_command",
                                                "update_deliverable_command",
                                                "autopilot_command"}):
@@ -76,70 +75,9 @@ def _attribute_call(node: ast.AST, name: str) -> bool:
             and node.func.attr == name)
 
 
-def closure_transaction_proof(source: str) -> dict[str, Any]:
-    """Structurally prove closure metadata and audit use the same connection scope.
-
-    Repository-wide string matching is deliberately insufficient: the UPDATE and
-    activity INSERT must both be ``c.execute`` calls under one ``with ..._conn``
-    node in ``_record_deliverable_closure_impl``.  The public entrypoint must also
-    return ``_write_through(... _record_deliverable_closure_impl(...))``.
-    """
-    try:
-        tree = ast.parse(source)
-    except SyntaxError as exc:
-        return {"ok": False, "reason": "syntax_error", "message": str(exc)}
-    implementation = _function(tree, "_record_deliverable_closure_impl")
-    entrypoint = _function(tree, "record_deliverable_closure")
-    if implementation is None or entrypoint is None:
-        return {"ok": False, "reason": "closure_functions_missing"}
-
-    atomic_scope = False
-    for scope in (node for node in ast.walk(implementation) if isinstance(node, ast.With)):
-        bound_names = {
-            item.optional_vars.id for item in scope.items
-            if isinstance(item.optional_vars, ast.Name)
-            and _attribute_call(item.context_expr, "_conn")
-        }
-        if "c" not in bound_names:
-            continue
-        sql_calls = [
-            call for call in ast.walk(scope)
-            if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
-            and isinstance(call.func.value, ast.Name) and call.func.value.id == "c"
-            and call.func.attr == "execute"
-        ]
-        sql_text = [
-            " ".join(str(value.value) for value in ast.walk(call)
-                     if isinstance(value, ast.Constant) and isinstance(value.value, str))
-            for call in sql_calls
-        ]
-        metadata_update = any("UPDATE deliverables SET metadata_json" in text
-                              for text in sql_text)
-        audited_insert = any("INSERT INTO activity" in text
-                             and "deliverable.closure_verified" in text
-                             for text in sql_text)
-        if metadata_update and audited_insert:
-            atomic_scope = True
-            break
-
-    write_through_bound = False
-    for statement in entrypoint.body:
-        if not isinstance(statement, ast.Return) or not _attribute_call(statement.value, "_write_through"):
-            continue
-        write_through_bound = any(
-            _attribute_call(node, "_record_deliverable_closure_impl")
-            for node in ast.walk(statement.value)
-        )
-    return {
-        "ok": atomic_scope and write_through_bound,
-        "atomic_connection_scope": atomic_scope,
-        "write_through_entrypoint": write_through_bound,
-    }
-
-
 def writer_transaction_inventory_complete(writers: list[dict[str, Any]]) -> bool:
     """Require every monolith writer to name its concrete boundary and transaction shape."""
-    return len(writers) == 21 and all(
+    return len(writers) == 19 and all(
         str(row.get("ownership") or "").strip() == "monolith"
         and bool(str(row.get("boundary_ref") or "").strip())
         and bool(str(row.get("transaction") or "").strip())
@@ -149,7 +87,7 @@ def writer_transaction_inventory_complete(writers: list[dict[str, Any]]) -> bool
 
 def run_sqlite_probe(*, writes: int = 80, reads_per_worker: int = 80,
                      readers: int = 3) -> dict[str, Any]:
-    """Prove readers see the closure row and audit stamp from one committed revision."""
+    """Prove readers see a deliverable row and its audit stamp from one committed revision."""
     errors: list[str] = []
     mismatches: list[str] = []
     with tempfile.TemporaryDirectory(prefix="arch-ms109-sqlite-") as tmp:
@@ -159,7 +97,7 @@ def run_sqlite_probe(*, writes: int = 80, reads_per_worker: int = 80,
             conn.execute("CREATE TABLE deliverables(id TEXT PRIMARY KEY, revision INTEGER, report_revision INTEGER)")
             conn.execute("CREATE TABLE activity(revision INTEGER PRIMARY KEY, kind TEXT)")
             conn.execute("INSERT INTO deliverables VALUES ('d1', 0, 0)")
-            conn.execute("INSERT INTO activity VALUES (0, 'deliverable.closure_verified')")
+            conn.execute("INSERT INTO activity VALUES (0, 'deliverable.upsert')")
             conn.commit()
         start = threading.Barrier(readers + 1)
 
@@ -172,7 +110,7 @@ def run_sqlite_probe(*, writes: int = 80, reads_per_worker: int = 80,
                     with conn:
                         conn.execute("UPDATE deliverables SET revision=?, report_revision=? WHERE id='d1'",
                                      (revision, revision))
-                        conn.execute("INSERT INTO activity VALUES (?, 'deliverable.closure_verified')",
+                        conn.execute("INSERT INTO activity VALUES (?, 'deliverable.upsert')",
                                      (revision,))
                 conn.close()
             except Exception as exc:  # pragma: no cover
@@ -230,8 +168,6 @@ def evaluate(root: Path = ROOT, *, run_probe: bool = True) -> dict[str, Any]:
     declared_by_route = {(row.get("method"), row.get("path")): row for row in declared}
     call_match = all(sorted(row.get("calls") or []) == actual_by_route[key]["calls"]
                      for key, row in declared_by_route.items() if key in actual_by_route)
-    repository_source = (root / "src" / "switchboard" / "storage" / "repositories" / "deliverables.py").read_text(encoding="utf-8")
-    closure_proof = closure_transaction_proof(repository_source)
     writer_transactions_complete = writer_transaction_inventory_complete(writers)
     auth_scope = verdict.get("auth_project_scope") or {}
     revision = verdict.get("revision_drift_binding") or {}
@@ -251,11 +187,9 @@ def evaluate(root: Path = ROOT, *, run_probe: bool = True) -> dict[str, Any]:
         "day_one_surface_exact": {(row.get("method"), row.get("path")) for row in reads} == DAY_ONE,
         "repository_calls_exact": call_match,
         "all_day_one_routes_read_only": all(row.get("writes") is False for row in reads),
-        "all_writers_remain_monolith": len(writers) == 21 and bool(
+        "all_writers_remain_monolith": len(writers) == 19 and bool(
             (verdict.get("writer_policy") or {}).get("all_inventory_entries_stay_on_monolith")),
         "writer_transactions_complete": writer_transactions_complete,
-        "closure_transaction_atomic": bool(closure_proof.get("ok")) and bool(
-            (verdict.get("closure_consistency") or {}).get("unsafe_split_forbidden")),
         "auth_project_scope_bound": auth_scope.get("required_port") == "DeliverablesReadAuthPort"
                                      and auth_scope.get("explicit_project_required") is True,
         "revision_drift_contract": bool(revision.get("mission_cache_stamp"))
@@ -278,7 +212,7 @@ def evaluate(root: Path = ROOT, *, run_probe: bool = True) -> dict[str, Any]:
         "process_build_authorized": bool(verdict.get("process_build_authorized")),
         "production_cutover_authorized": bool(verdict.get("production_cutover_authorized")),
         "failed_gates": failed_gates, "checks": checks,
-        "closure_transaction_proof": closure_proof, "sqlite_probe": probe,
+        "sqlite_probe": probe,
     }
 
 
