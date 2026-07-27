@@ -396,6 +396,19 @@ def mark_task_merged(task_id: str, merged_sha: str, pr_number: Optional[int] = N
     return result
 
 
+def task_merge_reconcile_subject(
+    task_id: str, project: str = DEFAULT_PROJECT,
+) -> Optional[tuple[Dict[str, Any], Dict[str, Any]]]:
+    """Load only the task and recorded git state needed by exact-task reconcile."""
+    with _conn(project) as c:
+        row = c.execute(
+            "SELECT * FROM tasks WHERE task_id=?", (task_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return _task_row(row), _load_git_state(c, task_id)
+
+
 def _mark_task_merged_impl(task_id: str, merged_sha: str, pr_number: Optional[int] = None,
                            pr_url: str = "", branch: str = "", head_sha: str = "",
                            actor: str = "github-webhook",
@@ -415,16 +428,28 @@ def _mark_task_merged_impl(task_id: str, merged_sha: str, pr_number: Optional[in
         )
         publication = get_for_task_in(c, project, task_id)
         if publication:
+            task_scoped_reconcile = (
+                provenance_source == "github_pr_merged_task_reconcile"
+            )
             try:
                 validate_event(
                     publication, project=project,
                     repository=_github_repo_from_pr_url(pr_url),
-                    pr_number=int(pr_number or 0), branch=branch,
-                    head_sha=head_sha, base_branch=base_branch)
+                    pr_number=int(pr_number or 0),
+                    # A fresh exact-PR merge read may repair stale stored
+                    # publication branch/head. All immutable authority fields
+                    # still validate; the fresh provider head is then persisted
+                    # below as the repaired provenance.
+                    branch="" if task_scoped_reconcile else branch,
+                    head_sha="" if task_scoped_reconcile else head_sha,
+                    base_branch=base_branch)
             except ExecutionPublicationError as exc:
                 return exc.as_dict() | {"task_id": task_id}
         current = _load_git_state(c, task_id)
         task = _task_row(row)
+        from switchboard.storage.repositories.attention import (
+            terminalize_task_attention_in,
+        )
         semantic_gate = semantic_completion_gate(task, current.get("evidence") or {})
         if not semantic_gate.get("ok"):
             c.execute("UPDATE tasks SET status='Blocked', updated_at=? WHERE task_id=?",
@@ -453,8 +478,13 @@ def _mark_task_merged_impl(task_id: str, merged_sha: str, pr_number: Optional[in
                        json.dumps({"merged_sha": merged_sha, "pr_number": pr_number,
                                    "pr_url": pr_url, "semantic_gate": semantic_gate},
                                   sort_keys=True), now))
+            attention_cleanup = terminalize_task_attention_in(
+                c, project=project, task_id=task_id, actor=actor,
+                reason="canonical_merge_observed", now=now,
+            )
             return {"task_id": task_id, "status": "Blocked", "git_state": git_state,
-                    "semantic_gate": semantic_gate, "merged": True}
+                    "semantic_gate": semantic_gate, "merged": True,
+                    "attention_cleanup": attention_cleanup}
         merge_evidence = {
             **(current.get("evidence") or {}),
             "merged_sha": merged_sha,
@@ -476,9 +506,14 @@ def _mark_task_merged_impl(task_id: str, merged_sha: str, pr_number: Optional[in
             (not head_sha or current.get("head_sha") == head_sha)
         )
         if same_merge:
+            attention_cleanup = terminalize_task_attention_in(
+                c, project=project, task_id=task_id, actor=actor,
+                reason="canonical_merge_observed", now=now,
+            )
             return {"task_id": task_id, "status": target_status,
                     "git_state": current, "idempotent": True,
-                    "merge_done_gate": done_gate}
+                    "merge_done_gate": done_gate,
+                    "attention_cleanup": attention_cleanup}
         c.execute("UPDATE tasks SET status=?, updated_at=? WHERE task_id=?",
                   (target_status, now, task_id))
         git_state = _upsert_git_state(c, task_id, {
@@ -559,8 +594,13 @@ def _mark_task_merged_impl(task_id: str, merged_sha: str, pr_number: Optional[in
             _heal_dependency_blocked_tasks_in(
                 c, completed_task_id=task_id, actor="switchboard/dependency-lifecycle",
                 now=now)
+        attention_cleanup = terminalize_task_attention_in(
+            c, project=project, task_id=task_id, actor=actor,
+            reason="canonical_merge_observed", now=now,
+        )
     return {"task_id": task_id, "status": target_status, "git_state": git_state,
-            "merge_done_gate": done_gate, "merged": True}
+            "merge_done_gate": done_gate, "merged": True,
+            "attention_cleanup": attention_cleanup}
 
 
 def mark_task_default_branch_commit(task_id: str, commit_sha: str,

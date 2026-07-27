@@ -43,6 +43,27 @@ def reconcile(project: str = "maxwell", full: bool = False,
         activity_limit=activity_limit, task_limit=task_limit))
 
 
+def reconcile_task_merge(ctx: Context, task_id: str,
+                         project: str = "maxwell") -> str:
+    """Freshly reconcile one task's exact recorded canonical GitHub PR."""
+    services = _services()
+    services.require_write(ctx, project, ("write:ixp",))
+    from switchboard.application.commands.reconcile_task_merge import execute
+    from switchboard.storage.repositories.provenance import (
+        task_merge_reconcile_subject,
+    )
+    return services.dumps(execute(
+        task_id=task_id,
+        project=project,
+        actor="mcp/reconcile-task-merge",
+        load_subject=task_merge_reconcile_subject,
+        canonical_repo_for=store.get_project_github_repo,
+        fetch_pull_request=lambda repo, number: store._github_pr(
+            repo, number, token=store._github_token(repo)),
+        mark_merged=store.mark_task_merged,
+    ))
+
+
 def reconcile_alerts(ctx: Context, project: str = "maxwell",
                      alert_to: str = "switchboard/operator",
                      min_severity: str = "medium",
@@ -60,7 +81,7 @@ def reconcile_alerts(ctx: Context, project: str = "maxwell",
         requires_ack=requires_ack))
 
 
-RECONCILE_TOOL_NAMES = ("reconcile", "reconcile_alerts")
+RECONCILE_TOOL_NAMES = ("reconcile", "reconcile_task_merge", "reconcile_alerts")
 
 
 def register_reconcile_tools(mcp: Any, services: ReconcileToolServices) -> dict[str, Callable[..., str]]:

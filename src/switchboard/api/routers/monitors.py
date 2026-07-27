@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Callable
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
+from pydantic import BaseModel, ConfigDict
 
 import auth
 import store
@@ -21,6 +22,12 @@ import store
 ProjectResolver = Callable[[str], str]
 PrincipalResolver = Callable[..., dict]
 BodyProjectResolver = Callable[[dict], str]
+
+
+class TaskMergeReconcileBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project: str
 
 
 def create_router(*, resolve_project: ProjectResolver,
@@ -107,6 +114,31 @@ def create_router(*, resolve_project: ProjectResolver,
         return store.reconcile(
             project=resolve_project(project), incremental=not full,
             activity_limit=activity_limit, task_limit=task_limit)
+
+    @router.post("/ixp/v1/tasks/{task_id}/reconcile-merge")
+    async def ixp_reconcile_task_merge(task_id: str, request: Request,
+                                       body: TaskMergeReconcileBody):
+        project = resolve_project(body.project)
+        principal = resolve_principal(
+            request, project, ("write:ixp",),
+            dev_actor="switchboard/reconcile-task-merge")
+        from switchboard.application.commands.reconcile_task_merge import execute
+        from switchboard.storage.repositories.provenance import (
+            task_merge_reconcile_subject,
+        )
+        result = execute(
+            task_id=task_id,
+            project=project,
+            actor=auth.actor(principal),
+            load_subject=task_merge_reconcile_subject,
+            canonical_repo_for=store.get_project_github_repo,
+            fetch_pull_request=lambda repo, number: store._github_pr(
+                repo, number, token=store._github_token(repo)),
+            mark_merged=store.mark_task_merged,
+        )
+        if result.get("error"):
+            raise HTTPException(400, result)
+        return result
 
     @router.get("/ixp/v1/background_jobs")
     async def ixp_list_background_jobs():

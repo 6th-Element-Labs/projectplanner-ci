@@ -722,6 +722,78 @@ def reconcile_attention_lifecycle_in(
     return {"expired": len(expired), "orphaned": len(abandoned)}
 
 
+def terminalize_task_attention_in(
+    c: sqlite3.Connection, *, project: str, task_id: str,
+    actor: str, reason: str, now: Optional[float] = None,
+) -> dict[str, Any]:
+    """Cancel nonterminal provider attention after authoritative task termination.
+
+    This is transaction-local so merge provenance and communication cleanup
+    cannot diverge. It never wakes completion or invokes a provider; attention
+    remains communication-only per ADR-0008 M1.
+    """
+    now_value = float(now if now is not None else time.time())
+    normalized_task_id = str(task_id or "").strip().upper()
+    try:
+        wake_rows = c.execute(
+            "SELECT wake_id FROM attention_completion_wakes "
+            "WHERE project_id=? AND task_id=? "
+            "AND status NOT IN ('resolved','cancelled') ORDER BY wake_id",
+            (project, normalized_task_id),
+        ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" not in str(exc).lower():
+            raise
+        # Compatibility for an older or deliberately minimal database opened
+        # before the attention migration. There is no communication state to
+        # terminalize; provenance remains authoritative and must still stamp.
+        return {
+            "schema": "switchboard.task_attention_terminalization.v1",
+            "task_id": normalized_task_id,
+            "reason": reason,
+            "requests_cancelled": 0,
+            "completion_wakes_cancelled": 0,
+            "changed": False,
+            "available": False,
+        }
+    if wake_rows:
+        c.execute(
+            "UPDATE attention_completion_wakes SET status='cancelled', "
+            "last_error=?, claimed_by=NULL, lease_expires_at=NULL, updated_at=? "
+            "WHERE project_id=? AND task_id=? "
+            "AND status NOT IN ('resolved','cancelled')",
+            (reason, now_value, project, normalized_task_id),
+        )
+
+    request_rows = c.execute(
+        "SELECT request_id, version FROM attention_requests "
+        "WHERE project_id=? AND task_id=? "
+        "AND status IN ('pending','decision_recorded','delivering') "
+        "ORDER BY request_id",
+        (project, normalized_task_id),
+    ).fetchall()
+    for row in request_rows:
+        transition_attention_request_in(
+            c,
+            row["request_id"],
+            expected_version=row["version"],
+            target_status="cancelled",
+            actor=actor,
+            reason=reason,
+            project=project,
+            now=now_value,
+            allow_completion_owner=True,
+        )
+    return {
+        "schema": "switchboard.task_attention_terminalization.v1",
+        "task_id": normalized_task_id,
+        "reason": reason,
+        "requests_cancelled": len(request_rows),
+        "completion_wakes_cancelled": len(wake_rows),
+        "changed": bool(request_rows or wake_rows),
+    }
+
+
 def _operator_queue_clause(now: float) -> tuple[str, Sequence[Any]]:
     """Single predicate shared by the operator queue and bell count."""
     return (
@@ -1660,5 +1732,6 @@ __all__ = [
     "record_attention_decision_in",
     "reconcile_attention_lifecycle_in",
     "reconstruct_attention_audit_in",
+    "terminalize_task_attention_in",
     "transition_attention_request_in",
 ]

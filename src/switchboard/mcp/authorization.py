@@ -228,7 +228,7 @@ WRITE_TOOLS = frozenset({
     "poll_external_ci_mirror_run", "pre_tool_check", "preflight_scm_repository",
     "preflight_work_session",
     "reactivate_narration", "reconcile",
-    "reconcile_alerts",
+    "reconcile_alerts", "reconcile_task_merge",
     "record_coordinator_decision", "record_decision", "record_executed_test_run",
     "record_human_blocker",
     "record_outcome",
