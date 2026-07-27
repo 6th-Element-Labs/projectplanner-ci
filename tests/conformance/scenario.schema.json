@@ -45,6 +45,12 @@
         "effect": {
           "type": "string",
           "minLength": 1
+        },
+        "missing_artifact_near_miss_keys": {
+          "description": "COORD-78/CO-21. Evidence keys the classifier's missing_artifact report must name. Present only on scenarios whose refusal has a near miss; an empty list is written as absence, never as [].",
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
         }
       }
     },
@@ -135,6 +141,37 @@
             },
             "head": {
               "enum": ["same", "stale", "none"]
+            }
+          }
+        },
+        "evidence": {
+          "description": "COORD-78 board-evidence axis, fed through the real application.commands.merge_gate. Optional: a scenario that omits it asserts the evidence world derived from the PR world by tests/conformance/_evidence.default_evidence, not an unmodelled one.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "executed_test_run",
+            "external_ci",
+            "work_session",
+            "review_verdict"
+          ],
+          "properties": {
+            "executed_test_run": {
+              "enum": ["valid", "missing", "near_miss_key", "failed", "stale_head"]
+            },
+            "external_ci": {
+              "enum": [
+                "green_exact_head",
+                "green_other_head",
+                "failed",
+                "pending",
+                "none"
+              ]
+            },
+            "work_session": {
+              "enum": ["present", "missing", "borrowed"]
+            },
+            "review_verdict": {
+              "enum": ["pass", "missing", "stale", "open_findings", "not_passed"]
             }
           }
         }

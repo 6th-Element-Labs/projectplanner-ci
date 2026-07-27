@@ -213,13 +213,21 @@ def decision_expect(result: dict[str, Any]) -> dict[str, Any]:
     decision = result["decision"]
     plan = result["plan"]
     roles = [decision["desired_role"]] if decision.get("desired_role") else []
-    return {
+    expect = {
         "terminal": _shared.terminal_for(result),
         "reason_code": decision.get("reason_code"),
         "role_sequence": roles,
         "route": decision.get("route"),
         "effect": plan.get("effect"),
     }
+    # COORD-78: only when the refusal actually names a near miss. Writing an
+    # empty list into every row would put a field in 24 gold files that asserts
+    # nothing, and would make "the near-miss identity survived" indistinguishable
+    # from "there was never a near miss to carry".
+    near_miss = _shared.missing_artifact_near_miss_keys(decision)
+    if near_miss:
+        expect["missing_artifact_near_miss_keys"] = near_miss
+    return expect
 
 
 def assert_gold_scenario(scenario: dict[str, Any]) -> dict[str, Any]:

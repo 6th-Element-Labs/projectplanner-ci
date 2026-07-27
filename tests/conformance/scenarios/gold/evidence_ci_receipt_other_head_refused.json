@@ -1,14 +1,12 @@
 {
   "expect": {
-    "effect": "attach_and_wait",
-    "reason_code": "required_exact_head_ci_failed",
-    "role_sequence": [
-      "remediation"
-    ],
-    "route": "remediation",
+    "effect": "repair_dispatch",
+    "reason_code": "missing_executed_test_run",
+    "role_sequence": [],
+    "route": "coordination_retry",
     "terminal": "blocked"
   },
-  "id": "remediation_fences_stale_head_matching_role",
+  "id": "evidence_ci_receipt_other_head_refused",
   "schema": "switchboard.completion_conformance.scenario.v1",
   "timing": {
     "ci_delay_seconds": 0,
@@ -18,18 +16,24 @@
     "never_report": false
   },
   "world": {
-    "ci": "fail",
+    "ci": "pass",
     "ci_attribution": "product",
     "ci_context": "Switchboard CI / VM gate",
     "draft": false,
+    "evidence": {
+      "executed_test_run": "missing",
+      "external_ci": "green_other_head",
+      "review_verdict": "pass",
+      "work_session": "present"
+    },
     "merge_state_status": "CLEAN",
     "mergeable": true,
     "queue": "none",
     "review": "passed",
     "runner": {
-      "head": "stale",
-      "live": true,
-      "role": "remediation"
+      "head": "none",
+      "live": false,
+      "role": "none"
     }
   }
 }

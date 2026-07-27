@@ -83,6 +83,12 @@ MUTATING = frozenset({
 })
 NAMED_LADDER_REASON = "completion_not_converging"
 
+#: Reason codes whose route hands the task OFF to another plane rather than
+#: continuing the completion loop. Repeating one is not a spin — there is
+#: nothing left for completion to do, and the plane that finishes the job
+#: (GitHub merge provenance) is outside the scenario world's vocabulary.
+HANDOFF_REASONS = frozenset({"canonical_pr_merged", "merge_queue_merged"})
+
 
 def react(world: dict[str, Any], effect: str) -> None:
     """Deterministic consequence of a COMPLETED effect on the scenario world.
@@ -165,6 +171,17 @@ def run_convergence(scenario: dict[str, Any], task_id: str) -> dict[str, Any]:
                         "ticks": tick, "history": history}
             if effect == "none":
                 return {"outcome": "settled", "reason": reason,
+                        "ticks": tick, "history": history}
+            if reason in HANDOFF_REASONS:
+                # The completion loop is DONE here, not spinning: the PR is
+                # merged and provenance belongs to the webhook/reconcile plane
+                # (ADR-0008). The scenario world has no merged_sha axis, so the
+                # reactor cannot show that handoff landing, and without this the
+                # correct terminal reads as a livelock. Deliberately keyed on the
+                # reason, not the effect: the convergence ladder's own forced
+                # `completion_not_converging_reconcile` uses the same effect and
+                # MUST still be caught if it repeats.
+                return {"outcome": "handoff", "reason": reason,
                         "ticks": tick, "history": history}
             if effect not in MUTATING:
                 # wait / attach_and_wait: in a frozen world this is a stable,

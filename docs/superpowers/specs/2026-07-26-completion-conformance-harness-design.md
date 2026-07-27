@@ -9,6 +9,8 @@
   - Task: `COORD-65` (T1 fixture tick) — Done
   - Task: `COORD-66` (T2 Observe harness) — harness-side cut landed; obedient sandbox
     workflow + live wiring are follow-on work (see the T2 plan doc)
+  - Task: `COORD-78` (evidence axis) — `world.evidence` through the real
+    `merge_gate`; see "`world.evidence`" under Scenario contract below
   - T3 Full: follow-on task after T2's sandbox workflow exists
 - **Related:** [AUTOPILOT-COMPLETION-STATE-MACHINE.md](../../AUTOPILOT-COMPLETION-STATE-MACHINE.md),
   [COMPLETION-LIFECYCLE-PIPELINE.md](../../COMPLETION-LIFECYCLE-PIPELINE.md),
@@ -89,6 +91,39 @@ Every conformance PR (T2/T3) or fixture (T1) is identified by a stable `id` and 
   }
 }
 ```
+
+### `world.evidence` — the board-evidence axis (COORD-78)
+
+The `world` above is PR-world only. That was blind spot #1 of the COORD-57
+incident review: the last three completion outages (COORD-57, COORD-61, CO-21)
+were all in the *evidence* family, and T1 pinned `merge_gate={"findings": []}`,
+so none of them could be written down.
+
+`world.evidence` is an optional block with four axes — `executed_test_run`
+(`valid|missing|near_miss_key|failed|stale_head`), `external_ci`
+(`green_exact_head|green_other_head|failed|pending|none`), `work_session`
+(`present|missing|borrowed`), `review_verdict`
+(`pass|missing|stale|open_findings|not_passed`).
+
+It is fed by **running the real `application.commands.merge_gate`** and passing
+its actual findings into `build_completion_snapshot`. Only DB and GitHub seams
+are stubbed, at `merge_gate`'s own `_store_facade` delegate layer; every
+sub-gate that produces a finding stays production code (`_executed_test_run_gate`,
+`_external_ci_review_gate` over a real `_external_ci_summary`,
+`review_merge_gate_findings` over an in-memory copy of the real `db.schema`).
+
+Findings are never hand-built. `_merge_gate_finding` splats its `details`
+argument onto the finding, so `finding["details"]` does not exist — and two
+authors independently shipped consumers reading that key, green and dead,
+because their tests hand-built the shape the gate never emits. A harness that
+hand-built findings would make that defect class permanently invisible.
+
+Omitting `world.evidence` is an assertion, not a gap: the scenario gets the
+world derived by `_evidence.default_evidence`, in which `external_ci` follows
+`world.ci` so a red-CI scenario never claims a green receipt.
+
+Implementation: `tests/conformance/_evidence.py`; contract guarded by
+`tests/test_coord78_conformance_evidence_axis.py`.
 
 Rules:
 
