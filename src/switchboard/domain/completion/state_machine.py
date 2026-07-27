@@ -847,8 +847,8 @@ def _classify_completion_base(
         if queue_failure in {"policy", "authority"}:
             return _decision("blocked", "human", "merge_queue_authority_failure",
                              board="Blocked")
-        return _decision("blocked", "coordination_retry", "merge_queue_infrastructure_failure",
-                         retry="bounded")
+        return _decision("blocked", "human", "merge_queue_infrastructure_failure",
+                         board="Blocked")
 
     ci_decision = _required_ci_decision(snap)
     # Product / authority CI failures still outrank draft (code is wrong or policy
@@ -889,7 +889,7 @@ def _classify_completion_base(
     )
     if merge_state == "behind":
         return _decision("blocked", "coordination_retry", "pr_branch_behind",
-                         retry="bounded")
+                         retry="bounded", effect="update_branch")
     if merge_state == "unknown" or mergeable is None:
         route = "coordination_retry" if snap.get("mergeability_retry_exhausted") else "wait"
         return _decision("blocked" if route != "wait" else "waiting", route,
@@ -906,10 +906,10 @@ def _classify_completion_base(
         return _decision("blocked", "coordination_retry", "live_runner_not_desired",
                          retry="bounded", effect="fence_runner")
 
-    # Tip gates are green and there is no live queue entry. Distinguish
-    # "never queued" (enqueue once) from "GitHub ejected after a verified
-    # enqueue" (requeue). Treating eject as a fresh enqueue is a no-op under
-    # ONCE_ONLY / idempotent replay — that is the BREAKDOWN 38 / 40 jam.
+    # Tip gates are green and there is no live queue entry. Enqueue exactly once.
+    # If GitHub later ejects that entry, native auto-merge may recover it; Switchboard
+    # does not run a second requeue lifecycle. A persistent eject becomes an explicit
+    # operator decision with the audited CI-repair/admin-merge path available.
     removal = _text(queue.get("last_removal_reason") or queue.get("removal_reason"))
     if (
         not queue_state
@@ -918,10 +918,8 @@ def _classify_completion_base(
             or removal in {"failed_checks", "checks_timed_out"}
         )
     ):
-        return _decision(
-            "blocked", "coordination_retry", "merge_queue_ejected_tip_green",
-            retry="bounded", effect="requeue_merge_group",
-        )
+        return _decision("blocked", "human", "merge_queue_ejected_tip_green",
+                         board="Blocked")
 
     return _decision("ready_to_queue", "review_merge", "exact_head_gates_passed",
                      role="review_merge", effect="enqueue")

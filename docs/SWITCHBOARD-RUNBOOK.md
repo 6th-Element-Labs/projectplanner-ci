@@ -132,19 +132,9 @@ projectplanner-ci `verify` workflow run and the corresponding Switchboard `exter
 do not treat a missing status as a pass. Re-open or synchronize the PR to request a fresh
 exact-SHA scratchpad tag through the Plan VM webhook.
 
-The Plan VM posts only the advisory SESSION-12 **`Switchboard / claim gate`**
-via `projectplanner-claim-gate.timer`. Merge authorization remains visible
-inside Switchboard; it is not another GitHub status lifecycle:
-
-```bash
-/opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py claim_gate_prs
-```
-
-Manual claim-gate for one PR:
-
-```bash
-PM_GITHUB_TOKEN=... scripts/switchboard_pr_gate.py --pr 18
-```
+Claim, Work Session, exact-head review, remediation, and merge authorization remain
+Switchboard preconditions for arming auto-merge. They are not GitHub status contexts.
+GitHub branch protection requires exactly one context: **`Switchboard CI / VM gate`**.
 
 ### Trusted scratchpad CI (CI-12/CI-17) + box teardown (CI-7)
 
@@ -153,7 +143,9 @@ PM_GITHUB_TOKEN=... scripts/switchboard_pr_gate.py --pr 18
 exact `refs/pull/<n>/head` SHA, and push it to a disposable `refs/tags/ci/**` tag. The dispatcher
 then invokes `master:verify.yml`; the tag cannot satisfy a branch-push trigger and mirrored
 agent code never supplies workflow authority.
-PR heads run fast impacted admission, while merge-group SHAs run the full suite and Playwright.
+PR heads and merge-group SHAs run the identical `scripts/switchboard_ci.sh` full gate,
+including Playwright, and publish the same single context. There is no fast/full fork.
+Wall-clock load ratchets run in the scheduled, non-required `performance-monitor` workflow.
 The Plan VM coordinates the mirror from the service-owned
 `/var/lib/projectplanner/ci-source` clone but never runs the test suite. If mirroring fails,
 verify that path is a Git checkout owned by `projectplanner` and that the service token can
@@ -166,11 +158,24 @@ and fails closed; do not restore `PRIVATE_READ_TOKEN`. Scratchpad checkout is pu
 credential-free. The suite job contains no secret expressions; isolated announce/report jobs
 mint the App token and publish one pending/terminal status.
 
-Manual exact-head recovery uses the same route, not a second pull workflow:
+Manual exact-head recovery uses the same mirror and workflow, not a second CI path:
 
 ```bash
-python ci_scratchpad_dispatch.py --pr <PR> --head-sha <SHA> --dispatch --json
+python jobs.py dispatch_scratchpad --pr <PR> --head-sha <SHA> \
+  --purpose ci_repair --actor <OPERATOR> --reason "<WHY>" --dispatch --json
 ```
+
+After that exact run is green, the human administrator verifies the provider readback and
+required context, records the SHA/run/operator/reason audit, and bypasses only the queue:
+
+```bash
+python scripts/ci_repair_merge.py --pr <PR> --sha <SHA> \
+  --run-url <PROJECTPLANNER_CI_RUN_URL> --reason "<WHY>" --merge
+```
+
+The script fails closed if the PR head or base moves, the branch is not current, the run is
+not successful, or the required context does not point to that run. It never merges a red or
+untested SHA.
 
 **Retire on-box VM CI** after scratchpad verification holds (operator script — reversible via
 `deploy/retired/*.bak` for one week):
@@ -180,19 +185,21 @@ cd /opt/projectplanner && sudo bash deploy/ci7-teardown-box-ci.sh
 ```
 
 This stops `projectplanner-ci-gate.{timer,service}` and `projectplanner-ci-gate-request.{path,service}`,
-removes `/var/lib/projectplanner/ci-gate`, enables `projectplanner-claim-gate.timer`, and deletes
-disabled merge-queue ruleset **18821466**.
+removes `/var/lib/projectplanner/ci-gate`. The advisory claim-status timer is retired; hygiene
+remains inside Switchboard. Native merge-queue ruleset **18821466** remains the landing serializer.
 
 Rollback (within one week): restore units from `deploy/retired/` or `/etc/systemd/system/*.bak-ci7`,
-re-enable the old timers, and disable `projectplanner-claim-gate.timer`.
+re-enable the old timers only for rollback diagnosis.
 
 ### Native merge queue
 
 The active native merge queue sends `merge_group/checks_requested` webhooks. Switchboard mirrors
 the exact temporary head SHA through the same scratchpad route, and `verify.yml` posts the single
-required `Switchboard CI / VM gate` verdict after the full suite and Playwright. A transient
-dispatch failure keeps the webhook delivery retryable. No advisory status is projected onto
-merge-group SHAs; only the claim advisory is posted on PR heads.
+required `Switchboard CI / VM gate` verdict after the same full suite and Playwright used for
+PR heads. A transient dispatch failure keeps the webhook delivery retryable. No claim or merge
+authorization statuses are projected onto GitHub. Autopilot enqueues once and then waits for
+GitHub; it does not run a custom requeue lifecycle. Persistent queue failure uses the audited
+CI-repair administrator lane above.
 
 Verifier resume rule: review/audit workflows that spawn skeptic verifier agents should write a
 `switchboard.review_verifier_run.v1` checkpoint with one deterministic job per

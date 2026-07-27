@@ -76,22 +76,31 @@ Route A-push is implemented by the first-class **`external_ci_mirror`** runner +
 Flow:
 
 1. Canonical PR `opened` / `reopened` / `ready_for_review` / `synchronize` webhook → [`github_sync.py`](../github_sync.py) → `external_ci_mirror.request_external_ci_mirror_run`.
-2. The runner fetches `refs/pull/<n>/head`, verifies the live GitHub head and merge-base SHAs, and pushes the exact head to a deterministic disposable `refs/tags/ci/<task>/<sha>` tag on `6th-Element-Labs/projectplanner-ci`. The tag transport cannot trigger a branch-authored workflow.
-3. The runner dispatches **`master:verify.yml`** with the scratchpad ref, exact SHA, merge base, and `head` mode. The trusted workflow runs impacted admission tests in a secret-free job; isolated App jobs post the one required context **`Switchboard CI / VM gate`**.
-4. GitHub's merge queue creates a temporary merge-group SHA. The same route dispatches `merge_group` mode, which runs the full suite plus Playwright before landing.
-5. Plan VM **`switchboard_pr_gate.py` posts only SESSION-12 `Switchboard / claim gate`** as advisory coordination visibility. Merge authorization remains internal Switchboard state.
+2. The runner fetches `refs/pull/<n>/head`, verifies the live GitHub head SHA, and pushes it to a deterministic disposable `refs/tags/ci/<task>/<sha>` tag on `6th-Element-Labs/projectplanner-ci`. The tag transport cannot trigger a branch-authored workflow.
+3. The runner dispatches **`master:verify.yml`** with the scratchpad ref, exact SHA, and an audit-only purpose. The trusted workflow always runs the full canonical `scripts/switchboard_ci.sh` gate plus Playwright in a secret-free job; isolated App jobs post the one required context **`Switchboard CI / VM gate`**.
+4. GitHub's merge queue creates a temporary merge-group SHA. The same route, workflow, script, suite, and context verify that distinct exact SHA before landing.
+5. Claim, Work Session, review, remediation, and merge-authorization hygiene stay inside Switchboard as preconditions to arm auto-merge. They are not GitHub status contexts. Autopilot enqueues once and waits; it never owns a custom requeue cycle.
 
 **Trigger decision (projectplanner):**
 
 | Layer | Mechanism | Role |
 |---|---|---|
-| **Primary** | exact-SHA mirror plus trusted `workflow_dispatch` | Fast PR admission; full merge-group verification |
-| **Manual recovery** | trusted `workflow_dispatch` with `source_ref`, `source_sha`, and mode | Re-run one exact mirrored SHA without another trigger path |
+| **Primary** | exact-SHA mirror plus trusted `workflow_dispatch` | Identical full verification for PR and merge-group SHAs |
+| **Manual recovery** | the same exact-SHA mirror and trusted workflow with `purpose=ci_repair` | Require one green run, then audited administrator squash merge that bypasses only the queue |
+| **Performance monitor** | scheduled, non-required public workflow | Wall-clock load ratchets and reports; never a PR status |
 | **Heartbeat** | [`docs/UPTIME-MONITORING.md`](UPTIME-MONITORING.md) off-box probe (5-min) | Separate liveness probe for `plan.taikunai.com`; does not run the suite |
 
 Failure legibility (2026-07-12 lesson): checkout/setup failures post `infra: …`; suite failures post `tests: …`.
 
-Operator runbook: [`SWITCHBOARD-RUNBOOK.md`](SWITCHBOARD-RUNBOOK.md) (scratchpad route + claim gate). The old suite runner remains retired by [`deploy/ci7-teardown-box-ci.sh`](../deploy/ci7-teardown-box-ci.sh); only the mirror coordination step runs on the Plan VM.
+Operator runbook: [`SWITCHBOARD-RUNBOOK.md`](SWITCHBOARD-RUNBOOK.md). The old
+suite runner, pull relay, duplicate backend/sharded workflows, claim-status
+timer, and legacy merge coordinator remain retired; only exact-SHA mirror
+coordination runs on the Plan VM. Merge authorization remains internal
+Switchboard state, evaluated before Autopilot arms the PR, rather than a second
+advisory GitHub lifecycle.
+
+Merge authorization remains internal Switchboard state.
+The pull relay and duplicate backend/sharded workflows are retired.
 
 ---
 
@@ -111,7 +120,7 @@ This is why Route A is safe for private code: the public mirror is a disposable 
 | Repo | Account | Constraint | Route |
 |---|---|---|---|
 | **Helm** | `StevenRidder` (personal) | tiny budget + macOS 10× | **A-push — public mirror** (`external_ci_mirror`; only economical option) |
-| **projectplanner** | `6th-Element-Labs` (org) | suite must never run on prod; scratchpad exposure accepted | **A-push — `verify.yml`** on `projectplanner-ci` (`ci/**` push) |
+| **projectplanner** | `6th-Element-Labs` (org) | suite must never run on prod; scratchpad exposure accepted | **A-push — `verify.yml`** on `projectplanner-ci` (disposable `refs/tags/ci/**`) |
 | **Enterprise customer** | their org | code must not go public | **B — self-hosted runner** (their compute, code private) |
 | **Open-source project** | any | code already public | **A-push** (natural fit) |
 
@@ -124,7 +133,7 @@ Helm routing is **unchanged**. projectplanner now uses the same push mirror engi
 **Built + shipped:**
 - `repo_topology` schema — roles, authority, `required_status_contexts`, `claim_gate`; MCP tools (`set_project_repo_topology`, …); agent session-prompt guidance ("public_ci = verification evidence only").
 - **`external_ci_mirror` engine** — push/dispatch/poll/record for Route A-push (Helm and MCP-driven mirrors).
-- **Scratchpad verification (CI-10…CI-17):** exact-SHA mirror plus trusted default-branch `verify.yml`; secret-free suite execution; fast PR admission; full merge-group verification; one required status; Plan VM claim advisory. The pull relay and duplicate backend/sharded workflows are retired.
+- **Scratchpad verification:** exact-SHA mirror plus one trusted default-branch `verify.yml`; identical full suite execution for PR, queue, and repair purposes; one required status; no process-state status fan-out.
 - **Off-box uptime probe (HARDEN-44):** [`UPTIME-MONITORING.md`](UPTIME-MONITORING.md) on `projectplanner-ci`.
 
 **To build (turns the capability into a one-click product):**
@@ -140,7 +149,7 @@ Helm routing is **unchanged**. projectplanner now uses the same push mirror engi
 - **Phase 1 — Consolidate (DONE):** topology-driven verification; on-box venv test-runner retired; duplicate `run_sandbox_gate` + `ci-sandbox.sh` removed.
 - **Phase 1b — Pull bridge (DONE, CI-6…CI-9):** projectplanner VM gate moved to `verify.yml`; suite and legacy bare-mirror units retired from the box.
 - **Phase 1c — Scratchpad route (CI-10…CI-17):** reuse the mirror engine, push exact projectplanner PR heads to non-triggering disposable tags, and keep the required status contract. Other mirror consumers retain their declared ref strategy.
-- **Phase 1d — Trusted fast/full route (CI-16…CI-17):** one App-authenticated verdict, trusted workflow authority, secret/job separation, fast head admission, full queue verification, and no pull fallback.
+- **Phase 1d — Trusted thin-queue route:** one App-authenticated verdict, trusted workflow authority, secret/job separation, identical exact-SHA verification, non-blocking scheduled timing monitors, and an audited administrator repair lane.
 - **Phase 2 — Automate provisioning:** opt-in creates + wires a mirror or pull workflow from the topology.
 - **Phase 3 — Route B:** dedicated/autoscaling self-hosted runner as the private fallback.
 - **Phase 4 — UI:** project-settings strategy selector + status.
@@ -157,7 +166,7 @@ Helm routing is **unchanged**. projectplanner now uses the same push mirror engi
 
 ## Native merge queue
 
-GitHub's native merge queue tests merge-group head SHAs, not PR heads. The canonical `merge_group/checks_requested` webhook sends that exact temporary SHA through the same mirror route in full mode, and **`verify.yml` posts only `Switchboard CI / VM gate` to it** after the full suite and Playwright. PR-head green means safe to enqueue, not safe to bypass this landing gate. See [`SWITCHBOARD-RUNBOOK.md`](SWITCHBOARD-RUNBOOK.md) → "Native merge queue".
+GitHub's native merge queue tests merge-group head SHAs, not PR heads. The canonical `merge_group/checks_requested` webhook sends that exact temporary SHA through the same mirror route, and **the same `verify.yml` / `scripts/switchboard_ci.sh` path posts only `Switchboard CI / VM gate`** after the full suite and Playwright. Autopilot enqueues once and waits. It does not requeue; a persistent GitHub/process failure uses the audited exact-SHA CI-repair administrator lane. See [`SWITCHBOARD-RUNBOOK.md`](SWITCHBOARD-RUNBOOK.md) → "Native merge queue".
 
 ## Non-goals
 

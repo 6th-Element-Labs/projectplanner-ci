@@ -72,6 +72,10 @@ _run_one_test() {
 # adding its repo-relative path here with a reason that can survive code review.
 TEST_DENYLIST=(
   ""  # Empty sentinel keeps macOS Bash 3 + `set -u` happy when nothing is denied.
+  # Wall-clock ratchets are monitored by the scheduled performance workflow.
+  # They are deliberately non-blocking for PR and merge-group verification.
+  "test_concurrent_load_ratchet.py"
+  "test_cross_process_load_ratchet.py"
   # "test_example.py"  # Example: requires a provider fixture unavailable in hermetic CI.
 )
 
@@ -229,14 +233,6 @@ fi
 
 section "Python compile"
 "$PYTHON" -m compileall -q . -x '(^|/)(\.git|\.venv|__pycache__)(/|$)|(^|/)\._'
-
-section "Concurrent agent-path SLO gate"
-CONCURRENT_LOAD_REPORT="${CONCURRENT_LOAD_REPORT:-${TMPDIR:-/tmp}/switchboard-concurrent-load-report.json}" \
-  "$PYTHON" scripts/concurrent_load_gate.py
-
-section "Cross-process SQLite contention SLO gate (ARCH-19)"
-CROSS_PROCESS_LOAD_REPORT="${CROSS_PROCESS_LOAD_REPORT:-${TMPDIR:-/tmp}/switchboard-cross-process-load-report.json}" \
-  "$PYTHON" scripts/cross_process_load_gate.py
 
 section "CI hermeticity gate (tests must not read live host state)"
 # A flaky test blocks the whole merge-queue train, not just one PR. Fail before the suite runs

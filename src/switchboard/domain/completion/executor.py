@@ -26,11 +26,12 @@ class CompletionEffectAdapters:
     ensure_review_generation: Optional[EffectFn] = None
     start_remediation: Optional[EffectFn] = None
     mark_ready: Optional[EffectFn] = None
+    update_branch: Optional[EffectFn] = None
     enqueue: Optional[EffectFn] = None
-    requeue_merge_group: Optional[EffectFn] = None
     repair_dispatch: Optional[EffectFn] = None
     fence_runner: Optional[EffectFn] = None
     reconcile_provenance: Optional[EffectFn] = None
+    escalate_human: Optional[EffectFn] = None
 
     def for_effect(self, effect: str) -> Optional[EffectFn]:
         return getattr(self, effect, None)
@@ -572,6 +573,24 @@ def execute_effect(
     plan = _map(plan)
     effect = str(plan.get("effect") or "")
     if effect == "escalate_human":
+        observe_adapter = (adapters or CompletionEffectAdapters()).escalate_human
+        if observe_adapter is not None:
+            result = observe_adapter(plan)
+            return {
+                "effect": effect,
+                "route": plan.get("route"),
+                "run": _map(run),
+                "plan": plan,
+                "result": result,
+                "receipt": {
+                    "schema": "switchboard.completion_effect_receipt.v1",
+                    "effect": effect,
+                    "idem_key": plan.get("idem_key"),
+                    "verified": True,
+                    "pending": False,
+                    "observed": True,
+                },
+            }
         return _escalate_human(
             plan,
             decision=decision,
@@ -601,7 +620,7 @@ def execute_effect(
         }
     if effect in {
         "ensure_review_generation", "start_remediation", "mark_ready",
-        "enqueue", "requeue_merge_group", "repair_dispatch", "fence_runner",
+        "update_branch", "enqueue", "repair_dispatch", "fence_runner",
         "reconcile_provenance",
     }:
         return _execute_mutating_effect(

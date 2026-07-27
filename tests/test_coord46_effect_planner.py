@@ -35,8 +35,8 @@ def _run(**kw):
 
 def _plan(route, *, effect="none", role=None, snapshot=None, run=None,
           runner=None, state="blocked", acceptance_findings=None,
-          escalated_findings=None):
-    decision = {"state": state, "route": route, "reason_code": "r",
+          escalated_findings=None, reason_code="r"):
+    decision = {"state": state, "route": route, "reason_code": reason_code,
                 "desired_role": role, "effect": effect,
                 "acceptance_findings": list(acceptance_findings or []),
                 "escalated_findings": list(escalated_findings or [])}
@@ -90,14 +90,20 @@ class RouteToEffect(unittest.TestCase):
         plan = _plan("reconcile", state="reconciling")
         self.assertEqual(plan["effect"], "reconcile_provenance")
 
-    def test_merge_group_infrastructure_failure_requeues(self):
+    def test_coordination_retry_never_infers_a_queue_requeue(self):
         plan = _plan("coordination_retry", snapshot=_snap(
             merge_queue={"state": "unmergeable",
                          "failure_attribution": "infrastructure"}))
-        self.assertEqual(plan["effect"], "requeue_merge_group")
+        self.assertEqual(plan["effect"], "repair_dispatch")
 
     def test_generic_coordination_retry_repairs_dispatch(self):
         self.assertEqual(_plan("coordination_retry")["effect"], "repair_dispatch")
+
+    def test_behind_pr_updates_then_rereads_instead_of_dispatching_a_runner(self):
+        plan = _plan("coordination_retry", effect="update_branch")
+        self.assertEqual(plan["effect"], "update_branch")
+        self.assertTrue(plan["reread_after"])
+        self.assertTrue(plan["mutates"])
 
     def test_fence_runner_is_fence_only_not_dispatch(self):
         plan = _plan(
@@ -185,6 +191,12 @@ class Idempotency(unittest.TestCase):
     def test_a_new_route_yields_a_new_key(self):
         self.assertNotEqual(_plan("remediation", role="remediation")["idem_key"],
                             _plan("review_merge", role="review_merge")["idem_key"])
+
+    def test_a_new_reason_yields_a_new_key(self):
+        self.assertNotEqual(
+            _plan("human", reason_code="queue_infrastructure")["idem_key"],
+            _plan("human", reason_code="queue_ejected")["idem_key"],
+        )
 
     def test_a_new_attempt_yields_a_new_key(self):
         self.assertNotEqual(

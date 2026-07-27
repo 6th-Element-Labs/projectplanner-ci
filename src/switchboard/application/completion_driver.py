@@ -27,7 +27,7 @@ def _text(value: Any) -> str:
     return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
 
 
-_QUEUE_EFFECTS = frozenset({"enqueue", "requeue_merge_group"})
+_QUEUE_EFFECTS = frozenset({"enqueue"})
 
 
 def _merge_queue_snapshot(
@@ -40,8 +40,8 @@ def _merge_queue_snapshot(
     """Project live GitHub queue state plus Autopilot enqueue provenance.
 
     When GitHub has no ``mergeQueueEntry`` but completion already verified an
-    enqueue/requeue for this exact head, surface ``prior_enqueue_verified`` so
-    the classifier can requeue instead of replaying once-only enqueue.
+    enqueue for this exact head, surface ``prior_enqueue_verified`` so a later
+    queue eject becomes an explicit operator decision instead of a custom loop.
     """
     queue = _map(merge_queue_entry)
     head = str(head_sha or "").strip().lower()
@@ -252,6 +252,18 @@ def production_effect_adapters(
             ["pr", "ready", str(number), "--repo", repo], token=token,
         )
 
+    def update_branch(plan: Mapping[str, Any]) -> dict[str, Any]:
+        """Advance one behind PR, then stop.
+
+        The next Autopilot tick rehydrates the new head. CI and exact-head
+        review must pass again before the classifier can emit ``enqueue``.
+        """
+        number = int(plan.get("pr_number") or 0)
+        return _github_command(
+            ["api", "-X", "PUT", f"repos/{repo}/pulls/{number}/update-branch"],
+            token=token,
+        )
+
     def enqueue(plan: Mapping[str, Any]) -> dict[str, Any]:
         number = int(plan.get("pr_number") or 0)
         pr = provenance._github_pr(repo, number, token) or {}
@@ -286,8 +298,8 @@ def production_effect_adapters(
         ensure_review_generation=start,
         start_remediation=start,
         mark_ready=mark_ready,
+        update_branch=update_branch,
         enqueue=enqueue,
-        requeue_merge_group=enqueue,
         repair_dispatch=start,
         fence_runner=fence_only,
         reconcile_provenance=reconcile,

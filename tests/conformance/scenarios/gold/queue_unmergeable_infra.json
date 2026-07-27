@@ -1,10 +1,10 @@
 {
   "expect": {
-    "effect": "requeue_merge_group",
+    "effect": "escalate_human",
     "reason_code": "merge_queue_infrastructure_failure",
     "role_sequence": [],
-    "route": "coordination_retry",
-    "terminal": "merged"
+    "route": "human",
+    "terminal": "human"
   },
   "id": "queue_unmergeable_infra",
   "schema": "switchboard.completion_conformance.scenario.v1",

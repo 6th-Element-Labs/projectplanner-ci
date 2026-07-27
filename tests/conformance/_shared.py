@@ -375,10 +375,6 @@ def terminal_for(result: dict[str, Any]) -> str:
     """Collapse one completion-tick result to the scenario's terminal vocabulary."""
     route = result["decision"]["route"]
     effect = result["plan"]["effect"]
-    # Still on the merge path: tip green after eject / infra unmergeable requeue
-    # must not collapse to "blocked" just because the route is coordination_retry.
-    if effect == "requeue_merge_group":
-        return "merged"
     if route == "human":
         return "human"
     if route == "reconcile":

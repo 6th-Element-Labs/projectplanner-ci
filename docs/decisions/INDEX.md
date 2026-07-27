@@ -32,6 +32,7 @@ supersession link; do not delete or silently rewrite it.
 | [ADR-0019: repo constitution](0019-repo-constitution.md) | Owns code layout and front doors. REPO-6 merged and its required front doors now exist. |
 | [ADR-0020: merge gates observe](0020-merge-gates-observe-not-enforce.md) | Owns the “enforce at dispatch, observe at merge, stamp at Done” authority boundary. |
 | [ADR-0022: one fail-closed CI verdict](0022-one-fail-closed-ci-verdict.md) | Owns the single App-authenticated technical verdict and PR-scoped advisory-status boundary. |
+| [ADR-0023: thin merge-queue CI](0023-thin-merge-queue-ci.md) | Supersedes the fast/full split and advisory-status projection: one exact-SHA workflow/script/context, scheduled timing, enqueue-once Autopilot, and audited queue bypass. |
 
 ## Active or partly active decisions
 

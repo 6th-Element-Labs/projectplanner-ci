@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Guard the current Switchboard CI policy.
+"""Guard the thin-queue Switchboard CI policy.
 
-The single required verdict (`Switchboard CI / VM gate`) runs on
-projectplanner-ci from a trusted default-branch workflow. PR heads receive a
-fast admission pass; merge-group SHAs receive the full suite and Playwright.
-The Plan VM posts only the advisory claim status.
+PR heads, merge-group heads, and CI repairs use one trusted workflow, one
+canonical full script, and one required status. Process hygiene stays inside
+Switchboard; timing ratchets are scheduled and non-required.
 """
 from pathlib import Path
 
@@ -21,8 +20,8 @@ def ok(condition, message):
 actions_dir = Path(".github/workflows")
 workflow_files = sorted(actions_dir.glob("*.yml")) + sorted(actions_dir.glob("*.yaml")) \
     if actions_dir.exists() else []
-pr_gate = Path("scripts/switchboard_pr_gate.py").read_text(encoding="utf-8")
 ci_suite = Path("scripts/switchboard_ci.sh").read_text(encoding="utf-8")
+perf_suite = Path("scripts/switchboard_perf_ci.sh").read_text(encoding="utf-8")
 runbook = Path("docs/SWITCHBOARD-RUNBOOK.md").read_text(encoding="utf-8")
 provision = Path("deploy/PROVISION.md").read_text(encoding="utf-8")
 web_unit = Path("deploy/projectplanner.service").read_text(encoding="utf-8")
@@ -49,28 +48,28 @@ ok("Switchboard CI / VM gate" in _verify
    and "Switchboard UI / Playwright" not in _verify
    and "scripts/run_ui_playwright.py" in ci_suite
    and "SWITCHBOARD_CI_STRICT" in _verify
-   and "validation_mode" in _verify
-   and "SWITCHBOARD_CI_SCOPE" in _verify,
-   "one context covers fast head admission and full merge-group verification")
+   and "purpose" in _verify
+   and 'SWITCHBOARD_CI_SCOPE: "full"' in _verify,
+   "one context and identical full script cover head, queue, and repair SHAs")
 ok("jobs:\n  announce:" in _verify
    and "\n  suite:" in _verify
    and "\n  report:" in _verify,
    "credentials and untrusted test execution live in separate jobs")
-ok('DEFAULT_CLAIM_CONTEXT = "Switchboard / claim gate"' in pr_gate,
-   "claim gate posts a stable PR-visible commit status context")
-ok("run_merge_authorization_for_pr(" not in pr_gate[pr_gate.index("def main("):],
-   "claim-gate timer no longer publishes advisory merge-authorization statuses")
-ok("import subprocess" not in pr_gate and "import external_ci_mirror" not in pr_gate,
-   "switchboard_pr_gate.py has no git/subprocess/external_ci_mirror imports")
-ok("projectplanner-claim-gate.timer" in provision and "switchboard_ci.sh" in provision,
-   "Provisioning docs install the claim-gate timer and strict local suite")
+github_sync = Path("github_sync.py").read_text(encoding="utf-8")
+ok("_maybe_refresh_claim_gate" not in github_sync
+   and "projectplanner-claim-gate.timer" not in provision,
+   "claim and Work Session hygiene stay inside Switchboard, not GitHub statuses")
 ok("Switchboard CI / VM gate" in runbook
    and "projectplanner-ci" in runbook,
    "Runbook names VM verification on projectplanner-ci")
-ok("ci_scratchpad_dispatch" in Path("github_sync.py").read_text(encoding="utf-8"),
+ok("ci_scratchpad_dispatch" in github_sync,
    "github_sync routes canonical PR verification through scratchpad dispatch")
-ok("fail-on-red" in pr_gate,
-   "Manual gate can fail closed when requested")
+repair = Path("scripts/ci_repair_merge.py").read_text(encoding="utf-8")
+ok("--admin" in repair
+   and "--match-head-commit" in repair
+   and "ci-repair" in repair
+   and "base branch moved" in repair,
+   "repair lane audits and bypasses only the queue after exact-SHA green")
 ok("Environment=PM_AUTH_MODE=required" in web_unit,
    "Production web unit forces PM_AUTH_MODE=required")
 ok("Environment=PM_AUTH_MODE=required" in mcp_unit,
@@ -81,19 +80,23 @@ ok("SWITCHBOARD_CI_SOURCE_PATH=/var/lib/projectplanner/ci-source" in web_unit
    and "git clone --no-checkout" in least_privilege
    and "credential.helper" in least_privilege,
    "production webhook has a writable authenticated coordination clone for scratchpad mirroring")
-ok("claim_gate_prs" in Path("jobs.py").read_text(encoding="utf-8")
-   and "Environment=HOME=/var/lib/projectplanner" in
-   Path("deploy/projectplanner-claim-gate.service").read_text(encoding="utf-8"),
-   "claim-gate job and service are wired for the Plan VM")
 ok("run_discovered_tests" in ci_suite and "TEST_DENYLIST" in ci_suite
    and "find ." in ci_suite,
    "CI gate discovers every Python test unless the documented denylist excludes it")
 ok(not any(line.startswith("run_test test_") for line in ci_suite.splitlines()),
    "CI gate cannot silently regress to a hand-maintained per-test allowlist")
-ok("SWITCHBOARD_CI_SCOPE" in ci_suite
-   and "select_impacted_tests.py" in ci_suite
-   and "SWITCHBOARD_CI_FAIL_FAST" in ci_suite,
-   "fast admission selects impacted tests and stops scheduling after a known failure")
+ok("test_concurrent_load_ratchet.py" in ci_suite
+   and "test_cross_process_load_ratchet.py" in ci_suite
+   and "concurrent_load_gate.py" not in ci_suite
+   and "cross_process_load_gate.py" not in ci_suite
+   and "concurrent_load_gate.py" in perf_suite
+   and "cross_process_load_gate.py" in perf_suite,
+   "timing ratchets are scheduled monitoring, never PR or queue blockers")
+perf_workflow = (actions_dir / "performance-monitor.yml").read_text(encoding="utf-8")
+ok("schedule:" in perf_workflow
+   and "scripts/switchboard_perf_ci.sh" in perf_workflow
+   and "Switchboard CI / VM gate" not in perf_workflow,
+   "scheduled performance workflow publishes no required status")
 ok("app.js composition root stays below 5,000 lines" not in
    Path("test_arch_ms21_frontend_modules.py").read_text(encoding="utf-8"),
    "retired global app.js line counter is no longer a blocking test")

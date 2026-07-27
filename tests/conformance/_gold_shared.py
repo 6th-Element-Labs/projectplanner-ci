@@ -68,7 +68,7 @@ _HUMAN_SCHEMA_MIGRATIONS = {
 #: invoke a ``CompletionEffectAdapters`` callback.
 _LEDGER_EFFECTS = frozenset({
     "ensure_review_generation", "start_remediation", "mark_ready", "enqueue",
-    "requeue_merge_group", "repair_dispatch", "fence_runner",
+    "update_branch", "repair_dispatch", "fence_runner",
     "reconcile_provenance",
 })
 
@@ -160,8 +160,8 @@ def run_world(
         ensure_review_generation=effect,
         start_remediation=effect,
         mark_ready=effect,
+        update_branch=effect,
         enqueue=effect,
-        requeue_merge_group=effect,
         repair_dispatch=effect,
         fence_runner=effect,
         reconcile_provenance=effect,

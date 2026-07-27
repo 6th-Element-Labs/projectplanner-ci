@@ -92,8 +92,7 @@ sudo cp deploy/projectplanner-gateway.service deploy/projectplanner.service \
   deploy/projectplanner-mcp.service deploy/projectplanner-monitors.service \
   deploy/projectplanner-monitors.timer deploy/projectplanner-reconcile.service \
   deploy/projectplanner-reconcile.timer deploy/projectplanner-coordinator-audit.service \
-  deploy/projectplanner-coordinator-audit.timer deploy/projectplanner-claim-gate.service \
-  deploy/projectplanner-claim-gate.timer deploy/projectplanner-agent-host.service \
+  deploy/projectplanner-coordinator-audit.timer deploy/projectplanner-agent-host.service \
   deploy/switchboard-auth.service deploy/switchboard-tasks.service \
   deploy/switchboard-coord.service deploy/switchboard-deliverables.service \
   deploy/projectplanner-interactive.slice deploy/projectplanner-batch.slice \
@@ -104,7 +103,6 @@ sudo systemctl enable --now projectplanner-gateway projectplanner projectplanner
 sudo systemctl enable --now projectplanner-monitors.timer
 sudo systemctl enable --now projectplanner-reconcile.timer
 sudo systemctl enable --now projectplanner-coordinator-audit.timer
-sudo systemctl enable --now projectplanner-claim-gate.timer
 # Optional but recommended for Switchboard dogfood: consumes message-only wake intents.
 # It uses PM_HOST_LANES=__MESSAGE_ONLY__ so it will not claim lane-scoped work.
 sudo systemctl enable --now projectplanner-agent-host
@@ -214,7 +212,6 @@ systemctl is-active switchboard-deliverables
 systemctl list-timers projectplanner-monitors.timer
 systemctl list-timers projectplanner-reconcile.timer
 systemctl list-timers projectplanner-coordinator-audit.timer
-systemctl list-timers projectplanner-claim-gate.timer
 systemctl list-timers projectplanner-backup.timer     # HARDEN-43: daily off-box snapshot
 systemctl is-active projectplanner-agent-host
 gh --version                                    # off-box CI mirror needs gh >= 2.6 (see step 6)
@@ -279,12 +276,12 @@ active health checks on the main upstream so hung backends fail fast instead of 
 for minutes. PERF-3 routes swap through **zram** (`deploy/setup-zram-swap.sh`) so any spill stays
 in compressed RAM instead of thrashing disk. PERF-4 splits services into
 `projectplanner-interactive.slice` (web/MCP/gateway: high CPUWeight, memory reservations, no swap)
-and `projectplanner-batch.slice` (reconcile/narrate/claim-gate: CPUQuota~40%, Nice=10, low IOWeight,
+and `projectplanner-batch.slice` (reconcile/narrate/monitors: CPUQuota~40%, Nice=10, low IOWeight,
 memory-capped). Install with `deploy/apply-resource-guards.sh`; verify with
 `bash scripts/verify_cgroup_slices.sh` and `bash scripts/verify_memory_isolation.sh`. If a batch
 job still wedges the box, stop the timers to recover fast:
 ```bash
-sudo systemctl stop projectplanner-{narrate,monitors,inbox,reconcile,coordinator-audit,summarize,claim-gate}.timer
+sudo systemctl stop projectplanner-{narrate,monitors,inbox,reconcile,coordinator-audit,summarize}.timer
 sudo pkill -9 -f jobs.py   # then restart the web app if needed
 ```
 If wedges recur, bump the instance to `t4g.small` (2 GB) and/or move the GitHub Actions runner +
@@ -335,7 +332,7 @@ journalctl -u projectplanner-narrate.service -n 40 --no-pager
 cd /opt/projectplanner && sudo -u projectplanner .venv/bin/python jobs.py narrate_pending
 ```
 
-## Scratchpad GitHub verification (CI-17) + claim gate (CI-7)
+## Scratchpad GitHub verification
 
 **VM verification** (`Switchboard CI / VM gate`) runs on `6th-Element-Labs/projectplanner-ci`
 via the trusted default-branch `verify.yml` workflow — not on the Plan VM. The canonical
@@ -366,19 +363,12 @@ sudo systemctl disable --now actions.runner.6th-Element-Labs-projectplanner.plan
 After scratchpad verification holds, retire the old on-box VM gate with
 `sudo bash deploy/ci7-teardown-box-ci.sh`.
 
-## PR claim-gate timer (CI-7)
+## PR merge preconditions
 
 VM verification (`Switchboard CI / VM gate`) runs on projectplanner-ci via the scratchpad
-`verify.yml` workflow. The Plan VM separately posts the SESSION-12 claim gate
-as the only advisory GitHub status:
-
-```bash
-/opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py claim_gate_prs
-```
-
-`projectplanner-claim-gate.timer` polls open non-draft PRs across every configured canonical repo
-and posts `Switchboard / claim gate` to each PR head SHA. It needs a token with commit-status
-write in `PM_GITHUB_TOKEN`, `GITHUB_TOKEN`, or `SWITCHBOARD_CI_GITHUB_TOKEN`.
+`verify.yml` workflow. Claim, Work Session, exact-head review, and remediation hygiene remain
+Switchboard preconditions for arming auto-merge. They are not published as GitHub status
+contexts. The retired claim-status unit is preserved under `deploy/retired/` for history only.
 
 VM verification on projectplanner-ci runs `scripts/switchboard_ci.sh` inside `verify.yml` (see
 [`docs/CI-STRATEGY.md`](../docs/CI-STRATEGY.md)).

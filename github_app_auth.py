@@ -1,7 +1,7 @@
 """GitHub App installation tokens — the fleet's own rate-limit bucket.
 
 Every server-side GitHub caller (open_prs, the PR gates, push verification, the
-merge coordinator, deployment status, the orphan sweep) used to read the same
+scoped Autopilot, deployment status, the orphan sweep) used to read the same
 personal access token out of the environment. A user PAT is billed **per GitHub
 account**, 5,000 REST requests/hour shared across every token that account owns —
 so the batch timers, the Fleet dock's sweeps and an operator's local `gh` all drew
