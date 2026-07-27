@@ -21,7 +21,7 @@ EFFECT_SCHEMA = "switchboard.completion_effect.v1"
 #: Effects that change something outside the completion run itself.
 MUTATING_EFFECTS = frozenset({
     "ensure_review_generation", "start_remediation", "mark_ready", "enqueue",
-    "update_branch", "repair_dispatch", "fence_runner", "escalate_human",
+    "update_branch", "repair_dispatch", "escalate_human",
     "reconcile_provenance",
 })
 
@@ -52,7 +52,9 @@ def canonical_findings(value: Any) -> list[dict[str, Any]]:
 def _effect_for(route: str, decision_effect: str,
                 snapshot: Mapping[str, Any]) -> str:
     if decision_effect == "fence_runner":
-        return "fence_runner"
+        # Capacity owns fencing. Coordination waits for the current lease
+        # generation to surrender or expire, then starts through start_task.
+        return "wait"
     if route == "none":
         return "none"
     if route == "wait":
@@ -180,16 +182,14 @@ def plan_effect(decision: Mapping[str, Any], snapshot: Mapping[str, Any],
         decision.get("escalated_findings"))
 
     effect = _effect_for(route, _text(decision.get("effect")), snapshot)
-    fence_required, fence_identity = _fence(
-        snapshot, desired_role, head_sha)
-
-    # Precedence: the classifier decides before any running process does. A
-    # live generation is attached to only when it already matches the desired
-    # role at the exact head; otherwise it is fenced and replaced.
-    if effect in {"ensure_review_generation", "start_remediation"} and not fence_required:
-        runner = _map(snapshot.get("runner"))
-        if runner.get("live"):
-            effect = "attach_and_wait"
+    # Coordination never selects a runner-fencing effect. A live physical
+    # generation is capacity truth; wait for its lease boundary before asking
+    # start_task for the next generation.
+    runner = _map(snapshot.get("runner"))
+    if effect in {"ensure_review_generation", "start_remediation"} and runner.get("live"):
+        effect = "attach_and_wait"
+    fence_required = False
+    fence_identity: dict[str, Any] = {}
 
     return {
         "schema": EFFECT_SCHEMA,

@@ -970,15 +970,6 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
             message = str(
                 result.get("reason") or result.get("error") or "start refused")
         raise TaskExecutionError("start_refused", message, **details)
-    # W1/W2: a Start must grant coordination authority as well as capacity.
-    # Without a scope the task gets a runner and then stalls at In Review,
-    # because nothing is authorised to drive its review/remediation/merge
-    # rounds. Armed only after the start is known good, so a refused start
-    # never leaves an active scope behind.
-    scope = _arm_task_scope(task_id, project=project, role=role,
-                            runtime=runtime, actor=actor)
-    if scope:
-        result = {**result, "scope": scope}
     execution_id = str(result.get("runner_session_id") or "").strip()
     wake_id = str(result.get("wake_id") or "").strip()
     host_id = str(result.get("host_id") or "").strip()
@@ -1024,6 +1015,7 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
         expires_at=descriptor.get("expires_at"),
         browser_safe=descriptor.get("browser_safe"),
         capacity=result.get("capacity"),
+        scope=result.get("scope"),
         intake_routing=intake_routing or result.get("intake_routing") or None,
     )
 

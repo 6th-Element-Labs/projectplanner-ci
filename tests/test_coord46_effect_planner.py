@@ -105,7 +105,7 @@ class RouteToEffect(unittest.TestCase):
         self.assertTrue(plan["reread_after"])
         self.assertTrue(plan["mutates"])
 
-    def test_fence_runner_is_fence_only_not_dispatch(self):
+    def test_legacy_fence_runner_decision_normalizes_to_wait(self):
         plan = _plan(
             "coordination_retry",
             effect="fence_runner",
@@ -120,28 +120,28 @@ class RouteToEffect(unittest.TestCase):
                 "head_sha": HEAD,
             },
         )
-        self.assertEqual(plan["effect"], "fence_runner")
-        self.assertTrue(plan["fence_required"])
-        self.assertEqual(
-            plan["fence_identity"]["runner_session_id"], "runner-9")
+        self.assertEqual(plan["effect"], "wait")
+        self.assertFalse(plan["fence_required"])
+        self.assertIsNone(plan["fence_identity"])
 
 
-class ClassifierBeatsLiveRunner(unittest.TestCase):
-    """A decision outranks whatever process happens to be running."""
+class ClassifierWaitsForCapacityBoundary(unittest.TestCase):
+    """Coordination records the decision but never fences a live process."""
 
-    def test_live_review_merge_is_fenced_when_remediation_is_required(self):
+    def test_live_review_merge_waits_when_remediation_is_required(self):
         plan = _plan("remediation", role="remediation",
                      runner={"live": True, "role": "review_merge",
                              "head_sha": HEAD, "generation": 7})
-        self.assertTrue(plan["fence_required"])
-        self.assertEqual(plan["fence_generation"], 7)
-        self.assertEqual(plan["effect"], "start_remediation")
+        self.assertFalse(plan["fence_required"])
+        self.assertIsNone(plan["fence_generation"])
+        self.assertEqual(plan["effect"], "attach_and_wait")
 
-    def test_stale_head_runner_is_fenced_even_with_the_right_role(self):
+    def test_stale_head_runner_waits_for_its_capacity_boundary(self):
         plan = _plan("review_merge", role="review_merge",
                      runner={"live": True, "role": "review_merge",
                              "head_sha": OLD, "generation": 2})
-        self.assertTrue(plan["fence_required"])
+        self.assertFalse(plan["fence_required"])
+        self.assertEqual(plan["effect"], "attach_and_wait")
 
     def test_matching_role_and_head_attaches_instead_of_restarting(self):
         plan = _plan("review_merge", role="review_merge",
@@ -263,7 +263,7 @@ class Idempotency(unittest.TestCase):
 class EndToEndFixtures(unittest.TestCase):
     """Acceptance 1 and 2, driven through the real classifier."""
 
-    def test_pr810_routes_remediation_and_fences_live_review(self):
+    def test_pr810_routes_remediation_and_waits_for_live_review(self):
         head = "88624a605727fd44df98191d5b7dd99c73b75d9c"
         pr_url = "https://github.com/6th-Element-Labs/projectplanner/pull/810"
         snapshot = build_completion_snapshot(
@@ -287,9 +287,9 @@ class EndToEndFixtures(unittest.TestCase):
         self.assertEqual(decision["reason_code"], "required_exact_head_ci_failed")
 
         plan = effects.plan_effect(decision, snapshot, _run())
-        self.assertEqual(plan["effect"], "start_remediation")
-        self.assertTrue(plan["fence_required"])
-        self.assertEqual(plan["fence_generation"], 9)
+        self.assertEqual(plan["effect"], "attach_and_wait")
+        self.assertFalse(plan["fence_required"])
+        self.assertIsNone(plan["fence_generation"])
         self.assertEqual(plan["head_sha"], head)
 
     def test_pr811_routes_review_merge_at_current_head_without_a_coder(self):

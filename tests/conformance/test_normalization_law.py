@@ -58,7 +58,6 @@ def _action_for(plan: dict) -> NormalizedAction:
         "mark_ready": NormalizedAction.MARK_READY,
         "enqueue": NormalizedAction.ARM_MERGE,
         "escalate_human": NormalizedAction.BLOCK,
-        "fence_runner": NormalizedAction.BLOCK,
         "reconcile_provenance": NormalizedAction.MERGED,
     }[effect]
 
