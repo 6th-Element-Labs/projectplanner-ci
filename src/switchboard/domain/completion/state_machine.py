@@ -906,7 +906,8 @@ def _classify_completion_base(
         return _decision("blocked", "coordination_retry", "live_runner_not_desired",
                          retry="bounded", effect="fence_runner")
 
-    # Tip gates are green and there is no live queue entry. Enqueue exactly once.
+    # Tip gates are green and there is no live queue entry. Arm auto-merge once;
+    # GitHub's native merge queue owns admission and land order.
     # If GitHub later ejects that entry, native auto-merge may recover it; Switchboard
     # does not run a second requeue lifecycle. A persistent eject becomes an explicit
     # operator decision with the audited CI-repair/admin-merge path available.

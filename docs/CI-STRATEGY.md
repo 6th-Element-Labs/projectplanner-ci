@@ -79,7 +79,7 @@ Flow:
 2. The runner fetches `refs/pull/<n>/head`, verifies the live GitHub head SHA, and pushes it to a deterministic disposable `refs/tags/ci/<task>/<sha>` tag on `6th-Element-Labs/projectplanner-ci`. The tag transport cannot trigger a branch-authored workflow.
 3. The runner dispatches **`master:verify.yml`** with the scratchpad ref, exact SHA, and an audit-only purpose. The trusted workflow always runs the full canonical `scripts/switchboard_ci.sh` gate plus Playwright in a secret-free job; isolated App jobs post the one required context **`Switchboard CI / VM gate`**.
 4. GitHub's merge queue creates a temporary merge-group SHA. The same route, workflow, script, suite, and context verify that distinct exact SHA before landing.
-5. Claim, Work Session, review, remediation, and merge-authorization hygiene stay inside Switchboard as preconditions to arm auto-merge. They are not GitHub status contexts. Autopilot enqueues once and waits; it never owns a custom requeue cycle.
+5. Claim, Work Session, review, remediation, and merge-authorization hygiene stay inside Switchboard as preconditions to arm auto-merge. They are not GitHub status contexts. Autopilot enables squash auto-merge once; GitHub's native queue owns admission and land order. Autopilot never owns a custom requeue cycle.
 
 **Trigger decision (projectplanner):**
 

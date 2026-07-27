@@ -29,9 +29,9 @@ circular outage.
    non-required monitoring. Their reports remain visible but cannot eject PRs or merge groups.
 5. Claim, Work Session, exact-head review, remediation, and merge authorization remain
    Switchboard preconditions for arming auto-merge. They are not GitHub statuses.
-6. Autopilot updates the PR, waits for the single required context, enqueues once, and waits.
-   It does not own a requeue effect. GitHub may recover its native queue entry; a persistent
-   failure becomes an explicit operator decision.
+6. Autopilot updates the PR, waits for the single required context, enables squash auto-merge
+   once, and waits. GitHub's native queue owns admission and land order. Autopilot does not own
+   a requeue effect; a persistent failure becomes an explicit operator decision.
 7. The repair lane uses the same App mirror, workflow, script, context, and exact SHA. After
    one green run, a human administrator may squash-merge outside the queue only after recording
    the PR head, base SHA, run URL, operator, reason, and `ci-repair` designation. The repair

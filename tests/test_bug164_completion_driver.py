@@ -198,7 +198,7 @@ class CompletionDriver(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         stop.assert_called_once()
 
-    def test_enqueue_adapter_uses_merge_queue_mutation(self):
+    def test_enqueue_adapter_arms_squash_auto_merge(self):
         class Store:
             @staticmethod
             def get_project_github_repo(_project):
@@ -226,7 +226,10 @@ class CompletionDriver(unittest.TestCase):
         self.assertEqual(result["returncode"], 0)
         args = command.call_args.args[0]
         self.assertEqual(args[:2], ["api", "graphql"])
-        self.assertIn("enqueuePullRequest", " ".join(args))
+        command_text = " ".join(args)
+        self.assertIn("enablePullRequestAutoMerge", command_text)
+        self.assertIn("mergeMethod:SQUASH", command_text)
+        self.assertNotIn("enqueuePullRequest", command_text)
 
     def test_update_branch_adapter_advances_one_pr_and_stops(self):
         class Store:

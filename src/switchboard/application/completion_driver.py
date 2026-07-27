@@ -265,6 +265,7 @@ def production_effect_adapters(
         )
 
     def enqueue(plan: Mapping[str, Any]) -> dict[str, Any]:
+        """Arm squash auto-merge; GitHub's native queue owns serialization."""
         number = int(plan.get("pr_number") or 0)
         pr = provenance._github_pr(repo, number, token) or {}
         node_id = str(pr.get("node_id") or "")
@@ -276,8 +277,9 @@ def production_effect_adapters(
                 "-f",
                 (
                     "query=mutation($pullRequestId:ID!){"
-                    "enqueuePullRequest(input:{pullRequestId:$pullRequestId})"
-                    "{mergeQueueEntry{id state}}}"
+                    "enablePullRequestAutoMerge(input:{"
+                    "pullRequestId:$pullRequestId,mergeMethod:SQUASH})"
+                    "{pullRequest{id autoMergeRequest{mergeMethod enabledAt}}}}"
                 ),
                 "-F", f"pullRequestId={node_id}",
             ],
