@@ -961,11 +961,13 @@ def _convergence_ladder(
          the last rung, not the fix: by construction there is no deterministic
          move left, and naming the stall beats spinning on it silently.
 
-    Never fires below pressure, on any non-coordination_retry route, or across
-    a head change — ordinary bounded retries and remediation loops that make
-    progress are untouched.
+    Never fires below pressure, outside coordination/reconciliation routes, or
+    across a head change — ordinary bounded retries and remediation loops that
+    make progress are untouched. Reconciliation is included because a verified
+    ``reconcile_provenance`` replay can otherwise livelock forever after the
+    canonical PR is already merged.
     """
-    if _text(decision.get("route")) != "coordination_retry":
+    if _text(decision.get("route")) not in {"coordination_retry", "reconcile"}:
         return dict(decision)
     run = _map(current_run)
     convergence = _map(_map(run.get("evidence_refs")).get("convergence"))

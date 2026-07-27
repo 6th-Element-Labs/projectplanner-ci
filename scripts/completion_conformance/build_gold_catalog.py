@@ -443,13 +443,15 @@ CATALOG: list[Row] = [
         "scar",
     ),
     Row(
-        "remediation_fences_stale_head_matching_role",
+        "remediation_attaches_stale_head_matching_role",
         _world(ci="fail",
                runner={"live": True, "role": "remediation", "head": "stale"}),
         "remediation",
-        "Required regression matrix: a stale-head runner is never attached",
-        "Role matches but head is stale -- must still fence, proving head "
-        "alone (not just role) gates attach.",
+        "Required regression matrix: matching-role remediation survives its "
+        "own head advance",
+        "Remediation advances the head by design. Keep the live matching-role "
+        "generation and rely on the stale-head write gate for safety instead "
+        "of killing and replacing the runner after every push.",
         "scar",
     ),
     Row(

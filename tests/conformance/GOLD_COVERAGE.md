@@ -106,7 +106,7 @@ conflict check does not look at it.
 | `aggregate_blocked_not_masking_green` | `review_merge` | gold | mergeStateStatus mapping: BLOCKED -- decompose through CI, review, draft, policy, and conflict; never route directly from this aggregate; Invariant: only a clean, green, exact-head snapshot advances to READY_TO_QUEUE |
 | `remediation_fences_live_review_merge` | `remediation` | gold | Required regression matrix: a live review_merge is fenced when remediation becomes higher priority |
 | `remediation_attaches_matching_generation` | `remediation` | gold | Runner mapping: Starting or running with desired role and exact head -> Attach and wait |
-| `remediation_fences_stale_head_matching_role` | `remediation` | gold | Required regression matrix: a stale-head runner is never attached |
+| `remediation_attaches_stale_head_matching_role` | `remediation` | gold | Required regression matrix: matching-role remediation survives its own head advance |
 | `review_merge_attaches_matching_generation` | `review_merge` | gold | Runner mapping: Starting or running with desired role and exact head -> Attach and wait |
 | `review_merge_fences_wrong_role` | `review_merge` | gold | Runner mapping: Running with wrong role -> fence exact generation, then start desired role |
 

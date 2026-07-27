@@ -319,7 +319,8 @@ uses its coded findings and authoritative snapshot to determine ownership.
 |---|---|
 | Starting or running with desired role and exact head | Attach and `wait` |
 | Running with wrong role | Fence exact generation, then start desired role |
-| Running against stale head | Fence exact generation, then start desired role at current head |
+| `review_merge` running against stale head | Fence exact generation, then start at current head |
+| `remediation` running against stale head | Attach and `wait`; remediation advances the head, while the exact-head write gate remains authoritative |
 | `start_failed_retry` | `coordination_retry` |
 | Wake lost, host unavailable, or idempotency conflict | `coordination_retry` |
 | Stopping | Wait for exact host, generation, and fence acknowledgement |
@@ -582,7 +583,9 @@ expired retries.
 2. A head change invalidates old CI, review, gate, and queue evidence.
 3. One classifier feeds coordinator routing and operator projections.
 4. One active execution generation exists per task.
-5. Only the generation matching desired role and exact head may be attached.
+5. Only the generation matching the desired role may be attached. `review_merge`
+   must also match the exact head; matching-role `remediation` may survive the
+   head advance it produced, while the stale-head write gate remains authoritative.
 6. Exactly one `review_merge` generation may enqueue a given exact head.
 7. Draft never masks another failure.
 8. Every nonterminal state has an owner, route, wake condition, and retry
@@ -609,7 +612,8 @@ Before rollout, tests must prove:
 - dirty/conflicting, behind, unknown, unstable, and blocked merge states are
   decomposed correctly;
 - a live `review_merge` is fenced when remediation becomes higher priority;
-- a stale-head runner is never attached;
+- stale-head `review_merge` is fenced, while matching-role remediation survives
+  the head advance it produced;
 - same-decision replay is idempotent;
 - a new head or route produces a new effect key;
 - mark-ready is followed by an exact-head re-read;
