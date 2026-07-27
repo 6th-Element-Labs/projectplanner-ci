@@ -1,4 +1,4 @@
-# Completion Conformance — operator guide (T1 Fixture + T2 Observe)
+# Completion Conformance — operator guide (T1 Fixture, T2 Observe, T3 Full)
 
 Companion to the design doc
 [`docs/superpowers/specs/2026-07-26-completion-conformance-harness-design.md`](superpowers/specs/2026-07-26-completion-conformance-harness-design.md)
@@ -13,7 +13,7 @@ exist" reference.
 |---|---|---|---|
 | **T1** Fixture tick | Entire PR world (`scenario.json`) | `classify_completion` + `plan_effect` + `run_completion_tick` | No |
 | **T2** Observe | Failure reason via `scenario.json`, on a real sandbox PR | GitHub checks/review/queue, real hydration, Autopilot decision, up to the assignment | **No** — this is the whole point |
-| **T3** Full loop (not built yet) | Same scenarios | T2 + `start_task` + runner boot + push re-entry | Yes, curated/budgeted |
+| **T3** Full loop | Same scenarios | T2 + `start_task` + runner boot + push re-entry | Yes, curated and hard-budgeted |
 
 T2's contract: hydrate a **real** GitHub PR on the sandbox `conformance` project, run it
 through the same production classifier/planner/driver T1 uses, then **stop** before any
@@ -278,6 +278,30 @@ python3.11 -m scripts.completion_conformance reaper \
   in-process script cannot call directly. Pass `archive_task=` (a callable) when calling
   `tests.conformance.observe.reaper.reap` from an MCP-aware caller; otherwise the CLI
   reports a `to_archive` list of task ids for an operator/agent to archive afterwards.
+
+## T3 Full nightly contract
+
+T3 is the external-port orchestration in `tests/conformance/full/runner.py`. The scheduled
+sandbox job binds its ports to existing Switchboard surfaces:
+
+- `start` calls only `start_task` on project `conformance`, carrying the run id and scenario;
+- `observe` reads Task Execution terminal, role sequence, generations, reason codes, and
+  attributed spend;
+- `stop_run` asks the capacity plane to fence/stop every live runner tagged with the run id.
+
+The curated pack is `tests/conformance/full/curated.json` (11 scenarios; the implementation
+rejects more than 12). Runs are restricted to project `conformance` and repository
+`6th-Element-Labs/switchboard-conformance`, with at most two concurrent boots. Schedule the
+caller nightly outside the working day; the repository merge gate remains hermetic.
+
+The spend envelope is a kill switch, not a warning. Configure `max_spend_usd` before launch.
+Every observation adds newly attributed spend atomically. Crossing the cap aborts the run and
+invokes `stop_run`; wall-clock expiry does the same. The run scoreboard adds `generation_count`
+and `spend_usd` per scenario, and summarizes timeout, unexpected-human, and over-generation
+rows. Do not accept an unattended run whose stop port is unbound.
+
+T3 asserts only terminal state and the complete role sequence. It never grades intermediate
+routes on a live clock.
 
 ## Isolation rules (enforced in code where practical)
 
