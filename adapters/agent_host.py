@@ -3637,6 +3637,15 @@ def run_once(inventory):
     if relay_auth_faults:
         heartbeat_body["relay_auth_fault"] = relay_auth_faults[-1]
     heartbeat = _try("POST", P_HEARTBEAT_HOST, heartbeat_body)
+    # DOGFOOD-25: presence must reach EVERY project this host serves. Wake
+    # polling already spans _host_projects, but heartbeating only PM_PROJECT
+    # left every other board with a stale host row, so their placements
+    # refused this host with host_unavailable and wakes expired unclaimed.
+    # Policy authority stays with the primary project's response alone.
+    for extra_project in _host_projects(inventory):
+        if extra_project != PROJECT:
+            _try("POST", P_HEARTBEAT_HOST,
+                 {**heartbeat_body, "project": extra_project})
     if apply_authoritative_execution_policy(inventory, heartbeat):
         advertised = _try("POST", P_REGISTER_HOST, registration_inventory(inventory))
         apply_authoritative_execution_policy(inventory, advertised)
@@ -4176,6 +4185,12 @@ def run(interval=10, once=False):
             if apply_authoritative_execution_policy(inv, reg):
                 advertised = registration_inventory(inv, drain_request=drain_request)
                 reg = _try("POST", P_REGISTER_HOST, advertised)
+            # DOGFOOD-25: renew the host row on every board this host serves,
+            # not just PM_PROJECT — see the multi-project heartbeat in run_once.
+            for extra_project in _host_projects(inv):
+                if extra_project != PROJECT:
+                    _try("POST", P_REGISTER_HOST,
+                         {**advertised, "project": extra_project})
             registered = bool(reg and not reg.get("error"))
             drain_advertised = bool(drain_request and reg)
             last_register_at = now
