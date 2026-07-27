@@ -847,21 +847,8 @@ const TeepPlan = {
             }
         } catch (e) { this._fleetLoadBusy = false; return; }
         const prs = prPayload.prs || [];
-        // UI-66: one batched coverage read for every board task on the PR tab,
-        // so each row can say whether autopilot is actually driving it.
-        // Advisory: a failed read renders the dock without pills, never blank.
-        this._dockAutopilot = {};
-        const apTaskIds = [...new Set(prs.flatMap(
-            (x) => (x.tasks || []).map((t) => t.task_id).filter(Boolean)))];
-        if (apTaskIds.length) {
-            try {
-                const p2 = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`;
-                const cRes = await this._fetchTimeout(
-                    `api/autopilot/coverage?task_ids=${encodeURIComponent(apTaskIds.join(','))}&${p2}`,
-                    { cache: 'no-store' });
-                if (cRes.ok) this._dockAutopilot = ((await cRes.json()).coverage) || {};
-            } catch (e) { /* coverage is advisory */ }
-        }
+        // UI-66: batched autopilot coverage per board task (js/fleet-dock.js).
+        this._dockAutopilot = await window.SwitchboardFleetDock.loadCoverage(this, prs);
         this._dockPrUnavailable = prPayload.unavailable || '';
         this._dockDeploymentUnavailable = deploymentPayload.unavailable || '';
         const sig = this._fleetSignature(
@@ -1103,96 +1090,13 @@ const TeepPlan = {
             </div>
         </div>`;
     },
-    // A PR is usually several things at once (red CI *and* conflicting *and* draft). Rank every
-    // condition that holds by how much it blocks the merge and return them worst-first, so the card
-    // can show one authoritative chip instead of a badge strip whose contents move around. The
-    // ladder deliberately outranks `draft` with every real problem: a broken build on a draft is
-    // still a broken build, and burying it under "Draft" is what made the old strip unscannable.
-    _prConditions(x) {
-        const out = [];
-        const p = x.completion_projection || {};
-        // GitHub check names are often workflow-qualified ("Switchboard CI / VM gate"); the job name
-        // is the part that identifies the failure, and the full name stays in the chip's tooltip.
-        const failing = String((x.ci_failing || [])[0] || '').split(' / ').pop().trim();
-        if (x.ci_state === 'failure') {
-            out.push({ key: 'ci_failed', label: failing ? `${failing} failed` : 'CI failed',
-                       tone: 'red', icon: 'x', title: (x.ci_failing || [])[0] || '' });
-        }
-        if (p.route === 'remediation') out.push({ key: 'remediation', label: 'Remediation owner', tone: 'red', icon: 'tool' });
-        else if (p.route === 'coordination_retry') out.push({ key: 'coordination_retry', label: 'Coordination retry', tone: 'yellow', icon: 'refresh' });
-        else if (p.route === 'review_merge') out.push({ key: 'review_merge', label: 'Review / merge', tone: 'azure', icon: 'git-merge' });
-        else if (p.route === 'human') out.push({ key: 'human', label: 'Needs you', tone: 'orange', icon: 'user-exclamation' });
-        else if (p.route === 'reconcile') out.push({ key: 'reconcile', label: 'Reconciling', tone: 'purple', icon: 'refresh' });
-        if (x.mergeable_state === 'dirty') out.push({ key: 'conflicts', label: 'Conflicts', tone: 'yellow', icon: 'git-merge' });
-        if (x.mergeable_state === 'blocked') out.push({ key: 'merge_blocked', label: 'Merge blocked', tone: 'yellow', icon: 'lock' });
-        if (x.ci_state === 'pending') out.push({ key: 'checks_running', label: 'Checks running', tone: 'yellow', icon: 'loader' });
-        if (x.queue_position) out.push({ key: 'queued', label: `Queued #${x.queue_position}`, tone: 'azure', icon: 'clock' });
-        else if (x.auto_merge) out.push({ key: 'auto_merge', label: 'Auto-merge armed', tone: 'azure', icon: 'clock' });
-        // Stalled ranks above "ready" on purpose: a green PR nobody has touched in days is the
-        // green-but-stuck case the dock already raises its red pill for, so it must be visible on
-        // the card face rather than buried in the footer line it used to live in.
-        if (x.stalled) out.push({ key: 'stalled', label: `Stalled ${this._fleetAge(x.updated_at)}`, tone: 'yellow', icon: 'zzz' });
-        if (x.ci_state === 'success' && x.mergeable_state !== 'dirty' && x.mergeable_state !== 'blocked') {
-            out.push({ key: 'ready', label: 'Ready to merge', tone: 'green', icon: 'check' });
-        }
-        if (x.draft) out.push({ key: 'draft', label: 'Draft', tone: 'secondary', icon: 'pencil' });
-        if (x.ci_state !== 'success' && x.ci_state !== 'failure' && x.ci_state !== 'pending') {
-            out.push({ key: 'no_checks', label: 'No checks', tone: 'secondary', icon: 'minus' });
-        }
-        if (!out.length) out.push({ key: 'open', label: 'Open', tone: 'secondary', icon: 'git-pull-request' });
-        return out;
-    },
-    // UI-66: one compact autopilot control per PR row, from the batched
-    // coverage read. States are the resolver's honest liveness vocabulary; the
-    // click action follows the coverage kind so a deliverable-covered task can
-    // never start a duplicate task scope (the double-drive guard).
-    _dockAutopilotHtml(x) {
-        const ids = (x.tasks || []).map((t) => t.task_id).filter(Boolean);
-        if (!ids.length) return '';
-        const taskId = String(ids[0]).toUpperCase();
-        const cov = (this._dockAutopilot || {})[taskId];
-        if (!cov) return '';
-        const states = {
-            live: ['Autopilot', 'green', 'route',
-                   cov.coverage === 'deliverable'
-                       ? `Driven by ${cov.deliverable_id}'s autopilot — click to pause`
-                       : 'Task-scoped autopilot running — click to pause', 'pause'],
-            armed: ['Autopilot armed', 'azure', 'clock',
-                    'Scope started; waiting for a coordinator host to pick it up — click to pause', 'pause'],
-            paused: ['Autopilot paused', 'yellow', 'player-pause',
-                     'Click to resume', 'resume'],
-            stale: ['Autopilot stale', 'orange', 'alert-triangle',
-                    'Scope holder is dead (deploy restart?) — click to re-arm', 'start'],
-            none: ['Arm autopilot', 'secondary', 'player-play',
-                   `Start a task-scoped autopilot for ${taskId}`, 'start'],
-        };
-        const [label, tone, icon, title, action] = states[cov.liveness] || states.none;
-        return `<button type="button" class="btn btn-sm btn-ghost-secondary dock-tab p-0 px-1 d-inline-flex align-items-center gap-1"
-            style="font-size:11px;flex:none;" data-ap-task="${this.esc(taskId)}" data-ap-action="${this.esc(action)}"
-            title="${this.esc(title)}">
-            <span style="width:6px;height:6px;border-radius:50%;background:var(--tblr-${tone}, var(--tblr-secondary));"></span>
-            <i class="ti ti-${icon}" style="font-size:11px;"></i>${this.esc(label)}</button>`;
-    },
-    async _dockAutopilotAction(taskId, action) {
-        const cov = (this._dockAutopilot || {})[String(taskId || '').toUpperCase()] || {};
-        const p = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`;
-        // A deliverable-covered task is controlled through ITS scope; only an
-        // uncovered (or task-scoped) task addresses /api/tasks/{id}/autopilot.
-        const url = (cov.coverage === 'deliverable' && cov.deliverable_id)
-            ? `api/deliverables/${encodeURIComponent(cov.deliverable_id)}/autopilot?${p}`
-            : `api/tasks/${encodeURIComponent(taskId)}/autopilot?${p}`;
-        try {
-            const res = await this._fetchTimeout(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action }),
-            });
-            const body = await res.json().catch(() => ({}));
-            if (!res.ok) throw new Error(body.message || body.error || `HTTP ${res.status}`);
-        } catch (error) {
-            window.alert(`Autopilot ${action} failed: ${error.message || error}`);
-        }
-        await this._loadFleetDock(true);
+    // Fleet-dock presentation (PR condition ladder + the UI-66 autopilot pill)
+    // lives in js/fleet-dock.js (window.SwitchboardFleetDock) — ARCH-MS-21
+    // keeps this composition root under its line ceiling.
+    _prConditions(x) { return window.SwitchboardFleetDock.prConditions(this, x); },
+    _dockAutopilotHtml(x) { return window.SwitchboardFleetDock.autopilotHtml(this, x); },
+    _dockAutopilotAction(taskId, action) {
+        return window.SwitchboardFleetDock.autopilotAction(this, taskId, action);
     },
     _dockPrHtml(x) {
         // Winner takes the fixed top-left slot and tints the card's left edge; the runner-up gets a

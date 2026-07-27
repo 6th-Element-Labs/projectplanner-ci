@@ -159,5 +159,29 @@ cov = coverage("UI66-1", "UI66-2", "UI66-3")
 ok(set(cov.keys()) == {"UI66-1", "UI66-2", "UI66-3"},
    "batch answers every requested task id")
 
+# 8. The route must live where the shell ALWAYS mounts it. On prod the tasks
+# router is mounted sibling_bc_only (PM_TASKS_HTTP_PRIMARY=service): any route
+# inside its conditional block silently never registers on the shell, and the
+# proxy only forwards /api/tasks/* to the sibling — /api/autopilot/coverage
+# 404'd live on 2026-07-27 for exactly that reason while passing every local
+# test that called the command instead of the route. Pin the mount, not just
+# the command.
+from switchboard.api.routers import deliverables as deliverables_router_mod  # noqa: E402
+from switchboard.api.routers import tasks as tasks_router_mod  # noqa: E402
+
+deliverables_router = deliverables_router_mod.create_router(
+    resolve_project=lambda p: p,
+    resolve_principal=lambda *a, **k: None,
+    etag_json=lambda *a, **k: None,
+    sibling_bc_only=True)
+ok("/api/autopilot/coverage" in {r.path for r in deliverables_router.routes},
+   "coverage route registers on the shell even in sibling_bc_only mode")
+tasks_router = tasks_router_mod.create_router(
+    resolve_project=lambda p: p,
+    resolve_principal=lambda *a, **k: None,
+    sibling_bc_only=True)
+ok("/api/autopilot/coverage" not in {r.path for r in tasks_router.routes},
+   "coverage route does not depend on the tasks router at all")
+
 print(f"\nUI-66 autopilot coverage: {passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)

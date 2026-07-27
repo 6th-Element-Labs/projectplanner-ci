@@ -235,6 +235,26 @@ def create_router(*, resolve_project: ProjectResolver,
         return _autopilot_json(autopilot_command.execute_mapping_result(
             "get_autopilot", deliverable_id, project=resolve_project(project)))
 
+    @router.get("/api/autopilot/coverage")
+    def autopilot_coverage(task_ids: str = Query(...), project: str = Query(...)):
+        """Batched per-task autopilot coverage for the Fleet dock (UI-66).
+
+        One call answers, for up to 100 comma-separated task ids, which scope
+        covers each task and whether it is actually running: armed / live /
+        stale / paused — derived from the holder lease, never from status
+        alone (a restart-killed scope keeps status "active").
+
+        Lives here, in the deliverables router's UNCONDITIONAL section beside
+        the other autopilot surfaces — NOT in routers/tasks.py. That router is
+        mounted with ``sibling_bc_only=True`` when ``PM_TASKS_HTTP_PRIMARY=
+        service`` (prod), which silently drops any route in its conditional
+        block on the shell app, and the Caddy proxy only forwards
+        ``/api/tasks/*`` to the sibling — this path 404'd on prod for exactly
+        that reason on 2026-07-27 while working in every local test.
+        """
+        return _autopilot_json(autopilot_command.execute_mapping_result(
+            "autopilot_coverage", task_ids, project=resolve_project(project)))
+
     @router.post("/api/deliverables/{deliverable_id}/autopilot")
     async def control_deliverable_autopilot(request: Request, deliverable_id: str,
                                             body: AutopilotControlBody,
