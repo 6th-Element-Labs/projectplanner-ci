@@ -22,6 +22,7 @@ import store
 SCHEMA = "switchboard.ci_scratchpad_dispatch.v1"
 DEFAULT_WORKFLOW = "verify"
 DEFAULT_WORKFLOW_REF = "master"
+PURPOSES = frozenset({"head", "merge_group", "ci_repair"})
 
 
 def is_scratchpad_enabled() -> bool:
@@ -62,9 +63,18 @@ def dispatch_scratchpad(
     source_path: str = "",
     dry_run: bool = False,
     strict_explicit: bool = False,
+    purpose: str = "head",
+    actor: str = "github-webhook",
+    audit_reason: str = "",
 ) -> Dict[str, Any]:
     """Push one PR head SHA to the public scratchpad and record an external_ci_run."""
     pr = int(pr_number)
+    purpose = (purpose or "head").strip().lower()
+    if purpose not in PURPOSES:
+        raise cvd.CiVerifyDispatchError(
+            f"unsupported verification purpose {purpose!r}; expected one of {sorted(PURPOSES)}")
+    if purpose == "ci_repair" and not (audit_reason or "").strip():
+        raise cvd.CiVerifyDispatchError("ci_repair dispatch requires an audit_reason.")
     source_repo = cvd.canonical_repo(repo)
     tok = cvd._token("")
     if not tok:
@@ -74,10 +84,9 @@ def dispatch_scratchpad(
     sha, sha_source, stale_webhook_sha = cvd.resolve_head_sha(
         pr, head_sha, repo=source_repo, token=tok, strict_explicit=strict_explicit)
     cvd.verify_commit_exists(sha, repo=source_repo, token=tok)
-    merge_base_sha = cvd.fetch_pr_merge_base_sha(
-        pr, sha, repo=source_repo, token=tok)
     checkout = (source_path or source_checkout_path()).strip()
-    mirror_branch = mirror_branch_for_pr(pr, sha)
+    mirror_label = f"repair-pr-{pr}" if purpose == "ci_repair" else f"pr-{pr}"
+    mirror_branch = store.default_external_ci_mirror_branch(mirror_label, sha)
     result: Dict[str, Any] = {
         "schema": SCHEMA,
         "dispatched": False,
@@ -91,7 +100,8 @@ def dispatch_scratchpad(
         "mirror_branch": mirror_branch,
         "workflow": DEFAULT_WORKFLOW,
         "workflow_ref": DEFAULT_WORKFLOW_REF,
-        "merge_base_sha": merge_base_sha,
+        "purpose": purpose,
+        "audit_reason": (audit_reason or "").strip() or None,
         "source_path": checkout,
     }
     if dry_run:
@@ -113,8 +123,7 @@ def dispatch_scratchpad(
         "workflow_ref": DEFAULT_WORKFLOW_REF,
         "workflow_inputs": {
             "source_ref": mirror_tag_ref(mirror_branch),
-            "validation_mode": "head",
-            "base_sha": merge_base_sha,
+            "purpose": purpose,
         },
         # A terminal external_ci_run is the durable evidence/cleanup handoff.
         "poll_after_push": True,
@@ -122,19 +131,20 @@ def dispatch_scratchpad(
         "request": {
             "pr": pr,
             "schema": SCHEMA,
+            "purpose": purpose,
+            "audit_reason": (audit_reason or "").strip() or None,
             "workflow_ref": DEFAULT_WORKFLOW_REF,
             "mirror_ref_kind": "tag",
             "workflow_inputs": {
                 "source_ref": mirror_tag_ref(mirror_branch),
-                "validation_mode": "head",
-                "base_sha": merge_base_sha,
+                "purpose": purpose,
             },
             "cleanup_mirror_branch": True,
             "source_fetch_ref": f"refs/pull/{pr}/head",
         },
     }
     mirror = external_ci_mirror.request_external_ci_mirror_run(
-        request, checkout, actor="github-webhook", project=project)
+        request, checkout, actor=actor, project=project)
     result["mirror"] = mirror
     result["run_id"] = mirror.get("run_id")
     result["dispatched"] = bool(mirror.get("ok")) and not mirror.get("error")
@@ -194,6 +204,9 @@ def dispatch_scratchpad_ref(
     project: str = "switchboard",
     source_path: str = "",
     dry_run: bool = False,
+    purpose: str = "merge_group",
+    actor: str = "github-webhook",
+    audit_reason: str = "",
 ) -> Dict[str, Any]:
     """Push an exact canonical SHA (identified by a fetch ref) to the public scratchpad.
 
@@ -205,6 +218,12 @@ def dispatch_scratchpad_ref(
     if not sha:
         raise cvd.CiVerifyDispatchError("dispatch_scratchpad_ref requires a source_sha.")
     source_repo = cvd.canonical_repo(repo)
+    purpose = (purpose or "merge_group").strip().lower()
+    if purpose not in PURPOSES:
+        raise cvd.CiVerifyDispatchError(
+            f"unsupported verification purpose {purpose!r}; expected one of {sorted(PURPOSES)}")
+    if purpose == "ci_repair" and not (audit_reason or "").strip():
+        raise cvd.CiVerifyDispatchError("ci_repair dispatch requires an audit_reason.")
     tok = cvd._token("")
     if not tok:
         raise cvd.CiVerifyDispatchError(
@@ -225,6 +244,8 @@ def dispatch_scratchpad_ref(
         "mirror_branch": mirror_branch,
         "workflow": DEFAULT_WORKFLOW,
         "workflow_ref": DEFAULT_WORKFLOW_REF,
+        "purpose": purpose,
+        "audit_reason": (audit_reason or "").strip() or None,
         "source_path": checkout,
     }
     if dry_run:
@@ -245,8 +266,7 @@ def dispatch_scratchpad_ref(
         "workflow_ref": DEFAULT_WORKFLOW_REF,
         "workflow_inputs": {
             "source_ref": mirror_tag_ref(mirror_branch),
-            "validation_mode": "merge_group",
-            "base_sha": "",
+            "purpose": purpose,
         },
         # Webhook intake is already accept-and-ack; this executes in the
         # off-request drain worker. Wait there for terminal evidence so the
@@ -262,19 +282,20 @@ def dispatch_scratchpad_ref(
         "request": {
             "label": label,
             "schema": SCHEMA,
+            "purpose": purpose,
+            "audit_reason": (audit_reason or "").strip() or None,
             "workflow_ref": DEFAULT_WORKFLOW_REF,
             "mirror_ref_kind": "tag",
             "workflow_inputs": {
                 "source_ref": mirror_tag_ref(mirror_branch),
-                "validation_mode": "merge_group",
-                "base_sha": "",
+                "purpose": purpose,
             },
             "cleanup_mirror_branch": True,
             "source_fetch_ref": fetch_ref,
         },
     }
     mirror = external_ci_mirror.request_external_ci_mirror_run(
-        request, checkout, actor="github-webhook", project=project)
+        request, checkout, actor=actor, project=project)
     result["mirror"] = mirror
     result["run_id"] = mirror.get("run_id")
     result["dispatched"] = bool(mirror.get("ok")) and not mirror.get("error")
@@ -338,6 +359,9 @@ def _cli(argv: Optional[list] = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--dispatch", action="store_true")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--purpose", choices=sorted(PURPOSES), default="head")
+    parser.add_argument("--actor", default="operator")
+    parser.add_argument("--reason", default="")
     args = parser.parse_args(argv)
     dry_run = args.dry_run or not args.dispatch
     try:
@@ -349,6 +373,9 @@ def _cli(argv: Optional[list] = None) -> int:
             source_path=args.source_path,
             dry_run=dry_run,
             strict_explicit=bool((args.head_sha or "").strip()),
+            purpose=args.purpose,
+            actor=args.actor,
+            audit_reason=args.reason,
         )
     except cvd.CiVerifyDispatchError as exc:
         if args.json:

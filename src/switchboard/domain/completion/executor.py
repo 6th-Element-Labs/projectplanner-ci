@@ -26,8 +26,8 @@ class CompletionEffectAdapters:
     ensure_review_generation: Optional[EffectFn] = None
     start_remediation: Optional[EffectFn] = None
     mark_ready: Optional[EffectFn] = None
+    update_branch: Optional[EffectFn] = None
     enqueue: Optional[EffectFn] = None
-    requeue_merge_group: Optional[EffectFn] = None
     repair_dispatch: Optional[EffectFn] = None
     fence_runner: Optional[EffectFn] = None
     reconcile_provenance: Optional[EffectFn] = None
@@ -601,7 +601,7 @@ def execute_effect(
         }
     if effect in {
         "ensure_review_generation", "start_remediation", "mark_ready",
-        "enqueue", "requeue_merge_group", "repair_dispatch", "fence_runner",
+        "update_branch", "enqueue", "repair_dispatch", "fence_runner",
         "reconcile_provenance",
     }:
         return _execute_mutating_effect(

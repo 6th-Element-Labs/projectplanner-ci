@@ -23,6 +23,7 @@ from switchboard.domain.completion.executor import (  # noqa: E402
 )
 
 import _shared  # noqa: E402
+import _gold_shared  # noqa: E402
 
 
 SCENARIO_DIR = HERE / "scenarios"
@@ -51,14 +52,17 @@ def run_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
         ensure_review_generation=effect,
         start_remediation=effect,
         mark_ready=effect,
+        update_branch=effect,
         enqueue=effect,
-        requeue_merge_group=effect,
         repair_dispatch=effect,
         fence_runner=effect,
         reconcile_provenance=effect,
     )
     snapshot = _shared.build_snapshot(scenario)
-    with _shared.hermetic_completion_patches(run, ledger):
+    with (
+        _shared.hermetic_completion_patches(run, ledger),
+        _gold_shared._human_route_db_patches("COORD-65"),
+    ):
         first = completion_driver.run_completion_tick(
             "COORD-65",
             project="switchboard",
@@ -117,12 +121,13 @@ def run_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
         first["plan"]["idem_key"] == second["plan"]["idem_key"],
         f"{scenario['id']}: second tick changed effect identity",
     )
-    # Wait/none are non-mutating: the executor does not call an effect adapter.
-    # Mutating effects must fire exactly once, then verify as idempotent replay.
-    if expect["effect"] in {"wait", "none"}:
+    # Wait/none and human escalation do not call an effect adapter. Human
+    # escalation uses the transactional attention-request boundary instead.
+    # Other mutating effects fire exactly once, then replay their ledger proof.
+    if expect["effect"] in {"wait", "none", "attach_and_wait", "escalate_human"}:
         _shared.require(
             len(calls) == 0,
-            f"{scenario['id']}: wait/none must not fire adapters "
+            f"{scenario['id']}: {expect['effect']} must not fire adapters "
             f"(fired {len(calls)})",
         )
     else:

@@ -87,9 +87,9 @@ conflict check does not look at it.
 | `merge_conflict` | `remediation` | gold | Mergeability mapping: CONFLICTING -> remediation |
 | `queue_awaiting` | `wait` | gold | Merge queue mapping: AWAITING_CHECKS -> wait |
 | `queue_unmergeable_product` | `remediation` | gold | Merge queue mapping: UNMERGEABLE, product check failure -> remediation |
-| `queue_unmergeable_infra` | `coordination_retry` | gold | Merge queue mapping: UNMERGEABLE, infrastructure failure -> coordination_retry and requeue |
-| `tip_green_after_queue_eject` | `coordination_retry` | gold | Merge queue mapping: No entry after verified enqueue eject (failed_checks / checks_timed_out), tip still green -> coordination_retry and requeue_merge_group (merge_queue_ejected_tip_green) |
-| `tip_green_after_checks_timed_out` | `coordination_retry` | gold | Merge queue mapping: No entry after verified enqueue eject (failed_checks / checks_timed_out), tip still green -> coordination_retry and requeue_merge_group (merge_queue_ejected_tip_green) |
+| `queue_unmergeable_infra` | `human` | gold | Merge queue mapping: UNMERGEABLE, infrastructure failure -> human repair decision |
+| `tip_green_after_queue_eject` | `human` | gold | Merge queue mapping: No entry after verified enqueue eject (failed_checks / checks_timed_out), tip still green -> human repair decision (merge_queue_ejected_tip_green) |
+| `tip_green_after_checks_timed_out` | `human` | gold | Merge queue mapping: No entry after verified enqueue eject (failed_checks / checks_timed_out), tip still green -> human repair decision (merge_queue_ejected_tip_green) |
 | `pr_merged_reconcile` | `reconcile` | gold | Required regression matrix / terminal mapping: merged PR -> reconcile via canonical_pr_merged |
 | `pr_closed_unmerged_human` | `human` | gold | Required regression matrix: CLOSED unmerged without reopen authorization -> human |
 | `pr_closed_unmerged_reopen` | `coordination_retry` | gold | Required regression matrix: CLOSED unmerged with reopen authorization -> coordination_retry |

@@ -228,6 +228,33 @@ class CompletionDriver(unittest.TestCase):
         self.assertEqual(args[:2], ["api", "graphql"])
         self.assertIn("enqueuePullRequest", " ".join(args))
 
+    def test_update_branch_adapter_advances_one_pr_and_stops(self):
+        class Store:
+            @staticmethod
+            def get_project_github_repo(_project):
+                return "owner/repo"
+
+        with (
+            patch(
+                "switchboard.storage.repositories.provenance._github_token",
+                return_value="token",
+            ),
+            patch.object(
+                completion_driver, "_github_command",
+                return_value={"returncode": 0},
+            ) as command,
+        ):
+            adapters = completion_driver.production_effect_adapters(
+                project="switchboard", actor="owner", agent_id="owner",
+                store_mod=Store,
+            )
+            result = adapters.update_branch({"pr_number": 811})
+        self.assertEqual(result["returncode"], 0)
+        self.assertEqual(
+            command.call_args.args[0],
+            ["api", "-X", "PUT", "repos/owner/repo/pulls/811/update-branch"],
+        )
+
     def test_mixed_pr812_findings_reach_remediation_port(self):
         calls = []
         adapters = CompletionEffectAdapters(

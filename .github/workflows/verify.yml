@@ -5,7 +5,7 @@
 # invokes this workflow on the trusted default branch with that ref as input.
 # Agent-authored workflow files on the mirrored branch are never executed.
 name: verify
-run-name: verify ${{ inputs.source_sha }} (${{ inputs.validation_mode }})
+run-name: verify ${{ inputs.source_sha }} (${{ inputs.purpose }})
 
 on:
   workflow_dispatch:
@@ -18,19 +18,15 @@ on:
         description: "Exact canonical SHA to verify and stamp"
         required: true
         type: string
-      validation_mode:
-        description: "Fast PR-head admission or full merge-group verification"
+      purpose:
+        description: "Audit label only; every purpose runs the identical full gate"
         required: true
         default: head
         type: choice
         options:
           - head
           - merge_group
-          - full
-      base_sha:
-        description: "Optional merge-base SHA used for impacted-test selection"
-        required: false
-        type: string
+          - ci_repair
 
 permissions: {}
 
@@ -52,16 +48,12 @@ jobs:
         env:
           SOURCE_REF: ${{ inputs.source_ref }}
           SOURCE_SHA: ${{ inputs.source_sha }}
-          VALIDATION_MODE: ${{ inputs.validation_mode }}
-          BASE_SHA: ${{ inputs.base_sha }}
+          PURPOSE: ${{ inputs.purpose }}
         run: |
           set -euo pipefail
           [[ "$SOURCE_REF" =~ ^refs/tags/ci/[A-Za-z0-9._/-]+$ ]]
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$VALIDATION_MODE" =~ ^(head|merge_group|full)$ ]]
-          if [ -n "$BASE_SHA" ]; then
-            [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          fi
+          [[ "$PURPOSE" =~ ^(head|merge_group|ci_repair)$ ]]
 
       - name: Mint status-callback token
         id: app_token
@@ -76,12 +68,11 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
           SOURCE_SHA: ${{ inputs.source_sha }}
-          VALIDATION_MODE: ${{ inputs.validation_mode }}
         run: |
           gh api "repos/$CANONICAL_REPO/statuses/$SOURCE_SHA" \
             -f state=pending \
             -f context="$STATUS_CONTEXT" \
-            -f description="CI: ${VALIDATION_MODE} verification running" \
+            -f description="CI: exact-SHA full verification running" \
             -f target_url="$TARGET_URL"
 
   suite:
@@ -129,8 +120,7 @@ jobs:
           pip install --disable-pip-version-check -r requirements.txt -r requirements-ci.txt
 
       - name: Install Chromium
-        # Admission can select browser tests (or safely expand to the full suite).
-        # Keep the runner contract uniform instead of predicting that selection twice.
+        # PR heads, merge groups, and CI repairs use the same full gate.
         run: python -m playwright install --with-deps chromium
 
       - name: Run Switchboard CI
@@ -139,11 +129,8 @@ jobs:
         env:
           SWITCHBOARD_CI_STRICT: "1"
           SWITCHBOARD_CI_REQUIRE_NODE: "1"
-          SWITCHBOARD_CI_SCOPE: ${{ inputs.validation_mode == 'head' && 'fast' || 'full' }}
-          SWITCHBOARD_CI_BASE_SHA: ${{ inputs.base_sha }}
+          SWITCHBOARD_CI_SCOPE: "full"
           SWITCHBOARD_CI_FAIL_FAST: "1"
-          CONCURRENT_LOAD_REPORT: ".artifacts/concurrent-load-report.json"
-          CROSS_PROCESS_LOAD_REPORT: ".artifacts/cross-process-load-report.json"
           UI_PLAYWRIGHT_REPORT: ".artifacts/ui-playwright-receipt.json"
           CI_RESULT_REPORT: ".artifacts/ci-result.json"
         run: |
@@ -158,18 +145,8 @@ jobs:
           path: .artifacts/ci-result.json
           if-no-files-found: warn
 
-      - name: Upload load reports
-        if: always() && steps.checkout.outcome == 'success'
-        uses: actions/upload-artifact@v4
-        with:
-          name: load-reports-${{ inputs.source_sha }}
-          path: |
-            .artifacts/concurrent-load-report.json
-            .artifacts/cross-process-load-report.json
-          if-no-files-found: warn
-
       - name: Upload Playwright receipt
-        if: always() && inputs.validation_mode != 'head' && steps.checkout.outcome == 'success'
+        if: always() && steps.checkout.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: ui-playwright-${{ inputs.source_sha }}
@@ -182,17 +159,16 @@ jobs:
         env:
           CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
           TEST_OUTCOME: ${{ steps.tests.outcome }}
-          VALIDATION_MODE: ${{ inputs.validation_mode }}
         run: |
           if [ "$CHECKOUT_OUTCOME" != "success" ]; then
             echo "failure_class=infra" >> "$GITHUB_OUTPUT"
             echo "summary=infra: exact scratchpad checkout failed" >> "$GITHUB_OUTPUT"
           elif [ "$TEST_OUTCOME" != "success" ]; then
             echo "failure_class=tests" >> "$GITHUB_OUTPUT"
-            echo "summary=tests: ${VALIDATION_MODE} verification failed" >> "$GITHUB_OUTPUT"
+            echo "summary=tests: exact-SHA full verification failed" >> "$GITHUB_OUTPUT"
           else
             echo "failure_class=" >> "$GITHUB_OUTPUT"
-            echo "summary=tests: ${VALIDATION_MODE} verification passed" >> "$GITHUB_OUTPUT"
+            echo "summary=tests: exact-SHA full verification passed" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Enforce suite result

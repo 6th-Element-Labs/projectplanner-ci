@@ -1,6 +1,7 @@
 # ADR-0022 — One fail-closed CI verdict
 
-- **Status:** Accepted (operator decision, 2026-07-27; amended by CI-17)
+- **Status:** Accepted historical decision; Decisions 2 and 5 superseded by
+  [ADR-0023](0023-thin-merge-queue-ci.md) on 2026-07-27
 - **Date:** 2026-07-27
 - **Author:** CI-16 simplification
 - **Amends:** [ADR-0020 — Merge gates observe](0020-merge-gates-observe-not-enforce.md)

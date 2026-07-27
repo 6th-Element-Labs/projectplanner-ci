@@ -257,34 +257,34 @@ CATALOG: list[Row] = [
     Row(
         "queue_unmergeable_infra",
         _world(queue="unmergeable", ci="error", ci_attribution="infrastructure"),
-        "coordination_retry",
+        "human",
         "Merge queue mapping: UNMERGEABLE, infrastructure failure -> "
-        "coordination_retry and requeue",
-        "Queue attributes the failure to infrastructure -> requeue, not a "
-        "remediation coder.",
+        "human repair decision",
+        "Queue attributes the failure to infrastructure -> explicit operator "
+        "repair, never a custom requeue or remediation coder.",
         "scar",
     ),
     Row(
         "tip_green_after_queue_eject",
         _world(queue="ejected", queue_removal_reason="failed_checks"),
-        "coordination_retry",
+        "human",
         "Merge queue mapping: No entry after verified enqueue eject "
         "(failed_checks / checks_timed_out), tip still green -> "
-        "coordination_retry and requeue_merge_group "
+        "human repair decision "
         "(merge_queue_ejected_tip_green)",
-        "BREAKDOWN 38/40: tip CLEAN after GitHub ejected a prior verified "
-        "enqueue must requeue, not replay once-only enqueue.",
+        "A tip-green eject never starts a custom requeue lifecycle. Native "
+        "auto-merge may recover it; otherwise the audited repair lane is explicit.",
         "scar",
     ),
     Row(
         "tip_green_after_checks_timed_out",
         _world(queue="ejected", queue_removal_reason="checks_timed_out"),
-        "coordination_retry",
+        "human",
         "Merge queue mapping: No entry after verified enqueue eject "
         "(failed_checks / checks_timed_out), tip still green -> "
-        "coordination_retry and requeue_merge_group "
+        "human repair decision "
         "(merge_queue_ejected_tip_green)",
-        "Same eject→requeue contract with checks_timed_out removal reason.",
+        "Same native-recovery-or-human contract with checks_timed_out removal reason.",
         "scar",
     ),
     Row(

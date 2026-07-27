@@ -1,6 +1,6 @@
 {
   "expect": {
-    "effect": "repair_dispatch",
+    "effect": "update_branch",
     "reason_code": "pr_branch_behind",
     "role_sequence": [],
     "route": "coordination_retry",

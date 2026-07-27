@@ -718,7 +718,6 @@ class DecisionCorpusStorageTest(unittest.TestCase):
             start_remediation=lambda plan: {"ok": True},
             mark_ready=lambda plan: {"ok": True},
             enqueue=lambda plan: {"ok": True},
-            requeue_merge_group=lambda plan: {"ok": True},
             repair_dispatch=lambda plan: {"ok": True},
             fence_runner=lambda plan: {"ok": True},
             reconcile_provenance=lambda plan: {"ok": True},

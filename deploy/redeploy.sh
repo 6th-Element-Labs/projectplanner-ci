@@ -46,13 +46,17 @@ PRE_DELIVERABLES_CUT_SERVICES=(projectplanner-gateway projectplanner-mcp "${CUT_
 AUX_UNITS=(projectplanner-agent-host.service
     projectplanner-coordinator-autopilot.service
     projectplanner-monitors.timer projectplanner-reconcile.timer
-    projectplanner-coordinator-audit.timer projectplanner-claim-gate.timer
+    projectplanner-coordinator-audit.timer
     projectplanner-narrate.timer projectplanner-digest.timer projectplanner-inbox.timer
     projectplanner-summarize.timer projectplanner-backup.timer)
 RETIRED_LIFECYCLE_UNITS=(projectplanner-coordinator-review.timer
     projectplanner-coordinator-review.service
     projectplanner-coordinator-merge.timer
-    projectplanner-coordinator-merge.service)
+    projectplanner-coordinator-merge.service
+    projectplanner-claim-gate.timer
+    projectplanner-claim-gate.service
+    projectplanner-merge-coordinator.timer
+    projectplanner-merge-coordinator.service)
 
 section() { printf '\n== %s ==\n' "$1"; }
 

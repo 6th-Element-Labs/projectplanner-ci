@@ -1,4 +1,4 @@
-# /etc/systemd/system/projectplanner-merge-coordinator.service
+# Retired by ADR-0023: scoped Autopilot is the only merge coordinator.
 # One-shot service: run the Switchboard merge-coordinator (HARDEN-72 / CI-5, Lever 6).
 # Triggered by projectplanner-merge-coordinator.timer.
 #

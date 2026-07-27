@@ -78,7 +78,7 @@ LIVELOCK_TICKS = 6
 
 MUTATING = frozenset({
     "ensure_review_generation", "start_remediation", "mark_ready", "enqueue",
-    "requeue_merge_group", "repair_dispatch", "fence_runner",
+    "update_branch", "repair_dispatch", "fence_runner",
     "reconcile_provenance",
 })
 NAMED_LADDER_REASON = "completion_not_converging"
@@ -92,7 +92,9 @@ def react(world: dict[str, Any], effect: str) -> None:
     """
     if effect == "mark_ready":
         world["draft"] = False
-    elif effect in {"enqueue", "requeue_merge_group"}:
+    elif effect == "update_branch":
+        world["merge_state_status"] = "CLEAN"
+    elif effect == "enqueue":
         world["queue"] = "queued"
     elif effect == "ensure_review_generation":
         world["runner"] = {"live": True, "role": "review_merge", "head": "same"}
@@ -121,8 +123,8 @@ def run_convergence(scenario: dict[str, Any], task_id: str) -> dict[str, Any]:
         ensure_review_generation=effect_adapter,
         start_remediation=effect_adapter,
         mark_ready=effect_adapter,
+        update_branch=effect_adapter,
         enqueue=effect_adapter,
-        requeue_merge_group=effect_adapter,
         repair_dispatch=effect_adapter,
         fence_runner=effect_adapter,
         reconcile_provenance=effect_adapter,

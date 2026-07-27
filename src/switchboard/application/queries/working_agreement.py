@@ -71,9 +71,9 @@ def execute(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         },
         "claim_before_starting": (
             "Before building anything, search_tasks for the feature area and claim (or create) "
-            "the board task — this prevents two agents shipping the same work. Fleet PRs on the "
-            "canonical repo are checked by the 'Switchboard / claim gate' commit status: a PR that "
-            "references no claimed task or Work Session is flagged (SESSION-12)."
+            "the board task — this prevents two agents shipping the same work. Claim and Work "
+            "Session hygiene are Switchboard preconditions for arming auto-merge; they are not "
+            "GitHub status contexts."
         ),
         "merge_strategy": "squash",
         "main_writes": "PR only — never push main directly",

@@ -53,7 +53,6 @@ pr_payload = {
 
 os.environ["SWITCHBOARD_CI_SCRATCHPAD"] = "1"
 orig_verify = github_sync.verify_ci_command.verify
-orig_claim = github_sync._maybe_refresh_claim_gate
 github_sync.verify_ci_command.verify = lambda sha, **k: {
     "ok": True,
     "sha": sha or VALID_SHA,
@@ -68,14 +67,14 @@ github_sync.verify_ci_command.verify = lambda sha, **k: {
         "mirror_branch": f"ci/pr-999/{VALID_SHA[:12]}",
     },
 }
-github_sync._maybe_refresh_claim_gate = lambda *a, **k: {"claim_gate_refreshed": True}
 
 opened = github_sync.handle_pr(pr_payload, P)
 ok(opened["action"] == "pr_review_recorded"
    and opened["scratchpad_dispatched"]
    and opened["scratchpad_run_id"] == "run-smoke"
-   and opened["pull_model_skip_reason"] == "scratchpad_primary",
-   "PR webhook triggers verify_ci ensure path and keeps claim gate refresh")
+   and opened["pull_model_skip_reason"] == "scratchpad_primary"
+   and opened["claim_gate_skip_reason"] == "switchboard_precondition_not_github_status",
+   "PR webhook triggers the one CI status without claim-status fan-out")
 
 # Required CI cannot depend on a task id being present in the PR. Ordinary
 # canonical PRs still need the required status or branch protection wedges them.
@@ -96,7 +95,6 @@ runs = store.list_external_ci_runs(task_id=task["task_id"], project=P)
 ok(isinstance(runs, list), "external_ci_runs list API remains available for board evidence")
 
 github_sync.verify_ci_command.verify = orig_verify
-github_sync._maybe_refresh_claim_gate = orig_claim
 
 print(f"\nci_scratchpad_smoke: {passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)

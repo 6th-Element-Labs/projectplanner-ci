@@ -3,9 +3,6 @@
 This module is intentionally FastAPI-free so replay/idempotency behavior can be tested
 without importing the web app.
 """
-import subprocess
-import sys
-from pathlib import Path
 from typing import Any, Dict, List
 
 import ci_scratchpad_dispatch
@@ -189,27 +186,6 @@ def handle_push(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
             "changed_files": len(changed_files), "notified_agents": notified}
 
 
-def _maybe_refresh_claim_gate(repo: str, pr_number: Any, project: str = "") -> Dict[str, Any]:
-    """Post claim-gate status for one PR immediately (CI-11 — no 2-min timer wait)."""
-    if pr_number is None:
-        return {"claim_gate_refreshed": False, "skip_reason": "missing_pr_number"}
-    proj = (project or store.DEFAULT_PROJECT).strip()
-    role = store.get_project_repo_role(repo, project=proj)
-    if not role.get("canonical"):
-        return {"claim_gate_refreshed": False, "skip_reason": "non_canonical_repo"}
-    script = Path(__file__).resolve().parent / "scripts" / "switchboard_pr_gate.py"
-    try:
-        subprocess.run(
-            [sys.executable, str(script), "--pr", str(int(pr_number)), "--once-open-prs"],
-            cwd=str(script.parent.parent),
-            check=True,
-            timeout=120,
-        )
-        return {"claim_gate_refreshed": True}
-    except Exception as exc:
-        return {"claim_gate_refreshed": False, "claim_gate_error": str(exc)}
-
-
 def _maybe_dispatch_scratchpad_ci(
     repo: str, pr_number: Any, head_sha: str, project: str = ""
 ) -> Dict[str, Any]:
@@ -243,7 +219,11 @@ def _maybe_dispatch_scratchpad_ci(
 
 
 def _maybe_trigger_ci(repo: str, pr_number: Any, head_sha: str, project: str = "") -> Dict[str, Any]:
-    """Trigger the one trusted scratchpad CI route + advisory claim refresh."""
+    """Trigger the one trusted scratchpad CI route.
+
+    Claim and work-session hygiene remain Switchboard preconditions for arming
+    auto-merge. They are deliberately not projected as GitHub status contexts.
+    """
     if ci_scratchpad_dispatch.is_scratchpad_enabled():
         dispatch = _maybe_dispatch_scratchpad_ci(repo, pr_number, head_sha, project=project)
         verification = {
@@ -265,11 +245,10 @@ def _maybe_trigger_ci(repo: str, pr_number: Any, head_sha: str, project: str = "
             "pull_model_skip_reason": "pull_model_retired",
             "pull_model_head_sha": None,
         }
-    claim = _maybe_refresh_claim_gate(repo, pr_number, project=project)
     return {
         **verification,
-        "claim_gate_refreshed": bool(claim.get("claim_gate_refreshed")),
-        "claim_gate_skip_reason": claim.get("skip_reason") or claim.get("claim_gate_error"),
+        "claim_gate_refreshed": False,
+        "claim_gate_skip_reason": "switchboard_precondition_not_github_status",
     }
 
 
@@ -277,13 +256,13 @@ def handle_merge_group(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
     """Native merge-queue support: when GitHub forms a merge group it runs required checks on
     the *temporary merge commit* and needs the required status reported on THAT SHA (not any
     PR head), or the queue hangs. We mirror the merge-group head SHA to the scratchpad exactly
-    like a PR head; verify.yml then posts ``Switchboard CI / VM gate`` on it. We also project
-    ``Switchboard / merge authorization`` onto the same temporary SHA (BUG-173).
+    like a PR head; verify.yml then posts ``Switchboard CI / VM gate`` on it.
 
     Dormant until the merge-queue ruleset is enabled — no ``merge_group`` events arrive until
     then — so this is safe to ship ahead of the toggle. Provenance/Done stays with the PR-merge
     path; a merge group only needs the required technical CI verdict on its head SHA.
-    Advisory PR authorization is intentionally not projected onto temporary queue SHAs."""
+    Claim and merge authorization remain internal Switchboard preconditions and are not
+    projected as GitHub statuses."""
     action = payload.get("action")
     if action != "checks_requested":
         return {"action": "ignored", "reason": f"unsupported merge_group action {action!r}"}

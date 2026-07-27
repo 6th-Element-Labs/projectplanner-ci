@@ -1,10 +1,10 @@
 {
   "expect": {
-    "effect": "requeue_merge_group",
+    "effect": "escalate_human",
     "reason_code": "merge_queue_ejected_tip_green",
     "role_sequence": [],
-    "route": "coordination_retry",
-    "terminal": "merged"
+    "route": "human",
+    "terminal": "human"
   },
   "id": "tip_green_after_checks_timed_out",
   "schema": "switchboard.completion_conformance.scenario.v1",

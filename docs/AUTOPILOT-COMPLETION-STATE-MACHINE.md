@@ -346,14 +346,14 @@ fence
 | Queue state | Completion decision |
 |---|---|
 | No entry, never queued, all exact-head gates green | Enqueue exactly once |
-| No entry after verified enqueue eject (`failed_checks` / `checks_timed_out`), tip still green | `coordination_retry` and `requeue_merge_group` (`merge_queue_ejected_tip_green`) — do **not** treat as a fresh enqueue; ONCE_ONLY / idempotent replay would no-op |
+| No entry after verified enqueue eject (`failed_checks` / `checks_timed_out`), tip still green | Native auto-merge may recover; otherwise `human` (`merge_queue_ejected_tip_green`) with the audited CI-repair/admin-merge lane |
 | `QUEUED` | `wait` |
 | `AWAITING_CHECKS` | `wait` |
 | `MERGEABLE` | `wait` for canonical merge event |
 | `LOCKED` | Bounded `wait`, then `coordination_retry` |
 | `UNMERGEABLE`, product check failure | `remediation` |
 | `UNMERGEABLE`, merge conflict | `remediation` |
-| `UNMERGEABLE`, infrastructure failure | `coordination_retry` and requeue |
+| `UNMERGEABLE`, infrastructure failure | `human`; never start a custom requeue lifecycle |
 | `UNMERGEABLE`, policy or authority failure | `human` |
 | Merged | `reconcile` |
 

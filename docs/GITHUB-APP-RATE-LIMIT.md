@@ -6,7 +6,7 @@ Why the fleet stopped reading GitHub on 2026-07-26, and the cutover that fixes i
 
 Every server-side GitHub caller read the same personal access token out of the
 environment. **A user PAT's 5,000 requests/hour is billed to the GitHub account, not
-to the token** — so the claim-gate timer, the merge coordinator, reconcile, the Fleet
+to the token** — so reconcile, the Fleet
 dock's sweeps, push verification and an operator's local `gh` all drew on one budget.
 
 The budget ran out and stayed out. Real evidence from prod:
@@ -80,7 +80,7 @@ Repository permissions:
 | Permission | Access | Used by |
 |---|---|---|
 | Metadata | Read | required by GitHub |
-| Pull requests | Read | dock, gates, merge coordinator |
+| Pull requests | Read | dock and scoped Autopilot |
 | Contents | Read | commit / branch checks, push verification |
 | Commit statuses | **Read & write** | the claim advisory and required CI callback |
 | Checks | Read | CI state on PR cards |

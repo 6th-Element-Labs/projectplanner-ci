@@ -67,15 +67,10 @@ for unit in \
   projectplanner-coordinator-audit.service \
   projectplanner-summarize.service \
   projectplanner-digest.service \
-  projectplanner-claim-gate.service \
   projectplanner-backup.service; do
   check "${unit} Slice=projectplanner-batch.slice" \
     prop_eq "$unit" Slice projectplanner-batch.slice
 done
-check "projectplanner-claim-gate.service MemoryMax <= 128M" bash -c '
-  max=$(systemctl show projectplanner-claim-gate.service -p MemoryMax --value)
-  [[ "$max" =~ ^[0-9]+$ && "$max" -le 134217728 ]]
-'
 
 if (( failures > 0 )); then
   printf '\nverify_cgroup_slices: %d check(s) failed\n' "$failures"

@@ -73,11 +73,9 @@ source_path = os.path.join(_TMP, "checkout")
 os.makedirs(source_path)
 
 orig_resolve = csd.cvd.resolve_head_sha
-orig_merge_base = csd.cvd.fetch_pr_merge_base_sha
 orig_verify = csd.cvd.verify_commit_exists
 orig_mirror = csd.external_ci_mirror.request_external_ci_mirror_run
 csd.cvd.resolve_head_sha = lambda *a, **k: (VALID_SHA, "test", None)
-csd.cvd.fetch_pr_merge_base_sha = lambda *a, **k: VALID_SHA
 csd.cvd.verify_commit_exists = lambda *a, **k: None
 csd.cvd._token = lambda *a, **k: "tok"
 mirror_calls = []
@@ -102,8 +100,8 @@ ok(mirror_calls and not mirror_calls[0].get("push_triggered"),
 ok(mirror_calls[0].get("mirror_ref_kind") == "tag",
    "projectplanner scratchpad transport uses non-triggering tags")
 ok(mirror_calls[0].get("workflow_ref") == "master"
-   and mirror_calls[0].get("workflow_inputs", {}).get("validation_mode") == "head",
-   "PR heads dispatch the trusted default-branch workflow in fast admission mode")
+   and mirror_calls[0].get("workflow_inputs", {}).get("purpose") == "head",
+   "PR heads dispatch the trusted default-branch full workflow")
 ok(mirror_calls[0].get("workflow_inputs", {}).get("source_ref")
    == f"refs/tags/{result['mirror_branch']}",
    "trusted workflow receives the exact disposable scratchpad ref")
@@ -130,12 +128,41 @@ ok(mirror_calls[0].get("poll_after_push") is True,
 ok(mirror_calls[0].get("source_sha") == VALID_SHA,
    "merge-group dispatch preserves the exact requested SHA")
 ok(mirror_calls[0].get("workflow_ref") == "master"
-   and mirror_calls[0].get("workflow_inputs", {}).get("validation_mode") == "merge_group"
+   and mirror_calls[0].get("workflow_inputs", {}).get("purpose") == "merge_group"
    and mirror_calls[0].get("mirror_ref_kind") == "tag",
-   "merge groups dispatch full verification through the trusted default-branch workflow")
+   "merge groups dispatch the identical verification through the trusted workflow")
+
+try:
+    csd.dispatch_scratchpad(
+        412,
+        head_sha=VALID_SHA,
+        purpose="ci_repair",
+        project=P,
+        source_path=source_path,
+        dry_run=False,
+    )
+except csd.cvd.CiVerifyDispatchError as exc:
+    ok("reason" in str(exc).lower(),
+       "ci-repair dispatch fails closed without an audit reason")
+else:
+    ok(False, "ci-repair dispatch fails closed without an audit reason")
+
+mirror_calls.clear()
+repair_result = csd.dispatch_scratchpad(
+    412,
+    head_sha=VALID_SHA,
+    purpose="ci_repair",
+    actor="operator@example",
+    audit_reason="repair the CI control path",
+    project=P,
+    source_path=source_path,
+    dry_run=False,
+)
+ok(repair_result["dispatched"]
+   and mirror_calls[0].get("workflow_inputs", {}).get("purpose") == "ci_repair",
+   "ci-repair dispatch runs the identical trusted workflow with audit-only purpose")
 
 csd.cvd.resolve_head_sha = orig_resolve
-csd.cvd.fetch_pr_merge_base_sha = orig_merge_base
 csd.cvd.verify_commit_exists = orig_verify
 csd.external_ci_mirror.request_external_ci_mirror_run = orig_mirror
 
@@ -153,13 +180,12 @@ github_sync.verify_ci_command.verify = lambda sha, **k: {
         "run_id": "run-test",
     },
 }
-orig_claim = github_sync._maybe_refresh_claim_gate
-github_sync._maybe_refresh_claim_gate = lambda *a, **k: {"claim_gate_refreshed": True}
 ci = github_sync._maybe_trigger_ci("6th-Element-Labs/projectplanner", 412, VALID_SHA, P)
-ok(ci["scratchpad_dispatched"] and ci["pull_model_skip_reason"] == "scratchpad_primary",
-   "github_sync routes verification through verify_ci when scratchpad is enabled")
+ok(ci["scratchpad_dispatched"]
+   and ci["pull_model_skip_reason"] == "scratchpad_primary"
+   and ci["claim_gate_skip_reason"] == "switchboard_precondition_not_github_status",
+   "github_sync routes one CI context and keeps hygiene inside Switchboard")
 github_sync.verify_ci_command.verify = orig_verify
-github_sync._maybe_refresh_claim_gate = orig_claim
 
 os.environ["SWITCHBOARD_CI_SCRATCHPAD"] = "0"
 ci_pull = github_sync._maybe_trigger_ci("6th-Element-Labs/projectplanner", 412, VALID_SHA, P)
