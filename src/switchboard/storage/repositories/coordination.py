@@ -33,6 +33,7 @@ from switchboard.domain.coordination.placement import (
 )
 from switchboard.domain.coordination.runtime_profile import evaluate_runtime_profile
 from switchboard.domain.coordination.terminal import TERMINAL_WAKE_STATUSES
+from switchboard.domain.execution_liveness import TERMINAL_EXECUTION_STATES
 from switchboard.domain.ixp.protocol import (
     PROTOCOL_ENVELOPE,
     ack_deadline_expectation,
@@ -490,13 +491,36 @@ def _insert_wake_intent(c: sqlite3.Connection, selector: Dict[str, Any],
 
 def _active_task_claim_in(c: sqlite3.Connection, task_id: str,
                           now: float) -> Dict[str, Any]:
+    """The live coordination owner of ``task_id``, if one exists.
+
+    A claim whose bound execution is recorded terminal is NOT live ownership.
+    ADR-0008 C2 gives a fenced or reaped generation no authority, so it must not
+    keep the completion owner from starting the next role (W4). Leaving it
+    blocking wedged COORD-67/68 on 2026-07-27: both implementation runners
+    finished, surrendered, and were reaped, yet their claims stayed active on a
+    one-hour TTL and refused every ``start_remediation`` with "Another agent owns
+    this task" until they expired.
+
+    Deliberately narrow: only a claim we can positively see is bound to a
+    terminal execution is ignored. A claim with no bound runner (desktop/MCP
+    ownership), or one whose runner row is missing, or one whose execution is
+    still alive, all still block — concurrency protection is unchanged.
+    """
     if not task_id:
         return {}
+    terminal = tuple(sorted(TERMINAL_EXECUTION_STATES))
+    marks = ",".join("?" for _ in terminal)
     row = c.execute(
-        "SELECT id,task_id,agent_id,principal_id,expires_at FROM task_claims "
-        "WHERE task_id=? AND status='active' AND expires_at>? "
-        "ORDER BY claimed_at LIMIT 1",
-        (task_id, now),
+        "SELECT tc.id,tc.task_id,tc.agent_id,tc.principal_id,tc.expires_at "
+        "FROM task_claims tc "
+        "LEFT JOIN runner_sessions rs "
+        "  ON rs.runner_session_id = tc.runner_session_id "
+        "WHERE tc.task_id=? AND tc.status='active' AND tc.expires_at>? "
+        "AND NOT (tc.runner_session_id IS NOT NULL "
+        "         AND rs.runner_session_id IS NOT NULL "
+        f"        AND lower(COALESCE(rs.status,'')) IN ({marks})) "
+        "ORDER BY tc.claimed_at LIMIT 1",
+        (task_id, now, *terminal),
     ).fetchone()
     if not row:
         return {}
