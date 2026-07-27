@@ -7,6 +7,14 @@ through ``storage.repositories`` → ``db.connection`` → ``domain``.
 
 from .effects import effect_key, plan_effect
 from .human_closeout import build_human_closeout_request
+from .normalization_law import (
+    NORMALIZATION_LAW_SCHEMA,
+    NORMALIZED_TICK_SCHEMA,
+    FreshTick,
+    NormalizedAction,
+    normalize_fresh_tick,
+    validate_law_table,
+)
 from .routing import task_ready_for_dispatch
 from .state_machine import (
     COMPLETION_CLASSIFIER_VERSION,
@@ -22,10 +30,16 @@ __all__ = [
     "COMPLETION_DECISION_SCHEMA",
     "COMPLETION_SNAPSHOT_SCHEMA",
     "MERGE_AUTHORIZATION_CONTEXT",
+    "NORMALIZATION_LAW_SCHEMA",
+    "NORMALIZED_TICK_SCHEMA",
+    "FreshTick",
+    "NormalizedAction",
     "build_completion_snapshot",
     "build_human_closeout_request",
     "classify_completion",
     "effect_key",
+    "normalize_fresh_tick",
     "plan_effect",
     "task_ready_for_dispatch",
+    "validate_law_table",
 ]
