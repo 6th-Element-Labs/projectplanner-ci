@@ -336,7 +336,9 @@ def require_generation_binding(
             connection_reference=reference,
             lifecycle_state=str(provider.get("lifecycle_state") or ""))
     revocation = str(provider.get("revocation_state") or "").strip().lower()
-    if revocation and revocation not in {"none", "active", "valid"}:
+    # Provider inventory writes "not_revoked"; admit the same words Connect
+    # stores or every host-side generation binding refuses a healthy credential.
+    if revocation and revocation not in {"none", "active", "valid", "not_revoked"}:
         raise ExecutionContextError(
             "provider_connection_revoked",
             "provider credential was revoked for this generation",

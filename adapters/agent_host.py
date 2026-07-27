@@ -1082,6 +1082,53 @@ CONNECT_RUNTIME_DEFAULTS = {
 }
 
 
+def _ensure_codex_workspace_trusted(workspace_path: str) -> None:
+    """Seed exact-path trust so Connect Codex skips the interactive trust TUI.
+
+    Parent-directory trust entries are not enough: Codex prompts per cwd. An
+    unanswered "1 or 2" prompt blocks the session and starves runner heartbeats
+    until the lease expires — Autopilot must boot with no human at the keyboard.
+    """
+    raw = str(workspace_path or "").strip()
+    if not raw:
+        return
+    try:
+        workspace = str(Path(raw).expanduser().resolve())
+    except OSError:
+        return
+    if not Path(workspace).is_dir():
+        return
+    home_raw = (
+        os.environ.get("CODEX_HOME")
+        or os.environ.get("PM_AGENT_HOST_CODEX_HOME")
+        or ""
+    ).strip()
+    try:
+        # launchd starts the host with a minimal environment, so an env-only
+        # lookup silently no-ops exactly where the seeding matters most.
+        codex_home = (Path(home_raw).expanduser().resolve() if home_raw
+                      else Path.home() / ".codex")
+    except OSError:
+        return
+    config_path = codex_home / "config.toml"
+    if not config_path.parent.is_dir():
+        return
+    escaped = workspace.replace("\\", "\\\\").replace('"', '\\"')
+    header = f'[projects."{escaped}"]'
+    try:
+        text = config_path.read_text(encoding="utf-8") if config_path.is_file() else ""
+    except OSError:
+        return
+    if header in text:
+        return
+    try:
+        with open(config_path, "a", encoding="utf-8") as fh:
+            fh.write(f'\n{header}\ntrust_level = "trusted"\n')
+        print(f"[agent_host] seeded Codex trust for {workspace}", flush=True)
+    except OSError as exc:
+        print(f"[agent_host] failed to seed Codex trust: {exc}", flush=True)
+
+
 def _connect_mcp_endpoint():
     """Public MCP URL the host already uses for Switchboard Communicate."""
     base = str(os.environ.get("PM_BASE") or "https://plan.taikunai.com").rstrip("/")
@@ -1370,6 +1417,12 @@ def launch_command(wake, inventory, runner_session_id="", workspace_path=""):
                 task_id=str(wake.get("task_id") or ""),
                 assignment=assignment_data,
                 lifecycle=lifecycle,
+                # COORD-52: echo the dispatch-time memory rather than re-deriving
+                # it, exactly like the server claim path (claims.py). The corpus
+                # is append-only and moves between dispatch and launch, so a
+                # fresh derivation here refuses every retry/remediation wake
+                # with execution_assignment_contract_mismatch.
+                prior_attempts=execution_assignment.get("prior_attempts"),
             )
             require_exact_execution_assignment(execution_assignment, expected)
         except ExecutionAssignmentError as exc:
@@ -1586,6 +1639,12 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
                 materialized_workspace.receipt_path)
             _record_workspace_binding(
                 runner_session_id, materialized_workspace, workspace_request)
+        if (
+            workspace_path
+            and mode == "connect"
+            and str((wake.get("selector") or {}).get("runtime") or "") == "codex"
+        ):
+            _ensure_codex_workspace_trusted(workspace_path)
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=20, env=env)
         if out.returncode != 0 or not (out.stdout or "").strip():
             detail = (out.stderr or out.stdout or "supervisor emitted no receipt")[-4000:]
@@ -1753,6 +1812,11 @@ def register_runner_session(rec, wake, inventory):
                        or lifecycle.get("source_sha")),
         "execution_connection_id": execution.get("execution_connection_id"),
     }
+    if connect_assignment:
+        # Connect Mac PTYs are native host execution. Without this flag the host
+        # renew loop skips the session and the 60s launch lease kills a live Codex.
+        metadata["native_host_execution"] = True
+        metadata["connect_assignment"] = True
     host_preflight = _host_repo_preflight(rec, inventory, metadata)
     if host_preflight:
         metadata["host_repo_preflight"] = host_preflight
@@ -1772,11 +1836,13 @@ def register_runner_session(rec, wake, inventory):
         "control": rec.get("control") or {"tier": "T3", "runner_kill": True,
                                            "managed_process": True},
         "metadata": metadata,
-        "heartbeat_ttl_s": (
-            3600 if rec.get("cloud_session") else
-            180 if rec.get("wake_mode") in {"direct_task", "connect"} else
-            60
-        ),
+        # Connect and direct CLIs need the same renewable lease; 60s launch TTL
+        # was killing live PTYs when a single renew tick was missed.
+        "heartbeat_ttl_s": (3600 if rec.get("cloud_session") else
+                            180 if (
+                                rec.get("wake_mode") in {"direct_task", "connect"}
+                                or connect_assignment
+                            ) else 60),
     }
     # Use hard POST when this registration claims to be claim-bound / watchable so
     # agent hosts fail closed instead of silently skipping (_try returns None).
@@ -2501,12 +2567,19 @@ def _runner_cpu_percent(session):
         return None
 
 
-def _runner_progress_metadata(session):
-    """Progress signals the host already owns; stop discarding them on heartbeat."""
+def _runner_progress_metadata(session, *, include_log_tail=False):
+    """Progress signals beside liveness (WATCH-19).
+
+    Routine renewals carry lightweight signals only. A 4KB PTY ``log_tail`` on
+    every heartbeat turned Capacity renewal into a heavy Communication payload
+    and caused control-plane timeouts to look like dead leases (ADR-0008 C2).
+    Operators still get tails via Watch/attention paths that ask for them.
+    """
     payload = {
         "last_output_at": _runner_last_output_at(session),
-        "log_tail": _runner_log_tail(session),
     }
+    if include_log_tail:
+        payload["log_tail"] = _runner_log_tail(session)
     output_bytes = _runner_output_bytes(session)
     if output_bytes is not None:
         payload["output_bytes"] = output_bytes
@@ -2531,9 +2604,20 @@ def expire_runner_leases(inventory, *, now=None):
     for session in _drain_runners(host_id):
         metadata = dict(session.get("metadata") or {})
         surrendered = bool(metadata.get("lease_surrender"))
-        # BUG-175: terminal-task / complete_claim surrender makes the lease due
-        # even if a concurrent renew refreshed heartbeat_at before the fence
-        # landed. Kill on surrender or staleness — never wait a full TTL.
+        # ADR-0008 C2: only surrender or true lease expiry may stop a process.
+        # A stale flag from a missed/timeout heartbeat must NOT SIGTERM a still-
+        # alive Connect/native Codex — that is Capacity impersonating from a
+        # Communication failure. Local process exit is terminalized by
+        # renew_live_direct_runners; surrender remains the explicit stop clock
+        # for complete_claim / terminal-task make_lease_due (BUG-175).
+        native_or_connect = (
+            metadata.get("native_host_execution") is True
+            or metadata.get("connect_assignment") is True
+            or str(session.get("wake_mode") or metadata.get("wake_mode") or "")
+            == "connect"
+        )
+        if session.get("alive") is True and native_or_connect and not surrendered:
+            continue
         if session.get("alive") is not True or not (
                 session.get("stale") or surrendered):
             continue
@@ -2804,14 +2888,19 @@ def renew_live_direct_runners(inventory):
                 "wake_repaired": wake_repaired,
             })
             continue
-        if (not native_transport or session.get("alive") is not True
+        connect_transport = metadata.get("connect_assignment") is True
+        if (not (native_transport or connect_transport)
+                or session.get("alive") is not True
                 or str(session.get("status") or "").lower() != "running"):
             continue
-        # BUG-175: a due/fenced lease must not be renewed. Terminal-task
-        # cleanup (and complete_claim) make the lease due; renewing it was the
-        # zombie amplifier that kept Done-task PTYs alive for hours.
-        if session.get("stale") is True or metadata.get("lease_surrender"):
+        # BUG-175 / ADR-0008 C2: an explicit lease surrender must not be
+        # renewed. Terminal-task cleanup and complete_claim fence the
+        # generation; renewing a surrendered lease was the zombie amplifier.
+        if metadata.get("lease_surrender"):
             continue
+        # Stale Connect/direct PTYs still get a renew attempt this tick.
+        # expire_runner_leases will not kill a still-alive Connect/native row
+        # on stale alone — only surrender or local process death does.
         if not wake_id or not task_id:
             continue
         body = {
@@ -2834,12 +2923,12 @@ def renew_live_direct_runners(inventory):
                 "wake_id": wake_id,
                 "wake_mode": (session.get("wake_mode") or
                               "claim_next"),
+                "native_host_execution": True,
                 **({
                     "direct_assignment": True,
                     "assignment_schema": "switchboard.direct_cli_assignment.v1",
                 } if metadata.get("direct_assignment") is True else {}),
-                # WATCH-19: progress beside liveness — PTY mtime/bytes/tail the
-                # host already owns; previously discarded on every renewal.
+                # WATCH-19: lightweight progress beside liveness (no log_tail).
                 **_runner_progress_metadata(session),
             },
             # Busy hosts may spend longer than one nominal tick finalizing other
@@ -2847,6 +2936,17 @@ def renew_live_direct_runners(inventory):
             # flickering out of Watch between successful renewals.
             "heartbeat_ttl_s": 180,
         }
+        # Server fences renewals that omit lease_epoch when the row already has
+        # one (execution_liveness.heartbeat_is_fenced). Re-assert identity
+        # fields after progress metadata merge so a quiet PTY cannot 403 itself
+        # to death.
+        for key in (
+            "lease_epoch", "execution_id", "execution_generation",
+            "execution_role", "execution_head_sha", "assignment_id",
+            "connect_assignment", "assignment_schema",
+        ):
+            if metadata.get(key) not in (None, ""):
+                body["metadata"][key] = metadata.get(key)
         host_preflight = _host_repo_preflight(
             session, inventory, body["metadata"])
         if host_preflight:
@@ -2857,9 +2957,9 @@ def renew_live_direct_runners(inventory):
             else "heartbeat_runner_session_failed"
         )
         if not result or first_error:
-            # A single transport blip must not unfairly consume a runner's
-            # lease. Retry once in this daemon tick; the next tick remains the
-            # deferred renewal boundary if both attempts fail.
+            # ADAPTER-35: a single transport blip must not unfairly consume a
+            # runner's lease. Retry once in this daemon tick; the next tick
+            # remains the deferred renewal boundary if both attempts fail.
             result = _try("POST", P_HEARTBEAT_RUNNER, body)
         final_error = (
             (result or {}).get("error") if isinstance(result, dict)
@@ -3495,10 +3595,12 @@ def run_once(inventory):
         advertised = _try("POST", P_REGISTER_HOST, registration_inventory(inventory))
         apply_authoritative_execution_policy(inventory, advertised)
         capacity = heartbeat_capacity(inventory)
+    # Renew before expiry kill. The previous order marked a just-due lease stale
+    # and SIGTERM'd a live Codex before this tick could extend the heartbeat.
+    runner_heartbeats = renew_live_direct_runners(inventory)
     expired_runner_leases = expire_runner_leases(inventory)
     if expired_runner_leases:
         capacity = heartbeat_capacity(inventory)
-    runner_heartbeats = renew_live_direct_runners(inventory)
     local_auth = capacity.get("local_auth")
     if isinstance(local_auth, dict) and local_auth.get("available") is not True:
         return {

@@ -256,6 +256,22 @@ def create_signed_bundle(source_root: Path, output_dir: Path, version: str,
         path for path in (source_root / "db").rglob("*.py")
         if "__pycache__" not in path.parts
     ))
+    # store.py is a facade over the legacy repo-root modules (evidence_claims,
+    # push_verification, github_sync, ...) and the Connect/direct session code
+    # imports it at launch. Shipping store.py without its root-module import
+    # closure made every Connect launch die with "No module named '<first
+    # missing module>'" — the 0.4.2 fleet only worked because the missing files
+    # were hand-copied into the installed release. Bundle every repo-root
+    # module and the root packages store.py pulls in.
+    candidates.extend(sorted(
+        path for path in source_root.glob("*.py") if path.is_file()
+    ))
+    for package in ("deliverable_gates", "deliverable_closure"):
+        candidates.extend(sorted(
+            path for path in (source_root / package).rglob("*")
+            if path.is_file() and "__pycache__" not in path.parts
+            and path.suffix in {".py", ".json"}
+        ))
     candidates.extend(path for path in (
         source_root / "constants.py",
         source_root / "store.py",

@@ -111,14 +111,24 @@ def _runner_fence_identity(runner: Mapping[str, Any]) -> dict[str, Any]:
 
 def _fence(snapshot: Mapping[str, Any], desired_role: str,
            head_sha: str) -> tuple[bool, dict[str, Any]]:
-    """A live generation may be kept only if role AND exact head both match."""
+    """A live generation is kept when it already serves the decided role.
+
+    review_merge additionally requires the exact decided head: that role never
+    moves the head itself, so a mismatch means the review target is obsolete.
+    remediation's entire job is to advance the head — fencing it on head
+    mismatch killed every remediation session the moment it pushed its own fix
+    (ADAPTER-36 attempt 9, the COORD-57 50-attempt loop). ADR-0008 C2: the
+    stale-head WRITE gate in claims verification is the safety authority; a
+    live, renewing, matching-role process is not made lease-due by head drift.
+    """
     runner = _map(snapshot.get("runner"))
     if not runner or not runner.get("live"):
         return False, {}
     runner_role = _text(runner.get("role") or runner.get("execution_role"))
     runner_head = str(runner.get("head_sha") or "").strip()
-    if desired_role and runner_role == _text(desired_role) and runner_head == head_sha:
-        return False, {}
+    if desired_role and runner_role == _text(desired_role):
+        if runner_role == "remediation" or runner_head == head_sha:
+            return False, {}
     return True, _runner_fence_identity(runner)
 
 

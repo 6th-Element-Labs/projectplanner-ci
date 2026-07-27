@@ -108,8 +108,8 @@ ok(isinstance(meta.get("last_output_at"), (int, float))
    and abs(float(meta["last_output_at"]) - stale_mtime) < 2.0,
    "heartbeat reports last_output_at from the PTY log mtime")
 ok(int(meta.get("output_bytes") or 0) > 0, "heartbeat reports output_bytes")
-ok("rate limit menu" in str(meta.get("log_tail") or ""),
-   "heartbeat carries a clean PTY log tail for operator evidence")
+ok("log_tail" not in meta,
+   "routine renew omits PTY log_tail so Capacity heartbeats stay light")
 
 
 # ---------------------------------------------------------------------------

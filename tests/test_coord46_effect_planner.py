@@ -145,6 +145,22 @@ class ClassifierBeatsLiveRunner(unittest.TestCase):
         self.assertEqual(plan["effect"], "attach_and_wait")
         self.assertFalse(plan["mutates"])
 
+    def test_live_remediation_survives_advancing_its_own_head(self):
+        """Remediation's job is to push; the push must not get it killed.
+
+        Fencing a matching-role remediation on head mismatch killed every
+        remediation session the moment it pushed its fix, re-dispatched a fresh
+        generation, and looped (ADAPTER-36 attempt 9; COORD-57 reached 50).
+        ADR-0008 C2: the stale-head write gate is the safety authority, not
+        process death.
+        """
+        plan = _plan("remediation", role="remediation",
+                     runner={"live": True, "role": "remediation",
+                             "head_sha": OLD, "generation": 4})
+        self.assertFalse(plan["fence_required"])
+        self.assertEqual(plan["effect"], "attach_and_wait")
+        self.assertFalse(plan["mutates"])
+
     def test_a_dead_runner_never_blocks_a_fresh_generation(self):
         plan = _plan("remediation", role="remediation",
                      runner={"live": False, "role": "review_merge",

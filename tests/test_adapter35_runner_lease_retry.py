@@ -83,5 +83,7 @@ assert renewed == [{
     "server_relay_error": None,
     "server_relay_missing": [],
 }]
+# Routine renew must stay light — no PTY log_tail on the Capacity heartbeat.
+assert "log_tail" not in (heartbeat_attempts[0][2].get("metadata") or {})
 
 print("ADAPTER-35 runner lease retry: 3 passed, 0 failed")

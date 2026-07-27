@@ -36,7 +36,9 @@ import urllib.request
 from pathlib import Path
 
 DEFAULT_BASE = os.environ.get("PM_BASE", "https://plan.taikunai.com").rstrip("/")
-TIMEOUT = 4
+# Capacity renewals post under IXP load; a 4s floor marked healthy Connect
+# leases stale and let expire_runner_leases SIGTERM live PTYs (ADR-0008 C2).
+TIMEOUT = int(os.environ.get("PM_HTTP_TIMEOUT_S", "30"))
 SUPPORTED_PROTOCOL = {
     "name": "switchboard-adapter",
     "version": "ixp.v1",
