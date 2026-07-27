@@ -100,7 +100,6 @@ def ready_host_placement(project: str = "switchboard") -> dict:
         "repositories": ["6th-Element-Labs/projectplanner"],
         "supports_scm_materialization": True,
         "scm_providers": ["github_app"],
-        "session_policies": ["docs_review", "code_strict"],
         "isolation_modes": ["task_worktree"],
         "workspace_backends": ["worktree"],
         "runtime_binaries": ["codex", "git"],

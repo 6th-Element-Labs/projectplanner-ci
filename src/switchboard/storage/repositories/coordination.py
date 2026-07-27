@@ -110,7 +110,6 @@ def _audit_policy(policy: Dict[str, Any]) -> Dict[str, Any]:
         },
         "placement": {
             "canonical_repo": placement.get("canonical_repo"),
-            "session_policy": placement.get("session_policy"),
             "isolation": placement.get("isolation"),
             "runtime_binaries": placement.get("runtime_binaries") or [],
             "runtime_profile": placement.get("runtime_profile") or {},

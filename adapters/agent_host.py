@@ -409,7 +409,6 @@ def placement_inventory(repo, runtime, policy):
             and "git" in binaries
         ),
         "scm_providers": _csv(os.environ.get("PM_HOST_SCM_PROVIDERS", "github_app,github")),
-        "session_policies": _csv(os.environ.get("PM_HOST_SESSION_POLICIES", "code_strict")),
         "isolation_modes": isolation_modes,
         "workspace_backends": workspace_backends,
         "runtime_binaries": binaries,

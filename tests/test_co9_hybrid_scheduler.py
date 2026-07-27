@@ -72,7 +72,6 @@ def placement(kind, *, tenant="", provider="", affinity="", cost="already_paid")
         "account_affinity_ids": [affinity] if affinity else [],
         "supports_credential_leases": True,
         "repositories": ["6th-Element-Labs/projectplanner"],
-        "session_policies": ["code_strict"],
         "isolation_modes": ["task_worktree"],
         "runtime_binaries": ["codex", "git", "python3"],
         "provider_capacity_mode": "external_account_admission",
@@ -180,7 +179,7 @@ def hybrid_policy(*, bucket="deliverable-co9", binding=None, provider_capacity=N
         },
         "placement": {
             "canonical_repo": "6th-Element-Labs/projectplanner",
-            "session_policy": "code_strict", "isolation": "task_worktree",
+            "isolation": "task_worktree",
             "runtime_binaries": ["codex", "git"],
             "resources": {"cpu": 2, "memory_mb": 1024, "disk_gb": 5},
         },
