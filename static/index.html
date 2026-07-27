@@ -42,6 +42,18 @@
         --tblr-btn-active-color:inherit;
         --tblr-btn-active-shadow:none;
       }
+      /* UI-66: Fleet dock tabs (and its small ghost controls) inherit the same
+         vendor ghost-secondary hover — a solid dark-grey slab. Same cure as
+         .epic-head: hover stays transparent, text darkens to full body color. */
+      .dock-tab.btn-ghost-secondary{
+        --tblr-btn-hover-bg:transparent;
+        --tblr-btn-hover-border-color:transparent;
+        --tblr-btn-hover-color:var(--tblr-body-color);
+        --tblr-btn-active-bg:transparent;
+        --tblr-btn-active-border-color:transparent;
+        --tblr-btn-active-color:var(--tblr-body-color);
+        --tblr-btn-active-shadow:none;
+      }
       /* Activity timeline: long updates clamp to a few lines, click row to expand */
       .tk-act-item{cursor:pointer}
       .tk-act-item:hover{background:var(--tblr-bg-surface-secondary,#f6f7f9)}

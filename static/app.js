@@ -775,7 +775,7 @@ const TeepPlan = {
         document.addEventListener('hidden.bs.modal', sync);
         sync();
     },
-    _fleetSignature(runners, prs, deployments, prUnavailable) {
+    _fleetSignature(runners, prs, deployments, prUnavailable, autopilotCoverage) {
         const r = (runners || []).map((s) => [
             s.runner_session_id || '', s.status || '', s.stale ? 1 : 0,
             ((s.last_snapshot || {}).captured_at) || 0,
@@ -794,9 +794,15 @@ const TeepPlan = {
         ]).sort((a, b) => Number(a[0]) - Number(b[0]));
         // Include unavailable flags so a recovery (auth_required → ok, or
         // http_503 → no_github_token) re-renders instead of keeping a stale message.
+        // UI-66: a coverage change (armed -> live, live -> stale) must re-render
+        // the pills even when nothing about the PRs themselves moved.
+        const a = Object.entries(autopilotCoverage || {}).map(([task, cov]) => [
+            task, (cov || {}).coverage || '', (cov || {}).liveness || '',
+            (cov || {}).scope_id || '',
+        ]).sort((x, y) => String(x[0]).localeCompare(String(y[0])));
         return JSON.stringify([
             r, p, d, Number((deployments || {}).undeployed_count || 0),
-            prUnavailable || '', (deployments || {}).unavailable || '',
+            prUnavailable || '', (deployments || {}).unavailable || '', a,
         ]);
     },
     // A stalled request here used to hang forever (no timeout), which left
@@ -841,10 +847,26 @@ const TeepPlan = {
             }
         } catch (e) { this._fleetLoadBusy = false; return; }
         const prs = prPayload.prs || [];
+        // UI-66: one batched coverage read for every board task on the PR tab,
+        // so each row can say whether autopilot is actually driving it.
+        // Advisory: a failed read renders the dock without pills, never blank.
+        this._dockAutopilot = {};
+        const apTaskIds = [...new Set(prs.flatMap(
+            (x) => (x.tasks || []).map((t) => t.task_id).filter(Boolean)))];
+        if (apTaskIds.length) {
+            try {
+                const p2 = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`;
+                const cRes = await this._fetchTimeout(
+                    `api/autopilot/coverage?task_ids=${encodeURIComponent(apTaskIds.join(','))}&${p2}`,
+                    { cache: 'no-store' });
+                if (cRes.ok) this._dockAutopilot = ((await cRes.json()).coverage) || {};
+            } catch (e) { /* coverage is advisory */ }
+        }
         this._dockPrUnavailable = prPayload.unavailable || '';
         this._dockDeploymentUnavailable = deploymentPayload.unavailable || '';
         const sig = this._fleetSignature(
-            runners, prs, deploymentPayload, this._dockPrUnavailable);
+            runners, prs, deploymentPayload, this._dockPrUnavailable,
+            this._dockAutopilot);
         const changed = sig !== this._fleetSig;
         this._fleetLoadBusy = false;
         if (force || changed) {
@@ -1120,6 +1142,58 @@ const TeepPlan = {
         if (!out.length) out.push({ key: 'open', label: 'Open', tone: 'secondary', icon: 'git-pull-request' });
         return out;
     },
+    // UI-66: one compact autopilot control per PR row, from the batched
+    // coverage read. States are the resolver's honest liveness vocabulary; the
+    // click action follows the coverage kind so a deliverable-covered task can
+    // never start a duplicate task scope (the double-drive guard).
+    _dockAutopilotHtml(x) {
+        const ids = (x.tasks || []).map((t) => t.task_id).filter(Boolean);
+        if (!ids.length) return '';
+        const taskId = String(ids[0]).toUpperCase();
+        const cov = (this._dockAutopilot || {})[taskId];
+        if (!cov) return '';
+        const states = {
+            live: ['Autopilot', 'green', 'route',
+                   cov.coverage === 'deliverable'
+                       ? `Driven by ${cov.deliverable_id}'s autopilot — click to pause`
+                       : 'Task-scoped autopilot running — click to pause', 'pause'],
+            armed: ['Autopilot armed', 'azure', 'clock',
+                    'Scope started; waiting for a coordinator host to pick it up — click to pause', 'pause'],
+            paused: ['Autopilot paused', 'yellow', 'player-pause',
+                     'Click to resume', 'resume'],
+            stale: ['Autopilot stale', 'orange', 'alert-triangle',
+                    'Scope holder is dead (deploy restart?) — click to re-arm', 'start'],
+            none: ['Arm autopilot', 'secondary', 'player-play',
+                   `Start a task-scoped autopilot for ${taskId}`, 'start'],
+        };
+        const [label, tone, icon, title, action] = states[cov.liveness] || states.none;
+        return `<button type="button" class="btn btn-sm btn-ghost-secondary dock-tab p-0 px-1 d-inline-flex align-items-center gap-1"
+            style="font-size:11px;flex:none;" data-ap-task="${this.esc(taskId)}" data-ap-action="${this.esc(action)}"
+            title="${this.esc(title)}">
+            <span style="width:6px;height:6px;border-radius:50%;background:var(--tblr-${tone}, var(--tblr-secondary));"></span>
+            <i class="ti ti-${icon}" style="font-size:11px;"></i>${this.esc(label)}</button>`;
+    },
+    async _dockAutopilotAction(taskId, action) {
+        const cov = (this._dockAutopilot || {})[String(taskId || '').toUpperCase()] || {};
+        const p = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`;
+        // A deliverable-covered task is controlled through ITS scope; only an
+        // uncovered (or task-scoped) task addresses /api/tasks/{id}/autopilot.
+        const url = (cov.coverage === 'deliverable' && cov.deliverable_id)
+            ? `api/deliverables/${encodeURIComponent(cov.deliverable_id)}/autopilot?${p}`
+            : `api/tasks/${encodeURIComponent(taskId)}/autopilot?${p}`;
+        try {
+            const res = await this._fetchTimeout(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action }),
+            });
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(body.message || body.error || `HTTP ${res.status}`);
+        } catch (error) {
+            window.alert(`Autopilot ${action} failed: ${error.message || error}`);
+        }
+        await this._loadFleetDock(true);
+    },
     _dockPrHtml(x) {
         // Winner takes the fixed top-left slot and tints the card's left edge; the runner-up gets a
         // single muted outline chip so a second problem is never lost, but can't compete for the eye.
@@ -1128,6 +1202,7 @@ const TeepPlan = {
         const tasks = (x.tasks || []).length
             ? (x.tasks || []).map((t) => `${this.esc(t.task_id)}${t.status ? ` (${this.esc(t.status)})` : ''}`).join(', ')
             : '';
+        const autopilot = this._dockAutopilotHtml(x);
         return `<div class="p-2 border rounded mb-2" style="border-left:2px solid ${accent} !important;border-top-left-radius:0;border-bottom-left-radius:0;">
             <div class="d-flex align-items-center gap-2">
                 ${this._dockBadge(primary.label, primary.tone, primary.icon, primary.title)}
@@ -1135,8 +1210,9 @@ const TeepPlan = {
                 <span class="ms-auto text-secondary font-monospace" style="font-size:12px;flex:none;white-space:nowrap;">#${this.esc(String(x.number))} · ${this.esc(this._fleetAge(x.updated_at))}</span>
             </div>
             <a href="${this.esc(x.url)}" target="_blank" rel="noopener" class="d-block mt-1 text-reset text-truncate" style="font-size:13px;">${this.esc(x.title || `PR #${x.number}`)} <i class="ti ti-external-link text-secondary" style="font-size:12px;"></i></a>
-            <div class="mt-1 text-secondary text-truncate font-monospace" style="font-size:11px;">
-                <span class="text-green">+${this.esc(String(x.additions || 0))}</span> <span class="text-red">−${this.esc(String(x.deletions || 0))}</span> · ${this.esc(String(x.changed_files || 0))} files · ${tasks ? tasks : 'no board task'} · ${this.esc(x.author || '')}
+            <div class="mt-1 text-secondary font-monospace d-flex align-items-center gap-2" style="font-size:11px;">
+                <span class="text-truncate"><span class="text-green">+${this.esc(String(x.additions || 0))}</span> <span class="text-red">−${this.esc(String(x.deletions || 0))}</span> · ${this.esc(String(x.changed_files || 0))} files · ${tasks ? tasks : 'no board task'} · ${this.esc(x.author || '')}</span>
+                ${autopilot ? `<span class="ms-auto"></span>${autopilot}` : ''}
             </div>
         </div>`;
     },
@@ -1227,7 +1303,7 @@ const TeepPlan = {
         if (!this._dockTab) this._dockTab = (blockedPrs.length && !deadRunners.length) ? 'prs' : 'runners';
         const tab = this._dockTab;
         const tabBtn = (key, label, count) =>
-            `<button class="btn btn-sm ${tab === key ? '' : 'btn-ghost-secondary'}" data-dock-tab="${key}" style="border-radius:0;border:0;border-bottom:2px solid ${tab === key ? 'var(--tblr-primary)' : 'transparent'};">${label}<span class="text-secondary ms-1">${count}</span></button>`;
+            `<button class="btn btn-sm dock-tab ${tab === key ? '' : 'btn-ghost-secondary'}" data-dock-tab="${key}" style="border-radius:0;border:0;border-bottom:2px solid ${tab === key ? 'var(--tblr-primary)' : 'transparent'};">${label}<span class="text-secondary ms-1">${count}</span></button>`;
         let body;
         if (tab === 'runners') {
             body = runners.length
@@ -1295,6 +1371,9 @@ const TeepPlan = {
         host.querySelectorAll('[data-deploy-pr]').forEach((b) =>
             b.addEventListener('click', () => this._requestDeployment(
                 b.getAttribute('data-deploy-pr'), b.getAttribute('data-deploy-title'))));
+        host.querySelectorAll('[data-ap-task]').forEach((b) =>
+            b.addEventListener('click', () => this._dockAutopilotAction(
+                b.getAttribute('data-ap-task'), b.getAttribute('data-ap-action'))));
         document.getElementById('fleet-dock-min').addEventListener('click', () => { this._dockCollapsed = true; rerender(); });
         document.getElementById('fleet-dock-refresh').addEventListener('click', () => this._loadFleetDock(true));
     },

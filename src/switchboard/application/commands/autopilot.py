@@ -23,7 +23,7 @@ from switchboard.storage.repositories import autopilot_scopes as scopes_repo
 SCHEMA = "switchboard.autopilot.v1"
 ERROR_SCHEMA = "switchboard.autopilot_error.v1"
 
-COMMANDS = ("get_autopilot", "control_autopilot")
+COMMANDS = ("get_autopilot", "control_autopilot", "autopilot_coverage")
 
 #: The operator verbs, exactly the REST body's action Literal. ``start`` routes
 #: to ``start_autopilot_scope``; the rest to ``control_autopilot_scope``.
@@ -208,9 +208,40 @@ def control_autopilot(deliverable_id: Any, *, project: str = DEFAULT_PROJECT,
     }
 
 
+def autopilot_coverage(task_ids: Any, *, project: str = DEFAULT_PROJECT,
+                       task_project: str = "",
+                       profile_id: str = "autopilot-default") -> dict[str, Any]:
+    """Batched per-task coverage read for the Fleet dock (UI-66).
+
+    For each task id: which scope covers it (deliverable via task links, or a
+    standalone task scope) and an honest liveness verdict — ``armed`` / ``live``
+    / ``stale`` / ``paused`` — derived from the holder lease, never from
+    ``status`` alone (a restart-killed scope keeps status "active" while
+    nothing ticks).
+    """
+    if isinstance(task_ids, str):
+        task_ids = [part.strip() for part in task_ids.split(",")]
+    wanted = [str(item or "").strip() for item in (task_ids or [])]
+    wanted = [item for item in wanted if item]
+    if not wanted:
+        raise AutopilotError("invalid_input", "task_ids required",
+                             project=project)
+    if len(wanted) > 100:
+        raise AutopilotError("invalid_input", "at most 100 task_ids per call",
+                             requested=len(wanted), project=project)
+    coverage = scopes_repo.autopilot_coverage_for_tasks(
+        wanted, project=project, task_project=task_project,
+        profile_id=profile_id)
+    return {
+        "schema": SCHEMA, "command": "autopilot_coverage", "project": project,
+        "coverage": coverage,
+    }
+
+
 _DISPATCH: dict[str, Callable[..., dict[str, Any]]] = {
     "get_autopilot": get_autopilot,
     "control_autopilot": control_autopilot,
+    "autopilot_coverage": autopilot_coverage,
 }
 
 

@@ -218,6 +218,121 @@ def get_autopilot_scope(scope_id: str, *, project: str = DEFAULT_PROJECT) -> Opt
         return _row(row) if row else None
 
 
+def scope_liveness(scope: Dict[str, Any], *, now: Optional[float] = None) -> str:
+    """One honest verdict for a scope row: armed | live | stale | paused.
+
+    ``status`` alone lies: on 2026-07-26 a deploy restart killed a scope's
+    holder and the row kept ``status="active"`` — every read surface reported a
+    dead autopilot as running for 45+ minutes. Liveness is derived from the
+    holder lease, which is the thing that actually ticks:
+
+      * ``paused``  — operator paused it;
+      * ``armed``   — active with no holder yet (started, awaiting pickup by a
+        coordinator; the wake substrate queues until a capable host is online);
+      * ``live``    — a holder's lease is current;
+      * ``stale``   — a holder existed and its lease expired without release:
+        the restart-killed shape. The scope is NOT running, whatever status
+        says.
+    """
+    at = time.time() if now is None else float(now)
+    status = str(scope.get("status") or "").strip().lower()
+    if status == "paused":
+        return "paused"
+    holder = str(scope.get("holder_agent_id") or "").strip()
+    expires = scope.get("expires_at")
+    if not holder and expires in (None, "", 0):
+        return "armed"
+    if expires not in (None, "", 0) and float(expires) > at:
+        return "live"
+    return "stale"
+
+
+#: Preference order when several scopes could answer for one task: a running
+#: scope beats an armed one beats paused beats dead-but-visible.
+_LIVENESS_RANK = {"live": 0, "armed": 1, "paused": 2, "stale": 3}
+
+
+def autopilot_coverage_for_tasks(
+        task_ids: Any, *, project: str = DEFAULT_PROJECT,
+        task_project: str = "",
+        profile_id: str = "autopilot-default") -> Dict[str, Dict[str, Any]]:
+    """Which live scope covers each task, with an honest liveness verdict.
+
+    UI-66, for the Fleet dock: the dock is the exception surface, but nothing
+    could answer "is autopilot driving this?" per task. Coverage comes from a
+    standalone task scope, or from a deliverable scope over any deliverable the
+    task is linked to. A task linked to no deliverable (the COORD-76 shape) is
+    only ever covered by a task scope — which is exactly what the dock needs to
+    know to offer the right arm action. Batched: one call for every row on the
+    dock, not one request per task per poll.
+    """
+    from switchboard.storage.repositories import deliverables as deliverables_repo
+
+    now = time.time()
+    wanted = [str(item or "").strip().upper() for item in (task_ids or [])]
+    wanted = [item for item in dict.fromkeys(wanted) if item]
+    out: Dict[str, Dict[str, Any]] = {}
+    if not wanted:
+        return out
+    with _conn(project) as c:
+        for task_id in wanted:
+            candidates: List[Dict[str, Any]] = []
+            rows = c.execute(
+                "SELECT * FROM autopilot_scopes WHERE profile_id=? AND "
+                "scope_type='task' AND task_id=? AND status IN ('active','paused') "
+                "ORDER BY updated_at DESC",
+                (profile_id, task_id),
+            ).fetchall()
+            for row in rows:
+                scope = _row(row)
+                candidates.append({"coverage": "task", "scope": scope})
+            try:
+                links = deliverables_repo.list_task_deliverable_links(
+                    task_id, project=task_project or project)
+            except Exception:
+                links = []
+            for link in links or []:
+                deliverable_id = str(link.get("deliverable_id") or "").strip()
+                if not deliverable_id:
+                    continue
+                for row in c.execute(
+                        "SELECT * FROM autopilot_scopes WHERE profile_id=? AND "
+                        "scope_type='deliverable' AND deliverable_id=? AND "
+                        "status IN ('active','paused') ORDER BY updated_at DESC",
+                        (profile_id, deliverable_id)).fetchall():
+                    scope = _row(row)
+                    candidates.append(
+                        {"coverage": "deliverable", "scope": scope})
+            if not candidates:
+                out[task_id] = {
+                    "task_id": task_id, "covered": False, "coverage": "none",
+                    "liveness": "none", "scope_id": None,
+                    "deliverable_id": None, "scope_status": None,
+                }
+                continue
+            for candidate in candidates:
+                candidate["liveness"] = scope_liveness(
+                    candidate["scope"], now=now)
+            best = min(candidates, key=lambda item: (
+                _LIVENESS_RANK.get(item["liveness"], 9),
+                0 if item["coverage"] == "deliverable" else 1,
+            ))
+            scope = best["scope"]
+            out[task_id] = {
+                "task_id": task_id,
+                "covered": True,
+                "coverage": best["coverage"],
+                "liveness": best["liveness"],
+                "scope_id": scope.get("scope_id"),
+                "deliverable_id": scope.get("deliverable_id") or None,
+                "scope_status": scope.get("status"),
+                "heartbeat_at": scope.get("heartbeat_at"),
+                "expires_at": scope.get("expires_at"),
+                "runtime": scope.get("runtime"),
+            }
+    return out
+
+
 def _validate_target(project: str, deliverable_id: str, scope_type: str,
                      task_project: str, task_id: str) -> Optional[Dict[str, Any]]:
     if scope_type == "task" and not deliverable_id:

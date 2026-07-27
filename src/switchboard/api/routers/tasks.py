@@ -385,6 +385,24 @@ def create_router(*, resolve_project: ProjectResolver,
                 raise HTTPException(404, "task not found")
             return {"deleted": task_id}
 
+        @router.get("/api/autopilot/coverage")
+        async def autopilot_coverage(task_ids: str = Query(...),
+                                     project: str = Query(...)):
+            """Batched per-task autopilot coverage for the Fleet dock (UI-66).
+
+            One call answers, for up to 100 comma-separated task ids, which
+            scope covers each task and whether it is actually running: armed /
+            live / stale / paused — derived from the holder lease, never from
+            status alone (a restart-killed scope keeps status "active").
+            """
+            from switchboard.application.commands import autopilot as autopilot_command
+            result = autopilot_command.execute_mapping_result(
+                "autopilot_coverage", task_ids, project=resolve_project(project))
+            if result.get("error"):
+                raise HTTPException(
+                    autopilot_command.error_status(result), result)
+            return result
+
         @router.post("/api/tasks/{task_id}/autopilot")
         async def control_task_autopilot(request: Request, task_id: str,
                                          body: dict = Body(default={}),

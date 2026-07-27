@@ -94,8 +94,11 @@ try:
                 "id": "user-ui58", "display_name": "web"}))
 
     # ---- 1) the command surface exists on both transports -------------------
-    ok(set(autopilot.COMMANDS) == {"get_autopilot", "control_autopilot"},
-       "the service declares get_autopilot + control_autopilot")
+    # autopilot_coverage joined the surface in UI-66 (Fleet dock per-task
+    # coverage read); it is REST-only by design — the dock is its consumer.
+    ok(set(autopilot.COMMANDS)
+       == {"get_autopilot", "control_autopilot", "autopilot_coverage"},
+       "the service declares get_autopilot + control_autopilot + autopilot_coverage")
     ok(set(mcp_autopilot.AUTOPILOT_TOOL_NAMES) == {"get_autopilot", "control_autopilot"},
        "MCP registers a tool for each command")
     routes = {(m, r.path) for r in _expand(client.app.routes) if hasattr(r, "path")
