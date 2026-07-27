@@ -22,15 +22,15 @@ jobs:
     steps:
       - name: Mint source-read token
         id: app_token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.SWITCHBOARD_APP_ID }}
+          client-id: ${{ vars.SWITCHBOARD_APP_CLIENT_ID }}
           private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
           owner: 6th-Element-Labs
           repositories: projectplanner
 
       - name: Check out canonical master
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: 6th-Element-Labs/projectplanner
           ref: master
@@ -39,7 +39,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -60,7 +60,7 @@ jobs:
 
       - name: Upload timing reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: performance-reports-${{ github.run_id }}
           path: |

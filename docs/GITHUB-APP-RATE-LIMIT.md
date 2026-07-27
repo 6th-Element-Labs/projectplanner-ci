@@ -58,9 +58,10 @@ That compatibility statement applies to the fleet REST clients described here. I
 **not** apply to the public CI callback. `projectplanner-ci/verify.yml` uses the dedicated
 `switchboard-ci-status` App, installed only on the canonical projectplanner repository,
 with metadata read and commit-status read/write permissions. Its
-`SWITCHBOARD_APP_ID` and `SWITCHBOARD_APP_PRIVATE_KEY` secrets are mandatory; token
-minting fails closed and there is no PAT fallback. Only the trusted default-branch
-announce/report jobs can access those secrets; the scratchpad suite job is secret-free.
+`SWITCHBOARD_APP_CLIENT_ID` repository variable and
+`SWITCHBOARD_APP_PRIVATE_KEY` secret are mandatory; token minting fails closed and
+there is no PAT fallback. Only the trusted default-branch announce/report jobs can
+access the private key; the scratchpad suite job is secret-free.
 
 ## Operator cutover
 

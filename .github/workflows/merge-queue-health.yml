@@ -39,9 +39,9 @@ jobs:
       ALERT_ASSIGNEE: ${{ vars.UPTIME_ALERT_ASSIGNEE || 'StevenRidder' }}
       MQ_STUCK_MIN: ${{ inputs.stuck_min || vars.MQ_STUCK_MIN || '15' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 

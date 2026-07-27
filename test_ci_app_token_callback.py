@@ -49,8 +49,10 @@ for job_name in ("announce", "report"):
     ok(mint and str(mint.get("uses") or "").startswith(
         "actions/create-github-app-token"), f"{job_name} uses the official App action")
     with_block = (mint or {}).get("with") or {}
-    ok("SWITCHBOARD_APP_ID" in str(with_block.get("app-id")),
-       f"{job_name} reads the dedicated App id")
+    ok("SWITCHBOARD_APP_CLIENT_ID" in str(with_block.get("client-id")),
+       f"{job_name} reads the dedicated App client id")
+    ok("app-id" not in with_block,
+       f"{job_name} does not use the deprecated App id input")
     ok("SWITCHBOARD_APP_PRIVATE_KEY" in str(with_block.get("private-key")),
        f"{job_name} reads the dedicated App private key")
 

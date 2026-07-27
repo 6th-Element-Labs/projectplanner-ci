@@ -39,7 +39,8 @@ ok(verify.exists()
    and "refs/tags/ci/" in _verify
    and "scripts/switchboard_ci.sh" in _verify,
    "trusted default-branch workflow accepts tags, not mirrored branch pushes")
-ok("SWITCHBOARD_APP_ID" in _verify
+ok("SWITCHBOARD_APP_CLIENT_ID" in _verify
+   and "app-id:" not in _verify
    and "SWITCHBOARD_APP_PRIVATE_KEY" in _verify
    and "PRIVATE_READ_TOKEN" not in _verify
    and "refs/pull/" not in _verify,

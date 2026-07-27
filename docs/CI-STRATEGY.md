@@ -160,7 +160,7 @@ Helm routing is **unchanged**. projectplanner now uses the same push mirror engi
 
 - **Route A-push briefly exposes source on a public repo.** Mitigations: ephemeral `ci/…` branches, terminal cleanup, a secrets/history scan gate before first push, and **Route B/C for anyone who can't accept it.** This exposure is explicit and accepted for the projectplanner scratchpad route.
 - **Route A-push needs authenticated source fetch and mirror push credentials on the caller.** For projectplanner the Plan VM performs only this coordination step; the suite still runs off-box.
-- **projectplanner-ci uses a dedicated App for commit-status writeback.** `SWITCHBOARD_APP_ID` and `SWITCHBOARD_APP_PRIVATE_KEY` are mandatory and token minting fails closed; the retired `PRIVATE_READ_TOKEN` must not be restored. Only isolated announce/report jobs can read those secrets. The suite job checks out public scratchpad code with no credential.
+- **projectplanner-ci uses a dedicated App for commit-status writeback.** The `SWITCHBOARD_APP_CLIENT_ID` repository variable and `SWITCHBOARD_APP_PRIVATE_KEY` secret are mandatory and token minting fails closed; the retired `PRIVATE_READ_TOKEN` must not be restored. Only isolated announce/report jobs can read the private key. The suite job checks out public scratchpad code with no credential.
 - **Self-hosted (B) is standard GitHub Actions on a *separate* machine** — never the prod web box (that was the HARDEN-32 mistake).
 - **Free macOS only exists on public runners**, so macOS-heavy private repos either accept Route A-push or pay for Mac hardware under B.
 

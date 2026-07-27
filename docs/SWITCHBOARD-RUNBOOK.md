@@ -152,9 +152,10 @@ verify that path is a Git checkout owned by `projectplanner` and that the servic
 fetch the canonical repo, push to `projectplanner-ci`, and poll Actions.
 
 Confirm the service account can fetch the private canonical repo, push to projectplanner-ci,
-and poll Actions with `gh`. Confirm projectplanner-ci has `SWITCHBOARD_APP_ID` and
-`SWITCHBOARD_APP_PRIVATE_KEY` for canonical commit-status writeback. The callback is App-only
-and fails closed; do not restore `PRIVATE_READ_TOKEN`. Scratchpad checkout is public and
+and poll Actions with `gh`. Confirm projectplanner-ci has the
+`SWITCHBOARD_APP_CLIENT_ID` repository variable and `SWITCHBOARD_APP_PRIVATE_KEY` secret
+for canonical commit-status writeback. The callback is App-only and fails closed; do not
+restore `PRIVATE_READ_TOKEN`. Scratchpad checkout is public and
 credential-free. The suite job contains no secret expressions; isolated announce/report jobs
 mint the App token and publish one pending/terminal status.
 
