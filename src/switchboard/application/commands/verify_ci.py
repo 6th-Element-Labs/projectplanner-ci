@@ -178,21 +178,32 @@ def _ensure_dispatch(
     import ci_scratchpad_dispatch as csd
 
     path = (source_path or csd.source_checkout_path()).strip()
-    # ``verify_ci`` is an exact-SHA API.  A PR number is useful as a fetch-ref
-    # hint, but must never turn the request into a PR-head lookup: merge-group
-    # commits are deliberately different from the current PR head.
+    # PR heads use fast admission and wait for a terminal provider result so the
+    # disposable tag is cleaned automatically. Merge-group/exact-ref requests
+    # stay fire-and-forget because GitHub owns their temporary SHA lifecycle.
     fetch_ref = (source_fetch_ref or sha).strip()
     label = f"verify-{(task_id or sha)[:24]}".replace("/", "-")
     try:
-        out = csd.dispatch_scratchpad_ref(
-            sha,
-            fetch_ref,
-            label=label,
-            repo=repo,
-            project=project,
-            source_path=path,
-            dry_run=False,
-        )
+        if pr_number and not source_fetch_ref:
+            out = csd.dispatch_scratchpad(
+                pr_number,
+                head_sha=sha,
+                repo=repo,
+                project=project,
+                source_path=path,
+                dry_run=False,
+                strict_explicit=True,
+            )
+        else:
+            out = csd.dispatch_scratchpad_ref(
+                sha,
+                fetch_ref,
+                label=label,
+                repo=repo,
+                project=project,
+                source_path=path,
+                dry_run=False,
+            )
         out.setdefault("skip_reason", None)
         return out
     except Exception as exc:

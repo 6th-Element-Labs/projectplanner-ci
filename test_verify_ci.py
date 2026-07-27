@@ -156,11 +156,11 @@ def test_ensure_is_sha_only_and_hides_dispatch():
             ok("mirror_branch" not in result, "public surface hides mirror_branch")
 
 
-def test_ensure_pr_hint_cannot_replace_explicit_sha():
+def test_ensure_routes_pr_heads_and_merge_groups_separately():
     sha = _sha("merge-group")
     with mock.patch("ci_scratchpad_dispatch.dispatch_scratchpad_ref",
                     return_value={"dispatched": True, "head_sha": sha}) as dispatch, \
-            mock.patch("ci_scratchpad_dispatch.try_dispatch_scratchpad") as pr_dispatch:
+            mock.patch("ci_scratchpad_dispatch.dispatch_scratchpad") as pr_dispatch:
         result = verify_ci._ensure_dispatch(
             sha,
             project="switchboard",
@@ -173,11 +173,13 @@ def test_ensure_pr_hint_cannot_replace_explicit_sha():
     ok(dispatch.call_args.args[:2] == (
         sha, "refs/heads/gh-readonly-queue/master/pr-412-merge"),
        "exact SHA and fetch ref use the ref dispatcher even with a PR hint")
-    ok(not pr_dispatch.called, "PR-head resolution is not used for exact-SHA ensure")
+    ok(not pr_dispatch.called, "merge-group exact ref never resolves as a PR head")
 
-    with mock.patch("ci_scratchpad_dispatch.dispatch_scratchpad_ref",
-                    return_value={"dispatched": True, "head_sha": sha}) as dispatch, \
-            mock.patch("ci_scratchpad_dispatch.try_dispatch_scratchpad") as pr_dispatch:
+    with mock.patch("ci_scratchpad_dispatch.dispatch_scratchpad_ref") as dispatch, \
+            mock.patch(
+                "ci_scratchpad_dispatch.dispatch_scratchpad",
+                return_value={"dispatched": True, "head_sha": sha},
+            ) as pr_dispatch:
         verify_ci._ensure_dispatch(
             sha,
             project="switchboard",
@@ -185,9 +187,11 @@ def test_ensure_pr_hint_cannot_replace_explicit_sha():
             repo="6th-Element-Labs/projectplanner",
             source_path="/tmp/ci-source",
         )
-    ok(dispatch.call_args.args[:2] == (sha, sha),
-       "PR hint without a fetch ref still fetches the authoritative SHA")
-    ok(not pr_dispatch.called, "PR hint never re-resolves an exact-SHA request")
+    ok(not dispatch.called, "ordinary PR head does not use merge-group dispatch")
+    ok(pr_dispatch.call_args.args[0] == 412
+       and pr_dispatch.call_args.kwargs["head_sha"] == sha
+       and pr_dispatch.call_args.kwargs["strict_explicit"] is True,
+       "ordinary PR uses terminal fast admission while fencing the exact head SHA")
 
 
 def test_mapping_entry():
@@ -206,7 +210,7 @@ if __name__ == "__main__":
     test_status_and_stall_taxonomy()
     test_callback_stall_when_gh_context_missing()
     test_ensure_is_sha_only_and_hides_dispatch()
-    test_ensure_pr_hint_cannot_replace_explicit_sha()
+    test_ensure_routes_pr_heads_and_merge_groups_separately()
     test_mapping_entry()
     print(f"\nverify_ci: {passed} passed, {failed} failed")
     raise SystemExit(1 if failed else 0)
