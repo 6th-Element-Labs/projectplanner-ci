@@ -50,8 +50,11 @@ class FreshTick:
     """Facts read during one controller tick.
 
     ``source_observed_at`` contains immutable observation times, not mutable
-    retry counters.  ``prior_head_sha`` is allowed only to invalidate history;
-    no prior classifier decision is represented here.
+    retry counters.  ``wait_started_at`` is the authoritative timestamp for
+    the event that began a WAIT (for example the head, check, or queue event);
+    callers must preserve it across ticks over unchanged state.
+    ``prior_head_sha`` is allowed only to invalidate history; no prior
+    classifier decision is represented here.
     """
 
     observed_at: float
@@ -59,6 +62,7 @@ class FreshTick:
     source_observed_at: Mapping[str, float]
     head_sha: str
     prior_head_sha: str = ""
+    wait_started_at: float | None = None
 
 
 @dataclass(frozen=True)
@@ -253,11 +257,16 @@ def _validate_tick(tick: FreshTick, row: NormalizationLawRow) -> None:
 def _wait_evidence(
     *, reason: str, row: NormalizationLawRow, tick: FreshTick,
 ) -> WaitEvidence:
+    if tick.wait_started_at is None:
+        raise ValueError("WAIT requires an authoritative wait_started_at")
+    wait_started_at = _finite_time(tick.wait_started_at, "wait_started_at")
+    if wait_started_at > tick.live_clock_at:
+        raise ValueError("wait_started_at may not be in the future")
     return WaitEvidence(
         reason=reason or "fresh_observation_pending",
         evidence=tuple(row.authoritative_sources),
         owner=row.owner,
-        deadline_at=tick.live_clock_at + row.live_clock_bound_s,
+        deadline_at=wait_started_at + row.live_clock_bound_s,
         next_observation=row.freshness_rule,
     )
 
@@ -288,6 +297,15 @@ def normalize_fresh_tick(
     action = _PLAN_ACTIONS[effect]
     row = LAW_BY_ACTION[action]
     _validate_tick(tick, row)
+    wait = (
+        _wait_evidence(
+            reason=_text(plan_map.get("reason_code") or decision_map.get("reason_code")),
+            row=row,
+            tick=tick,
+        )
+        if action is NormalizedAction.WAIT else None
+    )
+    wait_expired = bool(wait and tick.live_clock_at >= wait.deadline_at)
 
     snapshot_head = _text(snapshot_map.get("head_sha"))
     plan_head = _text(plan_map.get("head_sha"))
@@ -337,9 +355,29 @@ def normalize_fresh_tick(
     }
     if not normalized["task_id"] or not normalized["idempotency_key"]:
         raise ValueError("normalized tick requires task_id and idempotency_key")
-    if action is NormalizedAction.WAIT:
-        normalized["wait"] = asdict(_wait_evidence(
-            reason=reason, row=row, tick=tick))
+    if action is NormalizedAction.WAIT and not wait_expired:
+        normalized["wait"] = asdict(wait)
+    if action is NormalizedAction.WAIT and wait_expired:
+        normalized.update({
+            "action": NormalizedAction.BLOCK.value,
+            "reason_code": "wait_deadline_expired",
+            "effect": LAW_BY_ACTION[NormalizedAction.BLOCK].effect,
+            "idempotency_key": (
+                f"{normalized['idempotency_key']}:wait_deadline_expired"
+            ),
+            "receipt_contract": LAW_BY_ACTION[NormalizedAction.BLOCK].receipt,
+            "owner": wait.owner,
+            "block": asdict(BlockEvidence(
+                reason="wait_deadline_expired",
+                owner=wait.owner,
+                live_evidence=wait.evidence,
+                minimum_repair=(
+                    "repair or advance the awaited authoritative event, "
+                    "then take a fresh tick"
+                ),
+            )),
+            "expired_wait": asdict(wait),
+        })
     if action is NormalizedAction.BLOCK:
         normalized["block"] = asdict(_block_evidence(reason=reason, row=row))
     return normalized

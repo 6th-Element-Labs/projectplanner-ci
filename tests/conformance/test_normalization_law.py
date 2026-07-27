@@ -41,6 +41,7 @@ def _tick(action: NormalizedAction, head: str, prior_head: str = "") -> FreshTic
         source_observed_at=sources,
         head_sha=head,
         prior_head_sha=prior_head,
+        wait_started_at=NOW - 1 if action is NormalizedAction.WAIT else None,
     )
 
 
@@ -136,6 +137,56 @@ def test_wait_and_block_have_required_operating_contracts():
     )
     assert set(blocked["block"]) == {
         "reason", "owner", "live_evidence", "minimum_repair"}
+
+
+def test_wait_deadline_is_immutable_across_ticks_and_expires_to_owned_block():
+    scenario = properties._scenario("law-wait-multi-tick", ci="pending")
+    snapshot = _shared.build_snapshot(scenario, task_id="LAW-WAIT-MULTI-TICK")
+    run = {"run_id": "run-wait-multi-tick", "attempt": 0, "state_version": 1}
+    decision = classify_completion(run, snapshot)
+    plan = plan_effect(decision, snapshot, run)
+    wait_started_at = NOW - 10
+
+    def normalize_at(live_clock_at: float) -> dict:
+        return normalize_fresh_tick(
+            decision=decision,
+            plan=plan,
+            snapshot=snapshot,
+            tick=FreshTick(
+                observed_at=live_clock_at,
+                live_clock_at=live_clock_at,
+                source_observed_at={
+                    source: live_clock_at - 1
+                    for source in LAW_BY_ACTION[
+                        NormalizedAction.WAIT].authoritative_sources
+                },
+                head_sha=snapshot["head_sha"],
+                wait_started_at=wait_started_at,
+            ),
+        )
+
+    first = normalize_at(NOW)
+    second = normalize_at(NOW + 60)
+    expired = normalize_at(
+        wait_started_at
+        + LAW_BY_ACTION[NormalizedAction.WAIT].live_clock_bound_s
+    )
+
+    expected_deadline = (
+        wait_started_at
+        + LAW_BY_ACTION[NormalizedAction.WAIT].live_clock_bound_s
+    )
+    assert first["action"] == second["action"] == "WAIT"
+    assert first["wait"]["deadline_at"] == expected_deadline
+    assert second["wait"]["deadline_at"] == expected_deadline
+    assert expired["action"] == "BLOCK"
+    assert expired["reason_code"] == "wait_deadline_expired"
+    assert expired["idempotency_key"] == (
+        f"{plan['idem_key']}:wait_deadline_expired"
+    )
+    assert expired["owner"] == first["wait"]["owner"]
+    assert expired["block"]["owner"] == first["wait"]["owner"]
+    assert expired["expired_wait"]["deadline_at"] == expected_deadline
 
 
 def test_stale_authoritative_source_fails_closed():
