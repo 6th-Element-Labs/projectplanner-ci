@@ -478,7 +478,6 @@ PM_EXECUTION_BASE_SHA={values['base_sha']}
 PM_EXECUTION_DEFAULT_BRANCH={values['default_branch']}
 PM_EXECUTION_GENERATION={values['generation']}
 PM_EXECUTION_CONTEXT_DIGEST={values['digest']}
-PM_HOST_SESSION_POLICIES=code_strict
 PM_HOST_ISOLATION=task_worktree
 PM_WAKE_ID={values['wake']}
 PM_TASK_ID={values['task']}

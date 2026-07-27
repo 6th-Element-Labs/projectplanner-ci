@@ -12,7 +12,6 @@ from dataclasses import asdict
 import hashlib
 import json
 import os
-import re
 from typing import Any
 
 from switchboard.application.session_boot import ADVERTISED_LAUNCH_RUNTIMES
@@ -34,12 +33,6 @@ _UNSUPPORTED_RUNTIME_REPAIR = (
     "Call start_task with a supported runtime; do not use runtime=cli. "
     "Connect boots the CLI worker. From a launcher session do not claim_task."
 )
-_SESSION_POLICY_RE = re.compile(
-    r"(?:policy_profile|session_profile)\s*[:=]\s*([a-zA-Z0-9_-]+)",
-    re.IGNORECASE,
-)
-
-
 def _runtime(value: str) -> tuple[str, str]:
     selected = _RUNTIMES.get(str(value or "codex").strip().lower())
     if not selected:
@@ -58,20 +51,6 @@ def unsupported_runtime_payload(requested_runtime: str) -> dict[str, Any]:
         "repair": _UNSUPPORTED_RUNTIME_REPAIR,
         "message": _UNSUPPORTED_RUNTIME_REPAIR,
     }
-
-
-def _session_policy(task: dict[str, Any]) -> str:
-    state = task.get("agent_state") if isinstance(task.get("agent_state"), dict) else {}
-    session = state.get("session_policy") if isinstance(
-        state.get("session_policy"), dict) else {}
-    explicit = str(
-        session.get("profile") or task.get("policy_profile")
-        or task.get("session_policy_profile") or ""
-    ).strip()
-    if explicit:
-        return explicit
-    match = _SESSION_POLICY_RE.search(str(task.get("description") or ""))
-    return match.group(1) if match else "docs_review"
 
 
 def _hybrid_policy(
@@ -110,7 +89,6 @@ def _hybrid_policy(
                 str(item).strip() for item in configured.get("trust_zones") or []
                 if str(item).strip()
             }),
-            "session_policy": _session_policy(task),
             "isolation": (
                 "task_worktree" if workspace.get("isolation") == "worktree"
                 else str(workspace.get("isolation") or "")
