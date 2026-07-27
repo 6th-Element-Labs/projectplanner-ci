@@ -248,9 +248,10 @@ def dispatch_scratchpad_ref(
             "validation_mode": "merge_group",
             "base_sha": "",
         },
-        # Webhook delivery only owns the durable push/dispatch handoff.  CI
-        # completion is asynchronous and may exceed GitHub's webhook deadline.
-        "poll_after_push": False,
+        # Webhook intake is already accept-and-ack; this executes in the
+        # off-request drain worker. Wait there for terminal evidence so the
+        # durable run closes and its disposable tag is always removed.
+        "poll_after_push": True,
         "cleanup_mirror_branch": True,
         # BUG-180: this path exists for merge-group heads, whose SHA is minted by GitHub
         # and can never be changed. If a previous attempt aborted before publishing a

@@ -125,8 +125,8 @@ ref_result = csd.dispatch_scratchpad_ref(
 )
 ok(ref_result["dispatched"] and mirror_calls,
    "merge-group exact-ref dispatch persists the mirror request")
-ok(mirror_calls[0].get("poll_after_push") is False,
-   "merge-group webhook dispatch does not poll CI before returning")
+ok(mirror_calls[0].get("poll_after_push") is True,
+   "merge-group background dispatch waits for terminal evidence and tag cleanup")
 ok(mirror_calls[0].get("source_sha") == VALID_SHA,
    "merge-group dispatch preserves the exact requested SHA")
 ok(mirror_calls[0].get("workflow_ref") == "master"
