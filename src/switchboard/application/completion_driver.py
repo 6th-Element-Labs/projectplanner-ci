@@ -12,10 +12,9 @@ from switchboard.application.commands.completion_orchestration import (
     execute_normalized_command,
 )
 from switchboard.application.completion_shadow import (
-    compare_shadow_actions,
+    build_thin_observation,
     explain_fresh_snapshot,
 )
-from switchboard.domain.completion.effects import plan_effect
 from switchboard.domain.completion.executor import (
     CompletionEffectAdapters,
     ensure_completion_run,
@@ -489,17 +488,6 @@ def run_completion_tick(
             project=project,
         )
     )
-    try:
-        legacy_plan = plan_effect(decision, snapshot, persisted)
-    except Exception as exc:  # noqa: BLE001
-        # The retired planner is shadow evidence only. Corrupt historical
-        # counters or any other legacy-planner failure must not stop the fresh
-        # reducer from selecting and executing its production command.
-        legacy_plan = {
-            "schema": "switchboard.legacy_completion_shadow_error.v1",
-            "effect": "legacy_shadow_error",
-            "error": f"{type(exc).__name__}: {exc}",
-        }
     observed_at = float(snapshot.get("observed_at") or time.time())
     hydration_started_at = float(
         snapshot.get("hydration_started_at") or observed_at
@@ -543,34 +531,33 @@ def run_completion_tick(
         ),
     )
     plan = _map(normalized.get("command"))
-    shadow = compare_shadow_actions(
+    observation = build_thin_observation(
         task_id=task_id,
         snapshot=snapshot,
         decision=decision,
-        legacy_plan=legacy_plan,
         normalized=normalized,
     )
     explanation = explain_fresh_snapshot(snapshot, normalized)
     # Append-only observability is a port, not lifecycle authority. Tests and
     # alternate runtimes can supply a storage-independent observer.
-    def default_shadow_observer(observation: Mapping[str, Any]) -> Any:
+    def default_tick_observer(tick_observation: Mapping[str, Any]) -> Any:
         from switchboard.storage.repositories.activity import append_activity
         return append_activity(
-            "completion.shadow_observed",
+            "completion.thin_tick_observed",
             actor,
-            dict(observation),
+            dict(tick_observation),
             task_id=str(task_id or "").strip().upper(),
             project=project,
         )
 
-    observe_shadow = shadow_observer or default_shadow_observer
+    observe_tick = shadow_observer or default_tick_observer
     try:
-        receipt = observe_shadow(shadow)
-        shadow["ledger_receipt"] = receipt
+        receipt = observe_tick(observation)
+        observation["ledger_receipt"] = receipt
     except Exception as exc:  # noqa: BLE001
-        # Shadow persistence cannot alter lifecycle behavior, but its loss must
+        # Observation persistence cannot alter lifecycle behavior, but its loss must
         # remain visible to the caller rather than becoming a hidden fallback.
-        shadow["ledger_error"] = f"{type(exc).__name__}: {exc}"
+        observation["ledger_error"] = f"{type(exc).__name__}: {exc}"
 
     result = execute_normalized_command(
         normalized,
@@ -591,8 +578,7 @@ def run_completion_tick(
         "decision": decision,
         "plan": plan,
         "normalized": normalized,
-        "legacy_plan": legacy_plan,
-        "shadow": shadow,
+        "observation": observation,
         "explanation": explanation,
         "execution": result,
         "decision_record": {

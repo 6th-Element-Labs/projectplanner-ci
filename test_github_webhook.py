@@ -12,6 +12,7 @@ os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = os.path.join(_TMP, "project_registry
 
 import github_sync  # noqa: E402
 import store  # noqa: E402
+from switchboard.storage.repositories import provenance as provenance_repository  # noqa: E402
 
 P = "switchboard"
 passed = failed = 0
@@ -61,6 +62,35 @@ try:
        "default-branch push no longer backfills tasks (ADR-0006)")
     ok(store.get_meta("canonical_main_sha", project=P) == "abc123",
        "default-branch push still advances canonical main SHA")
+    original_commit_exists = provenance_repository._git_commit_exists
+    original_is_ancestor = provenance_repository._git_is_ancestor
+    provenance_repository._git_commit_exists = lambda _sha: True
+    provenance_repository._git_is_ancestor = (
+        lambda older, newer: older == "older123" and newer == "abc123"
+    )
+    try:
+        github_sync.handle_push({
+            "ref": "refs/heads/master",
+            "after": "older123",
+            "repository": {
+                "full_name": "6th-Element-Labs/projectplanner",
+                "name": "projectplanner",
+                "default_branch": "master",
+            },
+            "commits": [],
+        }, P)
+    finally:
+        provenance_repository._git_commit_exists = original_commit_exists
+        provenance_repository._git_is_ancestor = original_is_ancestor
+    with store._conn(P) as c:
+        rewind_ignored = c.execute(
+            "SELECT COUNT(*) FROM activity WHERE kind='git.main_rewind_ignored'"
+        ).fetchone()[0]
+    ok(
+        store.get_meta("canonical_main_sha", project=P) == "abc123"
+        and rewind_ignored == 1,
+        "out-of-order default-branch push cannot rewind canonical main",
+    )
     ok(store.get_task(ready["task_id"], project=P)["status"] == "In Review",
        "In Review task is NOT auto-promoted by a default-branch push; the orphan sweep owns Done")
 
@@ -142,8 +172,8 @@ try:
     pr_payload["pull_request"]["merge_commit_sha"] = "mergeabc"
     merged = github_sync.handle_pr(pr_payload, P)
     ok(merged["auto_closed_tasks"] == [pr_task["task_id"]] and
-       store.get_meta("canonical_main_sha", project=P) == "mergeabc",
-       "PR merged webhook updates canonical main SHA and closes the task")
+       store.get_meta("canonical_main_sha", project=P) == "abc123",
+       "PR merged webhook closes the task without impersonating default-branch push")
     merged_task = store.get_task(pr_task["task_id"], project=P)
     ok(merged_task["status"] == "Done" and
        merged_task["git_state"]["merged_sha"] == "mergeabc" and
@@ -199,7 +229,7 @@ try:
         "commits": [{"id": "cipushsha", "message": f"ci({public_ci_task['task_id']}): mirror"}],
     }, P)
     ok(ci_push["reason"] == "repo_role_cannot_mark_done" and
-       store.get_meta("canonical_main_sha", project=P) == "mergeabc",
+       store.get_meta("canonical_main_sha", project=P) == "abc123",
        "public-CI push does not advance canonical main or backfill Done")
 
     public_task = store.create_task({"workstream_id": "HARDEN", "title": "public mirror evidence"},
@@ -289,7 +319,7 @@ try:
         },
     }
     github_sync.handle_pr(release_payload, P)
-    ok(store.get_meta("canonical_main_sha", project=P) == "mergeabc",
+    ok(store.get_meta("canonical_main_sha", project=P) == "abc123",
        "non-default-branch PR merge does not advance canonical main SHA")
 
     dynamic_created = store.create_project(

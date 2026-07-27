@@ -10,8 +10,12 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Optional
 
-from switchboard.domain.completion.effects import canonical_findings, plan_effect
+from switchboard.domain.completion.effects import canonical_findings
 from switchboard.domain.completion.human_closeout import build_human_closeout_request
+from switchboard.domain.completion.normalization_law import (
+    NormalizedAction,
+    command_idempotency_key,
+)
 
 
 FenceFn = Callable[[Any], Any]
@@ -186,9 +190,25 @@ def _escalate_human(
                     persisted_row.get("attempt") or _map(run).get("attempt")
                 ),
             }
-            # Rebuild against the persisted identity before creating the
-            # request. Both rows commit or roll back together.
-            durable = plan_effect(decision, snapshot, closeout_run)
+            # Keep the normalized command authoritative while attaching the
+            # persisted audit identity. Replanning here would create a second
+            # lifecycle decision inside the effect boundary.
+            durable = {
+                **_map(plan),
+                "completion_run_id": closeout_run.get("run_id"),
+                "state_version": closeout_run.get("state_version"),
+                "decision_attempt": closeout_run.get("attempt"),
+            }
+            durable["idem_key"] = command_idempotency_key(
+                action=NormalizedAction.BLOCK,
+                decision={
+                    **_map(decision),
+                    "reason_code": durable.get("reason_code"),
+                },
+                snapshot=snapshot,
+                run=closeout_run,
+                role=str(durable.get("role") or ""),
+            )
             request_data = build_human_closeout_request(
                 plan=durable,
                 decision=decision,

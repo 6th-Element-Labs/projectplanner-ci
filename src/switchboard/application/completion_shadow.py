@@ -14,6 +14,7 @@ from switchboard.domain.completion.normalization_law import NormalizedAction
 
 SCHEMA = "switchboard.completion_shadow_observation.v1"
 DIVERGENCE_CLASSES = frozenset({"match", "safe_fail_closed", "unsafe"})
+THIN_OBSERVATION_SCHEMA = "switchboard.completion_thin_observation.v1"
 
 _LEGACY_ACTIONS = {
     "wait": NormalizedAction.WAIT.value,
@@ -133,6 +134,42 @@ def compare_shadow_actions(
     return observation
 
 
+def build_thin_observation(
+    *,
+    task_id: str,
+    snapshot: Mapping[str, Any],
+    decision: Mapping[str, Any],
+    normalized: Mapping[str, Any],
+    now: float | None = None,
+) -> dict[str, Any]:
+    """Describe one production tick without introducing another authority."""
+    stamp = float(now if now is not None else time.time())
+    source_times = [
+        _timestamp(value)
+        for value in dict(snapshot.get("source_observed_at") or {}).values()
+    ]
+    source_times = [value for value in source_times if value is not None]
+    evidence_age = max((stamp - value for value in source_times), default=None)
+    return {
+        "schema": THIN_OBSERVATION_SCHEMA,
+        "task_id": str(task_id or "").strip().upper(),
+        "snapshot_id": str(snapshot.get("snapshot_id") or ""),
+        "head_sha": str(snapshot.get("head_sha") or ""),
+        "observed_at": _timestamp(snapshot.get("observed_at")),
+        "recorded_at": stamp,
+        "controller_build_sha": (
+            str(normalized.get("controller_build_sha") or "")
+            or "unavailable"
+        ),
+        "table_version": str(normalized.get("table_version") or ""),
+        "evidence_age_seconds": evidence_age,
+        "action": str(normalized.get("action") or ""),
+        "route": str(decision.get("route") or ""),
+        "reason_code": str(normalized.get("reason_code") or ""),
+        "observation_is_lifecycle_authority": False,
+    }
+
+
 def explain_fresh_snapshot(
     snapshot: Mapping[str, Any],
     normalized: Mapping[str, Any],
@@ -165,6 +202,8 @@ def explain_fresh_snapshot(
 __all__ = [
     "DIVERGENCE_CLASSES",
     "SCHEMA",
+    "THIN_OBSERVATION_SCHEMA",
+    "build_thin_observation",
     "compare_shadow_actions",
     "explain_fresh_snapshot",
 ]

@@ -102,15 +102,15 @@ class DurablePlanIdentity(unittest.TestCase):
         run = durable_run()
         adapter_calls = []
         order = []
-        original_plan = completion_driver.plan_effect
+        original_reduce = completion_driver.reduce_fresh_tick
 
         def persist(**_kwargs):
             order.append(("persist", run["run_id"]))
             return dict(run)
 
-        def plan(decision, snap, persisted):
-            order.append(("plan", persisted.get("run_id")))
-            return original_plan(decision, snap, persisted)
+        def reduce(**kwargs):
+            order.append(("reduce", kwargs["run"].get("run_id")))
+            return original_reduce(**kwargs)
 
         adapters = CompletionEffectAdapters(
             start_remediation=lambda value: (
@@ -128,7 +128,7 @@ class DurablePlanIdentity(unittest.TestCase):
                 "switchboard.domain.completion.executor._persist_run",
                 side_effect=persist,
             ),
-            patch.object(completion_driver, "plan_effect", side_effect=plan),
+            patch.object(completion_driver, "reduce_fresh_tick", side_effect=reduce),
             patch(
                 "switchboard.storage.repositories.external_effects."
                 "claim_external_effect",
@@ -168,7 +168,7 @@ class DurablePlanIdentity(unittest.TestCase):
             )
 
         self.assertEqual(order[0], ("persist", run["run_id"]))
-        self.assertEqual(order[1], ("plan", run["run_id"]))
+        self.assertEqual(order[1], ("reduce", run["run_id"]))
         self.assertEqual(first["plan"]["idem_key"], second["plan"]["idem_key"])
         self.assertEqual(first["plan"]["completion_run_id"], run["run_id"])
         self.assertEqual(first["plan"]["decision_attempt"], 3)

@@ -142,7 +142,7 @@ def test_update_branch_has_no_identical_sha_retry_mapping():
         raise AssertionError("head-changing update_branch mapped to RETRY_CI")
 
 
-def test_typed_command_fails_closed_on_legacy_effect_disagreement():
+def test_typed_command_requires_the_normalized_command():
     normalized = {
         "action": "ARM_MERGE",
         "snapshot_id": "snapshot-1",
@@ -154,7 +154,6 @@ def test_typed_command_fails_closed_on_legacy_effect_disagreement():
     try:
         execute_normalized_command(
             normalized,
-            legacy_plan={"effect": "start_remediation"},
             decision={},
             snapshot={},
             run={},
@@ -162,9 +161,9 @@ def test_typed_command_fails_closed_on_legacy_effect_disagreement():
             actor="test",
         )
     except ValueError as exc:
-        assert "conflicts" in str(exc)
+        assert "normalized completion command is required" in str(exc)
     else:
-        raise AssertionError("conflicting legacy effect reached an adapter")
+        raise AssertionError("missing normalized command reached an adapter")
 
 
 def test_reconcile_without_merge_provenance_becomes_owned_block():

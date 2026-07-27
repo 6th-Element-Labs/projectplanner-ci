@@ -9,6 +9,7 @@ from unittest.mock import patch
 from switchboard.application import completion_driver
 from switchboard.application.completion_driver import production_effect_adapters
 from switchboard.domain.completion.executor import CompletionEffectAdapters
+from switchboard.domain.completion import executor as completion_executor
 from switchboard.domain.completion.normalization_law import (
     FreshTick,
     LAW_BY_ACTION,
@@ -216,7 +217,7 @@ def test_production_adapter_set_has_no_legacy_lifecycle_side_doors():
     assert adapters.reconcile_provenance is None
 
 
-def test_retired_planner_failure_cannot_block_production_reducer():
+def test_retired_planner_is_not_loaded_by_production_reducer():
     snapshot = {
         "schema": "switchboard.completion_snapshot.v1",
         "task_id": "COORD-88",
@@ -248,8 +249,6 @@ def test_retired_planner_failure_cannot_block_production_reducer():
                      return_value=decision),
         patch.object(completion_driver, "ensure_completion_run",
                      return_value={"run_id": "run-1", "state_version": 1}),
-        patch.object(completion_driver, "plan_effect",
-                     side_effect=ValueError("stale retry counter")),
         patch(
             "switchboard.storage.repositories.completion_runs."
             "get_active_completion_run",
@@ -273,7 +272,9 @@ def test_retired_planner_failure_cannot_block_production_reducer():
         )
     assert result["normalized"]["action"] == "WAIT"
     assert result["plan"]["effect"] == "wait"
-    assert result["legacy_plan"]["effect"] == "legacy_shadow_error"
+    assert result["observation"]["action"] == "WAIT"
+    assert not hasattr(completion_driver, "plan_effect")
+    assert not hasattr(completion_executor, "plan_effect")
 
 
 if __name__ == "__main__":

@@ -378,9 +378,6 @@ def handle_pr(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
     merged_sha = pr.get("merge_commit_sha") or ""
     if not merged_sha:
         return {"action": "ignored", "reason": "missing merge_commit_sha", "pr": pr_num}
-    if merged_sha and base == default:
-        store.update_canonical_main_sha(merged_sha, "github-webhook", project)
-
     closed: List[str] = []
     skipped = []
     for task_id in task_ids:

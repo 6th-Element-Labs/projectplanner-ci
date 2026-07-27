@@ -801,6 +801,29 @@ def update_canonical_main_sha(sha: str, actor: str = "github-webhook",
                               project: str = DEFAULT_PROJECT) -> None:
     if not sha:
         return
+    current = str(
+        _store_facade().get_meta("canonical_main_sha", project=project) or ""
+    ).strip()
+    if current == sha:
+        return
+    if (
+        current
+        and _git_commit_exists(current)
+        and _git_commit_exists(sha)
+        and _git_is_ancestor(sha, current)
+    ):
+        _store_facade().append_activity(
+            "git.main_rewind_ignored",
+            actor,
+            {
+                "canonical_main_sha": current,
+                "rejected_sha": sha,
+                "reason": "candidate_is_ancestor_of_canonical_main",
+            },
+            task_id=None,
+            project=project,
+        )
+        return
     _store_facade().set_meta("canonical_main_sha", sha, project=project)
     _store_facade().append_activity("git.main_advanced", actor, {"canonical_main_sha": sha},
                     task_id=None, project=project)
@@ -822,6 +845,14 @@ def _git_ok(args: List[str], timeout: float = 5) -> bool:
                               timeout=timeout).returncode == 0
     except Exception:
         return False
+
+
+def _git_commit_exists(sha: str) -> bool:
+    return _git_ok(["cat-file", "-e", f"{sha}^{{commit}}"])
+
+
+def _git_is_ancestor(older_sha: str, newer_sha: str) -> bool:
+    return _git_ok(["merge-base", "--is-ancestor", older_sha, newer_sha])
 
 
 def _git_fetch_origin(timeout: float = 45) -> bool:
@@ -1356,8 +1387,6 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
                 has_merged_sha=bool(state.get("merged_sha")),
             )
             if merged and merge_sha and stamp_eligible:
-                if default_branch_merge:
-                    update_canonical_main_sha(merge_sha, "reconcile", project)
                 stamped = _store_facade().mark_task_merged(
                     task["task_id"], merge_sha,
                     pr_number=int(state.get("pr_number") or 0) or None,

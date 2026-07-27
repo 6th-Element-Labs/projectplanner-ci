@@ -32,7 +32,6 @@ def _map(value: Any) -> dict[str, Any]:
 def execute_normalized_command(
     normalized: Mapping[str, Any],
     *,
-    legacy_plan: Mapping[str, Any] | None = None,
     decision: Mapping[str, Any],
     snapshot: Mapping[str, Any],
     run: Mapping[str, Any] | None,
@@ -42,14 +41,13 @@ def execute_normalized_command(
 ) -> dict[str, Any]:
     """Execute at most one command selected by the versioned normalization table.
 
-    The normalized command is the sole production authority.  ``legacy_plan``
-    is an optional compatibility assertion for tests and shadow migration; it
-    is never consulted when the reducer supplied ``normalized.command``.
+    The normalized command is the sole production authority.
     """
     normalized_map = _map(normalized)
     command = _map(normalized_map.get("command"))
-    compatibility_plan = _map(legacy_plan)
-    plan = command or compatibility_plan
+    if not command:
+        raise ValueError("normalized completion command is required")
+    plan = command
     plan["normalized_command"] = normalized_map
     command_decision = _map(decision)
     try:

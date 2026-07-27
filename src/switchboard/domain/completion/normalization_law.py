@@ -288,7 +288,7 @@ def _block_evidence(
     )
 
 
-def _command_idempotency_key(
+def command_idempotency_key(
     *,
     action: NormalizedAction,
     decision: Mapping[str, Any],
@@ -440,7 +440,7 @@ def reduce_fresh_tick(
             NormalizedAction.MERGED,
         },
     }
-    plan["idem_key"] = _command_idempotency_key(
+    plan["idem_key"] = command_idempotency_key(
         action=action,
         decision=decision_map,
         snapshot=snapshot_map,
@@ -652,6 +652,7 @@ __all__ = [
     "NormalizedAction",
     "NormalizationLawRow",
     "WaitEvidence",
+    "command_idempotency_key",
     "normalize_fresh_tick",
     "reduce_fresh_tick",
     "validate_law_table",
