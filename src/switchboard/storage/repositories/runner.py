@@ -1555,9 +1555,24 @@ def _release_terminal_runner_ownership_in(
     claim_id = str(record.get("claim_id") or "").strip()
     agent_id = str(record.get("agent_id") or "").strip()
     lease_expired = metadata.get("terminalized_by") == "runner_lease_expiry"
-    if (status not in RUNNER_TERMINAL_STATUSES
-            or not (task_id and claim_id and agent_id)):
+    if status not in RUNNER_TERMINAL_STATUSES or not (task_id and agent_id):
         return None
+
+    # Connect starts the runner before the worker can claim. The claim stores
+    # the exact runner generation during the authenticated Work Session bind,
+    # but a fast exit or host loss can happen before the next heartbeat copies
+    # that claim_id back onto runner_sessions. Resolve only that server-owned
+    # reverse binding; never infer ownership from task or agent labels.
+    if not claim_id:
+        bound_claims = c.execute(
+            "SELECT * FROM task_claims WHERE runner_session_id=? "
+            "AND task_id=? AND agent_id=? AND status='active'",
+            (runner_session_id, task_id, agent_id),
+        ).fetchall()
+        if len(bound_claims) != 1:
+            return None
+        claim_id = str(bound_claims[0]["id"] or "")
+        record = {**record, "claim_id": claim_id}
 
     # COORD-73: capacity owns liveness.  An old lease-expiry acknowledgement
     # must never unwind ownership while a replacement generation is alive.
@@ -1609,9 +1624,6 @@ def _release_terminal_runner_ownership_in(
     task_status = str(task["status"] or "") if task else ""
     review_handoff_recovery = task_status == "In Review"
     execution_role = str(
-        metadata.get("execution_role") or metadata.get("role") or ""
-    ).strip().lower()
-    execution_role = str(
         metadata.get("execution_role") or metadata.get("role")
         or metadata.get("lifecycle_role") or "implementation"
     ).strip().lower()
@@ -1620,8 +1632,6 @@ def _release_terminal_runner_ownership_in(
     # at that point a terminal implementation must never retain ownership and
     # block the next exact-head remediation generation.
     if (review_handoff_recovery and execution_role != "implementation"):
-        return None
-    if review_handoff_recovery and execution_role != "implementation":
         return None
     if (not review_handoff_recovery
             and (status not in RUNNER_FAILURE_TERMINAL_STATUSES
