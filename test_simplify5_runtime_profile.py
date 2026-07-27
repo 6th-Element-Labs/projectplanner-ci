@@ -112,7 +112,7 @@ ok(malformed_result["eligible"] is False
 # pure profile contract.  Binary/relay probes are controlled so this is hermetic.
 saved_env = {key: os.environ.get(key) for key in (
     "PM_RUNTIME", "PM_AGENT_WORK_MODULE_CODEX", "PM_AUTO_WORK_SESSION",
-    "PM_AGENT_HOST_ALLOW_WORK", "PM_HOST_PROJECTS", "PM_HOST_SESSION_POLICIES",
+    "PM_AGENT_HOST_ALLOW_WORK", "PM_HOST_PROJECTS",
 )}
 saved_watch = agent_host.host_serves_runner_watch
 saved_which = agent_host.shutil.which
@@ -124,7 +124,6 @@ try:
         "PM_AUTO_WORK_SESSION": "1",
         "PM_AGENT_HOST_ALLOW_WORK": "1",
         "PM_HOST_PROJECTS": P,
-        "PM_HOST_SESSION_POLICIES": "code_strict",
     })
     agent_host.host_serves_runner_watch = lambda: True
     agent_host.shutil.which = lambda name: f"/test/bin/{name}"
@@ -174,7 +173,6 @@ policy = {
     },
     "placement": {
         "canonical_repo": "6th-Element-Labs/projectplanner",
-        "session_policy": "code_strict",
         "isolation": "task_worktree",
         "runtime_profile": requirement,
     },

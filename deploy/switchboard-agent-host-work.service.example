@@ -22,7 +22,6 @@ Environment=PM_AGENT_HOST_ALLOW_WORK=1
 Environment=PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM=0
 Environment=PM_HOST_MAX_SESSIONS=1
 Environment=PM_HOST_SUPPORTS_CREDENTIAL_LEASES=1
-Environment=PM_HOST_SESSION_POLICIES=code_strict
 Environment=PM_REPO_ROOT=/path/to/projectplanner
 Environment=PM_RUNNER_DIR=/var/lib/projectplanner/runner
 Environment=PM_PROVIDER_RUNTIME_ROOT=/var/lib/switchboard-provider-runtimes

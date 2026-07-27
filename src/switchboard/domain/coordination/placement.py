@@ -241,9 +241,23 @@ def evaluate_host(
                 and requested_affinity not in _strings(
                     placement.get("account_affinity_ids"))):
             reasons.append("provider_account_affinity_mismatch")
-        session_policy = str(request.get("session_policy") or "")
-        if session_policy and session_policy not in _strings(placement.get("session_policies")):
-            reasons.append("session_policy_not_supported")
+        # COORD-81: there is deliberately no session-policy check here. A host
+        # advertises CAPACITY — what the box physically has and is allowed to
+        # touch. It does not advertise policy, because it does not enforce any:
+        # work_session_required, requires_executed_tests, requires_diff_check,
+        # requires_upstream and requires_branch_task_scope are all enforced
+        # server-side (merge_gate / pre_tool_check / claims / work_sessions),
+        # identically no matter which host ran the job. The one part of a
+        # profile that IS a property of the box — where the workspace lives —
+        # is the isolation / workspace_backend pair checked immediately below.
+        #
+        # The check that used to sit here was plain set membership, so the
+        # STRICTEST profile produced the NARROWEST eligibility: a host
+        # advertising code_strict (the default) was refused a docs_review job
+        # it was strictly more than qualified to run. On 2026-07-27 that left
+        # COORD-79 and COORD-80 with eligible_host_count=0 against an online
+        # host with 16 free slots, queued behind `no_eligible_host: wait` where
+        # nobody could see the refusal.
         isolation = str(request.get("isolation") or "")
         if isolation and isolation not in _strings(placement.get("isolation_modes")):
             reasons.append("isolation_policy_not_supported")
