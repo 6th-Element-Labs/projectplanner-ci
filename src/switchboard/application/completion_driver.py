@@ -11,6 +11,10 @@ from typing import Any, Callable, Mapping, Optional
 from switchboard.application.commands.completion_orchestration import (
     execute_normalized_command,
 )
+from switchboard.application.completion_shadow import (
+    compare_shadow_actions,
+    explain_fresh_snapshot,
+)
 from switchboard.domain.completion.effects import plan_effect
 from switchboard.domain.completion.executor import (
     CompletionEffectAdapters,
@@ -473,6 +477,7 @@ def run_completion_tick(
     store_mod: Any = None,
     hydrator: Callable[..., dict[str, Any]] = hydrate_completion_snapshot,
     adapters: Optional[CompletionEffectAdapters] = None,
+    shadow_observer: Optional[Callable[[Mapping[str, Any]], Any]] = None,
 ) -> dict[str, Any]:
     """Execute exactly one persisted route effect for one task."""
     from switchboard.application.commands import task_execution
@@ -585,6 +590,34 @@ def run_completion_tick(
             ),
         ),
     )
+    shadow = compare_shadow_actions(
+        task_id=task_id,
+        snapshot=snapshot,
+        decision=decision,
+        legacy_plan=plan,
+        normalized=normalized,
+    )
+    explanation = explain_fresh_snapshot(snapshot, normalized)
+    # Append-only observability is a port, not lifecycle authority. Tests and
+    # alternate runtimes can supply a storage-independent observer.
+    def default_shadow_observer(observation: Mapping[str, Any]) -> Any:
+        from switchboard.storage.repositories.activity import append_activity
+        return append_activity(
+            "completion.shadow_observed",
+            actor,
+            dict(observation),
+            task_id=str(task_id or "").strip().upper(),
+            project=project,
+        )
+
+    observe_shadow = shadow_observer or default_shadow_observer
+    try:
+        receipt = observe_shadow(shadow)
+        shadow["ledger_receipt"] = receipt
+    except Exception as exc:  # noqa: BLE001
+        # Shadow persistence cannot alter lifecycle behavior, but its loss must
+        # remain visible to the caller rather than becoming a hidden fallback.
+        shadow["ledger_error"] = f"{type(exc).__name__}: {exc}"
 
     def fence(identity: Any) -> Any:
         return task_execution.fence_task_generation(
@@ -619,6 +652,8 @@ def run_completion_tick(
         "decision": decision,
         "plan": plan,
         "normalized": normalized,
+        "shadow": shadow,
+        "explanation": explanation,
         "execution": result,
         "decision_record": {
             "record_id": episode.get("record_id"),

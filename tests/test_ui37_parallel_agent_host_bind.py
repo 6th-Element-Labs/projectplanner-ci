@@ -53,7 +53,7 @@ originals = {
         "handle_runner_controls", "active_session_count", "launch",
         "confirm_started", "_register_preclaim_runner",
         "register_runner_session", "wait_for_runner_binding",
-        "supervisor_action",
+        "supervisor_action", "mint_host_tunnel_url",
     )
 }
 
@@ -134,6 +134,9 @@ try:
     agent_host._register_preclaim_runner = lambda *_args: {"ok": True}
     agent_host.register_runner_session = lambda record, *_args: dict(record or {})
     agent_host.wait_for_runner_binding = fake_wait
+    # This is a finalizer-concurrency test, not a relay integration test.
+    # Keep the background workers independent of live network latency.
+    agent_host.mint_host_tunnel_url = lambda *_args: {}
     agent_host.supervisor_action = (
         lambda action, runner_id, payload=None: kills.append(
             (action, runner_id, payload)) or {"ok": True})

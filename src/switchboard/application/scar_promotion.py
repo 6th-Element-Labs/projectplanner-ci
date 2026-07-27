@@ -30,6 +30,8 @@ _BAD_ACTION = re.compile(r"\b(?:override|bypass|force|manual)\b", re.I)
 
 def scar_kind(episode: Mapping[str, Any], *, repeat_threshold: int = 8) -> str:
     """Return the production-scar class, or ``""`` for an ordinary episode."""
+    if str(episode.get("divergence_class") or "") == "unsafe":
+        return "unsafe_shadow_divergence"
     if int(episode.get("tick_count") or 0) >= repeat_threshold:
         return "repair_loop"
     action = str(episode.get("human_action") or "")
@@ -225,16 +227,20 @@ def build_scenario(episode: Mapping[str, Any]) -> dict[str, Any]:
         "reconcile_done" if route == "reconcile" else
         "merged" if route == "none" else "blocked"
     )
+    expected = {
+        "terminal": terminal,
+        "reason_code": str(decision.get("reason_code") or ""),
+        "role_sequence": [decision["desired_role"]] if decision.get("desired_role") else [],
+        "route": route,
+        "effect": str(plan.get("effect") or ""),
+    }
+    if str(episode.get("divergence_class") or "") == "unsafe":
+        expected["normalized_action"] = str(episode.get("thin_action") or "")
+        expected["shadow_divergence_class"] = "unsafe"
     return {
         "schema": SCHEMA,
         "id": _scenario_id(episode, world),
-        "expect": {
-            "terminal": terminal,
-            "reason_code": str(decision.get("reason_code") or ""),
-            "role_sequence": [decision["desired_role"]] if decision.get("desired_role") else [],
-            "route": route,
-            "effect": str(plan.get("effect") or ""),
-        },
+        "expect": expected,
         "world": world,
         "timing": dict(TIMING),
     }
