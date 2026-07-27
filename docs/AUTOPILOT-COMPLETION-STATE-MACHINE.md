@@ -4,7 +4,18 @@
 - **Board:** `project=switchboard`
 - **Scope:** PR-backed code tasks from Start through canonical Done
 - **Related:** [Completion lifecycle pipeline](COMPLETION-LIFECYCLE-PIPELINE.md),
-  [Coordinator Autopilot](COORDINATOR-AUTOPILOT.md), COORD-20, Task Execution
+  [Coordinator Autopilot](COORDINATOR-AUTOPILOT.md),
+  [ADR-0023 thin merge queue](decisions/0023-thin-merge-queue-ci.md),
+  COORD-20, COORD-88, Task Execution
+
+> **Production cutover (COORD-88):** the route names below remain classifier
+> and audit vocabulary. They are not lifecycle commands. One fresh reducer
+> converts the current snapshot to exactly one of `WAIT`, `START`, `RETRY_CI`,
+> `MARK_READY`, `ARM_MERGE`, `BLOCK`, or observed `MERGED`. In particular,
+> `coordination_retry` cannot dispatch a generic repair agent, update a branch,
+> requeue GitHub, or fence a runner. Stored attempts, retry counters, wait
+> counters, claims, and process flags are history/projections, never command
+> authority.
 
 ## Decision
 
@@ -14,7 +25,7 @@ GitHub PR state, CI, review verdicts, mergeability, merge queue state, board
 status, claims, Work Sessions, and runner state are inputs or projections. None
 of them independently decides what work to start next.
 
-The state machine classifies one next action as a typed route:
+The classifier describes the current world with one typed route:
 
 ```text
 wait
@@ -26,7 +37,8 @@ reconcile
 none
 ```
 
-The coordinator selects work by `route`, never merely because the board says
+The fresh reducer, not the route or a stored completion row, selects the one
+production command. The coordinator never acts merely because the board says
 `Blocked`.
 
 No new board status is required.
@@ -34,7 +46,7 @@ No new board status is required.
 ## Authoritative record
 
 There is one active completion run per task until the task reaches a terminal
-state. A durable current-state record contains at least:
+state. A durable current-state projection contains at least:
 
 ```text
 run_id
@@ -54,7 +66,9 @@ updated_at
 ```
 
 The existing append-only task completion transitions remain the event and
-evidence history. They do not serve as the current-state authority.
+evidence history. Stored route, attempt, `next_retry_at`, and related counters
+do not authorize a command. Bounds derive from live provider run history and
+immutable source timestamps read during the current tick.
 
 A new PR head:
 

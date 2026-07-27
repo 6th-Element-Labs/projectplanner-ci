@@ -6,7 +6,7 @@
     "reason_code": "missing_executed_test_run",
     "role_sequence": [],
     "route": "coordination_retry",
-    "effect": "repair_dispatch",
+    "effect": "escalate_human",
     "missing_artifact_near_miss_keys": ["executed_tests"]
   },
   "world": {

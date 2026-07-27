@@ -1,7 +1,7 @@
 """Versioned normalization law for one fresh completion-controller tick.
 
-This module is a contract, not a production router.  It gives the thin
-orchestrator a finite vocabulary and makes every selected action carry the
+This module is the production reducer and its versioned contract.  It gives
+the thin orchestrator a finite vocabulary and makes every selected action carry the
 authority, freshness, exact-head, idempotency, receipt, ownership, and repair
 facts needed to execute it safely.
 
@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from enum import Enum
+import hashlib
+import json
 import math
 from typing import Any, Mapping, Sequence
 
@@ -182,6 +184,7 @@ _PLAN_ACTIONS = {
     "ensure_review_generation": NormalizedAction.START,
     "start_remediation": NormalizedAction.START,
     "repair_dispatch": NormalizedAction.RETRY_CI,
+    "retry_ci": NormalizedAction.RETRY_CI,
     "mark_ready": NormalizedAction.MARK_READY,
     "enqueue": NormalizedAction.ARM_MERGE,
     "escalate_human": NormalizedAction.BLOCK,
@@ -283,6 +286,178 @@ def _block_evidence(
         live_evidence=tuple(row.authoritative_sources),
         minimum_repair=row.minimum_repair,
     )
+
+
+def _command_idempotency_key(
+    *,
+    action: NormalizedAction,
+    decision: Mapping[str, Any],
+    snapshot: Mapping[str, Any],
+    run: Mapping[str, Any],
+    role: str,
+) -> str:
+    """Stable command identity derived from immutable live facts.
+
+    Stored retry/wait counters are deliberately absent.  A new head, provider
+    run, completion state version, or role creates a new command identity;
+    replaying the same fresh world cannot create a duplicate mutation.
+    """
+    payload = {
+        "action": action.value,
+        "task_id": _text(snapshot.get("task_id")).upper(),
+        "pr_number": int(snapshot.get("pr_number") or 0),
+        "head_sha": _text(snapshot.get("head_sha")).lower(),
+        "reason_code": _text(decision.get("reason_code")),
+        "role": _text(role).lower(),
+        "run_id": _text(run.get("run_id")),
+        "state_version": int(run.get("state_version") or 0),
+        "failing_check_url": _text(decision.get("failing_check_url")),
+        "failing_run_attempt": int(decision.get("failing_run_attempt") or 0),
+    }
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return f"completion:{payload['task_id'] or 'unknown'}:{digest[:32]}"
+
+
+def reduce_fresh_tick(
+    *,
+    decision: Mapping[str, Any],
+    snapshot: Mapping[str, Any],
+    run: Mapping[str, Any] | None,
+    tick: FreshTick,
+) -> dict[str, Any]:
+    """Select one production command from the seven-action law.
+
+    Legacy routes remain classifier/audit vocabulary during migration, but
+    they no longer select lifecycle effects.  In particular,
+    ``coordination_retry`` can only become one exact-head CI retry backed by
+    live run history or an owned BLOCK.  It can never boot a generic repair
+    agent, update a branch, requeue GitHub, or fence a runner.
+    """
+    decision_map = _map(decision)
+    snapshot_map = _map(snapshot)
+    run_map = _map(run)
+    route = _text(decision_map.get("route")).lower()
+    decision_effect = _text(decision_map.get("effect")).lower()
+    role = _text(decision_map.get("desired_role")).lower()
+
+    if route == "review_merge":
+        if decision_effect == "mark_ready_then_reread":
+            action = NormalizedAction.MARK_READY
+            effect = "mark_ready"
+        elif decision_effect == "enqueue":
+            action = NormalizedAction.ARM_MERGE
+            effect = "enqueue"
+        else:
+            action = NormalizedAction.START
+            effect = "ensure_review_generation"
+            role = "review_merge"
+    elif route == "remediation":
+        action = NormalizedAction.START
+        effect = "start_remediation"
+        role = "remediation"
+    elif route == "coordination_retry":
+        reason_code = _text(decision_map.get("reason_code"))
+        if reason_code == "live_runner_not_desired":
+            # Capacity owns the live generation. Coordination may observe and
+            # wait for it, but it may not fence or replace that runner.
+            action = NormalizedAction.WAIT
+            effect = "wait"
+        elif reason_code == (
+            "required_ci_infrastructure_failure"
+        ):
+            action = NormalizedAction.RETRY_CI
+            effect = "retry_ci"
+        else:
+            action = NormalizedAction.BLOCK
+            effect = "escalate_human"
+    elif route == "human":
+        action = NormalizedAction.BLOCK
+        effect = "escalate_human"
+    elif route == "reconcile":
+        action = NormalizedAction.MERGED
+        effect = "reconcile_provenance"
+    else:
+        action = NormalizedAction.WAIT
+        effect = "wait"
+
+    runner = _map(snapshot_map.get("runner"))
+    if action is NormalizedAction.START and runner.get("live"):
+        action = NormalizedAction.WAIT
+        effect = "attach_and_wait"
+
+    plan = {
+        "schema": "switchboard.completion_command.v1",
+        "effect": effect,
+        "route": route,
+        "role": role or None,
+        "reason_code": decision_map.get("reason_code"),
+        "task_id": _text(snapshot_map.get("task_id")).upper(),
+        "pr_number": snapshot_map.get("pr_number"),
+        "head_sha": _text(snapshot_map.get("head_sha")),
+        "completion_run_id": _text(run_map.get("run_id")),
+        "decision_attempt": int(run_map.get("attempt") or 0),
+        "state_version": int(run_map.get("state_version") or 0),
+        "board_projection": decision_map.get("board_projection"),
+        "acceptance_findings": list(
+            decision_map.get("acceptance_findings") or []
+        ),
+        "escalated_findings": list(
+            decision_map.get("escalated_findings") or []
+        ),
+        "failing_contexts": list(decision_map.get("failing_contexts") or []),
+        "failing_check_url": _text(decision_map.get("failing_check_url")),
+        "failing_run_attempt": int(
+            decision_map.get("failing_run_attempt") or 0
+        ),
+        "failing_check_summary": _text(
+            decision_map.get("failing_check_summary")
+        ),
+        "fence_required": False,
+        "fence_generation": None,
+        "fence_identity": None,
+        "queue_remediation_round": action is NormalizedAction.START
+        and role == "remediation",
+        "reread_after": action is NormalizedAction.MARK_READY,
+        "once_only": action in {
+            NormalizedAction.ARM_MERGE,
+            NormalizedAction.BLOCK,
+        },
+        "retry_policy": "live_facts_only",
+        "mutates": action not in {
+            NormalizedAction.WAIT,
+            NormalizedAction.MERGED,
+        },
+    }
+    plan["idem_key"] = _command_idempotency_key(
+        action=action,
+        decision=decision_map,
+        snapshot=snapshot_map,
+        run=run_map,
+        role=role,
+    )
+    normalized = normalize_fresh_tick(
+        decision=decision_map,
+        plan=plan,
+        snapshot=snapshot_map,
+        tick=tick,
+    )
+    # Bounds and provenance checks may fail closed after the initial action is
+    # selected.  Keep the executable command aligned with that final law row.
+    if normalized["action"] == NormalizedAction.BLOCK.value:
+        plan.update({
+            "effect": "escalate_human",
+            "route": "human",
+            "role": None,
+            "reason_code": normalized["reason_code"],
+            "idem_key": normalized["idempotency_key"],
+            "reread_after": False,
+            "mutates": True,
+            "once_only": True,
+        })
+    normalized["command"] = plan
+    return normalized
 
 
 def normalize_fresh_tick(
@@ -468,5 +643,6 @@ __all__ = [
     "NormalizationLawRow",
     "WaitEvidence",
     "normalize_fresh_tick",
+    "reduce_fresh_tick",
     "validate_law_table",
 ]

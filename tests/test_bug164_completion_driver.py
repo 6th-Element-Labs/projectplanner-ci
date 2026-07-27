@@ -160,6 +160,11 @@ class CompletionDriver(unittest.TestCase):
                 "switchboard.application.queries.task_session.execute_for",
                 return_value={},
             ),
+            patch(
+                "switchboard.storage.repositories.autopilot_scopes."
+                "list_autopilot_scopes",
+                return_value=[],
+            ),
         ):
             snapshot = completion_driver.hydrate_completion_snapshot(
                 "COORD-41", project="switchboard", actor="owner",
@@ -252,7 +257,7 @@ class CompletionDriver(unittest.TestCase):
         self.assertIn("mergeMethod:SQUASH", command_text)
         self.assertNotIn("enqueuePullRequest", command_text)
 
-    def test_update_branch_adapter_advances_one_pr_and_stops(self):
+    def test_update_branch_adapter_is_retired_from_production(self):
         class Store:
             @staticmethod
             def get_project_github_repo(_project):
@@ -263,21 +268,12 @@ class CompletionDriver(unittest.TestCase):
                 "switchboard.storage.repositories.provenance._github_token",
                 return_value="token",
             ),
-            patch.object(
-                completion_driver, "_github_command",
-                return_value={"returncode": 0},
-            ) as command,
         ):
             adapters = completion_driver.production_effect_adapters(
                 project="switchboard", actor="owner", agent_id="owner",
                 store_mod=Store,
             )
-            result = adapters.update_branch({"pr_number": 811})
-        self.assertEqual(result["returncode"], 0)
-        self.assertEqual(
-            command.call_args.args[0],
-            ["api", "-X", "PUT", "repos/owner/repo/pulls/811/update-branch"],
-        )
+        self.assertIsNone(adapters.update_branch)
 
     def test_mixed_pr812_findings_reach_remediation_port(self):
         calls = []

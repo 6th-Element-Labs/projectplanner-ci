@@ -445,6 +445,16 @@ def _execute_mutating_effect(
             },
         }
     if not ledger.get("claimed") and existing_effect.get("status") == "failed":
+        if plan.get("retry_policy") == "live_facts_only":
+            raise RuntimeError(
+                "completion effect failed and requires a fresh authoritative "
+                "reassessment: "
+                + str(
+                    existing_effect.get("last_error")
+                    or ledger.get("reason")
+                    or effect
+                )
+            )
         retry_count = int(existing_effect.get("retry_count") or 0)
         retry_after = min(300.0, 5.0 * (2 ** min(max(retry_count - 1, 0), 6)))
         age = time.time() - float(

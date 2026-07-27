@@ -1,6 +1,6 @@
 {
   "expect": {
-    "effect": "repair_dispatch",
+    "effect": "escalate_human",
     "reason_code": "merge_queue_locked",
     "role_sequence": [],
     "route": "coordination_retry",

@@ -1,6 +1,6 @@
 {
   "expect": {
-    "effect": "repair_dispatch",
+    "effect": "escalate_human",
     "missing_artifact_near_miss_keys": [
       "executed_tests"
     ],

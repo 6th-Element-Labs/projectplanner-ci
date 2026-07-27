@@ -1,6 +1,6 @@
 {
   "expect": {
-    "effect": "repair_dispatch",
+    "effect": "escalate_human",
     "reason_code": "required_ci_hydration_missing",
     "role_sequence": [],
     "route": "coordination_retry",

@@ -1,6 +1,6 @@
 {
   "expect": {
-    "effect": "repair_dispatch",
+    "effect": "escalate_human",
     "reason_code": "invalid_executed_test_run",
     "role_sequence": [],
     "route": "coordination_retry",

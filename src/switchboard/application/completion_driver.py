@@ -25,8 +25,7 @@ from switchboard.domain.completion.normalization_law import (
     FreshTick,
     LAW_BY_ACTION,
     NORMALIZATION_TABLE_VERSION,
-    NormalizedAction,
-    normalize_fresh_tick,
+    reduce_fresh_tick,
 )
 from switchboard.domain.completion.state_machine import (
     COMPLETION_CLASSIFIER_VERSION,
@@ -361,18 +360,6 @@ def production_effect_adapters(
             ["pr", "ready", str(number), "--repo", repo], token=token,
         )
 
-    def update_branch(plan: Mapping[str, Any]) -> dict[str, Any]:
-        """Advance one behind PR, then stop.
-
-        The next Autopilot tick rehydrates the new head. CI and exact-head
-        review must pass again before the classifier can emit ``enqueue``.
-        """
-        number = int(plan.get("pr_number") or 0)
-        return _github_command(
-            ["api", "-X", "PUT", f"repos/{repo}/pulls/{number}/update-branch"],
-            token=token,
-        )
-
     def retry_ci(plan: Mapping[str, Any]) -> dict[str, Any]:
         """Rerun one identified Actions run only when it still names this head."""
         url = str(plan.get("failing_check_url") or "")
@@ -445,26 +432,12 @@ def production_effect_adapters(
             token=token,
         ))
 
-    def reconcile(_: Mapping[str, Any]) -> dict[str, Any]:
-        return provenance.reconcile(project=project, incremental=True)
-
-    def fence_only(plan: Mapping[str, Any]) -> dict[str, Any]:
-        return {
-            "action": "stopping",
-            "runner_session_id": _map(
-                plan.get("fence_identity")).get("runner_session_id"),
-        }
-
     return CompletionEffectAdapters(
         ensure_review_generation=start,
         start_remediation=start,
         mark_ready=mark_ready,
-        update_branch=update_branch,
         retry_ci=retry_ci,
         enqueue=enqueue,
-        repair_dispatch=start,
-        fence_runner=fence_only,
-        reconcile_provenance=reconcile,
     )
 
 
@@ -480,7 +453,6 @@ def run_completion_tick(
     shadow_observer: Optional[Callable[[Mapping[str, Any]], Any]] = None,
 ) -> dict[str, Any]:
     """Execute exactly one persisted route effect for one task."""
-    from switchboard.application.commands import task_execution
     from switchboard.storage.repositories import completion_runs, decision_records
 
     snapshot = hydrator(
@@ -517,65 +489,45 @@ def run_completion_tick(
             project=project,
         )
     )
-    plan = plan_effect(decision, snapshot, persisted)
-    effect = str(plan.get("effect") or "")
-    action_by_effect = {
-        "wait": NormalizedAction.WAIT,
-        "attach_and_wait": NormalizedAction.WAIT,
-        "none": NormalizedAction.WAIT,
-        "ensure_review_generation": NormalizedAction.START,
-        "start_remediation": NormalizedAction.START,
-        "repair_dispatch": NormalizedAction.RETRY_CI,
-        "mark_ready": NormalizedAction.MARK_READY,
-        "enqueue": NormalizedAction.ARM_MERGE,
-        "escalate_human": NormalizedAction.BLOCK,
-        "fence_runner": NormalizedAction.BLOCK,
-        "reconcile_provenance": NormalizedAction.MERGED,
-    }
-    if effect not in action_by_effect:
-        raise ValueError(
-            f"completion effect {effect!r} has no truthful normalized action"
-        )
-    action = action_by_effect[effect]
+    try:
+        legacy_plan = plan_effect(decision, snapshot, persisted)
+    except Exception as exc:  # noqa: BLE001
+        # The retired planner is shadow evidence only. Corrupt historical
+        # counters or any other legacy-planner failure must not stop the fresh
+        # reducer from selecting and executing its production command.
+        legacy_plan = {
+            "schema": "switchboard.legacy_completion_shadow_error.v1",
+            "effect": "legacy_shadow_error",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
     observed_at = float(snapshot.get("observed_at") or time.time())
     hydration_started_at = float(
         snapshot.get("hydration_started_at") or observed_at
     )
-    row = LAW_BY_ACTION[action]
-    if observed_at - hydration_started_at > row.live_clock_bound_s:
+    if observed_at - hydration_started_at > max(
+        row.live_clock_bound_s for row in LAW_BY_ACTION.values()
+    ):
         raise ValueError("authoritative snapshot hydration exceeded action bound")
     source_observed_at = _map(snapshot.get("source_observed_at"))
     source_observed_at["completion_run"] = completion_run_observed_at
-    missing_sources = [
-        source for source in row.authoritative_sources
-        if source not in source_observed_at
-    ]
-    if missing_sources:
-        raise ValueError(
-            "authoritative snapshot is missing source observation timestamps: "
-            + ", ".join(missing_sources)
-        )
-    wait_started_at: float | None = None
-    if action is NormalizedAction.WAIT:
-        if snapshot.get("wait_started_at") is None:
-            raise ValueError(
-                "WAIT snapshot is missing authoritative wait_started_at"
-            )
-        wait_started_at = float(snapshot["wait_started_at"])
-    normalized = normalize_fresh_tick(
+    normalized = reduce_fresh_tick(
         decision=decision,
-        plan=plan,
         snapshot=snapshot,
+        run=persisted,
         tick=FreshTick(
             observed_at=observed_at,
             live_clock_at=time.time(),
             source_observed_at={
-                source: float(source_observed_at[source])
-                for source in row.authoritative_sources
+                source: float(value)
+                for source, value in source_observed_at.items()
             },
             head_sha=str(snapshot.get("head_sha") or ""),
             prior_head_sha=str(current.get("head_sha") or ""),
-            wait_started_at=wait_started_at,
+            wait_started_at=(
+                float(snapshot["wait_started_at"])
+                if snapshot.get("wait_started_at") is not None
+                else None
+            ),
             snapshot_id=str(
                 snapshot.get("snapshot_id") or f"snapshot-{uuid.uuid4().hex}"
             ),
@@ -590,11 +542,12 @@ def run_completion_tick(
             ),
         ),
     )
+    plan = _map(normalized.get("command"))
     shadow = compare_shadow_actions(
         task_id=task_id,
         snapshot=snapshot,
         decision=decision,
-        legacy_plan=plan,
+        legacy_plan=legacy_plan,
         normalized=normalized,
     )
     explanation = explain_fresh_snapshot(snapshot, normalized)
@@ -619,27 +572,13 @@ def run_completion_tick(
         # remain visible to the caller rather than becoming a hidden fallback.
         shadow["ledger_error"] = f"{type(exc).__name__}: {exc}"
 
-    def fence(identity: Any) -> Any:
-        return task_execution.fence_task_generation(
-            task_id,
-            _map(identity),
-            project=project,
-            actor=actor,
-            reason=(
-                f"completion route changed to {plan.get('route')} at "
-                f"{plan.get('head_sha')}"
-            ),
-        )
-
     result = execute_normalized_command(
         normalized,
-        legacy_plan=plan,
         decision=decision,
         snapshot=snapshot,
         run=persisted,
         project=project,
         actor=actor,
-        fence_generation=fence,
         adapters=adapters or production_effect_adapters(
             project=project, actor=actor, agent_id=agent_id,
             store_mod=store_mod,
@@ -652,6 +591,7 @@ def run_completion_tick(
         "decision": decision,
         "plan": plan,
         "normalized": normalized,
+        "legacy_plan": legacy_plan,
         "shadow": shadow,
         "explanation": explanation,
         "execution": result,

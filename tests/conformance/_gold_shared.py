@@ -68,14 +68,14 @@ _HUMAN_SCHEMA_MIGRATIONS = {
 #: invoke a ``CompletionEffectAdapters`` callback.
 _LEDGER_EFFECTS = frozenset({
     "ensure_review_generation", "start_remediation", "mark_ready", "enqueue",
-    "update_branch", "repair_dispatch", "fence_runner",
-    "reconcile_provenance",
 })
 
 #: Effects whose receipt carries no ``idempotent_replay`` key at all (they
 #: are terminal inside ``execute_effect`` and never reach a ledger or the
 #: human-escalation write path).
-_NO_REPLAY_RECEIPT_EFFECTS = frozenset({"wait", "none", "attach_and_wait"})
+_NO_REPLAY_RECEIPT_EFFECTS = frozenset({
+    "wait", "none", "attach_and_wait", "reconcile_provenance",
+})
 
 
 def _build_human_route_db(task_id: str) -> sqlite3.Connection:
