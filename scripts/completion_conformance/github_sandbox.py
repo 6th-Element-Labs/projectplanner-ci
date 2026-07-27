@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -130,4 +131,54 @@ def open_scenario_prs(
     ]
 
 
-__all__ = ["OpenedScenarioPR", "branch_name", "open_scenario_pr", "open_scenario_prs"]
+def open_scenario_prs_concurrently(
+    scenarios: list[dict[str, Any]],
+    *,
+    repo: str,
+    run_id: str,
+    checkout_dirs: list[str],
+    base: str = "main",
+    concurrency: int = 40,
+    runner: Optional[GhRunner] = None,
+) -> list[OpenedScenarioPR]:
+    """Open a burst using one clean checkout per scenario.
+
+    Sharing a checkout across concurrent branch creation races git's index and
+    HEAD.  Requiring distinct checkout paths makes that unsafe state
+    unrepresentable and lets the caller reuse the T2 run-id/reaper convention.
+    """
+    if len(checkout_dirs) != len(scenarios):
+        raise ValueError("checkout_dirs must contain one path per scenario")
+    if len(set(checkout_dirs)) != len(checkout_dirs):
+        raise ValueError("concurrent scenario PRs require distinct checkout_dirs")
+    if concurrency < 1:
+        raise ValueError("concurrency must be positive")
+    opened: list[OpenedScenarioPR] = []
+    with ThreadPoolExecutor(
+        max_workers=min(concurrency, len(scenarios)) if scenarios else 1,
+        thread_name_prefix="conformance-pr",
+    ) as pool:
+        futures = [
+            pool.submit(
+                open_scenario_pr,
+                scenario,
+                repo=repo,
+                run_id=run_id,
+                checkout_dir=checkout_dir,
+                base=base,
+                runner=runner,
+            )
+            for scenario, checkout_dir in zip(scenarios, checkout_dirs)
+        ]
+        for future in as_completed(futures):
+            opened.append(future.result())
+    return sorted(opened, key=lambda item: item.scenario_id)
+
+
+__all__ = [
+    "OpenedScenarioPR",
+    "branch_name",
+    "open_scenario_pr",
+    "open_scenario_prs",
+    "open_scenario_prs_concurrently",
+]

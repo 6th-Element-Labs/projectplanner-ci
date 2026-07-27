@@ -171,6 +171,12 @@ axes (draft × CI × mergeability × review × runner).
   asserts admission throttle, no double-boot, no raced coordinator ticks.
 - Motivation: contention outages (poisoned-runner wedge, merge wedge) are invisible to
   one-at-a-time tests.
+- **Implemented by COORD-68:** `tests/conformance/observe/burst.py` supplies the concurrent
+  runner and burst scoreboard; `open_scenario_prs_concurrently` opens independently
+  checked-out sandbox branches under the existing run-id convention. Observe is the
+  default and admits no capacity. Full-loop bursts require a positive capacity budget and
+  an operator-watching acknowledgement. See
+  [`docs/COMPLETION-CONFORMANCE-OPERATOR.md`](../../COMPLETION-CONFORMANCE-OPERATOR.md).
 
 ## Scoreboard (primary deliverable)
 

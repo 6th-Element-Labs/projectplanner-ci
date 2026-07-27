@@ -40,11 +40,45 @@ tests/conformance/
     runner.py                 # run_observe_tick — fixture mode + live mode
     reaper.py                 # gh cleanup for one run_id
     coverage.py               # axis coverage (same idea as T1)
+    burst.py                  # concurrent burst runner + invariant scoreboard
 
 scripts/completion_conformance/
   cli.py                      # validate / observe-fixture / matrix-seed / reaper
   github_sandbox.py           # opens sandbox branches/PRs for a live matrix run (CLI-only)
 ```
+
+## Concurrency burst (COORD-68)
+
+The burst suite is deliberately separate from the serial scenario scoreboard. The serial
+matrix asks whether one decision is correct; the burst asks whether many decisions can
+run together without duplicate capacity admission, raced coordinator ownership, leaked
+runner rows, or a wedged host.
+
+Run the hermetic Observe-mode proof (40 cases by default):
+
+```bash
+python3.11 tests/conformance/test_burst_conformance.py
+python3.11 -m scripts.completion_conformance burst-fixture \
+  --run-id local-burst --count 40 --concurrency 40
+```
+
+The burst scoreboard reports:
+
+- boots requested, admitted, and completed;
+- duplicate-boot and raced-coordinator-tick counts;
+- orphaned runners, including the stricter failed-dispatch/live-runner count;
+- wall-clock drain time; and
+- whether a fresh post-burst canary boot succeeded.
+
+Observe mode is the default and fails if any boot is admitted. The injected full-loop
+runner refuses to start without both a positive capacity budget and
+`operator_watching=True`; it is not a scheduled or unattended mode.
+
+For real sandbox PR creation, use
+`scripts.completion_conformance.github_sandbox.open_scenario_prs_concurrently`. It requires
+one clean checkout path per scenario because concurrent branch creation cannot safely
+share a git index. Branches retain the T2 `conformance/{run_id}/{scenario_id}` convention,
+so the existing `reaper` command cleans a partially failed burst.
 
 ## Fixture mode (default — hermetic, merge-gate safe)
 
