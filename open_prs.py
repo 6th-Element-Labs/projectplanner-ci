@@ -219,6 +219,7 @@ def _board_join(pr: Mapping[str, Any], project: str,
             projection = task.get("completion_projection")
             tasks.append({
                 "task_id": task_id,
+                "title": str(task.get("title") or ""),
                 "status": str(task.get("status") or ""),
                 "completion_projection": projection,
             })

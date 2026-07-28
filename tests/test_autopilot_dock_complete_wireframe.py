@@ -1,0 +1,37 @@
+"""UI-72: approved desktop/mobile dock surfaces and thin server actions."""
+from __future__ import annotations
+
+import subprocess
+
+from path_setup import ROOT
+
+
+def main() -> None:
+    app = (ROOT / "static/app.js").read_text()
+    dock = (ROOT / "static/js/fleet-dock.js").read_text()
+    css = (ROOT / "static/taikun-ui.css").read_text()
+    board = (ROOT / "src/switchboard/api/routers/board.py").read_text()
+    deployment = (ROOT / "deployment_status.py").read_text()
+
+    for label in ("Needs you", "Broken", "Stalled", "working normally"):
+        assert label in app, label
+    for text in ("Merge queue", "data-pr-merge", "data-pr-regate",
+                 "Autodeploy failing", "Not yet deployed"):
+        assert text in app, text
+    assert "@media (max-width: 640px)" in css
+    assert "width: 100vw !important" in css
+    assert "min-height: 44px" in css
+    assert "_dockMobileAnswer" in app and "dock-answer-sheet" in app
+    assert "/api/pull-requests/{pr_number}/merge" in board
+    assert "/api/pull-requests/{pr_number}/regate" in board
+    assert '"--auto"' in board and '"--squash"' not in board
+    assert '"tasks": board["tasks"]' in deployment
+    assert "((s.environment || {}).progress_fault || {})" in dock
+    assert "age >= 600" not in dock
+    subprocess.run(["node", "--check", "static/app.js"], cwd=ROOT, check=True)
+    subprocess.run(["node", "--check", "static/js/fleet-dock.js"], cwd=ROOT, check=True)
+    print("PASS test_autopilot_dock_complete_wireframe")
+
+
+if __name__ == "__main__":
+    main()

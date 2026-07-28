@@ -121,6 +121,7 @@ def build_deployments(
             )
             else "undeployed"
         )
+        board = open_prs._board_join(pr, project, store.get_task)
         rows.append({
             "number": int(pr.get("number") or 0),
             "title": str(pr.get("title") or ""),
@@ -133,6 +134,8 @@ def build_deployments(
             "deploy_task_id": str((request_task or {}).get("task_id") or ""),
             "deploy_task_status": request_status,
             "target_sha": running_sha if deployed else canonical_sha,
+            "tasks": board["tasks"],
+            "orphan": board["orphan"],
         })
     rows.sort(key=lambda row: row["merged_at"], reverse=True)
     return {

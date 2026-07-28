@@ -1115,8 +1115,9 @@ const TeepPlan = {
         const recommended = attention.recommended_default;
         const fallback = typeof recommended === 'string'
             ? recommended : ((recommended || {}).id || ((choices[0] || {}).id));
-        const choiceId = window.prompt(attention.prompt || 'Choose an answer',
-            fallback || '');
+        const choiceId = window.innerWidth <= 640
+            ? await this._dockMobileAnswer(attention, fallback)
+            : window.prompt(attention.prompt || 'Choose an answer', fallback || '');
         if (!choiceId) return;
         const p = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`;
         try {
@@ -1137,6 +1138,32 @@ const TeepPlan = {
         }
         await this._loadFleetDock(true);
     },
+    _dockMobileAnswer(attention, fallback) {
+        return new Promise((resolve) => {
+            const choices = attention.choices || [];
+            const layer = document.createElement('div');
+            layer.className = 'dock-answer-scrim';
+            const buttons = choices.length ? choices.map((choice) => {
+                const id = typeof choice === 'string' ? choice : (choice.id || choice.value || '');
+                const label = typeof choice === 'string' ? choice : (choice.label || id);
+                return `<button class="btn btn-outline-primary dock-answer-choice" data-answer-value="${this.esc(id)}">${this.esc(label)}${id === fallback ? ' · Recommended' : ''}</button>`;
+            }).join('') : `<input class="form-control dock-answer-input" placeholder="Type your answer"><button class="btn btn-primary dock-answer-submit">Send answer</button>`;
+            layer.innerHTML = `<div class="dock-answer-sheet" role="dialog" aria-modal="true">
+                <div class="dock-answer-handle"></div><h3 class="h4">Answer</h3>
+                <p>${this.esc(attention.prompt || 'Choose an answer')}</p>${buttons}
+                <button class="btn btn-ghost-secondary dock-answer-cancel">Cancel</button></div>`;
+            const finish = (value) => { layer.remove(); resolve(value || ''); };
+            layer.addEventListener('click', (event) => {
+                const choice = event.target.closest('[data-answer-value]');
+                if (choice) finish(choice.getAttribute('data-answer-value'));
+                else if (event.target === layer || event.target.closest('.dock-answer-cancel')) finish('');
+                else if (event.target.closest('.dock-answer-submit')) finish(
+                    layer.querySelector('.dock-answer-input')?.value);
+            });
+            document.body.appendChild(layer);
+            layer.querySelector('.dock-answer-input')?.focus();
+        });
+    },
     // Fleet-dock presentation (PR condition ladder + the UI-66 autopilot pill)
     // lives in js/fleet-dock.js (window.SwitchboardFleetDock) — ARCH-MS-21
     // keeps this composition root under its line ceiling.
@@ -1150,22 +1177,41 @@ const TeepPlan = {
         // single muted outline chip so a second problem is never lost, but can't compete for the eye.
         const [primary, secondary] = this._prConditions(x);
         const accent = `var(--tblr-${primary.tone}, var(--tblr-secondary, #626976))`;
-        const tasks = (x.tasks || []).length
-            ? (x.tasks || []).map((t) => `${this.esc(t.task_id)}${t.status ? ` (${this.esc(t.status)})` : ''}`).join(', ')
-            : '';
+        const task = (x.tasks || [])[0] || {};
+        const taskId = task.task_id || 'No board task';
+        const taskTitle = task.title || this._fleetTaskTitle(task.task_id) || x.title || `PR #${x.number}`;
         const autopilot = this._dockAutopilotHtml(x);
+        const failure = String((x.ci_failing || [])[0] || '');
+        const reason = x.blocked_reason || failure;
+        const actions = x.queue_position ? ''
+            : (x.ci_state === 'success' && x.mergeable_state !== 'dirty'
+                ? `<button class="btn btn-sm btn-primary dock-primary-action" data-pr-merge="${this.esc(String(x.number))}" data-pr-mode="${x.mergeable_state === 'clean' ? 'merge' : 'enqueue'}">${x.mergeable_state === 'clean' ? 'Merge' : 'Enqueue'}</button>`
+                : `<button class="btn btn-sm btn-outline-secondary dock-primary-action" data-pr-regate="${this.esc(String(x.number))}" data-pr-sha="${this.esc(x.head_sha || '')}">Re-gate</button>`);
         return `<div class="p-2 border rounded mb-2" style="border-left:2px solid ${accent} !important;border-top-left-radius:0;border-bottom-left-radius:0;">
             <div class="d-flex align-items-center gap-2">
                 ${this._dockBadge(primary.label, primary.tone, primary.icon, primary.title)}
                 ${secondary ? `<span class="badge bg-transparent border text-secondary" style="flex:none;">+ ${this.esc(secondary.label)}</span>` : ''}
-                <span class="ms-auto text-secondary font-monospace" style="font-size:12px;flex:none;white-space:nowrap;">#${this.esc(String(x.number))} · ${this.esc(this._fleetAge(x.updated_at))}</span>
+                <span class="ms-auto">${autopilot}</span>
             </div>
-            <a href="${this.esc(x.url)}" target="_blank" rel="noopener" class="d-block mt-1 text-reset text-truncate" style="font-size:13px;">${this.esc(x.title || `PR #${x.number}`)} <i class="ti ti-external-link text-secondary" style="font-size:12px;"></i></a>
-            <div class="mt-1 text-secondary font-monospace d-flex align-items-center gap-2" style="font-size:11px;">
-                <span class="text-truncate"><span class="text-green">+${this.esc(String(x.additions || 0))}</span> <span class="text-red">−${this.esc(String(x.deletions || 0))}</span> · ${this.esc(String(x.changed_files || 0))} files · ${tasks ? tasks : 'no board task'} · ${this.esc(x.author || '')}</span>
-                ${autopilot ? `<span class="ms-auto"></span>${autopilot}` : ''}
+            <div class="mt-1 fw-medium text-truncate">${this.esc(taskId)} · ${this.esc(taskTitle)}</div>
+            <a href="${this.esc(x.url)}" target="_blank" rel="noopener" class="d-block text-secondary font-monospace text-truncate" style="font-size:11px;">PR #${this.esc(String(x.number))} · ${this.esc(x.author || '')} · ${this.esc(this._fleetAge(x.updated_at))} · <span class="text-green">+${this.esc(String(x.additions || 0))}</span> <span class="text-red">−${this.esc(String(x.deletions || 0))}</span></a>
+            ${reason ? `<div class="small text-${x.blocked ? 'danger' : 'secondary'} mt-1">${this.esc(reason)}</div>` : ''}
+            <div class="mt-2 d-flex gap-2">
+                ${actions}
             </div>
         </div>`;
+    },
+    _dockQueueHtml(rows) {
+        if (!rows.length) return '';
+        return `<div class="p-2"><div class="text-uppercase text-secondary mb-1" style="font-size:10px;letter-spacing:.08em;">Merge queue · ${rows.length}</div>`
+            + rows.sort((a, b) => Number(a.queue_position) - Number(b.queue_position)).map((x, i) => {
+                const task = (x.tasks || [])[0] || {};
+                return `<div class="d-flex align-items-center gap-2 border rounded p-2 mb-1">
+                    <span class="badge bg-azure-lt">#${this.esc(String(x.queue_position))}</span>
+                    <span class="text-truncate">${this.esc(task.task_id || `PR #${x.number}`)} · ${this.esc(task.title || this._fleetTaskTitle(task.task_id) || x.title)}</span>
+                    ${i === 0 ? '<span class="badge bg-yellow-lt ms-auto">Merging</span>' : ''}
+                </div>`;
+            }).join('') + '</div>';
     },
     _dockDeploymentHtml(x) {
         const state = String(x.status || 'undeployed');
@@ -1196,6 +1242,21 @@ const TeepPlan = {
             </div>
         </div>`;
     },
+    _dockDeploymentBanner(payload) {
+        const h = payload.production || {};
+        const failed = h.last_deploy_ok === false;
+        const behind = Number(h.commits_behind || 0) > 0;
+        const state = failed ? ['Autodeploy failing', 'red', 'alert-triangle']
+            : (behind ? ['Behind and shipping', 'yellow', 'truck-delivery']
+                : ['Production current', 'green', 'check']);
+        const [label, tone, icon] = state;
+        const action = failed ? `<button class="btn btn-sm btn-danger dock-primary-action" data-deploy-pr="${this.esc(String(((payload.deployments || []).find((x) => !x.deployed) || {}).number || 0))}" data-deploy-title="Autodeploy recovery">Dispatch deploy agent</button>` : '';
+        return `<div class="alert alert-${tone} m-2 mb-1">
+            <div class="d-flex align-items-center gap-2"><i class="ti ti-${icon}"></i><strong>${label}</strong>${action ? `<span class="ms-auto">${action}</span>` : ''}</div>
+            <div class="font-monospace small mt-1">running ${this.esc(String(h.running_sha || '').slice(0, 7) || 'unknown')} · canonical ${this.esc(String(h.canonical_sha || payload.canonical_sha || '').slice(0, 7) || 'unknown')} · ${this.esc(String(h.commits_behind || 0))} behind</div>
+            <div class="text-secondary small">checked ${this.esc(this._fleetAge(h.checked_at))}${h.last_deploy_at ? ` · last deploy ${this.esc(this._fleetAge(h.last_deploy_at))}` : ''}</div>
+        </div>`;
+    },
     async _requestDeployment(prNumber, title) {
         const queued = document.querySelector(`[data-deploy-pr="${CSS.escape(String(prNumber))}"]`);
         if (!window.confirm(`Deploy current canonical master to production?\n\nRequested from PR #${prNumber}: ${title || ''}\n\nAn authorized agent will run the fail-closed deployment and production verification.`)) return;
@@ -1223,6 +1284,25 @@ const TeepPlan = {
             }
         }
     },
+    async _dockMerge(prNumber, mode) {
+        if (mode === 'merge' && !window.confirm(
+            `Merge PR #${prNumber}?\n\nAutodeploy ships master to production in about two minutes.`)) return;
+        const res = await fetch(`/api/pull-requests/${encodeURIComponent(prNumber)}/merge`, {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({project: window.PM_PROJECT || 'maxwell', mode}),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) window.alert(`Could not ${mode}: ${body.detail || body.message || res.status}`);
+        await this._loadFleetDock(true);
+    },
+    async _dockRegate(prNumber, sha) {
+        const res = await fetch(`/api/pull-requests/${encodeURIComponent(prNumber)}/regate`, {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({project: window.PM_PROJECT || 'maxwell', sha, ensure: true}),
+        });
+        if (!res.ok) window.alert(`Could not re-gate PR #${prNumber}`);
+        await this._loadFleetDock(true);
+    },
     _renderFleetDock(runners, prs, deploymentPayload) {
         const host = document.getElementById('fleet-dock');
         if (!host) return;
@@ -1237,29 +1317,51 @@ const TeepPlan = {
         const running = runners.filter((s) => !s.stale && s.status === 'running').length;
         const deadRunners = runners.filter((s) => s.stale || s.status !== 'running');
         const blockedPrs = prs.filter((x) => x.blocked);
-        const nAttn = deadRunners.length + blockedPrs.length;
+        const FD = window.SwitchboardFleetDock;
+        const runnerKeys = runners.map((s) => FD.runnerConditions(
+            this, s, (this._dockAttention || {})[s.runner_session_id])[0].key);
+        const nAsking = runnerKeys.filter((k) => k === 'waiting_on_you').length;
+        const nSilent = runnerKeys.filter((k) => k === 'silent').length;
+        const nBroken = runnerKeys.filter((k) => k === 'exited' || k === 'lost_host').length;
+        const nAttn = nAsking + nBroken + blockedPrs.length;
         const collapsed = this._dockCollapsed == null ? (nAttn === 0) : this._dockCollapsed;
         const anchor = 'position:fixed;right:1rem;bottom:1rem;z-index:1031;';
         const rerender = () => this._renderFleetDock(runners, prs, deploymentPayload);
         if (collapsed) {
-            const dot = nAttn ? 'var(--tblr-danger)' : 'var(--tblr-success)';
+            const lead = nAsking ? `${nAsking} waiting on you`
+                : (nBroken ? `${nBroken} broken`
+                    : (blockedPrs.length ? `${blockedPrs.length} blocked` : 'All clear'));
+            const dot = nAsking ? 'var(--tblr-orange)' : (nAttn ? 'var(--tblr-red)' : 'var(--tblr-green)');
             host.innerHTML = `<button id="fleet-dock-pill" class="btn btn-sm shadow-sm" style="${anchor}border-radius:999px;display:inline-flex;align-items:center;gap:8px;">
                 <span style="width:8px;height:8px;border-radius:50%;background:${dot};"></span>
-                <span class="fw-medium">${nAttn ? this.esc(String(nAttn)) + ' blocked' : 'All clear'}</span>
-                <span class="text-secondary small">· ${running} working · ${prs.length} PR${prs.length === 1 ? '' : 's'}${undeployed ? ` · ${undeployed} un-deployed` : ''}</span>
+                <span class="fw-medium">${this.esc(lead)}</span>
+                <span class="text-secondary small">· ${nSilent ? `${nSilent} silent · ` : ''}${running} working · ${prs.length} PR${prs.length === 1 ? '' : 's'}${undeployed ? ` · ${undeployed} un-deployed` : ''}</span>
                 <i class="ti ti-chevron-up"></i></button>`;
             document.getElementById('fleet-dock-pill').addEventListener('click', () => { this._dockCollapsed = false; rerender(); });
             return;
         }
         if (!this._dockTab) this._dockTab = (blockedPrs.length && !deadRunners.length) ? 'prs' : 'runners';
         const tab = this._dockTab;
-        const tabBtn = (key, label, count) =>
-            `<button class="btn btn-sm dock-tab ${tab === key ? '' : 'btn-ghost-secondary'}" data-dock-tab="${key}" style="border-radius:0;border:0;border-bottom:2px solid ${tab === key ? 'var(--tblr-primary)' : 'transparent'};">${label}<span class="text-secondary ms-1">${count}</span></button>`;
+        const runnerTone = nBroken ? 'red' : (nAsking ? 'orange' : (nSilent ? 'yellow' : 'green'));
+        const prTone = blockedPrs.length ? 'red' : (prs.length ? 'azure' : 'green');
+        const production = deploymentPayload.production || {};
+        const deployTone = production.last_deploy_ok === false ? 'red' : (undeployed ? 'yellow' : 'green');
+        const tabBtn = (key, label, count, tone) =>
+            `<button class="btn btn-sm dock-tab ${tab === key ? '' : 'btn-ghost-secondary'}" data-dock-tab="${key}" style="border-radius:0;border:0;border-bottom:2px solid ${tab === key ? 'var(--tblr-primary)' : 'transparent'};display:inline-flex;align-items:center;gap:5px;"><span style="width:6px;height:6px;border-radius:50%;background:var(--tblr-${tone});"></span>${label}<span class="text-secondary">${count}</span></button>`;
         let body;
         if (tab === 'runners') {
-            body = runners.length
-                ? `<div class="p-2">${runners.map((s) => this._dockRunnerHtml(s)).join('')}</div>`
-                : `<div class="p-3 text-secondary small">No live runners for this project.</div>`;
+            const decorated = runners.map((s) => ({s, c: FD.runnerConditions(
+                this, s, (this._dockAttention || {})[s.runner_session_id])}));
+            decorated.sort((a, b) => FD.runnerRank(a.c[0].key) - FD.runnerRank(b.c[0].key));
+            const healthy = ['working', 'running_unknown', 'idle'];
+            const bucket = (name, keys) => {
+                const rows = decorated.filter((d) => keys.includes(d.c[0].key));
+                return rows.length ? `<div class="dock-bucket-label">${name} · ${rows.length}</div>${rows.map((d) => this._dockRunnerHtml(d.s)).join('')}` : '';
+            };
+            const calm = decorated.filter((d) => healthy.includes(d.c[0].key));
+            body = `<div class="p-2">${bucket('Needs you', ['waiting_on_you'])}${bucket('Broken', ['exited', 'lost_host'])}${bucket('Stalled', ['silent'])}`
+                + (calm.length ? `<details class="dock-healthy"><summary>${calm.length} working normally</summary>${calm.map((d) => this._dockRunnerHtml(d.s)).join('')}</details>` : '')
+                + (!decorated.length ? '<div class="p-3 text-secondary small">No live runners for this project.</div>' : '') + '</div>';
         } else if (tab === 'prs' && this._dockPrUnavailable) {
             // The server already knows why: build_open_prs returns `github_error: <exc>`
             // with the real exception. Overwriting that with a blanket "GitHub is
@@ -1284,15 +1386,20 @@ const TeepPlan = {
                             : `PR status is unavailable (${raw}). Status will return on the next refresh.`))));
             body = `<div class="p-3 text-secondary small">${this.esc(why)}</div>`;
         } else if (tab === 'prs') {
+            const queued = prs.filter((x) => x.queue_position);
+            const unqueued = prs.filter((x) => !x.queue_position);
             body = prs.length
-                ? `<div class="p-2">${prs.map((x) => this._dockPrHtml(x)).join('')}</div>`
+                ? `${this._dockQueueHtml(queued)}<div class="p-2">${unqueued.map((x) => this._dockPrHtml(x)).join('')}</div>`
                 : `<div class="p-3 text-secondary small">No open PRs on the canonical repo.</div>`;
         } else if (this._dockDeploymentUnavailable) {
             body = `<div class="p-3 text-secondary small">Deployment status is unavailable: ${this.esc(this._dockDeploymentUnavailable)}</div>`;
         } else {
-            body = deployments.length
-                ? `<div class="p-2">${deployments.map((x) => this._dockDeploymentHtml(x)).join('')}</div>`
-                : `<div class="p-3 text-secondary small">No recently merged PRs.</div>`;
+            const manifest = deployments.filter((x) => !x.deployed);
+            body = this._dockDeploymentBanner(deploymentPayload)
+                + (manifest.length ? `<div class="p-2"><div class="dock-bucket-label">Not yet deployed · ${manifest.length}</div>${manifest.map((x) => {
+                    const task = (x.tasks || [])[0] || {};
+                    return `<div class="border rounded p-2 mb-1"><strong>${this.esc(task.task_id || `PR #${x.number}`)}</strong> · ${this.esc(task.title || x.title)}</div>`;
+                }).join('')}</div>` : '<div class="p-3 text-secondary small">Nothing waiting to ship.</div>');
         }
         const attnBadge = nAttn
             ? `<span class="ms-auto small text-danger"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:currentColor" class="me-1"></span>${nAttn} blocked</span>`
@@ -1307,9 +1414,9 @@ const TeepPlan = {
                 <button id="fleet-dock-min" class="btn btn-sm btn-ghost-secondary p-1" title="Collapse"><i class="ti ti-chevron-down"></i></button>
             </div>
             <div class="d-flex px-2 border-bottom">
-                ${tabBtn('runners', 'Runners', runners.length)}
-                ${tabBtn('prs', 'Pull requests', prs.length)}
-                ${tabBtn('deployments', 'Deployments', undeployed)}
+                ${tabBtn('runners', 'Runners', runners.length, runnerTone)}
+                ${tabBtn('prs', 'PRs', prs.length, prTone)}
+                ${tabBtn('deployments', 'Deploy', undeployed, deployTone)}
             </div>
             ${body}</div>`;
         host.querySelectorAll('[data-dock-tab]').forEach((b) =>
@@ -1325,6 +1432,12 @@ const TeepPlan = {
         host.querySelectorAll('[data-deploy-pr]').forEach((b) =>
             b.addEventListener('click', () => this._requestDeployment(
                 b.getAttribute('data-deploy-pr'), b.getAttribute('data-deploy-title'))));
+        host.querySelectorAll('[data-pr-merge]').forEach((b) =>
+            b.addEventListener('click', () => this._dockMerge(
+                b.getAttribute('data-pr-merge'), b.getAttribute('data-pr-mode'))));
+        host.querySelectorAll('[data-pr-regate]').forEach((b) =>
+            b.addEventListener('click', () => this._dockRegate(
+                b.getAttribute('data-pr-regate'), b.getAttribute('data-pr-sha'))));
         host.querySelectorAll('[data-ap-task]').forEach((b) =>
             b.addEventListener('click', () => this._dockAutopilotAction(
                 b.getAttribute('data-ap-task'), b.getAttribute('data-ap-action'))));

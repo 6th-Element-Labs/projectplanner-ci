@@ -216,3 +216,51 @@ body.tk-density-control .card-body{ padding:.75rem .85rem; }
 body.tk-density-control .btn, body.tk-density-control .btn-sm{ border-radius:.3rem; }
 body.tk-density-control .table > :not(caption) > * > *{ padding-top:.35rem; padding-bottom:.35rem; }
 body.tk-density-control .h1{ font-variant-numeric:tabular-nums; }
+/* Autopilot dock: phone widths use the approved full-screen exception surface. */
+.dock-bucket-label {
+  color: var(--tblr-secondary);
+  font-size: 10px;
+  letter-spacing: .08em;
+  margin: 4px 2px;
+  text-transform: uppercase;
+}
+.dock-healthy {
+  background: var(--tblr-bg-surface-secondary, #f6f7f9);
+  border-radius: 6px;
+  padding: 10px;
+}
+.dock-healthy summary { color: var(--tblr-secondary); cursor: pointer; }
+.dock-answer-scrim {
+  align-items: flex-end; background: rgb(0 0 0 / 45%); display: flex;
+  inset: 0; position: fixed; z-index: 1080;
+}
+.dock-answer-sheet {
+  background: var(--tblr-bg-surface, #fff); border-radius: 18px 18px 0 0;
+  display: grid; gap: 10px; padding: 12px 18px max(18px, env(safe-area-inset-bottom));
+  width: 100%;
+}
+.dock-answer-handle {
+  background: var(--tblr-border-color); border-radius: 4px; height: 4px;
+  margin: 0 auto 4px; width: 40px;
+}
+.dock-answer-choice, .dock-answer-submit, .dock-answer-cancel { min-height: 44px; }
+@media (max-width: 640px) {
+  #fleet-dock > .card {
+    border: 0 !important;
+    border-radius: 0 !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    max-height: none !important;
+    right: 0 !important;
+    top: 0 !important;
+    width: 100vw !important;
+    z-index: 1060 !important;
+  }
+  #fleet-dock .card-header { min-height: 56px; }
+  #fleet-dock .dock-tab { flex: 1; justify-content: center; min-height: 44px; }
+  #fleet-dock .dock-primary-action,
+  #fleet-dock [data-runner-answer],
+  #fleet-dock [data-runner-watch-task] { min-height: 44px; width: 100%; }
+  #fleet-dock .p-2.border.rounded { width: 100%; }
+  body:has(#fleet-dock > .card) { overflow: hidden; }
+}

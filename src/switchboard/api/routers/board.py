@@ -13,6 +13,7 @@ import re
 from typing import Any, Callable
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
+from pydantic import BaseModel
 
 import auth
 import dispatch
@@ -21,12 +22,25 @@ import store
 from switchboard.application.commands import create_task as create_task_command
 from switchboard.application.commands import task_execution as task_execution_command
 from switchboard.application.commands import update_task as update_task_command
+from switchboard.application.commands import verify_ci as verify_ci_command
+from switchboard.application import completion_driver
 
 
 ProjectResolver = Callable[[str], str]
 EtagJson = Callable[..., Any]
 SaturationSnapshot = Callable[[str], dict]
 PrincipalResolver = Callable[..., dict]
+
+
+class PullRequestMergeBody(BaseModel):
+    project: str
+    mode: str = "enqueue"
+
+
+class PullRequestRegateBody(BaseModel):
+    project: str
+    sha: str
+    ensure: bool = True
 
 
 def create_router(*, resolve_project: ProjectResolver,
@@ -89,6 +103,56 @@ def create_router(*, resolve_project: ProjectResolver,
         return deployment_status.deployments_payload(resolve_project(project))
 
     if resolve_principal is not None:
+        @router.post("/api/pull-requests/{pr_number}/merge")
+        async def merge_pull_request(pr_number: int, request: Request,
+                                     body: PullRequestMergeBody):
+            """Authenticated server-side admission to GitHub's native merge queue."""
+            project = resolve_project(body.project)
+            principal = resolve_principal(
+                request, project, ("write:system",), dev_actor="web")
+            import open_prs
+            snapshot = open_prs.build_open_prs(project)
+            row = next((item for item in snapshot.get("prs") or []
+                        if int(item.get("number") or 0) == pr_number), None)
+            if not row:
+                raise HTTPException(404, "Open pull request not found")
+            if row.get("ci_state") != "success" or row.get("mergeable_state") == "dirty":
+                raise HTTPException(409, "Pull request is not green and mergeable")
+            repo = str(snapshot.get("repo") or "")
+            token = open_prs._token(repo)
+            result = await asyncio.to_thread(
+                completion_driver._github_command,
+                ["pr", "merge", str(pr_number), "--repo", repo, "--auto"],
+                token=token,
+            )
+            actor = auth.actor(principal)
+            for task in row.get("tasks") or []:
+                if task.get("task_id"):
+                    store.add_comment(
+                        task["task_id"], actor,
+                        json.dumps({"pr_number": pr_number, "mode": body.mode,
+                                    "result": result}, sort_keys=True),
+                        kind="pull_request.merge_requested", project=project,
+                        hydrate_task=False,
+                    )
+            if result.get("returncode"):
+                raise HTTPException(409, result)
+            return {"status": "enqueued", "pr_number": pr_number, "result": result}
+
+        @router.post("/api/pull-requests/{pr_number}/regate")
+        async def regate_pull_request(pr_number: int, request: Request,
+                                      body: PullRequestRegateBody):
+            project = resolve_project(body.project)
+            principal = resolve_principal(
+                request, project, ("write:system",), dev_actor="web")
+            result = verify_ci_command.execute_mapping_result({
+                "project": project, "sha": body.sha, "ensure": True,
+                "pr_number": pr_number,
+            }, actor=auth.actor(principal))
+            if result.get("error"):
+                raise HTTPException(409, result)
+            return result
+
         @router.post("/api/deployments/request")
         async def request_deployment(request: Request, body: dict = Body(...)):
             """Queue one audited, SHA-pinned deployment-agent task.

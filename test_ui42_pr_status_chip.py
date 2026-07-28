@@ -46,6 +46,8 @@ const T = {
     esc: (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
         (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),
     _fleetAge: () => '3d',
+    _fleetTaskTitle: () => '',
+    _dockAutopilotHtml: () => '',
 %s
 };
 const out = INPUT.map((x) => ({
@@ -130,7 +132,8 @@ ok("VM gate (ubuntu-latest, py3.12) failed" in wide,
    "a workflow-qualified check name drops its workflow prefix")
 ok(f'title="{long_name}"' in wide, "the full check name survives in the tooltip")
 ok("text-truncate" in wide and "min-width:0" in wide, "the chip ellipsises instead of clipping")
-ok("flex:none;white-space:nowrap" in wide, "the PR number never wraps to a second line")
+ok('font-monospace text-truncate' in wide and "PR #" in wide,
+   "the PR number lives on the non-wrapping mono meta line")
 
 # The escaping contract survives: check names come from GitHub, so they are data.
 hostile = render([pr(ci_state="failure", ci_failing=['<img src=x onerror="a">'])])[0]["html"]

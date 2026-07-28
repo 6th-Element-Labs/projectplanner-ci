@@ -107,7 +107,7 @@ ok([r["number"] for r in out["prs"]][:3] == [2, 3, 4] or out["prs"][0]["blocked"
    "blocked PRs sort first")
 
 print("== board join ==")
-ok(rows[1]["tasks"] == [{"task_id": "WATCH-13", "status": "In Review",
+ok(rows[1]["tasks"] == [{"task_id": "WATCH-13", "title": "", "status": "In Review",
                          "completion_projection": None}] and not rows[1]["orphan"],
    "branch-parsed task id joined with board status")
 ok(rows[3]["orphan"] and rows[3]["tasks"] == [],

@@ -1,4 +1,4 @@
-/* UI-66: Fleet dock presentation — PR condition ranking + the autopilot pill.
+/* Autopilot dock presentation — PR/runner condition ranking and actions.
  * ============================================================================
  * Extracted from app.js (ARCH-MS-21 keeps the composition root under 5,000
  * lines; the dock render loop stays there, its presentation logic lives here).
@@ -59,7 +59,7 @@
             return `${Math.round(age / 86400)}d`;
         },
         runnerOutputAge(s, nowSeconds) {
-            const faultAge = (s.progress_fault || {}).output_age_s;
+            const faultAge = ((s.environment || {}).progress_fault || {}).output_age_s;
             if (faultAge != null && Number.isFinite(Number(faultAge))) {
                 return Math.max(0, Number(faultAge));
             }
@@ -83,12 +83,12 @@
             if (attention) {
                 out.push({ key: 'waiting_on_you', label: 'Waiting on you', tone: 'orange', icon: 'user-question' });
             }
-            if (age != null && age >= 600) {
+            if ((s.environment || {}).progress_fault) {
                 out.push({ key: 'silent', label: `Silent ${this.shortAge(age)}`, tone: 'yellow', icon: 'volume-off' });
-            } else if (age != null && age >= 120) {
-                out.push({ key: 'idle', label: `Idle ${this.shortAge(age)}`, tone: 'azure', icon: 'zzz' });
+            } else if (!s.task_id && status === 'running') {
+                out.push({ key: 'idle', label: 'Idle', tone: 'secondary', icon: 'zzz' });
             } else if (age != null) {
-                out.push({ key: 'working', label: 'Working', tone: 'green', icon: 'activity' });
+                out.push({ key: 'working', label: `Working ${this.shortAge(age)}`, tone: 'green', icon: 'activity' });
             } else {
                 const uptime = (s.environment || {}).uptime_seconds;
                 out.push({
@@ -109,6 +109,12 @@
                 });
             }
             return out;
+        },
+        runnerRank(key) {
+            const order = ['exited', 'lost_host', 'waiting_on_you', 'silent',
+                           'idle', 'working', 'running_unknown'];
+            const at = order.indexOf(key);
+            return at === -1 ? order.length : at;
         },
         // UI-66: one batched coverage read for every board task on the PR tab.
         // Advisory by contract: a failed read renders the dock without pills,
