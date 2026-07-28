@@ -186,14 +186,7 @@ def production_mission_ports(
         run: Mapping[str, Any], project: str, actor: str,
     ) -> dict[str, Any]:
         del run
-        decision = {
-            "state": "reconciling",
-            "route": "reconcile",
-            "reason_code": command.get("reason_code") or "canonical_pr_merged",
-            "desired_role": None,
-            "board_projection": "Done",
-            "effect": "reconcile_provenance",
-        }
+        snap = _map(snapshot)
         # Always stamp merge provenance in production — do not invent Done.
         # Hermetic conformance injects store_mod=object() with no task surface;
         # skip network there. Production coordinators pass the live store, which
@@ -211,7 +204,7 @@ def production_mission_ports(
             )
             from switchboard.storage.repositories import projects
             reconcile_result = reconcile_task_merge(
-                str(command.get("task_id") or _map(snapshot).get("task_id") or ""),
+                str(command.get("task_id") or snap.get("task_id") or ""),
                 project=project,
                 actor=actor or "mission_bot/observe_merged",
                 load_subject=task_merge_reconcile_subject,
@@ -221,6 +214,44 @@ def production_mission_ports(
                 ),
                 mark_merged=provenance.mark_task_merged,
             )
+        reconcile_error = str(_map(reconcile_result).get("error") or "").strip()
+        if reconcile_error:
+            # Failed GitHub reconciliation must not persist Done.
+            decision = {
+                "state": "reconciling",
+                "route": "reconcile",
+                "reason_code": "reconcile_failed",
+                "desired_role": None,
+                "board_projection": str(
+                    snap.get("board_status") or "In Review"
+                ),
+                "effect": "reconcile_provenance",
+            }
+            _ensure_completion_run(
+                decision=decision,
+                snapshot=snapshot,
+                current={},
+                actor=actor,
+                project=project,
+            )
+            return {
+                "action": "reconcile_failed",
+                "error": reconcile_error,
+                "head_sha": command.get("head_sha"),
+                "decision": decision,
+                "reconcile": reconcile_result,
+                "snapshot_task_id": snap.get("task_id"),
+                "project": project,
+                "actor": actor,
+            }
+        decision = {
+            "state": "reconciling",
+            "route": "reconcile",
+            "reason_code": command.get("reason_code") or "canonical_pr_merged",
+            "desired_role": None,
+            "board_projection": "Done",
+            "effect": "reconcile_provenance",
+        }
         _ensure_completion_run(
             decision=decision,
             snapshot=snapshot,
@@ -233,7 +264,7 @@ def production_mission_ports(
             "head_sha": command.get("head_sha"),
             "decision": decision,
             "reconcile": reconcile_result,
-            "snapshot_task_id": _map(snapshot).get("task_id"),
+            "snapshot_task_id": snap.get("task_id"),
             "project": project,
             "actor": actor,
         }

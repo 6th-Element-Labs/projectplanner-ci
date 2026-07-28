@@ -283,6 +283,17 @@ def test_green_arms_merge():
     assert cmd["reason_code"] == "exact_head_gates_passed"
 
 
+def test_passed_review_without_head_sha_does_not_arm_merge():
+    """Exact-head review is required — a headless pass must not arm merge."""
+    from switchboard.domain.mission_bot.facts import review_passed
+
+    snap = snapshot(review_head="")
+    assert review_passed(snap) is False
+    cmd = reduce_mission(snap)
+    assert cmd["output"] != MissionOutput.ARM_MERGE.value
+    assert cmd["output"] == MissionOutput.START_REVIEW.value
+
+
 def test_live_runner_waits():
     cmd = reduce_mission(snapshot(
         runner={"live": True, "role": "remediation", "head_sha": HEAD},
@@ -367,6 +378,7 @@ def test_failed_effect_receipt_is_not_verified():
         actor="test",
     )
     assert failed_ready["receipt"]["verified"] is False
+    assert failed_ready["receipt"]["pending"] is False
     assert failed_ready["receipt"]["error"]
 
     failed_merge = execute_mission_command(
@@ -383,6 +395,69 @@ def test_failed_effect_receipt_is_not_verified():
     assert "pr_state_unavailable" in str(failed_merge["receipt"]["error"])
 
 
+def test_pending_effect_receipt_is_not_verified():
+    """In-flight / transitioning boots must stay pending — never verified."""
+    from switchboard.domain.mission_bot import MissionPorts, execute_mission_command
+    from switchboard.domain.mission_bot import adapter as mission_adapter
+
+    ports = MissionPorts(
+        start_task=lambda _plan: {"action": "transitioning"},
+        mark_ready=lambda _plan: {"returncode": 0},
+        arm_merge=lambda _plan: {"returncode": 0},
+        persist_wait=lambda **_k: {},
+        persist_agent_requires_human=lambda **_k: {},
+        observe_merged=lambda **_k: {},
+    )
+    pending_start = execute_mission_command(
+        {
+            "output": MissionOutput.START_REMEDIATION.value,
+            "task_id": "MISSION-1",
+            "head_sha": HEAD,
+            "role": "remediation",
+            "reason_code": "required_exact_head_ci_failed",
+            "dossier": {},
+        },
+        ports=ports,
+        project="switchboard",
+        actor="test",
+    )
+    assert pending_start["receipt"]["pending"] is True
+    assert pending_start["receipt"]["verified"] is False
+
+    # Ledger in-flight replay must also stay pending / unverified.
+    original_replay = mission_adapter._ledger_replay
+
+    def fake_replay(**_kwargs):
+        return {
+            "claimed": False,
+            "ledger": {"effect_key": "effect-pending-1", "status": "issued"},
+            "result": {"action": "awaiting_readback"},
+            "idempotent_replay": True,
+            "verified": False,
+            "pending": True,
+        }
+
+    mission_adapter._ledger_replay = fake_replay
+    try:
+        in_flight = execute_mission_command(
+            {
+                "output": MissionOutput.START_REMEDIATION.value,
+                "task_id": "MISSION-1",
+                "head_sha": HEAD,
+                "idem_key": "mission:pending:1",
+                "dossier": {},
+            },
+            ports=ports,
+            project="switchboard",
+            actor="test",
+        )
+    finally:
+        mission_adapter._ledger_replay = original_replay
+    assert in_flight["receipt"]["pending"] is True
+    assert in_flight["receipt"]["verified"] is False
+    assert in_flight["receipt"]["idempotent_replay"] is True
+
+
 def test_observe_merged_reconciles_when_live_store_injected():
     """Production coordinators pass store_mod=self.store; reconcile must still run."""
     from unittest.mock import patch
@@ -390,6 +465,7 @@ def test_observe_merged_reconciles_when_live_store_injected():
     from switchboard.application.mission_bot.driver import production_mission_ports
 
     calls = []
+    decisions = []
 
     class LiveStore:
         def get_task(self, *_a, **_k):
@@ -399,6 +475,10 @@ def test_observe_merged_reconciles_when_live_store_injected():
         calls.append(task_id)
         return {"merged": True, "task_id": task_id}
 
+    def capture_ensure(**kwargs):
+        decisions.append(dict(kwargs.get("decision") or {}))
+        return {"run_id": "run-1"}
+
     with (
         patch(
             "switchboard.application.commands.reconcile_task_merge.execute",
@@ -406,7 +486,7 @@ def test_observe_merged_reconciles_when_live_store_injected():
         ),
         patch(
             "switchboard.application.completion_driver.ensure_completion_run",
-            return_value={"run_id": "run-1"},
+            side_effect=capture_ensure,
         ),
     ):
         ports = production_mission_ports(
@@ -429,6 +509,61 @@ def test_observe_merged_reconciles_when_live_store_injected():
 
     assert calls == ["MISSION-1"]
     assert result["reconcile"].get("merged") is True
+    assert decisions[-1]["board_projection"] == "Done"
+
+
+def test_failed_reconcile_does_not_persist_done_projection():
+    from unittest.mock import patch
+
+    from switchboard.application.mission_bot.driver import production_mission_ports
+
+    decisions = []
+
+    class LiveStore:
+        def get_task(self, *_a, **_k):
+            return {"task_id": "MISSION-1"}
+
+    def capture_ensure(**kwargs):
+        decisions.append(dict(kwargs.get("decision") or {}))
+        return {"run_id": "run-1"}
+
+    with (
+        patch(
+            "switchboard.application.commands.reconcile_task_merge.execute",
+            return_value={"error": "pr_state_unavailable"},
+        ),
+        patch(
+            "switchboard.application.completion_driver.ensure_completion_run",
+            side_effect=capture_ensure,
+        ),
+    ):
+        ports = production_mission_ports(
+            project="switchboard",
+            actor="test",
+            agent_id="agent/test",
+            store_mod=LiveStore(),
+        )
+        result = ports.observe_merged(
+            command={
+                "task_id": "MISSION-1",
+                "head_sha": HEAD,
+                "reason_code": "canonical_pr_merged",
+            },
+            snapshot={
+                "task_id": "MISSION-1",
+                "head_sha": HEAD,
+                "board_status": "In Review",
+            },
+            run={},
+            project="switchboard",
+            actor="test",
+        )
+
+    assert result["action"] == "reconcile_failed"
+    assert result["error"] == "pr_state_unavailable"
+    assert decisions[-1]["board_projection"] != "Done"
+    assert decisions[-1]["board_projection"] == "In Review"
+    assert decisions[-1]["reason_code"] == "reconcile_failed"
 
 
 if __name__ == "__main__":

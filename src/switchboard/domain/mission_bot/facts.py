@@ -216,15 +216,20 @@ def changes_requested(snapshot: Mapping[str, Any]) -> bool:
 
 
 def review_passed(snapshot: Mapping[str, Any]) -> bool:
+    """True only for an exact-head passed review.
+
+    A passed verdict without a review head SHA is not enough — arming merge
+    requires the review to bind the current snapshot head.
+    """
     review = _map(snapshot.get("review"))
     state = _text(review.get("status") or review.get("state") or review.get("verdict"))
     if state not in {"pass", "passed", "approved", "success"}:
         return False
     head = _text(snapshot.get("head_sha")).lower()
     review_head = _text(review.get("head_sha")).lower()
-    if head and review_head and head != review_head:
+    if not head or not review_head:
         return False
-    return True
+    return head == review_head
 
 
 def review_needed(snapshot: Mapping[str, Any]) -> bool:

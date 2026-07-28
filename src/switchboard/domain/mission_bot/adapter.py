@@ -12,7 +12,8 @@ exactly one port call:
 
 Mutating ports reuse the external-effect ledger for verified idempotent replay.
 Failed port results must fail the ledger — never verify — so retries are not
-permanently suppressed.
+permanently suppressed. In-flight / pending results stay pending — never
+verified — so uncertain runner boots cannot wedge a mission.
 """
 from __future__ import annotations
 
@@ -31,6 +32,10 @@ _MUTATING_EFFECTS = frozenset({
     "ensure_review_generation",
     "mark_ready",
     "enqueue",
+})
+
+_PENDING_ACTIONS = frozenset({
+    "transitioning", "pending", "stopping", "starting", "awaiting_readback",
 })
 
 
@@ -69,6 +74,13 @@ def _effect_failed(result: Any) -> str:
     return ""
 
 
+def _effect_pending(result: Any) -> bool:
+    row = _map(result)
+    return str(row.get("action") or row.get("status") or "").strip().lower() in (
+        _PENDING_ACTIONS
+    )
+
+
 def _start_plan(command: Mapping[str, Any]) -> dict[str, Any]:
     dossier = _map(command.get("dossier"))
     return {
@@ -98,7 +110,7 @@ def _ledger_replay(
     project: str,
     actor: str,
 ) -> dict[str, Any] | None:
-    """Return a verified-replay result when the ledger already owns this effect."""
+    """Return a replay decision when the ledger already owns this effect."""
     if effect not in _MUTATING_EFFECTS:
         return None
     from switchboard.storage.repositories import external_effects
@@ -122,16 +134,26 @@ def _ledger_replay(
             "ledger": ledger,
             "result": _map(ledger.get("proof") or ledger.get("readback")),
             "idempotent_replay": True,
+            "verified": True,
+            "pending": False,
         }
     if not ledger.get("claimed"):
-        # Issued/in-flight — do not double-fire.
+        # Issued/in-flight — do not double-fire, and do not mark verified.
         return {
             "claimed": False,
             "ledger": ledger,
             "result": {"action": "awaiting_readback"},
             "idempotent_replay": True,
+            "verified": False,
+            "pending": True,
         }
-    return {"claimed": True, "ledger": ledger, "idempotent_replay": False}
+    return {
+        "claimed": True,
+        "ledger": ledger,
+        "idempotent_replay": False,
+        "verified": False,
+        "pending": False,
+    }
 
 
 def _ledger_settle(
@@ -140,16 +162,27 @@ def _ledger_settle(
     result: Mapping[str, Any],
     project: str,
     actor: str,
-) -> bool:
-    """Verify on success; fail the ledger on error. Returns verified flag."""
+) -> dict[str, bool]:
+    """Verify on success; issue on pending; fail on error."""
+    failure = _effect_failed(result)
+    pending = _effect_pending(result)
     if not ledger_claim or not ledger_claim.get("claimed"):
-        return not bool(_effect_failed(result))
+        return {
+            "verified": (not failure) and (not pending),
+            "pending": pending and not failure,
+        }
     from switchboard.storage.repositories import external_effects
 
-    effect_key = str(_map(ledger_claim.get("ledger")).get("effect_key") or "")
+    effect_key = str(
+        _map(ledger_claim.get("ledger")).get("effect_key")
+        or ledger_claim.get("effect_key")
+        or ""
+    )
     if not effect_key:
-        return not bool(_effect_failed(result))
-    failure = _effect_failed(result)
+        return {
+            "verified": (not failure) and (not pending),
+            "pending": pending and not failure,
+        }
     if failure:
         external_effects.fail_external_effect(
             effect_key,
@@ -158,14 +191,48 @@ def _ledger_settle(
             actor=actor,
             project=project,
         )
-        return False
+        return {"verified": False, "pending": False}
+    if pending:
+        external_effects.mark_external_effect_issued(
+            effect_key,
+            readback=dict(result),
+            actor=actor,
+            project=project,
+        )
+        return {"verified": False, "pending": True}
     external_effects.verify_external_effect(
         effect_key,
         readback=dict(result),
         actor=actor,
         project=project,
     )
-    return True
+    return {"verified": True, "pending": False}
+
+
+def _run_mutating(
+    *,
+    ports_fn: EffectFn,
+    plan: Mapping[str, Any],
+    effect: str,
+    project: str,
+    actor: str,
+) -> tuple[Any, dict[str, Any] | None, bool, bool]:
+    ledger_claim = _ledger_replay(
+        effect=effect, plan=plan, project=project, actor=actor,
+    )
+    if ledger_claim and ledger_claim.get("idempotent_replay"):
+        result = ledger_claim["result"]
+        return (
+            result,
+            ledger_claim,
+            bool(ledger_claim.get("verified")) and not bool(_effect_failed(result)),
+            bool(ledger_claim.get("pending")),
+        )
+    result = ports_fn(plan)
+    settled = _ledger_settle(
+        ledger_claim, result=_map(result), project=project, actor=actor,
+    )
+    return result, ledger_claim, settled["verified"], settled["pending"]
 
 
 def execute_mission_command(
@@ -188,48 +255,28 @@ def execute_mission_command(
 
     ledger_claim: dict[str, Any] | None = None
     verified = True
+    pending = False
     if output is MissionOutput.START_IMPLEMENTATION:
         plan = _start_plan({**cmd, "role": "implementation"})
         effect = "start_implementation"
-        ledger_claim = _ledger_replay(
-            effect=effect, plan=plan, project=project, actor=actor,
+        result, ledger_claim, verified, pending = _run_mutating(
+            ports_fn=ports.start_task, plan=plan, effect=effect,
+            project=project, actor=actor,
         )
-        if ledger_claim and ledger_claim.get("idempotent_replay"):
-            result = ledger_claim["result"]
-            verified = not bool(_effect_failed(result))
-        else:
-            result = ports.start_task(plan)
-            verified = _ledger_settle(
-                ledger_claim, result=_map(result), project=project, actor=actor,
-            )
     elif output is MissionOutput.START_REMEDIATION:
         plan = _start_plan({**cmd, "role": "remediation"})
         effect = "start_remediation"
-        ledger_claim = _ledger_replay(
-            effect=effect, plan=plan, project=project, actor=actor,
+        result, ledger_claim, verified, pending = _run_mutating(
+            ports_fn=ports.start_task, plan=plan, effect=effect,
+            project=project, actor=actor,
         )
-        if ledger_claim and ledger_claim.get("idempotent_replay"):
-            result = ledger_claim["result"]
-            verified = not bool(_effect_failed(result))
-        else:
-            result = ports.start_task(plan)
-            verified = _ledger_settle(
-                ledger_claim, result=_map(result), project=project, actor=actor,
-            )
     elif output is MissionOutput.START_REVIEW:
         plan = _start_plan({**cmd, "role": "review_merge"})
         effect = "ensure_review_generation"
-        ledger_claim = _ledger_replay(
-            effect=effect, plan=plan, project=project, actor=actor,
+        result, ledger_claim, verified, pending = _run_mutating(
+            ports_fn=ports.start_task, plan=plan, effect=effect,
+            project=project, actor=actor,
         )
-        if ledger_claim and ledger_claim.get("idempotent_replay"):
-            result = ledger_claim["result"]
-            verified = not bool(_effect_failed(result))
-        else:
-            result = ports.start_task(plan)
-            verified = _ledger_settle(
-                ledger_claim, result=_map(result), project=project, actor=actor,
-            )
     elif output is MissionOutput.MARK_READY:
         plan = {
             "pr_number": cmd.get("pr_number"),
@@ -238,17 +285,10 @@ def execute_mission_command(
             "idem_key": cmd.get("idem_key") or cmd.get("idempotency_key"),
         }
         effect = "mark_ready"
-        ledger_claim = _ledger_replay(
-            effect=effect, plan=plan, project=project, actor=actor,
+        result, ledger_claim, verified, pending = _run_mutating(
+            ports_fn=ports.mark_ready, plan=plan, effect=effect,
+            project=project, actor=actor,
         )
-        if ledger_claim and ledger_claim.get("idempotent_replay"):
-            result = ledger_claim["result"]
-            verified = not bool(_effect_failed(result))
-        else:
-            result = ports.mark_ready(plan)
-            verified = _ledger_settle(
-                ledger_claim, result=_map(result), project=project, actor=actor,
-            )
     elif output is MissionOutput.ARM_MERGE:
         plan = {
             "pr_number": cmd.get("pr_number"),
@@ -257,38 +297,34 @@ def execute_mission_command(
             "idem_key": cmd.get("idem_key") or cmd.get("idempotency_key"),
         }
         effect = "enqueue"
-        ledger_claim = _ledger_replay(
-            effect=effect, plan=plan, project=project, actor=actor,
+        result, ledger_claim, verified, pending = _run_mutating(
+            ports_fn=ports.arm_merge, plan=plan, effect=effect,
+            project=project, actor=actor,
         )
-        if ledger_claim and ledger_claim.get("idempotent_replay"):
-            result = ledger_claim["result"]
-            verified = not bool(_effect_failed(result))
-        else:
-            result = ports.arm_merge(plan)
-            verified = _ledger_settle(
-                ledger_claim, result=_map(result), project=project, actor=actor,
-            )
     elif output is MissionOutput.WAIT:
         result = ports.persist_wait(
             command=cmd, snapshot=snapshot or {}, run=run or {},
             project=project, actor=actor,
         )
         effect = "wait"
-        verified = not bool(_effect_failed(result))
+        verified = not bool(_effect_failed(result)) and not _effect_pending(result)
+        pending = _effect_pending(result) and not bool(_effect_failed(result))
     elif output is MissionOutput.AGENT_REQUIRES_HUMAN:
         result = ports.persist_agent_requires_human(
             command=cmd, snapshot=snapshot or {}, run=run or {},
             project=project, actor=actor,
         )
         effect = "agent_requires_human"
-        verified = not bool(_effect_failed(result))
+        verified = not bool(_effect_failed(result)) and not _effect_pending(result)
+        pending = _effect_pending(result) and not bool(_effect_failed(result))
     elif output is MissionOutput.OBSERVE_MERGED:
         result = ports.observe_merged(
             command=cmd, snapshot=snapshot or {}, run=run or {},
             project=project, actor=actor,
         )
         effect = "reconcile_provenance"
-        verified = not bool(_effect_failed(result))
+        verified = not bool(_effect_failed(result)) and not _effect_pending(result)
+        pending = _effect_pending(result) and not bool(_effect_failed(result))
     else:  # pragma: no cover - enum exhaustiveness
         raise ValueError(f"unhandled mission output: {output}")
 
@@ -296,6 +332,9 @@ def execute_mission_command(
         ledger_claim and ledger_claim.get("idempotent_replay")
     )
     failure = _effect_failed(result)
+    if failure:
+        verified = False
+        pending = False
     return {
         "effect": effect,
         "output": output.value,
@@ -309,8 +348,8 @@ def execute_mission_command(
             "effect": effect,
             "output": output.value,
             "idem_key": cmd.get("idem_key") or cmd.get("idempotency_key"),
-            "verified": bool(verified) and not bool(failure),
-            "pending": False,
+            "verified": bool(verified) and not bool(failure) and not bool(pending),
+            "pending": bool(pending) and not bool(failure),
             "idempotent_replay": idempotent_replay,
             "error": failure or None,
         },
