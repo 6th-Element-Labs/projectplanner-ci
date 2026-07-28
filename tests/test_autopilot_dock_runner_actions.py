@@ -12,8 +12,8 @@ def main() -> None:
     assert "condition.key === 'waiting_on_you'" in actions
     assert "data-runner-answer=" in actions
     assert ">Answer</button>" in actions
-    assert "condition.key === 'silent' || condition.key === 'idle'" in actions
-    assert "actions.includes('open')" in actions
+    assert "condition.key === 'silent'" in actions  # Nudge = inject on a silent runner
+    assert "actions.includes('inject')" in actions  # Nudge injects; Watch is unconditional
     assert ">Nudge</button>" in actions
     assert "condition.key === 'exited'" in actions
     assert "actions.includes('restart')" in actions
