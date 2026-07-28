@@ -135,10 +135,11 @@ def list_sessions(
         task_id: str = "",
         status: str = "",
         include_stale: bool = False,
+        pending_completion: bool = False,
         project: Optional[str] = None) -> list[dict[str, Any]]:
     return runner_repo.list_runner_sessions(
         host_id=host_id, runtime=runtime, task_id=task_id, status=status,
-        include_stale=include_stale,
+        include_stale=include_stale, pending_completion=pending_completion,
         project=project or DEFAULT_PROJECT,
     )
 
