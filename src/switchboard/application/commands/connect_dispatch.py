@@ -285,10 +285,12 @@ def enqueue_task(
             return unsupported_runtime_payload(runtime)
         return {"dispatched": False, "error": str(exc), "runtime": runtime}
     generation_ref = str(generation_ref or "").strip()
-    if not predecessor_wake_id and not generation_ref:
+    if not predecessor_wake_id:
         predecessor_wake_id = _latest_terminal_wake_id(task_id, project)
     lane = str(task.get("_wsId") or task.get("workstream") or "").strip()
-    generation = generation_ref or str(predecessor_wake_id or "")
+    generation = ":".join(
+        part for part in (generation_ref, str(predecessor_wake_id or "")) if part
+    )
     assignment_id = _assignment_id(project, task_id, runtime_name, generation)
     try:
         context = execution_context.resolve(
@@ -404,7 +406,7 @@ def enqueue_task(
                 lifecycle["acceptance_findings"], sort_keys=True,
                 separators=(",", ":"), default=str).encode()).hexdigest(),
         }
-    suffix = generation_ref or str(predecessor_wake_id or "initial")
+    suffix = generation or "initial"
     wake = coordination_repo.request_wake(
         selector=selector,
         reason=f"Connect assignment {task_id}",
