@@ -2777,3 +2777,49 @@ needs to be absorbing until the operator acts or the head changes, which is what
 **Not repaired.** Left running deliberately; the operator is holding all fixes.
 Note for whoever does repair this: there are 17+ pending rows to reconcile, and
 the count is still climbing.
+
+### RESOLUTION — the 2026-07-27 run, final verified root cause (2026-07-28)
+
+The runner's own stdout.log settled what board-state inference got wrong twice.
+Verbatim, from the remediation agent's closing comment:
+
+```
+claim_task returned status_not_ready and complete_claim cannot resolve the
+server-owned direct runner claim. Preserve this as a visible
+coordination-projection blocker; do not treat it as a code/CI failure.
+```
+
+**Root cause (supersedes the framing of BREAKDOWN 47):** a claim-admission
+deadlock, not a dropped write. The controller flipped UI-68 to `Blocked` on the
+first head-mismatch tick, then dispatched a remediation generation whose
+assignment required a claim — but `claim_task`'s escape hatches for
+non-ready statuses were only evaluated for `In Review`
+(`claims.py:870-877`), so the controller's own dispatch was refused with
+`status_not_ready`. No claim → no `complete_claim` → the only head-advancing
+write could never legally run → the mismatch persisted → `Blocked` persisted.
+
+**STATUS: FIXED** — BUG-202 / PR #1010 (merged 2026-07-28T00:57Z) extends the
+identity-checked assignment hatch to `Blocked` for remediation generations.
+Proof from the very next run: UI-71's board, evidence, and PR heads all agreed
+(`9eff0d2f1`); no head mismatch occurred.
+
+**BREAKDOWN 49 correction:** the attempted fix (removing `state_version` from
+`command_idempotency_key`, PR #1008) was WRONG and was closed. The law table in
+`normalization_law.py` specifies that key as "completion run + state version +
+exact head + blocker code", and `test_coord46_human_attention` fails closed on
+same-key-different-body. The real defect is that `escalate_human` re-decides an
+unchanged world every tick; the escalation must become absorbing. **Still open**
+— and confirmed again on UI-71, which reached `attempt=161`.
+
+**BREAKDOWN 48:** still open (operator config: Slack `dry_run`, Gmail quota).
+
+### New occurrence — evidence-shape false negative on UI-71 (2026-07-28)
+
+UI-71 completed cleanly through the BUG-202-fixed path, recorded
+`python3 scripts/run_ui_playwright.py --task-id UI-71 ...` with `exit_code=0`
+inside its typed executed-test run, with a `ui_playwright` key present in
+evidence — and was blocked with `reason_code=missing_ui_playwright_evidence`.
+The gate cannot recognize the receipt shape the recording tool writes. Merged
+on the ADR-0020 advisory bar (CI green + Playwright demonstrably run + queue);
+filed as a follow-up task. The diagnostic-discard pattern, again: a gate
+verdict that drops the evidence that contradicts it.
