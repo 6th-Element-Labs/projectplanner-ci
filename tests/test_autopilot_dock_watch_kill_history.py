@@ -33,12 +33,16 @@ assert '"inject"' in actions or "data-runner-action=\"inject\"" in actions, \
 # Kill lives in the overflow dropdown.
 assert 'data-runner-action="kill"' in actions and "dropdown-menu" in actions
 
-# Deploy tab renders shipped history behind a native disclosure.
+# Deploy tab renders shipped history as an always-visible bucket, and both
+# buckets reuse the full card so PR number / merge SHA / age are in every row.
 deploy = section(app, "const manifest = deployments.filter((x) => !x.deployed);",
                  "const attnBadge")
 assert "x.deployed)" in deploy and "Recently shipped" in deploy, \
     "shipped-deployments history missing from the deploy tab"
 assert "_dockDeploymentHtml" in deploy, "history must reuse the full deployment card"
+assert "<details" not in deploy, "deploy history must not be collapsed"
+assert deploy.count("_dockDeploymentHtml") >= 2, \
+    "un-deployed and shipped must render the same card"
 
 # The CI re-run control says what it does.
 assert ">Re-run CI</button>" in app and ">Re-gate</button>" not in app
