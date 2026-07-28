@@ -126,6 +126,30 @@
             } catch (e) { /* coverage is advisory */ }
             return {};
         },
+        // UI-71: join Communication-plane attention to Connect-plane runners
+        // only at the browser edge. Advisory by contract: a failed read leaves
+        // the runner ladder intact without Waiting-on-you.
+        async loadRunnerAttention(app) {
+            try {
+                const p = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`;
+                const res = await app._fetchTimeout(
+                    `/api/attention/requests?${p}&limit=200`,
+                    { cache: 'no-store' });
+                if (!res.ok) return {};
+                const items = ((await res.json()).items) || [];
+                return Object.fromEntries(items.filter((item) => item.runner_session_id).map((item) => [
+                    item.runner_session_id,
+                    {
+                        request_id: item.request_id,
+                        version: item.version,
+                        prompt: item.prompt,
+                        choices: item.choices,
+                        recommended_default: item.recommended_default,
+                    },
+                ]));
+            } catch (e) { /* attention is advisory */ }
+            return {};
+        },
         // One compact autopilot control per PR row, from the batched coverage
         // read. States are the resolver's honest liveness vocabulary; the click
         // action follows the coverage kind so a deliverable-covered task can
