@@ -1370,12 +1370,12 @@ def launch_command(wake, inventory, runner_session_id="", workspace_path=""):
         assignment = Assignment(**assignment_data)
         if assignment.runtime != runtime:
             raise ValueError("connect assignment runtime mismatch")
-        # Connect boots the INTERACTIVE CLI session inside the supervised PTY;
-        # Switchboard assigns the task through the normal handshake. One-shot
-        # batch modes (codex exec / claude -p / cursor-agent -p) render as a
-        # scrolling log with no composer, so Watch cannot show a real session
-        # and chat injection has nothing to type into. PM_CONNECT_<RT>_ARGS
-        # still overrides per host.
+        # Operator Connect boots an interactive CLI inside the supervised PTY.
+        # Mission Bot Codex work is different: its durable mission_key already
+        # identifies a coordination-owned one-shot decision, so launch it with
+        # ``codex exec`` and let child-process exit be Capacity's terminal
+        # signal.  Do not infer process death from claims, messages, or task
+        # state. PM_CONNECT_<RT>_ARGS still overrides per host.
         if runtime not in CONNECT_RUNTIME_DEFAULTS:
             # Guessing "<runtime> --prompt" for an unknown runtime launches a
             # process that is not a supported provider CLI and cannot be
@@ -1392,6 +1392,9 @@ def launch_command(wake, inventory, runner_session_id="", workspace_path=""):
         # "via Switchboard" means MCP tools, not improvised REST/curl.
         if runtime == "codex":
             before = before + _connect_codex_mcp_argv()
+            if str((connect_policy.get("lifecycle") or {}).get(
+                    "mission_key") or "").strip():
+                before = ("exec",) + before
         config = HostRuntimeConfig(
             runtime=runtime,
             provider=assignment.provider,

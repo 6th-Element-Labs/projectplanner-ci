@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
-"""Connect boots the INTERACTIVE CLI; Switchboard assigns the task.
+"""Operator Connect stays interactive; Mission Bot Codex is one-shot.
 
-The operator contract: a Connect launch starts the real interactive CLI session
-(Codex TUI / Claude Code / cursor-agent) inside the supervised PTY, and the agent
-receives its task through the Switchboard handshake. Batch one-shot modes
-(`codex exec`, `claude -p`, `cursor-agent -p`) produce a scrolling log with no
-composer -- Watch renders a wall of text and "Message the live agent" can inject
-into nothing. That is what shipped in the DISPATCH-12 cutover and it broke the
-operator window's whole premise.
+Operator-launched sessions retain the real CLI composer. Mission Bot Codex
+assignments carry a durable lifecycle mission_key and run as ``codex exec`` so
+the supervised child exits naturally after its final response. Capacity remains
+the only process-lifecycle authority in both cases.
 """
 from __future__ import annotations
 
@@ -29,7 +26,7 @@ def ok(condition, message):
     failed += int(not condition)
 
 
-def connect_wake(runtime):
+def connect_wake(runtime, *, mission_key=""):
     wake = {
         "wake_id": "wake-interactive",
         "task_id": "WATCH-10",
@@ -55,6 +52,8 @@ def connect_wake(runtime):
             "generation": 1, "fence_epoch": 1,
         }},
     }
+    if mission_key:
+        wake["policy"]["lifecycle"]["mission_key"] = mission_key
     wake["policy"]["execution_assignment"] = build_execution_assignment(
         task_id=wake["task_id"],
         assignment=wake["policy"]["assignment"],
@@ -90,6 +89,18 @@ ok("mcp_servers.taikun_plan.required=true" in child
    and any("Do WATCH-10 in project switchboard via Switchboard." in part
            for part in child if isinstance(part, str)),
    "codex Connect boots with required MCP and the via-Switchboard note")
+
+mission_cmd, mission_mode = agent_host.launch_command(
+    connect_wake("codex", mission_key="mission-bot:WATCH-10:1"),
+    inventory, runner_session_id="run_mission_one_shot",
+    workspace_path=str(ROOT))
+mission_child = mission_cmd[mission_cmd.index("--") + 1:]
+ok(mission_mode == "connect" and mission_child[:2] == ["codex", "exec"],
+   "Mission Bot Codex launches one-shot `codex exec` "
+   f"(argv={mission_child[:3]})")
+ok("--dangerously-bypass-approvals-and-sandbox" in mission_child
+   and "mcp_servers.taikun_plan.required=true" in mission_child,
+   "Mission Bot Codex preserves autonomous permissions and required MCP")
 
 claude_cmd, _ = agent_host.launch_command(
     connect_wake("claude-code"), inventory, runner_session_id="run_interactive2",
