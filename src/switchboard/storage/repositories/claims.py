@@ -160,13 +160,7 @@ def _assigned_execution_for_claim_in(
         or str(selector.get("agent_id") or "") != agent_id
         or str(assignment.get("assignment_id") or "")
         != str(metadata.get("assignment_id") or "")
-        or not (
-            role in {"review_merge", "remediation"}
-            or (
-                role == "implementation"
-                and str(contract.get("route") or "") == "coordination_retry"
-            )
-        )
+        or role not in {"implementation", "review_merge", "remediation"}
         or contract.get("claim_expectations") != {
             "required": True, "work_session_required": True, "role": role}
         or str(contract.get("task_id") or "") != task_id

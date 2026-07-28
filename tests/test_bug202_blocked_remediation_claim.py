@@ -179,6 +179,21 @@ assert durable_claim["status"] == "active"
 assert durable_claim["execution_generation"] == blocked_lifecycle["generation"]
 assert durable_claim["execution_role"] == "remediation"
 
+# BUG-209: implementation is also a valid immutable execution role. Once the
+# server has admitted that exact generation, a stale Blocked board projection
+# must not become a second admission veto merely because the route is not the
+# older coordination_retry repair route.
+implementation_task, implementation_lifecycle, implementation_claim = assigned_claim(
+    "Blocked", "implementation", "IMPLEMENTATION")
+assert implementation_claim["claimed"] is True, implementation_claim
+assert implementation_claim["task"]["status"] == "Blocked"
+assert implementation_claim["dispatch_reason"]["workflow_status_preserved"] == "Blocked"
+assert implementation_claim["dispatch_reason"]["assigned_execution"]["role"] == "implementation"
+assert (
+    implementation_claim["dispatch_reason"]["assigned_execution"]["execution_id"]
+    == implementation_lifecycle["execution_id"]
+)
+
 wrong_role_task, _, wrong_role_claim = assigned_claim(
     "Blocked", "review_merge", "WRONG-ROLE")
 assert wrong_role_claim["claimed"] is True, wrong_role_claim
