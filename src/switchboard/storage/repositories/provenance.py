@@ -377,13 +377,14 @@ def _mark_task_pr_opened_impl(task_id: str, pr_number: int, pr_url: str = "",
             validate_event,
         )
         publication = get_for_task_in(c, project, task_id)
+        publication_event = {"valid": True, "head_advanced": False}
         if publication:
             repo = _github_repo_from_pr_url(pr_url)
             try:
-                validate_event(
+                publication_event = validate_event(
                     publication, project=project, repository=repo,
                     pr_number=pr_number, branch=branch, head_sha=head_sha,
-                    base_branch=base_branch)
+                    base_branch=base_branch, allow_head_advance=True)
             except ExecutionPublicationError as exc:
                 return exc.as_dict() | {"task_id": task_id}
         current = _load_git_state(c, task_id)
@@ -417,14 +418,26 @@ def _mark_task_pr_opened_impl(task_id: str, pr_number: int, pr_url: str = "",
             c.execute("UPDATE tasks SET status='In Review', updated_at=? WHERE task_id=? "
                       "AND status NOT IN ('Done', 'Cancelled', 'Canceled')",
                       (now, task_id))
+        evidence = {"pr_number": pr_number, "pr_url": pr_url,
+                    "branch": branch, "head_sha": head_sha}
+        if publication_event.get("head_advanced"):
+            evidence["provider_head_advance"] = {
+                "source": "github_pr_observation",
+                "previous_head_sha": publication_event.get("bound_head_sha"),
+                "current_head_sha": publication_event.get("event_head_sha"),
+                "execution_publication_id": publication.get("publication_id"),
+                "execution_id": publication.get("execution_id"),
+                "execution_generation": publication.get(
+                    "execution_generation"),
+            }
+            evidence["execution_publication_history"] = [dict(publication)]
         git_state = _upsert_git_state(c, task_id, {
             "branch": branch or None,
             "head_sha": head_sha or None,
             "pushed_at": now if head_sha else None,
             "pr_number": pr_number,
             "pr_url": pr_url or None,
-            "evidence": {"pr_number": pr_number, "pr_url": pr_url,
-                         "branch": branch, "head_sha": head_sha},
+            "evidence": evidence,
         })
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (task_id, actor, "git.pr_opened",
@@ -434,7 +447,11 @@ def _mark_task_pr_opened_impl(task_id: str, pr_number: int, pr_url: str = "",
                                "active_claim_id": (
                                    active_claim["id"] if active_claim else None),
                                "active_agent_id": (
-                                   active_claim["agent_id"] if active_claim else None)},
+                                   active_claim["agent_id"] if active_claim else None),
+                               "provider_head_advanced": bool(
+                                   publication_event.get("head_advanced")),
+                               "previous_head_sha": publication_event.get(
+                                   "bound_head_sha")},
                               sort_keys=True), now))
         status_row = c.execute(
             "SELECT status FROM tasks WHERE task_id=?", (task_id,),

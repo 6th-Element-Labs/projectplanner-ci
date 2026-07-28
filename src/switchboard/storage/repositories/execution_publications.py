@@ -149,7 +149,8 @@ def get_for_task_in(c, project: str, task_id: str) -> dict[str, Any] | None:
 
 def validate_event(binding: Mapping[str, Any], *, project: str, repository: str,
                    pr_number: int, branch: str = "", head_sha: str = "",
-                   base_branch: str = "") -> None:
+                   base_branch: str = "",
+                   allow_head_advance: bool = False) -> dict[str, Any]:
     checks = {
         "project_id": (binding.get("project_id"), project),
         "repository": (str(binding.get("repository") or "").lower(),
@@ -165,8 +166,20 @@ def validate_event(binding: Mapping[str, Any], *, project: str, repository: str,
         checks["default_branch"] = (binding.get("default_branch"), base_branch)
     mismatches = {field: {"bound": values[0], "event": values[1]}
                   for field, values in checks.items() if values[0] != values[1]}
+    if (
+        allow_head_advance
+        and set(mismatches) == {"head_sha"}
+        and str(head_sha or "").strip()
+    ):
+        return {
+            "valid": True,
+            "head_advanced": True,
+            "bound_head_sha": str(binding.get("head_sha") or "").lower(),
+            "event_head_sha": str(head_sha).lower(),
+        }
     if mismatches:
         raise ExecutionPublicationError(
             "execution_publication_event_mismatch",
             "GitHub event disagrees with the persisted Execution Context binding.",
             mismatches=mismatches)
+    return {"valid": True, "head_advanced": False}
