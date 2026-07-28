@@ -100,26 +100,55 @@ def _parse_github_ts(value: str) -> float:
         return 0.0
 
 
-def fetch_merge_queue_positions(repo: str, token: str,
-                                graphql_fn: Optional[Callable[[str, str], Any]] = None,
-                                ) -> Dict[int, int]:
-    """PR number -> 1-based merge-queue position. Best-effort: {} on any failure."""
+def fetch_merge_queue_entries(repo: str, token: str,
+                              graphql_fn: Optional[Callable[[str, str], Any]] = None,
+                              ) -> Dict[int, Dict[str, Any]]:
+    """PR number -> {position, enqueued_at}. Best-effort: {} on any failure.
+
+    ``enqueuedAt`` is the only honest answer to "how long has this been stuck in
+    the queue?" — a PR's updated_at keeps moving for unrelated reasons, so the
+    dock was showing edit age and calling it queue age.
+    """
     graphql_fn = graphql_fn or _github_graphql
     owner, _, name = repo.partition("/")
     if not owner or not name or not token:
         return {}
     query = (
         'query { repository(owner: "%s", name: "%s") { mergeQueue { '
-        'entries(first: 50) { nodes { position pullRequest { number } } } } } }'
+        'entries(first: 50) { nodes { position enqueuedAt pullRequest { number } } } } } }'
         % (owner, name))
     try:
         payload = graphql_fn(query, token) or {}
         nodes = (((payload.get("data") or {}).get("repository") or {})
                  .get("mergeQueue") or {}).get("entries", {}).get("nodes") or []
-        return {int((n.get("pullRequest") or {}).get("number") or 0): int(n.get("position") or 0)
-                for n in nodes if (n.get("pullRequest") or {}).get("number")}
+        out: Dict[int, Dict[str, Any]] = {}
+        for node in nodes:
+            number = int((node.get("pullRequest") or {}).get("number") or 0)
+            if not number:
+                continue
+            out[number] = {
+                "position": int(node.get("position") or 0),
+                "enqueued_at": _parse_github_ts(str(node.get("enqueuedAt") or "")),
+            }
+        return out
     except Exception:
         return {}
+
+
+def fetch_merge_queue_positions(repo: str, token: str,
+                                graphql_fn: Optional[Callable[[str, str], Any]] = None,
+                                ) -> Dict[int, int]:
+    """PR number -> 1-based merge-queue position. Best-effort: {} on any failure."""
+    return {number: int(entry.get("position") or 0)
+            for number, entry in fetch_merge_queue_entries(
+                repo, token, graphql_fn=graphql_fn).items()}
+
+
+def _queue_entry(value: Any) -> tuple:
+    """Accept a bare position (legacy queue_fn) or a {position, enqueued_at} map."""
+    if isinstance(value, Mapping):
+        return int(value.get("position") or 0), int(value.get("enqueued_at") or 0)
+    return int(value or 0), 0
 
 
 def ci_state_for_sha(repo: str, sha: str, token: str,
@@ -265,7 +294,7 @@ def build_open_prs(project: str, *,
     detail_fn = detail_fn or (lambda r, n, t: _github_request(
         f"https://api.github.com/repos/{r}/pulls/{int(n)}", t))
     ci_fn = ci_fn or (lambda r, sha, t: ci_state_for_sha(r, sha, t))
-    queue_fn = queue_fn or (lambda r, t: fetch_merge_queue_positions(r, t))
+    queue_fn = queue_fn or (lambda r, t: fetch_merge_queue_entries(r, t))
     # The PR list is the one fatal call in this function — every per-PR detail/CI call
     # below is individually caught and degrades to a partial row. A single transient 5xx
     # or reset here blanked the whole dock panel, which is why "GitHub is unreachable"
@@ -300,6 +329,7 @@ def build_open_prs(project: str, *,
         number = int(pr.get("number") or 0)
         head_sha = str((pr.get("head") or {}).get("sha") or "")
         updated_ts = _parse_github_ts(str(pr.get("updated_at") or pr.get("created_at") or ""))
+        queue_position, queue_enqueued_at = _queue_entry(queue_positions.get(number))
         row: Dict[str, Any] = {
             "number": number,
             "title": str(pr.get("title") or ""),
@@ -311,7 +341,8 @@ def build_open_prs(project: str, *,
             "updated_at": updated_ts,
             "stalled": bool(updated_ts and now - updated_ts > STALL_AFTER_SECONDS),
             "auto_merge": bool(pr.get("auto_merge")),
-            "queue_position": queue_positions.get(number, 0),
+            "queue_position": queue_position,
+            "queue_enqueued_at": queue_enqueued_at,
         }
         try:
             detail = detail_fn(repo, number, token) or {}

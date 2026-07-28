@@ -1210,12 +1210,26 @@ const TeepPlan = {
         return `<div class="p-2"><div class="text-uppercase text-secondary mb-1" style="font-size:10px;letter-spacing:.08em;">Merge queue · ${rows.length}</div>`
             + rows.sort((a, b) => Number(a.queue_position) - Number(b.queue_position)).map((x, i) => {
                 const task = (x.tasks || [])[0] || {};
-                return `<div class="d-flex align-items-center gap-2 border rounded p-2 mb-1">
-                    <span class="badge bg-azure-lt">#${this.esc(String(x.queue_position))}</span>
-                    <span class="text-truncate">${this.esc(task.task_id || `PR #${x.number}`)} · ${this.esc(task.title || this._fleetTaskTitle(task.task_id) || x.title)}</span>
-                    ${i === 0 ? '<span class="badge bg-yellow-lt ms-auto">Merging</span>' : ''}
+                // Queue dwell, not edit age: a PR's updated_at moves for unrelated
+                // reasons, so "1h ago" told the operator nothing about being stuck.
+                const dwell = this._dockQueueDwell(x.queue_enqueued_at);
+                return `<div class="border rounded p-2 mb-1">
+                    <div class="d-flex align-items-center gap-2" style="min-width:0;">
+                        <span class="badge bg-azure-lt" style="flex:none;">#${this.esc(String(x.queue_position))}</span>
+                        <span class="text-truncate" style="min-width:0;">${this.esc(task.task_id || `PR #${x.number}`)} · ${this.esc(task.title || this._fleetTaskTitle(task.task_id) || x.title)}</span>
+                        ${i === 0 ? '<span class="badge bg-yellow-lt ms-auto" style="flex:none;">Merging</span>' : ''}
+                    </div>
+                    <div class="text-secondary font-monospace mt-1" style="font-size:11px;">PR #${this.esc(String(x.number))} · ${dwell.text}${dwell.slow ? ' <span class="text-red">stuck</span>' : ''}</div>
                 </div>`;
             }).join('') + '</div>';
+    },
+    // A queue entry with no enqueuedAt is unknown, not "0s" — saying "queued 0s ago"
+    // when GitHub did not tell us would be inventing a number.
+    _dockQueueDwell(enqueuedAt) {
+        const ts = Number(enqueuedAt || 0);
+        if (!ts) return { text: 'queued · time unknown', slow: false };
+        const secs = Math.max(0, Math.round(Date.now() / 1000 - ts));
+        return { text: `in queue ${this._fleetAge(ts).replace(/ ago$/, '')}`, slow: secs >= 1800 };
     },
     _dockDeploymentHtml(x) {
         const state = String(x.status || 'undeployed');
