@@ -231,8 +231,8 @@ ok(derived_decision.get("reason_code") == "exact_head_gates_passed",
    "COORD-57 shape: reason is exact_head_gates_passed")
 
 no_receipt_decision = classify_completion(None, refused)
-ok(no_receipt_decision.get("route") == "coordination_retry",
-   "COORD-57 negative control: no receipt keeps the repair route")
+ok(no_receipt_decision.get("route") == "remediation",
+   "COORD-57 negative control: no receipt boots remediation with evidence dossier")
 ok(no_receipt_decision.get("reason_code") == "missing_executed_test_run",
    "COORD-57 negative control: reason is missing_executed_test_run")
 ok(derived_decision.get("route") != no_receipt_decision.get("route"),

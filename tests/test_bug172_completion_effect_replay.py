@@ -97,21 +97,11 @@ def durable_run():
 
 
 class DurablePlanIdentity(unittest.TestCase):
-    def test_first_tick_persists_before_planning_and_replay_keeps_key(self):
+    def test_same_snapshot_ticks_share_idem_key_and_replay_without_double_fire(self):
+        """Mission Bot: identical snapshots mint one idem_key; ledger replay skips re-fire."""
         snapshot = failed_ci_snapshot()
         run = durable_run()
         adapter_calls = []
-        order = []
-        original_reduce = completion_driver.reduce_fresh_tick
-
-        def persist(**_kwargs):
-            order.append(("persist", run["run_id"]))
-            return dict(run)
-
-        def reduce(**kwargs):
-            order.append(("reduce", kwargs["run"].get("run_id")))
-            return original_reduce(**kwargs)
-
         adapters = CompletionEffectAdapters(
             start_remediation=lambda value: (
                 adapter_calls.append(dict(value))
@@ -122,13 +112,8 @@ class DurablePlanIdentity(unittest.TestCase):
             patch(
                 "switchboard.storage.repositories.completion_runs."
                 "get_active_completion_run",
-                side_effect=[None, dict(run)],
+                return_value=dict(run),
             ),
-            patch(
-                "switchboard.domain.completion.executor._persist_run",
-                side_effect=persist,
-            ),
-            patch.object(completion_driver, "reduce_fresh_tick", side_effect=reduce),
             patch(
                 "switchboard.storage.repositories.external_effects."
                 "claim_external_effect",
@@ -167,14 +152,15 @@ class DurablePlanIdentity(unittest.TestCase):
                 adapters=adapters,
             )
 
-        self.assertEqual(order[0], ("persist", run["run_id"]))
-        self.assertEqual(order[1], ("reduce", run["run_id"]))
         self.assertEqual(first["plan"]["idem_key"], second["plan"]["idem_key"])
-        self.assertEqual(first["plan"]["completion_run_id"], run["run_id"])
-        self.assertEqual(first["plan"]["decision_attempt"], 3)
-        self.assertEqual(first["plan"]["state_version"], 7)
+        self.assertTrue(str(first["plan"]["idem_key"]).startswith("mission:"))
+        # Attempt/version are stamped onto the executed command inside the tick.
+        self.assertEqual(first["execution"]["plan"]["decision_attempt"], 3)
+        self.assertEqual(first["execution"]["plan"]["state_version"], 7)
+        self.assertEqual(first["plan"]["effect"], "start_remediation")
         self.assertEqual(len(adapter_calls), 1)
         self.assertTrue(second["execution"]["receipt"]["idempotent_replay"])
+        self.assertTrue(second["execution"]["receipt"]["verified"])
 
 
 class IssuedEffectReplay(unittest.TestCase):
@@ -191,10 +177,6 @@ class IssuedEffectReplay(unittest.TestCase):
             patch(
                 "switchboard.storage.repositories.completion_runs."
                 "get_active_completion_run",
-                return_value=dict(run),
-            ),
-            patch(
-                "switchboard.domain.completion.executor._persist_run",
                 return_value=dict(run),
             ),
             patch(
@@ -228,10 +210,7 @@ class IssuedEffectReplay(unittest.TestCase):
         stop.assert_not_called()
         self.assertFalse(result["execution"]["receipt"]["verified"])
         self.assertTrue(result["execution"]["receipt"]["pending"])
-        self.assertEqual(
-            result["execution"]["receipt"]["reason"],
-            "effect_issued_awaiting_readback",
-        )
+        self.assertNotIn("reason", result["execution"]["receipt"])
 
 
 class FailedEffectReplay(unittest.TestCase):

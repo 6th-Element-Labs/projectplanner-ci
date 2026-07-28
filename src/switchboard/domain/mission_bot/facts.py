@@ -27,6 +27,18 @@ AGENT_PROVENANCE_BINDINGS = frozenset({
     "direct_session",
 })
 
+#: Switchboard's own merge-gate projection. When typed findings are present it
+#: must not impersonate external CI and short-circuit into remediation
+#: (COORD-49 / DOGFOOD-19).
+MERGE_AUTHORIZATION_CONTEXT = "Switchboard / merge authorization"
+
+#: Findings that have typed Mission Bot routes other than factory remediation.
+_PROCESS_FINDINGS_NOT_FACTORY = frozenset({
+    "draft_pr",
+    "review_verdict_missing",
+    "review_verdict_stale",
+})
+
 
 def _map(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
@@ -159,8 +171,33 @@ def is_draft(snapshot: Mapping[str, Any]) -> bool:
     return _map(snapshot.get("github_pr")).get("draft") is True
 
 
-def ci_pending(snapshot: Mapping[str, Any]) -> bool:
+def _typed_blocking_findings(snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for item in list(snapshot.get("findings") or []):
+        if isinstance(item, Mapping) and item.get("blocking") is not False:
+            if _text_raw(item.get("code")):
+                rows.append(dict(item))
+    return rows
+
+
+def _required_ci_contexts(snapshot: Mapping[str, Any]) -> list[Any]:
+    """Required contexts for external CI facts.
+
+    When typed findings are already on the snapshot, omit Switchboard's own
+    merge-authorization projection so it cannot outrank draft/review/evidence
+    routes (COORD-49).
+    """
     required = list(snapshot.get("required_status_contexts") or [])
+    if not _typed_blocking_findings(snapshot):
+        return required
+    return [
+        name for name in required
+        if str(name or "").strip() != MERGE_AUTHORIZATION_CONTEXT
+    ]
+
+
+def ci_pending(snapshot: Mapping[str, Any]) -> bool:
+    required = _required_ci_contexts(snapshot)
     contexts = _map(snapshot.get("status_contexts"))
     if not required:
         return False
@@ -173,7 +210,7 @@ def ci_pending(snapshot: Mapping[str, Any]) -> bool:
 
 
 def ci_failed(snapshot: Mapping[str, Any]) -> bool:
-    required = list(snapshot.get("required_status_contexts") or [])
+    required = _required_ci_contexts(snapshot)
     contexts = _map(snapshot.get("status_contexts"))
     for name in required:
         row = _map(contexts.get(name))
@@ -269,7 +306,7 @@ def blocking_findings(snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
     for item in list(snapshot.get("findings") or []):
         if isinstance(item, Mapping) and item.get("blocking") is not False:
             code = _text(item.get("code"))
-            if code in {"draft_pr"}:
+            if code in _PROCESS_FINDINGS_NOT_FACTORY:
                 continue
             rows.append(dict(item))
     return rows
@@ -300,7 +337,7 @@ def factory_failure_reason(snapshot: Mapping[str, Any]) -> str:
     if ci_failed(snapshot):
         # Name infrastructure red distinctly for operators/dossiers, but never
         # route it to a human — Mission Bot still boots remediation.
-        required = list(snapshot.get("required_status_contexts") or [])
+        required = _required_ci_contexts(snapshot)
         contexts = _map(snapshot.get("status_contexts"))
         for name in required:
             row = _map(contexts.get(name))

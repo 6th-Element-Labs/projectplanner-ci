@@ -29,8 +29,8 @@ STATES = frozenset({
     "waiting_merge_queue", "reconciling", "done", "failed",
 })
 ROUTES = frozenset({
-    "wait", "review_merge", "remediation", "coordination_retry",
-    "human", "reconcile", "none",
+    "wait", "review_merge", "remediation", "implementation",
+    "coordination_retry", "human", "reconcile", "none",
 })
 TERMINAL_STATES = frozenset({"done", "failed"})
 STALE_EVIDENCE_KEYS = ("ci", "review", "merge_gate", "queue", "merge_queue")

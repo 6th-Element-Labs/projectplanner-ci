@@ -18,8 +18,9 @@ Both shipped green because both test suites hand-built the nested shape. A test 
 constructs its own fixture is only testing the author's belief; only the gate's own
 constructor tests the system.
 
-These tests pin the behaviour (§1), prove every consumer reads it correctly (§2), and
-make a silent recurrence impossible by failing on the pattern itself (§3).
+Mission Bot replaced the old classifier helpers. These tests pin the splat shape (§1),
+prove Mission Bot facts/dossier consumers read it correctly (§2), and make a silent
+recurrence impossible by failing on the nested-details pattern itself (§3).
 """
 from __future__ import annotations
 
@@ -30,12 +31,41 @@ import unittest
 from path_setup import ROOT  # noqa: F401
 
 from switchboard.application.commands.merge_gate import _merge_gate_finding
-from switchboard.domain.completion import state_machine as sm
+from switchboard.domain.completion.state_machine import (
+    build_completion_snapshot,
+    classify_completion,
+)
+from switchboard.domain.mission_bot import facts
+from switchboard.domain.mission_bot.dossier import _missing_artifact_from_findings
+
+
+HEAD = "8a79c572037366f1b100531441b19908c4717b51"
+PR_URL = "https://github.com/6th-Element-Labs/projectplanner/pull/863"
 
 
 # Every detail-carrying blocking finding the gate emits, as the gate emits it.
 def _finding(code, message, **details):
     return _merge_gate_finding(code, message, "failed_gate", details=details or None)
+
+
+def _finding_detail(finding, *keys):
+    """Read a splat (or legacy nested) finding detail — dual-shape accessor.
+
+    Kept local to this contract test: Mission Bot production code reads flat
+    fields directly (``finding.get("mergeable")``), and dossier lift reads
+    splat ``executed_test_gate`` the same way. The dual-shape helper documents
+    the trap for any future consumer.
+    """
+    if not isinstance(finding, dict):
+        return None
+    nested = finding.get("details")
+    nested = nested if isinstance(nested, dict) else {}
+    for key in keys:
+        if key in finding:
+            return finding[key]
+        if key in nested:
+            return nested[key]
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -50,7 +80,7 @@ class FindingShapeIsFlatTest(unittest.TestCase):
         self.assertNotIn(
             "details", finding,
             "the gate splats details; a consumer reading finding['details'] gets "
-            "nothing. If this ever nests, every _finding_detail caller must be revisited",
+            "nothing. If this ever nests, every finding-detail caller must be revisited",
         )
         self.assertIs(finding["mergeable"], False)
         self.assertEqual(finding["merge_state"], "dirty")
@@ -66,48 +96,73 @@ class FindingShapeIsFlatTest(unittest.TestCase):
         # exactly the same surprise the last two did.
         doc = (_merge_gate_finding.__doc__ or "").lower()
         self.assertIn("splat", doc)
-        self.assertIn("_finding_detail", doc)
+        self.assertIn("top level", doc)
 
 
 # ---------------------------------------------------------------------------
-# §2 the accessor, and every consumer through it
+# §2 Mission Bot consumers through the splat shape
 # ---------------------------------------------------------------------------
 
 class FindingDetailAccessorTest(unittest.TestCase):
     def test_it_reads_the_flat_shape_the_gate_emits(self):
         finding = _finding("pr_not_mergeable", "m", mergeable=False,
                            merge_state="dirty")
-        self.assertIs(sm._finding_detail(finding, "mergeable"), False)
-        self.assertEqual(sm._finding_detail(finding, "merge_state"), "dirty")
+        self.assertIs(_finding_detail(finding, "mergeable"), False)
+        self.assertEqual(_finding_detail(finding, "merge_state"), "dirty")
 
     def test_it_still_reads_a_nested_finding(self):
         # Preflight findings (work_sessions.py) genuinely nest under "details".
         nested = {"code": "pr_not_mergeable",
                   "details": {"mergeable": False, "merge_state": "dirty"}}
-        self.assertIs(sm._finding_detail(nested, "mergeable"), False)
-        self.assertEqual(sm._finding_detail(nested, "merge_state"), "dirty")
+        self.assertIs(_finding_detail(nested, "mergeable"), False)
+        self.assertEqual(_finding_detail(nested, "merge_state"), "dirty")
 
     def test_it_tries_each_alias_in_order(self):
         finding = _finding("pr_not_mergeable", "m", mergeStateStatus="DIRTY")
         self.assertEqual(
-            sm._finding_detail(finding, "merge_state", "mergeStateStatus"), "DIRTY")
+            _finding_detail(finding, "merge_state", "mergeStateStatus"), "DIRTY")
 
     def test_a_missing_detail_is_none_not_an_error(self):
-        self.assertIsNone(sm._finding_detail({}, "mergeable"))
-        self.assertIsNone(sm._finding_detail({"details": "not-a-mapping"}, "mergeable"))
+        self.assertIsNone(_finding_detail({}, "mergeable"))
+        self.assertIsNone(_finding_detail({"details": "not-a-mapping"}, "mergeable"))
 
 
 class ConsumersReadRealFindingsTest(unittest.TestCase):
-    """Both live consumers, driven by the gate's own constructor."""
+    """Mission Bot facts/dossier consumers, driven by the gate's own constructor."""
 
     def test_the_conflict_decomposer_fires_on_a_finding_only_conflict(self):
         """BUG-182's whole purpose: PR hydration empty, finding is the only evidence."""
-        finding = _finding("pr_not_mergeable",
-                           "GitHub PR state is not cleanly mergeable.",
-                           mergeable=False, merge_state="dirty")
-        decision = sm._merge_conflict_decision({}, [finding])
-        self.assertIsNotNone(
-            decision, "a conflicted PR must reach pr_merge_conflict, not read as missing")
+        finding = _finding(
+            "pr_not_mergeable",
+            "GitHub PR state is not cleanly mergeable.",
+            mergeable=False, merge_state="dirty",
+        )
+        self.assertTrue(
+            facts.merge_conflict({"github_pr": {}, "findings": [finding]}),
+            "a conflicted PR must reach pr_merge_conflict, not read as missing",
+        )
+        snap = build_completion_snapshot(
+            task={
+                "task_id": "CO-20",
+                "status": "In Review",
+                "git_state": {
+                    "head_sha": HEAD, "pr_number": 863, "pr_url": PR_URL,
+                },
+            },
+            github_pr={},
+            review={
+                "status": "passed", "head_sha": HEAD, "number": 863,
+                "pr_url": PR_URL,
+            },
+            merge_gate={
+                "findings": [finding],
+                "head_sha": HEAD,
+                "pr_number": 863,
+                "pr_url": PR_URL,
+            },
+        )
+        snap["head_sha"] = HEAD
+        decision = classify_completion(None, snap)
         self.assertEqual(decision["reason_code"], "pr_merge_conflict")
         self.assertEqual(decision["route"], "remediation")
 
@@ -117,12 +172,14 @@ class ConsumersReadRealFindingsTest(unittest.TestCase):
             details={"executed_test_gate": {"missing_artifact": {
                 "expected_key": "executed_test_run"}}})
         self.assertEqual(
-            sm._missing_artifact_identity([finding]),
-            {"missing_artifact": {"expected_key": "executed_test_run"}})
+            _missing_artifact_from_findings([finding]),
+            {"expected_key": "executed_test_run"})
 
     def test_a_clean_pr_produces_no_conflict_decision(self):
-        self.assertIsNone(sm._merge_conflict_decision({"mergeable": True}, []))
-        self.assertIsNone(sm._merge_conflict_decision({}, []))
+        self.assertFalse(
+            facts.merge_conflict({"github_pr": {"mergeable": True}, "findings": []})
+        )
+        self.assertFalse(facts.merge_conflict({"github_pr": {}, "findings": []}))
 
 
 # ---------------------------------------------------------------------------
@@ -130,9 +187,13 @@ class ConsumersReadRealFindingsTest(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 _COMPLETION_PACKAGE = pathlib.Path(ROOT) / "src" / "switchboard" / "domain" / "completion"
+_MISSION_BOT_PACKAGE = pathlib.Path(ROOT) / "src" / "switchboard" / "domain" / "mission_bot"
 
-#: The accessor is allowed to read the nested form; it is the thing that knows about it.
-_DETAILS_READERS_ALLOWED = {"_finding_detail"}
+#: Review evidence may carry a nested details blob; finding splat readers must not.
+_DETAILS_READERS_ALLOWED = {
+    "_finding_detail",
+    "evidence_identity",  # review.get("details"), not merge-gate findings
+}
 
 
 def _direct_details_reads(path: pathlib.Path) -> list[str]:
@@ -169,11 +230,13 @@ class NobodyReadsFindingDetailsByHandTest(unittest.TestCase):
         check that catches that before it ships.
         """
         offenders: list[str] = []
-        for path in sorted(_COMPLETION_PACKAGE.glob("*.py")):
-            offenders.extend(_direct_details_reads(path))
+        for package in (_COMPLETION_PACKAGE, _MISSION_BOT_PACKAGE):
+            for path in sorted(package.glob("*.py")):
+                offenders.extend(_direct_details_reads(path))
         self.assertEqual(
             offenders, [],
-            "read merge-gate finding details via state_machine._finding_detail(); "
+            "read merge-gate finding details from the splat top level "
+            "(Mission Bot facts/dossier); "
             "_merge_gate_finding splats them, so .get('details') is always empty. "
             f"Offenders: {offenders}",
         )
