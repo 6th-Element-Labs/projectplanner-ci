@@ -308,6 +308,220 @@ def test_idempotency_changes_when_review_or_finding_details_change():
     )
 
 
+def test_idempotency_ignores_elapsed_review_clock():
+    """An unchanged red head is one mission even while its wait clock advances."""
+    first_snap = snapshot(ci="FAILURE", findings=[{
+        "code": "review_stalled_no_verdict",
+        "message": "No review verdict in 30 min.",
+        "blocking": True,
+        "head_sha": HEAD,
+        "waited_seconds": 1807.7,
+        "review_gate": {
+            "code": "review_required",
+            "head_sha": HEAD,
+            "waited_seconds": 1807.7,
+        },
+    }])
+    second_snap = snapshot(ci="FAILURE", findings=[{
+        "code": "review_stalled_no_verdict",
+        "message": "No review verdict in 31 min.",
+        "blocking": True,
+        "head_sha": HEAD,
+        "waited_seconds": 1868.9,
+        "review_gate": {
+            "code": "review_required",
+            "head_sha": HEAD,
+            "waited_seconds": 1868.9,
+        },
+    }])
+    first = reduce_mission(first_snap)
+    second = reduce_mission(second_snap)
+    assert first["idem_key"] == second["idem_key"]
+    # The dossier remains complete for the remediation agent.
+    assert first["dossier"]["acceptance_findings"][0]["waited_seconds"] == 1807.7
+    assert second["dossier"]["acceptance_findings"][0]["waited_seconds"] == 1868.9
+
+
+def test_ledger_identity_uses_stable_mission_key_not_full_dossier():
+    """Volatile dossier detail cannot mint a second external-effect key."""
+    from unittest.mock import patch
+
+    from switchboard.domain.mission_bot import MissionPorts, execute_mission_command
+
+    claimed_payloads = []
+
+    def claim(*_args, **kwargs):
+        claimed_payloads.append(dict(_args[3]))
+        return {
+            "claimed": True,
+            "effect_key": "effect-one",
+            "effect": {"effect_key": "effect-one", "status": "claimed"},
+        }
+
+    ports = MissionPorts(
+        start_task=lambda _plan: {"action": "started"},
+        mark_ready=lambda _plan: {"returncode": 0},
+        arm_merge=lambda _plan: {"returncode": 0},
+        persist_wait=lambda **_k: {},
+        persist_agent_requires_human=lambda **_k: {},
+        observe_merged=lambda **_k: {},
+    )
+    base = {
+        "output": MissionOutput.START_REMEDIATION.value,
+        "task_id": "MISSION-1",
+        "head_sha": HEAD,
+        "role": "remediation",
+        "reason_code": "required_exact_head_ci_failed",
+        "idem_key": "mission:MISSION-1:stable",
+        "evidence_identity": {"finding_codes": ["required_ci_failed"]},
+    }
+    with (
+        patch(
+            "switchboard.storage.repositories.external_effects.claim_external_effect",
+            side_effect=claim,
+        ),
+        patch(
+            "switchboard.storage.repositories.external_effects.verify_external_effect",
+            return_value={},
+        ),
+    ):
+        execute_mission_command(
+            {**base, "dossier": {"waited_seconds": 1807.7}},
+            ports=ports, project="switchboard", actor="test",
+        )
+        execute_mission_command(
+            {**base, "dossier": {"waited_seconds": 1868.9}},
+            ports=ports, project="switchboard", actor="test",
+        )
+    assert claimed_payloads[0] == claimed_payloads[1]
+    assert "dossier" not in claimed_payloads[0]
+
+
+def test_raised_start_task_failure_closes_claimed_effect():
+    """A port exception is a failed receipt, never an immortal claimed row."""
+    from unittest.mock import patch
+
+    from switchboard.domain.mission_bot import MissionPorts, execute_mission_command
+
+    failed = []
+    ports = MissionPorts(
+        start_task=lambda _plan: (_ for _ in ()).throw(
+            RuntimeError("runner admission exploded")
+        ),
+        mark_ready=lambda _plan: {"returncode": 0},
+        arm_merge=lambda _plan: {"returncode": 0},
+        persist_wait=lambda **_k: {},
+        persist_agent_requires_human=lambda **_k: {},
+        observe_merged=lambda **_k: {},
+    )
+    with (
+        patch(
+            "switchboard.storage.repositories.external_effects.claim_external_effect",
+            return_value={
+                "claimed": True,
+                "effect_key": "effect-failed",
+                "effect": {
+                    "effect_key": "effect-failed",
+                    "status": "claimed",
+                },
+            },
+        ),
+        patch(
+            "switchboard.storage.repositories.external_effects.fail_external_effect",
+            side_effect=lambda *args, **kwargs: failed.append((args, kwargs)),
+        ),
+    ):
+        try:
+            execute_mission_command(
+                {
+                    "output": MissionOutput.START_REMEDIATION.value,
+                    "task_id": "MISSION-1",
+                    "head_sha": HEAD,
+                    "role": "remediation",
+                    "reason_code": "required_exact_head_ci_failed",
+                    "idem_key": "mission:MISSION-1:failure",
+                    "dossier": {},
+                },
+                ports=ports,
+                project="switchboard",
+                actor="test",
+            )
+        except RuntimeError as exc:
+            assert "runner admission exploded" in str(exc)
+        else:
+            raise AssertionError("start_task exception was swallowed")
+    assert len(failed) == 1
+    assert failed[0][0][0] == "effect-failed"
+    assert "RuntimeError: runner admission exploded" in failed[0][0][1]
+
+
+def test_failed_boot_receipt_is_reclaimed_for_next_agent_boot():
+    """A factory boot failure retries through one CAS; it never becomes WAIT."""
+    from unittest.mock import patch
+
+    from switchboard.domain.mission_bot import MissionPorts, execute_mission_command
+
+    starts = []
+    ports = MissionPorts(
+        start_task=lambda plan: starts.append(dict(plan)) or {"action": "started"},
+        mark_ready=lambda _plan: {"returncode": 0},
+        arm_merge=lambda _plan: {"returncode": 0},
+        persist_wait=lambda **_k: {},
+        persist_agent_requires_human=lambda **_k: {},
+        observe_merged=lambda **_k: {},
+    )
+    failed_row = {
+        "effect_key": "effect-retry",
+        "status": "failed",
+        "retry_count": 1,
+        "last_error": "runner admission exploded",
+    }
+    with (
+        patch(
+            "switchboard.storage.repositories.external_effects.claim_external_effect",
+            return_value={
+                "claimed": False,
+                "effect_key": "effect-retry",
+                "effect": failed_row,
+            },
+        ),
+        patch(
+            "switchboard.storage.repositories.external_effects.retry_external_effect",
+            return_value={
+                "claimed": True,
+                "effect_key": "effect-retry",
+                "effect": failed_row,
+            },
+        ) as retry,
+        patch(
+            "switchboard.storage.repositories.external_effects.verify_external_effect",
+            return_value={},
+        ),
+    ):
+        result = execute_mission_command(
+            {
+                "output": MissionOutput.START_REMEDIATION.value,
+                "task_id": "MISSION-1",
+                "head_sha": HEAD,
+                "role": "remediation",
+                "reason_code": "required_exact_head_ci_failed",
+                "idem_key": "mission:MISSION-1:retry",
+                "dossier": {},
+            },
+            ports=ports,
+            project="switchboard",
+            actor="test",
+        )
+    retry.assert_called_once_with(
+        "effect-retry",
+        expected_retry_count=1,
+        actor="test",
+        project="switchboard",
+    )
+    assert len(starts) == 1
+    assert result["receipt"]["verified"] is True
+
+
 def test_unmet_dependencies_wait_instead_of_start():
     snap = snapshot(
         board_status="Not Started",

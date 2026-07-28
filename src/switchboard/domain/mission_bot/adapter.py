@@ -97,6 +97,7 @@ def _start_plan(command: Mapping[str, Any]) -> dict[str, Any]:
         "failing_run_attempt": int(dossier.get("failing_run_attempt") or 0),
         "failing_check_summary": dossier.get("failing_check_summary") or "",
         "dossier": dossier,
+        "evidence_identity": _map(command.get("evidence_identity")),
         "idem_key": command.get("idem_key") or command.get("idempotency_key"),
         "decision_attempt": int(command.get("decision_attempt") or 0),
         "state_version": int(command.get("state_version") or 0),
@@ -122,7 +123,19 @@ def _ledger_replay(
         "completion_effect",
         str(plan.get("task_id") or ""),
         effect,
-        dict(plan),
+        {
+            # The assignment carries the complete dossier.  Ledger identity
+            # must contain only the already-normalized mission identity;
+            # otherwise elapsed clocks inside that dossier create a new
+            # external mutation on every tick.
+            "idem_key": idem_key,
+            "effect": effect,
+            "task_id": str(plan.get("task_id") or ""),
+            "head_sha": str(plan.get("head_sha") or ""),
+            "role": str(plan.get("role") or ""),
+            "reason_code": str(plan.get("reason_code") or ""),
+            "evidence_identity": _map(plan.get("evidence_identity")),
+        },
         task_id=str(plan.get("task_id") or ""),
         idem_key=idem_key,
         actor=actor,
@@ -138,6 +151,28 @@ def _ledger_replay(
             "pending": False,
         }
     if not ledger.get("claimed"):
+        existing = _map(ledger.get("effect"))
+        if str(existing.get("status") or "").lower() == "failed":
+            # Mission Bot has no human/factory-failure classifier. A failed
+            # boot is retried by a fresh tick through one ledger CAS; start_task
+            # and the execution lease remain the duplicate-run authorities.
+            retried = external_effects.retry_external_effect(
+                str(ledger.get("effect_key") or ""),
+                expected_retry_count=int(existing.get("retry_count") or 0),
+                actor=actor,
+                project=project,
+            )
+            if retried.get("claimed"):
+                return {
+                    "claimed": True,
+                    "ledger": retried,
+                    # This tick owns a fresh issuance attempt; do not take the
+                    # readback-only replay branch in _run_mutating.
+                    "idempotent_replay": False,
+                    "retry": True,
+                    "verified": False,
+                    "pending": False,
+                }
         # Issued/in-flight — do not double-fire, and do not mark verified.
         return {
             "claimed": False,
@@ -228,7 +263,32 @@ def _run_mutating(
             bool(ledger_claim.get("verified")) and not bool(_effect_failed(result)),
             bool(ledger_claim.get("pending")),
         )
-    result = ports_fn(plan)
+    try:
+        result = ports_fn(plan)
+    except Exception as exc:
+        # Claiming the ledger and calling the port are one guarded issuance
+        # boundary.  A raised start_task/GitHub exception must never leave a
+        # permanent "claimed" receipt that looks in-flight forever.
+        if ledger_claim and ledger_claim.get("claimed"):
+            from switchboard.storage.repositories import external_effects
+
+            effect_key = str(
+                _map(ledger_claim.get("ledger")).get("effect_key")
+                or ledger_claim.get("effect_key")
+                or ""
+            )
+            if effect_key:
+                external_effects.fail_external_effect(
+                    effect_key,
+                    f"{type(exc).__name__}: {exc}",
+                    readback={
+                        "error": str(exc),
+                        "exception_type": type(exc).__name__,
+                    },
+                    actor=actor,
+                    project=project,
+                )
+        raise
     settled = _ledger_settle(
         ledger_claim, result=_map(result), project=project, actor=actor,
     )

@@ -50,6 +50,25 @@ _PROMPT_REDACT_KEYS = frozenset({
     "refresh_token",
 })
 
+# Observation clocks belong in the dossier presented to the agent, but they do
+# not identify a new mission.  Hashing them made an unchanged red head mint a
+# fresh remediation effect every coordinator tick (BUG-207).
+_VOLATILE_IDENTITY_KEYS = frozenset({
+    "age_seconds",
+    "checked_at",
+    "created_at",
+    "evidence_age_seconds",
+    "expires_at",
+    "generated_at",
+    "hydration_started_at",
+    "last_heartbeat_at",
+    "observed_at",
+    "source_observed_at",
+    "updated_at",
+    "uptime_seconds",
+    "waited_seconds",
+})
+
 
 def _map(value: Any) -> dict[str, Any]:
     return copy.deepcopy(dict(value)) if isinstance(value, Mapping) else {}
@@ -128,6 +147,26 @@ def _stable_digest(value: Any) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()[:32]
 
 
+def _stable_evidence_value(value: Any) -> Any:
+    """Remove observation churn while preserving the complete agent dossier."""
+    if isinstance(value, Mapping):
+        code = str(value.get("code") or "")
+        return {
+            str(key): _stable_evidence_value(item)
+            for key, item in value.items()
+            if str(key) not in _VOLATILE_IDENTITY_KEYS
+            # This server-generated sentence embeds the elapsed minute.  Its
+            # durable identity is the finding code plus exact head below.
+            and not (
+                str(key) == "message"
+                and code == "review_stalled_no_verdict"
+            )
+        }
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return [_stable_evidence_value(item) for item in value]
+    return value
+
+
 def evidence_identity(dossier: Mapping[str, Any]) -> dict[str, Any]:
     """Stable evidence keys that must enter mission idempotency."""
     failing = list(dossier.get("failing_checks") or [])
@@ -155,17 +194,19 @@ def evidence_identity(dossier: Mapping[str, Any]) -> dict[str, Any]:
         ],
         # Material nested surfaces — same codes with different details must
         # not replay an obsolete boot.
-        "findings_digest": _stable_digest(findings),
-        "failing_checks_digest": _stable_digest(failing),
-        "review_digest": _stable_digest({
+        "findings_digest": _stable_digest(_stable_evidence_value(findings)),
+        "failing_checks_digest": _stable_digest(
+            _stable_evidence_value(failing)
+        ),
+        "review_digest": _stable_digest(_stable_evidence_value({
             "status": review.get("status") or review.get("state")
             or review.get("verdict"),
             "head_sha": review.get("head_sha"),
             "findings": review.get("findings") or [],
             "summary": review.get("summary") or review.get("body") or "",
             "details": review.get("details") or review.get("review_details") or {},
-        }),
-        "queue_digest": _stable_digest({
+        })),
+        "queue_digest": _stable_digest(_stable_evidence_value({
             "state": queue.get("state") or queue.get("status"),
             "last_removal_reason": (
                 queue.get("last_removal_reason") or queue.get("removal_reason")
@@ -176,12 +217,12 @@ def evidence_identity(dossier: Mapping[str, Any]) -> dict[str, Any]:
             "messages": queue.get("messages") or queue.get("message") or "",
             "retry_exhausted": queue.get("retry_exhausted"),
             "prior_enqueue_verified": queue.get("prior_enqueue_verified"),
-        }),
+        })),
         "missing_artifact_expected_key": str(
             _map(dossier.get("missing_artifact")).get("expected_key") or ""
         ),
         "missing_artifact_digest": _stable_digest(
-            dossier.get("missing_artifact") or {}
+            _stable_evidence_value(dossier.get("missing_artifact") or {})
         ),
     }
 
