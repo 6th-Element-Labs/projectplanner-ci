@@ -388,13 +388,44 @@ def _mark_task_pr_opened_impl(task_id: str, pr_number: int, pr_url: str = "",
             except ExecutionPublicationError as exc:
                 return exc.as_dict() | {"task_id": task_id}
         current = _load_git_state(c, task_id)
+        current_evidence = dict(current.get("evidence") or {})
+        current_observation = dict(
+            current_evidence.get("provider_head_observation") or {})
+        superseded_heads = {
+            str(value).lower()
+            for value in current_observation.get("superseded_head_shas") or []
+            if str(value or "").strip()
+        }
+        incoming_head = str(head_sha or "").lower()
+        current_head = str(current.get("head_sha") or "").lower()
+        stale_provider_head = bool(
+            incoming_head
+            and current_head
+            and incoming_head != current_head
+            and incoming_head in superseded_heads
+        )
+        if stale_provider_head:
+            task = _task_row(row)
+            return {
+                "task_id": task_id,
+                "status": task["status"],
+                "git_state": current,
+                "idempotent": True,
+                "skipped": True,
+                "reason": "stale_provider_head_observation",
+                "provider_head_observation": {
+                    "incoming_head_sha": incoming_head,
+                    "current_head_sha": current_head,
+                    "sequence": int(current_observation.get("sequence") or 0),
+                },
+            }
         same_pr = (
             current.get("pr_number") == pr_number and
             (not pr_url or current.get("pr_url") == pr_url) and
             (not branch or current.get("branch") == branch) and
             (not head_sha or current.get("head_sha") == head_sha)
         )
-        if row["status"] in ("In Review", "Done") and same_pr:
+        if same_pr:
             task = _task_row(row)
             return {"task_id": task_id, "status": task["status"],
                     "git_state": current, "idempotent": True}
@@ -421,9 +452,22 @@ def _mark_task_pr_opened_impl(task_id: str, pr_number: int, pr_url: str = "",
         evidence = {"pr_number": pr_number, "pr_url": pr_url,
                     "branch": branch, "head_sha": head_sha}
         if publication_event.get("head_advanced"):
+            prior_superseded = list(
+                current_observation.get("superseded_head_shas") or [])
+            previous_head = str(current.get("head_sha") or
+                                publication_event.get("bound_head_sha") or "").lower()
+            if previous_head and previous_head not in prior_superseded:
+                prior_superseded.append(previous_head)
+            evidence["provider_head_observation"] = {
+                "source": "github_pr_observation",
+                "sequence": int(current_observation.get("sequence") or 0) + 1,
+                "accepted_at": now,
+                "head_sha": str(head_sha or "").lower(),
+                "superseded_head_shas": prior_superseded,
+            }
             evidence["provider_head_advance"] = {
                 "source": "github_pr_observation",
-                "previous_head_sha": publication_event.get("bound_head_sha"),
+                "previous_head_sha": previous_head,
                 "current_head_sha": publication_event.get("event_head_sha"),
                 "execution_publication_id": publication.get("publication_id"),
                 "execution_id": publication.get("execution_id"),

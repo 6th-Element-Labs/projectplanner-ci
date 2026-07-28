@@ -75,6 +75,35 @@ replayed = store.mark_task_pr_opened(
 )
 assert replayed.get("idempotent") is True, replayed
 assert replayed["git_state"]["head_sha"] == HEAD_B, replayed
+with store._conn(P) as c:
+    event_count_after_replay = c.execute(
+        "SELECT COUNT(*) AS n FROM activity "
+        "WHERE task_id=? AND kind='git.pr_opened'",
+        (TASK,),
+    ).fetchone()["n"]
+assert event_count_after_replay == 2, event_count_after_replay
+
+delayed = store.mark_task_pr_opened(
+    TASK, PR_NUMBER, PR_URL, BRANCH, HEAD_A,
+    actor="github-webhook", project=P, base_branch="master",
+)
+assert delayed.get("idempotent") is True, delayed
+assert delayed.get("reason") == "stale_provider_head_observation", delayed
+assert delayed["git_state"]["head_sha"] == HEAD_B, delayed
+observation = delayed["git_state"]["evidence"]["provider_head_observation"]
+assert observation["sequence"] == 1, observation
+assert observation["head_sha"] == HEAD_B, observation
+assert observation["superseded_head_shas"] == [HEAD_A], observation
+with store._conn(P) as c:
+    event_count_after_delayed = c.execute(
+        "SELECT COUNT(*) AS n FROM activity "
+        "WHERE task_id=? AND kind='git.pr_opened'",
+        (TASK,),
+    ).fetchone()["n"]
+assert event_count_after_delayed == event_count_after_replay, (
+    event_count_after_delayed,
+    event_count_after_replay,
+)
 
 wrong_branch = store.mark_task_pr_opened(
     TASK, PR_NUMBER, PR_URL, "codex/OTHER-1", "d" * 40,
