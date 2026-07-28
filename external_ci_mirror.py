@@ -348,6 +348,19 @@ def _cleanup_terminal_mirror_branch(run: Dict[str, Any], source_path: str,
     return updated
 
 
+def _should_cleanup_terminal_ref(request: Dict[str, Any], result: Dict[str, Any]) -> bool:
+    """Clean disposable refs only after a conclusive CI verdict.
+
+    GitHub can report a workflow cancelled before a queued job has stopped
+    starting. Retaining the exact ref for abortive terminal states prevents that
+    late actions/checkout from racing cleanup and leaves the audited retry path
+    a usable ref.
+    """
+    return bool((request or {}).get("cleanup_mirror_branch")) and (
+        (result or {}).get("status") in {"success", "failure"}
+    )
+
+
 def request_external_ci_mirror_run(request: Dict[str, Any], source_path: str,
                                    actor: str = "system",
                                    project: str = store.DEFAULT_PROJECT,
@@ -476,8 +489,7 @@ def request_external_ci_mirror_run(request: Dict[str, Any], source_path: str,
     except ExternalCiError as e:
         result = _update_failure(run, e.failure_class, e.message, e.result,
                                  actor=actor, project=project)
-    if (request or {}).get("cleanup_mirror_branch") and \
-            result.get("status") in store.EXTERNAL_CI_TERMINAL_STATUSES:
+    if _should_cleanup_terminal_ref(request or {}, result):
         result = _cleanup_terminal_mirror_branch(
             result, source_path, request or {}, actor, project, runner)
     return result
