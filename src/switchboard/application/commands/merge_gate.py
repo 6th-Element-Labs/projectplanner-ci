@@ -852,6 +852,10 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
                 "Merge gate requires safe rebase evidence before merge.",
                 "missing_data"))
 
+    resolved_head = str(
+        head_sha or merged_payload.get("head_sha")
+        or (task.get("git_state") or {}).get("head_sha") or ""
+    ).strip()
     session_hint = None
     if work_session_id:
         session_hint = get_work_session(work_session_id, project=project)
@@ -869,10 +873,6 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
         # and for any task whose claim has completed, so fall back to the session bound
         # to the task itself — pinned to the exact head being gated. An explicit but
         # unknown work_session_id is left alone so work_session_not_found still fires.
-        resolved_head = str(
-            head_sha or merged_payload.get("head_sha")
-            or (task.get("git_state") or {}).get("head_sha") or ""
-        ).strip()
         session_hint = _task_scoped_work_session(
             task_id, project, head_sha=resolved_head)
         if session_hint is None:
