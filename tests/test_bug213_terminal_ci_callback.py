@@ -1,12 +1,12 @@
 """BUG-213: terminal public-CI evidence survives a callback outage."""
-from pathlib import Path
+
+from path_setup import ROOT
 
 from switchboard.application.commands.merge_gate import (
     _apply_terminal_external_ci_receipt,
 )
 
 
-ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "verify.yml"
 SHA = "d1e25eff0580ebdacbbba0906f5e80265403716b"
 CONTEXT = "Switchboard CI / VM gate"
