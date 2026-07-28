@@ -241,17 +241,14 @@ def _github_timestamp(value: Any) -> float:
 
 
 def _select_run(runs: Any, triggered_after: float = 0.0,
-                source_sha: str = "", purpose: str = "",
-                source_ref: str = "") -> Optional[Dict[str, Any]]:
+                source_sha: str = "",
+                purpose: str = "") -> Optional[Dict[str, Any]]:
     if not isinstance(runs, list):
         return None
     candidates = [r for r in runs if isinstance(r, dict)]
     if not candidates:
         return None
-    expected = [
-        value for value in (source_sha, purpose, source_ref)
-        if str(value or "").strip()
-    ]
+    expected = [value for value in (source_sha, purpose) if str(value or "").strip()]
     exact = []
     for candidate in candidates:
         title = str(candidate.get("displayTitle") or candidate.get("name") or "")
@@ -729,7 +726,6 @@ def _poll_run(run: Dict[str, Any], source_path: str, actor: str,
             triggered_after=triggered_after,
             source_sha=run["source_sha"],
             purpose=str(workflow_inputs.get("purpose") or ""),
-            source_ref=str(workflow_inputs.get("source_ref") or ""),
         )
         if not selected:
             _update_run(
