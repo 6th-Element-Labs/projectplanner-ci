@@ -10,6 +10,7 @@ import os
 import subprocess
 import time
 import uuid
+from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import store
@@ -229,23 +230,45 @@ def _workflow_inputs_for_run(run: Dict[str, Any], request: Dict[str, Any]) -> Di
     return inputs
 
 
+def _github_timestamp(value: Any) -> float:
+    text = str(value or "").strip()
+    if not text:
+        return 0.0
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _select_run(runs: Any, triggered_after: float = 0.0,
-                source_sha: str = "") -> Optional[Dict[str, Any]]:
+                source_sha: str = "", purpose: str = "",
+                source_ref: str = "") -> Optional[Dict[str, Any]]:
     if not isinstance(runs, list):
         return None
     candidates = [r for r in runs if isinstance(r, dict)]
     if not candidates:
         return None
-    if source_sha:
-        exact = [
-            r for r in candidates
-            if source_sha in str(r.get("displayTitle") or r.get("name") or "")
-        ]
-        if not exact:
-            return None
-        candidates = exact
-    # gh returns newest first; keep that behavior but tolerate fake/test order.
-    return candidates[0]
+    expected = [
+        value for value in (source_sha, purpose, source_ref)
+        if str(value or "").strip()
+    ]
+    exact = []
+    for candidate in candidates:
+        title = str(candidate.get("displayTitle") or candidate.get("name") or "")
+        if expected and not all(str(value) in title for value in expected):
+            continue
+        created_at = _github_timestamp(candidate.get("createdAt"))
+        if triggered_after and (not created_at or created_at < triggered_after):
+            continue
+        exact.append(candidate)
+    if not exact:
+        return None
+    # GitHub normally returns newest first. Sort explicitly so tests and alternate
+    # adapters cannot make an older matching run authoritative.
+    return max(exact, key=lambda item: (
+        _github_timestamp(item.get("createdAt")),
+        int(item.get("databaseId") or item.get("id") or 0),
+    ))
 
 
 def _artifact_list(mirror_repo: str, run_id: Any, cwd: str,
@@ -647,6 +670,9 @@ def _execute_run(run: Dict[str, Any], source_path: str, actor: str,
     trigger_args = ["gh", "workflow", "run", workflow, "--repo", mirror_repo,
                     "--ref", workflow_ref]
     trigger_args.extend(_workflow_inputs_args(_workflow_inputs_for_run(run, request)))
+    # GitHub's createdAt is second-resolution. Floor the local fence to the same
+    # precision so a run created in the dispatch second is not rejected.
+    triggered_after = float(int(now_fn()))
     trigger = _check(trigger_args, source_path, "workflow_trigger_failed",
                      "workflow dispatch", runner)
     updated = _update_run(
@@ -669,7 +695,8 @@ def _execute_run(run: Dict[str, Any], source_path: str, actor: str,
     return _poll_run({**run, "status": "triggered"}, source_path, actor, project,
                      runner, sleep_fn, now_fn,
                      float(request.get("poll_interval_seconds") or 15),
-                     float(request.get("timeout_seconds") or 1800), request)
+                     float(request.get("timeout_seconds") or 1800),
+                     {**request, "_triggered_after": triggered_after})
 
 
 def _poll_run(run: Dict[str, Any], source_path: str, actor: str,
@@ -682,6 +709,8 @@ def _poll_run(run: Dict[str, Any], source_path: str, actor: str,
     mirror_branch = run["mirror_branch"]
     workflow = run["workflow"]
     workflow_ref = str((request or {}).get("workflow_ref") or mirror_branch).strip()
+    workflow_inputs = _workflow_inputs_for_run(run, request or {})
+    triggered_after = float((request or {}).get("_triggered_after") or 0.0)
     selected: Optional[Dict[str, Any]] = None
     while now_fn() <= deadline:
         runs = _json(
@@ -695,7 +724,13 @@ def _poll_run(run: Dict[str, Any], source_path: str, actor: str,
             "workflow run list",
             runner,
         )
-        selected = _select_run(runs, source_sha=run["source_sha"])
+        selected = _select_run(
+            runs,
+            triggered_after=triggered_after,
+            source_sha=run["source_sha"],
+            purpose=str(workflow_inputs.get("purpose") or ""),
+            source_ref=str(workflow_inputs.get("source_ref") or ""),
+        )
         if not selected:
             _update_run(
                 run, {"status": "triggered", "result": {"poll": "no_run_yet"}},
