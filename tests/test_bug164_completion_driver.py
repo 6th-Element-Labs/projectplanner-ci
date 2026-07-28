@@ -319,7 +319,7 @@ class CompletionDriver(unittest.TestCase):
         )
         self.assertFalse(calls[0].get("escalated_findings"))
 
-    def test_transitioning_replacement_remains_unverified_for_next_tick(self):
+    def test_transitioning_task_execution_remains_unverified_for_next_tick(self):
         adapters = CompletionEffectAdapters(
             start_remediation=lambda _plan: {"action": "transitioning"},
         )
@@ -358,9 +358,11 @@ class CompletionDriver(unittest.TestCase):
             )
         self.assertTrue(result["execution"]["receipt"]["pending"])
         self.assertFalse(result["execution"]["receipt"]["verified"])
-        issued.assert_called_once()
+        # START receipts belong to Task Execution, not the external-effect
+        # ledger used for GitHub mutations.
+        issued.assert_not_called()
 
-    def test_concurrent_claim_does_not_double_fire_effect(self):
+    def test_parallel_effect_claim_cannot_veto_task_execution_start(self):
         calls = []
         adapters = CompletionEffectAdapters(
             start_remediation=lambda plan: calls.append(dict(plan)) or {
@@ -393,11 +395,10 @@ class CompletionDriver(unittest.TestCase):
                 hydrator=lambda *args, **kwargs: pr810(),
                 adapters=adapters,
             )
-        self.assertEqual(calls, [])
-        # In-flight ledger claim must not verify — pending until readback.
-        self.assertTrue(result["execution"]["receipt"]["pending"])
-        self.assertFalse(result["execution"]["receipt"]["verified"])
-        self.assertTrue(result["execution"]["receipt"]["idempotent_replay"])
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(result["execution"]["receipt"]["pending"])
+        self.assertTrue(result["execution"]["receipt"]["verified"])
+        self.assertFalse(result["execution"]["receipt"]["idempotent_replay"])
 
     def test_empty_queue_hydrates_prior_enqueue_from_verified_ledger(self):
         with patch(

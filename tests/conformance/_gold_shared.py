@@ -63,14 +63,17 @@ _HUMAN_SCHEMA_MIGRATIONS = {
     "0112_ux_completion_runs_task",
 }
 
-#: Effects driven through the Mission Bot mutating-port ledger
-#: (``mission_bot.adapter`` → ``claim_external_effect``).
+#: GitHub effects driven through the Mission Bot external-effect ledger.
 _LEDGER_EFFECTS = frozenset({
+    "mark_ready",
+    "enqueue",
+})
+
+#: Start effects whose replay authority is Task Execution.
+_TASK_EXECUTION_EFFECTS = frozenset({
     "ensure_review_generation",
     "start_remediation",
     "start_implementation",
-    "mark_ready",
-    "enqueue",
 })
 
 #: Effects that never call a mutating adapter (persist only).
@@ -154,6 +157,7 @@ def run_world(
     ``route=human`` and to effects that never call an adapter at all.
     """
     calls: list[dict[str, Any]] = []
+    started_missions: set[str] = set()
     ledger = _shared.EffectLedger()
     run = {
         "run_id": f"gold-run-{scenario_id}",
@@ -165,9 +169,21 @@ def run_world(
         calls.append(dict(plan))
         return {"action": "completed", "scenario_id": scenario_id}
 
+    def start_effect(plan: dict[str, Any]) -> dict[str, Any]:
+        mission_key = str(
+            plan.get("idem_key") or plan.get("idempotency_key") or "")
+        if mission_key in started_missions:
+            return {
+                "action": "completed",
+                "scenario_id": scenario_id,
+                "idempotent_replay": True,
+            }
+        started_missions.add(mission_key)
+        return effect(plan)
+
     adapters = CompletionEffectAdapters(
-        ensure_review_generation=effect,
-        start_remediation=effect,
+        ensure_review_generation=start_effect,
+        start_remediation=start_effect,
         mark_ready=effect,
         update_branch=effect,
         enqueue=effect,
@@ -200,7 +216,7 @@ def run_world(
         or first.get("decision", {}).get("mission_output")
         or ""
     )
-    if effect_name in _LEDGER_EFFECTS and mission_output not in {
+    if effect_name in (_LEDGER_EFFECTS | _TASK_EXECUTION_EFFECTS) and mission_output not in {
         "WAIT", "AGENT_REQUIRES_HUMAN", "OBSERVE_MERGED",
     }:
         expected_calls = 1

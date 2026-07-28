@@ -97,7 +97,7 @@ def durable_run():
 
 
 class DurablePlanIdentity(unittest.TestCase):
-    def test_mission_tick_replay_keeps_key_and_does_not_boot_twice(self):
+    def test_mission_tick_replay_delegates_the_same_key_to_task_execution(self):
         snapshot = failed_ci_snapshot()
         adapter_calls = []
 
@@ -109,23 +109,14 @@ class DurablePlanIdentity(unittest.TestCase):
         )
         with (
             patch(
-                "switchboard.storage.repositories.external_effects."
-                "claim_external_effect",
-                side_effect=[
-                    {"claimed": True, "effect_key": "effect-1"},
-                    {
-                        "claimed": False,
-                        "verified": True,
-                        "effect_key": "effect-1",
-                        "proof": {"execution_id": "exec-1"},
-                    },
-                ],
+                "switchboard.storage.repositories.completion_runs."
+                "get_active_completion_run",
+                return_value=durable_run(),
             ),
             patch(
                 "switchboard.storage.repositories.external_effects."
-                "verify_external_effect",
-                return_value={"effect_key": "effect-1"},
-            ),
+                "claim_external_effect",
+            ) as claim_external_effect,
         ):
             first = completion_driver.run_completion_tick(
                 "COORD-41",
@@ -149,12 +140,16 @@ class DurablePlanIdentity(unittest.TestCase):
         self.assertEqual(first["plan"]["idem_key"], second["plan"]["idem_key"])
         self.assertEqual(first["controller"], "mission_bot")
         self.assertEqual(first["plan"]["output"], "START_REMEDIATION")
-        self.assertEqual(len(adapter_calls), 1)
-        self.assertTrue(second["execution"]["receipt"]["idempotent_replay"])
+        self.assertEqual(len(adapter_calls), 2)
+        self.assertEqual(
+            adapter_calls[0]["idem_key"],
+            adapter_calls[1]["idem_key"],
+        )
+        claim_external_effect.assert_not_called()
 
 
 class IssuedEffectReplay(unittest.TestCase):
-    def test_issued_effect_waits_for_readback_without_adapter_or_refence(self):
+    def test_parallel_issued_effect_cannot_veto_task_execution_start(self):
         snapshot = failed_ci_snapshot(runner={"live": False})
         run = durable_run()
         adapter_calls = []
@@ -200,10 +195,9 @@ class IssuedEffectReplay(unittest.TestCase):
                 adapters=adapters,
             )
 
-        self.assertEqual(adapter_calls, [])
+        self.assertEqual(len(adapter_calls), 1)
         stop.assert_not_called()
-        self.assertFalse(result["execution"]["receipt"]["verified"])
-        self.assertTrue(result["execution"]["receipt"]["pending"])
+        self.assertTrue(result["execution"]["receipt"]["verified"])
 
 
 class FailedEffectReplay(unittest.TestCase):

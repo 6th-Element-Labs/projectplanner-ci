@@ -181,12 +181,10 @@ assert durable_claim["execution_role"] == "remediation"
 
 wrong_role_task, _, wrong_role_claim = assigned_claim(
     "Blocked", "review_merge", "WRONG-ROLE")
-assert wrong_role_claim == {
-    "claimed": False,
-    "reason": "status_not_ready",
-    "task_id": wrong_role_task["task_id"],
-    "status": "Blocked",
-}
+assert wrong_role_claim["claimed"] is True, wrong_role_claim
+assert wrong_role_claim["task"]["status"] == "Blocked"
+assert wrong_role_claim["dispatch_reason"]["workflow_status_preserved"] == "Blocked"
+assert wrong_role_claim["dispatch_reason"]["assigned_execution"]["role"] == "review_merge"
 
 unassigned = store.create_task({
     "task_id": "BUG-202-UNASSIGNED",

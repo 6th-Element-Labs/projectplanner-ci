@@ -253,13 +253,10 @@ def prompt_safe_dossier(dossier: Mapping[str, Any]) -> dict[str, Any]:
     Only the prompt boundary applies this redaction.
     """
     row = copy.deepcopy(dict(dossier)) if isinstance(dossier, Mapping) else {}
-    for key in ("task", "work_session", "runner"):
-        if key in row:
-            row[key] = _redact_value(row.get(key))
-    # Nested agent blocker evidence may carry credential blobs.
-    if "agent_blocker" in row and row.get("agent_blocker") is not None:
-        row["agent_blocker"] = _redact_value(row.get("agent_blocker"))
-    return row
+    # The dossier is intentionally extensible.  Redacting only today's known
+    # subtrees lets a future top-level container (for example ``environment``)
+    # smuggle the same credential keys into an agent prompt.
+    return _redact_value(row)
 
 
 def build_dossier(

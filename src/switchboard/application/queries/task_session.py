@@ -183,6 +183,7 @@ def _attempt(wake: Optional[dict[str, Any]], sessions: list[dict[str, Any]]) -> 
         "agent_id": (runner or {}).get("agent_id") or selector.get("agent_id"),
         "runtime": (runner or {}).get("runtime") or selector.get("runtime"),
         "execution_mode": policy.get("mode"),
+        "execution_id": lifecycle.get("execution_id"),
         "generation": (assignment.get("generation") or lifecycle.get("generation")
                        or policy.get("generation")),
         "result": wake.get("result") or {},

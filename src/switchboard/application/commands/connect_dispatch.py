@@ -132,33 +132,6 @@ def _queued_at(task: dict[str, Any], assignment_id: str) -> float:
     return float(1_700_000_000 + (offset % 100_000_000))
 
 
-#: Wake states that end a dispatch generation; a new Start must chain past them.
-_TERMINAL_WAKE_STATUSES = frozenset({"completed", "failed", "cancelled"})
-
-
-def _latest_terminal_wake_id(task_id: str, project: str) -> str:
-    """The newest wake for this task when it is terminal, else "".
-
-    BUG-133: callers resolve their predecessor from ``last_dispatch_outcome``,
-    which only surfaces *failed* dispatches. A wake that COMPLETED (the runner
-    started, ran, and exited) leaves no predecessor there, so a resume replayed
-    the ``initial`` idempotency key -- and any ordinary task edit since the
-    first start had changed the payload hash, turning the replay into a raw
-    "idempotency conflict" instead of a replacement runner. Chaining past any
-    terminal newest wake mints a fresh generation for every restart.
-    """
-    try:
-        rows = coordination_repo.list_wake_intents(
-            task_id=task_id, project=project, newest_first=True, limit=1)
-    except Exception:
-        # Best-effort read: an environment without a wake store simply has no
-        # predecessor to chain past; behave exactly as before this lookup existed.
-        return ""
-    if rows and str(rows[0].get("status") or "") in _TERMINAL_WAKE_STATUSES:
-        return str(rows[0].get("wake_id") or "")
-    return ""
-
-
 def capacity_readback(
     wake: dict[str, Any], *, project: str, runtime: str = "", lane: str = "",
 ) -> dict[str, Any]:
@@ -265,6 +238,8 @@ def enqueue_task(
     route: str = "",
     decision_attempt: int = 0,
     state_version: int = 0,
+    mission_key: str = "",
+    mission_dossier: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Persist one provider-neutral assignment for any Start surface.
 
@@ -285,12 +260,11 @@ def enqueue_task(
             return unsupported_runtime_payload(runtime)
         return {"dispatched": False, "error": str(exc), "runtime": runtime}
     generation_ref = str(generation_ref or "").strip()
-    if not predecessor_wake_id:
-        predecessor_wake_id = _latest_terminal_wake_id(task_id, project)
     lane = str(task.get("_wsId") or task.get("workstream") or "").strip()
-    generation = ":".join(
-        part for part in (generation_ref, str(predecessor_wake_id or "")) if part
-    )
+    # Task Execution owns successor identity.  ``predecessor_wake_id`` remains
+    # a compatibility fallback for direct legacy callers, but Connect never
+    # reads wake history or combines delivery state with a named generation.
+    generation = generation_ref or str(predecessor_wake_id or "")
     assignment_id = _assignment_id(project, task_id, runtime_name, generation)
     try:
         context = execution_context.resolve(
@@ -361,6 +335,10 @@ def enqueue_task(
             "attempt": int(decision_attempt or 0),
             "state_version": int(state_version or 0),
         })
+    if mission_key:
+        lifecycle["mission_key"] = str(mission_key)
+    if mission_dossier:
+        lifecycle["mission_dossier"] = dict(mission_dossier)
     if (lifecycle["role"] in {"review_merge", "remediation"}
             and not lifecycle["head_sha"]):
         return {

@@ -94,6 +94,9 @@ def production_mission_ports(
         token = ""
 
     def start_task(plan: Mapping[str, Any]) -> dict[str, Any]:
+        from switchboard.domain.mission_bot.dossier import prompt_safe_dossier
+
+        dossier = prompt_safe_dossier(_map(plan.get("dossier")))
         return task_execution.start_task(
             str(plan.get("task_id") or ""),
             project=project,
@@ -106,6 +109,9 @@ def production_mission_ports(
             findings=list(plan.get("acceptance_findings") or []),
             decision_attempt=int(plan.get("decision_attempt") or 0),
             state_version=int(plan.get("state_version") or 0),
+            mission_key=str(
+                plan.get("idem_key") or plan.get("idempotency_key") or ""),
+            mission_dossier=dossier,
             instruction=_mission_instruction(plan),
         )
 
@@ -135,51 +141,6 @@ def production_mission_ports(
             ],
             token=token,
         ))
-
-    def persist_wait(
-        *, command: Mapping[str, Any], snapshot: Mapping[str, Any],
-        run: Mapping[str, Any], project: str, actor: str,
-    ) -> dict[str, Any]:
-        decision = {
-            "state": command.get("state") or "waiting",
-            "route": "wait",
-            "reason_code": command.get("reason_code"),
-            "desired_role": None,
-            "board_projection": command.get("board_projection") or "In Review",
-            "effect": "wait",
-        }
-        return _ensure_completion_run(
-            decision=decision,
-            snapshot=snapshot,
-            current=run,
-            actor=actor,
-            project=project,
-        )
-
-    def persist_agent_requires_human(
-        *, command: Mapping[str, Any], snapshot: Mapping[str, Any],
-        run: Mapping[str, Any], project: str, actor: str,
-    ) -> dict[str, Any]:
-        # Agent already recorded the blocker via MCP. Persist sticky projection
-        # only — never start another runner.
-        decision = {
-            "state": "blocked",
-            "route": "human",
-            "reason_code": command.get("reason_code") or "agent_requires_human",
-            "desired_role": None,
-            "board_projection": "Blocked",
-            "effect": "agent_requires_human",
-            "acceptance_findings": list(
-                _map(command.get("dossier")).get("acceptance_findings") or []
-            ),
-        }
-        return _ensure_completion_run(
-            decision=decision,
-            snapshot=snapshot,
-            current=run,
-            actor=actor,
-            project=project,
-        )
 
     def observe_merged(
         *, command: Mapping[str, Any], snapshot: Mapping[str, Any],
@@ -273,8 +234,6 @@ def production_mission_ports(
         start_task=start_task,
         mark_ready=mark_ready,
         arm_merge=arm_merge,
-        persist_wait=persist_wait,
-        persist_agent_requires_human=persist_agent_requires_human,
         observe_merged=observe_merged,
     )
 

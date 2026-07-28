@@ -478,8 +478,6 @@ def _mission_ports_from_adapters(
         start_task=start_task,
         mark_ready=mark_ready,
         arm_merge=arm_merge,
-        persist_wait=fallback.persist_wait,
-        persist_agent_requires_human=fallback.persist_agent_requires_human,
         observe_merged=observe_merged,
     )
 

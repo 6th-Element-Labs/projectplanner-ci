@@ -41,7 +41,8 @@ def snapshot(
     ci: str = "SUCCESS",
     attribution: str = "product",
     review: str = "passed",
-    review_head: str = HEAD,
+    review_head: str | None = None,
+    head: str = HEAD,
     findings=(),
     runner=None,
     work_session=None,
@@ -56,7 +57,7 @@ def snapshot(
     task = {
         "task_id": "MISSION-1",
         "status": board_status,
-        "git_state": {"head_sha": HEAD, "pr_number": 810},
+        "git_state": {"head_sha": head, "pr_number": 810},
     }
     if dependency_state is not None:
         task["dependency_state"] = dependency_state
@@ -64,7 +65,7 @@ def snapshot(
         task=task,
         github_pr={
             "number": 810, "state": pr_state, "draft": draft, "mergeable": True,
-            "mergeStateStatus": merge_state, "head": {"sha": HEAD},
+            "mergeStateStatus": merge_state, "head": {"sha": head},
             "status_contexts": [{
                 "context": "Switchboard CI / VM gate", "state": ci,
                 "failure_attribution": attribution,
@@ -74,7 +75,11 @@ def snapshot(
             }],
         },
         required_status_contexts=["Switchboard CI / VM gate"],
-        review={"status": review, "head_sha": review_head, "number": 810},
+        review={
+            "status": review,
+            "head_sha": head if review_head is None else review_head,
+            "number": 810,
+        },
         merge_gate={"findings": list(findings)},
         merge_queue=queue or {},
         runner=runner or {},
@@ -93,6 +98,44 @@ def test_agent_requires_human_stops_without_reboot():
     assert cmd["output"] == MissionOutput.AGENT_REQUIRES_HUMAN.value
     assert cmd["reason_code"] == "missing_credentials"
     assert cmd["role"] is None
+
+
+def test_wait_and_agent_attention_observation_have_no_mutating_port():
+    """Communication/operator observations cannot drive another lifecycle."""
+    from switchboard.domain.mission_bot import MissionPorts, execute_mission_command
+
+    def forbidden(_plan=None, **_kwargs):
+        raise AssertionError("non-driving observation called a mutating port")
+
+    ports = MissionPorts(
+        start_task=forbidden,
+        mark_ready=forbidden,
+        arm_merge=forbidden,
+        observe_merged=forbidden,
+    )
+    waited = execute_mission_command(
+        reduce_mission(snapshot(runner={"live": True, "role": "remediation"})),
+        ports=ports,
+        project="switchboard",
+        actor="test",
+    )
+    attention_snap = snapshot(ci="FAILURE")
+    attention_snap["work_session"] = {
+        "status": "blocked",
+        "hygiene": {"blocker": _agent_blocker()},
+    }
+    attention = execute_mission_command(
+        reduce_mission(attention_snap),
+        ports=ports,
+        project="switchboard",
+        actor="test",
+    )
+    assert waited["result"]["action"] == "wait"
+    assert attention["result"] == {
+        "action": "agent_requires_human_observed",
+        "source": "authenticated_agent_receipt",
+        "reason_code": "missing_credentials",
+    }
 
 
 def test_legacy_human_route_without_provenance_does_not_stop():
@@ -185,8 +228,6 @@ def test_canonical_task_id_reaches_start_task_unchanged():
         start_task=lambda plan: plans.append(dict(plan)) or {"action": "started"},
         mark_ready=lambda _plan: {"returncode": 0},
         arm_merge=lambda _plan: {"returncode": 0},
-        persist_wait=lambda **_kwargs: {},
-        persist_agent_requires_human=lambda **_kwargs: {},
         observe_merged=lambda **_kwargs: {},
     )
     cmd = reduce_mission(snapshot(ci="FAILURE"))
@@ -342,28 +383,17 @@ def test_idempotency_ignores_elapsed_review_clock():
     assert second["dossier"]["acceptance_findings"][0]["waited_seconds"] == 1868.9
 
 
-def test_ledger_identity_uses_stable_mission_key_not_full_dossier():
-    """Volatile dossier detail cannot mint a second external-effect key."""
+def test_start_commands_do_not_use_a_parallel_external_effect_ledger():
+    """Task Execution alone owns START attach, dedupe, and successor identity."""
     from unittest.mock import patch
 
     from switchboard.domain.mission_bot import MissionPorts, execute_mission_command
 
-    claimed_payloads = []
-
-    def claim(*_args, **kwargs):
-        claimed_payloads.append(dict(_args[3]))
-        return {
-            "claimed": True,
-            "effect_key": "effect-one",
-            "effect": {"effect_key": "effect-one", "status": "claimed"},
-        }
-
+    starts = []
     ports = MissionPorts(
-        start_task=lambda _plan: {"action": "started"},
+        start_task=lambda plan: starts.append(dict(plan)) or {"action": "started"},
         mark_ready=lambda _plan: {"returncode": 0},
         arm_merge=lambda _plan: {"returncode": 0},
-        persist_wait=lambda **_k: {},
-        persist_agent_requires_human=lambda **_k: {},
         observe_merged=lambda **_k: {},
     )
     base = {
@@ -375,16 +405,9 @@ def test_ledger_identity_uses_stable_mission_key_not_full_dossier():
         "idem_key": "mission:MISSION-1:stable",
         "evidence_identity": {"finding_codes": ["required_ci_failed"]},
     }
-    with (
-        patch(
-            "switchboard.storage.repositories.external_effects.claim_external_effect",
-            side_effect=claim,
-        ),
-        patch(
-            "switchboard.storage.repositories.external_effects.verify_external_effect",
-            return_value={},
-        ),
-    ):
+    with patch(
+        "switchboard.storage.repositories.external_effects.claim_external_effect",
+    ) as claim:
         execute_mission_command(
             {**base, "dossier": {"waited_seconds": 1807.7}},
             ports=ports, project="switchboard", actor="test",
@@ -393,44 +416,28 @@ def test_ledger_identity_uses_stable_mission_key_not_full_dossier():
             {**base, "dossier": {"waited_seconds": 1868.9}},
             ports=ports, project="switchboard", actor="test",
         )
-    assert claimed_payloads[0] == claimed_payloads[1]
-    assert "dossier" not in claimed_payloads[0]
+    claim.assert_not_called()
+    assert len(starts) == 2
+    assert starts[0]["idem_key"] == starts[1]["idem_key"]
 
 
-def test_raised_start_task_failure_closes_claimed_effect():
-    """A port exception is a failed receipt, never an immortal claimed row."""
+def test_raised_start_task_failure_creates_no_parallel_claimed_effect():
+    """A failed Start stays Task Execution's concern, not an orphan ledger row."""
     from unittest.mock import patch
 
     from switchboard.domain.mission_bot import MissionPorts, execute_mission_command
 
-    failed = []
     ports = MissionPorts(
         start_task=lambda _plan: (_ for _ in ()).throw(
             RuntimeError("runner admission exploded")
         ),
         mark_ready=lambda _plan: {"returncode": 0},
         arm_merge=lambda _plan: {"returncode": 0},
-        persist_wait=lambda **_k: {},
-        persist_agent_requires_human=lambda **_k: {},
         observe_merged=lambda **_k: {},
     )
-    with (
-        patch(
-            "switchboard.storage.repositories.external_effects.claim_external_effect",
-            return_value={
-                "claimed": True,
-                "effect_key": "effect-failed",
-                "effect": {
-                    "effect_key": "effect-failed",
-                    "status": "claimed",
-                },
-            },
-        ),
-        patch(
-            "switchboard.storage.repositories.external_effects.fail_external_effect",
-            side_effect=lambda *args, **kwargs: failed.append((args, kwargs)),
-        ),
-    ):
+    with patch(
+        "switchboard.storage.repositories.external_effects.claim_external_effect",
+    ) as claim:
         try:
             execute_mission_command(
                 {
@@ -450,13 +457,11 @@ def test_raised_start_task_failure_closes_claimed_effect():
             assert "runner admission exploded" in str(exc)
         else:
             raise AssertionError("start_task exception was swallowed")
-    assert len(failed) == 1
-    assert failed[0][0][0] == "effect-failed"
-    assert "RuntimeError: runner admission exploded" in failed[0][0][1]
+    claim.assert_not_called()
 
 
-def test_failed_boot_receipt_is_reclaimed_for_next_agent_boot():
-    """A factory boot failure retries through one CAS; it never becomes WAIT."""
+def test_failed_boot_calls_task_execution_directly_on_the_next_tick():
+    """Task Execution, not Mission Bot, owns retry/attach semantics."""
     from unittest.mock import patch
 
     from switchboard.domain.mission_bot import MissionPorts, execute_mission_command
@@ -466,37 +471,15 @@ def test_failed_boot_receipt_is_reclaimed_for_next_agent_boot():
         start_task=lambda plan: starts.append(dict(plan)) or {"action": "started"},
         mark_ready=lambda _plan: {"returncode": 0},
         arm_merge=lambda _plan: {"returncode": 0},
-        persist_wait=lambda **_k: {},
-        persist_agent_requires_human=lambda **_k: {},
         observe_merged=lambda **_k: {},
     )
-    failed_row = {
-        "effect_key": "effect-retry",
-        "status": "failed",
-        "retry_count": 1,
-        "last_error": "runner admission exploded",
-    }
     with (
         patch(
             "switchboard.storage.repositories.external_effects.claim_external_effect",
-            return_value={
-                "claimed": False,
-                "effect_key": "effect-retry",
-                "effect": failed_row,
-            },
-        ),
+        ) as claim,
         patch(
             "switchboard.storage.repositories.external_effects.retry_external_effect",
-            return_value={
-                "claimed": True,
-                "effect_key": "effect-retry",
-                "effect": failed_row,
-            },
         ) as retry,
-        patch(
-            "switchboard.storage.repositories.external_effects.verify_external_effect",
-            return_value={},
-        ),
     ):
         result = execute_mission_command(
             {
@@ -512,12 +495,8 @@ def test_failed_boot_receipt_is_reclaimed_for_next_agent_boot():
             project="switchboard",
             actor="test",
         )
-    retry.assert_called_once_with(
-        "effect-retry",
-        expected_retry_count=1,
-        actor="test",
-        project="switchboard",
-    )
+    claim.assert_not_called()
+    retry.assert_not_called()
     assert len(starts) == 1
     assert result["receipt"]["verified"] is True
 
@@ -598,6 +577,34 @@ def test_merged_observes_done():
     assert cmd["output"] == MissionOutput.OBSERVE_MERGED.value
 
 
+def test_red_to_done_command_sequence_is_fact_driven():
+    """The loop only boots, waits, reviews, arms, and observes provenance."""
+    new_head = "b" * 40
+    outputs = [
+        reduce_mission(snapshot(ci="FAILURE"))["output"],
+        reduce_mission(snapshot(
+            ci="FAILURE",
+            runner={"live": True, "role": "remediation", "head_sha": HEAD},
+        ))["output"],
+        reduce_mission(snapshot(
+            head=new_head, ci="SUCCESS", review="missing",
+        ))["output"],
+        reduce_mission(snapshot(
+            head=new_head, ci="SUCCESS", review="passed",
+        ))["output"],
+        reduce_mission(snapshot(
+            head=new_head, ci="SUCCESS", review="passed", pr_state="MERGED",
+        ))["output"],
+    ]
+    assert outputs == [
+        MissionOutput.START_REMEDIATION.value,
+        MissionOutput.WAIT.value,
+        MissionOutput.START_REVIEW.value,
+        MissionOutput.ARM_MERGE.value,
+        MissionOutput.OBSERVE_MERGED.value,
+    ]
+
+
 def test_no_pr_starts_implementation():
     snap = build_completion_snapshot(
         task={"task_id": "MISSION-2", "status": "Not Started"},
@@ -651,8 +658,6 @@ def test_failed_effect_receipt_is_not_verified():
         start_task=lambda _plan: {"error": "boom"},
         mark_ready=lambda _plan: {"returncode": 1, "stderr": "gh failed"},
         arm_merge=lambda _plan: {"returncode": 0},
-        persist_wait=lambda **_k: {},
-        persist_agent_requires_human=lambda **_k: {},
         observe_merged=lambda **_k: {"reconcile": {"error": "pr_state_unavailable"}},
     )
     failed_ready = execute_mission_command(
@@ -687,14 +692,11 @@ def test_failed_effect_receipt_is_not_verified():
 def test_pending_effect_receipt_is_not_verified():
     """In-flight / transitioning boots must stay pending — never verified."""
     from switchboard.domain.mission_bot import MissionPorts, execute_mission_command
-    from switchboard.domain.mission_bot import adapter as mission_adapter
 
     ports = MissionPorts(
         start_task=lambda _plan: {"action": "transitioning"},
         mark_ready=lambda _plan: {"returncode": 0},
         arm_merge=lambda _plan: {"returncode": 0},
-        persist_wait=lambda **_k: {},
-        persist_agent_requires_human=lambda **_k: {},
         observe_merged=lambda **_k: {},
     )
     pending_start = execute_mission_command(
@@ -713,38 +715,21 @@ def test_pending_effect_receipt_is_not_verified():
     assert pending_start["receipt"]["pending"] is True
     assert pending_start["receipt"]["verified"] is False
 
-    # Ledger in-flight replay must also stay pending / unverified.
-    original_replay = mission_adapter._ledger_replay
-
-    def fake_replay(**_kwargs):
-        return {
-            "claimed": False,
-            "ledger": {"effect_key": "effect-pending-1", "status": "issued"},
-            "result": {"action": "awaiting_readback"},
-            "idempotent_replay": True,
-            "verified": False,
-            "pending": True,
-        }
-
-    mission_adapter._ledger_replay = fake_replay
-    try:
-        in_flight = execute_mission_command(
-            {
-                "output": MissionOutput.START_REMEDIATION.value,
-                "task_id": "MISSION-1",
-                "head_sha": HEAD,
-                "idem_key": "mission:pending:1",
-                "dossier": {},
-            },
-            ports=ports,
-            project="switchboard",
-            actor="test",
-        )
-    finally:
-        mission_adapter._ledger_replay = original_replay
+    in_flight = execute_mission_command(
+        {
+            "output": MissionOutput.START_REMEDIATION.value,
+            "task_id": "MISSION-1",
+            "head_sha": HEAD,
+            "idem_key": "mission:pending:1",
+            "dossier": {},
+        },
+        ports=ports,
+        project="switchboard",
+        actor="test",
+    )
     assert in_flight["receipt"]["pending"] is True
     assert in_flight["receipt"]["verified"] is False
-    assert in_flight["receipt"]["idempotent_replay"] is True
+    assert in_flight["receipt"]["idempotent_replay"] is False
 
 
 def test_observe_merged_reconciles_when_live_store_injected():

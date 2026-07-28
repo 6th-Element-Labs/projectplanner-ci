@@ -10,10 +10,10 @@ request payload via ``assignment.queued_at``. Same key + different hash ->
 ``db/core._idem_hit`` returned a raw "idempotency conflict" to the panel and
 no replacement runner ever started.
 
-Contract pinned here: when the latest Connect wake for a task is terminal
-(completed OR failed OR cancelled), a new start advances the idempotency
-generation past it -- even when the caller supplies no predecessor and the
-task row has been edited since the original dispatch.
+Contract pinned here: when Task Execution's latest generation is terminal,
+a new start advances the idempotency generation past that server-owned
+execution -- even when the task row has been edited since the original
+dispatch. Connect delivery history is not a second lifecycle authority.
 """
 import os
 import shutil
@@ -66,6 +66,10 @@ try:
     first = task_execution.start_task(task_id, project=P, actor="bug133-test")
     assert first["started"] is True, first
     first_wake = first["wake_id"]
+    first_wake_row = store.list_wake_intents(
+        task_id=task_id, project=P)[0]
+    first_execution_id = str(
+        first_wake_row["policy"]["lifecycle"]["execution_id"])
 
     runner_id = "run_bug133"
     store.upsert_runner_session({
@@ -122,8 +126,8 @@ try:
            for w in wakes),
        "the new generation is pending for a host to claim")
     new_wake = next(w for w in wakes if w["wake_id"] == resumed["wake_id"])
-    ok(str(first_wake) in str(new_wake.get("idem_key") or ""),
-       "the new idempotency key is chained to the completed predecessor wake")
+    ok(first_execution_id in str(new_wake.get("idem_key") or ""),
+       "the new idempotency key is chained to the terminal Task Execution")
 
     # A second resume click while the new wake is in flight attaches to it
     # idempotently -- it must not fork a third generation or conflict.

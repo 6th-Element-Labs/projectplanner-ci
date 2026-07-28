@@ -874,18 +874,17 @@ def _claim_task_impl(task_id: str, agent_id: str,
             _review_continuation_wake_for_claim_in(c, task_id, agent_id)
             if task_status == "In Review" else None
         )
-        assigned_execution = (
-            _assigned_execution_for_claim_in(
-                c, task_id, agent_id, principal_id, now)
-            if task_status in {"In Review", "Blocked"} else None
-        )
+        # A server-admitted execution has already passed Coordination's Start
+        # transaction.  Board status is a projection, not a second admission
+        # authority: authenticate the exact execution first, then apply normal
+        # workflow gates only to ordinary/unassigned claims.
+        assigned_execution = _assigned_execution_for_claim_in(
+            c, task_id, agent_id, principal_id, now)
         blocked_remediation = bool(
             task_status == "Blocked"
             and assigned_execution
             and assigned_execution["role"] == "remediation"
         )
-        if task_status == "Blocked" and not blocked_remediation:
-            assigned_execution = None
         orphan_adoption = task_status == "In Progress"
         if (task_status not in READY_TASK_STATUSES
                 and not orphan_adoption and not review_continuation
@@ -901,13 +900,13 @@ def _claim_task_impl(task_id: str, agent_id: str,
             return response
         rows = c.execute("SELECT * FROM tasks ORDER BY sort_order, task_id").fetchall()
         by_id = {t["task_id"]: t for t in [_task_row(r) for r in rows]}
-        if not _deps_done(task, by_id):
+        if not assigned_execution and not _deps_done(task, by_id):
             response = {"claimed": False, "reason": "dependencies_unmet",
                         "task_id": task_id, "depends_on": task.get("depends_on") or []}
             _store_facade()._idem_store(c, "claim_task", idem_key, actor, payload, response)
             return response
         risk = _store_facade()._identity_takeover_risk_in(c, task_id, now)
-        if risk and not override_identity_risk:
+        if risk and not assigned_execution and not override_identity_risk:
             response = {"claimed": False, **risk,
                         "override_field": "override_identity_risk",
                         "override_required": True}
@@ -956,9 +955,9 @@ def _claim_task_impl(task_id: str, agent_id: str,
             (lease_id, agent_id, principal_id or None, task_id, "task",
              json.dumps([task_id]), now, ttl),
         )
-        if blocked_remediation:
-            next_status = "Blocked"
-        elif review_continuation or assigned_execution:
+        if assigned_execution:
+            next_status = task_status
+        elif review_continuation:
             next_status = "In Review"
         else:
             next_status = "In Progress"

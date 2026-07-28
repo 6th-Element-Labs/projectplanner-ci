@@ -37,6 +37,7 @@ def load_scenarios() -> list[dict[str, Any]]:
 
 def run_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
     calls: list[dict[str, Any]] = []
+    started_missions: set[str] = set()
     ledger = _shared.EffectLedger()
     run = {
         "run_id": f"fixture-run-{scenario['id']}",
@@ -48,9 +49,22 @@ def run_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
         calls.append(dict(plan))
         return {"action": "completed", "scenario_id": scenario["id"]}
 
+    def start_effect(plan: dict[str, Any]) -> dict[str, Any]:
+        """Model Task Execution's authoritative mission-key replay."""
+        mission_key = str(
+            plan.get("idem_key") or plan.get("idempotency_key") or "")
+        if mission_key in started_missions:
+            return {
+                "action": "completed",
+                "scenario_id": scenario["id"],
+                "idempotent_replay": True,
+            }
+        started_missions.add(mission_key)
+        return effect(plan)
+
     adapters = CompletionEffectAdapters(
-        ensure_review_generation=effect,
-        start_remediation=effect,
+        ensure_review_generation=start_effect,
+        start_remediation=start_effect,
         mark_ready=effect,
         update_branch=effect,
         enqueue=effect,

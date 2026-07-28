@@ -726,6 +726,8 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
                instruction: str = "", findings: Optional[list[dict[str, Any]]] = None,
                reason_code: str = "", route: str = "",
                decision_attempt: int = 0, state_version: int = 0,
+               mission_key: str = "",
+               mission_dossier: Optional[Mapping[str, Any]] = None,
                launcher: Optional[Callable[..., dict[str, Any]]] = None) -> dict[str, Any]:
     """Start or resume THE task session (COORD-44 contract, service-owned).
 
@@ -918,14 +920,28 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
                 attempt_wake = str(attempt.get("wake_id") or "")
                 if attempt_wake:
                     predecessor = attempt_wake
+            logical_mission = str(mission_key or "").strip()
+            if (not logical_mission
+                    and role in {"review_merge", "remediation"}
+                    and source_sha):
+                logical_mission = (
+                    f"{role}:{source_sha.lower()}:{route}:"
+                    f"{int(decision_attempt or 0)}:{int(state_version or 0)}"
+                )
+            # Task Execution, not Connect, names the successor request.  The
+            # latest attempt is terminal here (live/pending returned above), so
+            # its server-owned execution id advances a fresh physical
+            # generation without making wake delivery state lifecycle authority.
+            predecessor_execution_id = str(
+                attempt.get("execution_id") or "").strip()
+            dispatch_generation = ":".join(
+                part for part in (logical_mission, predecessor_execution_id)
+                if part
+            )
             result = connect_dispatch.enqueue_task(
                 task, project=project, actor=actor, runtime=runtime,
                 predecessor_wake_id=predecessor,
-                generation_ref=(f"{role}:{source_sha.lower()}:{route}:"
-                                f"{int(decision_attempt or 0)}:"
-                                f"{int(state_version or 0)}"
-                                if role in {"review_merge", "remediation"}
-                                and source_sha else ""),
+                generation_ref=dispatch_generation,
                 role=role,
                 caller_agent_id=caller_agent_id,
                 principal_id=principal_id,
@@ -935,6 +951,8 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
                 route=route,
                 decision_attempt=decision_attempt,
                 state_version=state_version,
+                mission_key=logical_mission,
+                mission_dossier=dict(mission_dossier or {}),
             )
         else:
             # Test/adapter seam retained while all product surfaces use Connect.

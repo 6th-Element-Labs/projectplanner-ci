@@ -6,11 +6,13 @@ exactly one port call:
 - START_* → ``start_task``
 - MARK_READY → GitHub mark-ready
 - ARM_MERGE → GitHub auto-merge arm
-- WAIT → persist wait observation
-- AGENT_REQUIRES_HUMAN → persist sticky blocked (agent already recorded it)
+- WAIT → no-op observation
+- AGENT_REQUIRES_HUMAN → observe the agent's already-durable receipt
 - OBSERVE_MERGED → observe merge provenance
 
-Mutating ports reuse the external-effect ledger for verified idempotent replay.
+GitHub mutations reuse the external-effect ledger for verified idempotent replay.
+START_* relies on Task Execution's atomic attach/dedupe/generation contract;
+Mission Bot owns no parallel execution retry lifecycle.
 Failed port results must fail the ledger — never verify — so retries are not
 permanently suppressed. In-flight / pending results stay pending — never
 verified — so uncertain runner boots cannot wedge a mission.
@@ -24,12 +26,7 @@ from switchboard.domain.mission_bot.outputs import MissionOutput
 
 
 EffectFn = Callable[[Mapping[str, Any]], Any]
-PersistFn = Callable[..., Any]
-
 _MUTATING_EFFECTS = frozenset({
-    "start_implementation",
-    "start_remediation",
-    "ensure_review_generation",
     "mark_ready",
     "enqueue",
 })
@@ -46,9 +43,7 @@ class MissionPorts:
     start_task: EffectFn
     mark_ready: EffectFn
     arm_merge: EffectFn
-    persist_wait: PersistFn
-    persist_agent_requires_human: PersistFn
-    observe_merged: PersistFn
+    observe_merged: Callable[..., Any]
 
 
 def _map(value: Any) -> dict[str, Any]:
@@ -362,21 +357,23 @@ def execute_mission_command(
             project=project, actor=actor,
         )
     elif output is MissionOutput.WAIT:
-        result = ports.persist_wait(
-            command=cmd, snapshot=snapshot or {}, run=run or {},
-            project=project, actor=actor,
-        )
+        result = {
+            "action": "wait",
+            "reason_code": cmd.get("reason_code"),
+            "wait_reason": cmd.get("wait_reason"),
+        }
         effect = "wait"
-        verified = not bool(_effect_failed(result)) and not _effect_pending(result)
-        pending = _effect_pending(result) and not bool(_effect_failed(result))
+        verified = True
+        pending = False
     elif output is MissionOutput.AGENT_REQUIRES_HUMAN:
-        result = ports.persist_agent_requires_human(
-            command=cmd, snapshot=snapshot or {}, run=run or {},
-            project=project, actor=actor,
-        )
+        result = {
+            "action": "agent_requires_human_observed",
+            "source": "authenticated_agent_receipt",
+            "reason_code": cmd.get("reason_code"),
+        }
         effect = "agent_requires_human"
-        verified = not bool(_effect_failed(result)) and not _effect_pending(result)
-        pending = _effect_pending(result) and not bool(_effect_failed(result))
+        verified = True
+        pending = False
     elif output is MissionOutput.OBSERVE_MERGED:
         result = ports.observe_merged(
             command=cmd, snapshot=snapshot or {}, run=run or {},
@@ -390,7 +387,7 @@ def execute_mission_command(
 
     idempotent_replay = bool(
         ledger_claim and ledger_claim.get("idempotent_replay")
-    )
+    ) or bool(_map(result).get("idempotent_replay"))
     failure = _effect_failed(result)
     if failure:
         verified = False

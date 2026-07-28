@@ -83,6 +83,12 @@ def build_execution_assignment(
         "route": str(lifecycle.get("route") or ""),
         "acceptance_findings": list(lifecycle.get("acceptance_findings") or []),
     }
+    mission_key = str(lifecycle.get("mission_key") or "").strip()
+    if mission_key:
+        contract["mission_key"] = mission_key
+    mission_dossier = lifecycle.get("mission_dossier")
+    if isinstance(mission_dossier, Mapping) and mission_dossier:
+        contract["mission_dossier"] = dict(mission_dossier)
     if prior_attempts:
         contract["prior_attempts"] = dict(prior_attempts)
     return contract

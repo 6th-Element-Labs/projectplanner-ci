@@ -109,9 +109,13 @@ try:
 
     wakes = store.list_wake_intents(task_id=task_id, project=P)
     ok(len(wakes) == 2, f"exactly two wake generations exist ({len(wakes)})")
+    old_wake = next(w for w in wakes if w["wake_id"] == first_wake)
+    old_execution = str(
+        (old_wake.get("policy") or {}).get("lifecycle", {}).get("execution_id") or ""
+    )
     new_wake = next(w for w in wakes if w["wake_id"] == replacement["wake_id"])
-    ok(first_wake in str(new_wake.get("idem_key") or ""),
-       "new completion generation chains past the terminal wake")
+    ok(old_execution and old_execution in str(new_wake.get("idem_key") or ""),
+       "Task Execution chains the successor past the terminal execution")
     ok((new_wake.get("policy") or {}).get("lifecycle", {}).get(
         "acceptance_findings", [{}])[0].get("waited_seconds") == 3600.0,
        "fresh assignment retains the full current evidence dossier")
