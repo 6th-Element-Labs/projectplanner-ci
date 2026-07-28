@@ -203,13 +203,15 @@ agent_host._try = bounded_try
 bounded_rows = agent_host._drain_runners(host_id)
 agent_host._try = saved_try
 agent_host.subprocess.run = saved_subprocess_run
-ok(len(bounded_calls) == 1
+ok(len(bounded_calls) == 2
    and f"task_id={task_id}" in bounded_calls[0][1]
    and "include_stale=true" in bounded_calls[0][1]
+   and "pending_completion=true" in bounded_calls[1][1]
+   and "include_stale=true" in bounded_calls[1][1]
    and all("task_id=OLD-1" not in path for _, path in bounded_calls)
    and bounded_rows[0]["alive"] is True
    and bounded_rows[0]["metadata"]["wake_id"] == wake["wake_id"],
-   "runner renewal fetches stale history only for locally-live task ids")
+   "runner renewal bounds stale history to live tasks and pending completions")
 
 # The wake leaves the pending feed after launch, but the native CLI can run for
 # hours.  Every later daemon tick must renew the exact local PTY row so closing

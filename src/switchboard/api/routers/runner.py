@@ -59,11 +59,14 @@ def create_router(*, resolve_project: ProjectResolver,
     async def ixp_runner_sessions(project: str = Query(...),
                                   host_id: str = "", runtime: str = "",
                                   task_id: str = "", status: str = "",
-                                  include_stale: bool = False):
+                                  include_stale: bool = False,
+                                  pending_completion: bool = False):
         project_id = resolve_project(project)
         return {"sessions": runner_control_command.list_sessions(
             host_id=host_id, runtime=runtime, task_id=task_id, status=status,
-            include_stale=include_stale, project=project_id)}
+            include_stale=include_stale,
+            pending_completion=pending_completion,
+            project=project_id)}
 
     @router.get("/ixp/v1/runner_sessions/{runner_session_id}/relay_attachment")
     async def ixp_runner_session_relay_attachment(runner_session_id: str):

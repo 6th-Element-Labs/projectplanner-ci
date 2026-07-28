@@ -2535,12 +2535,20 @@ def _drain_runners(host_id, recover_stale_local=True):
     alive.  The graceful-drain caller opts out and fetches only centrally-live
     rows for the host.
     """
+    local_inventory_available = False
     try:
         out = subprocess.run(
             [sys.executable, SUPERVISOR, "list"],
             capture_output=True, text=True, timeout=10)
-        local = (json.loads(out.stdout or "{}").get("sessions") or []) \
-            if out.returncode == 0 else []
+        if out.returncode == 0:
+            inventory = json.loads(out.stdout or "{}")
+            local = (
+                inventory if isinstance(inventory, list)
+                else inventory.get("sessions") or []
+            )
+            local_inventory_available = isinstance(local, list)
+        else:
+            local = []
     except Exception:
         local = []
     sessions = []
@@ -2556,6 +2564,16 @@ def _drain_runners(host_id, recover_stale_local=True):
             rows = result.get("sessions") or result.get("runner_sessions") or []
             if isinstance(rows, list):
                 sessions.extend(rows)
+        # A completed CLI can disappear from the supervisor inventory before
+        # the next Host tick. Fetch only server rows with an unacknowledged
+        # completion handoff so Capacity can still publish the exact terminal
+        # receipt. This is deliberately not a scan of every stale runner.
+        pending = _try("GET", _drain_query(
+            P_LIST_RUNNERS, host_id=host_id, include_stale="true",
+            pending_completion="true")) or {}
+        rows = pending.get("sessions") or pending.get("runner_sessions") or []
+        if isinstance(rows, list):
+            sessions.extend(rows)
     else:
         result = _try("GET", _drain_query(
             P_LIST_RUNNERS, host_id=host_id, include_stale="false")) or {}
@@ -2586,6 +2604,17 @@ def _drain_runners(host_id, recover_stale_local=True):
                     **dict(row.get("control") or {}),
                     **dict(local_row.get("control") or {}),
                 }
+            elif (
+                local_inventory_available
+                and runner_id not in local_by_id
+                and (dict(row.get("metadata") or {}).get("completion_handoff") or {})
+            ):
+                # A successful supervisor inventory is Capacity truth. If an
+                # exact pending-completion runner is absent, its managed process
+                # has exited or was forgotten; report that terminal observation
+                # through the normal durable receipt path. Never infer death
+                # when the supervisor inventory itself was unavailable.
+                combined["alive"] = False
             merged[runner_id] = combined
     return list(merged.values())
 

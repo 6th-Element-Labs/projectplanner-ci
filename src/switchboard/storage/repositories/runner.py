@@ -2477,6 +2477,7 @@ def upsert_runner_session(record: Dict[str, Any], principal_id: str = "",
 
 def list_runner_sessions(host_id: str = "", runtime: str = "", task_id: str = "",
                          status: str = "", include_stale: bool = False,
+                         pending_completion: bool = False,
                          project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
     q = "SELECT * FROM runner_sessions WHERE 1=1"
     params: List[Any] = []
@@ -2493,6 +2494,17 @@ def list_runner_sessions(host_id: str = "", runtime: str = "", task_id: str = ""
     with _conn(project) as c:
         rows = c.execute(q, params).fetchall()
         sessions = [_runner_session_row(r, now=now, include_claim=True, c=c) for r in rows]
+    if pending_completion:
+        sessions = [
+            session for session in sessions
+            if (
+                isinstance((session.get("metadata") or {}).get("completion_handoff"), dict)
+                and (session.get("metadata") or {}).get("completion_handoff")
+                and not (
+                    (session.get("metadata") or {}).get("completion_handoff") or {}
+                ).get("acknowledged_at")
+            )
+        ]
     if not include_stale:
         sessions = [s for s in sessions if not s.get("stale")]
     return sessions
