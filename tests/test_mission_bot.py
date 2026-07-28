@@ -162,6 +162,7 @@ def test_machine_ci_failure_boots_remediation_with_full_dossier():
     snap = snapshot(ci="FAILURE", attribution="authority")
     cmd = reduce_mission(snap)
     assert cmd["output"] == MissionOutput.START_REMEDIATION.value
+    assert cmd["task_id"] == "MISSION-1"
     assert cmd["role"] == "remediation"
     dossier = cmd["dossier"]
     assert dossier["failing_check_url"].endswith("/actions/runs/99")
@@ -173,6 +174,53 @@ def test_machine_ci_failure_boots_remediation_with_full_dossier():
     assert dossier["status_contexts"]
     # Findings present must not drop CI URL (P1 from #1015 review).
     assert dossier["acceptance_findings"][0].get("failing_check_url")
+
+
+def test_canonical_task_id_reaches_start_task_unchanged():
+    """A dispatch must never normalize the canonical board task identifier."""
+    from switchboard.domain.mission_bot import MissionPorts, execute_mission_command
+
+    plans = []
+    ports = MissionPorts(
+        start_task=lambda plan: plans.append(dict(plan)) or {"action": "started"},
+        mark_ready=lambda _plan: {"returncode": 0},
+        arm_merge=lambda _plan: {"returncode": 0},
+        persist_wait=lambda **_kwargs: {},
+        persist_agent_requires_human=lambda **_kwargs: {},
+        observe_merged=lambda **_kwargs: {},
+    )
+    cmd = reduce_mission(snapshot(ci="FAILURE"))
+    cmd.pop("idem_key", None)
+    cmd.pop("idempotency_key", None)
+    result = execute_mission_command(
+        cmd,
+        ports=ports,
+        project="switchboard",
+        actor="test",
+    )
+    assert result["receipt"]["verified"] is True
+    assert len(plans) == 1
+    assert plans[0]["task_id"] == "MISSION-1"
+
+
+def test_all_start_commands_preserve_canonical_task_id():
+    remediation = reduce_mission(snapshot(ci="FAILURE"))
+    review = reduce_mission(snapshot(review="missing"))
+    implementation_snap = build_completion_snapshot(
+        task={"task_id": "COORD-98", "status": "Not Started"},
+        github_pr={},
+        runner={},
+    )
+    implementation = reduce_mission(implementation_snap)
+
+    assert remediation["output"] == MissionOutput.START_REMEDIATION.value
+    assert review["output"] == MissionOutput.START_REVIEW.value
+    assert implementation["output"] == MissionOutput.START_IMPLEMENTATION.value
+    assert {
+        remediation["task_id"],
+        review["task_id"],
+        implementation["task_id"],
+    } == {"MISSION-1", "COORD-98"}
 
 
 def test_dossier_and_prompt_are_not_truncated():
