@@ -95,10 +95,10 @@ def _review_continuation_wake_for_claim_in(
 def _assigned_execution_for_claim_in(
         c: sqlite3.Connection, task_id: str, agent_id: str,
         principal_id: str, now: float) -> Optional[Dict[str, Any]]:
-    """Return the exact live server assignment authorizing an In Review claim.
+    """Return the exact live server assignment authorizing a lifecycle claim.
 
-    Ordinary implementation starts may not reopen an In Review task.  The only
-    exceptions are exact-head review/remediation generations and a
+    Ordinary implementation starts may not reopen a review or blocked task. The
+    only exceptions are exact-head review/remediation generations and a
     server-admitted ``coordination_retry`` implementation generation whose
     immutable assignment requires a claim. Every identity edge is checked
     before the status gate is relaxed; claim attachment performs the same
@@ -866,21 +866,29 @@ def _claim_task_impl(task_id: str, agent_id: str,
                         "agent_id": active["agent_id"]}
             _store_facade()._idem_store(c, "claim_task", idem_key, actor, payload, response)
             return response
+        task_status = task.get("status")
         review_continuation = (
             _review_continuation_wake_for_claim_in(c, task_id, agent_id)
-            if task.get("status") == "In Review" else None
+            if task_status == "In Review" else None
         )
         assigned_execution = (
             _assigned_execution_for_claim_in(
                 c, task_id, agent_id, principal_id, now)
-            if task.get("status") == "In Review" else None
+            if task_status in {"In Review", "Blocked"} else None
         )
-        orphan_adoption = task.get("status") == "In Progress"
-        if (task.get("status") not in READY_TASK_STATUSES
+        blocked_remediation = bool(
+            task_status == "Blocked"
+            and assigned_execution
+            and assigned_execution["role"] == "remediation"
+        )
+        if task_status == "Blocked" and not blocked_remediation:
+            assigned_execution = None
+        orphan_adoption = task_status == "In Progress"
+        if (task_status not in READY_TASK_STATUSES
                 and not orphan_adoption and not review_continuation
                 and not assigned_execution):
             response = {"claimed": False, "reason": "status_not_ready",
-                        "task_id": task_id, "status": task.get("status")}
+                        "task_id": task_id, "status": task_status}
             _store_facade()._idem_store(c, "claim_task", idem_key, actor, payload, response)
             return response
         if orphan_adoption and not (work_session_id or work_session):
@@ -945,11 +953,12 @@ def _claim_task_impl(task_id: str, agent_id: str,
             (lease_id, agent_id, principal_id or None, task_id, "task",
              json.dumps([task_id]), now, ttl),
         )
-        next_status = (
-            "In Review"
-            if review_continuation or assigned_execution
-            else "In Progress"
-        )
+        if blocked_remediation:
+            next_status = "Blocked"
+        elif review_continuation or assigned_execution:
+            next_status = "In Review"
+        else:
+            next_status = "In Progress"
         c.execute("UPDATE tasks SET status=?, assignee=?, updated_at=? WHERE task_id=?",
                   (next_status, agent_id, now, task_id))
         dispatch_reason = {"policy": "exact.v1", "requested_task_id": task_id,
@@ -961,7 +970,7 @@ def _claim_task_impl(task_id: str, agent_id: str,
             dispatch_reason["assigned_execution"] = assigned_execution
             if assigned_execution["route"] == "coordination_retry":
                 dispatch_reason["repair_execution"] = assigned_execution
-            dispatch_reason["workflow_status_preserved"] = "In Review"
+            dispatch_reason["workflow_status_preserved"] = next_status
         if orphan_adoption:
             dispatch_reason["orphan_adopted"] = True
         if risk and override_identity_risk:
