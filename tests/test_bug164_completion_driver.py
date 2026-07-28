@@ -310,14 +310,14 @@ class CompletionDriver(unittest.TestCase):
                 adapters=adapters,
             )
         self.assertEqual(result["decision"]["route"], "remediation")
+        # Mission Bot boots remediation with the full dossier. Credential /
+        # escalate-class findings are not split to humans by the controller —
+        # only a server-stamped agent_requires_human receipt may stop for a human.
         self.assertEqual(
             [row["id"] for row in calls[0]["acceptance_findings"]],
-            ["pin", "reconnect"],
+            ["pin", "credential", "reconnect"],
         )
-        self.assertEqual(
-            [row["id"] for row in calls[0]["escalated_findings"]],
-            ["credential"],
-        )
+        self.assertFalse(calls[0].get("escalated_findings"))
 
     def test_transitioning_replacement_remains_unverified_for_next_tick(self):
         adapters = CompletionEffectAdapters(
@@ -394,10 +394,10 @@ class CompletionDriver(unittest.TestCase):
                 adapters=adapters,
             )
         self.assertEqual(calls, [])
-        self.assertEqual(
-            result["execution"]["receipt"]["reason"],
-            "effect_claim_in_flight",
-        )
+        # In-flight ledger claim must not verify — pending until readback.
+        self.assertTrue(result["execution"]["receipt"]["pending"])
+        self.assertFalse(result["execution"]["receipt"]["verified"])
+        self.assertTrue(result["execution"]["receipt"]["idempotent_replay"])
 
     def test_empty_queue_hydrates_prior_enqueue_from_verified_ledger(self):
         with patch(
