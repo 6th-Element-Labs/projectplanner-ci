@@ -77,7 +77,6 @@ def build_execution_assignment(
         # tool names live here so agents see them without breaking that bind.
         "typed_tools": {
             "executed_test_run": "record_executed_test_run",
-            "human_blocker": "record_human_blocker",
             "agent_requires_human": "agent_requires_human",
         },
         "reason_code": str(lifecycle.get("reason_code") or ""),

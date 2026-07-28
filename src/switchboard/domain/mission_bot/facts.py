@@ -15,9 +15,7 @@ _FAILED = {
     "cancelled", "canceled", "stale", "startup_failure",
 }
 _QUEUE_WAIT = {"queued", "awaiting_checks", "mergeable", "locked"}
-_AGENT_HUMAN_TOOLS = frozenset({
-    "record_human_blocker", "agent_requires_human",
-})
+_AGENT_HUMAN_TOOLS = frozenset({"agent_requires_human"})
 
 #: Server-stamped write bindings from ``resolve_write_actor``. Payload
 #: ``actor`` / ``agent_id`` strings alone are forgeable and never suffice.
@@ -52,6 +50,17 @@ def _text_raw(value: Any) -> str:
     return str(value or "").strip()
 
 
+def finding_detail(finding: Mapping[str, Any], *names: str) -> Any:
+    """Read a merge-gate detail from either its flat or legacy nested shape."""
+    nested = _map(finding.get("details"))
+    for name in names:
+        if name in finding:
+            return finding.get(name)
+        if name in nested:
+            return nested.get(name)
+    return None
+
+
 def _has_agent_provenance(blocker: Mapping[str, Any]) -> bool:
     """True only when a server-stamped agent/direct-session authored the receipt.
 
@@ -75,8 +84,9 @@ def agent_requires_human(snapshot: Mapping[str, Any]) -> bool:
     """True only for a server-stamped agent-authored sticky blocker receipt.
 
     Machine classifiers must never create this fact. It comes from
-    ``record_human_blocker`` / ``agent_requires_human`` MCP after
-    ``resolve_write_actor`` stamps an agent/direct-session binding.
+    ``agent_requires_human`` MCP after ``resolve_write_actor`` stamps an
+    agent/direct-session binding. Merely blocking a Work Session, or carrying a
+    legacy ``record_human_blocker`` label, is not an operator-attention request.
     """
     session = _map(snapshot.get("work_session"))
     if _text(session.get("status")) == "blocked":
@@ -233,7 +243,10 @@ def merge_conflict(snapshot: Mapping[str, Any]) -> bool:
         code = _text(finding.get("code"))
         if code in {"merge_conflict", "pr_merge_conflict", "conflict_markers"}:
             return True
-        if code == "pr_not_mergeable" and finding.get("mergeable") is False:
+        if (
+            code == "pr_not_mergeable"
+            and finding_detail(finding, "mergeable") is False
+        ):
             return True
     return False
 
@@ -323,13 +336,26 @@ _PENDING_FINDING_CODES = frozenset({
 
 def factory_failure_reason(snapshot: Mapping[str, Any]) -> str:
     """Name the observed factory failure without diagnosing ownership."""
-    # Pending required checks are WAIT, not remediation.
-    if ci_pending(snapshot):
-        return ""
     if pr_closed_unmerged(snapshot):
         return "pr_closed_unmerged"
+    # A gate that already observed a concrete conflict outranks a later empty
+    # GitHub body; retain the most actionable evidence in the dossier.
     if merge_conflict(snapshot):
         return "pr_merge_conflict"
+    if not has_pr(snapshot):
+        # A board/gate PR identity with no hydrated GitHub body is a failed
+        # factory read, not a new implementation mission. A task already in
+        # review with no PR identity at all is likewise a missing artifact for
+        # a remediation agent to repair.
+        if (
+            _text_raw(snapshot.get("board_pr_identity"))
+            or snapshot.get("board_pr_number")
+            or snapshot.get("pr_identity")
+            or snapshot.get("pr_number")
+        ):
+            return "github_pr_state_unavailable"
+        if _text(snapshot.get("board_status")) in {"in_review", "blocked"}:
+            return "exact_head_pr_missing"
     if branch_behind(snapshot):
         return "pr_branch_behind"
     if changes_requested(snapshot):
@@ -365,6 +391,8 @@ def factory_failure_reason(snapshot: Mapping[str, Any]) -> str:
     ]
     if findings:
         return _text(findings[0].get("code")) or "merge_gate_blocked"
+    # Pending required checks are WAIT only when no stronger live failure
+    # (conflict, review finding, queue failure, or other gate red) exists.
     return ""
 
 

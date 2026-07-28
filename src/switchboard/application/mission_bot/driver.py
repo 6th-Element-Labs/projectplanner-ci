@@ -298,9 +298,13 @@ def _mission_instruction(plan: Mapping[str, Any]) -> str:
         "DOSSIER_JSON_BEGIN",
         json.dumps(safe, sort_keys=True, default=str),
         "DOSSIER_JSON_END",
-        "Use Switchboard MCP for the how. If you cannot proceed "
-        "(credentials/authority/product intent), call agent_requires_human "
-        "with evidence — do not invent a workaround.",
+        "Use Switchboard MCP for the how. CI, review, merge, callback, claim, "
+        "lease, and other factory failures are your mission to diagnose and "
+        "repair; never call agent_requires_human merely because one occurred. "
+        "Call agent_requires_human only when you have a concrete question that "
+        "requires an operator answer, or after exhausting the available agent "
+        "actions and explicitly giving up. Include the evidence and the exact "
+        "question or irreducible blocker — do not invent a workaround.",
     ]
     return "\n".join(header)
 
@@ -334,7 +338,7 @@ def run_mission_tick(
     command["state_version"] = int(current.get("state_version") or 0)
 
     dossier = _map(command.get("dossier"))
-    episode_decision: dict[str, Any] = {
+    recorded_decision = {
         "state": command.get("state"),
         "route": command.get("route"),
         "reason_code": command.get("reason_code"),
@@ -344,30 +348,20 @@ def run_mission_tick(
         "mission_output": command.get("output"),
         "acceptance_findings": list(dossier.get("acceptance_findings") or []),
     }
-    # COORD-51/61 diagnostics ride on the decision so features_json retains
-    # which required check failed and which artifact was near-miss — without
-    # re-deriving classification from the snapshot.
-    failing_contexts = [
-        str(name)
-        for name in list(dossier.get("failing_contexts") or [])
-        if str(name).strip()
-    ]
-    if failing_contexts:
-        episode_decision["failing_contexts"] = failing_contexts
-        episode_decision["failing_check_url"] = dossier.get("failing_check_url") or ""
-        episode_decision["failing_run_attempt"] = int(
-            dossier.get("failing_run_attempt") or 0
-        )
-        episode_decision["failing_check_summary"] = (
-            dossier.get("failing_check_summary") or ""
-        )
-    missing_artifact = _map(dossier.get("missing_artifact"))
-    if missing_artifact:
-        episode_decision["missing_artifact"] = missing_artifact
+    for key in (
+        "failing_contexts",
+        "failing_check_url",
+        "failing_run_attempt",
+        "failing_check_summary",
+        "missing_artifact",
+    ):
+        value = dossier.get(key)
+        if value:
+            recorded_decision[key] = value
     decision_record = decision_records.record_decision_episode(
         project=project,
         snapshot=snapshot,
-        decision=episode_decision,
+        decision=recorded_decision,
         classifier_version=MISSION_BOT_VERSION,
         advice_version=None,
     )
@@ -390,8 +384,8 @@ def run_mission_tick(
         "pr_number": snapshot.get("pr_number"),
         "snapshot_id": snapshot.get("snapshot_id") or f"snapshot-{uuid.uuid4().hex}",
     }
-    result["decision_record"] = decision_record
     result["mission_bot_version"] = MISSION_BOT_VERSION
+    result["decision_record"] = decision_record
     result["observed_at"] = time.time()
     return result
 

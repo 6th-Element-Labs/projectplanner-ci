@@ -107,6 +107,18 @@ def test_legacy_human_route_without_provenance_does_not_stop():
     assert cmd["output"] == MissionOutput.START_REMEDIATION.value
 
 
+def test_legacy_blocker_tool_cannot_stop_even_with_copied_agent_stamp():
+    """Only the canonical explicit MCP receipt is attention authority."""
+    snap = snapshot(ci="FAILURE")
+    blocker = _agent_blocker(source_tool="record_human_blocker")
+    snap["work_session"] = {
+        "status": "blocked",
+        "hygiene": {"blocker": blocker},
+    }
+    assert agent_requires_human(snap) is False
+    assert reduce_mission(snap)["output"] == MissionOutput.START_REMEDIATION.value
+
+
 def test_forged_actor_string_without_server_binding_does_not_stop():
     """Tool name + arbitrary actor string must not mint a human stop."""
     snap = snapshot(ci="FAILURE")
@@ -178,6 +190,8 @@ def test_dossier_and_prompt_are_not_truncated():
     assert "DOSSIER_JSON_BEGIN" in instruction
     assert "finding_24" in instruction
     assert '"nested"' in instruction
+    assert "factory failures are your mission to diagnose and repair" in instruction
+    assert "concrete question that requires an operator answer" in instruction
 
 
 def test_prompt_redacts_execution_environment_secrets():

@@ -17,7 +17,7 @@ from unittest import mock
 
 from path_setup import ROOT  # noqa: F401
 
-from switchboard.domain.completion import normalize  # noqa: E402
+from switchboard.domain.completion import effects, normalize  # noqa: E402
 from switchboard.application.commands import merge_gate as merge_gate_command  # noqa: E402
 from switchboard.domain.completion.state_machine import (  # noqa: E402
     build_completion_snapshot, classify_completion,
@@ -205,8 +205,6 @@ class DuplicateStatusContextHydration(unittest.TestCase):
                     "infrastructure",
                 )
                 decision = classify_completion(None, normalized)
-                # Mission Bot never invents a human/coordination_retry page for
-                # infrastructure red — it boots remediation with the dossier.
                 self.assertEqual(decision["route"], "remediation")
                 self.assertEqual(
                     decision["reason_code"],
@@ -298,7 +296,7 @@ class ReviewFindingNormalization(unittest.TestCase):
 class Pr810RawFixture(unittest.TestCase):
     """Acceptance 8: observed payload, no synthetic attribution field."""
 
-    def _snapshot(self, *, live_runner: bool = False):
+    def _snapshot(self):
         return build_completion_snapshot(
             task={"task_id": "COORD-41", "status": "In Review",
                   "git_state": {
@@ -318,31 +316,17 @@ class Pr810RawFixture(unittest.TestCase):
                  "description": "1 test failed"},
             ],
             review={"status": "passed", "head_sha": HEAD, "pr_url": PR_810},
-            runner=(
-                {"live": True, "role": "review_merge", "head_sha": HEAD,
-                 "generation": 9}
-                if live_runner else {"live": False}
-            ),
+            runner={"live": False},
         )
 
     def test_raw_red_ci_routes_remediation_not_human(self):
-        decision = classify_completion(
-            None, normalize.normalize_snapshot(self._snapshot()),
-        )
+        decision = classify_completion(None, normalize.normalize_snapshot(self._snapshot()))
         self.assertEqual(decision["route"], "remediation")
         self.assertEqual(decision["desired_role"], "remediation")
         self.assertEqual(decision["board_projection"], "Blocked")
 
-    def test_live_runner_waits_before_remediation(self):
-        """Capacity presence outranks factory failure — no double-boot."""
-        decision = classify_completion(None, self._snapshot(live_runner=True))
-        self.assertEqual(decision["route"], "wait")
-        self.assertEqual(decision["reason_code"], "live_runner_in_progress")
-
-    def test_raw_red_ci_never_invents_a_human_page(self):
-        """Mission Bot: unknown attribution is still remediation, never human."""
+    def test_raw_red_ci_also_never_routes_human(self):
         decision = classify_completion(None, self._snapshot())
-        self.assertNotEqual(decision["route"], "human")
         self.assertEqual(decision["route"], "remediation")
 
 
@@ -377,24 +361,27 @@ class Pr812RawFixture(unittest.TestCase):
         self.assertEqual(decision["route"], "remediation")
         self.assertEqual(decision["desired_role"], "remediation")
 
-    def test_the_full_finding_set_reaches_the_dossier(self):
-        """Mission Bot does not split escalate vs auto — full dossier to remediation."""
+    def test_judgment_finding_is_retained_in_the_agent_dossier(self):
         decision = classify_completion(None, self._snapshot())
-        automatic = decision.get("acceptance_findings") or []
+        findings = decision.get("acceptance_findings") or []
         self.assertEqual(
-            [f.get("code") for f in automatic],
+            [f.get("code") for f in findings],
             ["missing_test", "design_judgment", "lint"],
         )
-        self.assertFalse(decision.get("escalated_findings"))
 
-    def test_escalate_only_findings_still_boot_remediation(self):
-        """Judgment findings are not invented human pages under Mission Bot."""
+    def test_the_remediator_receives_every_finding(self):
+        decision = classify_completion(None, self._snapshot())
+        findings = decision.get("acceptance_findings") or []
+        self.assertEqual(
+            [f.get("code") for f in findings],
+            ["missing_test", "design_judgment", "lint"],
+        )
+
+    def test_machine_judgment_labels_still_boot_remediation(self):
         snap = self._snapshot()
         snap["review"]["findings"] = [{"class": "escalate", "code": "j",
                                        "finding_class": "judgment"}]
-        decision = classify_completion(None, snap)
-        self.assertEqual(decision["route"], "remediation")
-        self.assertEqual(decision["reason_code"], "review_changes_requested")
+        self.assertEqual(classify_completion(None, snap)["route"], "remediation")
 
 
 class Pr834RawFixture(unittest.TestCase):
@@ -461,50 +448,72 @@ class Pr834RawFixture(unittest.TestCase):
             },
         ))
 
-    def test_live_runner_waits_before_acting_on_findings(self):
-        """Mission Bot: live capacity outranks review findings / draft / CI gaps."""
-        decision = classify_completion(None, self._snapshot())
-        self.assertEqual(decision["route"], "wait")
-        self.assertEqual(decision["reason_code"], "live_runner_in_progress")
-        self.assertEqual(decision["effect"], "wait")
-
-    def test_without_live_runner_draft_marks_ready_despite_missing_ci(self):
-        # BREAKDOWN-5: undrafting is free and must surface while CI is still
-        # hydrating. Mission Bot: draft → MARK_READY before ci_pending WAIT.
+    def test_exact_head_findings_route_remediation_before_ci_hydration(self):
         snapshot = self._snapshot()
         snapshot["runner"] = {"live": False}
+        decision = classify_completion(None, snapshot)
+        self.assertEqual(decision["route"], "remediation")
+        self.assertEqual(decision["reason_code"], "review_changes_requested")
+        self.assertEqual(decision["desired_role"], "remediation")
+        self.assertEqual(
+            [row["id"] for row in decision["acceptance_findings"]],
+            ["S16-CENSUS-2", "S16-LIVE-3", "S16-LIVE-4"],
+        )
+
+    def test_planner_waits_for_live_review_before_remediation(self):
+        snapshot = self._snapshot()
+        decision = classify_completion(None, snapshot)
+        plan = effects.plan_effect(
+            decision,
+            snapshot,
+            {"run_id": "run-834", "state_version": 4, "attempt": 2},
+        )
+        self.assertEqual(plan["effect"], "wait")
+        self.assertFalse(plan["fence_required"])
+        self.assertIsNone(plan["fence_generation"])
+        self.assertEqual(plan["head_sha"], self.HEAD)
+        self.assertEqual(plan["acceptance_findings"], [])
+
+    def test_draft_outranks_missing_ci_hydration_without_actionable_findings(self):
+        # BREAKDOWN-5: undrafting is free and must surface while CI is still
+        # hydrating. Product/authority CI failures still outrank draft; missing
+        # hydration does not.
+        snapshot = self._snapshot()
         snapshot["review"] = {
             "status": "passed",
             "head_sha": self.HEAD,
             "pr_url": self.PR_URL,
         }
+        snapshot["runner"] = {"live": False}
         decision = classify_completion(None, snapshot)
         self.assertEqual(decision["route"], "review_merge")
         self.assertEqual(decision["reason_code"], "draft_ready_to_mark_ready")
         self.assertEqual(decision["desired_role"], "review_merge")
         self.assertEqual(decision["effect"], "mark_ready")
 
-    def test_non_draft_missing_ci_without_findings_waits(self):
+    def test_non_draft_missing_ci_without_findings_stays_coordination_retry(self):
         snapshot = self._snapshot()
-        snapshot["runner"] = {"live": False}
         snapshot["github_pr"]["draft"] = False
         snapshot["review"] = {
             "status": "passed",
             "head_sha": self.HEAD,
             "pr_url": self.PR_URL,
         }
+        snapshot["runner"] = {"live": False}
         decision = classify_completion(None, snapshot)
         self.assertEqual(decision["route"], "wait")
-        self.assertEqual(decision["reason_code"], "required_exact_head_ci_pending")
+        self.assertEqual(
+            decision["reason_code"],
+            "required_exact_head_ci_pending",
+        )
 
-    def test_merge_queue_merged_alone_is_not_canonical_done(self):
-        """Only canonical merge proof owns OBSERVE_MERGED — not queue gossip."""
+    def test_merge_queue_complete_is_not_canonical_done(self):
         snapshot = self._snapshot()
         snapshot["runner"] = {"live": False}
         snapshot["merge_queue"] = {"state": "merged"}
         decision = classify_completion(None, snapshot)
-        self.assertNotEqual(decision["route"], "reconcile")
-        self.assertNotEqual(decision["reason_code"], "merge_queue_merged")
+        self.assertEqual(decision["route"], "remediation")
+        self.assertNotEqual(decision["reason_code"], "canonical_pr_merged")
 
 
 if __name__ == "__main__":

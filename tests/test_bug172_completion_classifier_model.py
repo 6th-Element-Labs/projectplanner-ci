@@ -102,13 +102,12 @@ def _finding_oracle(rows: tuple[dict, ...]) -> tuple[str, str]:
 
 
 def _ci_oracle(tokens: tuple[str, ...]) -> str:
-    """Mission Bot CI routing — pending waits; all machine red remediates."""
+    """Mission Bot CI routing — any machine red remediates; otherwise pending waits."""
     token_set = set(tokens)
-    # Missing/pending required contexts outrank red (factory_failure short-circuits).
-    if "pending" in token_set or "missing" in token_set:
-        return "wait"
     if token_set & {"product", "authority", "cancelled", "infrastructure"}:
         return "remediation"
+    if "pending" in token_set or "missing" in token_set:
+        return "wait"
     return "review_merge"
 
 

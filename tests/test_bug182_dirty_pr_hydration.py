@@ -132,7 +132,6 @@ class Bug182Classifier(unittest.TestCase):
         decision = classify_completion(None, snap)
         self.assertNotEqual(decision["reason_code"], "exact_head_pr_missing")
         self.assertEqual(decision["reason_code"], "github_pr_state_unavailable")
-        # Mission Bot treats unavailable PR state as factory failure → remediation.
         self.assertEqual(decision["route"], "remediation")
 
     def test_empty_live_pr_with_dirty_gate_finding_routes_conflict(self):
@@ -156,12 +155,7 @@ class Bug182Classifier(unittest.TestCase):
         self.assertEqual(decision["reason_code"], "pr_merge_conflict")
         self.assertEqual(decision["route"], "remediation")
 
-    def test_genuine_missing_pr_is_not_confused_with_dirty_hydration(self):
-        """No board PR identity: Mission Bot does not invent exact_head_pr_missing.
-
-        In Review without a PR falls through to review/implementation mission
-        outputs rather than the retired missing-PR classifier reason.
-        """
+    def test_genuine_missing_pr_still_uses_exact_head_pr_missing(self):
         snap = build_completion_snapshot(
             task={
                 "task_id": "CO-20",
@@ -172,15 +166,7 @@ class Bug182Classifier(unittest.TestCase):
         )
         snap["head_sha"] = HEAD
         decision = classify_completion(None, snap)
-        self.assertNotEqual(decision["reason_code"], "pr_merge_conflict")
-        self.assertIn(
-            decision["reason_code"],
-            {"review_required", "needs_implementation"},
-        )
-        self.assertIn(
-            decision["route"],
-            {"review_merge", "implementation"},
-        )
+        self.assertEqual(decision["reason_code"], "exact_head_pr_missing")
 
 
 class Bug182Hydrator(unittest.TestCase):

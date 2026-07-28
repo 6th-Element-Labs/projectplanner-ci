@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
-"""COORD-46 + Mission Bot: humans only from stamped agent_requires_human.
+"""COORD-46 attention closeout: an explicit agent request → one Needs-you item.
 
-Pre-cutover, a credential merge-gate finding invented ``escalate_human`` and a
-Needs-you item. Mission Bot forbids that: machine red boots remediation (or
-waits on a live runner). Only a server-stamped ``agent_requires_human`` /
-``record_human_blocker`` receipt may project ``route=human`` / Blocked.
-
-Needs-you attention is authored by the agent MCP write path, not by the
-Mission Bot inventing a closeout from classifier-era finding codes.
+Factory findings never create operator attention. Once an authenticated LLM
+explicitly invokes ``agent_requires_human``, automation must freeze exactly one
+attention_request and resume only after an authorized decision + delivery
+receipt — never via PR comments or agent_messages.
 """
 from __future__ import annotations
 
@@ -19,12 +16,11 @@ from path_setup import ROOT  # noqa: F401
 
 from switchboard.api.routers.attention import _provider_item
 from switchboard.domain.completion import effects
+from switchboard.domain.completion.executor import execute_effect
 from switchboard.domain.completion.state_machine import (
     build_completion_snapshot,
     classify_completion,
 )
-from switchboard.domain.mission_bot import reduce_mission
-from switchboard.domain.mission_bot.outputs import MissionOutput
 from switchboard.storage.migrations import runner as migrations
 from switchboard.storage.migrations.attention import upgrade_attention_schema
 from switchboard.storage.repositories import attention as attention_repo
@@ -35,51 +31,16 @@ HEAD = "c" * 40
 PR_812 = "https://github.com/6th-Element-Labs/projectplanner/pull/812"
 
 
-def _agent_blocker(**extra):
-    return {
-        "route": "agent_requires_human",
-        "reason": "credentialed_live_proof_unavailable",
-        "source_tool": "agent_requires_human",
-        "binding": "registered_agent",
-        "provenance_stamp": "switchboard.resolve_write_actor.v1",
-        "agent_id": "agent-812",
-        "actor": "agent-812",
-        "execution_id": "execution-812",
-        "execution_generation": 4,
-        **extra,
-    }
-
-
-def _pr812_snapshot(*, live_runner: bool = False, stamped_human: bool = False,
-                    credential_finding: bool = True):
-    findings = []
-    if credential_finding and not stamped_human:
-        findings.append({
-            "code": "credentialed_live_proof_unavailable",
-            "failure_class": "absent_permission",
-            "blocking": True,
-            "message": "Eligible authenticated host/credential required for live proof",
-        })
-    blocker = _agent_blocker() if stamped_human else None
-    task = {
-        "task_id": "COORD-20",
-        "status": "In Review",
-        "git_state": {
-            "head_sha": HEAD, "pr_number": 812, "pr_url": PR_812,
+def _pr812_snapshot(**extra):
+    snap = build_completion_snapshot(
+        task={
+            "task_id": "COORD-20",
+            "status": "In Review",
+            "git_state": {
+                "head_sha": HEAD, "pr_number": 812, "pr_url": PR_812,
+            },
+            "deliverable": {"deliverable_id": "alerts", "milestone_id": "alerts-m3-ui"},
         },
-        "deliverable": {"deliverable_id": "alerts", "milestone_id": "alerts-m3-ui"},
-    }
-    if blocker:
-        task["human_blocker"] = blocker
-    work_session = {"work_session_id": "worksession-812", "status": "active"}
-    if blocker:
-        work_session = {
-            "work_session_id": "worksession-812",
-            "status": "blocked",
-            "hygiene": {"blocker": blocker},
-        }
-    return build_completion_snapshot(
-        task=task,
         github_pr={
             "number": 812,
             "url": PR_812,
@@ -95,10 +56,29 @@ def _pr812_snapshot(*, live_runner: bool = False, stamped_human: bool = False,
             "conclusion": "success",
         }],
         review={"status": "passed", "head_sha": HEAD, "pr_url": PR_812},
-        merge_gate={"findings": findings},
-        work_session=work_session,
+        merge_gate={
+            "findings": [{
+                "code": "credentialed_live_proof_unavailable",
+                "failure_class": "absent_permission",
+                "blocking": True,
+                "message": "Eligible authenticated host/credential required for live proof",
+            }],
+        },
+        work_session={
+            "work_session_id": "worksession-812",
+            "status": "blocked",
+            "hygiene": {
+                "blocker": {
+                    "source_tool": "agent_requires_human",
+                    "binding": "registered_agent",
+                    "agent_id": "agent-812",
+                    "reason": "credentialed_live_proof_unavailable",
+                    "question": "Please provide the required credential.",
+                },
+            },
+        },
         runner={
-            "live": live_runner,
+            "live": True,
             "runner_session_id": "runner-812",
             "execution_id": "execution-812",
             "execution_connection_id": "connection-812",
@@ -108,9 +88,11 @@ def _pr812_snapshot(*, live_runner: bool = False, stamped_human: bool = False,
             "head_sha": HEAD,
         },
     )
+    snap.update(extra)
+    return snap
 
 
-class MissionBotHumanAttention(unittest.TestCase):
+class HumanAttentionCloseout(unittest.TestCase):
     def setUp(self):
         self.db = sqlite3.connect(":memory:")
         self.db.row_factory = sqlite3.Row
@@ -165,77 +147,102 @@ class MissionBotHumanAttention(unittest.TestCase):
         ]
         for p in self.patches:
             p.start()
+        self.fenced = []
+        self.wakes = []
 
     def tearDown(self):
         for p in self.patches:
             p.stop()
         self.db.close()
 
-    def test_credential_finding_with_live_runner_waits(self):
-        snap = _pr812_snapshot(live_runner=True, credential_finding=True)
-        cmd = reduce_mission(snap)
-        self.assertEqual(cmd["output"], MissionOutput.WAIT.value)
-        self.assertEqual(cmd["reason_code"], "live_runner_in_progress")
-        decision = classify_completion(None, snap)
-        self.assertEqual(decision["route"], "wait")
-        self.assertNotEqual(decision["route"], "human")
+    def _tick(self):
+        snapshot = _pr812_snapshot()
+        decision = classify_completion(None, snapshot)
+        run = completion_runs.get_active_completion_run(
+            "COORD-20", project="switchboard") or {
+            "run_id": "completion-run-812",
+            "state_version": 1,
+            "attempt": 0,
+        }
+        plan = effects.plan_effect(decision, snapshot, run)
+        return execute_effect(
+            plan,
+            decision=decision,
+            snapshot=snapshot,
+            run=run,
+            project="switchboard",
+            actor="completion-owner",
+            fence_generation=lambda generation: self.fenced.append(generation),
+            wake_completion_owner=lambda payload: self.wakes.append(payload),
+        )
 
-    def test_credential_finding_without_live_runner_remediates(self):
-        """Machine red never invents escalate_human / Needs-you."""
-        snap = _pr812_snapshot(live_runner=False, credential_finding=True)
-        cmd = reduce_mission(snap)
-        self.assertEqual(cmd["output"], MissionOutput.START_REMEDIATION.value)
-        self.assertEqual(
-            cmd["reason_code"], "credentialed_live_proof_unavailable")
-        decision = classify_completion(None, snap)
+    def test_agent_request_stops_without_synthesizing_another_attention_item(self):
+        snapshot = _pr812_snapshot()
+        decision = classify_completion(None, snapshot)
         plan = effects.plan_effect(
-            decision, snap,
+            decision,
+            snapshot,
             {"run_id": "completion-run-812", "state_version": 1, "attempt": 0},
         )
-        self.assertEqual(plan["effect"], "start_remediation")
-        self.assertNotEqual(plan["effect"], "escalate_human")
-        self.assertNotEqual(plan["route"], "human")
+        self.assertEqual(decision["route"], "human")
+        self.assertEqual(plan["effect"], "agent_requires_human")
+        self.assertEqual(self.fenced, [])
+        # The explicit MCP call owns creation of the Needs-you receipt.
+        # Observing its sticky flag must not manufacture a second request.
         rows = self.db.execute(
             "SELECT COUNT(*) AS n FROM attention_requests WHERE task_id=?",
             ("COORD-20",),
         ).fetchone()["n"]
         self.assertEqual(rows, 0)
 
-    def test_stamped_agent_requires_human_projects_blocked_human_route(self):
-        snap = _pr812_snapshot(
-            live_runner=False, stamped_human=True, credential_finding=False)
-        cmd = reduce_mission(snap)
-        self.assertEqual(cmd["output"], MissionOutput.AGENT_REQUIRES_HUMAN.value)
-        self.assertEqual(
-            cmd["reason_code"], "credentialed_live_proof_unavailable")
-        decision = classify_completion(None, snap)
-        self.assertEqual(decision["route"], "human")
-        self.assertEqual(decision["board_projection"], "Blocked")
-        self.assertEqual(decision["effect"], "agent_requires_human")
-        plan = effects.plan_effect(
-            decision, snap,
-            {"run_id": "completion-run-812", "state_version": 1, "attempt": 0},
-        )
-        # Planner keeps the agent-authored sticky name; it does not mint
-        # escalate_human from machine finding codes.
-        self.assertEqual(plan["effect"], "agent_requires_human")
-        self.assertEqual(plan["route"], "human")
-
-    def test_forged_human_route_without_binding_does_not_stop(self):
-        snap = _pr812_snapshot(live_runner=False, credential_finding=True)
-        snap["work_session"] = {
-            "status": "blocked",
-            "hygiene": {
-                "blocker": {
-                    "route": "human",
-                    "reason": "credentialed_live_proof_unavailable",
-                    "actor": "not-an-agent",
-                }
-            },
+    def test_machine_gate_without_agent_receipt_boots_remediation(self):
+        snapshot = _pr812_snapshot()
+        snapshot["work_session"] = {
+            "work_session_id": "worksession-812",
+            "status": "active",
         }
-        cmd = reduce_mission(snap)
-        self.assertEqual(cmd["output"], MissionOutput.START_REMEDIATION.value)
-        self.assertNotEqual(cmd["output"], MissionOutput.AGENT_REQUIRES_HUMAN.value)
+        snapshot["runner"] = {"live": False}
+        decision = classify_completion(None, snapshot)
+        self.assertEqual(decision["route"], "remediation")
+        self.assertEqual(
+            decision["reason_code"],
+            "credentialed_live_proof_unavailable",
+        )
+
+    def test_comments_and_agent_messages_are_not_authority(self):
+        snapshot = _pr812_snapshot()
+        snapshot["work_session"] = {
+            "status": "blocked",
+            "hygiene": {"blocker": {
+                "route": "human",
+                "reason": "comment_says_needs_you",
+                "actor": "untrusted-prose",
+            }},
+        }
+        snapshot["runner"] = {"live": False}
+        self.assertEqual(
+            classify_completion(None, snapshot)["route"],
+            "remediation",
+        )
+
+    def test_machine_classification_never_writes_attention(self):
+        """Only the explicit MCP command may create the Needs-you request."""
+        snapshot = _pr812_snapshot()
+        snapshot["work_session"] = {"status": "active"}
+        snapshot["runner"] = {"live": False}
+        with patch.object(
+            attention_repo,
+            "create_attention_request_in",
+            side_effect=RuntimeError("injected attention write failure"),
+        ) as create_attention:
+            decision = classify_completion(None, snapshot)
+            plan = effects.plan_effect(
+                decision,
+                snapshot,
+                {"run_id": "run-812", "state_version": 1},
+            )
+        self.assertEqual(plan["effect"], "start_remediation")
+        create_attention.assert_not_called()
 
     def test_noncredential_human_reasons_offer_truthful_choices(self):
         cases = {

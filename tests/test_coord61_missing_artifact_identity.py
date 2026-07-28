@@ -27,8 +27,8 @@ from path_setup import ROOT  # noqa: F401
 
 from constants import EXECUTED_TEST_RUN_SCHEMA, MISSING_ARTIFACT_SCHEMA
 from switchboard.domain.completion import state_machine
+from switchboard.domain.mission_bot.dossier import build_dossier
 from switchboard.domain.decisions import features as features_mod
-from switchboard.domain.mission_bot.dossier import _missing_artifact_from_findings
 from switchboard.storage.migrations import runner as migrations
 from switchboard.application.commands.merge_gate import _merge_gate_finding
 from switchboard.storage.repositories import claims as claims_repo
@@ -230,15 +230,23 @@ class ClassifierCarriesMissingArtifactTest(unittest.TestCase):
         finding = _gate_finding(self._report())
         self.assertNotIn("details", finding, "the gate splats details; it does not nest")
         self.assertIn("executed_test_gate", finding)
-        self.assertTrue(_missing_artifact_from_findings([finding]))
+        dossier = build_dossier(
+            {"task_id": "CO-21", "findings": [finding]},
+            reason_code="missing_executed_test_run",
+            mission="remediate",
+        )
+        self.assertTrue(dossier["missing_artifact"])
 
-    def test_a_nested_details_finding_is_not_mined(self):
-        # BUG-194: the live gate splats details. Reading nested ``details`` is
-        # how COORD-61's first cut reintroduced the discard — Mission Bot must
-        # not grow a second reader for that nest.
+    def test_a_nested_details_finding_is_still_accepted(self):
+        # Belt and braces: a caller that hands us an unsplatted finding still works.
         nested = {"code": "missing_executed_test_run", "blocking": True,
                   "details": {"executed_test_gate": {"missing_artifact": self._report()}}}
-        self.assertEqual(_missing_artifact_from_findings([nested]), {})
+        dossier = build_dossier(
+            {"task_id": "CO-21", "findings": [nested]},
+            reason_code="missing_executed_test_run",
+            mission="remediate",
+        )
+        self.assertTrue(dossier["missing_artifact"])
 
     def test_a_non_blocking_finding_is_not_mined_for_a_report(self):
         finding = _gate_finding(self._report())

@@ -118,104 +118,50 @@ ok(
     "merge-auth prose still normalizes to product (the trap this fix routes around)",
 )
 
-# --- Acceptance 1: draft PR with green product CI reaches mark_ready ---------
-draft_decision = classify_completion(
-    None, snapshot(draft=True, findings=[finding("draft_pr")]))
-ok(draft_decision["reason_code"] == "draft_ready_to_mark_ready",
-   "draft PR + green VM gate classifies draft_ready_to_mark_ready")
-ok(draft_decision["effect"] == "mark_ready",
-   "draft PR yields the Mission Bot mark_ready effect")
-ok(draft_decision["route"] == "review_merge",
-   "draft PR routes review_merge, not remediation")
-ok(draft_decision["state"] == "ready_to_queue",
-   "draft PR is ready_to_queue, not blocked")
+# Mission Bot does not interpret this legacy projection. Any required red is a
+# factory failure and boots an LLM with the evidence dossier.
+red_merge_auth = classify_completion(None, snapshot(findings=[]))
+ok(red_merge_auth["route"] == "remediation",
+   "legacy merge-authorization red boots remediation, never a human")
+ok(red_merge_auth["reason_code"] == "required_exact_head_ci_failed",
+   "legacy merge-authorization red keeps its CI reason")
 
-# --- BREAKDOWN 5: draft outranks pending product CI (COORD-56 misread) --------
-draft_pending = classify_completion(
-    None, snapshot(draft=True, vm_gate="PENDING", findings=[finding("draft_pr")]))
-ok(draft_pending["reason_code"] == "draft_ready_to_mark_ready",
-   "draft PR + pending VM gate classifies draft_ready_to_mark_ready, not CI wait")
-ok(draft_pending["effect"] == "mark_ready",
-   "draft + pending CI still yields mark_ready")
-
-# --- Acceptance 2: missing exact-head verdict routes review, not remediation -
-missing_verdict = classify_completion(None, snapshot(
-    review="", findings=[finding("review_verdict_missing")]))
-stale_verdict = classify_completion(None, snapshot(
-    review_head="d" * 40, findings=[finding("review_verdict_stale")]))
-ok(missing_verdict["route"] == "review_merge"
-   and missing_verdict["desired_role"] == "review_merge",
-   "non-draft PR with no exact-head verdict routes review_merge")
-ok(stale_verdict["route"] == "review_merge",
-   "non-draft PR with a stale verdict routes review_merge")
-
-# --- Acceptance 3: missing executed_test_run boots remediation with dossier -
-evidence = classify_completion(
-    None, snapshot(findings=[finding("missing_executed_test_run")]))
-ok(evidence["route"] == "remediation",
-   "missing executed_test_run boots remediation with the evidence dossier")
-ok(evidence["reason_code"] == "missing_executed_test_run",
-   "missing executed_test_run keeps its typed reason code")
-ok(evidence["desired_role"] == "remediation",
-   "the evidence gap is an agent mission, not a human/coordination_retry loop")
-
-# --- Acceptance 4: ordinary red product CI still routes to remediation -------
 red_product_ci = classify_completion(
-    None, snapshot(vm_gate="FAILURE", findings=[finding("draft_pr")], draft=True))
+    None, snapshot(vm_gate="FAILURE", merge_auth="SUCCESS"))
 ok(red_product_ci["route"] == "remediation",
-   "a red VM gate still routes remediation even while merge-auth is deferred")
-ok(red_product_ci["reason_code"] == "required_exact_head_ci_failed",
-   "a red VM gate keeps required_exact_head_ci_failed")
-ok(red_product_ci["board_projection"] == "Blocked",
-   "a red VM gate still projects Blocked")
+   "ordinary red product CI boots remediation")
 
-# --- Acceptance 5: fail closed when there are no typed findings --------------
-no_findings = classify_completion(None, snapshot(findings=[]))
-ok(no_findings["state"] != "ready_to_queue",
-   "red merge-auth with zero findings never becomes ready_to_queue")
-ok(no_findings["route"] == "remediation"
-   and no_findings["reason_code"] == "required_exact_head_ci_failed",
-   "red merge-auth with zero findings retains today's behaviour")
+# With the legacy projection green, the three mechanical verbs remain simple.
+draft_decision = classify_completion(None, snapshot(
+    draft=True, merge_auth="SUCCESS", findings=[]))
+ok(draft_decision["effect"] == "mark_ready",
+   "draft PR marks ready")
+missing_verdict = classify_completion(None, snapshot(
+    merge_auth="SUCCESS", review="", findings=[]))
+ok(missing_verdict["effect"] == "ensure_review_generation",
+   "missing exact-head verdict starts review")
 
-untyped_only = classify_completion(
-    None, snapshot(findings=[{"message": "something went wrong", "blocking": True}]))
-ok(untyped_only["state"] != "ready_to_queue",
-   "a finding with no route-bearing code does not license deferral")
-
-non_blocking_only = classify_completion(
-    None, snapshot(findings=[{"code": "draft_pr", "blocking": False}]))
-ok(non_blocking_only["state"] != "ready_to_queue",
-   "a non-blocking finding does not license deferral")
-
-# --- Acceptance 6: merge-auth red never impersonates product CI when typed
-# findings explain the gate. Draft/review keep non-remediation routes; evidence
-# / mergeability gaps boot remediation with the typed finding code.
-for code in ("draft_pr", "review_verdict_missing", "review_verdict_stale",
-             "missing_executed_test_run", "missing_ui_playwright_evidence",
+# Every machine finding, regardless of historical class, is an LLM mission.
+for code in ("missing_executed_test_run", "missing_ui_playwright_evidence",
              "pr_not_mergeable", "work_session_required"):
     decision = classify_completion(None, snapshot(
-        draft=(code == "draft_pr"),
+        merge_auth="SUCCESS",
         review="" if code.startswith("review_verdict") else "passed",
         findings=[finding(code)],
     ))
-    ok(decision["reason_code"] != "required_exact_head_ci_failed",
-       "process-state finding %s never becomes required_exact_head_ci_failed" % code)
-    if code in {"draft_pr", "review_verdict_missing", "review_verdict_stale"}:
-        ok(decision["desired_role"] != "remediation",
-           "process-state finding %s never dispatches a remediation runner" % code)
-    else:
-        ok(
-            decision["route"] == "remediation"
-            and decision["reason_code"] == code,
-            "process-state finding %s boots remediation with typed reason" % code,
-        )
+    ok(decision["route"] == "remediation",
+       "machine finding %s boots remediation" % code)
+    ok(decision["desired_role"] == "remediation",
+       "machine finding %s never pages a human" % code)
 
-# --- The deferral is scoped to exactly one context ---------------------------
-other_red_context = classify_completion(None, snapshot(
-    vm_gate="FAILURE", merge_auth="SUCCESS", findings=[finding("draft_pr")],
-    draft=True))
-ok(other_red_context["reason_code"] == "required_exact_head_ci_failed",
-   "deferral does not leak to any other required context")
+for code in ("review_verdict_missing", "review_verdict_stale"):
+    decision = classify_completion(None, snapshot(
+        merge_auth="SUCCESS", review="", findings=[finding(code)],
+    ))
+    ok(decision["route"] == "review_merge",
+       "review process finding %s starts the review verb" % code)
+    ok(decision["desired_role"] == "review_merge",
+       "review process finding %s never pages a human" % code)
 
 
 # --- The discarded reason code is kept as diagnostics, never as transport -----

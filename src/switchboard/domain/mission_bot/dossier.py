@@ -12,6 +12,7 @@ import hashlib
 import json
 from typing import Any, Mapping, Sequence
 
+from switchboard.domain.mission_bot.facts import finding_detail
 from switchboard.domain.mission_bot.outputs import MISSION_DOSSIER_SCHEMA
 
 
@@ -319,10 +320,12 @@ def _missing_artifact_from_findings(
     """
     for item in findings:
         row = _map(item)
-        direct = _map(row.get("missing_artifact"))
+        direct = _map(finding_detail(row, "missing_artifact"))
         if direct:
             return direct
-        nested = _map(_map(row.get("executed_test_gate")).get("missing_artifact"))
+        nested = _map(
+            _map(finding_detail(row, "executed_test_gate")).get("missing_artifact")
+        )
         if nested:
             return nested
     return {}

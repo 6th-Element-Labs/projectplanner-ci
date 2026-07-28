@@ -402,7 +402,8 @@ try:
     ok(forged_row.get("status") != "Blocked",
        f"unstamped update does not sticky-Block board (got {forged_row.get('status')})")
 
-    # Replaying an already server-stamped blocker still promotes (retry path).
+    # Even a copied server stamp is only data on a Work Session. It must not
+    # impersonate the explicit agent_requires_human MCP command.
     s4 = _make_session(T3, A3, "run_promote_stamped")
     upd = store.update_work_session(s4["work_session_id"], {
         "status": "blocked",
@@ -424,17 +425,17 @@ try:
         },
     }, actor=A3, project=P)
     ok(upd.get("updated") is True, f"stamped update_work_session lands ({upd.get('error')})")
-    ok(bool(upd.get("human_blocker") and upd["human_blocker"].get("recorded")),
-       f"stamped update_work_session promotes via human_blocker ({upd.get('human_blocker_error')})")
+    ok(not (upd.get("human_blocker") or {}).get("recorded"),
+       "stamped update_work_session does not impersonate agent_requires_human")
     t3_row = store.get_task(T3, project=P)
-    ok(t3_row.get("status") == "Blocked",
-       f"stamped update_work_session promotes to Blocked (got {t3_row.get('status')})")
+    ok(t3_row.get("status") != "Blocked",
+       f"stamped update does not sticky-Block board (got {t3_row.get('status')})")
     with _conn(P) as c:
         n3 = c.execute(
             "SELECT COUNT(*) AS n FROM attention_requests WHERE task_id=?",
             (T3,),
         ).fetchone()["n"]
-    ok(n3 >= 1, f"stamped update_work_session created Needs-you (n={n3})")
+    ok(n3 == 0, f"stamped update_work_session created no Needs-you (n={n3})")
 
     contract = build_execution_assignment(
         task_id="COORD-69",
@@ -449,8 +450,10 @@ try:
         },
     )
     tools = contract.get("typed_tools") or {}
-    ok(tools.get("human_blocker") == "record_human_blocker",
-       "execution_assignment names record_human_blocker")
+    ok("human_blocker" not in tools,
+       "execution_assignment does not prescribe the legacy human blocker")
+    ok(tools.get("agent_requires_human") == "agent_requires_human",
+       "execution_assignment names only the explicit agent attention tool")
     ok(tools.get("executed_test_run") == "record_executed_test_run",
        "execution_assignment names record_executed_test_run")
 

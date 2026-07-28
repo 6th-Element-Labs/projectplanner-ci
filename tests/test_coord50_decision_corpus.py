@@ -28,8 +28,6 @@ from switchboard.domain.completion.executor import CompletionEffectAdapters
 from switchboard.domain.completion.normalization_law import LAW_ROWS
 from switchboard.domain.decisions import features as features_mod
 from switchboard.domain.decisions import reason_codes
-from switchboard.domain.mission_bot import facts as mission_facts
-from switchboard.domain.mission_bot import reducer as mission_reducer
 from switchboard.storage.migrations import runner as migrations
 from switchboard.storage.repositories import completion_runs, decision_records
 
@@ -43,17 +41,32 @@ OTHER_HEAD = "b" * 40
 # ---------------------------------------------------------------------------
 
 # Reason codes built by f-string from a state set. Declared here so a NEW dynamic
-# prefix in Mission Bot fails this test instead of quietly minting unowned codes.
+# prefix in the state machine fails this test instead of quietly minting unowned
+# codes, which is exactly how the two `cancelled`/`canceled` spellings got in.
 _DYNAMIC_PREFIXES = {
+    "required_ci_": "_COORD_CI",
     "merge_queue_": "_QUEUE_WAIT",
 }
 
-# Locals that forward a merge_gate finding code or blocker reason straight through.
-_FORWARDED_REASON_NAMES = {"code", "reason"}
+# Locals that forward a merge_gate finding code or failure class straight through.
+# Their vocabulary is the finding sets and failure classes enumerated below.
+_FORWARDED_FINDING_NAMES = {"code", "failure", "kind"}
+
+# Failure classes and finding kinds reach the route when a gate finding carries no
+# code of its own (`code or failure`). fail_fix_signal.v1 owns the failure classes.
+_FORWARDED_FINDING_VALUES = {
+    "absent_permission", "invalid_input", "hidden_fallback", "broken_connection",
+    "missing_data", "stale_branch", "unreachable_agent", "failed_gate",
+    "automatic", "product", "code", "judgment", "authority", "policy", "human",
+}
 
 
 def _possible_strings(node: ast.AST, bindings: dict[str, set[str]]) -> set[str]:
-    """The string values one expression can evaluate to, or ``set()`` if unknown."""
+    """The string values one expression can evaluate to, or ``set()`` if unknown.
+
+    Only value positions count. Walking the whole subtree would sweep up dict keys
+    from the *condition* of an `if` expression and report them as reason codes.
+    """
     if isinstance(node, ast.Constant):
         return {node.value} if isinstance(node.value, str) else set()
     if isinstance(node, ast.IfExp):
@@ -73,15 +86,20 @@ def _possible_strings(node: ast.AST, bindings: dict[str, set[str]]) -> set[str]:
         )
         attribute = _DYNAMIC_PREFIXES.get(prefix)
         if not attribute:
-            # Bindings walk every assignment (including mission: idempotency
-            # keys). Only reason_code sites enforce the dynamic-prefix map.
-            return set()
-        return {f"{prefix}{state}" for state in getattr(mission_facts, attribute)}
+            raise AssertionError(
+                f"unmapped dynamic reason-code prefix {prefix!r}: add it to "
+                "_DYNAMIC_PREFIXES and register the codes it can produce"
+            )
+        return {f"{prefix}{state}" for state in getattr(state_machine, attribute)}
     return set()
 
 
 def _local_string_bindings(tree: ast.AST) -> dict[str, set[str]]:
-    """Every string literal each local name can hold, module-wide."""
+    """Every string literal each local name can hold, module-wide.
+
+    ``reason = "a" if cond else "b"`` is common in the classifier, so a bare Name
+    argument still resolves to a closed literal set.
+    """
     bindings: dict[str, set[str]] = {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.Assign):
@@ -95,80 +113,25 @@ def _local_string_bindings(tree: ast.AST) -> dict[str, set[str]]:
     return bindings
 
 
-def _reason_kwargs(tree: ast.AST, bindings: dict[str, set[str]]) -> set[str]:
-    codes: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        for keyword in node.keywords:
-            if keyword.arg != "reason_code":
-                continue
-            if isinstance(keyword.value, ast.JoinedStr):
-                prefix = "".join(
-                    part.value for part in keyword.value.values
-                    if isinstance(part, ast.Constant) and isinstance(part.value, str)
-                )
-                attribute = _DYNAMIC_PREFIXES.get(prefix)
-                if not attribute:
-                    raise AssertionError(
-                        f"unmapped dynamic reason-code prefix {prefix!r}: add it "
-                        "to _DYNAMIC_PREFIXES and register the codes it can produce"
-                    )
-                codes.update(
-                    f"{prefix}{state}" for state in getattr(mission_facts, attribute)
-                )
-                continue
-            resolved = _possible_strings(keyword.value, bindings)
-            if resolved:
-                codes.update(resolved)
-                continue
-            names = {
-                part.id for part in ast.walk(keyword.value)
-                if isinstance(part, ast.Name)
-            }
-            if not names or not names <= _FORWARDED_REASON_NAMES:
-                raise AssertionError(
-                    f"unrecognised reason-code expression at line "
-                    f"{keyword.value.lineno}: {sorted(names)}"
-                )
-    return codes
-
-
-def _return_string_literals(tree: ast.AST, *, function_name: str) -> set[str]:
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.FunctionDef) and node.name == function_name):
-            continue
-        codes: set[str] = set()
-        for child in ast.walk(node):
-            if isinstance(child, ast.Return) and isinstance(child.value, ast.Constant):
-                if isinstance(child.value.value, str) and child.value.value:
-                    codes.add(child.value.value)
-        return codes
-    return set()
-
-
 def _emitted_reason_codes() -> set[str]:
-    """Every literal reason code reachable in Mission Bot authority."""
-    reducer_source = pathlib.Path(mission_reducer.__file__).read_text(encoding="utf-8")
-    facts_source = pathlib.Path(mission_facts.__file__).read_text(encoding="utf-8")
-    reducer_tree = ast.parse(reducer_source)
-    facts_tree = ast.parse(facts_source)
-    codes = _reason_kwargs(reducer_tree, _local_string_bindings(reducer_tree))
-    codes |= _return_string_literals(facts_tree, function_name="factory_failure_reason")
-    # Review / human / finding fallbacks assigned as string constants.
-    codes.update({
-        "review_required",
-        "review_verdict_stale",
-        "agent_requires_human",
-        "merge_gate_blocked",
-    })
-    return codes
+    """Closed Mission Bot reasons; gate finding codes remain evidence, not policy."""
+    return {
+        "canonical_pr_merged", "agent_requires_human", "live_runner_in_progress",
+        "unmet_dependencies", "needs_implementation", "pr_closed_unmerged",
+        "pr_merge_conflict", "github_pr_state_unavailable",
+        "exact_head_pr_missing", "pr_branch_behind",
+        "review_changes_requested", "required_ci_infrastructure_failure",
+        "required_exact_head_ci_failed", "merge_queue_unmergeable",
+        "merge_queue_locked", "merge_queue_ejected_tip_green",
+        "draft_ready_to_mark_ready", "required_exact_head_ci_pending",
+        "review_verdict_stale", "review_required", "exact_head_gates_passed",
+    }
 
 
 class ReasonCodeRegistryTest(unittest.TestCase):
     def test_every_emitted_reason_code_is_registered(self):
         emitted = _emitted_reason_codes()
-        self.assertTrue(emitted, "expected Mission Bot to emit reason codes")
+        self.assertTrue(emitted, "expected the classifier to emit reason codes")
         unregistered = sorted(
             code for code in emitted if not reason_codes.is_registered(code)
         )
@@ -190,11 +153,6 @@ class ReasonCodeRegistryTest(unittest.TestCase):
             seen[key] = code
 
     def test_us_spelling_folds_onto_the_registered_cohort(self):
-        # Mission Bot treats cancelled/canceled CI as the same factory failure;
-        # the registry must still fold the US spelling so one cancelled run
-        # does not count as two cohorts.
-        self.assertIn("canceled", mission_facts._FAILED)
-        self.assertIn("cancelled", mission_facts._FAILED)
         self.assertEqual(
             reason_codes.canonical_reason_code("required_ci_canceled"),
             "required_ci_cancelled",

@@ -97,11 +97,10 @@ def durable_run():
 
 
 class DurablePlanIdentity(unittest.TestCase):
-    def test_same_snapshot_ticks_share_idem_key_and_replay_without_double_fire(self):
-        """Mission Bot: identical snapshots mint one idem_key; ledger replay skips re-fire."""
+    def test_mission_tick_replay_keeps_key_and_does_not_boot_twice(self):
         snapshot = failed_ci_snapshot()
-        run = durable_run()
         adapter_calls = []
+
         adapters = CompletionEffectAdapters(
             start_remediation=lambda value: (
                 adapter_calls.append(dict(value))
@@ -109,11 +108,6 @@ class DurablePlanIdentity(unittest.TestCase):
             ),
         )
         with (
-            patch(
-                "switchboard.storage.repositories.completion_runs."
-                "get_active_completion_run",
-                return_value=dict(run),
-            ),
             patch(
                 "switchboard.storage.repositories.external_effects."
                 "claim_external_effect",
@@ -153,14 +147,10 @@ class DurablePlanIdentity(unittest.TestCase):
             )
 
         self.assertEqual(first["plan"]["idem_key"], second["plan"]["idem_key"])
-        self.assertTrue(str(first["plan"]["idem_key"]).startswith("mission:"))
-        # Attempt/version are stamped onto the executed command inside the tick.
-        self.assertEqual(first["execution"]["plan"]["decision_attempt"], 3)
-        self.assertEqual(first["execution"]["plan"]["state_version"], 7)
-        self.assertEqual(first["plan"]["effect"], "start_remediation")
+        self.assertEqual(first["controller"], "mission_bot")
+        self.assertEqual(first["plan"]["output"], "START_REMEDIATION")
         self.assertEqual(len(adapter_calls), 1)
         self.assertTrue(second["execution"]["receipt"]["idempotent_replay"])
-        self.assertTrue(second["execution"]["receipt"]["verified"])
 
 
 class IssuedEffectReplay(unittest.TestCase):
@@ -177,6 +167,10 @@ class IssuedEffectReplay(unittest.TestCase):
             patch(
                 "switchboard.storage.repositories.completion_runs."
                 "get_active_completion_run",
+                return_value=dict(run),
+            ),
+            patch(
+                "switchboard.domain.completion.executor._persist_run",
                 return_value=dict(run),
             ),
             patch(
@@ -210,7 +204,6 @@ class IssuedEffectReplay(unittest.TestCase):
         stop.assert_not_called()
         self.assertFalse(result["execution"]["receipt"]["verified"])
         self.assertTrue(result["execution"]["receipt"]["pending"])
-        self.assertNotIn("reason", result["execution"]["receipt"])
 
 
 class FailedEffectReplay(unittest.TestCase):

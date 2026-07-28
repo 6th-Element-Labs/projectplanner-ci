@@ -238,16 +238,15 @@ def classify_completion(
         "mission_output": command.get("output"),
         "acceptance_findings": list(dossier.get("acceptance_findings") or []),
     }
-    # COORD-51 §3.3: omit empty failing-context identity. A decision that never
-    # looked at a failing check must not claim it found none.
-    failing_contexts = [
-        str(name) for name in list(dossier.get("failing_contexts") or []) if str(name).strip()
-    ]
+    failing_contexts = list(dossier.get("failing_contexts") or [])
     if failing_contexts:
         decision["failing_contexts"] = failing_contexts
-        decision["failing_check_url"] = dossier.get("failing_check_url") or ""
-        decision["failing_run_attempt"] = int(dossier.get("failing_run_attempt") or 0)
-        decision["failing_check_summary"] = dossier.get("failing_check_summary") or ""
+    if dossier.get("failing_check_url"):
+        decision["failing_check_url"] = dossier["failing_check_url"]
+    if int(dossier.get("failing_run_attempt") or 0):
+        decision["failing_run_attempt"] = int(dossier["failing_run_attempt"])
+    if dossier.get("failing_check_summary"):
+        decision["failing_check_summary"] = dossier["failing_check_summary"]
     missing_artifact = dossier.get("missing_artifact")
     if isinstance(missing_artifact, Mapping) and missing_artifact:
         decision["missing_artifact"] = dict(missing_artifact)
