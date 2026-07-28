@@ -283,6 +283,19 @@ def test_green_arms_merge():
     assert cmd["reason_code"] == "exact_head_gates_passed"
 
 
+
+def test_passed_review_from_replaced_pr_does_not_arm_merge():
+    """Same-head review on a replaced PR URL must not arm merge."""
+    from switchboard.domain.mission_bot.facts import review_passed
+    snap = snapshot()
+    snap["pr_url"] = "https://github.com/example/project/pull/810"
+    snap["github_pr"]["url"] = snap["pr_url"]
+    snap["review"]["pr_url"] = "https://github.com/example/project/pull/999"
+    assert review_passed(snap) is False
+    cmd = reduce_mission(snap)
+    assert cmd["output"] == MissionOutput.START_REVIEW.value
+
+
 def test_passed_review_without_head_sha_does_not_arm_merge():
     """Exact-head review is required — a headless pass must not arm merge."""
     from switchboard.domain.mission_bot.facts import review_passed

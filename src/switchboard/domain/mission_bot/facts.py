@@ -216,10 +216,11 @@ def changes_requested(snapshot: Mapping[str, Any]) -> bool:
 
 
 def review_passed(snapshot: Mapping[str, Any]) -> bool:
-    """True only for an exact-head passed review.
+    """True only for an exact-head passed review on the current PR.
 
     A passed verdict without a review head SHA is not enough — arming merge
-    requires the review to bind the current snapshot head.
+    requires the review to bind the current snapshot head. A same-head review
+    from a replaced PR URL must not inherit merge authority.
     """
     review = _map(snapshot.get("review"))
     state = _text(review.get("status") or review.get("state") or review.get("verdict"))
@@ -229,7 +230,15 @@ def review_passed(snapshot: Mapping[str, Any]) -> bool:
     review_head = _text(review.get("head_sha")).lower()
     if not head or not review_head:
         return False
-    return head == review_head
+    if head != review_head:
+        return False
+    snap_pr_url = _text_raw(
+        snapshot.get("pr_url") or _map(snapshot.get("github_pr")).get("url")
+    ).lower().rstrip("/")
+    review_pr_url = _text_raw(review.get("pr_url")).lower().rstrip("/")
+    if snap_pr_url and review_pr_url and snap_pr_url != review_pr_url:
+        return False
+    return True
 
 
 def review_needed(snapshot: Mapping[str, Any]) -> bool:
