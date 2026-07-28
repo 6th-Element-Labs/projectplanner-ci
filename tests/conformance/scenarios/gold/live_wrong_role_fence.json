@@ -1,10 +1,10 @@
 {
   "expect": {
-    "effect": "wait",
-    "reason_code": "live_runner_not_desired",
+    "terminal": "blocked",
+    "reason_code": "live_runner_in_progress",
     "role_sequence": [],
-    "route": "coordination_retry",
-    "terminal": "blocked"
+    "route": "wait",
+    "effect": "wait"
   },
   "id": "live_wrong_role_fence",
   "schema": "switchboard.completion_conformance.scenario.v1",

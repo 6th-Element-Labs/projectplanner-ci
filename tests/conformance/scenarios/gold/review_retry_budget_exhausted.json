@@ -1,10 +1,12 @@
 {
   "expect": {
-    "effect": "escalate_human",
-    "reason_code": "review_retry_budget_exhausted",
-    "role_sequence": [],
-    "route": "human",
-    "terminal": "human"
+    "terminal": "blocked",
+    "reason_code": "review_changes_requested",
+    "role_sequence": [
+      "remediation"
+    ],
+    "route": "remediation",
+    "effect": "start_remediation"
   },
   "id": "review_retry_budget_exhausted",
   "schema": "switchboard.completion_conformance.scenario.v1",

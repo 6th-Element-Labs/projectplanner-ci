@@ -137,9 +137,6 @@ def run_convergence(scenario: dict[str, Any], task_id: str) -> dict[str, Any]:
     with mock.patch(
         "switchboard.application.commands.task_execution.fence_task_generation",
         return_value={"fenced": True},
-    ), mock.patch(
-        "switchboard.application.attention_push.deliver_attention_request",
-        return_value={"delivered": False, "reason": "conformance"},
     ):
         for tick in range(1, MAX_TICKS + 1):
             try:
@@ -164,6 +161,11 @@ def run_convergence(scenario: dict[str, Any], task_id: str) -> dict[str, Any]:
             route = str(out["decision"].get("route") or "")
             reason = str(out["decision"].get("reason_code") or "")
             effect = str(out["plan"].get("effect") or "")
+            mission_output = str(
+                out.get("command", {}).get("output")
+                or out.get("decision", {}).get("mission_output")
+                or ""
+            )
             receipt = (out.get("execution") or {}).get("receipt") or {}
             fp = fingerprint(live["world"])
             history.append({
@@ -172,23 +174,20 @@ def run_convergence(scenario: dict[str, Any], task_id: str) -> dict[str, Any]:
                 "replay": bool(receipt.get("idempotent_replay")),
             })
 
-            if out["normalized"]["action"] == "BLOCK":
+            if mission_output == "AGENT_REQUIRES_HUMAN" or route == "human":
                 return {
                     "outcome": "owned_block",
-                    "reason": out["normalized"]["reason_code"],
+                    "reason": reason,
                     "ticks": tick,
                     "history": history,
                 }
-            if out["normalized"]["action"] == "MERGED":
+            if mission_output == "OBSERVE_MERGED" or route == "reconcile":
                 return {
                     "outcome": "settled",
-                    "reason": out["normalized"]["reason_code"],
+                    "reason": reason,
                     "ticks": tick,
                     "history": history,
                 }
-            if route == "human":
-                return {"outcome": "human", "reason": reason,
-                        "ticks": tick, "history": history}
             if effect == "none":
                 return {"outcome": "settled", "reason": reason,
                         "ticks": tick, "history": history}

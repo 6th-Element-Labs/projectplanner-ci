@@ -200,6 +200,9 @@ def _assert_red_product_ci_precedence(scenario: dict[str, Any]) -> None:
         "mergeable": True,
         "merge_state_status": "CLEAN",
         "queue": "none",
+        # Mission Bot hangs up while any live runner owns capacity. This
+        # property compares CI vs process findings only — clear the runner.
+        "runner": {"live": False, "role": "none", "head": "none"},
     })
     _, decision, _ = _decision_and_plan(process_world)
     if (

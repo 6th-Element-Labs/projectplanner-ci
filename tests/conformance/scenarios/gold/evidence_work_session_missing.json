@@ -1,9 +1,11 @@
 {
   "expect": {
-    "effect": "escalate_human",
+    "effect": "start_remediation",
     "reason_code": "work_session_required",
-    "role_sequence": [],
-    "route": "coordination_retry",
+    "role_sequence": [
+      "remediation"
+    ],
+    "route": "remediation",
     "terminal": "blocked"
   },
   "id": "evidence_work_session_missing",

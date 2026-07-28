@@ -231,6 +231,7 @@ WRITE_TOOLS = frozenset({
     "reconcile_alerts", "reconcile_task_merge",
     "record_coordinator_decision", "record_decision", "record_executed_test_run",
     "record_human_blocker",
+    "agent_requires_human",
     "record_outcome",
     "record_project_cleanup_review", "record_publication_evidence",
     "record_review_verdict", "register_agent", "register_host",

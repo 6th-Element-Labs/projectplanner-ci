@@ -1,9 +1,11 @@
 {
   "expect": {
-    "effect": "escalate_human",
+    "effect": "start_remediation",
     "reason_code": "pr_closed_unmerged",
-    "role_sequence": [],
-    "route": "coordination_retry",
+    "role_sequence": [
+      "remediation"
+    ],
+    "route": "remediation",
     "terminal": "blocked"
   },
   "id": "pr_closed_unmerged_reopen",

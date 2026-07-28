@@ -12,12 +12,16 @@ from switchboard.domain.completion.normalization_law import NormalizedAction
 
 _COMMAND_EFFECTS = {
     NormalizedAction.START: frozenset({
-        "ensure_review_generation", "start_remediation",
+        "ensure_review_generation",
+        "start_remediation",
+        "start_implementation",
     }),
     NormalizedAction.RETRY_CI: frozenset({"retry_ci"}),
     NormalizedAction.MARK_READY: frozenset({"mark_ready"}),
     NormalizedAction.ARM_MERGE: frozenset({"enqueue"}),
-    NormalizedAction.BLOCK: frozenset({"escalate_human"}),
+    NormalizedAction.BLOCK: frozenset({
+        "escalate_human", "agent_requires_human",
+    }),
     NormalizedAction.WAIT: frozenset({
         "wait", "none", "attach_and_wait",
     }),

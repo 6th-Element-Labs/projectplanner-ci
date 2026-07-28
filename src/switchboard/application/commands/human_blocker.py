@@ -22,6 +22,8 @@ from switchboard.storage.repositories import attention as attention_repo
 from switchboard.storage.repositories import work_sessions as work_sessions_repo
 
 HUMAN_BLOCKER_TOOL = "record_human_blocker"
+#: Canonical Mission Bot name for the same agent-authored sticky receipt.
+AGENT_REQUIRES_HUMAN_TOOL = "agent_requires_human"
 RESULT_SCHEMA = "switchboard.human_blocker.record_result.v1"
 BLOCKER_SCHEMA = "switchboard.work_session_human_blocker.v1"
 
@@ -51,13 +53,17 @@ def _blocker_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     evidence = _map(data.get("evidence"))
     return {
         "schema": BLOCKER_SCHEMA,
-        "route": "human",
+        "route": "agent_requires_human",
         "reason": _text(data.get("reason")),
         "completed_work": _text(data.get("completed_work")),
         "minimum_human_action": _text(data.get("minimum_human_action")),
         "resume_condition": _text(data.get("resume_condition")),
         "next_automatic_step": _text(data.get("next_automatic_step")),
         "evidence": evidence,
+        "source_tool": (
+            _text(data.get("source_tool"))
+            or AGENT_REQUIRES_HUMAN_TOOL
+        ),
     }
 
 
@@ -421,7 +427,9 @@ def session_has_human_blocker(session: Optional[Mapping[str, Any]]) -> bool:
     if _text(session.get("status")).lower() != "blocked":
         return False
     blocker = _map(_map(session.get("hygiene")).get("blocker"))
-    return _text(blocker.get("route")).lower() == "human"
+    return _text(blocker.get("route")).lower() in {
+        "human", "agent_requires_human",
+    }
 
 
 __all__ = [

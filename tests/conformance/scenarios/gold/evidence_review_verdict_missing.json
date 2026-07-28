@@ -1,12 +1,12 @@
 {
   "expect": {
-    "effect": "ensure_review_generation",
+    "terminal": "blocked",
     "reason_code": "review_required",
     "role_sequence": [
-      "review_merge"
+      "remediation"
     ],
-    "route": "review_merge",
-    "terminal": "blocked"
+    "route": "remediation",
+    "effect": "start_remediation"
   },
   "id": "evidence_review_verdict_missing",
   "schema": "switchboard.completion_conformance.scenario.v1",

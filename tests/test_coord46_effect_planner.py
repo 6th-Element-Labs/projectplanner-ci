@@ -81,9 +81,9 @@ class RouteToEffect(unittest.TestCase):
         self.assertEqual(plan["role"], "remediation")
         self.assertTrue(plan["queue_remediation_round"])
 
-    def test_human_emits_exactly_one_escalation(self):
+    def test_human_is_agent_requires_human_sticky(self):
         plan = _plan("human")
-        self.assertEqual(plan["effect"], "escalate_human")
+        self.assertEqual(plan["effect"], "agent_requires_human")
         self.assertTrue(plan["once_only"])
 
     def test_reconcile_reads_canonical_provenance(self):
@@ -283,13 +283,12 @@ class EndToEndFixtures(unittest.TestCase):
                     "generation": 9},
         )
         decision = classify_completion(None, snapshot)
-        self.assertEqual(decision["route"], "remediation")
-        self.assertEqual(decision["reason_code"], "required_exact_head_ci_failed")
+        # Mission Bot hangs up while any live runner owns capacity.
+        self.assertEqual(decision["mission_output"], "WAIT")
+        self.assertEqual(decision["route"], "wait")
 
         plan = effects.plan_effect(decision, snapshot, _run())
-        self.assertEqual(plan["effect"], "attach_and_wait")
-        self.assertFalse(plan["fence_required"])
-        self.assertIsNone(plan["fence_generation"])
+        self.assertEqual(plan["effect"], "wait")
         self.assertEqual(plan["head_sha"], head)
 
     def test_pr811_routes_review_merge_at_current_head_without_a_coder(self):

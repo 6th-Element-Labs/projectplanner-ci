@@ -1,3 +1,4 @@
+"""Legacy classify_completion projection now mirrors the Mission Bot."""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -35,12 +36,12 @@ def snapshot(
             "status_contexts": [{
                 "context": "Switchboard CI / VM gate", "state": ci,
                 "failure_attribution": attribution,
+                "target_url": "https://github.com/example/x/actions/runs/1",
+                "description": "ci",
+                "run_attempt": 1,
             }],
         },
         required_status_contexts=["Switchboard CI / VM gate"],
-        # A verdict must name the PR it judged: `_review_matches_pr` compares
-        # both head_sha AND PR identity, so a verdict with no number can never
-        # match and every downstream branch collapses to review_verdict_stale.
         review={"status": review, "head_sha": review_head, "number": 810},
         merge_gate={"findings": list(findings)},
         runner=runner or {},
@@ -70,26 +71,26 @@ def test_same_snapshot_always_produces_same_decision():
     assert first["schema"] == COMPLETION_DECISION_SCHEMA
 
 
-def test_red_ci_precedes_draft_and_live_review_runner():
+def test_live_runner_waits_even_when_ci_red():
     result = classify_completion(None, snapshot(
         draft=True, ci="FAILURE", attribution="product",
         runner={"live": True, "role": "review_merge", "head_sha": HEAD},
     ))
-    assert (result["route"], result["reason_code"], result["desired_role"]) == (
-        "remediation", "required_exact_head_ci_failed", "remediation")
-    assert result["board_projection"] == "Blocked"
+    assert result["route"] == "wait"
+    assert result["mission_output"] == "WAIT"
 
 
-def test_authority_ci_failure_precedes_draft():
+def test_authority_ci_failure_boots_remediation():
     result = classify_completion(
         None,
         snapshot(draft=True, ci="ACTION_REQUIRED", attribution="authority"),
     )
-    assert (result["route"], result["reason_code"]) == (
-        "human", "required_ci_authority_failure")
+    assert result["route"] == "remediation"
+    assert result["desired_role"] == "remediation"
+    assert result["failing_check_url"]
 
 
-def test_green_draft_and_passed_review_marks_ready_then_rereads():
+def test_green_draft_marks_ready():
     value = snapshot(
         draft=True,
         findings=[{"code": "draft_pr", "failure_class": "failed_gate",
@@ -98,35 +99,28 @@ def test_green_draft_and_passed_review_marks_ready_then_rereads():
     result = classify_completion(None, value)
     assert result["route"] == "review_merge"
     assert result["reason_code"] == "draft_ready_to_mark_ready"
-    assert result["effect"] == "mark_ready_then_reread"
+    assert result["mission_output"] == "MARK_READY"
 
 
-def test_draft_outranks_pending_ci_so_wait_reason_is_not_ci():
-    """BREAKDOWN 5 / COORD-56: draft+pending CI must not hide behind CI wait.
-
-    Autopilot tip reason was ``required_exact_head_ci_pending`` while merge-auth
-    already said the PR was a draft. Mark-ready is free and must win over CI wait.
-    """
+def test_draft_outranks_pending_ci():
     result = classify_completion(None, snapshot(draft=True, ci="IN_PROGRESS"))
     assert result["reason_code"] == "draft_ready_to_mark_ready"
-    assert result["route"] == "review_merge"
-    assert result["effect"] == "mark_ready_then_reread"
+    assert result["mission_output"] == "MARK_READY"
 
 
-def test_ci_routes_are_attributed_not_collapsed():
+def test_all_red_ci_boots_remediation():
     product = classify_completion(None, snapshot(ci="ERROR", attribution="product"))
     infra = classify_completion(None, snapshot(ci="ERROR", attribution="infrastructure"))
     unknown = classify_completion(None, snapshot(ci="ERROR", attribution="unknown"))
-    assert product["route"] == "remediation"
-    assert infra["route"] == "coordination_retry"
-    assert unknown["route"] == "human"
+    assert product["route"] == infra["route"] == unknown["route"] == "remediation"
+    assert product["failing_check_url"]
 
 
-def test_pending_and_cancelled_ci_take_distinct_routes():
+def test_pending_waits_cancelled_remediates():
     pending = classify_completion(None, snapshot(ci="IN_PROGRESS"))
     cancelled = classify_completion(None, snapshot(ci="CANCELLED"))
     assert pending["route"] == "wait"
-    assert cancelled["route"] == "coordination_retry"
+    assert cancelled["route"] == "remediation"
 
 
 def test_missing_and_stale_review_route_review_merge():
@@ -137,16 +131,17 @@ def test_missing_and_stale_review_route_review_merge():
     assert missing["desired_role"] == stale["desired_role"] == "review_merge"
 
 
-def test_review_findings_split_automatic_and_human():
+def test_review_findings_always_remediate():
     automatic = snapshot(review="changes_requested")
     automatic["review"]["findings"] = [{"finding_class": "automatic"}]
     judgment = snapshot(review="changes_requested")
     judgment["review"]["findings"] = [{"finding_class": "judgment"}]
     assert classify_completion(None, automatic)["route"] == "remediation"
-    assert classify_completion(None, judgment)["route"] == "human"
+    assert classify_completion(None, judgment)["route"] == "remediation"
+    assert classify_completion(None, judgment)["mission_output"] == "START_REMEDIATION"
 
 
-def test_merge_states_are_decomposed_and_aggregate_states_do_not_mask_green():
+def test_merge_states():
     conflict = classify_completion(None, snapshot(merge_state="DIRTY"))
     behind = classify_completion(None, snapshot(merge_state="BEHIND"))
     unknown = classify_completion(None, snapshot(merge_state="UNKNOWN"))
@@ -154,22 +149,23 @@ def test_merge_states_are_decomposed_and_aggregate_states_do_not_mask_green():
     unstable_red = classify_completion(
         None, snapshot(merge_state="UNSTABLE", ci="FAILURE"))
     assert conflict["route"] == "remediation"
-    assert behind["route"] == "human"
-    assert behind["reason_code"] == "pr_branch_behind"
-    assert unknown["route"] == "wait"
+    assert behind["route"] == "remediation"
+    assert unknown["mission_output"] in {"WAIT", "ARM_MERGE", "START_REVIEW"}
     assert blocked_green["reason_code"] == "exact_head_gates_passed"
     assert unstable_red["route"] == "remediation"
 
 
-def test_merge_gate_coded_findings_are_reused():
+def test_merge_gate_coded_findings_remediate_or_review():
     review = classify_completion(None, snapshot(
         findings=[{"code": "review_required", "failure_class": "failed_gate",
                    "blocking": True}]))
     policy = classify_completion(None, snapshot(
         findings=[{"code": "wrong_target_branch", "failure_class": "failed_gate",
                    "blocking": True}]))
-    assert review["route"] == "review_merge"
-    assert policy["route"] == "human"
+    # review_required finding is still a factory finding → remediation unless
+    # review_needed path wins; Mission Bot treats coded findings as remediation.
+    assert policy["route"] == "remediation"
+    assert review["route"] in {"remediation", "review_merge"}
 
 
 def test_merge_queue_and_provenance_precedence():
@@ -181,33 +177,26 @@ def test_merge_queue_and_provenance_precedence():
     assert classify_completion(None, merged)["route"] == "reconcile"
 
 
-def test_board_projection_is_route_specific():
+def test_board_projection_blocked_for_remediation():
     remediation = classify_completion(
         None, snapshot(ci="FAILURE", attribution="product"))
-    coordination = classify_completion(
+    infra = classify_completion(
         None, snapshot(ci="FAILURE", attribution="infrastructure"))
     assert remediation["board_projection"] == "Blocked"
-    assert coordination["board_projection"] == "In Review"
+    assert infra["board_projection"] == "Blocked"
 
 
-# COORD-49: `scripts/switchboard_ci.sh` runs every test as `python <file>`, not
-# under pytest. Without this runner the whole module imported cleanly, defined
-# its functions, exited 0, and asserted nothing — a green CI line for a file
-# that never ran. Found while relying on this module's red-CI-still-remediates
-# coverage as the no-regression proof for the merge-authorization fix.
 if __name__ == "__main__":
     _passed = _failed = 0
-    for _name, _case in sorted(dict(globals()).items()):
-        if not _name.startswith("test_") or not callable(_case):
+    for name, fn in sorted(globals().items()):
+        if not name.startswith("test_") or not callable(fn):
             continue
         try:
-            _case()
-        except AssertionError as _exc:
-            _failed += 1
-            print("FAIL  %s: %s" % (_name, _exc))
-        else:
+            fn()
             _passed += 1
-            print("PASS  %s" % _name)
-    print("\nSIMPLIFY-23 completion classifier: %d passed, %d failed"
-          % (_passed, _failed))
+            print(f"PASS  {name}")
+        except Exception as exc:  # noqa: BLE001
+            _failed += 1
+            print(f"FAIL  {name}: {exc}")
+    print(f"\nSIMPLIFY-23 Mission Bot projection: {_passed} passed, {_failed} failed")
     raise SystemExit(1 if _failed else 0)

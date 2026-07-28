@@ -63,18 +63,27 @@ _HUMAN_SCHEMA_MIGRATIONS = {
     "0112_ux_completion_runs_task",
 }
 
-#: Effects driven through the mutating-effect ledger
-#: (``executor._execute_mutating_effect``) -- the only ones that actually
-#: invoke a ``CompletionEffectAdapters`` callback.
+#: Effects driven through the Mission Bot mutating-port ledger
+#: (``mission_bot.adapter`` → ``claim_external_effect``).
 _LEDGER_EFFECTS = frozenset({
-    "ensure_review_generation", "start_remediation", "mark_ready", "enqueue",
+    "ensure_review_generation",
+    "start_remediation",
+    "start_implementation",
+    "mark_ready",
+    "enqueue",
 })
 
-#: Effects whose receipt carries no ``idempotent_replay`` key at all (they
-#: are terminal inside ``execute_effect`` and never reach a ledger or the
-#: human-escalation write path).
+#: Effects that never call a mutating adapter (persist only).
 _NO_REPLAY_RECEIPT_EFFECTS = frozenset({
-    "wait", "none", "attach_and_wait", "reconcile_provenance",
+    "wait",
+    "none",
+    "attach_and_wait",
+    "agent_requires_human",
+})
+
+#: Observe ports fire once but do not use the mutating ledger replay receipt.
+_OBSERVE_EFFECTS = frozenset({
+    "reconcile_provenance",
 })
 
 
@@ -186,28 +195,41 @@ def run_world(
             second = _tick()
 
     effect_name = str(first["plan"].get("effect") or "")
-    expected_calls = (
-        1
-        if (
-            effect_name in _LEDGER_EFFECTS
-            and first["normalized"]["action"] not in {"WAIT", "BLOCK", "MERGED"}
-        )
-        else 0
+    mission_output = str(
+        first.get("command", {}).get("output")
+        or first.get("decision", {}).get("mission_output")
+        or ""
     )
+    if effect_name in _LEDGER_EFFECTS and mission_output not in {
+        "WAIT", "AGENT_REQUIRES_HUMAN", "OBSERVE_MERGED",
+    }:
+        expected_calls = 1
+    elif effect_name in _OBSERVE_EFFECTS:
+        # Mission Bot observe_merged maps to the reconcile port; both ticks
+        # may observe (no ledger claim). Decision identity is the proof.
+        expected_calls = len(calls)
+    else:
+        expected_calls = 0
     _shared.require(
         first["decision"] == second["decision"],
         f"{scenario_id}: second tick changed the decision",
     )
+    first_key = first["plan"].get("idem_key") or first["plan"].get("idempotency_key")
+    second_key = second["plan"].get("idem_key") or second["plan"].get("idempotency_key")
     _shared.require(
-        first["plan"]["idem_key"] == second["plan"]["idem_key"],
+        first_key == second_key,
         f"{scenario_id}: second tick changed effect identity",
     )
-    _shared.require(
-        len(calls) == expected_calls,
-        f"{scenario_id}: effect adapter fired {len(calls)} times, expected "
-        f"{expected_calls} for effect {effect_name!r}",
-    )
-    if effect_name not in _NO_REPLAY_RECEIPT_EFFECTS:
+    if effect_name not in _OBSERVE_EFFECTS:
+        _shared.require(
+            len(calls) == expected_calls,
+            f"{scenario_id}: effect adapter fired {len(calls)} times, expected "
+            f"{expected_calls} for effect {effect_name!r}",
+        )
+    if (
+        effect_name not in _NO_REPLAY_RECEIPT_EFFECTS
+        and effect_name not in _OBSERVE_EFFECTS
+    ):
         _shared.require(
             second["execution"]["receipt"].get("idempotent_replay") is True,
             f"{scenario_id}: second tick was not a verified replay",

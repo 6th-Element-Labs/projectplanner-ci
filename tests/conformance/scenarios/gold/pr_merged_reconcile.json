@@ -1,10 +1,10 @@
 {
   "expect": {
-    "effect": "reconcile_provenance",
+    "terminal": "reconcile_done",
     "reason_code": "canonical_pr_merged",
     "role_sequence": [],
     "route": "reconcile",
-    "terminal": "reconcile_done"
+    "effect": "reconcile_provenance"
   },
   "id": "pr_merged_reconcile",
   "schema": "switchboard.completion_conformance.scenario.v1",

@@ -2,11 +2,13 @@
   "schema": "switchboard.completion_conformance.scenario.v1",
   "id": "tip_green_after_checks_timed_out",
   "expect": {
-    "terminal": "human",
+    "terminal": "blocked",
     "reason_code": "merge_queue_ejected_tip_green",
-    "role_sequence": [],
-    "route": "human",
-    "effect": "escalate_human"
+    "role_sequence": [
+      "remediation"
+    ],
+    "route": "remediation",
+    "effect": "start_remediation"
   },
   "world": {
     "draft": false,
@@ -18,7 +20,11 @@
     "merge_state_status": "CLEAN",
     "queue": "ejected",
     "queue_removal_reason": "checks_timed_out",
-    "runner": {"live": false, "role": "none", "head": "none"}
+    "runner": {
+      "live": false,
+      "role": "none",
+      "head": "none"
+    }
   },
   "timing": {
     "ci_delay_seconds": 0,

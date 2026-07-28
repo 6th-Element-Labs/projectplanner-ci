@@ -211,13 +211,26 @@ def verify_offline_completion(task_id: str, ctx: Context, evidence: str = "",
 
 def record_human_blocker(blocker_json: str, ctx: Context,
                          project: str = "maxwell") -> str:
-    """Record a sticky human-capacity blocker (COORD-69 / DOGFOOD-17 DHCP).
+    """Record a sticky agent-authored human-capacity blocker (COORD-69).
 
+    Prefer ``agent_requires_human`` — same receipt, Mission Bot canonical name.
     blocker_json: task_id, work_session_id, reason, plus closeout fields
     (completed_work, minimum_human_action, resume_condition,
     next_automatic_step, evidence). Atomically marks the Work Session blocked,
-    sets the board Blocked(route=human), creates one PROTO-7 Needs-you item,
-    and fences the bound runner when possible.
+    sets the board Blocked, creates one PROTO-7 Needs-you item, and fences the
+    bound runner when possible. Only agents may author this; orchestration code
+    must never synthesize it.
+    """
+    return agent_requires_human(blocker_json, ctx, project=project)
+
+
+def agent_requires_human(blocker_json: str, ctx: Context,
+                         project: str = "maxwell") -> str:
+    """Agent-authored sticky receipt: Mission Bot must stop and surface this.
+
+    GitHub/Switchboard machine facts never create this flag. Only the active LLM
+    agent may call this MCP tool. Bound to task/work session; sticky until a
+    human resolves the attention request.
     """
     services = _services()
     principal = services.require_write(ctx, project, ("write:ixp",))
@@ -227,6 +240,8 @@ def record_human_blocker(blocker_json: str, ctx: Context,
         return services.dumps({"error": "blocker_json must be valid JSON"})
     if not isinstance(payload, dict):
         return services.dumps({"error": "blocker_json must be a JSON object"})
+    payload = dict(payload)
+    payload.setdefault("source_tool", "agent_requires_human")
     task_id = str(payload.get("task_id") or "").strip()
     binding = services.resolve_write_actor(
         principal, project=project, task_id=task_id, agent_id="")
