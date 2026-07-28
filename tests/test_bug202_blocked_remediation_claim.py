@@ -114,9 +114,10 @@ def assigned_claim(status: str, role: str, suffix: str):
     now = time.time()
     with store._conn(P) as c:
         c.execute(
-            "UPDATE wake_intents SET status='claimed',claimed_at=?,claimed_by_host=? "
+            "UPDATE wake_intents SET status='completed',claimed_at=?,"
+            "claimed_by_host=?,completed_at=? "
             "WHERE wake_id=?",
-            (now, host, wake["wake_id"]),
+            (now, host, now, wake["wake_id"]),
         )
         c.execute(
             "UPDATE resource_leases SET lease_state='active' WHERE id=?",
@@ -130,6 +131,11 @@ def assigned_claim(status: str, role: str, suffix: str):
              task["task_id"], agent, host, wake["wake_id"], runner, now,
              now + 3600),
         )
+        durable_wake = c.execute(
+            "SELECT status FROM wake_intents WHERE wake_id=?",
+            (wake["wake_id"],),
+        ).fetchone()
+    assert durable_wake["status"] == "completed"
     claim = store._claim_task_impl(
         task["task_id"],
         agent,

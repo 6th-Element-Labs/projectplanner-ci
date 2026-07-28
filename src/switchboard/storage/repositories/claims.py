@@ -131,9 +131,12 @@ def _assigned_execution_for_claim_in(
         "AND expires_at>? LIMIT 1",
         (runner_id, task_id, agent_id, wake_id, now),
     ).fetchone()
+    # The wake is immutable assignment linkage, not coordination authority.
+    # Agent Host completes it once the runner starts; ADR-0008 forbids that
+    # communication outcome from invalidating the still-live execution lease.
     wake = c.execute(
         "SELECT * FROM wake_intents WHERE wake_id=? AND task_id=? "
-        "AND status IN ('pending','claimed') AND archived_at IS NULL",
+        "AND archived_at IS NULL",
         (wake_id, task_id),
     ).fetchone()
     lease = c.execute(
