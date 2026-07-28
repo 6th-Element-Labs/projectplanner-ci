@@ -333,21 +333,41 @@ def run_mission_tick(
     command["decision_attempt"] = int(current.get("attempt") or 0)
     command["state_version"] = int(current.get("state_version") or 0)
 
-    decision_records.record_decision_episode(
+    dossier = _map(command.get("dossier"))
+    episode_decision: dict[str, Any] = {
+        "state": command.get("state"),
+        "route": command.get("route"),
+        "reason_code": command.get("reason_code"),
+        "desired_role": command.get("desired_role"),
+        "board_projection": command.get("board_projection"),
+        "effect": command.get("effect"),
+        "mission_output": command.get("output"),
+        "acceptance_findings": list(dossier.get("acceptance_findings") or []),
+    }
+    # COORD-51/61 diagnostics ride on the decision so features_json retains
+    # which required check failed and which artifact was near-miss — without
+    # re-deriving classification from the snapshot.
+    failing_contexts = [
+        str(name)
+        for name in list(dossier.get("failing_contexts") or [])
+        if str(name).strip()
+    ]
+    if failing_contexts:
+        episode_decision["failing_contexts"] = failing_contexts
+        episode_decision["failing_check_url"] = dossier.get("failing_check_url") or ""
+        episode_decision["failing_run_attempt"] = int(
+            dossier.get("failing_run_attempt") or 0
+        )
+        episode_decision["failing_check_summary"] = (
+            dossier.get("failing_check_summary") or ""
+        )
+    missing_artifact = _map(dossier.get("missing_artifact"))
+    if missing_artifact:
+        episode_decision["missing_artifact"] = missing_artifact
+    decision_record = decision_records.record_decision_episode(
         project=project,
         snapshot=snapshot,
-        decision={
-            "state": command.get("state"),
-            "route": command.get("route"),
-            "reason_code": command.get("reason_code"),
-            "desired_role": command.get("desired_role"),
-            "board_projection": command.get("board_projection"),
-            "effect": command.get("effect"),
-            "mission_output": command.get("output"),
-            "acceptance_findings": list(
-                _map(command.get("dossier")).get("acceptance_findings") or []
-            ),
-        },
+        decision=episode_decision,
         classifier_version=MISSION_BOT_VERSION,
         advice_version=None,
     )
@@ -370,6 +390,7 @@ def run_mission_tick(
         "pr_number": snapshot.get("pr_number"),
         "snapshot_id": snapshot.get("snapshot_id") or f"snapshot-{uuid.uuid4().hex}",
     }
+    result["decision_record"] = decision_record
     result["mission_bot_version"] = MISSION_BOT_VERSION
     result["observed_at"] = time.time()
     return result

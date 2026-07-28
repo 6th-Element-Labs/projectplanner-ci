@@ -311,7 +311,12 @@ def build_dossier(
 def _missing_artifact_from_findings(
     findings: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """Lift the gate's missing_artifact report into the dossier unchanged."""
+    """Lift the gate's missing_artifact report into the dossier unchanged.
+
+    Reads the live gate shape only: ``_merge_gate_finding`` splats details onto
+    the finding top level. Nested ``details`` blobs are intentionally ignored
+    (BUG-194) so a second reader cannot reintroduce the COORD-61 discard.
+    """
     for item in findings:
         row = _map(item)
         direct = _map(row.get("missing_artifact"))

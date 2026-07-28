@@ -132,6 +132,7 @@ _ENTRIES: tuple[ReasonCode, ...] = (
     _code("pr_mergeability_unknown", "mergeability", _COMPLETION, "transient", "infra"),
     _code("draft_ready_to_mark_ready", "mergeability", _COMPLETION, "transient", "agent"),
     _code("exact_head_gates_passed", "mergeability", _COMPLETION, "transient", "agent"),
+    _code("merge_gate_blocked", "mergeability", _COMPLETION, "anomalous", "agent"),
     # -- runner / Mission Bot --------------------------------------------------
     _code("live_runner_not_desired", "runner", _COMPLETION, "transient", "agent"),
     _code("live_runner_in_progress", "runner", _COMPLETION, "transient", "agent"),

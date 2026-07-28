@@ -547,6 +547,16 @@ def run_completion_tick(
         "mission_output": command.get("output"),
         "acceptance_findings": list(dossier.get("acceptance_findings") or []),
     }
+    failing_contexts = [
+        str(name)
+        for name in list(dossier.get("failing_contexts") or [])
+        if str(name).strip()
+    ]
+    if failing_contexts:
+        decision["failing_contexts"] = failing_contexts
+        decision["failing_check_url"] = dossier.get("failing_check_url") or ""
+        decision["failing_run_attempt"] = int(dossier.get("failing_run_attempt") or 0)
+        decision["failing_check_summary"] = dossier.get("failing_check_summary") or ""
     missing_artifact = _map(dossier.get("missing_artifact"))
     if missing_artifact:
         decision["missing_artifact"] = missing_artifact
@@ -561,6 +571,7 @@ def run_completion_tick(
         "command": command,
         "observation": observation,
         "execution": result,
+        "decision_record": result.get("decision_record") or {},
     }
 
 

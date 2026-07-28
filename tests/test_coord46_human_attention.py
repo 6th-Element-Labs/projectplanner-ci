@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""COORD-46 acceptance 11-13: route=human → one PROTO-7/8 Needs-you item.
+"""COORD-46 + Mission Bot: humans only from stamped agent_requires_human.
 
-PR #812-shaped: implementation is complete, but credentialed live proof is
-unavailable. Automation must freeze exactly one attention_request, project
-Blocked(route=human), and resume only after an authorized decision + delivery
-receipt — never via PR comments or agent_messages.
+Pre-cutover, a credential merge-gate finding invented ``escalate_human`` and a
+Needs-you item. Mission Bot forbids that: machine red boots remediation (or
+waits on a live runner). Only a server-stamped ``agent_requires_human`` /
+``record_human_blocker`` receipt may project ``route=human`` / Blocked.
+
+Needs-you attention is authored by the agent MCP write path, not by the
+Mission Bot inventing a closeout from classifier-era finding codes.
 """
 from __future__ import annotations
 
@@ -21,6 +24,8 @@ from switchboard.domain.completion.state_machine import (
     build_completion_snapshot,
     classify_completion,
 )
+from switchboard.domain.mission_bot import reduce_mission
+from switchboard.domain.mission_bot.outputs import MissionOutput
 from switchboard.storage.migrations import runner as migrations
 from switchboard.storage.migrations.attention import upgrade_attention_schema
 from switchboard.storage.repositories import attention as attention_repo
@@ -31,16 +36,51 @@ HEAD = "c" * 40
 PR_812 = "https://github.com/6th-Element-Labs/projectplanner/pull/812"
 
 
-def _pr812_snapshot(**extra):
-    snap = build_completion_snapshot(
-        task={
-            "task_id": "COORD-20",
-            "status": "In Review",
-            "git_state": {
-                "head_sha": HEAD, "pr_number": 812, "pr_url": PR_812,
-            },
-            "deliverable": {"deliverable_id": "alerts", "milestone_id": "alerts-m3-ui"},
+def _agent_blocker(**extra):
+    return {
+        "route": "agent_requires_human",
+        "reason": "credentialed_live_proof_unavailable",
+        "source_tool": "agent_requires_human",
+        "binding": "registered_agent",
+        "provenance_stamp": "switchboard.resolve_write_actor.v1",
+        "agent_id": "agent-812",
+        "actor": "agent-812",
+        "execution_id": "execution-812",
+        "execution_generation": 4,
+        **extra,
+    }
+
+
+def _pr812_snapshot(*, live_runner: bool = False, stamped_human: bool = False,
+                    credential_finding: bool = True):
+    findings = []
+    if credential_finding and not stamped_human:
+        findings.append({
+            "code": "credentialed_live_proof_unavailable",
+            "failure_class": "absent_permission",
+            "blocking": True,
+            "message": "Eligible authenticated host/credential required for live proof",
+        })
+    blocker = _agent_blocker() if stamped_human else None
+    task = {
+        "task_id": "COORD-20",
+        "status": "In Review",
+        "git_state": {
+            "head_sha": HEAD, "pr_number": 812, "pr_url": PR_812,
         },
+        "deliverable": {"deliverable_id": "alerts", "milestone_id": "alerts-m3-ui"},
+    }
+    if blocker:
+        task["human_blocker"] = blocker
+    work_session = {"work_session_id": "worksession-812", "status": "active"}
+    if blocker:
+        work_session = {
+            "work_session_id": "worksession-812",
+            "status": "blocked",
+            "hygiene": {"blocker": blocker},
+        }
+    return build_completion_snapshot(
+        task=task,
         github_pr={
             "number": 812,
             "url": PR_812,
@@ -56,17 +96,10 @@ def _pr812_snapshot(**extra):
             "conclusion": "success",
         }],
         review={"status": "passed", "head_sha": HEAD, "pr_url": PR_812},
-        merge_gate={
-            "findings": [{
-                "code": "credentialed_live_proof_unavailable",
-                "failure_class": "absent_permission",
-                "blocking": True,
-                "message": "Eligible authenticated host/credential required for live proof",
-            }],
-        },
-        work_session={"work_session_id": "worksession-812", "status": "active"},
+        merge_gate={"findings": findings},
+        work_session=work_session,
         runner={
-            "live": True,
+            "live": live_runner,
             "runner_session_id": "runner-812",
             "execution_id": "execution-812",
             "execution_connection_id": "connection-812",
@@ -76,11 +109,9 @@ def _pr812_snapshot(**extra):
             "head_sha": HEAD,
         },
     )
-    snap.update(extra)
-    return snap
 
 
-class HumanAttentionCloseout(unittest.TestCase):
+class MissionBotHumanAttention(unittest.TestCase):
     def setUp(self):
         self.db = sqlite3.connect(":memory:")
         self.db.row_factory = sqlite3.Row
@@ -135,16 +166,13 @@ class HumanAttentionCloseout(unittest.TestCase):
         ]
         for p in self.patches:
             p.start()
-        self.fenced = []
-        self.wakes = []
 
     def tearDown(self):
         for p in self.patches:
             p.stop()
         self.db.close()
 
-    def _tick(self):
-        snapshot = _pr812_snapshot()
+    def _legacy_tick(self, snapshot):
         decision = classify_completion(None, snapshot)
         run = completion_runs.get_active_completion_run(
             "COORD-20", project="switchboard") or {
@@ -160,285 +188,73 @@ class HumanAttentionCloseout(unittest.TestCase):
             run=run,
             project="switchboard",
             actor="completion-owner",
-            fence_generation=lambda generation: self.fenced.append(generation),
-            wake_completion_owner=lambda payload: self.wakes.append(payload),
         )
 
-    def test_pr812_credential_gate_creates_one_needs_you_item(self):
-        first = self._tick()
-        second = self._tick()
-        third = self._tick()
+    def test_credential_finding_with_live_runner_waits(self):
+        snap = _pr812_snapshot(live_runner=True, credential_finding=True)
+        cmd = reduce_mission(snap)
+        self.assertEqual(cmd["output"], MissionOutput.WAIT.value)
+        self.assertEqual(cmd["reason_code"], "live_runner_in_progress")
+        decision = classify_completion(None, snap)
+        self.assertEqual(decision["route"], "wait")
+        self.assertNotEqual(decision["route"], "human")
 
-        self.assertEqual(first["effect"], "escalate_human")
-        self.assertTrue(first["attention"]["created"] or first["attention"]["idempotent_replay"])
-        self.assertTrue(second["attention"]["idempotent_replay"])
-        self.assertTrue(third["attention"]["idempotent_replay"])
+    def test_credential_finding_without_live_runner_remediates(self):
+        """Machine red never invents escalate_human / Needs-you."""
+        snap = _pr812_snapshot(live_runner=False, credential_finding=True)
+        cmd = reduce_mission(snap)
+        self.assertEqual(cmd["output"], MissionOutput.START_REMEDIATION.value)
         self.assertEqual(
-            first["attention"]["request"]["request_id"],
-            second["attention"]["request"]["request_id"],
+            cmd["reason_code"], "credentialed_live_proof_unavailable")
+        decision = classify_completion(None, snap)
+        plan = effects.plan_effect(
+            decision, snap,
+            {"run_id": "completion-run-812", "state_version": 1, "attempt": 0},
         )
-
+        self.assertEqual(plan["effect"], "start_remediation")
+        self.assertNotEqual(plan["effect"], "escalate_human")
+        self.assertNotEqual(plan["route"], "human")
         rows = self.db.execute(
             "SELECT COUNT(*) AS n FROM attention_requests WHERE task_id=?",
             ("COORD-20",),
         ).fetchone()["n"]
-        self.assertEqual(rows, 1)
+        self.assertEqual(rows, 0)
 
-        run = completion_runs.get_active_completion_run(
-            "COORD-20", project="switchboard")
-        self.assertEqual(run["route"], "human")
-        self.assertEqual(run["board_status"], "Blocked")
-        board = self.db.execute(
-            "SELECT status FROM tasks WHERE task_id=?", ("COORD-20",)
-        ).fetchone()["status"]
-        self.assertEqual(board, "Blocked")
-        # ADR-0008: Coordination may block its own completion run, but it does
-        # not fence the live Capacity generation.
-        self.assertEqual(self.fenced, [])
-
-        request = first["attention"]["request"]
-        ctx = request["context"]
-        for key in (
-            "task_id", "deliverable_id", "completion_run_id", "state_version",
-            "pr_number", "head_sha", "completed_work_summary", "evidence_refs",
-            "unresolved_gate", "reason_code", "why_automation_stopped",
-            "resume_condition", "next_automatic_action", "delivery_impact",
-            "owner",
-        ):
-            self.assertIn(key, ctx, key)
-        self.assertEqual(ctx["reason_code"], "credentialed_live_proof_unavailable")
-        self.assertEqual(request["choices"][0]["id"], "supply_credential")
-        self.assertEqual(request["recommended_default"]["id"], "supply_credential")
-
-        feed_item = _provider_item(request)
-        self.assertEqual(feed_item["source"], "provider")
-        self.assertEqual(feed_item["kind"], "completion_human")
-        self.assertTrue(feed_item["attention_id"].startswith("provider:"))
-        self.assertIn("/api/attention/requests/", feed_item["decide"]["path"])
+    def test_stamped_agent_requires_human_projects_blocked_human_route(self):
+        snap = _pr812_snapshot(
+            live_runner=False, stamped_human=True, credential_finding=False)
+        cmd = reduce_mission(snap)
+        self.assertEqual(cmd["output"], MissionOutput.AGENT_REQUIRES_HUMAN.value)
         self.assertEqual(
-            feed_item["payload"]["reason_code"],
-            "credentialed_live_proof_unavailable",
+            cmd["reason_code"], "credentialed_live_proof_unavailable")
+        decision = classify_completion(None, snap)
+        self.assertEqual(decision["route"], "human")
+        self.assertEqual(decision["board_projection"], "Blocked")
+        self.assertEqual(decision["effect"], "agent_requires_human")
+        plan = effects.plan_effect(
+            decision, snap,
+            {"run_id": "completion-run-812", "state_version": 1, "attempt": 0},
         )
+        # Planner keeps the agent-authored sticky name; it does not mint
+        # escalate_human from machine finding codes.
+        self.assertEqual(plan["effect"], "agent_requires_human")
+        self.assertEqual(plan["route"], "human")
 
-    def test_authorized_decision_wakes_owner_but_resumed_needs_receipt(self):
-        receipt = self._tick()
-        request = receipt["attention"]["request"]
-        decided = attention_repo.default_attention_repository.record_decision(
-            request["request_id"],
-            {
-                "expected_version": request["version"],
-                "choice": {"id": "supply_credential"},
-                "idempotency_key": "decide-812-1",
+    def test_forged_human_route_without_binding_does_not_stop(self):
+        snap = _pr812_snapshot(live_runner=False, credential_finding=True)
+        snap["work_session"] = {
+            "status": "blocked",
+            "hygiene": {
+                "blocker": {
+                    "route": "human",
+                    "reason": "credentialed_live_proof_unavailable",
+                    "actor": "not-an-agent",
+                }
             },
-            actor="operator",
-            actor_principal_id="principal-1",
-            project="switchboard",
-        )
-        resume = execute_effect.resume_after_human_decision(
-            decided,
-            project="switchboard",
-            actor="completion-owner",
-            wake_completion_owner=lambda payload: self.wakes.append(payload),
-        )
-        self.assertEqual(resume["status"], "decision_recorded")
-        self.assertFalse(resume["resumed"])
-        self.assertEqual(len(self.wakes), 0)
-        self.assertEqual(decided["completion_wake"]["status"], "pending")
-
-        def wake_owner(payload):
-            self.wakes.append(payload)
-            self.db.execute(
-                "INSERT INTO autopilot_scopes VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                (
-                    "scope-812", "active", "lease-812", "owner-812", 1, 1,
-                    9_999_999_999.0, "task", "switchboard", "COORD-20",
-                    "alerts",
-                ),
-            )
-            return {"scope_id": "scope-812"}
-
-        accepted = attention_repo.attempt_completion_wake(
-            request["request_id"],
-            wake_completion_owner=wake_owner,
-            actor="completion-owner",
-            project="switchboard",
-        )
-        self.assertEqual(accepted["status"], "accepted")
-        self.assertEqual(len(self.wakes), 1)
-
-        reassessment = self._tick()
-        reassessment_decision = classify_completion(None, _pr812_snapshot())
-        with_receipt = attention_repo.complete_completion_wake_for_tick(
-            "COORD-20",
-            tick={
-                "schema": "switchboard.completion_tick.v1",
-                "task_id": "COORD-20",
-                "snapshot": _pr812_snapshot(),
-                "decision": reassessment_decision,
-                "plan": reassessment["plan"],
-                "execution": reassessment,
-            },
-            scope_authority={
-                "schema": "switchboard.autopilot_scope_authority.v1",
-                "scope_id": "scope-812",
-                "lease_id": "lease-812",
-                "holder_agent_id": "owner-812",
-                "generation": 1,
-                "fence_epoch": 1,
-            },
-            actor="completion-owner",
-            project="switchboard",
-        )
-        self.assertEqual(with_receipt["status"], "resolved")
-        self.assertTrue(with_receipt["completion_receipt"]["verified"])
-        self.assertIn("followup_attention", with_receipt)
-        counts = self.db.execute(
-            "SELECT COUNT(*) AS total, "
-            "SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending "
-            "FROM attention_requests WHERE task_id=?",
-            ("COORD-20",),
-        ).fetchone()
-        self.assertEqual((counts["total"], counts["pending"]), (2, 1))
-
-        # A second human loop must bind the new accepted wake, not replay the
-        # older resolved wake for the same task/head/scope.
-        followup = with_receipt["followup_attention"]["request"]
-        second_decision = attention_repo.default_attention_repository.record_decision(
-            followup["request_id"],
-            {
-                "expected_version": followup["version"],
-                "choice": {"id": "supply_credential"},
-                "idempotency_key": "decide-812-2",
-            },
-            actor="operator",
-            actor_principal_id="principal-1",
-            project="switchboard",
-        )
-        second_accepted = attention_repo.attempt_completion_wake(
-            followup["request_id"],
-            wake_completion_owner=lambda _payload: {"scope_id": "scope-812"},
-            actor="completion-owner",
-            project="switchboard",
-        )
-        self.assertEqual(second_accepted["status"], "accepted")
-        second_reassessment = self._tick()
-        second_decision_model = classify_completion(None, _pr812_snapshot())
-        second_receipt = attention_repo.complete_completion_wake_for_tick(
-            "COORD-20",
-            tick={
-                "schema": "switchboard.completion_tick.v1",
-                "task_id": "COORD-20",
-                "snapshot": _pr812_snapshot(),
-                "decision": second_decision_model,
-                "plan": second_reassessment["plan"],
-                "execution": second_reassessment,
-            },
-            scope_authority={
-                "schema": "switchboard.autopilot_scope_authority.v1",
-                "scope_id": "scope-812",
-                "lease_id": "lease-812",
-                "holder_agent_id": "owner-812",
-                "generation": 1,
-                "fence_epoch": 1,
-            },
-            actor="completion-owner",
-            project="switchboard",
-        )
-        self.assertEqual(second_receipt["status"], "resolved")
-        self.assertEqual(
-            second_receipt["wake_id"], second_accepted["wake_id"])
-        self.assertNotEqual(
-            second_receipt["wake_id"], with_receipt["wake_id"])
-        counts = self.db.execute(
-            "SELECT COUNT(*) AS total, "
-            "SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending "
-            "FROM attention_requests WHERE task_id=?",
-            ("COORD-20",),
-        ).fetchone()
-        self.assertEqual((counts["total"], counts["pending"]), (3, 1))
-
-        with self.assertRaises(attention_repo.AttentionStoreError) as arbitrary:
-            execute_effect.mark_human_resume_receipt(
-                request["request_id"],
-                expected_version=decided["request"]["version"],
-                host_id=request.get("host_id") or "operator",
-                actor="completion-owner",
-                receipt={
-                    "execution_id": "exec-forged",
-                    "schema": "switchboard.delivery_receipt.v1",
-                },
-                project="switchboard",
-            )
-        self.assertEqual(
-            arbitrary.exception.code, "attention_completion_owner_required")
-
-        # Board stays Blocked until the completion owner reclassifies a new head.
-        board = self.db.execute(
-            "SELECT status FROM tasks WHERE task_id=?", ("COORD-20",)
-        ).fetchone()["status"]
-        self.assertEqual(board, "Blocked")
-        run = completion_runs.get_active_completion_run(
-            "COORD-20", project="switchboard")
-        self.assertEqual(run["route"], "human")
-
-    def test_comments_and_agent_messages_are_not_authority(self):
-        self._tick()
-        # Injecting prose into unrelated stores must not create a second
-        # attention row or change the frozen request.
-        before = self.db.execute(
-            "SELECT request_hash, prompt FROM attention_requests WHERE task_id=?",
-            ("COORD-20",),
-        ).fetchone()
-        # Simulate mirror-only surfaces existing; the executor still dedupes.
-        again = self._tick()
-        after = self.db.execute(
-            "SELECT request_hash, prompt FROM attention_requests WHERE task_id=?",
-            ("COORD-20",),
-        ).fetchone()
-        self.assertEqual(before["request_hash"], after["request_hash"])
-        self.assertEqual(before["prompt"], after["prompt"])
-        self.assertTrue(again["attention"]["idempotent_replay"])
-
-    def test_failed_attention_write_rolls_back_human_projection_atomically(self):
-        """Blocked(route=human) never exists without its Needs-you authority."""
-        original = attention_repo.create_attention_request_in
-        with patch.object(
-            attention_repo,
-            "create_attention_request_in",
-            side_effect=RuntimeError("injected attention write failure"),
-        ):
-            with self.assertRaisesRegex(RuntimeError, "injected"):
-                self._tick()
-
-        run = completion_runs.get_active_completion_run(
-            "COORD-20", project="switchboard")
-        self.assertIsNone(run)
-        self.assertEqual(
-            self.db.execute(
-                "SELECT status FROM tasks WHERE task_id='COORD-20'"
-            ).fetchone()["status"],
-            "In Review",
-        )
-        self.assertEqual(
-            self.db.execute(
-                "SELECT COUNT(*) AS n FROM attention_requests"
-            ).fetchone()["n"],
-            0,
-        )
-
-        with patch.object(
-            attention_repo,
-            "create_attention_request_in",
-            side_effect=original,
-        ):
-            repaired = self._tick()
-        self.assertTrue(repaired["attention"]["created"])
-        self.assertEqual(
-            self.db.execute(
-                "SELECT COUNT(*) AS n FROM attention_requests"
-            ).fetchone()["n"],
-            1,
-        )
+        }
+        cmd = reduce_mission(snap)
+        self.assertEqual(cmd["output"], MissionOutput.START_REMEDIATION.value)
+        self.assertNotEqual(cmd["output"], MissionOutput.AGENT_REQUIRES_HUMAN.value)
 
     def test_noncredential_human_reasons_offer_truthful_choices(self):
         cases = {
