@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<!--
+    fleet-dock-wireframe.html — the Fleet dock, redesigned, in the house style.
+
+    Same shell tokens as static/index.html (Tabler 1.4.0 pinned + taikun-tabler
+    tokens + taikun-ui polish). Same objects as the backend: runner_sessions with
+    environment.progress_fault / log_tail / last_output_at, attention requests
+    bound by runner_session_id, open_prs condition ranking + merge queue
+    positions, deploy_staleness health_view (commits_behind / checked_at /
+    last_deploy_ok).
+
+    Three tabs, one grammar: a condition ladder ranks every state that holds,
+    worst first; the winner takes one authoritative chip and tints the card's
+    left edge; healthy work collapses to a single summary row. Wireframe: all
+    data is illustrative.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Fleet dock · redesign | Taikun Switchboard</title>
+<link href="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/css/tabler.min.css" rel="stylesheet"/>
+<link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.44.0/dist/tabler-icons.min.css" rel="stylesheet"/>
+<style>
+/* ── taikun-tabler.css tokens (inlined verbatim — the single token source) ── */
+:root{
+  --tblr-primary:#c0392b; --tblr-primary-rgb:192,57,43;
+  --tblr-body-bg:#ffffff; --tblr-body-color:#101114; --tblr-secondary:#5b626e;
+  --tblr-border-color:#e2e5ea; --tblr-border-color-translucent:#e2e5ea;
+  --tk-radius-sm:.5rem; --tk-radius:.65rem; --tk-radius-lg:.9rem;
+  --tblr-border-radius:.65rem; --tblr-border-radius-lg:.85rem;
+  --tblr-font-sans-serif:'Inter Var','Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+/* ── taikun-ui.css polish (the parts this page exercises) ── */
+body{ -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; letter-spacing:-.005em;
+  background:#eef0f4; min-height:100vh; padding:34px 20px 64px; }
+.card{ background:#fff; border:1px solid var(--tblr-border-color); border-radius:.9rem;
+  box-shadow:0 1px 2px rgba(16,24,40,.05),0 1px 3px rgba(16,24,40,.08); }
+.card-header{ border-bottom:1px solid var(--tblr-border-color); }
+.btn{ border-radius:.6rem; font-weight:600; }
+.btn-sm{ border-radius:.5rem; }
+.btn-primary{ box-shadow:0 1px 2px rgba(var(--tblr-primary-rgb),.35); }
+.nav-tabs{ border-bottom:1px solid var(--tblr-border-color); gap:.1rem; }
+.nav-tabs .nav-link{ color:var(--tblr-secondary); font-weight:500; border:0; padding:.45rem .6rem;
+  position:relative; font-size:.78rem; display:flex; align-items:center; gap:.3rem; }
+.nav-tabs .nav-link::after{ content:""; position:absolute; left:.5rem; right:.5rem; bottom:-1px; height:2.5px;
+  border-radius:3px; background:var(--tblr-primary); transform:scaleX(0); transition:transform .2s ease; }
+.nav-tabs .nav-link.active{ color:var(--tblr-primary); font-weight:600; background:transparent; border:0; }
+.nav-tabs .nav-link.active::after{ transform:scaleX(1); }
+
+/* ── page furniture ── */
+.wrap{ max-width:1320px; margin:0 auto; }
+.page-h{ max-width:760px; margin-bottom:26px; }
+.page-h .ey{ font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.18em;
+  text-transform:uppercase; color:var(--tblr-primary); font-weight:600; }
+.page-h h1{ font-size:24px; font-weight:700; letter-spacing:-.02em; margin:7px 0 5px; }
+.page-h p{ color:var(--tblr-secondary); font-size:13.5px; margin:0; line-height:1.55; }
+.mono{ font-family:ui-monospace,Menlo,monospace; font-variant-numeric:tabular-nums; }
+.tk-eyebrow{ font-size:.62rem; text-transform:uppercase; letter-spacing:.08em;
+  color:var(--tblr-secondary); font-weight:600; }
+.cols{ display:flex; gap:22px; align-items:flex-start; flex-wrap:wrap; }
+.dock{ width:380px; flex:0 0 auto; }
+.dock > .card{ overflow:hidden; }
+
+/* ── the dock card idiom ── */
+.dk-body{ padding:.5rem; }
+.dk-bucket{ font-size:.62rem; text-transform:uppercase; letter-spacing:.08em;
+  color:var(--tblr-secondary); font-weight:600; margin:.15rem 0 .3rem .15rem; }
+.dk-item{ border:1px solid var(--tblr-border-color); border-radius:0 var(--tk-radius) var(--tk-radius) 0;
+  border-left-width:2px; padding:.45rem .55rem; margin-bottom:.4rem; background:#fff; }
+.dk-item.red{ border-left-color:var(--tblr-red); }
+.dk-item.orange{ border-left-color:var(--tblr-orange); }
+.dk-item.yellow{ border-left-color:var(--tblr-yellow); }
+.dk-item.green{ border-left-color:var(--tblr-green); }
+.dk-item.azure{ border-left-color:var(--tblr-azure); }
+.dk-item.grey{ border-left-color:var(--tblr-border-color); }
+.dk-task{ font-size:.81rem; margin-top:.3rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.dk-task .id{ font-family:ui-monospace,Menlo,monospace; font-size:.74rem; color:var(--tblr-secondary); }
+.dk-meta{ font-family:ui-monospace,Menlo,monospace; font-size:.68rem; color:var(--tblr-secondary);
+  margin-top:.15rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.dk-tail{ background:#f6f7f9; border-radius:var(--tk-radius-sm); padding:.3rem .45rem; margin-top:.4rem; }
+.dk-tail .line{ font-family:ui-monospace,Menlo,monospace; font-size:.68rem; color:var(--tblr-body-color);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.dk-tail .age{ font-size:.66rem; color:var(--tblr-secondary); margin-top:.1rem; }
+.dk-acts{ display:flex; align-items:center; gap:.35rem; margin-top:.45rem; }
+.dk-acts .btn{ font-size:.72rem; padding:.2rem .55rem; }
+.dk-quiet{ display:flex; align-items:center; gap:.45rem; background:#f6f7f9;
+  border-radius:var(--tk-radius-sm); padding:.4rem .55rem; font-size:.72rem; color:var(--tblr-secondary); }
+.dot{ width:.45rem; height:.45rem; border-radius:50%; display:inline-block; flex:0 0 auto; }
+.badge{ font-weight:600; }
+.dk-ap{ display:inline-flex; align-items:center; gap:.25rem; font-size:.66rem;
+  color:var(--tblr-secondary); white-space:nowrap; }
+.queue-row{ display:flex; align-items:center; gap:.45rem; padding:.16rem 0; font-size:.74rem; }
+.queue-row .pos{ font-family:ui-monospace,Menlo,monospace; font-size:.68rem; width:.9rem;
+  color:var(--tblr-secondary); }
+.pill{ display:inline-flex; align-items:center; gap:.45rem; background:#fff;
+  border:1px solid var(--tblr-border-color); border-radius:999px; padding:.3rem .7rem;
+  box-shadow:0 1px 2px rgba(16,24,40,.05),0 1px 3px rgba(16,24,40,.08); font-size:.8rem; }
+.sha{ font-family:ui-monospace,Menlo,monospace; font-size:.8rem; }
+.note{ font-size:.7rem; color:var(--tblr-secondary); line-height:1.5; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="page-h">
+    <div class="ey">Fleet dock · redesign</div>
+    <h1>Three tabs, one grammar</h1>
+    <p>A condition ladder ranks every state that holds and returns them worst first. The winner takes one
+       authoritative chip and tints the card's left edge; a runner-up becomes a muted outline chip so a second
+       problem is never lost. Healthy work collapses to a single row — the dock shows exceptions, the Fleet page
+       stays the full inventory.</p>
+  </div>
+
+  <div class="cols">
+
+    <!-- ═══════════════ TAB 1 · RUNNERS ═══════════════ -->
+    <div class="dock">
+      <div class="tk-eyebrow mb-2">tab 1 · runners</div>
+      <div class="card">
+        <div class="card-header py-2 d-flex align-items-center gap-2">
+          <i class="ti ti-server-bolt text-secondary"></i>
+          <span class="fw-medium" style="font-size:.85rem">Fleet</span>
+          <span class="ms-auto text-orange" style="font-size:.72rem">
+            <i class="ti ti-hand-stop"></i> 3 need you</span>
+          <button class="btn btn-sm btn-ghost-secondary p-1" title="Refresh"><i class="ti ti-refresh"></i></button>
+          <button class="btn btn-sm btn-ghost-secondary p-1" title="Collapse"><i class="ti ti-chevron-down"></i></button>
+        </div>
+
+        <ul class="nav nav-tabs px-2" role="tablist">
+          <li class="nav-item"><span class="nav-link active"><span class="dot" style="background:var(--tblr-orange)"></span>Runners<span class="text-secondary">4</span></span></li>
+          <li class="nav-item"><span class="nav-link"><span class="dot" style="background:var(--tblr-red)"></span>Pull requests<span class="text-secondary">7</span></span></li>
+          <li class="nav-item"><span class="nav-link"><span class="dot" style="background:var(--tblr-green)"></span>Deploy<span class="text-secondary">0</span></span></li>
+        </ul>
+
+        <div class="dk-body">
+          <div class="dk-bucket">Needs you · 1</div>
+          <div class="dk-item orange">
+            <div class="d-flex align-items-center gap-2">
+              <span class="badge bg-orange-lt"><i class="ti ti-user-exclamation me-1"></i>Waiting on you</span>
+              <span class="badge bg-transparent border text-secondary">+ 3 uncommitted</span>
+              <span class="dk-ap ms-auto"><span class="dot" style="background:var(--tblr-green)"></span>
+                <i class="ti ti-route"></i>Autopilot</span>
+            </div>
+            <div class="dk-task" title="rs-8f3c1a9e4b"><span class="id">ADAPTER-32</span>
+              Stop Connect wakes stranding on TLS blips</div>
+            <div class="dk-meta">claude-code · mac-studio-01 · fix/adapter-32 · up 47m</div>
+            <div class="dk-tail">
+              <div class="line">&rsaquo; Overwrite existing branch fix/adapter-32?</div>
+              <div class="age">quiet 14m · cpu 0%</div>
+            </div>
+            <div class="dk-acts">
+              <button class="btn btn-sm btn-primary"><i class="ti ti-message-2 me-1"></i>Answer</button>
+              <button class="btn btn-sm btn-outline-secondary"><i class="ti ti-terminal-2 me-1"></i>Watch</button>
+              <button class="btn btn-sm btn-ghost-secondary ms-auto p-1" aria-label="More"><i class="ti ti-dots"></i></button>
+            </div>
+          </div>
+
+          <div class="dk-bucket">Broken · 1</div>
+          <div class="dk-item red">
+            <div class="d-flex align-items-center gap-2">
+              <span class="badge bg-red-lt"><i class="ti ti-plug-connected-x me-1"></i>Lost host 6m</span>
+              <span class="ms-auto mono text-secondary" style="font-size:.68rem">lease gone</span>
+            </div>
+            <div class="dk-task"><span class="id">COORD-57</span> Repair loop on merge-auth advisory</div>
+            <div class="dk-meta">cursor · aws-worker-3 · up 2h</div>
+            <div class="dk-acts">
+              <button class="btn btn-sm btn-outline-secondary"><i class="ti ti-terminal-2 me-1"></i>Watch</button>
+              <button class="btn btn-sm btn-ghost-secondary ms-auto p-1" aria-label="More"><i class="ti ti-dots"></i></button>
+            </div>
+          </div>
+
+          <div class="dk-quiet">
+            <span class="dot" style="background:var(--tblr-green)"></span>
+            <span>2 working normally</span>
+            <span class="mono" style="font-size:.68rem">quiet 4s, 11s</span>
+            <a href="#" class="ms-auto text-secondary">show</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════ TAB 2 · PULL REQUESTS ═══════════════ -->
+    <div class="dock">
+      <div class="tk-eyebrow mb-2">tab 2 · pull requests</div>
+      <div class="card">
+        <div class="card-header py-2 d-flex align-items-center gap-2">
+          <i class="ti ti-server-bolt text-secondary"></i>
+          <span class="fw-medium" style="font-size:.85rem">Fleet</span>
+          <span class="ms-auto text-red" style="font-size:.72rem"><span class="dot" style="background:var(--tblr-red)"></span> 2 blocked</span>
+          <button class="btn btn-sm btn-ghost-secondary p-1" title="Refresh"><i class="ti ti-refresh"></i></button>
+          <button class="btn btn-sm btn-ghost-secondary p-1" title="Collapse"><i class="ti ti-chevron-down"></i></button>
+        </div>
+
+        <ul class="nav nav-tabs px-2" role="tablist">
+          <li class="nav-item"><span class="nav-link"><span class="dot" style="background:var(--tblr-orange)"></span>Runners<span class="text-secondary">4</span></span></li>
+          <li class="nav-item"><span class="nav-link active"><span class="dot" style="background:var(--tblr-red)"></span>Pull requests<span class="text-secondary">7</span></span></li>
+          <li class="nav-item"><span class="nav-link"><span class="dot" style="background:var(--tblr-green)"></span>Deploy<span class="text-secondary">0</span></span></li>
+        </ul>
+
+        <div class="dk-body">
+          <div class="dk-bucket">Needs you · 1</div>
+          <div class="dk-item orange">
+            <div class="d-flex align-items-center gap-2">
+              <span class="badge bg-orange-lt"><i class="ti ti-user-exclamation me-1"></i>Needs you</span>
+              <span class="ms-auto mono text-secondary" style="font-size:.68rem">#904 · 40m</span>
+            </div>
+            <div class="dk-task"><span class="id">CO-21</span> Closure verifier daemon bounds
+              <i class="ti ti-external-link text-secondary" style="font-size:.72rem"></i></div>
+            <div class="dk-meta">evidence shape unrecognised · <span class="text-green">+88</span>
+              <span class="text-red">&minus;12</span> · 3 files</div>
+            <div class="dk-acts">
+              <button class="btn btn-sm btn-primary"><i class="ti ti-gavel me-1"></i>Decide</button>
+              <button class="btn btn-sm btn-outline-secondary">Open PR</button>
+            </div>
+          </div>
+
+          <div class="dk-bucket">Blocked · 2</div>
+          <div class="dk-item red">
+            <div class="d-flex align-items-center gap-2">
+              <span class="badge bg-red-lt" title="Switchboard CI / VM gate"><i class="ti ti-x me-1"></i>VM gate failed</span>
+              <span class="badge bg-transparent border text-secondary">+ remediation</span>
+              <span class="ms-auto mono text-secondary" style="font-size:.68rem">#908</span>
+            </div>
+            <div class="dk-task"><span class="id">BREAKDOWN-5</span> Server-side PR ready check
+              <i class="ti ti-external-link text-secondary" style="font-size:.72rem"></i></div>
+            <div class="dk-meta"><span class="text-green">+214</span> <span class="text-red">&minus;31</span>
+              · 6 files · agent-4</div>
+            <div class="dk-acts">
+              <button class="btn btn-sm btn-outline-secondary"><i class="ti ti-refresh me-1"></i>Re-gate</button>
+              <button class="btn btn-sm btn-outline-secondary">Logs</button>
+              <span class="dk-ap ms-auto"><span class="dot" style="background:var(--tblr-orange)"></span>Autopilot stale</span>
+            </div>
+          </div>
+
+          <div class="dk-item yellow">
+            <div class="d-flex align-items-center gap-2">
+              <span class="badge bg-yellow-lt"><i class="ti ti-git-merge me-1"></i>Conflicts</span>
+              <span class="badge bg-transparent border text-secondary">+ stalled 3d</span>
+              <span class="ms-auto mono text-secondary" style="font-size:.68rem">#899</span>
+            </div>
+            <div class="dk-task"><span class="id">SIMPLIFY-23</span> Completion classifier extraction
+              <i class="ti ti-external-link text-secondary" style="font-size:.72rem"></i></div>
+          </div>
+
+          <div class="dk-bucket">Merge queue · 3</div>
+          <div class="dk-quiet d-block mb-2">
+            <div class="queue-row"><span class="pos text-green">1</span>
+              <span class="mono text-secondary" style="font-size:.68rem">#906</span>
+              <span class="text-truncate text-body">ADAPTER-31 Connect PTY prompts</span>
+              <span class="ms-auto text-green" style="font-size:.68rem">merging</span></div>
+            <div class="queue-row"><span class="pos">2</span>
+              <span class="mono text-secondary" style="font-size:.68rem">#907</span>
+              <span class="text-truncate text-body">ADAPTER-35 Runner lease retry</span></div>
+            <div class="queue-row"><span class="pos">3</span>
+              <span class="mono text-secondary" style="font-size:.68rem">#910</span>
+              <span class="text-truncate text-body">UI-67 Deck rework phase 1</span></div>
+          </div>
+
+          <div class="dk-item green mb-0">
+            <div class="d-flex align-items-center gap-2">
+              <span class="badge bg-green-lt"><i class="ti ti-check me-1"></i>Ready to merge</span>
+              <span class="ms-auto mono text-secondary" style="font-size:.68rem">#911 · 12m</span>
+            </div>
+            <div class="dk-task"><span class="id">UI-68</span> Runner card condition ladder
+              <i class="ti ti-external-link text-secondary" style="font-size:.72rem"></i></div>
+            <div class="dk-acts">
+              <button class="btn btn-sm btn-primary"><i class="ti ti-git-merge me-1"></i>Merge</button>
+              <button class="btn btn-sm btn-outline-secondary">Open PR</button>
+              <span class="ms-auto mono text-secondary" style="font-size:.66rem">squash</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════ TAB 3 · DEPLOY ═══════════════ -->
+    <div class="dock">
+      <div class="tk-eyebrow mb-2">tab 3 · deploy — the resting state</div>
+      <div class="card mb-3">
+        <div class="card-header py-2 d-flex align-items-center gap-2">
+          <i class="ti ti-server-bolt text-secondary"></i>
+          <span class="fw-medium" style="font-size:.85rem">Fleet</span>
+          <span class="ms-auto text-green" style="font-size:.72rem"><i class="ti ti-check"></i> all clear</span>
+          <button class="btn btn-sm btn-ghost-secondary p-1" title="Refresh"><i class="ti ti-refresh"></i></button>
+          <button class="btn btn-sm btn-ghost-secondary p-1" title="Collapse"><i class="ti ti-chevron-down"></i></button>
+        </div>
+
+        <ul class="nav nav-tabs px-2" role="tablist">
+          <li class="nav-item"><span class="nav-link"><span class="dot" style="background:var(--tblr-orange)"></span>Runners<span class="text-secondary">4</span></span></li>
+          <li class="nav-item"><span class="nav-link"><span class="dot" style="background:var(--tblr-red)"></span>Pull requests<span class="text-secondary">7</span></span></li>
+          <li class="nav-item"><span class="nav-link active"><span class="dot" style="background:var(--tblr-green)"></span>Deploy<span class="text-secondary">0</span></span></li>
+        </ul>
+
+        <div class="card-body py-3">
+          <div class="d-flex align-items-center gap-2">
+            <span class="badge bg-green-lt"><i class="ti ti-check me-1"></i>Production is current</span>
+            <span class="ms-auto text-secondary" style="font-size:.7rem">checked 40s ago</span>
+          </div>
+          <div class="dk-meta mt-2">running ca62e4d · deployed 12m ago, ok</div>
+          <div class="note mt-2">Autodeploy checks every 2 minutes and ships master when it moves.</div>
+        </div>
+        <div class="dk-body pt-0">
+          <div class="dk-quiet">
+            <span class="dot" style="background:var(--tblr-green)"></span>
+            <span>Last shipped</span>
+            <span class="mono" style="font-size:.68rem">#906 ADAPTER-31</span>
+            <a href="#" class="ms-auto text-secondary">show 14</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="tk-eyebrow mb-2">deploy · the two states that matter</div>
+      <div class="dk-item yellow">
+        <div class="d-flex align-items-center gap-2">
+          <span class="badge bg-yellow-lt"><i class="ti ti-clock me-1"></i>2 behind, shipping</span>
+          <span class="ms-auto text-secondary" style="font-size:.7rem">checked 20s ago</span>
+        </div>
+        <div class="d-flex align-items-center gap-3 mt-2">
+          <div><div class="tk-eyebrow">production</div><div class="sha">8fc2172</div></div>
+          <i class="ti ti-arrow-right text-secondary"></i>
+          <div><div class="tk-eyebrow">master</div><div class="sha text-yellow">ca62e4d</div></div>
+          <div class="ms-auto note text-end">autodeploy<br/>has this</div>
+        </div>
+      </div>
+
+      <div class="dk-item red">
+        <div class="d-flex align-items-center gap-2">
+          <span class="badge bg-red-lt"><i class="ti ti-alert-triangle me-1"></i>Autodeploy failing</span>
+          <span class="ms-auto text-red" style="font-size:.7rem">6 behind, 3h</span>
+        </div>
+        <div class="dk-meta mt-1">8fc2172 &rarr; ca62e4d · last ok deploy 3h ago</div>
+        <div class="note text-red mt-1">Retried every 2 minutes since 09:14. Nothing is reaching production.</div>
+        <div class="dk-acts">
+          <button class="btn btn-sm btn-danger"><i class="ti ti-rocket me-1"></i>Dispatch deploy agent</button>
+          <button class="btn btn-sm btn-outline-secondary">What's stuck</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ═══════════════ REFERENCE ═══════════════ -->
+  <div class="cols mt-4">
+
+    <div style="width:580px;flex:0 0 auto">
+      <div class="tk-eyebrow mb-2">runner condition ladder · worst first, one chip wins</div>
+      <div class="card">
+        <div class="list-group list-group-flush">
+          <div class="list-group-item py-2 d-flex align-items-center gap-2">
+            <span class="mono text-secondary" style="font-size:.7rem;width:.8rem">1</span>
+            <span class="badge bg-red-lt"><i class="ti ti-alert-triangle me-1"></i>Exited 1</span>
+            <span class="text-secondary" style="font-size:.74rem">status not running · failure_reason</span>
+            <button class="btn btn-sm btn-outline-secondary ms-auto">Restart</button>
+          </div>
+          <div class="list-group-item py-2 d-flex align-items-center gap-2">
+            <span class="mono text-secondary" style="font-size:.7rem;width:.8rem">2</span>
+            <span class="badge bg-red-lt"><i class="ti ti-plug-connected-x me-1"></i>Lost host 6m</span>
+            <span class="text-secondary" style="font-size:.74rem">lease expired, no heartbeat</span>
+            <button class="btn btn-sm btn-ghost-secondary ms-auto">Watch</button>
+          </div>
+          <div class="list-group-item py-2 d-flex align-items-center gap-2">
+            <span class="mono text-secondary" style="font-size:.7rem;width:.8rem">3</span>
+            <span class="badge bg-orange-lt"><i class="ti ti-user-exclamation me-1"></i>Waiting on you</span>
+            <span class="text-secondary" style="font-size:.74rem">attention request bound to this session</span>
+            <button class="btn btn-sm btn-primary ms-auto">Answer</button>
+          </div>
+          <div class="list-group-item py-2 d-flex align-items-center gap-2">
+            <span class="mono text-secondary" style="font-size:.7rem;width:.8rem">4</span>
+            <span class="badge bg-yellow-lt"><i class="ti ti-zzz me-1"></i>Silent 14m</span>
+            <span class="text-secondary" style="font-size:.74rem">progress_fault · live lease, quiet PTY</span>
+            <button class="btn btn-sm btn-outline-secondary ms-auto">Nudge</button>
+          </div>
+          <div class="list-group-item py-2 d-flex align-items-center gap-2">
+            <span class="mono text-secondary" style="font-size:.7rem;width:.8rem">5</span>
+            <span class="badge bg-secondary-lt"><i class="ti ti-minus me-1"></i>Idle</span>
+            <span class="text-secondary" style="font-size:.74rem">live host, no task bound</span>
+            <button class="btn btn-sm btn-ghost-secondary ms-auto">Watch</button>
+          </div>
+          <div class="list-group-item py-2 d-flex align-items-center gap-2">
+            <span class="mono text-secondary" style="font-size:.7rem;width:.8rem">6</span>
+            <span class="badge bg-green-lt"><i class="ti ti-player-play me-1"></i>Working 4s</span>
+            <span class="text-secondary" style="font-size:.74rem">output age, not uptime</span>
+            <button class="btn btn-sm btn-ghost-secondary ms-auto">Watch</button>
+          </div>
+          <div class="list-group-item py-2 d-flex align-items-center gap-2">
+            <span class="mono text-secondary" style="font-size:.7rem;width:.8rem">7</span>
+            <span class="badge bg-secondary-lt"><i class="ti ti-help-circle me-1"></i>Running · up 47m</span>
+            <span class="text-secondary" style="font-size:.74rem">host reports no output age</span>
+            <button class="btn btn-sm btn-ghost-secondary ms-auto">Watch</button>
+          </div>
+        </div>
+        <div class="card-footer py-2 note">
+          Rank 7 never says <b>silent</b> and never says <b>0s</b>. A runner whose host does not stamp
+          <span class="mono">last_output_at</span> reports uptime only — unknown is not zero.
+        </div>
+      </div>
+    </div>
+
+    <div style="width:380px;flex:0 0 auto">
+      <div class="tk-eyebrow mb-2">collapsed pill · worst condition sets the tone</div>
+      <div class="d-flex flex-column gap-2 mb-4">
+        <span class="pill"><span class="dot" style="background:var(--tblr-orange)"></span>
+          <span>2 waiting on you</span>
+          <span class="text-secondary" style="font-size:.74rem">· 1 silent · 3 working · 7 PRs</span>
+          <i class="ti ti-chevron-up text-secondary"></i></span>
+        <span class="pill"><span class="dot" style="background:var(--tblr-red)"></span>
+          <span>1 broken</span>
+          <span class="text-secondary" style="font-size:.74rem">· 4 working · 7 PRs</span>
+          <i class="ti ti-chevron-up text-secondary"></i></span>
+        <span class="pill"><span class="dot" style="background:var(--tblr-green)"></span>
+          <span>Fleet clear</span>
+          <span class="text-secondary" style="font-size:.74rem">· 4 working · 7 PRs</span>
+          <i class="ti ti-chevron-up text-secondary"></i></span>
+      </div>
+
+      <div class="tk-eyebrow mb-2">merge confirm · a production event</div>
+      <div class="card">
+        <div class="card-body p-3">
+          <div class="fw-medium" style="font-size:.88rem">Squash and merge #911 to master?</div>
+          <div class="text-secondary mt-1" style="font-size:.76rem">UI-68 Runner card condition ladder,
+            by agent-4. Checks are green.</div>
+          <div class="d-flex gap-2 align-items-start mt-2 p-2" style="background:rgba(247,103,7,.10);border-radius:var(--tk-radius-sm)">
+            <i class="ti ti-rocket text-orange" style="font-size:.9rem"></i>
+            <span class="text-orange" style="font-size:.72rem;line-height:1.45">Autodeploy ships master to
+              production within 2 minutes of this landing.</span>
+          </div>
+          <div class="d-flex gap-2 mt-3">
+            <button class="btn btn-sm btn-primary">Merge</button>
+            <button class="btn btn-sm btn-outline-secondary">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>

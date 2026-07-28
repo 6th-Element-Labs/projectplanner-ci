@@ -2232,3 +2232,548 @@ This is the second live confirmation today that the highest-leverage missing beh
 the placement decision — it simply never reaches an operator surface or a finding.
 
 **Not repaired** (observed under standing instruction not to intervene).
+**Run date:** 2026-07-27 (22:40 UTC)
+**Operator:** claude/UI-69-planner (observer mode — no intervention after arming)
+**Host:** `host/steve-mbp-co16`
+**Tasks launched:** UI-68 (`runtime=codex`, `role=implementation`); UI-71 gated behind it
+**Deliverable under test:** `deliverable-autopilot-dock-honest-runner-liveness`
+**Autopilot scope:** `autopilot-ae656a96cff64701` (deliverable scope, `status=active`, generation 1)
+
+> Standing instruction for this run: **do not intervene**. Document only.
+> Nothing below has been repaired.
+
+---
+
+## Step 0 — Preconditions (PASS)
+
+| Field | Value |
+|---|---|
+| `get_project_execution_readiness` | `passed=true`, `status=ready`, `blockers=[]` |
+| autopilot state | `ready`, profile `autopilot-default`, `enabled=true` |
+| configuration | topology valid, policy revision 6, canonical `6th-Element-Labs/projectplanner` |
+| provider | all selected connections active (selector_count 1) |
+| scm | `scm-a9db19c5b1d94400`, covers canonical repo lifecycle |
+| persistent capacity | `not_required`; eligible `host/steve-mbp-co16` |
+| ephemeral capacity | ready, burst enabled, max_concurrent 2 |
+| live_host_count | 2 |
+
+## GOOD PATH — arming to live runner worked hands-off
+
+Recorded because it worked and should not be re-litigated.
+
+- Scope created `1785191542`, ticked at `1785191633` (≈91s).
+- UI-68 runner live at `1785191598`: `run_ac7409834b93b352`,
+  `agent/codex/ui-68`, `host/steve-mbp-co16`, `status=running`, `stale=false`,
+  `heartbeat_ttl_s=180`, `fence_epoch=1`, `execlease-3fef8eaa92b64fd489c9`.
+- Output age fresh throughout the observed window (`last_output_at` advancing).
+- **Dependency gating held.** UI-71 `depends_on=[UI-68]` was correctly *not*
+  started; `list_runner_sessions` shows exactly one live runner. No double-drive.
+
+## BREAKDOWN 43 — a runner's `status` is never reconciled when its lease expires, and the watchdog that would notice cannot see it ⚠️
+
+**Severity:** high — three runners on this board currently report `status: "running"`
+while having produced nothing for hours. Every read surface believes them.
+
+**Evidence** (`GET /ixp/v1/runner_sessions?project=switchboard&include_stale=true`,
+2026-07-27 22:35 UTC, unrelated to this run's task):
+
+```
+UI-68        running stale=False last_output_at=1785191744  fault=None      <- this run, healthy
+COORD-94     running stale=True  last_output_at=1785170054  fault=raised
+BUG-154      running stale=True  last_output_at=None        fault=None
+SIMPLIFY-17  running stale=True  last_output_at=None        fault=None
+```
+
+COORD-94's fault, verbatim:
+
+```
+"message": "live runner lease with no PTY output for 11936s (bound 1800s)",
+"kind": "runner_progress_stalled", "output_age_s": 11936.314, "bound_s": 1800.0,
+"raised_at": 1785171867.5230937, "output_bytes": 751480
+```
+
+**Why it matters.** Two independent gates both fail open here:
+
+1. `runner_progress_monitor._eligible()` requires `_is_live_lease(row)`
+   (`runner_progress_monitor.py:68-76`), and `_default_sessions()` sweeps with
+   `include_stale=False` (`:153-157`). So once a lease expires the runner leaves
+   the watchdog's view **permanently** — it can never be faulted, and an
+   existing fault can never be cleared (COORD-94 still carries a fault raised
+   at `1785171867`).
+2. `evaluate_progress()` returns `None` when `last_output_at` is absent
+   (`:92-94`, "Old hosts that never report progress cannot invent a stall
+   signal"). That choice is defensible on its own, but it means BUG-154 and
+   SIMPLIFY-17 — which never reported output at all — are invisible to the
+   watchdog *and* therefore produce no `_runner_progress_item` attention entry.
+
+The compound result: a runner can die, keep `status: "running"` forever, raise
+no fault, and generate no attention item. Nothing escalates. `stale=true` is the
+only surviving evidence, and it is a field most surfaces do not lead with.
+
+**Note:** this is adjacent to the specced lease-orphan work (ADR-8 two-task cut,
+`tests/test_adapter35_runner_lease_retry.py`), but that work is about *recovering
+the task*. This entry is narrower and separate: the runner row's own `status`
+field is never reconciled, so the board reports a false "running" indefinitely.
+
+**Fix direction (not applied here):** on lease expiry, reconcile the row's
+`status` off `running` rather than leaving it host-reported, or have the read
+model derive a status from lease liveness instead of trusting the stored column.
+Either way `status` must stop being the field surfaces believe. Clearing a stale
+fault also needs a path that does not require eligibility.
+
+**Not repaired.**
+
+## BREAKDOWN 44 — `create_deliverable` upsert is a full replace, and it can empty `proof_requirements` while `status=in_progress` ⚠️
+
+**Severity:** high — this is the closure-gate intake requirement silently deleting itself.
+
+**Evidence.** Sequence run against `deliverable-autopilot-dock-honest-runner-liveness`
+while scoping this deliverable:
+
+1. Created with `end_state` + `acceptance_criteria` + valid `proof_requirements`
+   (2 gates) at `status=in_progress`. Accepted.
+2. Re-upserted passing **only** `deliverable_id`, `title`, `status`,
+   `acceptance_criteria` to correct a formatting problem.
+3. Response came back with `"end_state": ""`, `"why_it_matters": ""`,
+   `"owner_person_or_role": ""`, `"policy_constraints": {}`, and
+   `"proof_requirements": {}` — while `"status": "in_progress"` was retained.
+
+**Why it matters.** `PM_ENFORCE_DELIVERABLE_INTAKE` exists to guarantee that an
+`in_progress` deliverable has `end_state`, `acceptance_criteria`, and a
+well-formed `proof_requirements` (docs/DELIVERABLE-CLOSURE-GATE.md). The gate is
+enforced on the *transition* into `in_progress`, so an upsert that stays
+`in_progress` never re-checks it — and because unspecified fields are cleared
+rather than merged, a partial edit strips the gate's own preconditions. The
+deliverable then sits `in_progress` with zero required gates, and
+`verify_deliverable_closure` has nothing to hold it on.
+
+An operator correcting a typo in one field silently disarms the closure gate.
+
+**Fix direction (not applied here):** either make the upsert a merge for
+unspecified fields, or re-run the intake assertion on every write that leaves
+status at `in_progress` — not only on the transition into it.
+
+**Not repaired.** (Restored by hand in this session; the defect is unchanged.)
+
+## BREAKDOWN 45 — `acceptance_criteria` is comma-split, so any criterion containing a comma is shredded
+
+**Severity:** medium — corrupts the text the closure gate is checked against.
+
+**Evidence.** Submitted as newline-separated prose. Returned as:
+
+```json
+["1. Left nav",
+ "page header and dock header read \"Autopilot\"; ... Internal identifiers (fleet-dock element id",
+ "toptab-fleet",
+ "SwitchboardFleetDock",
+ "_renderFleetDock",
+ "/ixp/v1 routes) are unchanged.",
+ "2. FleetDock.runnerConditions returns conditions worst-first over seven ranks: exited",
+ "lost_host", "waiting_on_you", "silent", "idle", ...]
+```
+
+**Why it matters.** Acceptance criteria are the human-readable contract Gate 1
+(`scope`) and the closure report are judged against. Splitting on commas turns
+one criterion into a list of sentence fragments — `"toptab-fleet"` and
+`"silent"` became standalone "criteria". A reviewer reading the deliverable sees
+noise, and any automated criterion count is inflated and meaningless.
+
+**Fix direction (not applied here):** split on newlines only, or accept a JSON
+list. If comma-splitting is load-bearing for some caller, it needs to be opt-in
+rather than the default for a free-text field.
+
+**Not repaired.** (Worked around by writing comma-free criteria.)
+
+## BREAKDOWN 46 — `archive_task` leaves deliverable links behind as `state=missing` with `blocks_deliverable=true`
+
+**Severity:** medium — a deliverable can be blocked forever by tasks that no longer exist.
+
+**Evidence.** After archiving 7 tasks that had been linked to the deliverable,
+`get_deliverable_dependency_graph` reported:
+
+```
+stats: {"node_count": 9, "blocker_count": 9, "todo_count": 2, "edge_count": 1}
+nodes: UI-69/70/72/73/74/75/76 -> {"state": "missing", "status": null,
+                                   "blocker": true, "provenance": null}
+```
+
+and `get_deliverable` still listed each as a `task_links` entry with
+`"blocks_deliverable": true` and `"task": {"error": "unknown task"}`.
+
+**Why it matters.** `archive_task` succeeded and returned `archived: true` for
+each task, but the deliverable's link rows were not touched. The deliverable
+then reports 9 blockers of which 7 cannot ever reach a terminal state — an
+unresolvable closure condition produced by a supported operation. `archive_task`
+already refuses to run when a task has active claims or leases, so it clearly
+inspects related state; deliverable links are simply not in that set.
+
+**Fix direction (not applied here):** archiving a task should either cascade to
+its deliverable links or refuse while `blocks_deliverable=true` links exist,
+the same way it refuses on active claims. A dangling blocking link is the same
+class of broken edge that `add_dependency` already fails closed on.
+
+**Not repaired.** (Unlinked by hand in this session.)
+
+### Observe tick — UI-68 (2026-07-27 22:40 UTC)
+
+- `status=running stale=False output=fresh fault=none`. Background watch armed
+  on runner state + PR appearance; ticks appended below as they land.
+
+### Observe tick — UI-68 reached In Review hands-off (2026-07-27 22:53 UTC)
+
+**The full loop worked with no intervention.** Recorded as the good path.
+
+| Event | Time | Evidence |
+|---|---|---|
+| scope active | 1785191542 | `autopilot-ae656a96cff64701` |
+| runner live | 1785191598 | `run_ac7409834b93b352`, `agent/codex/ui-68` |
+| task claimed | 1785191709 | `Not Started` → `In Progress` (111s after runner start) |
+| draft PR opened | ~1785192651 | #1007, head `da4cd565`, 8 files, +296/−34 |
+| CI dispatched | ~1785192700 | `ci_state` `none` → `pending` (event-driven gate fired) |
+| claim completed | 1785192781 | `In Progress` → `In Review`, `has_ended_session=true` |
+| runner released | 1785192781 | `status=expired` after complete_claim, not before |
+
+Dependency gating held throughout: UI-71 stayed `Not Started` with no wake in
+flight. Exactly one runner for the whole run. No double-drive.
+
+Commit series matched the plan one-for-one, in order:
+`3e91c00e` rename → `c8471a7b` ladder → `8d543f60` task-first card →
+`d069180f` condition-led actions → `da4cd565` pill labels.
+
+## OBSERVATION — the agent completed the loop but silently substituted its own semantics, and wrote tests that ratify them
+
+**Severity:** medium — not an autopilot failure. Autopilot did its job. This is a
+fidelity gap between a specced plan and what a self-reviewing agent ships.
+
+**Evidence.** The plan (`docs/superpowers/plans/2026-07-28-autopilot-dock-runner-ladder.md`)
+specified seven ranks with `silent` keyed on the presence of WATCH-19's
+`progress_fault` and `idle` meaning *no task bound*. Shipped in
+`da4cd565:static/js/fleet-dock.js`:
+
+```js
+if (age != null && age >= 600) {
+    out.push({ key: 'silent', label: `Silent ${this.shortAge(age)}`, ... });
+} else if (age != null && age >= 120) {
+    out.push({ key: 'idle', label: `Idle ${this.shortAge(age)}`, ... });
+} else if (age != null) {
+    out.push({ key: 'working', label: 'Working', ... });
+```
+
+Three divergences:
+
+1. **`silent` now fires on a hardcoded 600s** instead of on `progress_fault`.
+   The server's own watchdog bound is 1800s (`runner_progress_monitor`), so the
+   card will call a runner "Silent" for 20 minutes while the control plane
+   considers it fine and raises no attention item. The UI and the watchdog now
+   disagree about what silence means.
+2. **`idle` was redefined** from "running, no `task_id` bound" to "output age
+   between 120s and 600s". A runner actively working with two minutes of quiet
+   now reports `Idle 3m`, and a runner with no task bound is no longer flagged
+   at all. The rank name survived; its meaning did not.
+3. **`runnerOutputAge` reads `s.progress_fault`**, but the payload carries it at
+   `s.environment.progress_fault` (`runner.py:822`). The fault fast-path is dead
+   code. It still computes a correct age by falling through to
+   `environment.last_output_at`, so nothing visibly breaks — which is why nothing
+   caught it.
+
+**What did survive:** the load-bearing rule. `runnerOutputAge` returns `null`
+when output age is unknown, and the ladder's `null` branch falls through to an
+uptime-labelled rank. The shipped test asserts it:
+
+```js
+if (!unknownConditions[0].label.includes('47m') || unknownConditions[0].label.includes('Silent'))
+```
+
+Acceptance criterion 3 holds — no "Silent 0m", no "0s".
+
+**Why it matters.** The plan supplied nine named test cases with full bodies.
+The shipped ladder test carries three assertions, covering `running_unknown` and
+the dirty secondary chip — precisely the slice its implementation satisfies.
+There is no test for the rank ordering, for `waiting_on_you` outranking `silent`,
+or for `idle` semantics. So CI goes green, self-review passes, and the divergence
+merges. This is the known cost of ADR-0021 self-review: CI is the bar, and CI
+cannot catch a semantic substitution that the tests were written around.
+
+**Fix direction (not applied here):** when a plan supplies verbatim test bodies,
+the task should require those tests rather than "tests for this behaviour" —
+tests-as-spec, not tests-as-afterthought. Cheap partial mitigation: have the
+closure gate assert a minimum assertion count per specced criterion.
+
+**Not repaired.** Observer-mode run; the operator is holding all fixes until the
+loop is proven end to end.
+
+### CI red on UI-68 — cause identified: the PLAN was wrong, not the agent (2026-07-27 23:10 UTC)
+
+`Switchboard CI / VM gate` failed on `da4cd565`
+(`ecir-dbd9f550b3ad41d4`, run 30312156176, `failure_class=workflow_failed`).
+
+Faithful local reproduction (`PYTHON=<project venv 3.13>` — see caveat below):
+**exactly 1 failure of 593 files.**
+
+```
+== FAIL tests/test_arch_ms14_test_layout.py (exit 1) ==
+AssertionError: test_autopilot_dock_autopilot_pill_labels.py imports the shared path shim
+```
+
+`tests/test_arch_ms14_test_layout.py` (ARCH-MS-14) is an architectural guard: it
+AST-parses every `tests/test_*.py` and requires `from path_setup import ...`.
+The five new test files use `pathlib.Path(__file__).resolve().parents[1]` instead.
+
+**This is a planner defect, not an agent defect.** The plan
+(`docs/superpowers/plans/2026-07-28-autopilot-dock-runner-ladder.md`) supplied
+those test files verbatim, and every one of them opens with:
+
+```python
+import pathlib
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+```
+
+The convention was visible in the file the planner had already read
+(`tests/test_ui_deployment_fleet_tab.py:7`, `from path_setup import ROOT`) and
+was not carried into the plan. The agent implemented the specified tests
+faithfully; the specification violated a guard the repo already enforces.
+
+**Significance — this is the system working.** ADR-0021 accepts agent
+self-review on the bet that CI is the real bar. Here self-review passed (the
+agent's own five tests are green, verified at its SHA) and CI caught a genuine
+convention violation anyway. The guard did exactly its job, on the planner.
+
+**Caveat on the first reproduction attempt.** An earlier local run reported 8
+failures, all `TypeError: dataclass() got an unexpected keyword argument 'slots'`.
+That was the observer's environment — the default `python3` on this host is
+3.9.6, CI runs 3.12, and `slots=True` needs 3.10+. Those 8 were not real. Noted
+because reporting them would have handed the operator a false cause; a repro is
+only evidence when the interpreter matches.
+
+**Fix direction (not applied here):** the plan's test scaffolding must use
+`from path_setup import ROOT`. More usefully: any plan that ships verbatim test
+bodies should be checked against the repo's own guard tests before dispatch —
+ARCH-MS-14 is discoverable and would have caught this at authoring time.
+
+**Not repaired.** Left red deliberately: the open question this run exists to
+answer is whether Autopilot routes a red gate to remediation and converges, or
+repair-loops as it did on COORD-57 (BREAKDOWN 42 territory). Watching.
+
+### CORRECTION to the fidelity observation above (2026-07-27 23:15 UTC)
+
+The earlier observation ("the agent substituted its own semantics") is **wrong
+about cause and unfair to the agent.** `get_task(UI-68).git_state.known_signal`
+records, verbatim:
+
+```json
+{"failure_class": "missing_data", "source": "task_plan_reference",
+ "observed": "docs/superpowers/plans/2026-07-28-autopilot-dock-runner-ladder.md absent at canonical base SHA",
+ "handling": "implemented against full board acceptance contract; UI-71 attention join excluded"}
+```
+
+The plan was committed on the observer's worktree branch and never merged, so it
+did not exist at the agent's base SHA `ae95edc1`. The agent never had the nine
+verbatim test bodies or the rank table. It reconstructed the ladder from the task
+description alone, **declared the missing input as a typed `missing_data` signal
+instead of hiding it** (fail-fix-early policy, working exactly as written), and
+still landed the load-bearing rule correctly.
+
+The divergences are real and still worth fixing, but they are a *planner*
+failure: referencing a plan path the executor cannot read. Second planner defect
+this run, same root cause as the `path_setup` one — authoring against a private
+branch.
+
+**Fix direction (not applied):** a task that cites a plan path must either have
+that path merged to the base branch first, or inline the contract in the task
+body. Cheap guard: reject dispatch when a task description references a
+`docs/**` path absent at the base SHA.
+
+## BREAKDOWN 47 — remediation advances the PR head but not the board's `head_sha`, and the assigned recovery route cannot ever fix it ⚠️
+
+**Severity:** high — non-convergent by construction. This is the shape of
+BREAKDOWN 42 again: a state routed to a recovery that is structurally incapable
+of resolving it.
+
+**Evidence.** Remediation pushed the correct minimal fix
+(`e0426552 UI-68 use shared test path shim`, 5 files, −10 net) and recorded a
+full passing test run **at the new head**:
+
+```json
+"executed_test_run": {"head_sha": "e04265521b691ec97e09080b3762e30594df7e70",
+  "exit_code": 0, "passed": true, "run_id": "testrun-aa52f344301f44cd",
+  "commands": ["for f in tests/test_autopilot_dock_*.py; do python3 \"$f\"; done",
+               "python3 tests/test_arch_ms14_test_layout.py",
+               "node --check static/app.js", "node --check static/js/fleet-dock.js",
+               "git diff --check",
+               ".../bin/python scripts/run_ui_playwright.py"]}
+"mutation_check": {"test": "tests/test_autopilot_dock_autopilot_pill_labels.py",
+                   "observed_exit_code": 1, "restored_exit_code": 0}
+```
+
+But the task's own top-level field was never advanced:
+
+```
+git_state.head_sha                            = da4cd565…   (stale)
+git_state.evidence.executed_test_run.head_sha = e0426552…   (current)
+PR #1007 head_sha                             = e0426552…   (current)
+```
+
+`state_machine.py:814-816` compares the stale top-level value:
+
+```python
+if board_head and board_head != head_sha:
+    return _decision("blocked", "coordination_retry", "board_pr_head_mismatch",
+                     retry="bounded")
+```
+
+Result: `route=coordination_retry`, `retry=bounded`, exhausted at `attempt: 5`,
+then `route=human`, `route_owner=operator`, `current_effect=escalate_human`,
+`board_status=Blocked`.
+
+**Why it matters.** A bounded coordination retry can never clear a stale board
+head — nothing in that route writes `head_sha`. Only a new `complete_claim` (or
+an explicit evidence advance) does, and the agent had already completed its claim
+before remediation ran. So the loop burned five attempts on a repair that was
+mechanically impossible, then escalated. The work itself is *finished and green*:
+the recorded run at `e0426552` passed every gate including Playwright and the
+mutation check. The task is Blocked purely on bookkeeping.
+
+**Fix direction (not applied here):** `record_executed_test_run` already carries
+the authoritative `head_sha` — advance `git_state.head_sha` from it (it is the
+same write path that stamps hygiene), or have the state machine compare against
+the newest recorded evidence head rather than the last-claimed head. Either
+removes an unreachable state. If the mismatch must stay blocking, its route
+should be one that can actually write the head, not `coordination_retry`.
+
+**Not repaired.**
+
+## BREAKDOWN 48 — the human escalation was created and then silently not delivered on either channel ⚠️
+
+**Severity:** high — the circuit breaker worked and the human was never told.
+
+**Evidence.** Two `attention.push_missed` activity records on UI-68:
+
+```json
+{"attention_id": "provider:attention-3670ce81ca7248dc8ee546872e45bf7d",
+ "delivered": false,
+ "results": [{"channel": "slack", "dry_run": true, "sent": false},
+             {"channel": "email", "sent": false,
+              "error": "(550, b'5.4.5 Daily user sending limit exceeded. ... gsmtp')"}]}
+```
+
+**Why it matters.** This is the good half of the story failing at the last inch.
+Autopilot bounded its retries, declined to loop 50x as it did on COORD-57, and
+correctly escalated to the operator — and then both delivery channels failed:
+Slack is in `dry_run`, and Gmail refused on a daily sending limit. `delivered:
+false` is recorded honestly rather than swallowed, which is the right behaviour,
+but nothing reads that record. The operator learned the run was blocked only
+because a human observer happened to be polling.
+
+An escalation nobody receives is indistinguishable from a hang. Every
+`escalate_human` outcome inherits this.
+
+**Fix direction (not applied here):** treat `delivered: false` on all channels as
+its own alertable condition — a `push_missed` with no successful channel should
+raise a visible board-level signal (the Autopilot dock's Needs-you strip is the
+natural home), not just an activity row. Separately: Slack `dry_run: true` on a
+production project is a config state worth surfacing at readiness time, and the
+Gmail limit argues for a channel that does not share a consumer quota.
+
+**Not repaired.**
+
+### Scoreboard for this run
+
+| Segment | Result |
+|---|---|
+| arm → scope → wake → runner | hands-off PASS |
+| claim → In Progress | hands-off PASS |
+| implement (5 commits, plan order) | PASS, despite the plan being unreadable |
+| draft PR → ready | hands-off PASS |
+| CI dispatch | hands-off PASS |
+| complete_claim → In Review | hands-off PASS |
+| dependency gating (UI-71 held) | PASS |
+| CI red → diagnose → remediate | hands-off PASS (correct minimal fix) |
+| executed-test evidence + Playwright + mutation check | PASS, all recorded |
+| repair loop bounded (no 50x) | PASS — stopped at attempt 5 |
+| board head advance after remediation | **FAIL — BREAKDOWN 47** |
+| human escalation delivery | **FAIL — BREAKDOWN 48** |
+
+Eleven of thirteen segments ran hands-off. Both failures are bookkeeping and
+notification, not code or dispatch.
+
+### CORRECTION — the repair loop is NOT bounded. It is the COORD-57 shape. (2026-07-27 23:25 UTC)
+
+The scoreboard above claims "repair loop bounded (no 50x) — PASS, stopped at
+attempt 5". **That was premature and is wrong.** Attempt 5 was simply where the
+counter happened to be when first sampled. Eight minutes later:
+
+```
+ci_state       = success
+mergeable      = clean          <- the PR is mergeable
+head_sha       = e0426552…      <- matches the recorded green evidence
+state          = blocked
+route          = human
+reason_code    = board_pr_head_mismatch
+current_effect = escalate_human
+attempt        = 33
+state_version  = 33
+terminal       = False          <- never settles
+```
+
+`route=human` did not stop the loop; it only changed the loop's effect. The
+controller keeps re-ticking, re-deciding, and re-escalating. `terminal: False`
+means there is no absorbing state.
+
+**Everything else about the PR is now green.** CI passed on `e0426552`,
+`mergeable_state=clean`. The single thing holding the task is
+`git_state.head_sha` still reading the superseded `da4cd565`. One stale field is
+producing an unbounded loop on a finished, mergeable, fully-evidenced change.
+
+Correct the scoreboard row: **repair loop bounded → FAIL.**
+
+## BREAKDOWN 49 — the human escalation is not idempotent: one new attention request per tick, none deliverable, none resolvable ⚠️
+
+**Severity:** critical — this is BREAKDOWN 47 and 48 compounding into a queue flood.
+
+**Evidence.** `GET /api/attention/requests?project=switchboard&limit=200`:
+
+```
+total attention requests = 17
+UI-68 attention requests = 17
+  ('pending', 'board_pr_head_mismatch') -> 17
+first created_at = 1785193424.645204   last = 1785193927.9272485
+all bound to runner_session_id = run_93048f035ca6ad10
+```
+
+17 requests in 503 seconds — **one every ~30 seconds** — every one `pending`,
+every one the same `reason_code`, every one for the same task and runner session.
+100% of the operator queue for this project is now a single stuck task
+restating itself.
+
+**Why it matters.** Three defects multiply:
+
+1. The condition cannot be fixed by its assigned route (BREAKDOWN 47), so it
+   never clears.
+2. Each escalation's push fails on both channels (BREAKDOWN 48), so nothing
+   surfaces.
+3. The escalation creates a *new* attention request per tick rather than
+   updating or deduping the existing one — so the queue grows without bound.
+
+An `escalate_human` effect that fires every 30s is not an escalation, it is a
+retry loop wearing an escalation's clothes. And because `create_attention_request`
+is being called per tick with no idempotency key on
+`(task_id, reason_code, head_sha)`, the operator queue becomes unusable for every
+*other* task on the board. At this rate a single stuck task produces ~2,880
+pending requests a day.
+
+**Design feedback for UI-71 (this deliverable).** The dock's planned
+Waiting-on-you join is keyed by `runner_session_id`, so all 17 collapse to one
+chip on one card — the join shape holds up under this failure. But the Needs-you
+inbox itself would show 17 identical rows. Whatever dedupe the dock applies,
+the queue needs it at the write path too.
+
+**Fix direction (not applied here):** make `escalate_human` idempotent on
+`(task_id, reason_code, head_sha)` — update `updated_at` / bump a repeat counter
+on the existing pending request instead of inserting a new one. Independently,
+an effect that has already escalated should stop re-deciding: `route=human`
+needs to be absorbing until the operator acts or the head changes, which is what
+`terminal` should be expressing and currently is not.
+
+**Not repaired.** Left running deliberately; the operator is holding all fixes.
+Note for whoever does repair this: there are 17+ pending rows to reconcile, and
+the count is still climbing.

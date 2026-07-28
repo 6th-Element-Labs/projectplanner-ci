@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<!--
+    fleet-dock-mobile-wireframe.html — the Fleet dock on a phone, in the house
+    design system (Tabler 1.4.0 pinned + taikun-tabler tokens). Same phone shell
+    as docs/mobile/switchboard-taikun-mobile.html: bottom tabs Overview · Brief ·
+    Fleet · Tally · Needs you, app bar, scroll pane, sheet + scrim.
+
+    The desktop dock is a floating card you glance at. On a phone there is no
+    corner to float in and no hover, so the same objects become a full tab:
+    one segmented control, cards at full width, the primary action sized for a
+    thumb, and every secondary action in a bottom sheet. The condition ladder is
+    unchanged — it is the grammar, not the layout. Wireframe: all data is
+    illustrative.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Fleet dock mobile · redesign | Taikun Switchboard</title>
+<link href="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/css/tabler.min.css" rel="stylesheet"/>
+<link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.44.0/dist/tabler-icons.min.css" rel="stylesheet"/>
+<style>
+:root{
+  --tblr-primary:#c0392b; --tblr-primary-rgb:192,57,43;
+  --tblr-body-bg:#ffffff; --tblr-body-color:#101114; --tblr-secondary:#5b626e;
+  --tblr-border-color:#e2e5ea; --tblr-border-radius:.65rem; --tblr-border-radius-lg:.85rem;
+  --tk-radius-sm:.5rem; --tk-radius:.65rem;
+  --tblr-font-sans-serif:'Inter Var','Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+body{ -webkit-font-smoothing:antialiased; letter-spacing:-.005em; background:#eef0f4 !important;
+  min-height:100vh; display:flex; flex-direction:column; align-items:center; gap:16px; padding:26px 14px 44px; }
+.card{ border:1px solid var(--tblr-border-color); border-radius:.9rem;
+  box-shadow:0 1px 2px rgba(16,24,40,.05),0 1px 3px rgba(16,24,40,.08); }
+.btn{ border-radius:.6rem; font-weight:600; }
+.page-h{ text-align:center; max-width:620px; }
+.page-h .ey{ font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.18em;
+  text-transform:uppercase; color:var(--tblr-primary); font-weight:600; }
+.page-h h1{ font-size:22px; font-weight:720; letter-spacing:-.02em; margin:6px 0 4px; }
+.page-h p{ color:var(--tblr-secondary); font-size:13.5px; margin:0; line-height:1.55; }
+.mono{ font-family:ui-monospace,Menlo,monospace; font-variant-numeric:tabular-nums; }
+.tk-eyebrow{ font-size:.62rem; text-transform:uppercase; letter-spacing:.08em;
+  color:var(--tblr-secondary); font-weight:600; }
+.rack{ display:flex; gap:26px; flex-wrap:wrap; justify-content:center; align-items:flex-start; }
+.slot{ display:flex; flex-direction:column; align-items:center; gap:9px; }
+.slot .cap{ font-family:ui-monospace,Menlo,monospace; font-size:11px; color:var(--tblr-secondary); }
+
+/* ── phone frame (same as switchboard-taikun-mobile.html) ── */
+.phone{ width:378px; border-radius:52px; padding:11px;
+  background:linear-gradient(160deg,#24262c,#0e0f12 60%);
+  box-shadow:0 2px 6px rgba(16,24,40,.06),0 30px 70px -20px rgba(16,24,40,.5); }
+.screen{ position:relative; border-radius:42px; overflow:hidden; background:#f6f7f9;
+  height:800px; display:flex; flex-direction:column; font-size:.85rem; }
+.island{ position:absolute; top:11px; left:50%; transform:translateX(-50%); width:112px; height:30px;
+  background:#000; border-radius:20px; z-index:40; }
+.sb{ height:50px; flex:0 0 auto; display:flex; align-items:flex-end; justify-content:space-between;
+  padding:0 26px 7px; font-size:13px; font-weight:650; background:#fff; }
+.homebar{ position:absolute; bottom:8px; left:50%; transform:translateX(-50%); width:128px; height:5px;
+  border-radius:999px; background:#111; opacity:.22; z-index:60; }
+.appbar{ display:flex; align-items:center; gap:8px; padding:6px 14px 10px; background:#fff;
+  border-bottom:1px solid var(--tblr-border-color); flex:0 0 auto; }
+.appbar .lk{ font-size:12px; font-weight:500; letter-spacing:.12em; white-space:nowrap; }
+.appbar .lk b{ font-weight:400; color:var(--tblr-primary); }
+.appbar .sub{ font-size:9.5px; color:var(--tblr-secondary); font-family:ui-monospace,Menlo,monospace; }
+.scroll{ flex:1; overflow:hidden; padding:10px 11px 8px; }
+.tabbar{ flex:0 0 auto; display:flex; border-top:1px solid var(--tblr-border-color); background:#fff;
+  padding:6px 4px 24px; }
+.tab{ flex:1; display:flex; flex-direction:column; align-items:center; gap:1px; font-size:9px;
+  font-weight:600; color:var(--tblr-secondary); position:relative; background:none; border:0; }
+.tab .ti{ font-size:19px; } .tab.on{ color:var(--tblr-primary); }
+.tbadge{ position:absolute; top:-2px; right:calc(50% - 17px); font-size:8.5px; font-weight:700;
+  background:#d63939; color:#fff; border-radius:999px; padding:0 5px; }
+
+/* ── segmented control ── */
+.seg{ display:flex; background:#e9ebef; border-radius:.6rem; padding:2px; margin-bottom:9px; }
+.seg button{ flex:1; border:0; background:none; font-size:.72rem; font-weight:600; padding:.28rem 0;
+  border-radius:.48rem; color:var(--tblr-secondary); display:flex; align-items:center;
+  justify-content:center; gap:.25rem; }
+.seg button.on{ background:#fff; color:var(--tblr-body-color);
+  box-shadow:0 1px 2px rgba(16,24,40,.10); }
+.seg .dot{ width:.4rem; height:.4rem; border-radius:50%; display:inline-block; }
+
+/* ── the card idiom, phone sizing ── */
+.dot{ width:.45rem; height:.45rem; border-radius:50%; display:inline-block; flex:0 0 auto; }
+.bucket{ font-size:.6rem; text-transform:uppercase; letter-spacing:.08em; color:var(--tblr-secondary);
+  font-weight:600; margin:.5rem 0 .3rem .15rem; }
+.item{ background:#fff; border:1px solid var(--tblr-border-color); border-left-width:3px;
+  border-radius:0 var(--tk-radius) var(--tk-radius) 0; padding:.5rem .6rem; margin-bottom:.45rem;
+  box-shadow:0 1px 2px rgba(16,24,40,.05); }
+.item.red{ border-left-color:var(--tblr-red); }
+.item.orange{ border-left-color:var(--tblr-orange); }
+.item.yellow{ border-left-color:var(--tblr-yellow); }
+.item.green{ border-left-color:var(--tblr-green); }
+.item .task{ font-size:.79rem; margin-top:.3rem; line-height:1.3; }
+.item .task .id{ font-family:ui-monospace,Menlo,monospace; font-size:.71rem; color:var(--tblr-secondary); }
+.item .meta{ font-family:ui-monospace,Menlo,monospace; font-size:.65rem; color:var(--tblr-secondary);
+  margin-top:.18rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.tail{ background:#f6f7f9; border-radius:var(--tk-radius-sm); padding:.32rem .45rem; margin-top:.4rem;
+  display:flex; align-items:center; gap:.4rem; }
+.tail .line{ font-family:ui-monospace,Menlo,monospace; font-size:.66rem; flex:1;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.acts{ display:flex; gap:.4rem; margin-top:.5rem; }
+.acts .btn{ font-size:.75rem; padding:.32rem .7rem; }
+.acts .btn.grow{ flex:1; }
+.quiet{ display:flex; align-items:center; gap:.45rem; background:#fff; border:1px solid var(--tblr-border-color);
+  border-radius:var(--tk-radius); padding:.45rem .6rem; font-size:.72rem; color:var(--tblr-secondary); }
+.badge{ font-weight:600; }
+.qrow{ display:flex; align-items:center; gap:.4rem; padding:.2rem 0; font-size:.73rem; }
+.qrow .pos{ font-family:ui-monospace,Menlo,monospace; font-size:.66rem; width:.85rem; color:var(--tblr-secondary); }
+.ptr{ text-align:center; font-size:.64rem; color:var(--tblr-secondary); padding:.1rem 0 .45rem; }
+.sha{ font-family:ui-monospace,Menlo,monospace; font-size:.86rem; }
+
+/* ── bottom sheet + scrim ── */
+.scrim{ position:absolute; inset:0; background:rgba(12,17,26,.42); z-index:45; }
+.sheet{ position:absolute; left:0; right:0; bottom:0; z-index:50; background:#fff;
+  border-radius:1.1rem 1.1rem 0 0; padding:9px 15px 30px;
+  box-shadow:0 -12px 40px -8px rgba(16,24,40,.35); }
+.grab{ width:38px; height:4px; border-radius:999px; background:#d7dae0; margin:0 auto 11px; }
+.choice{ display:block; width:100%; text-align:left; border:1px solid var(--tblr-border-color);
+  background:#fff; border-radius:var(--tk-radius); padding:.6rem .75rem; font-size:.82rem;
+  font-weight:600; margin-bottom:.45rem; }
+.choice.rec{ border-color:var(--tblr-primary); box-shadow:0 0 0 2px rgba(var(--tblr-primary-rgb),.12); }
+.choice .hint{ display:block; font-weight:400; font-size:.68rem; color:var(--tblr-secondary); margin-top:.1rem; }
+</style>
+</head>
+<body>
+
+<div class="page-h">
+  <div class="ey">Fleet dock · mobile</div>
+  <h1>The same grammar, sized for a thumb</h1>
+  <p>There is no corner to float in and no hover, so the dock stops being a floating card and becomes the Fleet
+     tab. The condition ladder is unchanged — it is the grammar, not the layout. What changes: one segmented
+     control instead of three nav tabs, the primary action sized for a thumb, every secondary action in a bottom
+     sheet, and the collapsed pill replaced by a badge on the tab bar that is visible from any screen.</p>
+</div>
+
+<div class="rack">
+
+  <!-- ═══════════════ 1 · FLEET → RUNNERS ═══════════════ -->
+  <div class="slot">
+    <div class="cap">fleet · runners</div>
+    <div class="phone"><div class="screen">
+      <div class="island"></div>
+      <div class="sb"><span>9:41</span><span><i class="ti ti-wifi"></i> <i class="ti ti-battery-3"></i></span></div>
+      <div class="appbar">
+        <div class="d-flex align-items-center gap-2 flex-fill" style="min-width:0">
+          <span class="lk">TAIKUN<b>·</b>SWITCHBOARD</span>
+        </div>
+        <span class="sub">switchboard</span>
+      </div>
+
+      <div class="scroll">
+        <div class="ptr"><i class="ti ti-arrow-down"></i> pull to refresh · live</div>
+        <div class="seg">
+          <button class="on"><span class="dot" style="background:var(--tblr-orange)"></span>Runners 4</button>
+          <button><span class="dot" style="background:var(--tblr-red)"></span>PRs 7</button>
+          <button><span class="dot" style="background:var(--tblr-green)"></span>Deploy</button>
+        </div>
+
+        <div class="bucket">Needs you · 1</div>
+        <div class="item orange">
+          <div class="d-flex align-items-center gap-2">
+            <span class="badge bg-orange-lt"><i class="ti ti-user-exclamation me-1"></i>Waiting on you</span>
+            <span class="ms-auto d-inline-flex align-items-center gap-1 text-secondary" style="font-size:.64rem">
+              <span class="dot" style="background:var(--tblr-green)"></span>Autopilot</span>
+          </div>
+          <div class="task"><span class="id">ADAPTER-32</span> Stop Connect wakes stranding on TLS blips</div>
+          <div class="meta">claude-code · mac-studio-01 · up 47m</div>
+          <div class="tail">
+            <span class="line">&rsaquo; Overwrite existing branch fix/adapter-32?</span>
+            <i class="ti ti-chevron-right text-secondary" style="font-size:.8rem"></i>
+          </div>
+          <div class="acts">
+            <button class="btn btn-sm btn-primary grow"><i class="ti ti-message-2 me-1"></i>Answer</button>
+            <button class="btn btn-sm btn-outline-secondary"><i class="ti ti-terminal-2"></i></button>
+            <button class="btn btn-sm btn-ghost-secondary"><i class="ti ti-dots"></i></button>
+          </div>
+        </div>
+
+        <div class="bucket">Broken · 1</div>
+        <div class="item red">
+          <div class="d-flex align-items-center gap-2">
+            <span class="badge bg-red-lt"><i class="ti ti-plug-connected-x me-1"></i>Lost host 6m</span>
+            <span class="ms-auto mono text-secondary" style="font-size:.64rem">lease gone</span>
+          </div>
+          <div class="task"><span class="id">COORD-57</span> Repair loop on merge-auth advisory</div>
+          <div class="meta">cursor · aws-worker-3 · up 2h</div>
+          <div class="acts">
+            <button class="btn btn-sm btn-outline-secondary grow"><i class="ti ti-terminal-2 me-1"></i>Watch</button>
+            <button class="btn btn-sm btn-ghost-secondary"><i class="ti ti-dots"></i></button>
+          </div>
+        </div>
+
+        <div class="bucket">Working · 2</div>
+        <div class="quiet">
+          <span class="dot" style="background:var(--tblr-green)"></span>
+          <span>2 working normally</span>
+          <span class="mono" style="font-size:.64rem">quiet 4s, 11s</span>
+          <i class="ti ti-chevron-down ms-auto"></i>
+        </div>
+      </div>
+
+      <div class="tabbar">
+        <button class="tab"><i class="ti ti-layout-dashboard"></i>Overview</button>
+        <button class="tab"><i class="ti ti-file-text"></i>Brief</button>
+        <button class="tab on"><i class="ti ti-server-bolt"></i>Fleet</button>
+        <button class="tab"><i class="ti ti-scale"></i>Tally</button>
+        <button class="tab"><span class="tbadge">3</span><i class="ti ti-hand-stop"></i>Needs you</button>
+      </div>
+      <div class="homebar"></div>
+    </div></div>
+  </div>
+
+  <!-- ═══════════════ 2 · ANSWER SHEET ═══════════════ -->
+  <div class="slot">
+    <div class="cap">answer · bottom sheet</div>
+    <div class="phone"><div class="screen">
+      <div class="island"></div>
+      <div class="sb"><span>9:41</span><span><i class="ti ti-wifi"></i> <i class="ti ti-battery-3"></i></span></div>
+      <div class="appbar">
+        <div class="d-flex align-items-center gap-2 flex-fill" style="min-width:0">
+          <span class="lk">TAIKUN<b>·</b>SWITCHBOARD</span>
+        </div>
+        <span class="sub">switchboard</span>
+      </div>
+
+      <div class="scroll">
+        <div class="seg">
+          <button class="on"><span class="dot" style="background:var(--tblr-orange)"></span>Runners 4</button>
+          <button><span class="dot" style="background:var(--tblr-red)"></span>PRs 7</button>
+          <button><span class="dot" style="background:var(--tblr-green)"></span>Deploy</button>
+        </div>
+        <div class="bucket">Needs you · 1</div>
+        <div class="item orange">
+          <div class="d-flex align-items-center gap-2">
+            <span class="badge bg-orange-lt"><i class="ti ti-user-exclamation me-1"></i>Waiting on you</span>
+          </div>
+          <div class="task"><span class="id">ADAPTER-32</span> Stop Connect wakes stranding on TLS blips</div>
+          <div class="meta">claude-code · mac-studio-01 · up 47m</div>
+        </div>
+      </div>
+
+      <div class="scrim"></div>
+      <div class="sheet">
+        <div class="grab"></div>
+        <div class="tk-eyebrow">ADAPTER-32 · mac-studio-01</div>
+        <div class="fw-medium mt-1" style="font-size:.92rem">Overwrite existing branch fix/adapter-32?</div>
+        <div class="text-secondary mt-1 mb-3" style="font-size:.72rem">
+          Asked 14 minutes ago. The runner is holding until you answer.</div>
+        <button class="choice rec">Yes, overwrite
+          <span class="hint">recommended by the agent</span></button>
+        <button class="choice">No, keep the existing branch</button>
+        <div class="d-flex gap-2 mt-3">
+          <button class="btn btn-sm btn-outline-secondary flex-fill">
+            <i class="ti ti-terminal-2 me-1"></i>Open terminal</button>
+          <button class="btn btn-sm btn-ghost-secondary flex-fill">Dismiss</button>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div></div>
+  </div>
+
+  <!-- ═══════════════ 3 · FLEET → PULL REQUESTS ═══════════════ -->
+  <div class="slot">
+    <div class="cap">fleet · pull requests</div>
+    <div class="phone"><div class="screen">
+      <div class="island"></div>
+      <div class="sb"><span>9:41</span><span><i class="ti ti-wifi"></i> <i class="ti ti-battery-3"></i></span></div>
+      <div class="appbar">
+        <div class="d-flex align-items-center gap-2 flex-fill" style="min-width:0">
+          <span class="lk">TAIKUN<b>·</b>SWITCHBOARD</span>
+        </div>
+        <span class="sub">switchboard</span>
+      </div>
+
+      <div class="scroll">
+        <div class="seg">
+          <button><span class="dot" style="background:var(--tblr-orange)"></span>Runners 4</button>
+          <button class="on"><span class="dot" style="background:var(--tblr-red)"></span>PRs 7</button>
+          <button><span class="dot" style="background:var(--tblr-green)"></span>Deploy</button>
+        </div>
+
+        <div class="bucket">Blocked · 2</div>
+        <div class="item red">
+          <div class="d-flex align-items-center gap-2">
+            <span class="badge bg-red-lt"><i class="ti ti-x me-1"></i>VM gate failed</span>
+            <span class="ms-auto mono text-secondary" style="font-size:.64rem">#908 · 22m</span>
+          </div>
+          <div class="task"><span class="id">BREAKDOWN-5</span> Server-side PR ready check</div>
+          <div class="meta">+214 &minus;31 · 6 files · agent-4</div>
+          <div class="acts">
+            <button class="btn btn-sm btn-outline-secondary grow"><i class="ti ti-refresh me-1"></i>Re-gate</button>
+            <button class="btn btn-sm btn-ghost-secondary"><i class="ti ti-external-link"></i></button>
+          </div>
+        </div>
+
+        <div class="item yellow">
+          <div class="d-flex align-items-center gap-2">
+            <span class="badge bg-yellow-lt"><i class="ti ti-git-merge me-1"></i>Conflicts</span>
+            <span class="badge bg-transparent border text-secondary" style="font-size:.62rem">+ stalled 3d</span>
+            <span class="ms-auto mono text-secondary" style="font-size:.64rem">#899</span>
+          </div>
+          <div class="task"><span class="id">SIMPLIFY-23</span> Completion classifier extraction</div>
+        </div>
+
+        <div class="bucket">Merge queue · 3</div>
+        <div class="quiet d-block">
+          <div class="qrow"><span class="pos text-green">1</span>
+            <span class="mono text-secondary" style="font-size:.64rem">#906</span>
+            <span class="text-truncate text-body">ADAPTER-31 Connect PTY</span>
+            <span class="ms-auto text-green" style="font-size:.64rem">merging</span></div>
+          <div class="qrow"><span class="pos">2</span>
+            <span class="mono text-secondary" style="font-size:.64rem">#907</span>
+            <span class="text-truncate text-body">ADAPTER-35 Lease retry</span></div>
+          <div class="qrow"><span class="pos">3</span>
+            <span class="mono text-secondary" style="font-size:.64rem">#910</span>
+            <span class="text-truncate text-body">UI-67 Deck rework</span></div>
+        </div>
+
+        <div class="bucket">Ready · 1</div>
+        <div class="item green">
+          <div class="d-flex align-items-center gap-2">
+            <span class="badge bg-green-lt"><i class="ti ti-check me-1"></i>Ready to merge</span>
+            <span class="ms-auto mono text-secondary" style="font-size:.64rem">#911 · 12m</span>
+          </div>
+          <div class="task"><span class="id">UI-68</span> Runner card condition ladder</div>
+          <div class="acts">
+            <button class="btn btn-sm btn-primary grow"><i class="ti ti-git-merge me-1"></i>Merge · squash</button>
+            <button class="btn btn-sm btn-ghost-secondary"><i class="ti ti-external-link"></i></button>
+          </div>
+        </div>
+      </div>
+
+      <div class="tabbar">
+        <button class="tab"><i class="ti ti-layout-dashboard"></i>Overview</button>
+        <button class="tab"><i class="ti ti-file-text"></i>Brief</button>
+        <button class="tab on"><i class="ti ti-server-bolt"></i>Fleet</button>
+        <button class="tab"><i class="ti ti-scale"></i>Tally</button>
+        <button class="tab"><span class="tbadge">3</span><i class="ti ti-hand-stop"></i>Needs you</button>
+      </div>
+      <div class="homebar"></div>
+    </div></div>
+  </div>
+
+  <!-- ═══════════════ 4 · FLEET → DEPLOY ═══════════════ -->
+  <div class="slot">
+    <div class="cap">fleet · deploy</div>
+    <div class="phone"><div class="screen">
+      <div class="island"></div>
+      <div class="sb"><span>9:41</span><span><i class="ti ti-wifi"></i> <i class="ti ti-battery-3"></i></span></div>
+      <div class="appbar">
+        <div class="d-flex align-items-center gap-2 flex-fill" style="min-width:0">
+          <span class="lk">TAIKUN<b>·</b>SWITCHBOARD</span>
+        </div>
+        <span class="sub">switchboard</span>
+      </div>
+
+      <div class="scroll">
+        <div class="seg">
+          <button><span class="dot" style="background:var(--tblr-orange)"></span>Runners 4</button>
+          <button><span class="dot" style="background:var(--tblr-red)"></span>PRs 7</button>
+          <button class="on"><span class="dot" style="background:var(--tblr-red)"></span>Deploy</button>
+        </div>
+
+        <div class="item red">
+          <div class="d-flex align-items-center gap-2">
+            <span class="badge bg-red-lt"><i class="ti ti-alert-triangle me-1"></i>Autodeploy failing</span>
+            <span class="ms-auto text-red" style="font-size:.66rem">3h</span>
+          </div>
+          <div class="d-flex align-items-center gap-3 mt-2">
+            <div><div class="tk-eyebrow">production</div><div class="sha">8fc2172</div></div>
+            <i class="ti ti-arrow-right text-secondary"></i>
+            <div><div class="tk-eyebrow">master</div><div class="sha text-red">ca62e4d</div></div>
+            <div class="ms-auto text-end"><div class="tk-eyebrow">behind</div>
+              <div class="sha text-red">6</div></div>
+          </div>
+          <div class="text-red mt-2" style="font-size:.7rem;line-height:1.45">
+            Retried every 2 minutes since 09:14. Nothing is reaching production.</div>
+          <div class="acts">
+            <button class="btn btn-sm btn-danger grow"><i class="ti ti-rocket me-1"></i>Dispatch deploy agent</button>
+          </div>
+        </div>
+
+        <div class="bucket">Waiting on this deploy · 6</div>
+        <div class="quiet d-block">
+          <div class="qrow"><span class="mono text-secondary" style="font-size:.64rem">#906</span>
+            <span class="text-truncate text-body">Connect PTY prompts</span>
+            <span class="ms-auto mono text-secondary" style="font-size:.62rem">ADAPTER-31</span></div>
+          <div class="qrow"><span class="mono text-secondary" style="font-size:.64rem">#905</span>
+            <span class="text-truncate text-body">Register TLS blips</span>
+            <span class="ms-auto mono text-secondary" style="font-size:.62rem">ADAPTER-32</span></div>
+          <div class="qrow"><span class="mono text-secondary" style="font-size:.64rem">#903</span>
+            <span class="text-truncate text-body">Closure verifier bounds</span>
+            <span class="ms-auto mono text-secondary" style="font-size:.62rem">CO-21</span></div>
+          <div class="qrow text-secondary"><span style="font-size:.68rem">3 more</span></div>
+        </div>
+
+        <div class="bucket">When it is healthy</div>
+        <div class="quiet">
+          <span class="dot" style="background:var(--tblr-green)"></span>
+          <span class="text-body">Production is current</span>
+          <span class="mono" style="font-size:.64rem">checked 40s ago</span>
+        </div>
+      </div>
+
+      <div class="tabbar">
+        <button class="tab"><i class="ti ti-layout-dashboard"></i>Overview</button>
+        <button class="tab"><i class="ti ti-file-text"></i>Brief</button>
+        <button class="tab on"><i class="ti ti-server-bolt"></i>Fleet</button>
+        <button class="tab"><i class="ti ti-scale"></i>Tally</button>
+        <button class="tab"><span class="tbadge">3</span><i class="ti ti-hand-stop"></i>Needs you</button>
+      </div>
+      <div class="homebar"></div>
+    </div></div>
+  </div>
+
+</div>
+</body>
+</html>
