@@ -775,7 +775,7 @@ const TeepPlan = {
         document.addEventListener('hidden.bs.modal', sync);
         sync();
     },
-    _fleetSignature(runners, prs, deployments, prUnavailable, autopilotCoverage) {
+    _fleetSignature(runners, prs, deployments, prUnavailable, autopilotCoverage, attention) {
         const r = (runners || []).map((s) => [
             s.runner_session_id || '', s.status || '', s.stale ? 1 : 0,
             ((s.last_snapshot || {}).captured_at) || 0,
@@ -800,9 +800,12 @@ const TeepPlan = {
             task, (cov || {}).coverage || '', (cov || {}).liveness || '',
             (cov || {}).scope_id || '',
         ]).sort((x, y) => String(x[0]).localeCompare(String(y[0])));
+        const q = Object.entries(attention || {}).map(([runner, request]) => [
+            runner, (request || {}).request_id || '', (request || {}).version || 0,
+        ]).sort((x, y) => String(x[0]).localeCompare(String(y[0])));
         return JSON.stringify([
             r, p, d, Number((deployments || {}).undeployed_count || 0),
-            prUnavailable || '', (deployments || {}).unavailable || '', a,
+            prUnavailable || '', (deployments || {}).unavailable || '', a, q,
         ]);
     },
     // A stalled request here used to hang forever (no timeout), which left
@@ -825,12 +828,14 @@ const TeepPlan = {
             // — one query, one payload, no dock-only filtering, so the dock can never
             // show a different fleet than the page. PRs are cached server-side (60s
             // GitHub sweep, open_prs.py), so the 10s poll only ever hits the cache.
-            const [runnerList, pRes, dRes] = await Promise.all([
+            const [runnerList, pRes, dRes, attention] = await Promise.all([
                 this._fetchFleetRunners(force),
                 this._fetchTimeout(`/ixp/v1/open_prs?${p}`, { cache: 'no-store' }),
                 this._fetchTimeout(`/ixp/v1/deployments?${p}`, { cache: 'no-store' }),
+                window.SwitchboardFleetDock.loadRunnerAttention(this),
             ]);
             runners = runnerList;
+            this._dockAttention = attention;
             prPayload = await pRes.json();
             deploymentPayload = await dRes.json();
             // 401/5xx bodies are `{detail: …}` with no `prs`/`unavailable`. Treat those
@@ -853,7 +858,7 @@ const TeepPlan = {
         this._dockDeploymentUnavailable = deploymentPayload.unavailable || '';
         const sig = this._fleetSignature(
             runners, prs, deploymentPayload, this._dockPrUnavailable,
-            this._dockAutopilot);
+            this._dockAutopilot, this._dockAttention);
         const changed = sig !== this._fleetSig;
         this._fleetLoadBusy = false;
         if (force || changed) {
