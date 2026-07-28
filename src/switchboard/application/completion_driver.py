@@ -438,12 +438,16 @@ def _mission_ports_from_adapters(
     actor: str,
     agent_id: str,
     store_mod: Any = None,
+    scope_authority: Optional[Mapping[str, Any]] = None,
+    scope_project: str = "",
 ) -> Any:
     """Bridge legacy CompletionEffectAdapters into MissionPorts (tests/shadow)."""
     from switchboard.domain.mission_bot import MissionPorts
 
     fallback = production_mission_ports(
         project=project, actor=actor, agent_id=agent_id, store_mod=store_mod,
+        scope_authority=scope_authority,
+        scope_project=scope_project,
     )
 
     def start_task(plan: Mapping[str, Any]) -> dict[str, Any]:
@@ -492,6 +496,8 @@ def run_completion_tick(
     hydrator: Callable[..., dict[str, Any]] = hydrate_completion_snapshot,
     adapters: Optional[CompletionEffectAdapters] = None,
     shadow_observer: Optional[Callable[[Mapping[str, Any]], Any]] = None,
+    scope_authority: Optional[Mapping[str, Any]] = None,
+    scope_project: str = "",
 ) -> dict[str, Any]:
     """Mission Bot production tick. One dossier → one boot/wait/land command."""
     snapshot = hydrator(
@@ -517,11 +523,14 @@ def run_completion_tick(
     ports = (
         _mission_ports_from_adapters(
             adapters, project=project, actor=actor, agent_id=agent_id,
-            store_mod=store_mod,
+            store_mod=store_mod, scope_authority=scope_authority,
+            scope_project=scope_project,
         )
         if adapters is not None
         else production_mission_ports(
             project=project, actor=actor, agent_id=agent_id, store_mod=store_mod,
+            scope_authority=scope_authority,
+            scope_project=scope_project,
         )
     )
     result = run_mission_tick(
@@ -532,6 +541,8 @@ def run_completion_tick(
         store_mod=store_mod,
         hydrator=lambda *_a, **_k: snapshot,
         ports=ports,
+        scope_authority=scope_authority,
+        scope_project=scope_project,
     )
     dossier = _map(command.get("dossier"))
     decision = {

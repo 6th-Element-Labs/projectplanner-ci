@@ -97,8 +97,32 @@ plan = {
     "dossier": dossier,
     "idem_key": MISSION_KEY,
 }
+scope = store.start_autopilot_scope(
+    project=P,
+    scope_type="task",
+    task_project=P,
+    task_id=task["task_id"],
+    runtime="codex",
+    actor="coord99-test",
+)
+store.register_agent(
+    "switchboard/scoped-owner/coord99-test",
+    "scoped-completion-coordinator",
+    project=P,
+    ttl_s=600,
+)
+scope_authority = store.acquire_autopilot_scope_lease(
+    scope["scope_id"],
+    holder_agent_id="switchboard/scoped-owner/coord99-test",
+    project=P,
+)
 ports = production_mission_ports(
-    project=P, actor="coord99-test", agent_id="", store_mod=object(),
+    project=P,
+    actor="coord99-test",
+    agent_id="",
+    store_mod=store,
+    scope_authority=scope_authority,
+    scope_project=P,
 )
 first = ports.start_task(plan)
 second = ports.start_task(plan)

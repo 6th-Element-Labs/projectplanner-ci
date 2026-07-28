@@ -14,6 +14,7 @@ not cover it; the deliverable-routed drive plus the head_sha plug do.
 from __future__ import annotations
 
 import sys
+from unittest.mock import patch
 
 from path_setup import ROOT  # noqa: F401
 
@@ -130,11 +131,16 @@ scoped = ScopedCompletionCoordinator(
     agent_id="switchboard/scoped-owner/test")
 ok(scoped._drive_scope.__func__ is ScopedCompletionCoordinator._drive_scope,
    "the scoped coordinator overrides _drive_scope to drive")
-# A standalone task scope drives without ever touching a mission (uses run_scope).
-outcome = scoped._drive_scope("switchboard", {
-    "scope_id": "s1", "scope_type": "task", "deliverable_id": "",
-    "task_project": "switchboard", "task_id": "PROTO-X"})
-ok(outcome.get("status") in {"observed", "dispatched", "completed"},
+# A standalone task scope drives through the one Mission Bot tick without ever
+# touching the legacy deliverable coordinator.
+with patch(
+    "switchboard.application.completion_driver.run_completion_tick",
+    return_value={"controller": "mission_bot", "execution": {"action": "started"}},
+):
+    outcome = scoped._drive_scope("switchboard", {
+        "scope_id": "s1", "scope_type": "task", "deliverable_id": "",
+        "task_project": "switchboard", "task_id": "PROTO-X"})
+ok(outcome.get("status") == "completion_tick",
    f"the scoped driver acts on a standalone task scope (got {outcome.get('status')})")
 
 

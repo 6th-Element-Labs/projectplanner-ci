@@ -1,9 +1,8 @@
-"""Package GitHub/Switchboard facts into an unchanged mission dossier.
+"""Package live facts for durable identity and a bounded Mission Bot tape.
 
-The Mission Bot copies facts. It does not diagnose, compress, or truncate them.
-Every boot receives the full nested evidence identity. Prompt rendering applies
-a separate redaction boundary so execution/environment secrets never enter the
-LLM tape.
+The complete dossier remains available to decision history.  A runner receives
+only actionable fields plus a durable evidence reference, so provider argv
+limits cannot turn a valid mission into a Capacity launch failure.
 """
 from __future__ import annotations
 
@@ -68,6 +67,10 @@ _VOLATILE_IDENTITY_KEYS = frozenset({
     "uptime_seconds",
     "waited_seconds",
 })
+
+MISSION_TAPE_MAX_BYTES = 32 * 1024
+MISSION_TAPE_MAX_ITEMS = 16
+MISSION_TAPE_MAX_TEXT = 1024
 
 
 def _map(value: Any) -> dict[str, Any]:
@@ -246,17 +249,238 @@ def _redact_value(value: Any, *, depth: int = 0) -> Any:
     return value
 
 
-def prompt_safe_dossier(dossier: Mapping[str, Any]) -> dict[str, Any]:
-    """Full gate/CI/review evidence for the LLM, without env/execution secrets.
+def _bounded_text(value: Any, limit: int = MISSION_TAPE_MAX_TEXT) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"<truncated:{len(text) - limit}>"
 
-    The in-memory dossier retains unfiltered copies for identity and operators.
-    Only the prompt boundary applies this redaction.
-    """
-    row = copy.deepcopy(dict(dossier)) if isinstance(dossier, Mapping) else {}
-    # The dossier is intentionally extensible.  Redacting only today's known
-    # subtrees lets a future top-level container (for example ``environment``)
-    # smuggle the same credential keys into an agent prompt.
-    return _redact_value(row)
+
+def _bounded_rows(value: Any, *, keys: Sequence[str]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    source = _deepcopy_rows(value)
+    for item in source[:MISSION_TAPE_MAX_ITEMS]:
+        if not isinstance(item, Mapping):
+            continue
+        row: dict[str, Any] = {}
+        for key in keys:
+            current = item.get(key)
+            if current in (None, "", [], {}):
+                continue
+            if isinstance(current, Sequence) and not isinstance(
+                    current, (str, bytes)):
+                row[key] = [
+                    _bounded_text(part, 256)
+                    for part in list(current)[:MISSION_TAPE_MAX_ITEMS]
+                ]
+            elif isinstance(current, Mapping):
+                row[key] = {
+                    str(name): _bounded_text(part, 512)
+                    for name, part in list(current.items())[:MISSION_TAPE_MAX_ITEMS]
+                    if part not in (None, "", [], {})
+                }
+            else:
+                row[key] = _bounded_text(current)
+        rows.append(row)
+    return rows
+
+
+def _bounded_mapping(value: Any, *, keys: Sequence[str]) -> dict[str, Any]:
+    source = _map(value)
+    return {
+        key: _bounded_text(source.get(key))
+        for key in keys
+        if source.get(key) not in (None, "", [], {})
+    }
+
+
+def _mission_tape(dossier: Mapping[str, Any]) -> dict[str, Any]:
+    """Project a complete dossier into an explicit, inspectable launch budget."""
+    source = _redact_value(copy.deepcopy(dict(dossier)))
+    task = _map(source.get("task"))
+    github_pr = _map(source.get("github_pr"))
+    required = [
+        _bounded_text(item, 256)
+        for item in list(source.get("required_status_contexts") or [])[
+            :MISSION_TAPE_MAX_ITEMS
+        ]
+    ]
+    status_contexts = _map(source.get("status_contexts"))
+    checks = _bounded_rows(
+        source.get("failing_checks"),
+        keys=(
+            "context", "name", "state", "status", "conclusion", "target_url",
+            "url", "details_url", "run_url", "description", "summary",
+            "output_title", "run_attempt",
+        ),
+    )
+    findings = _bounded_rows(
+        source.get("acceptance_findings"),
+        keys=(
+            "code", "message", "blocking", "failure_class", "finding_class",
+            "severity", "affected_surface", "observed_behavior",
+            "expected_behavior", "repro_steps", "failing_contexts",
+            "failing_check_url", "failing_check_summary", "failing_run_attempt",
+            "missing_artifact",
+        ),
+    )
+    tape: dict[str, Any] = {
+        "schema": source.get("schema") or MISSION_DOSSIER_SCHEMA,
+        "mission": _bounded_text(source.get("mission")),
+        "reason_code": _bounded_text(source.get("reason_code"), 256),
+        "task_id": _bounded_text(source.get("task_id"), 128),
+        "pr_number": int(source.get("pr_number") or 0),
+        "pr_url": _bounded_text(source.get("pr_url"), 1024),
+        "head_sha": _bounded_text(source.get("head_sha"), 128),
+        "board_status": _bounded_text(source.get("board_status"), 128),
+        "task": _bounded_mapping(
+            task,
+            keys=(
+                "title", "description", "entry_criteria", "exit_criteria",
+                "status", "workstream", "risk_level",
+            ),
+        ),
+        "github_pr": _bounded_mapping(
+            github_pr,
+            keys=(
+                "title", "body", "url", "html_url", "state", "is_draft",
+                "mergeable", "merge_state_status", "head_sha", "base_ref",
+                "head_ref",
+            ),
+        ),
+        "required_status_contexts": required,
+        "status_contexts": {
+            name: _bounded_mapping(
+                status_contexts.get(name),
+                keys=(
+                    "state", "status", "conclusion", "target_url", "url",
+                    "details_url", "description", "summary", "run_attempt",
+                ),
+            )
+            for name in required
+            if isinstance(status_contexts.get(name), Mapping)
+        },
+        "acceptance_findings": findings,
+        "failing_checks": checks,
+        "failing_contexts": [
+            _bounded_text(item, 256)
+            for item in list(source.get("failing_contexts") or [])[
+                :MISSION_TAPE_MAX_ITEMS
+            ]
+        ],
+        "failing_check_url": _bounded_text(
+            source.get("failing_check_url"), 1024
+        ),
+        "failing_check_summary": _bounded_text(
+            source.get("failing_check_summary")
+        ),
+        "failing_run_attempt": int(source.get("failing_run_attempt") or 0),
+        "review": _bounded_mapping(
+            source.get("review"),
+            keys=("status", "state", "verdict", "head_sha", "summary", "body"),
+        ),
+        "merge_gate": _bounded_mapping(
+            source.get("merge_gate"),
+            keys=("status", "state", "message", "reason", "allowed"),
+        ),
+        "merge_queue": _bounded_mapping(
+            source.get("merge_queue"),
+            keys=(
+                "status", "state", "url", "message", "messages",
+                "last_removal_reason", "removal_reason",
+            ),
+        ),
+        "dependency_state": _bounded_mapping(
+            source.get("dependency_state"),
+            keys=("ready", "satisfied", "blocked_by_count", "message"),
+        ),
+        "agent_blocker": _bounded_mapping(
+            source.get("agent_blocker"),
+            keys=("reason", "question", "evidence", "created_by"),
+        ),
+        "missing_artifact": _bounded_mapping(
+            source.get("missing_artifact"),
+            keys=("expected_key", "message", "reason", "repair"),
+        ),
+        "evidence_identity": {
+            key: (
+                [
+                    _bounded_text(item, 512)
+                    for item in list(value)[:MISSION_TAPE_MAX_ITEMS]
+                ]
+                if isinstance(value, Sequence)
+                and not isinstance(value, (str, bytes))
+                else _bounded_text(value, 512)
+            )
+            for key, value in _map(source.get("evidence_identity")).items()
+            if key in {
+                "failing_contexts", "failing_check_urls",
+                "failing_run_attempts", "finding_codes", "findings_digest",
+                "failing_checks_digest", "review_digest", "queue_digest",
+                "missing_artifact_expected_key", "missing_artifact_digest",
+            }
+        },
+        "evidence_ref": _map(source.get("evidence_ref")),
+    }
+    source_counts = {
+        "acceptance_findings": len(list(source.get("acceptance_findings") or [])),
+        "failing_checks": len(list(source.get("failing_checks") or [])),
+        "required_status_contexts": len(
+            list(source.get("required_status_contexts") or [])
+        ),
+    }
+    included_counts = {
+        "acceptance_findings": len(findings),
+        "failing_checks": len(checks),
+        "required_status_contexts": len(required),
+    }
+    tape["tape_bounds"] = {
+        "max_bytes": MISSION_TAPE_MAX_BYTES,
+        "max_items_per_surface": MISSION_TAPE_MAX_ITEMS,
+        "source_counts": source_counts,
+        "included_counts": included_counts,
+        "truncated": source_counts != included_counts,
+        "redaction_notice": "<redacted>",
+    }
+    encoded = json.dumps(
+        tape, sort_keys=True, separators=(",", ":"), default=str,
+    ).encode()
+    if len(encoded) > MISSION_TAPE_MAX_BYTES:
+        # Preserve the mission, exact identities, findings, and durable lookup.
+        # Large prose is optional because the full record remains addressable.
+        tape["task"].pop("description", None)
+        tape["task"].pop("entry_criteria", None)
+        tape["task"].pop("exit_criteria", None)
+        tape["github_pr"].pop("body", None)
+        tape["review"].pop("body", None)
+        tape["tape_bounds"]["truncated"] = True
+        tape["tape_bounds"]["prose_omitted"] = True
+        encoded = json.dumps(
+            tape, sort_keys=True, separators=(",", ":"), default=str,
+        ).encode()
+    if len(encoded) > MISSION_TAPE_MAX_BYTES:
+        raise ValueError(
+            f"mission_tape_exceeds_budget:{len(encoded)}:"
+            f"{MISSION_TAPE_MAX_BYTES}"
+        )
+    tape["tape_bounds"]["actual_bytes"] = len(encoded)
+    encoded = json.dumps(
+        tape, sort_keys=True, separators=(",", ":"), default=str,
+    ).encode()
+    tape["tape_bounds"]["actual_bytes"] = len(encoded)
+    if len(encoded) > MISSION_TAPE_MAX_BYTES:
+        raise ValueError(
+            f"mission_tape_exceeds_budget:{len(encoded)}:"
+            f"{MISSION_TAPE_MAX_BYTES}"
+        )
+    return tape
+
+
+def prompt_safe_dossier(dossier: Mapping[str, Any]) -> dict[str, Any]:
+    """Return one bounded, redacted tape plus a durable full-evidence reference."""
+    if not isinstance(dossier, Mapping):
+        return {}
+    return _mission_tape(dossier)
 
 
 def build_dossier(

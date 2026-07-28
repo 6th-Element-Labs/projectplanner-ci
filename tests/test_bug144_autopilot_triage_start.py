@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BUG-144: task Autopilot Start routes Triage intake before scope creation."""
+"""COORD-108: task Autopilot Start establishes scope before any dispatch."""
 from __future__ import annotations
 
 from path_setup import ROOT  # noqa: F401
@@ -8,7 +8,7 @@ from switchboard.application.commands import autopilot, task_execution
 from switchboard.storage.repositories import autopilot_scopes, tasks
 
 
-def test_autopilot_crosses_start_boundary_and_creates_scope_after_dispatch():
+def test_autopilot_start_creates_scope_without_pre_scope_dispatch():
     calls = []
     original_validate = autopilot_scopes.validate_autopilot_target
     original_start = autopilot_scopes.start_autopilot_scope
@@ -22,45 +22,37 @@ def test_autopilot_crosses_start_boundary_and_creates_scope_after_dispatch():
 
         autopilot_scopes.start_autopilot_scope = start_scope
 
-        def start_task(command, task_id, **_kw):
-            calls.append((command, task_id))
-            return {"command": "start_task", "action": "started", "started": True}
-
         result = autopilot.control_autopilot(
             "deliverable-bug144", project="switchboard", action="start",
-            scope_type="task", task_project="switchboard", task_id="BUG-144",
-            task_starter=start_task)
-        assert calls == [("start_task", "BUG-144"), "scope"]
-        assert result["task_start"]["command"] == "start_task"
+            scope_type="task", task_project="switchboard", task_id="BUG-144")
+        assert calls == ["scope"]
+        assert "task_start" not in result
     finally:
         autopilot_scopes.validate_autopilot_target = original_validate
         autopilot_scopes.start_autopilot_scope = original_start
 
 
-def test_start_refusal_leaves_no_active_scope():
+def test_invalid_target_leaves_no_active_scope():
     created = []
     original_validate = autopilot_scopes.validate_autopilot_target
     original_start = autopilot_scopes.start_autopilot_scope
     try:
-        autopilot_scopes.validate_autopilot_target = lambda **_kw: None
+        autopilot_scopes.validate_autopilot_target = lambda **_kw: {
+            "error": "BUG intake disposition 'duplicate' is not dispatchable.",
+        }
         autopilot_scopes.start_autopilot_scope = lambda **_kw: created.append(True)
         result = autopilot.execute_mapping_result(
             "control_autopilot", "deliverable-bug144", project="switchboard",
             action="start", scope_type="task", task_project="switchboard",
-            task_id="BUG-144", task_starter=lambda *_a, **_kw: {
-                "refused": True, "error": "bug_intake_not_routable",
-                "message": "BUG intake disposition 'duplicate' is not dispatchable.",
-            })
-        assert result["error_code"] == "structural_blocker"
-        assert result["task_start"]["error"] == "bug_intake_not_routable"
+            task_id="BUG-144")
+        assert result["error_code"] == "invalid_input"
         assert created == []
     finally:
         autopilot_scopes.validate_autopilot_target = original_validate
         autopilot_scopes.start_autopilot_scope = original_start
 
 
-def test_dependencies_unsatisfied_arms_waiting_scope_without_hard_block():
-    """CO-25 + UI-27: no wake, but Autopilot still arms a durable waiting scope."""
+def test_start_arms_scope_and_leaves_dependency_wait_to_mission_bot():
     created = []
     original_validate = autopilot_scopes.validate_autopilot_target
     original_start = autopilot_scopes.start_autopilot_scope
@@ -75,18 +67,10 @@ def test_dependencies_unsatisfied_arms_waiting_scope_without_hard_block():
         autopilot_scopes.start_autopilot_scope = start_scope
         result = autopilot.control_autopilot(
             "deliverable-ui27", project="switchboard", action="start",
-            scope_type="task", task_project="switchboard", task_id="AUTO-2",
-            task_starter=lambda *_a, **_kw: {
-                "refused": True,
-                "error_code": "start_refused",
-                "start_error": "dependencies_unsatisfied",
-                "error": "dependencies_unsatisfied",
-                "blocking": ["AUTO-1"],
-                "message": "Task dependencies are unsatisfied: AUTO-1.",
-            })
+            scope_type="task", task_project="switchboard", task_id="AUTO-2")
         assert result["command"] == "control_autopilot"
         assert result["scope"]["status"] == "active"
-        assert result["task_start"]["start_error"] == "dependencies_unsatisfied"
+        assert "task_start" not in result
         assert len(created) == 1
     finally:
         autopilot_scopes.validate_autopilot_target = original_validate
@@ -108,8 +92,7 @@ def test_unsupported_runtime_is_refused_before_task_start_or_scope_creation():
         result = autopilot.execute_mapping_result(
             "control_autopilot", "deliverable-bug144", project="switchboard",
             action="start", scope_type="task", task_project="switchboard",
-            task_id="BUG-144", runtime="unsupported-runtime",
-            task_starter=lambda *_a, **_kw: calls.append("task_start"))
+            task_id="BUG-144", runtime="unsupported-runtime")
 
         assert result["error_code"] == "invalid_input"
         assert result["runtime"] == "unsupported-runtime"
@@ -153,9 +136,9 @@ def test_task_start_routes_triage_before_launcher():
 
 
 if __name__ == "__main__":
-    test_autopilot_crosses_start_boundary_and_creates_scope_after_dispatch()
-    test_start_refusal_leaves_no_active_scope()
-    test_dependencies_unsatisfied_arms_waiting_scope_without_hard_block()
+    test_autopilot_start_creates_scope_without_pre_scope_dispatch()
+    test_invalid_target_leaves_no_active_scope()
+    test_start_arms_scope_and_leaves_dependency_wait_to_mission_bot()
     test_unsupported_runtime_is_refused_before_task_start_or_scope_creation()
     test_task_start_routes_triage_before_launcher()
     print("BUG-144 autopilot Triage Start: 5 passed")

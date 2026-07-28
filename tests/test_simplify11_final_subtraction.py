@@ -63,7 +63,8 @@ assert agent_host.count("def expire_runner_leases(") == 1
 assert '"execution_lease_v2", "runner_lease_enforcement"' in connect
 
 assert "janitor" in daemon.lower()
-assert "self.store.run_mission_coordinator_tick" in scoped
+assert "self.store.run_mission_coordinator_tick" not in scoped
+assert "run_completion_tick" in scoped
 
 baseline = json.loads(read("perf/simplify10_execution_authority_baseline.json"))
 for scope in (

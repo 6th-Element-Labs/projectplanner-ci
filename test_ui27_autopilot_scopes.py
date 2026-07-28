@@ -34,11 +34,17 @@ def ok(condition, message):
 
 try:
     ensures = []
+    ensured_by_mission = {}
 
     def fake_start_task(task_id, **kwargs):
+        mission_key = kwargs.get("mission_key")
+        if mission_key in ensured_by_mission:
+            return ensured_by_mission[mission_key]
         ensures.append({"task_id": task_id, **kwargs})
-        return {"action": "started", "started": True,
-                "wake_id": f"wake-{task_id}", "role": kwargs.get("role")}
+        receipt = {"action": "started", "started": True,
+                   "wake_id": f"wake-{task_id}", "role": kwargs.get("role")}
+        ensured_by_mission[mission_key] = receipt
+        return receipt
 
     task_execution.start_task = fake_start_task
     store.init_project_registry()

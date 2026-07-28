@@ -2,6 +2,8 @@
 """Mission Bot: ordered facts → eight outputs. No classifier. No invented humans."""
 from __future__ import annotations
 
+import json
+
 from path_setup import ROOT, SRC  # noqa: F401
 
 from switchboard.domain.completion.state_machine import build_completion_snapshot
@@ -264,7 +266,7 @@ def test_all_start_commands_preserve_canonical_task_id():
     } == {"MISSION-1", "COORD-98"}
 
 
-def test_dossier_and_prompt_are_not_truncated():
+def test_dossier_identity_is_complete_and_prompt_is_explicitly_bounded():
     findings = [
         {"code": f"finding_{i}", "blocking": True, "message": f"msg-{i}",
          "nested": {"detail": i}}
@@ -277,8 +279,16 @@ def test_dossier_and_prompt_are_not_truncated():
     assert dossier["acceptance_findings"][0]["nested"]["detail"] == 0
     instruction = _mission_instruction(cmd)
     assert "DOSSIER_JSON_BEGIN" in instruction
-    assert "finding_24" in instruction
-    assert '"nested"' in instruction
+    assert "finding_15" in instruction
+    assert "finding_24" not in instruction
+    tape = json.loads(
+        instruction.split("DOSSIER_JSON_BEGIN\n", 1)[1].split(
+            "\nDOSSIER_JSON_END", 1
+        )[0]
+    )
+    assert tape["tape_bounds"]["source_counts"]["acceptance_findings"] == 25
+    assert tape["tape_bounds"]["included_counts"]["acceptance_findings"] == 16
+    assert tape["tape_bounds"]["truncated"] is True
     assert "factory failures are your mission to diagnose and repair" in instruction
     assert "concrete question that requires an operator answer" in instruction
 
@@ -745,6 +755,9 @@ def test_observe_merged_reconciles_when_live_store_injected():
         def get_task(self, *_a, **_k):
             return {"task_id": "MISSION-1"}
 
+        def validate_autopilot_scope_authority(self, *_a, **_k):
+            return {"allowed": True, "reason_codes": []}
+
     def fake_execute(task_id, **kwargs):
         calls.append(task_id)
         return {"merged": True, "task_id": task_id}
@@ -768,6 +781,13 @@ def test_observe_merged_reconciles_when_live_store_injected():
             actor="test",
             agent_id="agent/test",
             store_mod=LiveStore(),
+            scope_authority={
+                "schema": "switchboard.autopilot_scope_authority.v1",
+                "scope_id": "scope-test",
+                "generation": 1,
+                "fence_epoch": 1,
+            },
+            scope_project="switchboard",
         )
         result = ports.observe_merged(
             command={
@@ -797,6 +817,9 @@ def test_failed_reconcile_does_not_persist_done_projection():
         def get_task(self, *_a, **_k):
             return {"task_id": "MISSION-1"}
 
+        def validate_autopilot_scope_authority(self, *_a, **_k):
+            return {"allowed": True, "reason_codes": []}
+
     def capture_ensure(**kwargs):
         decisions.append(dict(kwargs.get("decision") or {}))
         return {"run_id": "run-1"}
@@ -816,6 +839,13 @@ def test_failed_reconcile_does_not_persist_done_projection():
             actor="test",
             agent_id="agent/test",
             store_mod=LiveStore(),
+            scope_authority={
+                "schema": "switchboard.autopilot_scope_authority.v1",
+                "scope_id": "scope-test",
+                "generation": 1,
+                "fence_epoch": 1,
+            },
+            scope_project="switchboard",
         )
         result = ports.observe_merged(
             command={

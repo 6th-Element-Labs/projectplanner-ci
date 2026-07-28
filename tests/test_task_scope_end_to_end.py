@@ -79,9 +79,11 @@ ok(len(mine) == 1, f"exactly one live scope drives this task (found {len(mine)})
 ok(not str(mine[0].get("deliverable_id") or ""),
    "that scope carries no deliverable anchor")
 
-# --- the coordinator drives a standalone task scope, asking for no mission ---
+# --- the coordinator drives a standalone task scope through Mission Bot -------
 # Behavioural, not textual: the stub store raises if get_mission_status is ever
 # called, so a regression that reintroduces the deliverable lookup fails here.
+# The coordinator must not classify or dispatch a role itself; it hands the
+# exact fenced task to the one Mission Bot completion tick.
 import scoped_completion_coordinator as scc  # noqa: E402
 from coordinator_daemon import DaemonConfig  # noqa: E402
 
@@ -129,35 +131,38 @@ coordinator = scc.ScopedCompletionCoordinator(
     DaemonConfig(act=True), store_mod=store_stub,
     agent_id="switchboard/scoped-owner/test")
 
-dispatched = {}
-import switchboard.application.commands.task_execution as te  # noqa: E402
-_real_start = te.start_task
-te.start_task = lambda t, **kw: dispatched.update(
-    {"task_id": t, **kw}) or {"action": "starting"}
+import switchboard.application.completion_driver as completion_driver  # noqa: E402
+
+ticks = []
+_real_tick = completion_driver.run_completion_tick
+completion_driver.run_completion_tick = lambda t, **kw: ticks.append(
+    {"task_id": t, **kw}
+) or {
+    "action": "start_task",
+    "command": {
+        "output": "START_REVIEW",
+        "task_id": t,
+        "role": "review_merge",
+        "head_sha": "d" * 40,
+    },
+}
 try:
     outcome = coordinator.run_scope(
         P, {"scope_id": scope_id, "scope_type": "task",
             "task_project": P, "task_id": tid, "deliverable_id": ""})
 finally:
-    te.start_task = _real_start
+    completion_driver.run_completion_tick = _real_tick
 
-ok(outcome.get("status") == "dispatched",
+ok(outcome.get("status") == "completion_tick",
    f"a standalone task scope dispatches (got {outcome.get('status')})")
-ok(dispatched.get("task_id") == tid,
+ok(len(ticks) == 1 and ticks[0].get("task_id") == tid,
    "it drives exactly the scope's task")
-ok(dispatched.get("role") == "review_merge",
-   f"an In Review task gets a review_merge generation (got {dispatched.get('role')})")
-ok(dispatched.get("source_sha") == "d" * 40,
-   "the review generation binds to the exact PR head")
-
-# A review role with no head must refuse rather than dispatch unbound.
-store_stub.task_detail = {**in_review, "git_state": {}}
-headless = coordinator.run_scope(
-    P, {"scope_id": scope_id, "scope_type": "task",
-        "task_project": P, "task_id": tid, "deliverable_id": ""})
-ok(headless.get("status") == "dispatch_blocked"
-   and headless.get("error") == "review_head_sha_required",
-   "a review role with no exact head refuses loudly instead of dispatching")
+ok(ticks[0].get("scope_authority", {}).get("generation") == 3,
+   "the Mission Bot tick receives the exact scope generation")
+ok(ticks[0].get("scope_authority", {}).get("fence_epoch") == 1,
+   "the Mission Bot tick receives the exact scope fence")
+ok(outcome.get("receipts", [{}])[0].get("command", {}).get("head_sha") == "d" * 40,
+   "Mission Bot owns the review generation and exact-head binding")
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

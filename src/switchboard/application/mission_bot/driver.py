@@ -71,6 +71,8 @@ def production_mission_ports(
     actor: str,
     agent_id: str,
     store_mod: Any = None,
+    scope_authority: Optional[Mapping[str, Any]] = None,
+    scope_project: str = "",
 ) -> MissionPorts:
     """Bind Mission Bot outputs to start_task / GitHub / persist ports."""
     from switchboard.application.commands import task_execution
@@ -93,12 +95,38 @@ def production_mission_ports(
         repo = str(get_repo(project) or "") if callable(get_repo) else ""
         token = ""
 
+    def require_scope(task_id: str) -> None:
+        if scope_authority is None:
+            raise RuntimeError("scope_authority_required")
+        validator = getattr(store_mod, "validate_autopilot_scope_authority", None)
+        if not callable(validator):
+            from switchboard.storage.repositories.autopilot_scopes import (
+                validate_autopilot_scope_authority,
+            )
+            validator = validate_autopilot_scope_authority
+        authority = dict(scope_authority)
+        verdict = validator(
+            authority,
+            project=scope_project or project,
+            deliverable_id=str(authority.get("deliverable_id") or ""),
+            task_project=project,
+            task_id=task_id,
+        )
+        if verdict.get("allowed") is not True:
+            reason = ",".join(verdict.get("reason_codes") or [])
+            raise RuntimeError(
+                str(verdict.get("error") or "scope_authority_denied")
+                + (f":{reason}" if reason else "")
+            )
+
     def start_task(plan: Mapping[str, Any]) -> dict[str, Any]:
         from switchboard.domain.mission_bot.dossier import prompt_safe_dossier
 
         dossier = prompt_safe_dossier(_map(plan.get("dossier")))
+        task_id = str(plan.get("task_id") or "")
+        require_scope(task_id)
         return task_execution.start_task(
-            str(plan.get("task_id") or ""),
+            task_id,
             project=project,
             actor=actor,
             agent_id=agent_id,
@@ -106,7 +134,7 @@ def production_mission_ports(
             source_sha=str(plan.get("head_sha") or ""),
             reason_code=str(plan.get("reason_code") or ""),
             route=str(plan.get("route") or ""),
-            findings=list(plan.get("acceptance_findings") or []),
+            findings=list(dossier.get("acceptance_findings") or []),
             decision_attempt=int(plan.get("decision_attempt") or 0),
             state_version=int(plan.get("state_version") or 0),
             mission_key=str(
@@ -116,12 +144,14 @@ def production_mission_ports(
         )
 
     def mark_ready(plan: Mapping[str, Any]) -> dict[str, Any]:
+        require_scope(str(plan.get("task_id") or ""))
         number = int(plan.get("pr_number") or 0)
         return _github_command(
             ["pr", "ready", str(number), "--repo", repo], token=token,
         )
 
     def arm_merge(plan: Mapping[str, Any]) -> dict[str, Any]:
+        require_scope(str(plan.get("task_id") or ""))
         number = int(plan.get("pr_number") or 0)
         pr = provenance._github_pr(repo, number, token) or {}
         node_id = str(pr.get("node_id") or "")
@@ -148,6 +178,7 @@ def production_mission_ports(
     ) -> dict[str, Any]:
         del run
         snap = _map(snapshot)
+        require_scope(str(command.get("task_id") or snap.get("task_id") or ""))
         # Always stamp merge provenance in production — do not invent Done.
         # Hermetic conformance injects store_mod=object() with no task surface;
         # skip network there. Production coordinators pass the live store, which
@@ -278,6 +309,8 @@ def run_mission_tick(
     hydrator: Callable[..., dict[str, Any]] = hydrate_mission_snapshot,
     ports: Optional[MissionPorts] = None,
     shadow_only: bool = False,
+    scope_authority: Optional[Mapping[str, Any]] = None,
+    scope_project: str = "",
 ) -> dict[str, Any]:
     """Execute exactly one Mission Bot command for one task."""
     from switchboard.application.mission_bot.shadow import shadow_mission
@@ -324,9 +357,25 @@ def run_mission_tick(
         classifier_version=MISSION_BOT_VERSION,
         advice_version=None,
     )
+    if dossier:
+        dossier["evidence_ref"] = {
+            "schema": "switchboard.mission_evidence_ref.v1",
+            "project": project,
+            "task_id": str(task_id or "").strip().upper(),
+            "head_sha": str(command.get("head_sha") or ""),
+            "decision_id": str(
+                decision_record.get("decision_id")
+                or decision_record.get("episode_id")
+                or ""
+            ),
+            "read_via": "list_decision_episodes",
+        }
+        command["dossier"] = dossier
 
     bound = ports or production_mission_ports(
         project=project, actor=actor, agent_id=agent_id, store_mod=store_mod,
+        scope_authority=scope_authority,
+        scope_project=scope_project,
     )
     result = execute_mission_command(
         command,

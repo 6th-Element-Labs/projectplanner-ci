@@ -15,7 +15,7 @@ wake, or resolves a runner id.
 """
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from typing import Any
 
 from constants import DEFAULT_PROJECT
 from switchboard.storage.repositories import autopilot_scopes as scopes_repo
@@ -130,7 +130,6 @@ def control_autopilot(deliverable_id: Any, *, project: str = DEFAULT_PROJECT,
                       task_project: str = "", task_id: str = "",
                       runtime: str = "codex", profile_id: str = "autopilot-default",
                       actor: str = "user", agent_id: str = "",
-                      task_starter: Optional[Callable[..., dict[str, Any]]] = None,
                       ) -> dict[str, Any]:
     """Start, pause, resume, or stop one durable Autopilot scope.
 
@@ -165,35 +164,12 @@ def control_autopilot(deliverable_id: Any, *, project: str = DEFAULT_PROJECT,
         "scope_type": kind,
         "task_project": task_project, "task_id": task_id, "actor": actor,
     }
-    task_start = None
     if verb == "start" and common["scope_type"] == "task":
         invalid = scopes_repo.validate_autopilot_target(
             project=project, deliverable_id=deliverable_id, scope_type="task",
             task_project=task_project, task_id=task_id, runtime=runtime)
         if invalid:
             _raise_store_error(invalid)
-        if task_starter is None:
-            from switchboard.application.commands import task_execution
-            task_starter = task_execution.execute_mapping_result
-        task_start = task_starter(
-            "start_task", task_id, project=task_project or project,
-            actor=actor, agent_id=agent_id, runtime=runtime)
-        if task_start.get("refused") or task_start.get("error"):
-            # CO-25: unsatisfied dependencies must not spawn a wake/runner, but
-            # Autopilot may still arm a durable waiting scope so the coordinator
-            # can start once the graph clears (UI-27). Other start refusals stay
-            # hard blockers and never leave a scope behind.
-            start_error = str(
-                task_start.get("start_error") or task_start.get("error") or "")
-            if start_error != "dependencies_unsatisfied":
-                raise AutopilotError(
-                    "structural_blocker",
-                    str(task_start.get("message") or task_start.get("error")
-                        or "task start refused"),
-                    deliverable_id=deliverable_id,
-                    task_project=task_project or project,
-                    task_id=str(task_id or "").strip().upper(),
-                    task_start=task_start)
     if verb == "start":
         result = scopes_repo.start_autopilot_scope(**common, runtime=runtime)
     else:
@@ -204,7 +180,7 @@ def control_autopilot(deliverable_id: Any, *, project: str = DEFAULT_PROJECT,
         "schema": SCHEMA, "command": "control_autopilot", "project": project,
         "action": verb, **_scope_fields(deliverable_id, common["scope_type"],
                                         task_project, task_id),
-        "scope": result, **({"task_start": task_start} if task_start is not None else {}),
+        "scope": result,
     }
 
 

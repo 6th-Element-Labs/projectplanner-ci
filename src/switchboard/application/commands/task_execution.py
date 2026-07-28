@@ -697,6 +697,11 @@ def _arm_task_scope(task_id: str, *, project: str, role: str,
     """
     if str(role or "").strip().lower() != "implementation":
         return {}
+    scope_runtime = {
+        "anthropic": "claude-code",
+        "claude": "claude-code",
+        "openai": "codex",
+    }.get(str(runtime or "codex").strip().lower(), str(runtime or "codex"))
     from switchboard.storage.repositories import autopilot_scopes as scopes_repo
     try:
         live = scopes_repo.list_autopilot_scopes(
@@ -707,7 +712,7 @@ def _arm_task_scope(task_id: str, *, project: str, role: str,
                 return {"scope_id": row.get("scope_id"), "already_started": True}
         started = scopes_repo.start_autopilot_scope(
             project=project, scope_type="task", task_project=project,
-            task_id=task_id, runtime=runtime, actor=actor)
+            task_id=task_id, runtime=scope_runtime, actor=actor)
     except Exception as exc:  # noqa: BLE001
         # Capacity already started; report the gap rather than failing the start
         # or silently pretending the task can drive itself.
@@ -763,6 +768,22 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
     role = str(role or "").strip().lower()
     projection = _projection(task_id, project)
     task = projection.get("task") or {}
+    task_scope: dict[str, Any] = {}
+    if (str(task.get("status") or "") == "Triage"
+            and role == "implementation"
+            and not str(mission_key or "").strip()
+            and launcher is None):
+        task_scope = _arm_task_scope(
+            task_id, project=project, role=role, runtime=runtime, actor=actor,
+        )
+        if task_scope.get("error"):
+            raise TaskExecutionError(
+                "start_refused",
+                str(task_scope.get("reason") or "task scope could not be armed"),
+                task_id=task_id,
+                project=project,
+                start_error="scope_not_armed",
+            )
     intake_routing = None
     if str(task.get("status") or "") == "Triage":
         if role != "implementation":
@@ -875,6 +896,20 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
         # New wake path only — attach/pending leave an already-requested
         # generation alone. Cheap readiness check before Connect dispatch.
         task = projection.get("task") or {}
+        if (role == "implementation" and not str(mission_key or "").strip()
+                and launcher is None and not task_scope):
+            task_scope = _arm_task_scope(
+                task_id, project=project, role=role, runtime=runtime, actor=actor,
+            )
+            if task_scope.get("error"):
+                raise TaskExecutionError(
+                    "start_refused",
+                    str(task_scope.get("reason") or
+                        "task scope could not be armed"),
+                    task_id=task_id,
+                    project=project,
+                    start_error="scope_not_armed",
+                )
         _refuse_unsatisfied_dependencies(task, task_id=task_id, project=project)
         if launcher is None:
             from switchboard.application.commands import connect_dispatch
@@ -1033,7 +1068,7 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
         expires_at=descriptor.get("expires_at"),
         browser_safe=descriptor.get("browser_safe"),
         capacity=result.get("capacity"),
-        scope=result.get("scope"),
+        scope=task_scope or result.get("scope"),
         intake_routing=intake_routing or result.get("intake_routing") or None,
     )
 

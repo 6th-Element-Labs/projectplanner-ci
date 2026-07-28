@@ -1,8 +1,6 @@
 """One fenced completion owner for one operator-started Autopilot scope."""
 from __future__ import annotations
 
-import hashlib
-import json
 import time
 from typing import Any, Dict, Iterable
 
@@ -100,15 +98,7 @@ class ScopedCompletionCoordinator(CoordinatorDaemon):
 
     def _run_standalone_task_scope(self, project: str, scope: Dict[str, Any],
                                    authority: Dict[str, Any]) -> Dict[str, Any]:
-        """Carry one task from Start to Done without a deliverable.
-
-        Reuses the existing completion owner rather than running a second
-        lifecycle: mission_coordinator decides which role the task needs next,
-        and Task Execution's start_task creates that generation. This method
-        only supplies the target and the scope authority.
-        """
-        import mission_coordinator
-
+        """Carry one task through the same Mission Bot tick as every other scope."""
         task_project = str(scope.get("task_project") or project)
         task_id = str(scope.get("task_id") or "").upper()
         detail = self.store.get_task(task_id, project=task_project) or {}
@@ -128,124 +118,44 @@ class ScopedCompletionCoordinator(CoordinatorDaemon):
             return {"status": "observed", "scope_id": scope.get("scope_id"),
                     "task_id": task_id, "task_status": detail.get("status")}
 
-        from switchboard.storage.repositories import completion_runs
-        completion_run = (
-            completion_runs.get_active_completion_run(
-                task_id, project=task_project) or {})
-        git_state = detail.get("git_state") or {}
-        if completion_run or git_state.get("pr_number") or git_state.get("pr_url"):
-            from switchboard.application.completion_driver import run_completion_tick
-            try:
-                tick = run_completion_tick(
-                    task_id,
-                    project=task_project,
-                    actor=self.config.actor,
-                    agent_id=self.agent_id,
-                    store_mod=self.store,
-                )
-                completion_wake = self._complete_attention_wake(
-                    task_id=task_id,
-                    task_project=task_project,
-                    scope=scope,
-                    authority=authority,
-                    tick=tick,
-                )
-                result = {
-                    "status": "completion_tick",
-                    "scope_id": scope.get("scope_id"),
-                    "task_id": task_id,
-                    "task_project": task_project,
-                    "generation": authority.get("generation"),
-                    "fence_epoch": authority.get("fence_epoch"),
-                    "receipts": [tick],
-                    "completion_wake": completion_wake,
-                }
-            except Exception as exc:  # noqa: BLE001 - durable run preserves intent
-                result = {
-                    "status": "completion_tick_failed",
-                    "scope_id": scope.get("scope_id"),
-                    "task_id": task_id,
-                    "task_project": task_project,
-                    "error": type(exc).__name__,
-                    "reason": str(exc),
-                    "receipts": [],
-                }
-            self.store.update_autopilot_scope(
-                scope["scope_id"], project=project, last_result=result,
-                ticked_at=float(self.clock()))
-            return result
-
-        role = mission_coordinator._lifecycle_role(
-            self.store, task_project, task_id)
-        from switchboard.domain.completion.routing import route_allows_dispatch
-        route = str(completion_run.get("route") or "").strip().lower()
-        # Sticky human blockers stay on the attention_request authority path.
-        # Never dispatch another coder from a route=human completion decision.
-        if route == "human":
+        from switchboard.application.completion_driver import run_completion_tick
+        try:
+            tick = run_completion_tick(
+                task_id,
+                project=task_project,
+                actor=self.config.actor,
+                agent_id=self.agent_id,
+                store_mod=self.store,
+                scope_authority=authority,
+                scope_project=project,
+            )
+            completion_wake = self._complete_attention_wake(
+                task_id=task_id,
+                task_project=task_project,
+                scope=scope,
+                authority=authority,
+                tick=tick,
+            )
             result = {
-                "status": "human_blocked",
+                "status": "completion_tick",
                 "scope_id": scope.get("scope_id"),
                 "task_id": task_id,
                 "task_project": task_project,
-                "route": "human",
-                "reason_code": completion_run.get("reason_code"),
-                "board_status": detail.get("status"),
-                "receipts": [{
-                    "action": "await_attention_decision",
-                    "completion_run_id": completion_run.get("run_id"),
-                    "state_version": completion_run.get("state_version"),
-                }],
+                "generation": authority.get("generation"),
+                "fence_epoch": authority.get("fence_epoch"),
+                "receipts": [tick],
+                "completion_wake": completion_wake,
             }
-            self.store.update_autopilot_scope(
-                scope["scope_id"], project=project, last_result=result,
-                ticked_at=float(self.clock()))
-            return result
-        reason_code = str(
-            completion_run.get("reason_code")
-            or ("current_head_remediation_required"
-                if role == "remediation"
-                else "current_head_review_required"))
-        head_sha = str((detail.get("git_state") or {}).get("head_sha") or "").strip()
-        if detail.get("status") == "In Review" and role != "remediation":
-            role = "review_merge"
-        if role in {"review_merge", "remediation"} and not head_sha:
-            # Refusing loudly beats dispatching a review generation that cannot
-            # bind to an exact head.
-            return {"status": "dispatch_blocked", "scope_id": scope.get("scope_id"),
-                    "task_id": task_id, "role": role,
-                    "error": "review_head_sha_required"}
-        if route and not route_allows_dispatch(route) and role in {
-                "review_merge", "remediation", "implementation"}:
-            return {"status": "dispatch_blocked", "scope_id": scope.get("scope_id"),
-                    "task_id": task_id, "role": role, "route": route,
-                    "error": "route_not_dispatchable"}
-
-        from switchboard.application.commands import task_execution
-        try:
-            dispatch = task_execution.start_task(
-                task_id, project=task_project, actor=self.config.actor,
-                agent_id=self.agent_id, role=role,
-                source_sha=head_sha or "",
-                reason_code=reason_code,
-                route=str(completion_run.get("route") or role),
-                decision_attempt=int(completion_run.get("attempt") or 0),
-                state_version=int(completion_run.get("state_version") or 0),
-                findings=list(
-                    (completion_run.get("evidence_refs") or {}).get(
-                        "acceptance_findings") or []),
-            )
-        except Exception as exc:  # noqa: BLE001 - surface, never swallow
-            dispatch = {"action": "refused", "error": type(exc).__name__,
-                        "reason": str(exc)}
-
-        result = {
-            "status": "dispatched", "scope_id": scope.get("scope_id"),
-            "task_id": task_id, "task_project": task_project, "role": role,
-            "head_sha": head_sha or None,
-            "generation": authority.get("generation"),
-            "fence_epoch": authority.get("fence_epoch"),
-            "receipts": [dispatch],
-        }
+        except Exception as exc:  # noqa: BLE001 - durable run preserves intent
+            result = {
+                "status": "completion_tick_failed",
+                "scope_id": scope.get("scope_id"),
+                "task_id": task_id,
+                "task_project": task_project,
+                "error": type(exc).__name__,
+                "reason": str(exc),
+                "receipts": [],
+            }
         self.store.update_autopilot_scope(
             scope["scope_id"], project=project, last_result=result,
             ticked_at=float(self.clock()))
@@ -300,13 +210,7 @@ class ScopedCompletionCoordinator(CoordinatorDaemon):
             )
             if task_project != project:
                 self._register_or_heartbeat(task_project)
-            detail = self.store.get_task(task_id, project=task_project) or {}
-            git_state = detail.get("git_state") or {}
-            from switchboard.storage.repositories import completion_runs
-            active_run = completion_runs.get_active_completion_run(
-                task_id, project=task_project) or {}
-            if self.config.act and (
-                    active_run or git_state.get("pr_number") or git_state.get("pr_url")):
+            if self.config.act:
                 from switchboard.application.completion_driver import run_completion_tick
                 try:
                     tick = run_completion_tick(
@@ -315,6 +219,8 @@ class ScopedCompletionCoordinator(CoordinatorDaemon):
                         actor=self.config.actor,
                         agent_id=self.agent_id,
                         store_mod=self.store,
+                        scope_authority=authority,
+                        scope_project=project,
                     )
                     completion_wake = self._complete_attention_wake(
                         task_id=task_id,
@@ -339,42 +245,10 @@ class ScopedCompletionCoordinator(CoordinatorDaemon):
                         "reason": str(exc),
                     })
                 continue
-            revision = self._candidate_revision(mission_status, candidate)
-            wake_generation = self._wake_generation(
-                project, deliverable_id, task_id)
-            policy = {
-                "auto_refresh_brief": not receipts,
-                "auto_start": bool(self.config.act),
-                "allowed_lanes": list(self.config.allowed_lanes),
-                "denied_lanes": list(denied_lanes),
-                "target_task_id": task_id,
-                "target_project_id": task_project,
-            }
-            policy_revision = hashlib.sha256(
-                json.dumps(policy, sort_keys=True, default=str).encode()
-            ).hexdigest()[:12]
-            idem_key = (
-                f"s15:{scope['scope_id']}:{authority['generation']}:"
-                f"{authority['fence_epoch']}:{task_id}:{revision}:"
-                f"wake-generation-{wake_generation}:policy-{policy_revision}"
-            )
-            result = self.store.run_mission_coordinator_tick(
-                project=project,
-                deliverable_id=deliverable_id,
-                coordinator_agent_id=self.agent_id,
-                actor=self.config.actor,
-                policy=policy,
-                scope_authority=authority,
-                idem_key=idem_key,
-            )
             receipts.append({
                 "task_id": task_id,
                 "task_project": task_project,
-                "status": result.get("status"),
-                "decision_id": result.get("decision_id"),
-                "dispatch": result.get("dispatch"),
-                "error": result.get("error"),
-                "idem_key": idem_key,
+                "status": "observed",
             })
         result = {
             "status": "running" if receipts else "waiting",
