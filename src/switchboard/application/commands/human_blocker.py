@@ -64,6 +64,13 @@ def _blocker_payload(data: Mapping[str, Any]) -> dict[str, Any]:
             _text(data.get("source_tool"))
             or AGENT_REQUIRES_HUMAN_TOOL
         ),
+        # Authenticated agent provenance required by Mission Bot.
+        "actor": _text(data.get("actor")),
+        "agent_id": _text(data.get("agent_id") or data.get("actor")),
+        "principal_id": _text(data.get("principal_id")),
+        "binding": _text(data.get("binding")),
+        "execution_id": _text(data.get("execution_id")),
+        "execution_generation": int(data.get("execution_generation") or 0),
     }
 
 
@@ -366,11 +373,35 @@ def execute_mapping(
 ) -> dict[str, Any]:
     """Validate and record one typed human-blocker closeout."""
     data = _map(data)
+    data.setdefault("actor", actor)
+    data.setdefault("agent_id", data.get("agent_id") or actor)
+    # Lift execution identity from the work session when the caller omitted it.
+    if not _text(data.get("execution_id")):
+        session = work_sessions_repo.get_work_session(
+            _text(data.get("work_session_id")), project=project,
+        ) or {}
+        env = _map(session.get("env"))
+        data.setdefault(
+            "execution_id",
+            env.get("execution_id") or session.get("execution_id") or "",
+        )
+        data.setdefault(
+            "execution_generation",
+            session.get("execution_generation")
+            or env.get("execution_generation")
+            or 0,
+        )
     blocker = _blocker_payload(data)
     if not blocker["reason"]:
         return _error(
             "invalid_human_blocker",
             "reason is required (e.g. provider_acceptance_capacity_missing).",
+        )
+    if not blocker["agent_id"] and not blocker["actor"]:
+        return _error(
+            "agent_provenance_required",
+            "agent_requires_human requires an authenticated agent actor.",
+            failure_class="failed_gate",
         )
     return promote_human_blocker(
         task_id=_text(data.get("task_id")),

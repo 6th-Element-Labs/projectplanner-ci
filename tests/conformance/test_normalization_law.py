@@ -163,6 +163,10 @@ def test_wait_and_block_have_required_operating_contracts():
                 "route": "agent_requires_human",
                 "reason": "agent_requires_human",
                 "source_tool": "agent_requires_human",
+                "agent_id": "agent-law-block",
+                "actor": "agent-law-block",
+                "execution_id": "exec-law-block",
+                "execution_generation": 1,
             }
         },
     }

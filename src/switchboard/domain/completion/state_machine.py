@@ -210,6 +210,7 @@ def build_completion_snapshot(
         "work_session": _map(work_session),
         "runner": _map(runner),
         "merge_provenance": _map(merge_provenance),
+        "dependency_state": _map(task_row.get("dependency_state")),
     }
 
 

@@ -1,18 +1,24 @@
 """Package GitHub/Switchboard facts into an unchanged mission dossier.
 
-The Mission Bot copies facts. It does not diagnose them. Every remediation boot
-must carry the full evidence identity: finding codes, failing contexts, check
-URLs, and summaries.
+The Mission Bot copies facts. It does not diagnose, compress, or truncate them.
+Every boot receives the full nested evidence identity.
 """
 from __future__ import annotations
 
+import copy
 from typing import Any, Mapping, Sequence
 
 from switchboard.domain.mission_bot.outputs import MISSION_DOSSIER_SCHEMA
 
 
+_FAILED = {
+    "failure", "failed", "error", "timed_out", "action_required",
+    "cancelled", "canceled", "stale", "startup_failure",
+}
+
+
 def _map(value: Any) -> dict[str, Any]:
-    return dict(value) if isinstance(value, Mapping) else {}
+    return copy.deepcopy(dict(value)) if isinstance(value, Mapping) else {}
 
 
 def _text(value: Any) -> str:
@@ -23,64 +29,90 @@ def _text_raw(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _deepcopy_rows(value: Any) -> list[Any]:
+    if isinstance(value, Mapping) or isinstance(value, (str, bytes)):
+        return []
+    if not isinstance(value, Sequence):
+        return []
+    return [copy.deepcopy(item) for item in value]
+
+
 def _finding_rows(findings: Any) -> list[dict[str, Any]]:
-    if isinstance(findings, Mapping) or isinstance(findings, (str, bytes)):
-        return []
-    if not isinstance(findings, Sequence):
-        return []
     rows: list[dict[str, Any]] = []
-    for item in findings:
+    for item in _deepcopy_rows(findings):
         if isinstance(item, Mapping) and item.get("blocking") is not False:
             rows.append(dict(item))
     return rows
 
 
-def _failing_check_identity(snapshot: Mapping[str, Any]) -> dict[str, Any]:
-    """Collect failing required-context identity; never drop URL/summary."""
+def _failing_checks(snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Every failing required context, unchanged — not a single representative."""
     required = list(snapshot.get("required_status_contexts") or [])
     contexts = _map(snapshot.get("status_contexts"))
-    failing: list[tuple[str, dict[str, Any]]] = []
+    failing: list[dict[str, Any]] = []
     for name in required:
         row = _map(contexts.get(name))
-        state = _text(row.get("conclusion") or row.get("state") or row.get("status")).lower()
-        if not row or not state:
+        state = _text(
+            row.get("conclusion") or row.get("state") or row.get("status")
+        ).lower().replace("-", "_").replace(" ", "_")
+        if not row or state not in _FAILED:
             continue
-        if state in {
-            "failure", "failed", "error", "timed_out", "action_required",
-            "cancelled", "canceled", "stale", "startup_failure",
-        }:
-            failing.append((_text_raw(name), row))
-    if not failing:
-        return {}
-    ordered = sorted(failing, key=lambda item: item[0])
-    identity: dict[str, Any] = {
-        "failing_contexts": [name for name, _ in ordered],
-    }
-    _, representative = ordered[0]
-    url = _text_raw(
-        representative.get("target_url") or representative.get("url")
-        or representative.get("details_url") or representative.get("detailsUrl")
-        or representative.get("run_url")
+        entry = dict(row)
+        entry.setdefault("context", _text_raw(name))
+        entry.setdefault("name", _text_raw(name))
+        failing.append(entry)
+    failing.sort(key=lambda item: str(item.get("context") or item.get("name") or ""))
+    return failing
+
+
+def _check_url(row: Mapping[str, Any]) -> str:
+    return _text_raw(
+        row.get("target_url") or row.get("url")
+        or row.get("details_url") or row.get("detailsUrl")
+        or row.get("run_url")
     )
-    if url:
-        identity["failing_check_url"] = url
+
+
+def _check_summary(row: Mapping[str, Any]) -> str:
+    return _text_raw(
+        row.get("description") or row.get("summary") or row.get("output_title")
+    )
+
+
+def _run_attempt(row: Mapping[str, Any]) -> int:
     try:
-        run_attempt = int(
-            representative.get("run_attempt")
-            or representative.get("runAttempt")
-            or 0
-        )
+        return int(row.get("run_attempt") or row.get("runAttempt") or 0)
     except (TypeError, ValueError):
-        run_attempt = 0
-    if run_attempt > 0:
-        identity["failing_run_attempt"] = run_attempt
-    summary = _text_raw(
-        representative.get("description") or representative.get("summary")
-        or representative.get("output_title")
-    )
-    if summary:
-        identity["failing_check_summary"] = summary
-    return identity
+        return 0
+
+
+def evidence_identity(dossier: Mapping[str, Any]) -> dict[str, Any]:
+    """Stable evidence keys that must enter mission idempotency."""
+    failing = list(dossier.get("failing_checks") or [])
+    findings = list(dossier.get("acceptance_findings") or [])
+    return {
+        "failing_contexts": [
+            str(item.get("context") or item.get("name") or "")
+            for item in failing
+            if isinstance(item, Mapping)
+        ],
+        "failing_check_urls": sorted({
+            _check_url(item) for item in failing
+            if isinstance(item, Mapping) and _check_url(item)
+        }),
+        "failing_run_attempts": sorted({
+            _run_attempt(item) for item in failing
+            if isinstance(item, Mapping) and _run_attempt(item) > 0
+        }),
+        "finding_codes": [
+            str(item.get("code") or "")
+            for item in findings
+            if isinstance(item, Mapping) and item.get("code")
+        ],
+        "missing_artifact_expected_key": str(
+            _map(dossier.get("missing_artifact")).get("expected_key") or ""
+        ),
+    }
 
 
 def build_dossier(
@@ -89,36 +121,43 @@ def build_dossier(
     reason_code: str,
     mission: str,
 ) -> dict[str, Any]:
-    """Build the full mission dossier from live facts.
-
-    Findings and CI identity are always merged. Classifier-shaped early returns
-    that drop check URLs are forbidden here.
-    """
+    """Copy live facts into the mission dossier without compression."""
     snap = _map(snapshot)
     findings = _finding_rows(snap.get("findings"))
     review = _map(snap.get("review"))
     for item in _finding_rows(review.get("findings")):
         findings.append(item)
-    identity = _failing_check_identity(snap)
-    if identity.get("failing_contexts") and not findings:
-        findings.append({
-            "code": reason_code or "required_ci_failed",
-            "message": identity.get("failing_check_summary") or reason_code,
-            "finding_class": "automatic",
-            "blocking": True,
-            "failing_contexts": list(identity.get("failing_contexts") or []),
-            "failing_check_url": identity.get("failing_check_url") or "",
-        })
-    # Attach CI identity onto the first finding so boot prompts always see it.
-    if findings and identity:
+    failing_checks = _failing_checks(snap)
+    if failing_checks and not findings:
+        for row in failing_checks:
+            findings.append({
+                "code": reason_code or "required_ci_failed",
+                "message": _check_summary(row) or reason_code,
+                "finding_class": "automatic",
+                "blocking": True,
+                "failing_contexts": [
+                    str(row.get("context") or row.get("name") or "")
+                ],
+                "failing_check_url": _check_url(row),
+                "failing_run_attempt": _run_attempt(row),
+                "failing_check_summary": _check_summary(row),
+                "check": row,
+            })
+    # Attach per-check identity onto findings without dropping nested evidence.
+    if findings and failing_checks:
         head = dict(findings[0])
-        for key, value in identity.items():
-            if value not in (None, "", [], {}):
-                head.setdefault(key, value)
+        head.setdefault("failing_contexts", [
+            str(item.get("context") or item.get("name") or "")
+            for item in failing_checks
+        ])
+        head.setdefault("failing_check_url", _check_url(failing_checks[0]))
+        head.setdefault("failing_run_attempt", _run_attempt(failing_checks[0]))
+        head.setdefault("failing_check_summary", _check_summary(failing_checks[0]))
+        head.setdefault("failing_checks", failing_checks)
         findings[0] = head
     agent_blocker = _map(_map(_map(snap.get("work_session")).get("hygiene")).get("blocker"))
     missing_artifact = _missing_artifact_from_findings(findings)
-    return {
+    dossier = {
         "schema": MISSION_DOSSIER_SCHEMA,
         "mission": mission,
         "reason_code": reason_code,
@@ -127,25 +166,41 @@ def build_dossier(
         "pr_url": _text_raw(snap.get("pr_url")),
         "head_sha": _text(snap.get("head_sha")).lower(),
         "board_status": _text_raw(snap.get("board_status")),
-        "acceptance_findings": findings,
-        "missing_artifact": missing_artifact or None,
-        "failing_contexts": list(identity.get("failing_contexts") or []),
-        "failing_check_url": identity.get("failing_check_url") or "",
-        "failing_run_attempt": int(identity.get("failing_run_attempt") or 0),
-        "failing_check_summary": identity.get("failing_check_summary") or "",
+        # Full nested fact surfaces — unchanged copies.
+        "task": _map(snap.get("task")),
+        "github_pr": _map(snap.get("github_pr")),
+        "required_status_contexts": list(snap.get("required_status_contexts") or []),
+        "status_contexts": _map(snap.get("status_contexts")),
+        "review": review,
+        "merge_gate": _map(snap.get("merge_gate")),
         "merge_queue": _map(snap.get("merge_queue")),
-        "github_pr": {
-            "state": _text(_map(snap.get("github_pr")).get("state")),
-            "draft": bool(_map(snap.get("github_pr")).get("draft")),
-            "mergeable": _map(snap.get("github_pr")).get("mergeable"),
-            "merge_state": _text(
-                _map(snap.get("github_pr")).get("mergeStateStatus")
-                or _map(snap.get("github_pr")).get("mergeable_state")
-                or _map(snap.get("github_pr")).get("merge_state")
-            ),
-        },
+        "merge_provenance": _map(snap.get("merge_provenance")),
+        "work_session": _map(snap.get("work_session")),
+        "runner": _map(snap.get("runner")),
+        "dependency_state": _map(
+            snap.get("dependency_state")
+            or _map(snap.get("task")).get("dependency_state")
+        ),
+        "acceptance_findings": findings,
+        "failing_checks": failing_checks,
+        "missing_artifact": missing_artifact or None,
+        "failing_contexts": [
+            str(item.get("context") or item.get("name") or "")
+            for item in failing_checks
+        ],
+        "failing_check_url": (
+            _check_url(failing_checks[0]) if failing_checks else ""
+        ),
+        "failing_run_attempt": (
+            _run_attempt(failing_checks[0]) if failing_checks else 0
+        ),
+        "failing_check_summary": (
+            _check_summary(failing_checks[0]) if failing_checks else ""
+        ),
         "agent_blocker": agent_blocker or None,
     }
+    dossier["evidence_identity"] = evidence_identity(dossier)
+    return dossier
 
 
 def _missing_artifact_from_findings(
@@ -163,4 +218,4 @@ def _missing_artifact_from_findings(
     return {}
 
 
-__all__ = ["build_dossier"]
+__all__ = ["build_dossier", "evidence_identity"]

@@ -247,6 +247,14 @@ def agent_requires_human(blocker_json: str, ctx: Context,
         principal, project=project, task_id=task_id, agent_id="")
     if not binding.get("ok"):
         return services.dumps(binding)
+    # Authenticated agent/execution provenance — Mission Bot refuses human
+    # stops that lack this receipt identity.
+    payload["actor"] = str(binding.get("actor") or "")
+    payload["agent_id"] = str(
+        binding.get("agent_id") or binding.get("actor") or ""
+    )
+    payload["principal_id"] = str(binding.get("principal_id") or "")
+    payload["binding"] = str(binding.get("binding") or "")
     from switchboard.application.commands import human_blocker as human_blocker_cmd
     result = human_blocker_cmd.execute_mapping(
         payload, actor=binding["actor"], project=project,
@@ -296,9 +304,17 @@ def revoke_claim(claim_id: str, reason: str, ctx: Context,
 
 
 
-CLAIM_TOOL_NAMES = ("claim_next", "claim_task", "complete_claim",
-                    "record_executed_test_run", "record_human_blocker",
-                    'verify_offline_completion', 'abandon_claim', 'revoke_claim')
+CLAIM_TOOL_NAMES = (
+    "claim_next",
+    "claim_task",
+    "complete_claim",
+    "record_executed_test_run",
+    "record_human_blocker",
+    "agent_requires_human",
+    "verify_offline_completion",
+    "abandon_claim",
+    "revoke_claim",
+)
 
 
 def register_claim_tools(mcp: Any, services: ClaimToolServices) -> dict[str, Callable[..., str]]:

@@ -3,9 +3,10 @@
 No classifier. No attribution. No invented human involvement.
 
 ```
-agent_requires_human → AGENT_REQUIRES_HUMAN
-merged               → OBSERVE_MERGED
+merged               → OBSERVE_MERGED   (outranks stale human blockers)
+agent_requires_human → AGENT_REQUIRES_HUMAN  (authenticated agent only)
 live runner          → WAIT
+unmet dependencies   → WAIT
 no PR yet            → START_IMPLEMENTATION
 factory failure      → START_REMEDIATION(full dossier)
 draft                → MARK_READY
@@ -22,7 +23,7 @@ import json
 from typing import Any, Mapping
 
 from switchboard.domain.mission_bot import facts
-from switchboard.domain.mission_bot.dossier import build_dossier
+from switchboard.domain.mission_bot.dossier import build_dossier, evidence_identity
 from switchboard.domain.mission_bot.outputs import (
     MISSION_BOT_VERSION,
     MISSION_COMMAND_SCHEMA,
@@ -48,6 +49,7 @@ def _command(
     wait_reason: str = "",
 ) -> dict[str, Any]:
     snap = _map(snapshot)
+    evidence = evidence_identity(dossier or {})
     payload = {
         "output": output.value,
         "task_id": _text(snap.get("task_id")).upper(),
@@ -55,9 +57,11 @@ def _command(
         "head_sha": _text(snap.get("head_sha")).lower(),
         "reason_code": reason_code,
         "role": role or "",
+        # Fresh CI/evidence identity must mint a new mission key.
+        "evidence_identity": evidence,
     }
     digest = hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
     ).hexdigest()
     idem_key = f"mission:{payload['task_id'] or 'unknown'}:{digest[:32]}"
     command = {
@@ -71,6 +75,7 @@ def _command(
         "role": role,
         "dossier": dict(dossier) if dossier else None,
         "wait_reason": wait_reason or None,
+        "evidence_identity": evidence,
         "idempotency_key": idem_key,
         # Legacy completion/conformance surfaces still read idem_key.
         "idem_key": idem_key,
@@ -139,9 +144,24 @@ def reduce_mission(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     """Reduce one exact-head fact snapshot to exactly one Mission Bot command."""
     snap = _map(snapshot)
 
-    # 1. Only an authenticated agent receipt may require a human.
+    # 1. Canonical merge observation owns Done — outranks a stale human blocker.
+    if facts.is_merged(snap):
+        return _command(
+            MissionOutput.OBSERVE_MERGED,
+            snapshot=snap,
+            reason_code="canonical_pr_merged",
+        )
+
+    # 2. Only an authenticated agent receipt may require a human.
     if facts.agent_requires_human(snap):
         blocker = _map(_map(_map(snap.get("work_session")).get("hygiene")).get("blocker"))
+        if not blocker:
+            blocker = _map(
+                _map(snap.get("task")).get("human_blocker")
+                or _map(snap.get("task")).get("agent_requires_human")
+                or snap.get("agent_requires_human")
+                or snap.get("attention")
+            )
         reason = _text(blocker.get("reason")) or "agent_requires_human"
         dossier = build_dossier(
             snap, reason_code=reason, mission="surface_agent_requires_human",
@@ -151,14 +171,6 @@ def reduce_mission(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             snapshot=snap,
             reason_code=reason,
             dossier=dossier,
-        )
-
-    # 2. Canonical merge observation owns Done.
-    if facts.is_merged(snap):
-        return _command(
-            MissionOutput.OBSERVE_MERGED,
-            snapshot=snap,
-            reason_code="canonical_pr_merged",
         )
 
     # 3. Hang up while a live runner owns capacity.
@@ -171,7 +183,21 @@ def reduce_mission(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             wait_reason=_text(runner.get("role")) or "live_runner",
         )
 
-    # 4. No PR yet — boot the implementer.
+    # 4. Unmet dependencies — wait; do not emit a doomed start_task.
+    if facts.dependencies_unsatisfied(snap):
+        dep = facts.dependency_state(snap)
+        dossier = build_dossier(
+            snap, reason_code="unmet_dependencies", mission="wait_dependencies",
+        )
+        return _command(
+            MissionOutput.WAIT,
+            snapshot=snap,
+            reason_code="unmet_dependencies",
+            wait_reason="dependencies",
+            dossier=dossier,
+        )
+
+    # 5. No PR yet — boot the implementer.
     if facts.needs_implementation(snap):
         dossier = build_dossier(
             snap, reason_code="needs_implementation", mission="implement",
@@ -184,7 +210,7 @@ def reduce_mission(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             dossier=dossier,
         )
 
-    # 5. Factory failure — boot remediation with the full unchanged dossier.
+    # 6. Factory failure — boot remediation with the full unchanged dossier.
     #    GitHub/Switchboard red never becomes human. Pending CI is not a failure.
     if facts.factory_failure(snap):
         reason = facts.factory_failure_reason(snap)
@@ -199,7 +225,7 @@ def reduce_mission(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             dossier=dossier,
         )
 
-    # 6. Draft PR — mark ready (free mechanical step; outranks pending CI).
+    # 7. Draft PR — mark ready (free mechanical step; outranks pending CI).
     if facts.is_draft(snap):
         return _command(
             MissionOutput.MARK_READY,
@@ -208,7 +234,7 @@ def reduce_mission(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             role="review_merge",
         )
 
-    # 7. CI still pending/hydrating — wait.
+    # 8. CI still pending/hydrating — wait.
     if facts.ci_pending(snap):
         return _command(
             MissionOutput.WAIT,
@@ -217,7 +243,7 @@ def reduce_mission(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             wait_reason="ci_pending",
         )
 
-    # 8. Merge queue in flight — wait.
+    # 9. Merge queue in flight — wait.
     if facts.queue_waiting(snap):
         queue = _map(snap.get("merge_queue"))
         state = _text(queue.get("state") or queue.get("status")) or "queued"
@@ -228,7 +254,7 @@ def reduce_mission(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             wait_reason="merge_queue",
         )
 
-    # 9. Review missing/stale — boot review.
+    # 10. Review missing/stale — boot review.
     if facts.review_needed(snap):
         reason = (
             "review_verdict_stale"
@@ -247,7 +273,7 @@ def reduce_mission(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             dossier=dossier,
         )
 
-    # 10. Green gates — arm merge.
+    # 11. Green gates — arm merge.
     if facts.gates_green(snap):
         return _command(
             MissionOutput.ARM_MERGE,
@@ -256,7 +282,7 @@ def reduce_mission(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             role="review_merge",
         )
 
-    # 11. Nothing actionable.
+    # 12. Nothing actionable.
     return _command(
         MissionOutput.WAIT,
         snapshot=snap,

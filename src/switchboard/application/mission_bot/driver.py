@@ -194,10 +194,39 @@ def production_mission_ports(
             "board_projection": "Done",
             "effect": "reconcile_provenance",
         }
+        # Actually stamp merge provenance — do not invent Done from a dict.
+        reconcile_result: dict[str, Any] = {}
+        if store_mod is None:
+            from switchboard.application.commands.reconcile_task_merge import (
+                execute as reconcile_task_merge,
+            )
+            from switchboard.storage.repositories.provenance import (
+                task_merge_reconcile_subject,
+            )
+            from switchboard.storage.repositories import projects
+            reconcile_result = reconcile_task_merge(
+                str(command.get("task_id") or _map(snapshot).get("task_id") or ""),
+                project=project,
+                actor=actor or "mission_bot/observe_merged",
+                load_subject=task_merge_reconcile_subject,
+                canonical_repo_for=projects.get_project_github_repo,
+                fetch_pull_request=lambda repo, number: provenance._github_pr(
+                    repo, number, token=provenance._github_token(repo),
+                ),
+                mark_merged=provenance.mark_task_merged,
+            )
+        _ensure_completion_run(
+            decision=decision,
+            snapshot=snapshot,
+            current={},
+            actor=actor,
+            project=project,
+        )
         return {
             "action": "canonical_provenance_observed",
             "head_sha": command.get("head_sha"),
             "decision": decision,
+            "reconcile": reconcile_result,
             "snapshot_task_id": _map(snapshot).get("task_id"),
             "project": project,
             "actor": actor,
@@ -214,42 +243,26 @@ def production_mission_ports(
 
 
 def _mission_instruction(plan: Mapping[str, Any]) -> str:
-    """Render the dossier as the mission tape for the booted agent."""
+    """Render the full dossier as the mission tape — no truncation."""
+    import json
+
     dossier = _map(plan.get("dossier"))
     role = str(plan.get("role") or "")
     reason = str(plan.get("reason_code") or dossier.get("reason_code") or "")
-    lines = [
+    header = [
         f"YOUR MISSION ({role or 'agent'}): {dossier.get('mission') or reason}",
         f"task_id={plan.get('task_id')}",
         f"pr_number={plan.get('pr_number') or dossier.get('pr_number') or 0}",
         f"head_sha={plan.get('head_sha') or dossier.get('head_sha') or ''}",
         f"reason_code={reason}",
-    ]
-    url = str(dossier.get("failing_check_url") or plan.get("failing_check_url") or "")
-    if url:
-        lines.append(f"failing_check_url={url}")
-    summary = str(
-        dossier.get("failing_check_summary") or plan.get("failing_check_summary") or ""
-    )
-    if summary:
-        lines.append(f"failing_check_summary={summary}")
-    contexts = list(dossier.get("failing_contexts") or plan.get("failing_contexts") or [])
-    if contexts:
-        lines.append("failing_contexts=" + ", ".join(str(c) for c in contexts))
-    findings = list(dossier.get("acceptance_findings") or plan.get("acceptance_findings") or [])
-    if findings:
-        lines.append("acceptance_findings:")
-        for item in findings[:20]:
-            if isinstance(item, Mapping):
-                lines.append(
-                    f"- {item.get('code')}: {item.get('message') or item.get('summary') or ''}"
-                )
-    lines.append(
+        "DOSSIER_JSON_BEGIN",
+        json.dumps(dossier, sort_keys=True, default=str),
+        "DOSSIER_JSON_END",
         "Use Switchboard MCP for the how. If you cannot proceed "
         "(credentials/authority/product intent), call agent_requires_human "
-        "with evidence — do not invent a workaround."
-    )
-    return "\n".join(lines)
+        "with evidence — do not invent a workaround.",
+    ]
+    return "\n".join(header)
 
 
 def run_mission_tick(

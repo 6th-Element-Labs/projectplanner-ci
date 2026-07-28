@@ -137,6 +137,7 @@ _ENTRIES: tuple[ReasonCode, ...] = (
     _code("live_runner_in_progress", "runner", _COMPLETION, "transient", "agent"),
     _code("needs_implementation", "runner", _COMPLETION, "transient", "agent"),
     _code("no_actionable_mission", "runner", _COMPLETION, "transient", "infra"),
+    _code("unmet_dependencies", "runner", _COMPLETION, "transient", "infra"),
     _code("agent_requires_human", "runner", _COMPLETION, "anomalous", "human"),
     _code("invalid_executed_test_run", "session", _MERGE_GATE, "transient", "agent"),
     _code("merge_queue_unmergeable", "merge_queue", _COMPLETION, "anomalous", "agent"),

@@ -15,7 +15,9 @@ _FAILED = {
     "cancelled", "canceled", "stale", "startup_failure",
 }
 _QUEUE_WAIT = {"queued", "awaiting_checks", "mergeable", "locked"}
-_AGENT_HUMAN_ROUTES = frozenset({"human", "agent_requires_human"})
+_AGENT_HUMAN_TOOLS = frozenset({
+    "record_human_blocker", "agent_requires_human",
+})
 
 
 def _map(value: Any) -> dict[str, Any]:
@@ -30,48 +32,55 @@ def _text_raw(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _has_agent_provenance(blocker: Mapping[str, Any]) -> bool:
+    """True only when an authenticated agent authored the sticky receipt.
+
+    Bare ``route=human``, schema tags, or attention stickiness are not enough —
+    Mission Bot requires the MCP-stamped tool name plus agent identity.
+    """
+    if _text(blocker.get("source_tool")) not in _AGENT_HUMAN_TOOLS:
+        return False
+    if not (
+        _text_raw(blocker.get("agent_id"))
+        or _text_raw(blocker.get("actor"))
+    ):
+        return False
+    return True
+
+
 def agent_requires_human(snapshot: Mapping[str, Any]) -> bool:
-    """True only for an agent-authored sticky blocker receipt.
+    """True only for an authenticated agent-authored sticky blocker receipt.
 
     Machine classifiers must never create this fact. It comes from
-    ``record_human_blocker`` / ``agent_requires_human`` MCP, stored on the
-    work session hygiene blocker (and optionally mirrored on the task).
+    ``record_human_blocker`` / ``agent_requires_human`` MCP, stamped with
+    agent/actor identity (and preferably execution generation).
     """
     session = _map(snapshot.get("work_session"))
     if _text(session.get("status")) == "blocked":
         blocker = _map(_map(session.get("hygiene")).get("blocker"))
-        if _text(blocker.get("route")) in _AGENT_HUMAN_ROUTES:
-            return True
-        if _text(blocker.get("schema")).endswith("human_blocker.v1"):
-            return True
-        if blocker.get("source_tool") in {
-            "record_human_blocker", "agent_requires_human",
-        }:
+        if _has_agent_provenance(blocker):
             return True
     task = _map(snapshot.get("task"))
     task_blocker = _map(task.get("human_blocker") or task.get("agent_requires_human"))
-    if task_blocker and _text(task_blocker.get("route")) in _AGENT_HUMAN_ROUTES:
+    if _has_agent_provenance(task_blocker):
         return True
-    # Sticky completion attention created by agent closeout (not orchestrator).
     attention = _map(snapshot.get("agent_requires_human") or snapshot.get("attention"))
-    if attention.get("sticky") is True and _text(
-        attention.get("source_tool")
-    ) in {"record_human_blocker", "agent_requires_human"}:
+    if attention.get("sticky") is True and _has_agent_provenance(attention):
         return True
     return False
 
 
 def is_merged(snapshot: Mapping[str, Any]) -> bool:
+    """Canonical merge proof only — not merge-queue 'complete' speculation."""
     provenance = _map(snapshot.get("merge_provenance"))
-    pr = _map(snapshot.get("github_pr"))
-    queue = _map(snapshot.get("merge_queue"))
     if provenance.get("merged_sha") or provenance.get("canonical_merged_sha"):
         return True
+    pr = _map(snapshot.get("github_pr"))
     if _text(pr.get("state")) == "merged" or pr.get("merged") is True:
         return True
-    if _text(queue.get("state") or queue.get("status")) in {
-        "merged", "complete", "completed",
-    }:
+    if _text_raw(pr.get("merged_at")) and _text_raw(
+        pr.get("merge_commit_sha") or pr.get("merged_sha")
+    ):
         return True
     return False
 
@@ -79,6 +88,29 @@ def is_merged(snapshot: Mapping[str, Any]) -> bool:
 def live_runner(snapshot: Mapping[str, Any]) -> bool:
     runner = _map(snapshot.get("runner"))
     return bool(runner.get("live"))
+
+
+def dependency_state(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    direct = _map(snapshot.get("dependency_state"))
+    if direct:
+        return direct
+    return _map(_map(snapshot.get("task")).get("dependency_state"))
+
+
+def dependencies_unsatisfied(snapshot: Mapping[str, Any]) -> bool:
+    """True when start_task would refuse unmet dependencies."""
+    dep = dependency_state(snapshot)
+    if not dep:
+        return False
+    if dep.get("satisfied") is False:
+        return True
+    try:
+        if int(dep.get("blocked_by_count") or 0) > 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    blocking = dep.get("blocking")
+    return isinstance(blocking, (list, tuple)) and len(blocking) > 0
 
 
 def has_pr(snapshot: Mapping[str, Any]) -> bool:
@@ -302,6 +334,8 @@ __all__ = [
     "changes_requested",
     "ci_failed",
     "ci_pending",
+    "dependencies_unsatisfied",
+    "dependency_state",
     "factory_failure",
     "factory_failure_reason",
     "gates_green",
