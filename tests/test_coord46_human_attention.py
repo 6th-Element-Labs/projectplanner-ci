@@ -19,7 +19,6 @@ from path_setup import ROOT  # noqa: F401
 
 from switchboard.api.routers.attention import _provider_item
 from switchboard.domain.completion import effects
-from switchboard.domain.completion.executor import execute_effect
 from switchboard.domain.completion.state_machine import (
     build_completion_snapshot,
     classify_completion,
@@ -171,24 +170,6 @@ class MissionBotHumanAttention(unittest.TestCase):
         for p in self.patches:
             p.stop()
         self.db.close()
-
-    def _legacy_tick(self, snapshot):
-        decision = classify_completion(None, snapshot)
-        run = completion_runs.get_active_completion_run(
-            "COORD-20", project="switchboard") or {
-            "run_id": "completion-run-812",
-            "state_version": 1,
-            "attempt": 0,
-        }
-        plan = effects.plan_effect(decision, snapshot, run)
-        return execute_effect(
-            plan,
-            decision=decision,
-            snapshot=snapshot,
-            run=run,
-            project="switchboard",
-            actor="completion-owner",
-        )
 
     def test_credential_finding_with_live_runner_waits(self):
         snap = _pr812_snapshot(live_runner=True, credential_finding=True)
