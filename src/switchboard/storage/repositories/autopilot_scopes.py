@@ -195,12 +195,19 @@ def _row(row: Any) -> Dict[str, Any]:
 def list_autopilot_scopes(*, project: str = DEFAULT_PROJECT,
                           profile_id: str = "autopilot-default",
                           deliverable_id: str = "", status: str = "",
+                          task_project: str = "", task_id: str = "",
                           limit: int = 500) -> List[Dict[str, Any]]:
     sql = "SELECT * FROM autopilot_scopes WHERE profile_id=?"
     params: List[Any] = [profile_id]
     if deliverable_id:
         sql += " AND deliverable_id=?"
         params.append(deliverable_id)
+    if task_project:
+        sql += " AND task_project=?"
+        params.append(str(task_project).strip())
+    if task_id:
+        sql += " AND task_id=?"
+        params.append(str(task_id).strip().upper())
     if status:
         values = [part.strip() for part in status.split(",") if part.strip()]
         if values:

@@ -171,6 +171,27 @@ def pr_closed_unmerged(snapshot: Mapping[str, Any]) -> bool:
     return _text(pr.get("state")) == "closed" and not is_merged(snapshot)
 
 
+def terminal_operator_outcome(snapshot: Mapping[str, Any]) -> str:
+    """Return the terminal outcome that fences Mission Bot drive authority.
+
+    A cancelled task is an explicit human closeout.  A stopped coordination
+    scope is likewise explicit operator intent.  Expired, closed, or
+    superseded scopes terminate the loop without claiming human resolution.
+    These facts must outrank runner/PR state so a stale completion tick cannot
+    resurrect work after its W2 scope has ended.
+    """
+    status = _text(snapshot.get("board_status"))
+    if status in {"cancelled", "canceled"}:
+        return "human_resolved"
+    scope = _map(snapshot.get("autopilot_scope"))
+    scope_status = _text(scope.get("status"))
+    if scope_status == "stopped":
+        return "human_resolved"
+    if scope_status in {"closed", "expired", "superseded"}:
+        return "abandoned"
+    return ""
+
+
 def queue_waiting(snapshot: Mapping[str, Any]) -> bool:
     queue = _map(snapshot.get("merge_queue"))
     state = _text(queue.get("state") or queue.get("status"))
@@ -441,4 +462,5 @@ __all__ = [
     "queue_waiting",
     "review_needed",
     "review_passed",
+    "terminal_operator_outcome",
 ]

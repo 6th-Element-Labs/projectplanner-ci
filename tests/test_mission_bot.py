@@ -102,6 +102,34 @@ def test_agent_requires_human_stops_without_reboot():
     assert cmd["role"] is None
 
 
+def test_stopped_scope_fences_closed_pr_remediation():
+    snap = snapshot(pr_state="CLOSED")
+    snap["autopilot_scope"] = {"status": "stopped", "scope_id": "scope-1"}
+    cmd = reduce_mission(snap)
+    assert cmd["output"] == MissionOutput.WAIT.value
+    assert cmd["terminal_outcome"] == "human_resolved"
+    assert cmd["wait_reason"] == "terminal_coordination_scope"
+
+
+def test_expired_scope_fences_closed_pr_as_abandoned():
+    snap = snapshot(pr_state="CLOSED")
+    snap["autopilot_scope"] = {"status": "expired", "scope_id": "scope-1"}
+    cmd = reduce_mission(snap)
+    assert cmd["output"] == MissionOutput.WAIT.value
+    assert cmd["terminal_outcome"] == "abandoned"
+
+
+def test_cancelled_task_fences_before_live_runner_or_closed_pr():
+    snap = snapshot(
+        board_status="Cancelled",
+        pr_state="CLOSED",
+        runner={"live": True, "role": "remediation"},
+    )
+    cmd = reduce_mission(snap)
+    assert cmd["output"] == MissionOutput.WAIT.value
+    assert cmd["terminal_outcome"] == "human_resolved"
+
+
 def test_wait_and_agent_attention_observation_have_no_mutating_port():
     """Communication/operator observations cannot drive another lifecycle."""
     from switchboard.domain.mission_bot import MissionPorts, execute_mission_command
@@ -132,12 +160,23 @@ def test_wait_and_agent_attention_observation_have_no_mutating_port():
         project="switchboard",
         actor="test",
     )
+    terminal_snap = snapshot(pr_state="CLOSED")
+    terminal_snap["autopilot_scope"] = {"status": "stopped"}
+    terminal_command = reduce_mission(terminal_snap)
+    terminal_first = execute_mission_command(
+        terminal_command, ports=ports, project="switchboard", actor="test",
+    )
+    terminal_replay = execute_mission_command(
+        terminal_command, ports=ports, project="switchboard", actor="test",
+    )
     assert waited["result"]["action"] == "wait"
     assert attention["result"] == {
         "action": "agent_requires_human_observed",
         "source": "authenticated_agent_receipt",
         "reason_code": "missing_credentials",
     }
+    assert terminal_first["result"]["action"] == "wait"
+    assert terminal_replay["result"] == terminal_first["result"]
 
 
 def test_legacy_human_route_without_provenance_does_not_stop():

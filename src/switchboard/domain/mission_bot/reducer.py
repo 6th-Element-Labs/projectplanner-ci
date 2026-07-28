@@ -157,7 +157,19 @@ def reduce_mission(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             reason_code="canonical_pr_merged",
         )
 
-    # 2. Only an authenticated agent receipt may require a human.
+    # 2. Terminal operator/scope intent fences every work-driving output.
+    terminal_outcome = facts.terminal_operator_outcome(snap)
+    if terminal_outcome:
+        command = _command(
+            MissionOutput.WAIT,
+            snapshot=snap,
+            reason_code=f"coordination_scope_{terminal_outcome}",
+            wait_reason="terminal_coordination_scope",
+        )
+        command["terminal_outcome"] = terminal_outcome
+        return command
+
+    # 3. Only an authenticated agent receipt may require a human.
     if facts.agent_requires_human(snap):
         blocker = _map(_map(_map(snap.get("work_session")).get("hygiene")).get("blocker"))
         if not blocker:
@@ -178,7 +190,7 @@ def reduce_mission(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             dossier=dossier,
         )
 
-    # 3. Hang up while a live runner owns capacity.
+    # 4. Hang up while a live runner owns capacity.
     if facts.live_runner(snap):
         runner = _map(snap.get("runner"))
         return _command(
@@ -188,7 +200,7 @@ def reduce_mission(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             wait_reason=_text(runner.get("role")) or "live_runner",
         )
 
-    # 4. Unmet dependencies — wait; do not emit a doomed start_task.
+    # 5. Unmet dependencies — wait; do not emit a doomed start_task.
     if facts.dependencies_unsatisfied(snap):
         dep = facts.dependency_state(snap)
         dossier = build_dossier(
@@ -202,7 +214,7 @@ def reduce_mission(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             dossier=dossier,
         )
 
-    # 5. No PR yet — boot the implementer.
+    # 6. No PR yet — boot the implementer.
     if facts.needs_implementation(snap):
         dossier = build_dossier(
             snap, reason_code="needs_implementation", mission="implement",
@@ -215,7 +227,7 @@ def reduce_mission(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             dossier=dossier,
         )
 
-    # 6. Factory failure — boot remediation with the full unchanged dossier.
+    # 7. Factory failure — boot remediation with the full unchanged dossier.
     #    GitHub/Switchboard red never becomes human. Pending CI is not a failure.
     if facts.factory_failure(snap):
         reason = facts.factory_failure_reason(snap)
@@ -230,7 +242,7 @@ def reduce_mission(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             dossier=dossier,
         )
 
-    # 7. Draft PR — mark ready (free mechanical step; outranks pending CI).
+    # 8. Draft PR — mark ready (free mechanical step; outranks pending CI).
     if facts.is_draft(snap):
         return _command(
             MissionOutput.MARK_READY,
@@ -239,7 +251,7 @@ def reduce_mission(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             role="review_merge",
         )
 
-    # 8. CI still pending/hydrating — wait.
+    # 9. CI still pending/hydrating — wait.
     if facts.ci_pending(snap):
         return _command(
             MissionOutput.WAIT,
@@ -248,7 +260,7 @@ def reduce_mission(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             wait_reason="ci_pending",
         )
 
-    # 9. Merge queue in flight — wait.
+    # 10. Merge queue in flight — wait.
     if facts.queue_waiting(snap):
         queue = _map(snap.get("merge_queue"))
         state = _text(queue.get("state") or queue.get("status")) or "queued"

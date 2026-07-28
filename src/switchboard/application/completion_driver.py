@@ -192,16 +192,24 @@ def hydrate_completion_snapshot(
         "task": task_observed_at,
         "canonical_github_provenance": task_observed_at,
     })
-    active_scopes = autopilot_scopes.list_autopilot_scopes(
-        project=project, status="active,paused", limit=500,
+    scopes = autopilot_scopes.list_autopilot_scopes(
+        project=project,
+        task_project=project,
+        task_id=task_id,
+        limit=500,
     )
-    task_scope = next(
-        (
-            _map(scope) for scope in active_scopes
-            if _text(_map(scope).get("scope_type")) == "task"
-            and _text(_map(scope).get("task_id")).upper() == task_id
+    matching_scopes = [
+        _map(scope) for scope in scopes
+        if _text(_map(scope).get("scope_type")) == "task"
+        and _text(_map(scope).get("task_id")).upper() == task_id
+    ]
+    task_scope = max(
+        matching_scopes,
+        key=lambda scope: (
+            float(scope.get("updated_at") or 0),
+            str(scope.get("scope_id") or ""),
         ),
-        {},
+        default={},
     )
     source_observed_at["autopilot_scope"] = time.time()
     git_state = _map(task.get("git_state"))

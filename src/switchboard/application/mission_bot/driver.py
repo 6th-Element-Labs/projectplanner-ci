@@ -386,6 +386,19 @@ def run_mission_tick(
         project=project,
         actor=actor,
     )
+    terminal_outcome = str(command.get("terminal_outcome") or "")
+    if terminal_outcome == "human_resolved":
+        result["terminal_observation"] = decision_records.mark_human_intervention(
+            project=project,
+            task_id=task_id,
+            human_action="mission_bot:terminal_operator_intent",
+            resolved=True,
+        )
+    elif terminal_outcome == "abandoned":
+        result["terminal_observation"] = decision_records.abandon_open_episodes(
+            project=project,
+            task_id=task_id,
+        )
     result["snapshot"] = {
         "task_id": snapshot.get("task_id"),
         "head_sha": snapshot.get("head_sha"),
