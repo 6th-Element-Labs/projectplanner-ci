@@ -1,10 +1,12 @@
 {
   "expect": {
-    "effect": "escalate_human",
-    "reason_code": "required_ci_authority_failure",
-    "role_sequence": [],
-    "route": "human",
-    "terminal": "human"
+    "terminal": "blocked",
+    "reason_code": "required_exact_head_ci_failed",
+    "role_sequence": [
+      "remediation"
+    ],
+    "route": "remediation",
+    "effect": "start_remediation"
   },
   "id": "clean_ci_action_required",
   "schema": "switchboard.completion_conformance.scenario.v1",

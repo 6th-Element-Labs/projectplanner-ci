@@ -1,12 +1,12 @@
 {
   "expect": {
-    "effect": "start_remediation",
-    "reason_code": "automatic_review_findings",
+    "terminal": "blocked",
+    "reason_code": "review_changes_requested",
     "role_sequence": [
       "remediation"
     ],
     "route": "remediation",
-    "terminal": "blocked"
+    "effect": "start_remediation"
   },
   "id": "changes_requested_automatic_remediation",
   "schema": "switchboard.completion_conformance.scenario.v1",

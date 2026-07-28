@@ -1,8 +1,12 @@
-"""BUG-172: generated proofs for completion decision authority.
+"""BUG-172: generated proofs for Mission Bot decision authority.
 
-These are exhaustive small models, not seeded examples.  They prove that
+These are exhaustive small models, not seeded examples. They prove that
 presentation ordering cannot choose the route and that a pass verdict is not
-merge authority unless it is bound to the current PR head.
+merge authority unless it is bound to the current PR head (and PR identity).
+
+Legacy classifier expectations (credential/authority → human, infrastructure →
+coordination_retry) are intentionally retired: Mission Bot boots agents for
+machine red and only stops for a server-stamped agent_requires_human receipt.
 """
 from __future__ import annotations
 
@@ -75,27 +79,36 @@ def _snapshot() -> dict:
 
 
 def _finding_oracle(rows: tuple[dict, ...]) -> tuple[str, str]:
-    codes = {row["code"] for row in rows}
-    if "semantic_completion_failed" in codes:
-        return "remediation", "semantic_completion_failed"
-    if "canonical_repo_missing" in codes:
-        return "human", "canonical_repo_missing"
-    if "review_required" in codes:
-        return "review_merge", "review_required"
-    if "missing_required_status_contexts" in codes:
-        return "coordination_retry", "missing_required_status_contexts"
+    """Mission Bot: machine findings never invent a human route.
+
+    Route is independent of presentation order (always remediation when any
+    non-pending blocking finding exists). Reason follows the first such
+    finding in the supplied order — Mission Bot does not reorder evidence.
+    """
+    for row in rows:
+        if row.get("blocking") is False:
+            continue
+        code = row["code"]
+        if code in {"draft_pr", "missing_required_status_contexts"}:
+            continue
+        if code in {
+            "semantic_completion_failed",
+            "canonical_repo_missing",
+            "review_required",
+        }:
+            return "remediation", code
+    # Pending-class findings alone do not block when required contexts are empty.
     return "review_merge", "exact_head_gates_passed"
 
 
 def _ci_oracle(tokens: tuple[str, ...]) -> str:
-    if "product" in tokens:
-        return "remediation"
-    if "authority" in tokens:
-        return "human"
-    if {"cancelled", "infrastructure", "missing"} & set(tokens):
-        return "coordination_retry"
-    if "pending" in tokens:
+    """Mission Bot CI routing — pending waits; all machine red remediates."""
+    token_set = set(tokens)
+    # Missing/pending required contexts outrank red (factory_failure short-circuits).
+    if "pending" in token_set or "missing" in token_set:
         return "wait"
+    if token_set & {"product", "authority", "cancelled", "infrastructure"}:
+        return "remediation"
     return "review_merge"
 
 
@@ -110,6 +123,10 @@ def test_all_1957_ordered_finding_sets_follow_one_explicit_precedence():
             assert (decision["route"], decision["reason_code"]) == (
                 expected_route,
                 expected_reason,
+            ), (
+                f"codes={[row['code'] for row in ordered_rows]} "
+                f"got={(decision['route'], decision['reason_code'])} "
+                f"expected={(expected_route, expected_reason)}"
             )
             checked += 1
     assert checked == 1_957
@@ -130,11 +147,22 @@ def test_all_57624_required_ci_histories_ignore_context_presentation_order():
         for required_order in permutations(names):
             snapshot["required_status_contexts"] = list(required_order)
             decision = classify_completion(None, snapshot)
-            assert decision["route"] == expected_route
+            assert decision["route"] == expected_route, (
+                f"tokens={tokens} order={required_order} "
+                f"got={decision['route']} expected={expected_route} "
+                f"reason={decision.get('reason_code')}"
+            )
+            # Route/effect must be presentation-order invariant. Which failing
+            # context is named in reason_code may follow required-context order
+            # when multiple attributions are red.
+            key = (decision["route"], decision["effect"])
             if baseline is None:
-                baseline = decision
+                baseline = key
             else:
-                assert decision == baseline
+                assert key == baseline, (
+                    f"tokens={tokens} order={required_order} "
+                    f"got={key} expected={baseline}"
+                )
             checked += 1
     assert checked == 57_624
 
@@ -165,9 +193,13 @@ def test_pass_verdict_requires_an_explicit_exact_current_head_binding():
 
 
 def test_same_head_replacement_pr_never_inherits_old_review_authority():
-    for status, expected_route in (
-        ("pass", "review_merge"),
-        ("changes_requested", "review_merge"),
+    for status, expected_route, expected_reasons in (
+        ("pass", "review_merge", {"review_verdict_stale", "review_required"}),
+        (
+            "changes_requested",
+            "remediation",
+            {"review_changes_requested"},
+        ),
     ):
         snapshot = _snapshot()
         snapshot["pr_number"] = 826
@@ -190,17 +222,15 @@ def test_same_head_replacement_pr_never_inherits_old_review_authority():
         decision = classify_completion(None, snapshot)
         assert decision["route"] == expected_route
         assert decision["effect"] != "enqueue"
-        assert decision["reason_code"] in {
-            "review_verdict_stale", "review_required",
-        }
+        assert decision["reason_code"] in expected_reasons
 
 
 if __name__ == "__main__":
     # Switchboard CI executes each test file directly, not through pytest.
     # Keep the generated proof on that real path so a green file means the
-    # 59,581 modeled classifier states were actually evaluated.
+    # 59,581 modeled Mission Bot states were actually evaluated.
     test_all_1957_ordered_finding_sets_follow_one_explicit_precedence()
     test_all_57624_required_ci_histories_ignore_context_presentation_order()
     test_pass_verdict_requires_an_explicit_exact_current_head_binding()
     test_same_head_replacement_pr_never_inherits_old_review_authority()
-    print("BUG-172 completion classifier model: 59,581 generated states passed")
+    print("BUG-172 Mission Bot decision model: 59,581 generated states passed")

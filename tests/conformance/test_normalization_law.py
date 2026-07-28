@@ -53,11 +53,13 @@ def _action_for(plan: dict) -> NormalizedAction:
         "none": NormalizedAction.WAIT,
         "ensure_review_generation": NormalizedAction.START,
         "start_remediation": NormalizedAction.START,
+        "start_implementation": NormalizedAction.START,
         "repair_dispatch": NormalizedAction.RETRY_CI,
         "update_branch": NormalizedAction.RETRY_CI,
         "mark_ready": NormalizedAction.MARK_READY,
         "enqueue": NormalizedAction.ARM_MERGE,
         "escalate_human": NormalizedAction.BLOCK,
+        "agent_requires_human": NormalizedAction.BLOCK,
         "reconcile_provenance": NormalizedAction.MERGED,
     }[effect]
 
@@ -138,11 +140,43 @@ def test_wait_and_block_have_required_operating_contracts():
     assert set(waited["wait"]) == {
         "reason", "evidence", "owner", "deadline_at", "next_observation"}
 
-    block_scenario = properties._scenario(
-        "law-block", ci="action_required")
-    block_snapshot = _shared.build_snapshot(block_scenario, task_id="LAW-BLOCK")
+    # Machine red boots remediation (START). Agent-authored human is BLOCK.
+    start_scenario = properties._scenario(
+        "law-start", ci="action_required")
+    start_snapshot = _shared.build_snapshot(start_scenario, task_id="LAW-START")
+    start_decision = classify_completion(run, start_snapshot)
+    start_plan = plan_effect(start_decision, start_snapshot, run)
+    assert start_plan["effect"] == "start_remediation"
+    started = normalize_fresh_tick(
+        decision=start_decision,
+        plan=start_plan,
+        snapshot=start_snapshot,
+        tick=_tick(NormalizedAction.START, start_snapshot["head_sha"]),
+    )
+    assert started["action"] == "START"
+
+    block_snapshot = dict(start_snapshot)
+    block_snapshot["work_session"] = {
+        "status": "blocked",
+        "hygiene": {
+            "blocker": {
+                "route": "agent_requires_human",
+                "reason": "agent_requires_human",
+                "source_tool": "agent_requires_human",
+                # Server-stamped resolve_write_actor binding required by
+                # Mission Bot — bare actor/agent_id strings are forgeable.
+                "binding": "registered_agent",
+                "provenance_stamp": "switchboard.resolve_write_actor.v1",
+                "agent_id": "agent-law-block",
+                "actor": "agent-law-block",
+                "execution_id": "exec-law-block",
+                "execution_generation": 1,
+            }
+        },
+    }
     block_decision = classify_completion(run, block_snapshot)
     block_plan = plan_effect(block_decision, block_snapshot, run)
+    assert block_plan["effect"] == "agent_requires_human"
     blocked = normalize_fresh_tick(
         decision=block_decision,
         plan=block_plan,

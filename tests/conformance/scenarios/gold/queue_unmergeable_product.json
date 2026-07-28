@@ -1,12 +1,12 @@
 {
   "expect": {
-    "effect": "start_remediation",
-    "reason_code": "merge_queue_product_failure",
+    "terminal": "blocked",
+    "reason_code": "required_exact_head_ci_failed",
     "role_sequence": [
       "remediation"
     ],
     "route": "remediation",
-    "terminal": "blocked"
+    "effect": "start_remediation"
   },
   "id": "queue_unmergeable_product",
   "schema": "switchboard.completion_conformance.scenario.v1",

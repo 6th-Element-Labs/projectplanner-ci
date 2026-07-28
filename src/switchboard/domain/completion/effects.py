@@ -26,7 +26,9 @@ MUTATING_EFFECTS = frozenset({
 })
 
 #: Effects that must happen at most once per completion decision.
-ONCE_ONLY_EFFECTS = frozenset({"enqueue", "escalate_human"})
+ONCE_ONLY_EFFECTS = frozenset({
+    "enqueue", "escalate_human", "agent_requires_human",
+})
 
 
 def _text(value: Any) -> str:
@@ -62,11 +64,13 @@ def _effect_for(route: str, decision_effect: str,
     if route == "reconcile":
         return "reconcile_provenance"
     if route == "human":
-        return "escalate_human"
+        # Agent-authored sticky blocker only. Never invent a human page from
+        # machine facts; never boot another runner for this route.
+        return "agent_requires_human"
     if route == "remediation":
         return "start_remediation"
     if route == "review_merge":
-        if decision_effect == "mark_ready_then_reread":
+        if decision_effect in {"mark_ready", "mark_ready_then_reread"}:
             return "mark_ready"
         if decision_effect == "enqueue":
             return "enqueue"

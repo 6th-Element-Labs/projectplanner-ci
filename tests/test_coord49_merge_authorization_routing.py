@@ -123,8 +123,8 @@ draft_decision = classify_completion(
     None, snapshot(draft=True, findings=[finding("draft_pr")]))
 ok(draft_decision["reason_code"] == "draft_ready_to_mark_ready",
    "draft PR + green VM gate classifies draft_ready_to_mark_ready")
-ok(draft_decision["effect"] == "mark_ready_then_reread",
-   "draft PR yields the mark_ready_then_reread effect")
+ok(draft_decision["effect"] == "mark_ready",
+   "draft PR yields the Mission Bot mark_ready effect")
 ok(draft_decision["route"] == "review_merge",
    "draft PR routes review_merge, not remediation")
 ok(draft_decision["state"] == "ready_to_queue",
@@ -135,8 +135,8 @@ draft_pending = classify_completion(
     None, snapshot(draft=True, vm_gate="PENDING", findings=[finding("draft_pr")]))
 ok(draft_pending["reason_code"] == "draft_ready_to_mark_ready",
    "draft PR + pending VM gate classifies draft_ready_to_mark_ready, not CI wait")
-ok(draft_pending["effect"] == "mark_ready_then_reread",
-   "draft + pending CI still yields mark_ready_then_reread")
+ok(draft_pending["effect"] == "mark_ready",
+   "draft + pending CI still yields mark_ready")
 
 # --- Acceptance 2: missing exact-head verdict routes review, not remediation -
 missing_verdict = classify_completion(None, snapshot(
@@ -149,15 +149,15 @@ ok(missing_verdict["route"] == "review_merge"
 ok(stale_verdict["route"] == "review_merge",
    "non-draft PR with a stale verdict routes review_merge")
 
-# --- Acceptance 3: missing executed_test_run routes to the evidence step -----
+# --- Acceptance 3: missing executed_test_run boots remediation with dossier -
 evidence = classify_completion(
     None, snapshot(findings=[finding("missing_executed_test_run")]))
-ok(evidence["route"] == "coordination_retry",
-   "missing executed_test_run routes coordination_retry (evidence), not remediation")
+ok(evidence["route"] == "remediation",
+   "missing executed_test_run boots remediation with the evidence dossier")
 ok(evidence["reason_code"] == "missing_executed_test_run",
    "missing executed_test_run keeps its typed reason code")
-ok(evidence["retry_policy"] == "bounded",
-   "the evidence step retries under a bounded budget")
+ok(evidence["desired_role"] == "remediation",
+   "the evidence gap is an agent mission, not a human/coordination_retry loop")
 
 # --- Acceptance 4: ordinary red product CI still routes to remediation -------
 red_product_ci = classify_completion(
@@ -187,7 +187,9 @@ non_blocking_only = classify_completion(
 ok(non_blocking_only["state"] != "ready_to_queue",
    "a non-blocking finding does not license deferral")
 
-# --- Acceptance 6: no process-state failure yields required_exact_head_ci_failed
+# --- Acceptance 6: merge-auth red never impersonates product CI when typed
+# findings explain the gate. Draft/review keep non-remediation routes; evidence
+# / mergeability gaps boot remediation with the typed finding code.
 for code in ("draft_pr", "review_verdict_missing", "review_verdict_stale",
              "missing_executed_test_run", "missing_ui_playwright_evidence",
              "pr_not_mergeable", "work_session_required"):
@@ -198,8 +200,15 @@ for code in ("draft_pr", "review_verdict_missing", "review_verdict_stale",
     ))
     ok(decision["reason_code"] != "required_exact_head_ci_failed",
        "process-state finding %s never becomes required_exact_head_ci_failed" % code)
-    ok(decision["desired_role"] != "remediation",
-       "process-state finding %s never dispatches a remediation runner" % code)
+    if code in {"draft_pr", "review_verdict_missing", "review_verdict_stale"}:
+        ok(decision["desired_role"] != "remediation",
+           "process-state finding %s never dispatches a remediation runner" % code)
+    else:
+        ok(
+            decision["route"] == "remediation"
+            and decision["reason_code"] == code,
+            "process-state finding %s boots remediation with typed reason" % code,
+        )
 
 # --- The deferral is scoped to exactly one context ---------------------------
 other_red_context = classify_completion(None, snapshot(

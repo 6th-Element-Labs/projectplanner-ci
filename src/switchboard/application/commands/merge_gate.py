@@ -182,8 +182,8 @@ def _merge_gate_finding(code: str, message: str, failure_class: str,
     different authors on 2026-07-25: the COORD-61 artifact lift and the BUG-182 merge
     conflict decomposer both read ``finding.get("details")``, both silently returned
     nothing for every real finding, and both shipped with tests that hand-built the
-    nested shape and therefore passed. Read details from the finding's TOP LEVEL, or use
-    ``state_machine._finding_detail`` which handles both forms.
+    nested shape and therefore passed. Read details from the finding's TOP LEVEL.
+    Mission Bot ``facts`` / dossier helpers read the splat shape the same way.
 
     The parameter keeps its name because ~40 call sites read naturally as "these are the
     details"; the splat is what callers must remember, so it is stated here rather than

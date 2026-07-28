@@ -132,7 +132,7 @@ def _human_work_session_blocker(detail: Mapping[str, Any]) -> bool:
         return False
     hygiene = session.get("hygiene") if isinstance(session.get("hygiene"), Mapping) else {}
     blocker = hygiene.get("blocker") if isinstance(hygiene.get("blocker"), Mapping) else {}
-    return _text(blocker.get("route")) == "human"
+    return _text(blocker.get("route")) in {"human", "agent_requires_human"}
 
 
 def task_ready_for_dispatch(detail: Mapping[str, Any] | None, *,

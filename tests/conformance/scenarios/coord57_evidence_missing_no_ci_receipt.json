@@ -4,9 +4,11 @@
   "expect": {
     "terminal": "blocked",
     "reason_code": "missing_executed_test_run",
-    "role_sequence": [],
-    "route": "coordination_retry",
-    "effect": "escalate_human"
+    "role_sequence": [
+      "remediation"
+    ],
+    "route": "remediation",
+    "effect": "start_remediation"
   },
   "world": {
     "draft": false,
@@ -17,7 +19,11 @@
     "mergeable": true,
     "merge_state_status": "CLEAN",
     "queue": "none",
-    "runner": {"live": false, "role": "none", "head": "none"},
+    "runner": {
+      "live": false,
+      "role": "none",
+      "head": "none"
+    },
     "evidence": {
       "executed_test_run": "missing",
       "external_ci": "none",

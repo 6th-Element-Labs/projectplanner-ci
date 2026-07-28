@@ -183,11 +183,13 @@ _PLAN_ACTIONS = {
     "none": NormalizedAction.WAIT,
     "ensure_review_generation": NormalizedAction.START,
     "start_remediation": NormalizedAction.START,
+    "start_implementation": NormalizedAction.START,
     "repair_dispatch": NormalizedAction.RETRY_CI,
     "retry_ci": NormalizedAction.RETRY_CI,
     "mark_ready": NormalizedAction.MARK_READY,
     "enqueue": NormalizedAction.ARM_MERGE,
     "escalate_human": NormalizedAction.BLOCK,
+    "agent_requires_human": NormalizedAction.BLOCK,
     "fence_runner": NormalizedAction.BLOCK,
     "reconcile_provenance": NormalizedAction.MERGED,
 }

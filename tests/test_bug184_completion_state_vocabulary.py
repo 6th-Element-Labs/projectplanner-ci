@@ -1,29 +1,12 @@
 #!/usr/bin/env python3
-"""BUG-184 — the completion classifier and its durable store must share a vocabulary.
+"""BUG-184 — Mission Bot outputs and the durable store must share a vocabulary.
 
-``classify_completion`` is the decision authority; ``completion_runs`` records what
-it decided. The two enums were introduced two PRs apart — the store in #818
-(SIMPLIFY-22), the classifier's ``assessing`` in #820 (SIMPLIFY-23) — and nothing
-asserted they agree. ``assessing`` is the review branch (``review_required``,
-``review_verdict_stale``, the review findings route), which is the most common
-route in the system, so every review tick raised
-``CompletionRunError: unsupported completion state: assessing`` at the persist
-step in ``run_completion_tick`` — before it could plan an effect, fence a stale
-runner, or dispatch a review generation.
-
-It stayed hidden because COORD-49 (#878) is what routed traffic into it. Before
-that fix a red ``Switchboard / merge authorization`` context was misrouted to
-``required_exact_head_ci_failed`` → remediation → state ``blocked``, which IS
-writable: the fleet burned remediation runners pointlessly but kept moving. The
-correct fix moved those cases to the review branch and the fleet stopped.
-
-The first two tests are the guard that makes this class of drift impossible; the
-rest pin the live path that was broken.
+Mission Bot is the decision authority; ``completion_runs`` records what it
+decided. Every state/route ``reduce_mission`` / ``classify_completion`` can emit
+must be accepted by the store, or ticks die at persist before planning an effect.
 """
 from __future__ import annotations
 
-import ast
-import pathlib
 import sqlite3
 import unittest
 from unittest.mock import patch
@@ -33,6 +16,8 @@ from path_setup import ROOT  # noqa: F401
 from switchboard.domain.completion import state_machine
 from switchboard.domain.completion.effects import plan_effect
 from switchboard.domain.completion.executor import _completion_run_data
+from switchboard.domain.mission_bot import reduce_mission
+from switchboard.domain.mission_bot.outputs import MissionOutput
 from switchboard.storage.migrations import runner as migrations
 from switchboard.storage.repositories import completion_runs, task_completion
 
@@ -41,49 +26,172 @@ HEAD = "a" * 40
 PR_URL = "https://github.com/6th-Element-Labs/projectplanner/pull/863"
 
 
-def _emitted(index: int) -> set[str]:
-    """Literal values the classifier can pass in one ``_decision`` position.
+def _agent_blocker():
+    return {
+        "route": "agent_requires_human",
+        "reason": "missing_credentials",
+        "source_tool": "agent_requires_human",
+        "binding": "registered_agent",
+        "provenance_stamp": "switchboard.resolve_write_actor.v1",
+        "agent_id": "agent-vocab-1",
+        "actor": "agent-vocab-1",
+        "execution_id": "exec-1",
+        "execution_generation": 1,
+    }
 
-    Position 0 is ``state``, position 1 is ``route``. Read from source rather
-    than by exercising branches so a newly added branch is covered the moment it
-    is written, not once someone remembers to add a fixture for it.
-    """
-    tree = ast.parse(pathlib.Path(state_machine.__file__).read_text(encoding="utf-8"))
-    values: set[str] = set()
-    for node in ast.walk(tree):
-        if (isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Name)
-                and node.func.id == "_decision"
-                and len(node.args) > index
-                and isinstance(node.args[index], ast.Constant)
-                and isinstance(node.args[index].value, str)):
-            values.add(node.args[index].value)
-    return values
+
+def _mission_fixture_snapshots() -> list[dict]:
+    """Cover every Mission Bot output with a reasonable exact-head fixture."""
+    base_pr = {
+        "number": 863,
+        "state": "OPEN",
+        "draft": False,
+        "mergeable": True,
+        "mergeStateStatus": "CLEAN",
+        "head": {"sha": HEAD},
+        "url": PR_URL,
+    }
+    green_ci = [{"name": "Switchboard CI / VM gate", "conclusion": "success"}]
+    red_ci = [{
+        "name": "Switchboard CI / VM gate",
+        "conclusion": "failure",
+        "failure_attribution": "product",
+    }]
+    review_pass = {"status": "passed", "head_sha": HEAD, "pr_url": PR_URL}
+    return [
+        # START_IMPLEMENTATION
+        state_machine.build_completion_snapshot(
+            task={"task_id": "CO-IMPL", "status": "In Progress",
+                  "git_state": {"head_sha": HEAD}},
+            github_pr={},
+        ),
+        # START_REMEDIATION
+        state_machine.build_completion_snapshot(
+            task={"task_id": "CO-REM", "status": "In Review",
+                  "git_state": {"head_sha": HEAD, "pr_number": 863,
+                                "pr_url": PR_URL}},
+            github_pr={**base_pr, "mergeStateStatus": "BLOCKED"},
+            required_status_contexts=["Switchboard CI / VM gate"],
+            status_contexts=red_ci,
+            review=review_pass,
+        ),
+        # START_REVIEW / assessing
+        state_machine.build_completion_snapshot(
+            task={"task_id": "CO-REV", "status": "In Review",
+                  "git_state": {"head_sha": HEAD, "pr_number": 863,
+                                "pr_url": PR_URL}},
+            github_pr=base_pr,
+            required_status_contexts=["Switchboard CI / VM gate"],
+            status_contexts=green_ci,
+            review={},
+        ),
+        # MARK_READY
+        state_machine.build_completion_snapshot(
+            task={"task_id": "CO-DRAFT", "status": "In Review",
+                  "git_state": {"head_sha": HEAD, "pr_number": 863,
+                                "pr_url": PR_URL}},
+            github_pr={**base_pr, "draft": True},
+            required_status_contexts=["Switchboard CI / VM gate"],
+            status_contexts=green_ci,
+            review=review_pass,
+        ),
+        # ARM_MERGE / ready_to_queue
+        state_machine.build_completion_snapshot(
+            task={"task_id": "CO-ARM", "status": "In Review",
+                  "git_state": {"head_sha": HEAD, "pr_number": 863,
+                                "pr_url": PR_URL}},
+            github_pr=base_pr,
+            required_status_contexts=["Switchboard CI / VM gate"],
+            status_contexts=green_ci,
+            review=review_pass,
+        ),
+        # WAIT (live runner)
+        state_machine.build_completion_snapshot(
+            task={"task_id": "CO-WAIT", "status": "In Review",
+                  "git_state": {"head_sha": HEAD, "pr_number": 863,
+                                "pr_url": PR_URL}},
+            github_pr=base_pr,
+            required_status_contexts=["Switchboard CI / VM gate"],
+            status_contexts=green_ci,
+            review=review_pass,
+            runner={"live": True, "role": "remediation"},
+        ),
+        # AGENT_REQUIRES_HUMAN
+        {
+            **state_machine.build_completion_snapshot(
+                task={"task_id": "CO-HUMAN", "status": "In Review",
+                      "git_state": {"head_sha": HEAD, "pr_number": 863,
+                                    "pr_url": PR_URL}},
+                github_pr={**base_pr, "mergeStateStatus": "BLOCKED"},
+                required_status_contexts=["Switchboard CI / VM gate"],
+                status_contexts=red_ci,
+                review=review_pass,
+            ),
+            "work_session": {
+                "status": "blocked",
+                "hygiene": {"blocker": _agent_blocker()},
+            },
+        },
+        # OBSERVE_MERGED / reconciling
+        state_machine.build_completion_snapshot(
+            task={"task_id": "CO-DONE", "status": "In Review",
+                  "git_state": {"head_sha": HEAD, "pr_number": 863,
+                                "pr_url": PR_URL}},
+            github_pr={**base_pr, "state": "MERGED", "merged": True},
+            merge_provenance={"merged_sha": HEAD},
+        ),
+    ]
+
+
+def _emitted_from_mission_bot() -> tuple[set[str], set[str]]:
+    """States/routes Mission Bot actually emits across a fixture set."""
+    states: set[str] = set()
+    routes: set[str] = set()
+    seen_outputs: set[str] = set()
+    for snap in _mission_fixture_snapshots():
+        command = reduce_mission(snap)
+        decision = state_machine.classify_completion({}, snap)
+        states.add(str(command.get("state") or ""))
+        routes.add(str(command.get("route") or ""))
+        states.add(str(decision.get("state") or ""))
+        routes.add(str(decision.get("route") or ""))
+        seen_outputs.add(str(command.get("output") or ""))
+    states.discard("")
+    routes.discard("")
+    # Fixture set must exercise the full eight-output Mission Bot surface.
+    expected = {output.value for output in MissionOutput}
+    missing = sorted(expected - seen_outputs)
+    if missing:
+        raise AssertionError(
+            f"fixture set missed Mission Bot outputs: {missing}"
+        )
+    return states, routes
 
 
 class VocabularyConformanceTest(unittest.TestCase):
     """The guard. These two assertions are the point of this file."""
 
     def test_every_state_the_classifier_emits_is_accepted_by_the_store(self):
-        emitted = _emitted(0)
-        self.assertTrue(emitted, "expected the classifier to emit states")
+        emitted, _routes = _emitted_from_mission_bot()
+        self.assertTrue(emitted, "expected Mission Bot to emit states")
         self.assertEqual(
             sorted(emitted - completion_runs.STATES), [],
-            "classify_completion emits a state completion_runs rejects; every "
+            "Mission Bot emits a state completion_runs rejects; every "
             "tick reaching it dies at the persist step before planning an effect",
         )
 
     def test_every_route_the_classifier_emits_is_accepted_by_the_store(self):
-        emitted = _emitted(1)
-        self.assertTrue(emitted, "expected the classifier to emit routes")
+        _states, emitted = _emitted_from_mission_bot()
+        self.assertTrue(emitted, "expected Mission Bot to emit routes")
         self.assertEqual(
             sorted(emitted - completion_runs.ROUTES), [],
-            "classify_completion emits a route completion_runs rejects",
+            "Mission Bot emits a route completion_runs rejects",
         )
 
     def test_assessing_is_the_regressed_value(self):
         # Pins the specific defect: without the fix this set is {'assessing'}.
-        self.assertIn("assessing", _emitted(0))
+        emitted, _routes = _emitted_from_mission_bot()
+        self.assertIn("assessing", emitted)
         self.assertIn("assessing", completion_runs.STATES)
 
     def test_assessing_is_not_terminal(self):

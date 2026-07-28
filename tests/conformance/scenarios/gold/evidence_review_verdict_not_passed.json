@@ -1,10 +1,12 @@
 {
   "expect": {
-    "effect": "escalate_human",
+    "effect": "start_remediation",
     "reason_code": "review_not_passed",
-    "role_sequence": [],
-    "route": "human",
-    "terminal": "human"
+    "role_sequence": [
+      "remediation"
+    ],
+    "route": "remediation",
+    "terminal": "blocked"
   },
   "id": "evidence_review_verdict_not_passed",
   "schema": "switchboard.completion_conformance.scenario.v1",

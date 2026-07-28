@@ -119,6 +119,10 @@ _ENTRIES: tuple[ReasonCode, ...] = (
     _code("review_verdict_missing", "review", _MERGE_GATE, "transient", "agent"),
     _code("missing_review_verdict", "review", _MERGE_GATE, "transient", "agent"),
     _code("stale_review_verdict", "review", _MERGE_GATE, "transient", "agent"),
+    _code("review_head_sha_required", "review", _MERGE_GATE, "transient", "agent"),
+    _code("review_changes_requested", "review", _COMPLETION, "transient", "agent"),
+    _code("review_not_passed", "review", _MERGE_GATE, "transient", "agent"),
+    _code("open_review_findings", "review", _MERGE_GATE, "transient", "agent"),
     _code("review_retry_budget_exhausted", "review", _COMPLETION, "anomalous", "human"),
     _code("automatic_review_findings", "review", _COMPLETION, "transient", "agent"),
     _code("human_review_findings", "review", _COMPLETION, "anomalous", "human"),
@@ -128,8 +132,16 @@ _ENTRIES: tuple[ReasonCode, ...] = (
     _code("pr_mergeability_unknown", "mergeability", _COMPLETION, "transient", "infra"),
     _code("draft_ready_to_mark_ready", "mergeability", _COMPLETION, "transient", "agent"),
     _code("exact_head_gates_passed", "mergeability", _COMPLETION, "transient", "agent"),
-    # -- runner ----------------------------------------------------------------
+    _code("merge_gate_blocked", "mergeability", _COMPLETION, "anomalous", "agent"),
+    # -- runner / Mission Bot --------------------------------------------------
     _code("live_runner_not_desired", "runner", _COMPLETION, "transient", "agent"),
+    _code("live_runner_in_progress", "runner", _COMPLETION, "transient", "agent"),
+    _code("needs_implementation", "runner", _COMPLETION, "transient", "agent"),
+    _code("no_actionable_mission", "runner", _COMPLETION, "transient", "infra"),
+    _code("unmet_dependencies", "runner", _COMPLETION, "transient", "infra"),
+    _code("agent_requires_human", "runner", _COMPLETION, "anomalous", "human"),
+    _code("invalid_executed_test_run", "session", _MERGE_GATE, "transient", "agent"),
+    _code("merge_queue_unmergeable", "merge_queue", _COMPLETION, "anomalous", "agent"),
     # -- convergence ladder (COORD-77) -----------------------------------------
     # Emitted when a coordination_retry decision keeps producing identical
     # outcomes at one head: first a single forced reconcile (deterministic

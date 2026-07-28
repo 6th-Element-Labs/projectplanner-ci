@@ -1,10 +1,12 @@
 {
   "expect": {
-    "effect": "wait",
-    "reason_code": "pr_mergeability_unknown",
-    "role_sequence": [],
-    "route": "wait",
-    "terminal": "blocked"
+    "terminal": "merged",
+    "reason_code": "exact_head_gates_passed",
+    "role_sequence": [
+      "review_merge"
+    ],
+    "route": "review_merge",
+    "effect": "enqueue"
   },
   "id": "mergeability_unknown",
   "schema": "switchboard.completion_conformance.scenario.v1",

@@ -1,4 +1,8 @@
-"""Production completion tick: hydrate, classify, execute one effect, stop."""
+"""Production completion tick — Mission Bot only.
+
+Hydrate authoritative facts, reduce to one of eight Mission Bot outputs,
+execute exactly one port call. Old classify/normalize reinterpretation is gone.
+"""
 from __future__ import annotations
 
 import os
@@ -8,29 +12,22 @@ import time
 import uuid
 from typing import Any, Callable, Mapping, Optional
 
-from switchboard.application.commands.completion_orchestration import (
-    execute_normalized_command,
+from switchboard.application.mission_bot.driver import (
+    production_mission_ports,
+    run_mission_tick,
 )
-from switchboard.application.completion_shadow import (
-    build_thin_observation,
-    explain_fresh_snapshot,
-)
+from switchboard.application.mission_bot.shadow import shadow_mission
 from switchboard.domain.completion.executor import (
     CompletionEffectAdapters,
     ensure_completion_run,
 )
 from switchboard.domain.completion.normalize import normalize_snapshot
 from switchboard.domain.completion.normalization_law import (
-    FreshTick,
-    LAW_BY_ACTION,
     NORMALIZATION_TABLE_VERSION,
-    reduce_fresh_tick,
 )
-from switchboard.domain.completion.state_machine import (
-    COMPLETION_CLASSIFIER_VERSION,
-    build_completion_snapshot,
-    classify_completion,
-)
+from switchboard.domain.completion.state_machine import build_completion_snapshot
+from switchboard.domain.mission_bot import reduce_mission
+from switchboard.domain.mission_bot.outputs import MISSION_BOT_VERSION
 
 
 def _map(value: Any) -> dict[str, Any]:
@@ -42,12 +39,7 @@ def _text(value: Any) -> str:
 
 
 def _fresh_decision_context(current: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Exclude every stored completion-run outcome from decision authority.
-
-    ``completion_runs`` remains durable audit history during migration.  Retry
-    and WAIT bounds come from fresh GitHub run history and immutable source
-    timestamps, never from its mutable churn or replay counters.
-    """
+    """Retired with the classifier. Mission Bot never reads stored outcomes."""
     del current
     return {}
 
@@ -439,6 +431,58 @@ def production_effect_adapters(
         enqueue=enqueue,
     )
 
+def _mission_ports_from_adapters(
+    adapters: CompletionEffectAdapters,
+    *,
+    project: str,
+    actor: str,
+    agent_id: str,
+    store_mod: Any = None,
+) -> Any:
+    """Bridge legacy CompletionEffectAdapters into MissionPorts (tests/shadow)."""
+    from switchboard.domain.mission_bot import MissionPorts
+
+    fallback = production_mission_ports(
+        project=project, actor=actor, agent_id=agent_id, store_mod=store_mod,
+    )
+
+    def start_task(plan: Mapping[str, Any]) -> dict[str, Any]:
+        role = str(plan.get("role") or "")
+        if role == "remediation" and adapters.start_remediation:
+            return adapters.start_remediation(plan)
+        if role in {"review_merge", "implementation"} and adapters.ensure_review_generation:
+            if role == "implementation" and adapters.start_remediation:
+                return adapters.start_remediation(plan)
+            return adapters.ensure_review_generation(plan)
+        if adapters.start_remediation:
+            return adapters.start_remediation(plan)
+        return fallback.start_task(plan)
+
+    def mark_ready(plan: Mapping[str, Any]) -> dict[str, Any]:
+        if adapters.mark_ready:
+            return adapters.mark_ready(plan)
+        return fallback.mark_ready(plan)
+
+    def arm_merge(plan: Mapping[str, Any]) -> dict[str, Any]:
+        if adapters.enqueue:
+            return adapters.enqueue(plan)
+        return fallback.arm_merge(plan)
+
+    def observe_merged(**kwargs: Any) -> dict[str, Any]:
+        command = kwargs.get("command") or {}
+        if adapters.reconcile_provenance:
+            return adapters.reconcile_provenance(command)
+        return fallback.observe_merged(**kwargs)
+
+    return MissionPorts(
+        start_task=start_task,
+        mark_ready=mark_ready,
+        arm_merge=arm_merge,
+        persist_wait=fallback.persist_wait,
+        persist_agent_requires_human=fallback.persist_agent_requires_human,
+        observe_merged=observe_merged,
+    )
+
 
 def run_completion_tick(
     task_id: str,
@@ -451,147 +495,89 @@ def run_completion_tick(
     adapters: Optional[CompletionEffectAdapters] = None,
     shadow_observer: Optional[Callable[[Mapping[str, Any]], Any]] = None,
 ) -> dict[str, Any]:
-    """Execute exactly one persisted route effect for one task."""
-    from switchboard.storage.repositories import completion_runs, decision_records
-
+    """Mission Bot production tick. One dossier → one boot/wait/land command."""
     snapshot = hydrator(
         task_id, project=project, actor=actor, store_mod=store_mod,
     )
-    current = completion_runs.get_active_completion_run(
-        task_id, project=project,
-    ) or {}
-    completion_run_observed_at = time.time()
-    decision = classify_completion(_fresh_decision_context(current), snapshot)
-    # COORD-50: retain the classifier's input and output on EVERY tick, not only
-    # the ones that pull a human in. completion_runs overwrites reason_code in
-    # place, so this append-only episode is the only durable timeline. advice_version
-    # is NULL until Phase 4 makes advice live — the control arm needs the column
-    # populated from the first row, not retrofitted (spec §7).
-    episode = decision_records.record_decision_episode(
-        project=project,
-        snapshot=snapshot,
-        decision=decision,
-        classifier_version=COMPLETION_CLASSIFIER_VERSION,
-        advice_version=None,
-    )
-    # Human projection and its Needs-you authority must commit atomically in
-    # execute_effect; pre-persisting Blocked(route=human) could strand a task
-    # without an operator-visible request.
-    persisted = (
-        current
-        if str(decision.get("route") or "") == "human"
-        else ensure_completion_run(
-            decision=decision,
-            snapshot=snapshot,
-            current=current,
-            actor=actor,
-            project=project,
+    command = reduce_mission(snapshot)
+    observation = {
+        "schema": "switchboard.mission_bot.tick_observed.v1",
+        "mission_bot_version": MISSION_BOT_VERSION,
+        "task_id": str(task_id or "").strip().upper(),
+        "output": command.get("output"),
+        "reason_code": command.get("reason_code"),
+        "role": command.get("role"),
+        "head_sha": command.get("head_sha"),
+        "shadow": shadow_mission(snapshot),
+    }
+    if shadow_observer is not None:
+        try:
+            observation["ledger_receipt"] = shadow_observer(observation)
+        except Exception as exc:  # noqa: BLE001
+            observation["ledger_error"] = f"{type(exc).__name__}: {exc}"
+
+    ports = (
+        _mission_ports_from_adapters(
+            adapters, project=project, actor=actor, agent_id=agent_id,
+            store_mod=store_mod,
+        )
+        if adapters is not None
+        else production_mission_ports(
+            project=project, actor=actor, agent_id=agent_id, store_mod=store_mod,
         )
     )
-    observed_at = float(snapshot.get("observed_at") or time.time())
-    hydration_started_at = float(
-        snapshot.get("hydration_started_at") or observed_at
-    )
-    if observed_at - hydration_started_at > max(
-        row.live_clock_bound_s for row in LAW_BY_ACTION.values()
-    ):
-        raise ValueError("authoritative snapshot hydration exceeded action bound")
-    source_observed_at = _map(snapshot.get("source_observed_at"))
-    source_observed_at["completion_run"] = completion_run_observed_at
-    normalized = reduce_fresh_tick(
-        decision=decision,
-        snapshot=snapshot,
-        run=persisted,
-        tick=FreshTick(
-            observed_at=observed_at,
-            live_clock_at=time.time(),
-            source_observed_at={
-                source: float(value)
-                for source, value in source_observed_at.items()
-            },
-            head_sha=str(snapshot.get("head_sha") or ""),
-            prior_head_sha=str(current.get("head_sha") or ""),
-            wait_started_at=(
-                float(snapshot["wait_started_at"])
-                if snapshot.get("wait_started_at") is not None
-                else None
-            ),
-            snapshot_id=str(
-                snapshot.get("snapshot_id") or f"snapshot-{uuid.uuid4().hex}"
-            ),
-            controller_build_sha=str(
-                snapshot.get("controller_build_sha")
-                or os.environ.get("SWITCHBOARD_BUILD_SHA")
-                or os.environ.get("GIT_COMMIT")
-                or "unavailable"
-            ),
-            table_version=str(
-                snapshot.get("table_version") or NORMALIZATION_TABLE_VERSION
-            ),
-        ),
-    )
-    plan = _map(normalized.get("command"))
-    observation = build_thin_observation(
-        task_id=task_id,
-        snapshot=snapshot,
-        decision=decision,
-        normalized=normalized,
-    )
-    explanation = explain_fresh_snapshot(snapshot, normalized)
-    # Append-only observability is a port, not lifecycle authority. Tests and
-    # alternate runtimes can supply a storage-independent observer.
-    def default_tick_observer(tick_observation: Mapping[str, Any]) -> Any:
-        from switchboard.storage.repositories.activity import append_activity
-        return append_activity(
-            "completion.thin_tick_observed",
-            actor,
-            dict(tick_observation),
-            task_id=str(task_id or "").strip().upper(),
-            project=project,
-        )
-
-    observe_tick = shadow_observer or default_tick_observer
-    try:
-        receipt = observe_tick(observation)
-        observation["ledger_receipt"] = receipt
-    except Exception as exc:  # noqa: BLE001
-        # Observation persistence cannot alter lifecycle behavior, but its loss must
-        # remain visible to the caller rather than becoming a hidden fallback.
-        observation["ledger_error"] = f"{type(exc).__name__}: {exc}"
-
-    result = execute_normalized_command(
-        normalized,
-        decision=decision,
-        snapshot=snapshot,
-        run=persisted,
+    result = run_mission_tick(
+        task_id,
         project=project,
         actor=actor,
-        adapters=adapters or production_effect_adapters(
-            project=project, actor=actor, agent_id=agent_id,
-            store_mod=store_mod,
-        ),
+        agent_id=agent_id,
+        store_mod=store_mod,
+        hydrator=lambda *_a, **_k: snapshot,
+        ports=ports,
     )
+    dossier = _map(command.get("dossier"))
+    decision = {
+        "schema": "switchboard.completion_decision.v1",
+        "state": command.get("state"),
+        "route": command.get("route"),
+        "reason_code": command.get("reason_code"),
+        "desired_role": command.get("desired_role"),
+        "board_projection": command.get("board_projection"),
+        "effect": command.get("effect"),
+        "mission_output": command.get("output"),
+        "acceptance_findings": list(dossier.get("acceptance_findings") or []),
+    }
+    failing_contexts = [
+        str(name)
+        for name in list(dossier.get("failing_contexts") or [])
+        if str(name).strip()
+    ]
+    if failing_contexts:
+        decision["failing_contexts"] = failing_contexts
+        decision["failing_check_url"] = dossier.get("failing_check_url") or ""
+        decision["failing_run_attempt"] = int(dossier.get("failing_run_attempt") or 0)
+        decision["failing_check_summary"] = dossier.get("failing_check_summary") or ""
+    missing_artifact = _map(dossier.get("missing_artifact"))
+    if missing_artifact:
+        decision["missing_artifact"] = missing_artifact
     return {
         "schema": "switchboard.completion_tick.v1",
+        "controller": "mission_bot",
+        "mission_bot_version": MISSION_BOT_VERSION,
         "task_id": str(task_id or "").strip().upper(),
         "snapshot": snapshot,
         "decision": decision,
-        "plan": plan,
-        "normalized": normalized,
+        "plan": command,
+        "command": command,
         "observation": observation,
-        "explanation": explanation,
         "execution": result,
-        "decision_record": {
-            "record_id": episode.get("record_id"),
-            "snapshot_hash": episode.get("snapshot_hash"),
-            "tick_count": episode.get("tick_count"),
-            "reason_code_registered": episode.get("reason_code_registered"),
-        },
+        "decision_record": result.get("decision_record") or {},
     }
 
 
 __all__ = [
     "_fresh_decision_context",
+    "ensure_completion_run",
     "hydrate_completion_snapshot",
     "production_effect_adapters",
     "run_completion_tick",

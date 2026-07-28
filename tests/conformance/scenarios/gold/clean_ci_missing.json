@@ -1,10 +1,10 @@
 {
   "expect": {
-    "effect": "escalate_human",
-    "reason_code": "required_ci_hydration_missing",
+    "terminal": "blocked",
+    "reason_code": "required_exact_head_ci_pending",
     "role_sequence": [],
-    "route": "coordination_retry",
-    "terminal": "blocked"
+    "route": "wait",
+    "effect": "wait"
   },
   "id": "clean_ci_missing",
   "schema": "switchboard.completion_conformance.scenario.v1",

@@ -121,12 +121,20 @@ def run_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
         first["plan"]["idem_key"] == second["plan"]["idem_key"],
         f"{scenario['id']}: second tick changed effect identity",
     )
-    # Wait/none and human escalation do not call an effect adapter. Human
-    # escalation uses the transactional attention-request boundary instead.
-    # Other mutating effects fire exactly once, then replay their ledger proof.
+    # Wait / agent-requires-human / merge observe do not call mutating adapters.
+    # Mutating Mission Bot ports fire exactly once, then replay ledger proof.
+    _NO_ADAPTER_EFFECTS = {
+        "wait", "none", "attach_and_wait", "agent_requires_human",
+        "reconcile_provenance", "escalate_human",
+    }
+    mission_output = str(
+        first.get("command", {}).get("output")
+        or first.get("decision", {}).get("mission_output")
+        or ""
+    )
     if (
-        first["normalized"]["action"] in {"WAIT", "BLOCK", "MERGED"}
-        or expect["effect"] in {"wait", "none", "attach_and_wait", "escalate_human"}
+        mission_output in {"WAIT", "AGENT_REQUIRES_HUMAN", "OBSERVE_MERGED"}
+        or expect["effect"] in _NO_ADAPTER_EFFECTS
     ):
         _shared.require(
             len(calls) == 0,

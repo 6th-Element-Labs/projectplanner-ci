@@ -211,13 +211,26 @@ def verify_offline_completion(task_id: str, ctx: Context, evidence: str = "",
 
 def record_human_blocker(blocker_json: str, ctx: Context,
                          project: str = "maxwell") -> str:
-    """Record a sticky human-capacity blocker (COORD-69 / DOGFOOD-17 DHCP).
+    """Record a sticky agent-authored human-capacity blocker (COORD-69).
 
+    Prefer ``agent_requires_human`` — same receipt, Mission Bot canonical name.
     blocker_json: task_id, work_session_id, reason, plus closeout fields
     (completed_work, minimum_human_action, resume_condition,
     next_automatic_step, evidence). Atomically marks the Work Session blocked,
-    sets the board Blocked(route=human), creates one PROTO-7 Needs-you item,
-    and fences the bound runner when possible.
+    sets the board Blocked, creates one PROTO-7 Needs-you item, and fences the
+    bound runner when possible. Only agents may author this; orchestration code
+    must never synthesize it.
+    """
+    return agent_requires_human(blocker_json, ctx, project=project)
+
+
+def agent_requires_human(blocker_json: str, ctx: Context,
+                         project: str = "maxwell") -> str:
+    """Agent-authored sticky receipt: Mission Bot must stop and surface this.
+
+    GitHub/Switchboard machine facts never create this flag. Only the active LLM
+    agent may call this MCP tool. Bound to task/work session; sticky until a
+    human resolves the attention request.
     """
     services = _services()
     principal = services.require_write(ctx, project, ("write:ixp",))
@@ -227,11 +240,53 @@ def record_human_blocker(blocker_json: str, ctx: Context,
         return services.dumps({"error": "blocker_json must be valid JSON"})
     if not isinstance(payload, dict):
         return services.dumps({"error": "blocker_json must be a JSON object"})
+    payload = dict(payload)
+    # Client-supplied provenance is discarded before the server stamp.
+    for forged in (
+        "actor", "agent_id", "principal_id", "binding", "principal_kind",
+        "provenance_stamp",
+    ):
+        payload.pop(forged, None)
+    payload["source_tool"] = "agent_requires_human"
     task_id = str(payload.get("task_id") or "").strip()
+    # Prefer authenticated principal agent identity over an empty hint so
+    # resolve_write_actor can mint registered_agent / direct_session bindings.
+    agent_hint = str(
+        principal.get("bound_agent_id")
+        or (
+            auth.actor(principal)
+            if str(principal.get("kind") or "").lower()
+            in {"agent", "direct_session"}
+            else ""
+        )
+        or ""
+    )
     binding = services.resolve_write_actor(
-        principal, project=project, task_id=task_id, agent_id="")
+        principal, project=project, task_id=task_id, agent_id=agent_hint,
+    )
     if not binding.get("ok"):
         return services.dumps(binding)
+    from switchboard.domain.mission_bot.facts import AGENT_PROVENANCE_BINDINGS
+    stamped_binding = str(binding.get("binding") or "")
+    if stamped_binding not in AGENT_PROVENANCE_BINDINGS:
+        return services.dumps({
+            "recorded": False,
+            "error": "agent_binding_required",
+            "error_code": "agent_binding_required",
+            "failure_class": "failed_gate",
+            "binding": stamped_binding or None,
+            "message": (
+                "agent_requires_human requires a registered agent or "
+                "direct-session principal; principal/system actors cannot "
+                "author this receipt."
+            ),
+        })
+    # Server-stamped provenance only.
+    payload["actor"] = str(binding.get("actor") or "")
+    payload["agent_id"] = str(binding.get("agent_id") or "")
+    payload["principal_id"] = str(binding.get("principal_id") or "")
+    payload["binding"] = stamped_binding
+    payload["provenance_stamp"] = "switchboard.resolve_write_actor.v1"
     from switchboard.application.commands import human_blocker as human_blocker_cmd
     result = human_blocker_cmd.execute_mapping(
         payload, actor=binding["actor"], project=project,
@@ -281,9 +336,17 @@ def revoke_claim(claim_id: str, reason: str, ctx: Context,
 
 
 
-CLAIM_TOOL_NAMES = ("claim_next", "claim_task", "complete_claim",
-                    "record_executed_test_run", "record_human_blocker",
-                    'verify_offline_completion', 'abandon_claim', 'revoke_claim')
+CLAIM_TOOL_NAMES = (
+    "claim_next",
+    "claim_task",
+    "complete_claim",
+    "record_executed_test_run",
+    "record_human_blocker",
+    "agent_requires_human",
+    "verify_offline_completion",
+    "abandon_claim",
+    "revoke_claim",
+)
 
 
 def register_claim_tools(mcp: Any, services: ClaimToolServices) -> dict[str, Callable[..., str]]:

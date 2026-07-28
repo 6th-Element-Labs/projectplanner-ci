@@ -1,12 +1,10 @@
 {
   "expect": {
-    "effect": "attach_and_wait",
-    "reason_code": "required_exact_head_ci_failed",
-    "role_sequence": [
-      "remediation"
-    ],
-    "route": "remediation",
-    "terminal": "blocked"
+    "terminal": "blocked",
+    "reason_code": "live_runner_in_progress",
+    "role_sequence": [],
+    "route": "wait",
+    "effect": "wait"
   },
   "id": "remediation_attaches_stale_head_matching_role",
   "schema": "switchboard.completion_conformance.scenario.v1",
