@@ -374,6 +374,63 @@ def _merge_gate_context_passed(state: str) -> bool:
     return (state or "").strip().lower() in {"success", "passed", "pass", "ok", "neutral", "skipped"}
 
 
+def _apply_terminal_external_ci_receipt(
+    contexts: Dict[str, str],
+    external_ci: Mapping[str, Any],
+    *,
+    head_sha: str,
+    required_contexts: List[str],
+) -> Optional[Dict[str, Any]]:
+    """Recover a terminal exact-head context from the public run receipt.
+
+    GitHub commit-status publication and the public CI run are separate
+    dependency edges. If the terminal status callback exhausts its retries, the
+    combined status can remain ``pending`` even though ``external_ci_runs``
+    already contains the authoritative terminal public-run receipt. In that
+    narrow case, project the receipt onto the named required context so Mission
+    Bot sees the real red/green result instead of waiting forever.
+
+    This is deliberately exact and terminal: no SHA, context, or state is
+    inferred, and a pending/incomplete receipt changes nothing.
+    """
+    summary = dict(external_ci or {})
+    latest = dict(summary.get("latest") or {})
+    expected_head = str(head_sha or "").strip().lower()
+    receipt_head = str(
+        latest.get("source_sha") or summary.get("source_sha") or ""
+    ).strip().lower()
+    context = str(
+        latest.get("status_context") or summary.get("status_context") or ""
+    ).strip()
+    status = str(latest.get("status") or "").strip().lower()
+    conclusion = str(latest.get("conclusion") or "").strip().lower()
+
+    if (
+        not expected_head
+        or receipt_head != expected_head
+        or not context
+        or context not in required_contexts
+    ):
+        return None
+    if status == "success" and conclusion == "success":
+        state = "success"
+    elif status == "failure" and conclusion not in {"", "success"}:
+        state = "failure"
+    else:
+        return None
+
+    contexts[context] = state
+    return {
+        "schema": "switchboard.external_ci_terminal_receipt.v1",
+        "source_sha": receipt_head,
+        "context": context,
+        "state": state,
+        "run_url": latest.get("run_url") or summary.get("run_url"),
+        "failure_class": latest.get("failure_class"),
+        "failure_reason": latest.get("failure_reason"),
+    }
+
+
 # Work Session states that still count as real evidence of the work having happened.
 # A claim completing (In Review, awaiting merge) is the normal path into the merge gate,
 # so "completed" belongs here — mirrors PR_ACTIVE_SESSION_STATUSES in the repository.
@@ -861,6 +918,12 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
         merged_payload.get("checks"),
     )
     external_ci = _external_ci_review_gate(task, evidence=merged_payload, project=project)
+    terminal_ci_receipt = _apply_terminal_external_ci_receipt(
+        pr_contexts,
+        external_ci,
+        head_sha=resolved_head,
+        required_contexts=required_contexts,
+    )
     semantic_evidence = {
         **(((task.get("git_state") or {}).get("evidence") or {})),
         **merged_payload,
@@ -884,7 +947,12 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
             "failed_gate",
             details={"missing_contexts": missing_contexts,
                      "required_contexts": required_contexts,
-                     "status_contexts": pr_contexts}))
+                     "status_contexts": pr_contexts,
+                     "external_ci_terminal_receipt": terminal_ci_receipt,
+                     "failing_check_url": (
+                         (terminal_ci_receipt or {}).get("run_url") or ""),
+                     "failing_check_summary": (
+                         (terminal_ci_receipt or {}).get("failure_reason") or "")}))
     if external_ci.get("required") and not external_ci.get("passed"):
         findings.append(_merge_gate_finding(
             "external_ci_required",
@@ -1082,6 +1150,7 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
         "required_status_contexts": required_contexts,
         "status_contexts": pr_contexts,
         "external_ci": external_ci,
+        "external_ci_terminal_receipt": terminal_ci_receipt,
         "semantic_gate": semantic_gate,
         "review_gate": review_gate,
         "validation_policy": task_validation,

@@ -192,7 +192,7 @@ jobs:
           owner: 6th-Element-Labs
           repositories: projectplanner
 
-      - name: Post one terminal required status
+      - name: Post and verify terminal required status
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
           SOURCE_SHA: ${{ inputs.source_sha }}
@@ -208,8 +208,46 @@ jobs:
           elif [ -z "$FAILURE_CLASS" ]; then
             description="infra: verification job did not complete"
           fi
-          gh api "repos/$CANONICAL_REPO/statuses/$SOURCE_SHA" \
-            -f state="$state" \
-            -f context="$STATUS_CONTEXT" \
-            -f description="$description" \
-            -f target_url="$TARGET_URL"
+
+          # A terminal callback is coordination evidence, so a transient API error
+          # must not leave the pending announcement as the last visible state.
+          # Reposting an identical commit status is safe: GitHub statuses are
+          # append-only and the combined-status readback selects the newest
+          # matching context.
+          delays=(1 2 4 8 16)
+          for attempt in 1 2 3 4 5; do
+            post_rc=0
+            gh api "repos/$CANONICAL_REPO/statuses/$SOURCE_SHA" \
+              -f state="$state" \
+              -f context="$STATUS_CONTEXT" \
+              -f description="$description" \
+              -f target_url="$TARGET_URL" || post_rc=$?
+
+            readback="$(
+              gh api "repos/$CANONICAL_REPO/commits/$SOURCE_SHA/status" 2>/dev/null \
+                || true
+            )"
+            if jq -e \
+              --arg sha "$SOURCE_SHA" \
+              --arg context "$STATUS_CONTEXT" \
+              --arg state "$state" \
+              --arg target_url "$TARGET_URL" \
+              '
+                (.sha | ascii_downcase) == ($sha | ascii_downcase)
+                and (
+                  [.statuses[] | select(.context == $context)][0]
+                  | .state == $state
+                  and .target_url == $target_url
+                )
+              ' <<<"$readback" >/dev/null; then
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 5 ]; then
+              echo "Terminal status callback/readback attempt $attempt failed (post rc=$post_rc); retrying." >&2
+              sleep "${delays[$((attempt - 1))]}"
+            fi
+          done
+
+          echo "Terminal status callback did not verify after 5 bounded attempts for $SOURCE_SHA." >&2
+          exit 1
