@@ -39,6 +39,7 @@ P = "switchboard"
 connect_dispatch.execution_context.resolve = lambda **kwargs: ready_execution_context(
     kwargs["task_id"], runtime=kwargs["runtime"])
 HEAD = "1af20970ba52ed4cb862c3ae08d44b6b9ccdcde0"
+PR_BRANCH = "agent/switchboard/BUG-168/existing-pr"
 FINDINGS = [{
     "id": "reviewremediation-de1aaf65367940b9",
     "repair_requirement": "Implement the three accepted remediation findings.",
@@ -53,6 +54,7 @@ try:
         "title": "SIMPLIFY-16 regression",
     }, actor="bug168-test", project=P)
     task["git_state"] = {
+        "branch": PR_BRANCH,
         "head_sha": HEAD,
         "pr_number": 831,
         "pr_url": "https://github.com/6th-Element-Labs/projectplanner/pull/831",
@@ -100,6 +102,7 @@ try:
     assert contract["desired_role"] == "remediation"
     assert contract["exact_head_sha"] == HEAD
     assert contract["exact_pr"]["number"] == 831
+    assert policy["lifecycle"]["pr_branch"] == PR_BRANCH
     assert contract["launch_pointer"] == {
         "trigger": "changes_requested",
         "evidence_url": task["git_state"]["pr_url"],
@@ -161,6 +164,38 @@ try:
     assert '"desired_role":"remediation"' in host_prompt
     assert HEAD in host_prompt
     assert "Claim and start exactly desired_role" in host_prompt
+    assert agent_host.connect_workspace_request(
+        wake, inventory)["branch"] == PR_BRANCH
+
+    implementation_wake = {
+        **wake,
+        "policy": {
+            **policy,
+            "lifecycle": {
+                **policy["lifecycle"],
+                "role": "implementation",
+                "head_sha": "",
+                "pr_number": 0,
+                "pr_url": "",
+                "pr_branch": "",
+            },
+            "execution_assignment": {
+                **contract,
+                "desired_role": "implementation",
+                "exact_head_sha": "",
+                "exact_pr": {"number": 0, "url": ""},
+                "claim_expectations": {
+                    "required": True,
+                    "work_session_required": True,
+                    "role": "implementation",
+                },
+            },
+        },
+    }
+    implementation_branch = agent_host.connect_workspace_request(
+        implementation_wake, inventory)["branch"]
+    assert implementation_branch != PR_BRANCH
+    assert implementation_branch.endswith("-g1")
 
     original_token = agent_host._issue_connect_session_mcp_token
     original_run = agent_host.subprocess.run

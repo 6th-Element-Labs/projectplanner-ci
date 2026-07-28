@@ -829,7 +829,15 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
                     validate_event(
                         publication, project=project, repository=repo,
                         pr_number=pr_number, branch=head_ref,
-                        head_sha=head_sha, base_branch=base_ref)
+                        head_sha=head_sha, base_branch=base_ref,
+                        # An open PR is expected to advance when an agent
+                        # implements or remediates it.  Preserve the immutable
+                        # project/repository/PR/branch fence, but let exact-head
+                        # CI and review freshness own the new SHA.  Treating a
+                        # same-PR head advance as publication corruption boots
+                        # a writing remediator for normal progress and can
+                        # never converge (BUG-218).
+                        allow_head_advance=True)
                 except ExecutionPublicationError as exc:
                     findings.append(_merge_gate_finding(
                         exc.code, exc.message, "failed_gate",

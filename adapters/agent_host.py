@@ -1259,12 +1259,27 @@ def connect_workspace_request(wake, inventory):
     generation = int(lifecycle.get("generation") or 0)
     state_root = _agent_host_state_root()
     project_id = str(context.get("project_id") or _wake_project(wake))
+    execution_assignment = dict(policy.get("execution_assignment") or {})
+    desired_role = str(
+        execution_assignment.get("desired_role")
+        or lifecycle.get("role")
+        or "implementation"
+    ).strip().lower()
+    existing_pr_branch = (
+        str(lifecycle.get("pr_branch") or "").strip()
+        if desired_role in {"review_merge", "remediation"}
+        else ""
+    )
     common = {
         "task_id": task_id,
         "execution_id": execution_id,
         "branch": (
-            f"agent/{_safe_identity(project_id)}/"
-            f"{_safe_identity(task_id)}/{_safe_identity(execution_id)}-g{generation}"
+            existing_pr_branch
+            or (
+                f"agent/{_safe_identity(project_id)}/"
+                f"{_safe_identity(task_id)}/"
+                f"{_safe_identity(execution_id)}-g{generation}"
+            )
         ),
         "workspace_root": os.environ.get(
             "PM_AGENT_HOST_WORKSPACE_ROOT", str(state_root / "workspaces")),

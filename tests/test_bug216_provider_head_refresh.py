@@ -13,6 +13,7 @@ os.environ["PM_DYNAMIC_PROJECTS_DIR"] = os.path.join(tmp, "projects")
 from path_setup import ROOT  # noqa: E402,F401
 
 import store  # noqa: E402
+from switchboard.application.commands import merge_gate as merge_gate_mod  # noqa: E402
 
 P = "switchboard"
 REQUESTED_TASK = "BUG-216-REPRO"
@@ -68,6 +69,40 @@ assert advance["previous_head_sha"] == HEAD_A, advance
 assert advance["current_head_sha"] == HEAD_B, advance
 history = advanced["git_state"]["evidence"]["execution_publication_history"]
 assert history[0]["head_sha"] == HEAD_A, history
+
+# BUG-226: the provider refresh above is normal PR progress. The merge gate
+# must preserve the exact project/repository/PR/branch fence without
+# reclassifying the new head as publication corruption and booting a writing
+# remediator. Exact-head CI/review freshness owns HEAD_B from this point.
+gate = merge_gate_mod.merge_gate(
+    {
+        "task_id": TASK,
+        "head_sha": HEAD_B,
+        "pr_number": PR_NUMBER,
+        "pr_url": PR_URL,
+        "repo": "6th-Element-Labs/projectplanner",
+        "github_pr": {
+            "number": PR_NUMBER,
+            "state": "OPEN",
+            "draft": False,
+            "mergeable": True,
+            "base": {"ref": "master"},
+            "head": {"ref": BRANCH, "sha": HEAD_B},
+            "status_contexts": [{
+                "context": "Switchboard CI / VM gate",
+                "state": "PENDING",
+            }],
+        },
+    },
+    actor="bug226-test",
+    project=P,
+    record=False,
+)
+gate_codes = {
+    str(finding.get("code") or "")
+    for finding in gate.get("findings") or []
+}
+assert "execution_publication_event_mismatch" not in gate_codes, gate
 
 replayed = store.mark_task_pr_opened(
     TASK, PR_NUMBER, PR_URL, BRANCH, HEAD_B,

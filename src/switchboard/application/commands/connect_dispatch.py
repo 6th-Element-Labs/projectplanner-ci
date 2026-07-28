@@ -334,6 +334,10 @@ def enqueue_task(
             "route": str(route or ""),
             "attempt": int(decision_attempt or 0),
             "state_version": int(state_version or 0),
+            # A writing/review continuation must reopen the existing PR branch.
+            # Keep this out of the byte-stable base lifecycle used by ordinary
+            # implementation starts.
+            "pr_branch": str((task.get("git_state") or {}).get("branch") or ""),
         })
     if mission_key:
         lifecycle["mission_key"] = str(mission_key)
