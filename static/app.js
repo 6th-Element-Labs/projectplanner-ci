@@ -1093,12 +1093,16 @@ const TeepPlan = {
         let primary = '';
         if (condition.key === 'waiting_on_you' && attention) {
             primary = `<button class="btn btn-sm btn-orange" data-runner-answer="${this.esc(s.runner_session_id || '')}"><i class="ti ti-message-question me-1"></i>Answer</button>`;
-        } else if ((condition.key === 'silent' || condition.key === 'idle')
-                && s.task_id && actions.includes('open')) {
-            primary = `<button class="btn btn-sm btn-azure" data-runner-watch-task="${this.esc(s.task_id)}"><i class="ti ti-message me-1"></i>Nudge</button>`;
+        } else if (condition.key === 'silent' && s.task_id && actions.includes('inject')) {
+            primary = `<button class="btn btn-sm btn-azure" data-runner-task="${this.esc(s.task_id)}" data-runner-action="inject"><i class="ti ti-wand me-1"></i>Nudge</button>`;
         } else if (condition.key === 'exited' && s.task_id && actions.includes('restart')) {
             primary = `<button class="btn btn-sm btn-azure" data-runner-task="${this.esc(s.task_id)}" data-runner-action="restart"><i class="ti ti-refresh me-1"></i>Restart</button>`;
         }
+        // Watch is the operator's window into any bound runner — always offered,
+        // not condition-gated (UI-72 dropped it; restored by operator order).
+        const watch = s.task_id
+            ? `<button class="btn btn-sm ${primary ? 'btn-outline-secondary' : 'btn-azure'}" data-runner-watch-task="${this.esc(s.task_id)}"><i class="ti ti-terminal-2 me-1"></i>Watch</button>`
+            : '';
         const kill = s.task_id && actions.includes('kill')
             ? `<button class="dropdown-item text-danger" data-runner-task="${this.esc(s.task_id)}" data-runner-action="kill"><i class="ti ti-square me-2"></i>Kill</button>`
             : '';
@@ -1107,7 +1111,7 @@ const TeepPlan = {
                 <button class="btn btn-sm btn-ghost-secondary p-1" data-bs-toggle="dropdown" aria-label="Runner actions"><i class="ti ti-dots-vertical"></i></button>
                 <div class="dropdown-menu dropdown-menu-end">${kill}</div>
             </div>` : '<span class="ms-auto"></span>';
-        return `<div class="mt-2 d-flex gap-2 align-items-center">${primary}${overflow}</div>`;
+        return `<div class="mt-2 d-flex gap-2 align-items-center">${primary}${watch}${overflow}</div>`;
     },
     async _dockAnswer(attention) {
         if (!attention || !attention.request_id) return;
@@ -1186,7 +1190,7 @@ const TeepPlan = {
         const actions = x.queue_position ? ''
             : (x.ci_state === 'success' && x.mergeable_state !== 'dirty'
                 ? `<button class="btn btn-sm btn-primary dock-primary-action" data-pr-merge="${this.esc(String(x.number))}" data-pr-mode="${x.mergeable_state === 'clean' ? 'merge' : 'enqueue'}">${x.mergeable_state === 'clean' ? 'Merge' : 'Enqueue'}</button>`
-                : `<button class="btn btn-sm btn-outline-secondary dock-primary-action" data-pr-regate="${this.esc(String(x.number))}" data-pr-sha="${this.esc(x.head_sha || '')}">Re-gate</button>`);
+                : `<button class="btn btn-sm btn-outline-secondary dock-primary-action" data-pr-regate="${this.esc(String(x.number))}" data-pr-sha="${this.esc(x.head_sha || '')}" title="Request a fresh CI verification for this exact commit">Re-run CI</button>`);
         return `<div class="p-2 border rounded mb-2" style="border-left:2px solid ${accent} !important;border-top-left-radius:0;border-bottom-left-radius:0;">
             <div class="d-flex align-items-center gap-2">
                 ${this._dockBadge(primary.label, primary.tone, primary.icon, primary.title)}
@@ -1395,11 +1399,16 @@ const TeepPlan = {
             body = `<div class="p-3 text-secondary small">Deployment status is unavailable: ${this.esc(this._dockDeploymentUnavailable)}</div>`;
         } else {
             const manifest = deployments.filter((x) => !x.deployed);
+            const shipped = deployments.filter((x) => x.deployed);
             body = this._dockDeploymentBanner(deploymentPayload)
                 + (manifest.length ? `<div class="p-2"><div class="dock-bucket-label">Not yet deployed · ${manifest.length}</div>${manifest.map((x) => {
                     const task = (x.tasks || [])[0] || {};
                     return `<div class="border rounded p-2 mb-1"><strong>${this.esc(task.task_id || `PR #${x.number}`)}</strong> · ${this.esc(task.title || x.title)}</div>`;
-                }).join('')}</div>` : '<div class="p-3 text-secondary small">Nothing waiting to ship.</div>');
+                }).join('')}</div>` : '<div class="p-3 text-secondary small">Nothing waiting to ship.</div>')
+                // Shipped history (operator order 2026-07-28: the UI-72 rework
+                // dropped it). Native disclosure, newest first, full cards so
+                // merge SHA / deploy task / age stay visible.
+                + (shipped.length ? `<details class="px-2 pb-2"><summary class="text-secondary small py-1" style="cursor:pointer;">Recently shipped · ${shipped.length}</summary>${shipped.map((x) => this._dockDeploymentHtml(x)).join('')}</details>` : '');
         }
         const attnBadge = nAttn
             ? `<span class="ms-auto small text-danger"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:currentColor" class="me-1"></span>${nAttn} blocked</span>`
