@@ -2233,6 +2233,39 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
     return {"claimed": True, "reserved": phase == "pending",
             "credential_admission_phase": phase, "wake": claimed_wake}
 
+def _terminalize_failed_wake_wrappers_in(
+        c: sqlite3.Connection, wake: Dict[str, Any], *,
+        wake_id: str, status: str, result: Dict[str, Any],
+        runner_session_id: str, actor: str, now: float) -> List[str]:
+    """Clear only unbound wrapper debris for a failed wake receipt.
+
+    This remains safe after the wake itself is terminal: a later dispatch
+    attempt may have published a wrapper before replaying the same failure.
+    Claim-bound runners are fenced by ``terminalize_wake_runners_in``.
+    """
+    if status == "completed" and result.get("started") is not False:
+        return []
+    from .runner import terminalize_wake_runners_in
+    closed_runners = terminalize_wake_runners_in(
+        c, wake_id,
+        reason=str(result.get("reason") or result.get("error") or "")
+        or f"wake {status}",
+        keep=runner_session_id or "",
+        now=now,
+    )
+    if closed_runners:
+        c.execute(
+            "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+            "VALUES (?,?,?,?,?)",
+            (wake.get("task_id"), actor, "runner.terminalized_by_wake_failure",
+             json.dumps({"wake_id": wake_id, "status": status,
+                         "runner_session_ids": closed_runners,
+                         "reason": result.get("reason")
+                         or result.get("error") or ""},
+                        sort_keys=True), now))
+    return closed_runners
+
+
 def complete_wake(wake_id: str, runner_session_id: str = "",
                   agent_id: str = "", result: Optional[Dict[str, Any]] = None,
                   actor: str = "system", principal_id: str = "",
@@ -2368,8 +2401,8 @@ def complete_wake(wake_id: str, runner_session_id: str = "",
                             "reason_codes": [str(transitioned.get("reason_code")
                                                  or "execution_connection_completion_lost")],
                             "wake_id": wake_id}
-            elif wake.get("status") == "completed":
-                if (status == "failed"
+            elif wake.get("status") in {"completed", "failed", "cancelled"}:
+                if (wake.get("status") == "completed" and status == "failed"
                         and result.get("recoverable_post_execution_failure") is True):
                     recovery_error = _recover_host_local_completed_execution_in(
                         c, wake, principal_id=principal_id,
@@ -2384,15 +2417,22 @@ def complete_wake(wake_id: str, runner_session_id: str = "",
                         "completed": False,
                         "recovered_post_execution_failure": True,
                     }
-                if (status == "completed"
+                _terminalize_failed_wake_wrappers_in(
+                    c, wake, wake_id=wake_id, status=status, result=result,
+                    runner_session_id=runner_session_id, actor=actor, now=now)
+                if (str(wake.get("status") or "") == status
                         and str(wake.get("runner_session_id") or "")
                         == str(runner_session_id or "")
                         and str(wake.get("agent_id") or "") == str(agent_id or "")
                         and dict(wake.get("result") or {}) == result):
-                    return wake | {"completed": True,
+                    return wake | {"completed": status == "completed",
                                    "note": "idempotent terminal readback"}
                 return {"completed": False, "reason": "exact_binding_denied",
-                        "reason_codes": ["completed_wake_rewrite_denied"],
+                        "reason_codes": [
+                            "completed_wake_rewrite_denied"
+                            if wake.get("status") == "completed"
+                            else "terminal_wake_rewrite_denied"
+                        ],
                         "wake_id": wake_id}
             c.execute(
                 "UPDATE wake_intents SET status=?, completed_at=?, runner_session_id=?, "
@@ -2429,25 +2469,9 @@ def complete_wake(wake_id: str, runner_session_id: str = "",
             # attempt raced into existence. `keep` protects the runner a
             # successful attempt actually bound, so retries supersede their
             # predecessors without deleting the evidence.
-            if status != "completed" or result.get("started") is False:
-                from .runner import terminalize_wake_runners_in
-                closed_runners = terminalize_wake_runners_in(
-                    c, wake_id,
-                    reason=str(result.get("reason") or result.get("error") or "")
-                    or f"wake {status}",
-                    keep=runner_session_id or "",
-                    now=now,
-                )
-                if closed_runners:
-                    c.execute(
-                        "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
-                        "VALUES (?,?,?,?,?)",
-                        (wake.get("task_id"), actor, "runner.terminalized_by_wake_failure",
-                         json.dumps({"wake_id": wake_id, "status": status,
-                                     "runner_session_ids": closed_runners,
-                                     "reason": result.get("reason")
-                                     or result.get("error") or ""},
-                                    sort_keys=True), now))
+            _terminalize_failed_wake_wrappers_in(
+                c, wake, wake_id=wake_id, status=status, result=result,
+                runner_session_id=runner_session_id, actor=actor, now=now)
             if status == "completed" and runner_session_id and not personal:
                 selector = wake.get("selector") or {}
                 # A delegated worker may have rebound the preclaim runner row to its

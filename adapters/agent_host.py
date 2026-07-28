@@ -658,12 +658,21 @@ def _classify_connect_registration_failure(reg):
 
 
 def _complete_wake_with_retry(body, attempts=3, delay_s=0.5):
-    """Post complete_wake with retries so a blip cannot leave the wake claimed."""
+    """Durably post one exact complete_wake receipt.
+
+    A launch can fail before a runner exists, so there is no runner heartbeat
+    available to finish this capacity transaction later.  Persist the callback
+    before the first attempt and retain it after bounded inline retries; the
+    host loop replays it until the control plane returns a terminal readback.
+    """
+    _persist_pending_wake_receipt(body)
     last = None
     total = max(1, int(attempts or 1))
     for i in range(total):
         last = _try("POST", P_COMPLETE_WAKE, body)
-        if last and not last.get("error") and not last.get("error_code"):
+        if _wake_completion_recorded(last):
+            _delete_pending_wake_receipt(
+                (body or {}).get("project"), (body or {}).get("wake_id"))
             return last
         if i + 1 < total:
             print(
@@ -674,10 +683,82 @@ def _complete_wake_with_retry(body, attempts=3, delay_s=0.5):
             time.sleep(max(0.0, float(delay_s or 0)))
     print(
         f"[agent_host] POST {P_COMPLETE_WAKE} exhausted retries; "
-        f"wake may remain claimed wake_id={(body or {}).get('wake_id')}",
+        f"durable receipt retained wake_id={(body or {}).get('wake_id')}",
         flush=True,
     )
     return last
+
+
+def _wake_completion_recorded(response):
+    if not isinstance(response, dict) or response.get("error") \
+            or response.get("error_code"):
+        return False
+    if response.get("reason") == "exact_binding_denied":
+        return False
+    return bool(
+        response.get("ok") is True
+        or response.get("status") in {"completed", "failed", "cancelled"}
+        or response.get("note") in {
+            "already terminal", "idempotent terminal readback",
+        }
+    )
+
+
+def _pending_wake_receipt_dir():
+    root = Path(os.environ.get("PM_RUNNER_DIR", ".switchboard/runner")).resolve()
+    path = root / "_pending_wake_completions"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _pending_wake_receipt_path(project, wake_id):
+    identity = f"{project or PROJECT}__{wake_id or ''}"
+    safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", identity)
+    return _pending_wake_receipt_dir() / f"{safe_id}.json"
+
+
+def _persist_pending_wake_receipt(receipt):
+    path = _pending_wake_receipt_path(
+        (receipt or {}).get("project"), (receipt or {}).get("wake_id"))
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(receipt, sort_keys=True), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _delete_pending_wake_receipt(project, wake_id):
+    try:
+        _pending_wake_receipt_path(project, wake_id).unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _drain_pending_wake_receipts():
+    """Replay pre-registration terminal receipts before accepting fresh work."""
+    outcomes = []
+    for path in sorted(_pending_wake_receipt_dir().glob("*.json")):
+        try:
+            receipt = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        terminal = _try("POST", P_COMPLETE_WAKE, receipt)
+        recorded = _wake_completion_recorded(terminal)
+        if recorded:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+        outcomes.append({
+            "wake_id": receipt.get("wake_id"),
+            "task_id": ((receipt.get("result") or {}).get("task_id")),
+            "reason": "pending_wake_completion_retry",
+            "completed": recorded,
+            "error": None if recorded else (
+                (terminal or {}).get("error")
+                or (terminal or {}).get("error_code")
+                or (terminal or {}).get("reason")
+            ),
+        })
+    return outcomes
 
 
 CONNECT_REGISTER_ATTEMPTS = 3
@@ -3590,6 +3671,7 @@ def run_once(inventory):
         return handle_drain(drain_request, inventory)
     host_id = inventory["host_id"]
     finalized = _reap_bound_finalizers(host_id)
+    finalized.extend(_drain_pending_wake_receipts())
     capacity = heartbeat_capacity(inventory)
     heartbeat_body = {
         "project": PROJECT, "host_id": host_id,
