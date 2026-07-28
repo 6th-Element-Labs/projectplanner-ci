@@ -98,6 +98,7 @@ class FakeRunner:
                 "databaseId": 42,
                 "status": status,
                 "conclusion": None if status != "completed" else conclusion,
+                "createdAt": "2026-07-29T00:00:00Z",
                 "url": "https://github.com/6th-Element-Labs/public-ci/actions/runs/42",
                 "headSha": "1234567public",
                 "displayTitle": f"verify {self.last_source_sha} (head)",
