@@ -1205,6 +1205,13 @@ const TeepPlan = {
             </div>
         </div>`;
     },
+    // One phrase for the attention total, shared by the collapsed pill and the
+    // open dock header. "Blocked" was wrong for both a crashed runner and a
+    // runner waiting on an answer; what they have in common is that they need
+    // the operator. Single source so the two surfaces cannot drift apart again.
+    _dockAttnLabel(n) {
+        return `${n} need${n === 1 ? 's' : ''} you`;
+    },
     _dockQueueHtml(rows) {
         if (!rows.length) return '';
         return `<div class="p-2"><div class="text-uppercase text-secondary mb-1" style="font-size:10px;letter-spacing:.08em;">Merge queue · ${rows.length}</div>`
@@ -1346,14 +1353,23 @@ const TeepPlan = {
         const anchor = 'position:fixed;right:1rem;bottom:1rem;z-index:1031;';
         const rerender = () => this._renderFleetDock(runners, prs, deploymentPayload);
         if (collapsed) {
-            const lead = nAsking ? `${nAsking} waiting on you`
-                : (nBroken ? `${nBroken} broken`
-                    : (blockedPrs.length ? `${blockedPrs.length} blocked` : 'All clear'));
+            // The pill used to lead with a single category ("2 broken") while the
+            // open dock counted every attention item ("4 blocked") — same dock,
+            // two numbers, and the smaller one was the only one visible when
+            // minimized. Both surfaces now report the same total in the same words,
+            // and the pill spells out the mix instead of hiding it.
+            const lead = nAttn ? this._dockAttnLabel(nAttn) : 'All clear';
             const dot = nAsking ? 'var(--tblr-orange)' : (nAttn ? 'var(--tblr-red)' : 'var(--tblr-green)');
+            const mix = [
+                nAsking ? `${nAsking} waiting on you` : '',
+                nBroken ? `${nBroken} broken` : '',
+                blockedPrs.length ? `${blockedPrs.length} PR${blockedPrs.length === 1 ? '' : 's'} blocked` : '',
+                nSilent ? `${nSilent} silent` : '',
+            ].filter(Boolean).join(' · ');
             host.innerHTML = `<button id="fleet-dock-pill" class="btn btn-sm shadow-sm" style="${anchor}border-radius:999px;display:inline-flex;align-items:center;gap:8px;">
                 <span style="width:8px;height:8px;border-radius:50%;background:${dot};"></span>
                 <span class="fw-medium">${this.esc(lead)}</span>
-                <span class="text-secondary small">· ${nSilent ? `${nSilent} silent · ` : ''}${running} working · ${prs.length} PR${prs.length === 1 ? '' : 's'}${undeployed ? ` · ${undeployed} un-deployed` : ''}</span>
+                <span class="text-secondary small">· ${mix ? `${this.esc(mix)} · ` : ''}${running} working · ${prs.length} PR${prs.length === 1 ? '' : 's'}${undeployed ? ` · ${undeployed} un-deployed` : ''}</span>
                 <i class="ti ti-chevron-up"></i></button>`;
             document.getElementById('fleet-dock-pill').addEventListener('click', () => { this._dockCollapsed = false; rerender(); });
             return;
@@ -1422,7 +1438,7 @@ const TeepPlan = {
                 + (shipped.length ? `<div class="p-2"><div class="dock-bucket-label">Recently shipped · ${shipped.length}</div>${shipped.map((x) => this._dockDeploymentHtml(x)).join('')}</div>` : '');
         }
         const attnBadge = nAttn
-            ? `<span class="ms-auto small text-danger"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:currentColor" class="me-1"></span>${nAttn} blocked</span>`
+            ? `<span class="ms-auto small text-danger"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:currentColor" class="me-1"></span>${this.esc(this._dockAttnLabel(nAttn))}</span>`
             : `<span class="ms-auto small text-success"><i class="ti ti-check me-1"></i>all clear</span>`;
         host.innerHTML = `<div class="card shadow-sm" style="${anchor}width:380px;max-height:70vh;overflow:auto;">
             <div class="card-header py-2 d-flex align-items-center gap-2">
