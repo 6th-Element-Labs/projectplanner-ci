@@ -144,9 +144,10 @@ try:
 
     # ---- 1) the command set exists on both transports ----------------------
     expected = {"get_task_execution", "start_task", "open_session", "send_message",
-                "stop_task", "retry_task", "get_execution_transcript"}
+                "stop_task", "retry_task", "report_stale_assignment",
+                "get_execution_transcript"}
     ok(set(task_execution.COMMANDS) == expected,
-       "the service declares all seven COORD-44 commands")
+       "the service declares all eight Task Execution commands")
     ok(set(mcp_task_execution.TASK_EXECUTION_TOOL_NAMES)
        == expected | {"explain_task_block"},
        "MCP registers the commands plus the compact diagnostic")
@@ -159,6 +160,7 @@ try:
         ("POST", "/api/tasks/{task_id}/execution/message"),
         ("POST", "/api/tasks/{task_id}/execution/stop"),
         ("POST", "/api/tasks/{task_id}/execution/retry"),
+        ("POST", "/api/tasks/{task_id}/execution/stale-assignment"),
         ("GET", "/api/tasks/{task_id}/execution/transcript"),
         ("POST", "/api/tasks/{task_id}/start"),
     ):
@@ -168,9 +170,10 @@ try:
     ok({"get_task_execution", "get_execution_transcript"}
        <= mcp_authorization.READ_TOOLS,
        "the two read commands need no write scope")
-    ok({"start_task", "open_session", "send_message", "stop_task", "retry_task"}
+    ok({"start_task", "open_session", "send_message", "stop_task", "retry_task",
+        "report_stale_assignment"}
        <= mcp_authorization.WRITE_TOOLS,
-       "the five mutating commands require a write scope")
+       "the six mutating commands require a write scope")
 
     # ---- 2) REST and MCP return byte-identical bodies -----------------------
     running_task = new_task("running session")

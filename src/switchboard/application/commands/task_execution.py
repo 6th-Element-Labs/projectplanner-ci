@@ -5,7 +5,7 @@ that every surface must use, against the SIMPLIFY-1 execution projection:
 
     get_task_execution   start_task      open_session
     send_message         stop_task       retry_task
-    get_execution_transcript
+    report_stale_assignment              get_execution_transcript
 
 Every command returns the same envelope on REST and on MCP, and every failure
 returns the same typed error (``error_code`` + ``failure_class``).  Adapters own
@@ -22,6 +22,7 @@ from constants import DEFAULT_PROJECT
 from switchboard.application.commands import runner_pty as runner_pty_command
 from switchboard.application.queries import task_session as task_session_query
 from switchboard.security import redact_provider_secrets
+from switchboard.storage.repositories import completion_runs as completion_runs_repo
 from switchboard.storage.repositories import coordination as coordination_repo
 from switchboard.storage.repositories import external_effects as external_effects_repo
 from switchboard.storage.repositories import runner as runner_repo
@@ -33,7 +34,8 @@ TRANSCRIPT_SCHEMA = "switchboard.execution_transcript.v1"
 
 COMMANDS = (
     "get_task_execution", "start_task", "open_session", "send_message",
-    "stop_task", "retry_task", "get_execution_transcript",
+    "stop_task", "retry_task", "report_stale_assignment",
+    "get_execution_transcript",
 )
 
 
@@ -1366,6 +1368,128 @@ def retry_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
     )
 
 
+def report_stale_assignment(
+    task_id: Any,
+    *,
+    project: str = DEFAULT_PROJECT,
+    actor: str = "user",
+    principal_id: str = "",
+    expected_head: str,
+    live_head: str,
+    pr_number: int = 0,
+    pr_url: str = "",
+    evidence_url: str = "",
+) -> dict[str, Any]:
+    """Return a typed stale-head outcome and request one replacement generation.
+
+    This is the mechanical counterpart to ``agent_requires_human``. It never
+    creates attention. Task Execution supersedes the current generation; its
+    ordinary start/dedupe path owns the replacement, so replay cannot fork a
+    second runner.
+    """
+    task_id = _normalize(task_id)
+    expected_head = str(expected_head or "").strip()
+    live_head = str(live_head or "").strip()
+    pr_url = str(pr_url or "").strip()
+    evidence_url = str(evidence_url or "").strip()
+    if not expected_head or not live_head or expected_head == live_head:
+        raise TaskExecutionError(
+            "invalid_input",
+            "stale_assignment requires distinct non-empty expected_head and live_head",
+            task_id=task_id,
+            project=project,
+        )
+
+    projection = _projection(task_id, project)
+    attempt = projection.get("active_attempt") or {}
+    execution = attempt.get("execution") or {}
+    persisted_head = str(
+        execution.get("head_sha")
+        or (attempt.get("metadata") or {}).get("execution_head_sha")
+        or ""
+    ).strip()
+    if persisted_head and persisted_head != expected_head:
+        raise TaskExecutionError(
+            "stale_execution_generation",
+            "expected_head does not match the active persisted execution fence",
+            task_id=task_id,
+            project=project,
+            expected_head=expected_head,
+            persisted_head=persisted_head,
+        )
+    role = str(
+        execution.get("role")
+        or attempt.get("role")
+        or (attempt.get("metadata") or {}).get("execution_role")
+        or "implementation"
+    )
+    execution_id = str(
+        execution.get("execution_id")
+        or attempt.get("execution_id")
+        or (attempt.get("metadata") or {}).get("execution_id")
+        or ""
+    ).strip()
+    generation = int(
+        execution.get("generation")
+        or attempt.get("generation")
+        or (attempt.get("metadata") or {}).get("execution_generation")
+        or 0
+    )
+    outcome = {
+        "schema": "switchboard.stale_assignment.v1",
+        "outcome": "stale_assignment",
+        "task_id": task_id,
+        "expected_head": expected_head,
+        "live_head": live_head,
+        "pr": {"number": int(pr_number or 0), "url": pr_url},
+        "evidence_url": evidence_url,
+        "role": role,
+        # Bind the durable factory command to the generation that reported it.
+        # Mission Bot consumes it only until a different execution exists.
+        "execution_id": execution_id,
+        "generation": generation,
+    }
+    current_run = completion_runs_repo.get_active_completion_run(
+        task_id, project=project,
+    ) or {}
+    evidence_refs = dict(current_run.get("evidence_refs") or {})
+    evidence_refs["stale_assignment"] = outcome
+    completion_run = completion_runs_repo.transition_completion_run(
+        {
+            "task_id": task_id,
+            "pr_number": int(pr_number or current_run.get("pr_number") or 0),
+            "head_sha": live_head,
+            "state": "blocked",
+            "route": "remediation",
+            "reason_code": "stale_assignment",
+            "desired_role": role,
+            "board_status": str(
+                (projection.get("task") or {}).get("status")
+                or current_run.get("board_status")
+                or ""
+            ),
+            "evidence_refs": evidence_refs,
+        },
+        actor=actor,
+        project=project,
+    )
+    replacement = start_task(
+        task_id,
+        project=project,
+        actor=actor,
+        principal_id=principal_id,
+        role=role,
+        source_sha=live_head,
+        findings=[outcome],
+    )
+    return {
+        **outcome,
+        "replacement": replacement,
+        "completion_run": completion_run,
+        "attention_created": False,
+    }
+
+
 # --------------------------------------------------------------------------
 # 7. get_execution_transcript — what one execution actually produced.
 # --------------------------------------------------------------------------
@@ -1474,6 +1598,7 @@ _DISPATCH: dict[str, Callable[..., dict[str, Any]]] = {
     "send_message": send_message,
     "stop_task": stop_task,
     "retry_task": retry_task,
+    "report_stale_assignment": report_stale_assignment,
     "get_execution_transcript": get_execution_transcript,
 }
 

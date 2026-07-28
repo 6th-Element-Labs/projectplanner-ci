@@ -135,13 +135,15 @@ ok(len(store.list_wake_intents(task_id=task["task_id"], project=P)) == 1,
 wake = store.list_wake_intents(task_id=task["task_id"], project=P)[0]
 policy = wake["policy"]
 contract = policy["execution_assignment"]
-safe_dossier = contract.get("mission_dossier") or {}
-ok(contract.get("mission_key") == MISSION_KEY,
-   "immutable assignment carries the one Mission Bot key")
-ok(safe_dossier.get("failing_check_url") == finding["url"],
-   "immutable assignment carries the failing CI URL")
+safe_dossier = policy["lifecycle"].get("mission_dossier") or {}
+ok(policy["lifecycle"].get("mission_key") == MISSION_KEY,
+   "coordination lifecycle retains the one Mission Bot key")
+ok(contract.get("launch_pointer", {}).get("evidence_url") == finding["url"],
+   "immutable assignment carries only the starting CI URL")
+ok("mission_dossier" not in contract and "mission_key" not in contract,
+   "immutable runner assignment excludes interpreted Mission Bot state")
 ok(SECRET not in str(safe_dossier) and "<redacted>" in str(safe_dossier),
-   "immutable assignment carries a prompt-safe dossier")
+   "coordination retains a prompt-safe dossier outside the runner assignment")
 
 lifecycle = policy["lifecycle"]
 branch = f"codex/{task['task_id']}-canary"

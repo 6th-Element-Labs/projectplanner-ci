@@ -1,16 +1,10 @@
 #!/usr/bin/env python3
-"""ADR-0008 W1 regression: the host must launch a Connect wake that carries prior_attempts.
+"""ADR-0008 W1 regression: interpreted history never owns a runner launch.
 
-COORD-52 puts bounded execution memory (``prior_attempts``) on the execution
-assignment at dispatch, carried verbatim. The contract's own rule (see
-``switchboard.connect.execution_assignment``) is that every verification-path
-caller must ECHO the stored value rather than re-derive it, because the corpus
-moves between dispatch and claim. The server claim path echoes it
-(``claims.py``); the Agent Host's launch gate did not, so its re-derived
-``expected`` lacked the key and exact-equality refused every retry/remediation
-launch with ``execution_assignment_contract_mismatch`` — the 2026-07-25 and
-2026-07-27 fleet-down signature. First attempts (no history) still launched,
-which is why the break looked intermittent.
+COORD-52 prior-attempt history remains available to Coordination while choosing
+a mission. It is deliberately absent from the immutable runner assignment, so
+append-only history drift cannot reject a valid Connect launch or become stale
+diagnosis in the agent prompt.
 """
 from __future__ import annotations
 
@@ -89,7 +83,8 @@ try:
     contract = build_execution_assignment(
         task_id=task["task_id"], assignment=assignment,
         lifecycle=policy["lifecycle"], prior_attempts=prior)
-    assert contract.get("prior_attempts") == prior
+    assert "prior_attempts" not in contract
+    assert "launch_hints" not in contract
     policy["execution_assignment"] = contract
 
     policy["execution_context"] = with_generation({
@@ -136,12 +131,18 @@ try:
         workspace_path=str(ROOT))
     assert mode == "connect", mode
 
-    # Echoing prior_attempts must not weaken the gate for every other field:
+    # Excluding prior_attempts must not weaken the gate for identity fields:
     # tampering anything else in the persisted contract still refuses launch.
     for forged in (
         {**contract, "desired_role": "review_merge"},
         {**contract, "exact_head_sha": "0" * 40},
-        {**contract, "reason_code": "review_required"},
+        {
+            **contract,
+            "launch_pointer": {
+                **contract["launch_pointer"],
+                "trigger": "review_required",
+            },
+        },
     ):
         forged_wake = {
             **wake,
@@ -157,8 +158,11 @@ try:
         else:
             raise AssertionError("tampered execution contract launched")
 
-    # A first-ever dispatch (no prior_attempts key at all) must keep working.
-    bare = {k: v for k, v in contract.items() if k != "prior_attempts"}
+    # A first-ever dispatch has the same minimal assignment and still launches.
+    bare = build_execution_assignment(
+        task_id=task["task_id"], assignment=assignment,
+        lifecycle=policy["lifecycle"])
+    assert bare == contract
     bare_wake = {
         **wake,
         "policy": {**policy, "execution_assignment": bare},
@@ -171,4 +175,4 @@ finally:
     shutil.rmtree(TMP, ignore_errors=True)
 
 
-print("ADR-0008 Connect launch echoes prior_attempts: PASS")
+print("ADR-0008 Connect launch excludes interpreted prior_attempts: PASS")

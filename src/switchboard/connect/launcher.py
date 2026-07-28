@@ -79,16 +79,46 @@ def assignment_note(ack: Ack, completion_contract: dict | None = None) -> str:
         f"{_via_switchboard_instruction(assignment.work_ref)}"
     )
     if completion_contract:
+        pointer = dict(completion_contract.get("launch_pointer") or {})
+        identity = {
+            key: completion_contract.get(key)
+            for key in (
+                "schema",
+                "task_id",
+                "execution_id",
+                "assignment_id",
+                "generation",
+                "desired_role",
+                "exact_head_sha",
+                "exact_pr",
+                "claim_expectations",
+                "typed_tools",
+                "launch_pointer",
+            )
+        }
         note += (
             "\nImmutable execution assignment: "
-            + json.dumps(completion_contract, sort_keys=True, separators=(",", ":"))
-            + " This server-owned contract is lifecycle authority. Fail closed "
-              "before claiming or starting work if task_id, assignment_id, "
-              "execution_id, generation, desired_role, or exact_head_sha "
+            + json.dumps(identity, sort_keys=True, separators=(",", ":"))
+            + " The identity/scope fields (task_id, assignment_id, execution_id, "
+              "generation, desired_role, exact_head_sha, exact_pr, and "
+              "claim_expectations) are server-owned lifecycle authority. "
+              "launch_pointer is a non-authoritative starting pointer, not current "
+              "diagnosis or lifecycle truth.\n"
+              "Before changing code: (1) read the current Switchboard task and "
+              "execution; (2) confirm the live PR and head match the assignment "
+              "fence; (3) read all open structured findings for that head; "
+              "(4) read PR reviews, inline comments, and conversation comments; "
+              "(5) read required checks and failing logs; (6) inspect the current "
+              "diff and relevant code; (7) summarize the active requirements in "
+              "the terminal, then act. Treat the trigger"
+            + (f" ({pointer.get('trigger')})" if pointer.get("trigger") else "")
+            + " and evidence URL as pointers only. Fail closed if identity/scope "
               "disagrees with the persisted execution lease. Claim and start "
-              "exactly desired_role, applying its acceptance_findings; do not "
-              "infer a different role from board status and do not wait for "
-              "post-start runner injection."
+              "exactly desired_role. If the live PR head differs from "
+              "exact_head_sha, perform no repository write and call "
+              "report_stale_assignment with expected_head, live_head, PR, and an "
+              "evidence URL; do not call agent_requires_human for that mechanical "
+              "refresh. Do not wait for post-start runner injection."
         )
     return note
 

@@ -181,7 +181,11 @@ def hydrate_completion_snapshot(
         get_repo = store_mod.get_project_github_repo
     from switchboard.application.commands import merge_gate as merge_gate_command
     from switchboard.application.queries import task_session
-    from switchboard.storage.repositories import autopilot_scopes, provenance
+    from switchboard.storage.repositories import (
+        autopilot_scopes,
+        completion_runs,
+        provenance,
+    )
 
     hydration_started_at = time.time()
     source_observed_at: dict[str, float] = {}
@@ -259,6 +263,7 @@ def hydrate_completion_snapshot(
     runner_observed_at = time.time()
     source_observed_at["runner_sessions"] = runner_observed_at
     active_runner = _map(runner_view.get("active_runner"))
+    active_attempt = _map(runner_view.get("active_attempt"))
     identity = _map(active_runner.get("execution"))
     runner = {
         **active_runner,
@@ -308,6 +313,29 @@ def hydrate_completion_snapshot(
     normalized["observed_at"] = observed_at
     normalized["hydration_started_at"] = hydration_started_at
     normalized["autopilot_scope"] = task_scope
+    current_run = completion_runs.get_active_completion_run(
+        task_id, project=project,
+    ) or {}
+    stale_assignment = _map(
+        _map(current_run.get("evidence_refs")).get("stale_assignment")
+    )
+    stale_execution_id = str(stale_assignment.get("execution_id") or "").strip()
+    current_execution_id = str(
+        _map(active_attempt.get("execution")).get("execution_id")
+        or active_attempt.get("execution_id")
+        or _map(active_attempt.get("metadata")).get("execution_id")
+        or runner.get("execution_id")
+        or ""
+    ).strip()
+    if (
+        stale_assignment.get("outcome") == "stale_assignment"
+        and stale_execution_id
+        and current_execution_id == stale_execution_id
+    ):
+        normalized["stale_assignment"] = {
+            **stale_assignment,
+            "pending": True,
+        }
     source_observed_at["live_authority_evidence"] = observed_at
     normalized["source_observed_at"] = source_observed_at
     normalized["controller_build_sha"] = str(

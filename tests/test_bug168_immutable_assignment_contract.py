@@ -100,7 +100,11 @@ try:
     assert contract["desired_role"] == "remediation"
     assert contract["exact_head_sha"] == HEAD
     assert contract["exact_pr"]["number"] == 831
-    assert contract["acceptance_findings"] == FINDINGS
+    assert contract["launch_pointer"] == {
+        "trigger": "changes_requested",
+        "evidence_url": task["git_state"]["pr_url"],
+    }
+    assert "acceptance_findings" not in contract
     assert contract["claim_expectations"] == {
         "required": True,
         "work_session_required": True,
@@ -123,9 +127,10 @@ try:
         ack, config, workspace_path=str(ROOT), completion_contract=contract)
     prompt = spec.argv[2]
     assert "desired_role" in prompt and "remediation" in prompt
-    assert HEAD in prompt and "reviewremediation-de1aaf65367940b9" in prompt
+    assert HEAD in prompt
+    assert "reviewremediation-de1aaf65367940b9" not in prompt
+    assert "read all open structured findings for that head" in prompt
     assert "Claim and start exactly desired_role" in prompt
-    assert "do not infer a different role from board status" in prompt
     assert json.loads(
         spec.env_dict()["SWITCHBOARD_EXECUTION_ASSIGNMENT_JSON"]) == contract
 
@@ -192,7 +197,13 @@ try:
     for forged in (
         {**contract, "desired_role": "review_merge"},
         {**contract, "exact_pr": {**contract["exact_pr"], "number": 999}},
-        {**contract, "acceptance_findings": []},
+        {
+            **contract,
+            "launch_pointer": {
+                **contract["launch_pointer"],
+                "trigger": "forged-trigger",
+            },
+        },
     ):
         forged_wake = {
             **wake,

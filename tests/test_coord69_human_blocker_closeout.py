@@ -456,6 +456,8 @@ try:
        "execution_assignment names only the explicit agent attention tool")
     ok(tools.get("executed_test_run") == "record_executed_test_run",
        "execution_assignment names record_executed_test_run")
+    ok(tools.get("stale_assignment") == "report_stale_assignment",
+       "execution_assignment names typed stale-assignment return path")
 
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)

@@ -25,19 +25,15 @@ def build_execution_assignment(
     lifecycle: Mapping[str, Any],
     prior_attempts: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Derive the complete immutable contract from admitted server state.
+    """Derive the tiny immutable identity/scope contract for one boot.
 
-    ``prior_attempts`` (COORD-52) is bounded execution memory built by
-    ``domain.decisions.prior_attempts.build_prior_attempts`` at DISPATCH time and then
-    carried verbatim. It is passed in rather than derived here on purpose: this function is
-    re-run at claim time and compared to the stored contract with exact dict equality
-    (``require_exact_execution_assignment``), so a block re-derived from the append-only
-    corpus would drift between dispatch and claim and fail every claim. Callers on the
-    verification path must echo the stored value.
-
-    Omitted entirely when absent — a first-ever dispatch carries no key at all, because a
-    zeroed object reads as "nothing worked" rather than "there is no history".
+    Coordination may use ``prior_attempts`` and a rich mission dossier while
+    deciding to dispatch.  Neither belongs in the runner assignment: the agent
+    rereads live Switchboard and GitHub facts after boot.  Keeping interpreted
+    history out of this contract prevents cached diagnosis from masquerading as
+    lifecycle authority.
     """
+    del prior_attempts
 
     role = str(lifecycle.get("role") or "implementation")
     if role not in VALID_ROLES:
@@ -78,20 +74,37 @@ def build_execution_assignment(
         "typed_tools": {
             "executed_test_run": "record_executed_test_run",
             "agent_requires_human": "agent_requires_human",
+            "stale_assignment": "report_stale_assignment",
         },
-        "reason_code": str(lifecycle.get("reason_code") or ""),
-        "route": str(lifecycle.get("route") or ""),
-        "acceptance_findings": list(lifecycle.get("acceptance_findings") or []),
     }
-    mission_key = str(lifecycle.get("mission_key") or "").strip()
-    if mission_key:
-        contract["mission_key"] = mission_key
-    mission_dossier = lifecycle.get("mission_dossier")
-    if isinstance(mission_dossier, Mapping) and mission_dossier:
-        contract["mission_dossier"] = dict(mission_dossier)
-    if prior_attempts:
-        contract["prior_attempts"] = dict(prior_attempts)
+    # A launch pointer is intentionally not a diagnosis.  One trigger and one
+    # starting URL save the agent a lookup while every current fact remains
+    # discoverable through MCP/GitHub.
+    pointer: dict[str, Any] = {
+        "trigger": str(lifecycle.get("reason_code") or ""),
+        "evidence_url": _launch_pointer_url(lifecycle),
+    }
+    contract["launch_pointer"] = pointer
     return contract
+
+
+def _launch_pointer_url(lifecycle: Mapping[str, Any]) -> str:
+    findings = lifecycle.get("acceptance_findings")
+    if isinstance(findings, list):
+        for finding in findings:
+            if not isinstance(finding, Mapping):
+                continue
+            for key in ("failing_check_url", "evidence_url", "review_url", "url"):
+                value = str(finding.get(key) or "").strip()
+                if value:
+                    return value
+    dossier = lifecycle.get("mission_dossier")
+    if isinstance(dossier, Mapping):
+        for key in ("failing_check_url", "evidence_url", "pr_url"):
+            value = str(dossier.get(key) or "").strip()
+            if value:
+                return value
+    return str(lifecycle.get("pr_url") or "").strip()
 
 
 def require_exact_execution_assignment(

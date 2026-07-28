@@ -1521,12 +1521,6 @@ def launch_command(wake, inventory, runner_session_id="", workspace_path=""):
                 task_id=str(wake.get("task_id") or ""),
                 assignment=assignment_data,
                 lifecycle=lifecycle,
-                # COORD-52: echo the dispatch-time memory rather than re-deriving
-                # it, exactly like the server claim path (claims.py). The corpus
-                # is append-only and moves between dispatch and launch, so a
-                # fresh derivation here refuses every retry/remediation wake
-                # with execution_assignment_contract_mismatch.
-                prior_attempts=execution_assignment.get("prior_attempts"),
             )
             require_exact_execution_assignment(execution_assignment, expected)
         except ExecutionAssignmentError as exc:

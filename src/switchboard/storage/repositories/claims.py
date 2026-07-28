@@ -184,10 +184,7 @@ def _assigned_execution_for_claim_in(
             contract,
             build_execution_assignment(
                 task_id=task_id, assignment=assignment, lifecycle=lifecycle,
-                # COORD-52: echo the dispatch-time memory rather than re-deriving it.
-                # The corpus is append-only and moves between dispatch and claim, so a
-                # fresh derivation here would differ and fail every exact-equality check.
-                prior_attempts=contract.get("prior_attempts")),
+            ),
         )
     except (ExecutionAssignmentError, TypeError, ValueError):
         return None
@@ -199,7 +196,7 @@ def _assigned_execution_for_claim_in(
         "role": role,
         "head_sha": expected_head,
         "assignment_id": contract["assignment_id"],
-        "route": contract["route"],
+        "route": str(lifecycle.get("route") or ""),
     }
 
 

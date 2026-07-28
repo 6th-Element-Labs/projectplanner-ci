@@ -109,10 +109,9 @@ ok(with_near_miss.get("evidence_session_id") == "worksession-aa0ccd80bb504bbd",
 ok("evidence_session_id" not in summary,
    "no near-miss recorded means the key is absent, not empty")
 
-# --- THE CONTRACT SAFETY PROPERTY -------------------------------------------
-# claims.py re-runs build_execution_assignment and compares with exact dict equality.
-# A block derived from the live corpus would drift between dispatch and claim and fail
-# EVERY claim. These pin the echo contract.
+# --- THE BOOT CONTRACT EXCLUDES INTERPRETED HISTORY --------------------------
+# prior_attempts still informs Mission Bot's decision, but it is not runner
+# identity/scope and must not be serialized into the startup assignment.
 LIFECYCLE = {"role": "remediation", "head_sha": "d" * 40, "execution_id": "execlease-1",
              "generation": 2, "reason_code": "required_exact_head_ci_failed",
              "route": "remediation"}
@@ -121,22 +120,22 @@ ASSIGNMENT = {"assignment_id": "assignment-1"}
 base = build_execution_assignment(
     task_id="CO-20", assignment=ASSIGNMENT, lifecycle=LIFECYCLE)
 ok("prior_attempts" not in base,
-   "a dispatch with no memory omits the key entirely from the contract")
+   "a dispatch with no memory carries no history in the boot contract")
 
 dispatched = build_execution_assignment(
     task_id="CO-20", assignment=ASSIGNMENT, lifecycle=LIFECYCLE,
     prior_attempts=summary)
-ok(dispatched["prior_attempts"]["attempt_number"] == 7,
-   "the dispatched contract carries the memory block")
+ok(dispatched == base,
+   "prior-attempt history does not change the boot contract")
 
 echoed = build_execution_assignment(
     task_id="CO-20", assignment=ASSIGNMENT, lifecycle=LIFECYCLE,
-    prior_attempts=dispatched.get("prior_attempts"))
+    prior_attempts=summary)
 try:
     require_exact_execution_assignment(dispatched, echoed)
-    ok(True, "echoing the stored block re-derives an identical contract (claim succeeds)")
+    ok(True, "claim verification re-derives the same minimal contract")
 except ExecutionAssignmentError:
-    ok(False, "echoing the stored block must re-derive an identical contract")
+    ok(False, "claim verification must re-derive the same minimal contract")
 
 drifted = build_execution_assignment(
     task_id="CO-20", assignment=ASSIGNMENT, lifecycle=LIFECYCLE,
@@ -145,10 +144,9 @@ drifted = build_execution_assignment(
         reason_code="required_exact_head_ci_failed", head_sha="d150fd1b"))
 try:
     require_exact_execution_assignment(dispatched, drifted)
-    ok(False, "a re-derived (drifted) block must be rejected — proves why we echo")
-except ExecutionAssignmentError as exc:
-    ok(exc.code == "execution_assignment_contract_mismatch",
-       "a corpus that moved between dispatch and claim would fail equality — hence echo")
+    ok(True, "append-only history drift cannot invalidate the identity contract")
+except ExecutionAssignmentError:
+    ok(False, "history drift must not invalidate the identity contract")
 
 # --- the wiring is pinned so it cannot silently regress ----------------------
 coordination_src = (
@@ -156,9 +154,9 @@ coordination_src = (
 claims_src = (ROOT / "src/switchboard/storage/repositories/claims.py").read_text()
 ok("_dispatch_prior_attempts" in coordination_src
    and "prior_attempts=_dispatch_prior_attempts(" in coordination_src,
-   "dispatch derives the memory block once")
-ok('prior_attempts=contract.get("prior_attempts")' in claims_src,
-   "the claim path echoes the stored block rather than re-deriving it")
+   "coordination still derives history for its own decision")
+ok('"prior_attempts"' not in claims_src,
+   "claim verification does not recover history from the runner contract")
 ok("except Exception:" in coordination_src.split("_dispatch_prior_attempts")[2],
    "a corpus read failure cannot prevent a dispatch")
 

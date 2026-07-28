@@ -95,7 +95,10 @@ wake = next(
 policy = wake["policy"]
 lifecycle = policy["lifecycle"]
 assert lifecycle["route"] == "coordination_retry"
-assert policy["execution_assignment"]["route"] == "coordination_retry"
+assert "route" not in policy["execution_assignment"]
+assert policy["execution_assignment"]["launch_pointer"]["trigger"] == (
+    "missing_executed_test_run"
+)
 
 work_session = store.create_work_session({
     "agent_id": AGENT,

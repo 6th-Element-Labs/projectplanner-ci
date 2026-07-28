@@ -70,6 +70,7 @@ try:
         ("POST", "/api/tasks/{task_id}/execution/message"),
         ("POST", "/api/tasks/{task_id}/execution/stop"),
         ("POST", "/api/tasks/{task_id}/execution/retry"),
+        ("POST", "/api/tasks/{task_id}/execution/stale-assignment"),
         ("GET", "/api/tasks/{task_id}/execution/transcript"),
         # A task scope started on its own is named by its task, so its control
         # route is not nested under a deliverable.

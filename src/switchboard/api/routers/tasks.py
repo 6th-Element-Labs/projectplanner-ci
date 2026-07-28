@@ -68,6 +68,11 @@ class ExecutionCommandBody(BaseModel):
     role: Optional[str] = None
     runtime: Optional[str] = None
     reason: Optional[str] = None
+    expected_head: Optional[str] = None
+    live_head: Optional[str] = None
+    pr_number: Optional[int] = None
+    pr_url: Optional[str] = None
+    evidence_url: Optional[str] = None
     text: Optional[str] = None
     scopes: Optional[list[str]] = None
     ttl_seconds: Optional[int] = None
@@ -604,6 +609,20 @@ def create_router(*, resolve_project: ProjectResolver,
                 role=body.role or "implementation",
                 runtime=body.runtime or "",
                 reason=body.reason or "operator retry")
+
+        @router.post("/api/tasks/{task_id}/execution/stale-assignment")
+        async def report_stale_task_assignment(
+                request: Request, task_id: str,
+                body: ExecutionCommandBody = Body(...)):
+            """Return a stale exact-head generation to Task Execution."""
+            return await run_execution_command(
+                request, "report_stale_assignment", task_id,
+                resolve_project(body.project),
+                expected_head=body.expected_head or "",
+                live_head=body.live_head or "",
+                pr_number=int(body.pr_number or 0),
+                pr_url=body.pr_url or "",
+                evidence_url=body.evidence_url or "")
 
         @router.get("/api/tasks/{task_id}/execution/transcript")
         async def get_task_execution_transcript(

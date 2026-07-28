@@ -214,7 +214,31 @@ def reduce_mission(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             dossier=dossier,
         )
 
-    # 6. No PR yet — boot the implementer.
+    # 6. A generation-bound stale receipt is a durable factory command, not a
+    # cached diagnosis. Once the reporting generation is terminal, start its
+    # exact-head successor even when CI is merely pending. Hydration removes
+    # this receipt as soon as a different execution id exists, so replay can
+    # attach to the one successor but can never create another generation.
+    stale_assignment = _map(snap.get("stale_assignment"))
+    if (
+        stale_assignment.get("outcome") == "stale_assignment"
+        and stale_assignment.get("pending") is True
+    ):
+        dossier = build_dossier(
+            snap,
+            reason_code="stale_assignment",
+            mission="remediate",
+        )
+        dossier["stale_assignment"] = stale_assignment
+        return _command(
+            MissionOutput.START_REMEDIATION,
+            snapshot=snap,
+            reason_code="stale_assignment",
+            role=str(stale_assignment.get("role") or "remediation"),
+            dossier=dossier,
+        )
+
+    # 7. No PR yet — boot the implementer.
     if facts.needs_implementation(snap):
         dossier = build_dossier(
             snap, reason_code="needs_implementation", mission="implement",
@@ -227,7 +251,7 @@ def reduce_mission(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             dossier=dossier,
         )
 
-    # 7. Factory failure — boot remediation with the full unchanged dossier.
+    # 8. Factory failure — boot remediation with the full unchanged dossier.
     #    GitHub/Switchboard red never becomes human. Pending CI is not a failure.
     if facts.factory_failure(snap):
         reason = facts.factory_failure_reason(snap)
@@ -242,7 +266,7 @@ def reduce_mission(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             dossier=dossier,
         )
 
-    # 8. Draft PR — mark ready (free mechanical step; outranks pending CI).
+    # 9. Draft PR — mark ready (free mechanical step; outranks pending CI).
     if facts.is_draft(snap):
         return _command(
             MissionOutput.MARK_READY,
@@ -251,7 +275,7 @@ def reduce_mission(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             role="review_merge",
         )
 
-    # 9. CI still pending/hydrating — wait.
+    # 10. CI still pending/hydrating — wait.
     if facts.ci_pending(snap):
         return _command(
             MissionOutput.WAIT,

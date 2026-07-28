@@ -123,6 +123,29 @@ def retry_task(task_id: str, ctx: Context, project: str = "maxwell",
                 runtime=runtime, reason=reason)
 
 
+def report_stale_assignment(
+    task_id: str,
+    expected_head: str,
+    live_head: str,
+    ctx: Context,
+    project: str = "maxwell",
+    pr_number: int = 0,
+    pr_url: str = "",
+    evidence_url: str = "",
+) -> str:
+    """Report an exact-head mismatch without creating human attention.
+
+    The server validates the active fence, supersedes that generation, and
+    returns ``switchboard.stale_assignment.v1``. Task Execution owns the single
+    replacement-generation path.
+    """
+    return _run(
+        "report_stale_assignment", task_id, ctx, project,
+        expected_head=expected_head, live_head=live_head,
+        pr_number=pr_number, pr_url=pr_url, evidence_url=evidence_url,
+    )
+
+
 def get_execution_transcript(task_id: str = "", execution_id: str = "",
                              project: str = "maxwell", limit: int = 20) -> str:
     """The durable record for one execution, live or completed. Pass task_id for the
@@ -137,7 +160,8 @@ def get_execution_transcript(task_id: str = "", execution_id: str = "",
 
 TASK_EXECUTION_TOOL_NAMES = (
     "get_task_execution", "start_task", "open_session", "send_message",
-    "stop_task", "retry_task", "get_execution_transcript", "explain_task_block",
+    "stop_task", "retry_task", "report_stale_assignment",
+    "get_execution_transcript", "explain_task_block",
 )
 
 
