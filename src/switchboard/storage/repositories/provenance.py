@@ -232,9 +232,94 @@ def _same_pr_reference(current: Dict[str, Any], evidence_obj: Dict[str, Any]) ->
 
 def _preserve_provider_pr_evidence(current: Dict[str, Any],
                                    updates: Dict[str, Any],
-                                   evidence_obj: Dict[str, Any]) -> Dict[str, Any]:
+                                   evidence_obj: Dict[str, Any],
+                                   *,
+                                   execution_publication: Optional[
+                                       Dict[str, Any]
+                                   ] = None) -> Dict[str, Any]:
     """Keep webhook/GitHub PR evidence authoritative over later stale claim evidence."""
     if not _same_pr_reference(current, evidence_obj):
+        return updates
+    if execution_publication:
+        current_evidence = dict(current.get("evidence") or {})
+        current_publication = dict(
+            current_evidence.get("execution_publication") or {})
+        current_generation = int(
+            current_publication.get("execution_generation") or 0)
+        incoming_generation = int(
+            execution_publication.get("execution_generation") or 0)
+        incoming_head = str(execution_publication.get("head_sha") or "")
+        current_head = str(current.get("head_sha") or "")
+        stale_publication = (
+            current_generation > incoming_generation
+            or (
+                current_generation == incoming_generation
+                and current_generation > 0
+                and current_head
+                and incoming_head != current_head
+            )
+        )
+        if stale_publication:
+            # Completion can arrive out of order after a newer remediation has
+            # already published. Preserve the current exact-head fence and the
+            # newer publication identity; the late receipt remains historical.
+            for field in ("branch", "head_sha", "pushed_at", "pr_number",
+                          "pr_url"):
+                if current.get(field) not in (None, ""):
+                    updates[field] = current.get(field)
+            updates["evidence"] = {
+                **evidence_obj,
+                "execution_publication": current_publication,
+                "execution_publication_superseded": {
+                    "source": "out_of_order_execution_publication",
+                    "current_execution_id": current_publication.get(
+                        "execution_id"),
+                    "current_execution_generation": current_generation,
+                    "late_execution_id": execution_publication.get(
+                        "execution_id"),
+                    "late_execution_generation": incoming_generation,
+                    "late_head_sha": incoming_head,
+                },
+            }
+            for field in ("merged_sha", "merged_at", "in_main_content"):
+                if current.get(field) not in (None, "", False):
+                    updates[field] = current.get(field)
+            return updates
+        # Authenticated exact-execution evidence may advance the head of the same
+        # PR after an older provider observation. Retain that observation as
+        # history, but do not let it pin exact-head CI and review to the old SHA.
+        preserved_evidence = dict(evidence_obj)
+        superseded = {
+            field: current.get(field)
+            for field in ("branch", "head_sha", "pr_number", "pr_url")
+            if current.get(field) not in (None, "")
+        }
+        conflicts = {
+            field: {
+                "superseded_provider": current.get(field),
+                "execution_publication": evidence_obj.get(field),
+            }
+            for field in ("branch", "head_sha")
+            if current.get(field) not in (None, "")
+            and evidence_obj.get(field) not in (None, "")
+            and str(current.get(field)) != str(evidence_obj.get(field))
+        }
+        if conflicts:
+            preserved_evidence["provider_evidence_superseded"] = {
+                "source": "authenticated_execution_publication",
+                "execution_id": execution_publication.get("execution_id"),
+                "execution_generation": execution_publication.get(
+                    "execution_generation"),
+                "previous": superseded,
+                "conflicts": conflicts,
+            }
+        updates["pr_number"] = current.get("pr_number") or updates.get("pr_number")
+        updates["pr_url"] = current.get("pr_url") or updates.get("pr_url")
+        updates["evidence"] = preserved_evidence
+        # Execution evidence cannot alter terminal canonical merge provenance.
+        for field in ("merged_sha", "merged_at", "in_main_content"):
+            if current.get(field) not in (None, "", False):
+                updates[field] = current.get(field)
         return updates
     provider = {
         field: current.get(field)

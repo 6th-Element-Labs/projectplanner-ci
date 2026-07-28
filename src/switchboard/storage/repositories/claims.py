@@ -1413,7 +1413,12 @@ def _complete_claim_impl(claim_id: str, evidence: str = "", final_status: str = 
             "evidence": ({**evidence_obj, "push_verification": push_check}
                          if push_check else evidence_obj),
         }
-        git_updates = _store_facade()._preserve_provider_pr_evidence(current_git, git_updates, evidence_obj)
+        git_updates = _store_facade()._preserve_provider_pr_evidence(
+            current_git,
+            git_updates,
+            evidence_obj,
+            execution_publication=execution_publication,
+        )
         git_state = _store_facade()._upsert_git_state(c, row["task_id"], git_updates)
         task_snapshot_row = c.execute("SELECT * FROM tasks WHERE task_id=?",
                                       (row["task_id"],)).fetchone()
