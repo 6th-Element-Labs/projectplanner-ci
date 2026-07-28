@@ -163,6 +163,10 @@ def test_wait_and_block_have_required_operating_contracts():
                 "route": "agent_requires_human",
                 "reason": "agent_requires_human",
                 "source_tool": "agent_requires_human",
+                # Server-stamped resolve_write_actor binding required by
+                # Mission Bot — bare actor/agent_id strings are forgeable.
+                "binding": "registered_agent",
+                "provenance_stamp": "switchboard.resolve_write_actor.v1",
                 "agent_id": "agent-law-block",
                 "actor": "agent-law-block",
                 "execution_id": "exec-law-block",
