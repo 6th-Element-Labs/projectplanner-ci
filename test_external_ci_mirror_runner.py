@@ -258,6 +258,16 @@ try:
     ok(trusted["result"]["tested_public_sha"] == trusted_request["source_sha"]
        and trusted["result"]["workflow_head_sha"] == "1234567public",
        "evidence separates the exact tested SHA from the trusted workflow commit")
+    ok(external_ci_mirror._should_cleanup_terminal_ref(
+           trusted_request, {"status": "success"})
+       and external_ci_mirror._should_cleanup_terminal_ref(
+           trusted_request, {"status": "failure"}),
+       "conclusive trusted runs clean their disposable exact refs")
+    ok(not external_ci_mirror._should_cleanup_terminal_ref(
+           trusted_request, {"status": "cancelled"})
+       and not external_ci_mirror._should_cleanup_terminal_ref(
+           trusted_request, {"status": "error"}),
+       "abortive terminal runs retain exact refs for queued checkout and audited retry")
 
     push_task = store.create_task({"workstream_id": "CIQA", "title": "push trigger"},
                                   actor="test", project=P)
