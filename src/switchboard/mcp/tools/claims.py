@@ -241,20 +241,52 @@ def agent_requires_human(blocker_json: str, ctx: Context,
     if not isinstance(payload, dict):
         return services.dumps({"error": "blocker_json must be a JSON object"})
     payload = dict(payload)
-    payload.setdefault("source_tool", "agent_requires_human")
+    # Client-supplied provenance is discarded before the server stamp.
+    for forged in (
+        "actor", "agent_id", "principal_id", "binding", "principal_kind",
+        "provenance_stamp",
+    ):
+        payload.pop(forged, None)
+    payload["source_tool"] = "agent_requires_human"
     task_id = str(payload.get("task_id") or "").strip()
+    # Prefer authenticated principal agent identity over an empty hint so
+    # resolve_write_actor can mint registered_agent / direct_session bindings.
+    agent_hint = str(
+        principal.get("bound_agent_id")
+        or (
+            auth.actor(principal)
+            if str(principal.get("kind") or "").lower()
+            in {"agent", "direct_session"}
+            else ""
+        )
+        or ""
+    )
     binding = services.resolve_write_actor(
-        principal, project=project, task_id=task_id, agent_id="")
+        principal, project=project, task_id=task_id, agent_id=agent_hint,
+    )
     if not binding.get("ok"):
         return services.dumps(binding)
-    # Authenticated agent/execution provenance — Mission Bot refuses human
-    # stops that lack this receipt identity.
+    from switchboard.domain.mission_bot.facts import AGENT_PROVENANCE_BINDINGS
+    stamped_binding = str(binding.get("binding") or "")
+    if stamped_binding not in AGENT_PROVENANCE_BINDINGS:
+        return services.dumps({
+            "recorded": False,
+            "error": "agent_binding_required",
+            "error_code": "agent_binding_required",
+            "failure_class": "failed_gate",
+            "binding": stamped_binding or None,
+            "message": (
+                "agent_requires_human requires a registered agent or "
+                "direct-session principal; principal/system actors cannot "
+                "author this receipt."
+            ),
+        })
+    # Server-stamped provenance only.
     payload["actor"] = str(binding.get("actor") or "")
-    payload["agent_id"] = str(
-        binding.get("agent_id") or binding.get("actor") or ""
-    )
+    payload["agent_id"] = str(binding.get("agent_id") or "")
     payload["principal_id"] = str(binding.get("principal_id") or "")
-    payload["binding"] = str(binding.get("binding") or "")
+    payload["binding"] = stamped_binding
+    payload["provenance_stamp"] = "switchboard.resolve_write_actor.v1"
     from switchboard.application.commands import human_blocker as human_blocker_cmd
     result = human_blocker_cmd.execute_mapping(
         payload, actor=binding["actor"], project=project,

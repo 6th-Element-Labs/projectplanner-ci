@@ -18,6 +18,7 @@ from switchboard.domain.completion.human_closeout import (
     PROVIDER,
     _human_action,
 )
+from switchboard.domain.mission_bot.facts import AGENT_PROVENANCE_BINDINGS
 from switchboard.storage.repositories import attention as attention_repo
 from switchboard.storage.repositories import work_sessions as work_sessions_repo
 
@@ -51,9 +52,12 @@ def _error(code: str, message: str, failure_class: str = "invalid_input",
 
 def _blocker_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     evidence = _map(data.get("evidence"))
+    # Board/DHCP sticky closeout still projects route=human. Mission Bot does
+    # not trust that alone — it requires source_tool + resolve_write_actor
+    # binding stamped below.
     return {
         "schema": BLOCKER_SCHEMA,
-        "route": "agent_requires_human",
+        "route": "human",
         "reason": _text(data.get("reason")),
         "completed_work": _text(data.get("completed_work")),
         "minimum_human_action": _text(data.get("minimum_human_action")),
@@ -69,6 +73,7 @@ def _blocker_payload(data: Mapping[str, Any]) -> dict[str, Any]:
         "agent_id": _text(data.get("agent_id") or data.get("actor")),
         "principal_id": _text(data.get("principal_id")),
         "binding": _text(data.get("binding")),
+        "provenance_stamp": _text(data.get("provenance_stamp")),
         "execution_id": _text(data.get("execution_id")),
         "execution_generation": int(data.get("execution_generation") or 0),
     }
@@ -371,10 +376,17 @@ def promote_human_blocker(
 def execute_mapping(
     data: Mapping[str, Any], *, actor: str, project: str,
 ) -> dict[str, Any]:
-    """Validate and record one typed human-blocker closeout."""
+    """Validate and record one typed human-blocker closeout.
+
+    ``binding`` / ``agent_id`` / ``actor`` must be server-stamped by the MCP
+    edge via ``resolve_write_actor``. Client-supplied strings alone are refused.
+    """
     data = _map(data)
+    # Never invent an agent binding here — only the authenticated write edge
+    # may stamp AGENT_PROVENANCE_BINDINGS onto the payload.
     data.setdefault("actor", actor)
-    data.setdefault("agent_id", data.get("agent_id") or actor)
+    if not _text(data.get("agent_id")):
+        data["agent_id"] = _text(data.get("actor"))
     # Lift execution identity from the work session when the caller omitted it.
     if not _text(data.get("execution_id")):
         session = work_sessions_repo.get_work_session(
@@ -397,12 +409,24 @@ def execute_mapping(
             "invalid_human_blocker",
             "reason is required (e.g. provider_acceptance_capacity_missing).",
         )
-    if not blocker["agent_id"] and not blocker["actor"]:
+    if blocker["binding"] not in AGENT_PROVENANCE_BINDINGS:
         return _error(
             "agent_provenance_required",
-            "agent_requires_human requires an authenticated agent actor.",
+            "agent_requires_human requires a server-stamped agent or "
+            "direct-session binding from resolve_write_actor.",
+            failure_class="failed_gate",
+            binding=blocker["binding"] or None,
+        )
+    if not blocker["agent_id"]:
+        return _error(
+            "agent_provenance_required",
+            "agent_requires_human requires a server-stamped agent_id.",
             failure_class="failed_gate",
         )
+    # Application/MCP callers that already resolved an agent binding may omit
+    # the audit stamp; stamp it here so Mission Bot and storage agree.
+    if not blocker["provenance_stamp"]:
+        blocker["provenance_stamp"] = "switchboard.resolve_write_actor.v1"
     return promote_human_blocker(
         task_id=_text(data.get("task_id")),
         work_session_id=_text(data.get("work_session_id")),
@@ -441,11 +465,20 @@ def maybe_promote_from_work_session_update(
         return None
     if not _text(blocker.get("reason")):
         return None
+    # Forgeable payload strings must not promote sticky human closeout.
+    stamped = _blocker_payload({**blocker, "reason": blocker.get("reason")})
+    if (
+        stamped["binding"] not in AGENT_PROVENANCE_BINDINGS
+        or not stamped["agent_id"]
+    ):
+        return None
+    if not stamped["provenance_stamp"]:
+        stamped["provenance_stamp"] = "switchboard.resolve_write_actor.v1"
     task_id = _text(payload.get("task_id") or existing.get("task_id"))
     return promote_human_blocker(
         task_id=task_id,
         work_session_id=work_session_id,
-        blocker=_blocker_payload({**blocker, "reason": blocker.get("reason")}),
+        blocker=stamped,
         actor=actor,
         project=project,
         session=existing,

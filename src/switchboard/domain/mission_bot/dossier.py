@@ -1,11 +1,15 @@
 """Package GitHub/Switchboard facts into an unchanged mission dossier.
 
 The Mission Bot copies facts. It does not diagnose, compress, or truncate them.
-Every boot receives the full nested evidence identity.
+Every boot receives the full nested evidence identity. Prompt rendering applies
+a separate redaction boundary so execution/environment secrets never enter the
+LLM tape.
 """
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 from typing import Any, Mapping, Sequence
 
 from switchboard.domain.mission_bot.outputs import MISSION_DOSSIER_SCHEMA
@@ -15,6 +19,35 @@ _FAILED = {
     "failure", "failed", "error", "timed_out", "action_required",
     "cancelled", "canceled", "stale", "startup_failure",
 }
+
+#: Keys never copied into the LLM prompt (env, tokens, credentials).
+_PROMPT_REDACT_KEYS = frozenset({
+    "env",
+    "env_json",
+    "session_token",
+    "session_token_hash",
+    "token",
+    "tokens",
+    "api_key",
+    "api_keys",
+    "secret",
+    "secrets",
+    "password",
+    "passwd",
+    "credentials",
+    "credential",
+    "authorization",
+    "auth_header",
+    "gh_token",
+    "github_token",
+    "private_key",
+    "mcp_token",
+    "relay_ticket",
+    "ticket",
+    "bearer",
+    "access_token",
+    "refresh_token",
+})
 
 
 def _map(value: Any) -> dict[str, Any]:
@@ -86,10 +119,20 @@ def _run_attempt(row: Mapping[str, Any]) -> int:
         return 0
 
 
+def _stable_digest(value: Any) -> str:
+    """Compact digest so material nested evidence changes mint new keys."""
+    payload = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), default=str,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()[:32]
+
+
 def evidence_identity(dossier: Mapping[str, Any]) -> dict[str, Any]:
     """Stable evidence keys that must enter mission idempotency."""
     failing = list(dossier.get("failing_checks") or [])
     findings = list(dossier.get("acceptance_findings") or [])
+    review = _map(dossier.get("review"))
+    queue = _map(dossier.get("merge_queue"))
     return {
         "failing_contexts": [
             str(item.get("context") or item.get("name") or "")
@@ -109,10 +152,72 @@ def evidence_identity(dossier: Mapping[str, Any]) -> dict[str, Any]:
             for item in findings
             if isinstance(item, Mapping) and item.get("code")
         ],
+        # Material nested surfaces — same codes with different details must
+        # not replay an obsolete boot.
+        "findings_digest": _stable_digest(findings),
+        "failing_checks_digest": _stable_digest(failing),
+        "review_digest": _stable_digest({
+            "status": review.get("status") or review.get("state")
+            or review.get("verdict"),
+            "head_sha": review.get("head_sha"),
+            "findings": review.get("findings") or [],
+            "summary": review.get("summary") or review.get("body") or "",
+            "details": review.get("details") or review.get("review_details") or {},
+        }),
+        "queue_digest": _stable_digest({
+            "state": queue.get("state") or queue.get("status"),
+            "last_removal_reason": (
+                queue.get("last_removal_reason") or queue.get("removal_reason")
+            ),
+            "failure_evidence": (
+                queue.get("failure_evidence") or queue.get("evidence") or {}
+            ),
+            "messages": queue.get("messages") or queue.get("message") or "",
+            "retry_exhausted": queue.get("retry_exhausted"),
+            "prior_enqueue_verified": queue.get("prior_enqueue_verified"),
+        }),
         "missing_artifact_expected_key": str(
             _map(dossier.get("missing_artifact")).get("expected_key") or ""
         ),
+        "missing_artifact_digest": _stable_digest(
+            dossier.get("missing_artifact") or {}
+        ),
     }
+
+
+def _redact_value(value: Any, *, depth: int = 0) -> Any:
+    if depth > 12:
+        return "<redacted:depth>"
+    if isinstance(value, Mapping):
+        out: dict[str, Any] = {}
+        for key, item in value.items():
+            name = str(key)
+            if name.lower() in _PROMPT_REDACT_KEYS:
+                out[name] = "<redacted>"
+                continue
+            out[name] = _redact_value(item, depth=depth + 1)
+        return out
+    if isinstance(value, (str, bytes)):
+        return value
+    if isinstance(value, Sequence):
+        return [_redact_value(item, depth=depth + 1) for item in value]
+    return value
+
+
+def prompt_safe_dossier(dossier: Mapping[str, Any]) -> dict[str, Any]:
+    """Full gate/CI/review evidence for the LLM, without env/execution secrets.
+
+    The in-memory dossier retains unfiltered copies for identity and operators.
+    Only the prompt boundary applies this redaction.
+    """
+    row = copy.deepcopy(dict(dossier)) if isinstance(dossier, Mapping) else {}
+    for key in ("task", "work_session", "runner"):
+        if key in row:
+            row[key] = _redact_value(row.get(key))
+    # Nested agent blocker evidence may carry credential blobs.
+    if "agent_blocker" in row and row.get("agent_blocker") is not None:
+        row["agent_blocker"] = _redact_value(row.get("agent_blocker"))
+    return row
 
 
 def build_dossier(
@@ -166,7 +271,7 @@ def build_dossier(
         "pr_url": _text_raw(snap.get("pr_url")),
         "head_sha": _text(snap.get("head_sha")).lower(),
         "board_status": _text_raw(snap.get("board_status")),
-        # Full nested fact surfaces — unchanged copies.
+        # Full nested fact surfaces — unchanged copies (operators / identity).
         "task": _map(snap.get("task")),
         "github_pr": _map(snap.get("github_pr")),
         "required_status_contexts": list(snap.get("required_status_contexts") or []),
@@ -218,4 +323,4 @@ def _missing_artifact_from_findings(
     return {}
 
 
-__all__ = ["build_dossier", "evidence_identity"]
+__all__ = ["build_dossier", "evidence_identity", "prompt_safe_dossier"]

@@ -149,6 +149,10 @@ try:
             "coord_63_pr": "https://github.com/6th-Element-Labs/projectplanner/pull/921",
             "cursor_connection_present": False,
         },
+        # Server-stamped resolve_write_actor provenance (MCP edge normally sets).
+        "binding": "registered_agent",
+        "agent_id": AGENT,
+        "source_tool": "agent_requires_human",
     }, actor=AGENT, project=P)
 
     ok(first.get("recorded") is True,
@@ -203,6 +207,9 @@ try:
             "coord_63_pr": "https://github.com/6th-Element-Labs/projectplanner/pull/921",
             "cursor_connection_present": False,
         },
+        "binding": "registered_agent",
+        "agent_id": AGENT,
+        "source_tool": "agent_requires_human",
     }, actor=AGENT, project=P)
     ok(second.get("idempotent_replay") is True
        or second.get("attention_request_id") == first.get("attention_request_id"),
@@ -232,6 +239,9 @@ try:
             "task_id": stale_task["task_id"],
             "work_session_id": stale_session["work_session_id"],
             "reason": "provider_acceptance_capacity_missing",
+            "binding": "registered_agent",
+            "agent_id": "agent/codex/stale",
+            "source_tool": "agent_requires_human",
         }, actor="agent/codex/stale", project=P)
     finally:
         human_blocker_cmd._fence_session_runner = original_fence
@@ -363,12 +373,13 @@ try:
     ok(ordinary.get("human_closeout_preserved") is not True,
        "ordinary abandon does not mark human closeout preserved")
 
-    # update_work_session(blocked) promotes the same way
+    # Bare update_work_session(blocked) without server provenance must not
+    # mint sticky human closeout — agents must call agent_requires_human MCP.
     t3 = _make_task("update_work_session promote", agent="agent/codex/promote")
     T3 = t3["task_id"]
     A3 = "agent/codex/promote"
     s3 = _make_session(T3, A3, "run_promote")
-    upd = store.update_work_session(s3["work_session_id"], {
+    forged = store.update_work_session(s3["work_session_id"], {
         "status": "blocked",
         "hygiene": {
             "blocker": {
@@ -379,21 +390,51 @@ try:
                 "resume_condition": "host online",
                 "next_automatic_step": "retry proof",
                 "evidence": {},
+                "actor": A3,
+                "source_tool": "agent_requires_human",
             }
         },
     }, actor=A3, project=P)
-    ok(upd.get("updated") is True, f"update_work_session blocked lands ({upd.get('error')})")
+    ok(forged.get("updated") is True, f"update_work_session blocked lands ({forged.get('error')})")
+    ok(not (forged.get("human_blocker") or {}).get("recorded"),
+       "unstamped update_work_session does not promote human_blocker")
+    forged_row = store.get_task(T3, project=P)
+    ok(forged_row.get("status") != "Blocked",
+       f"unstamped update does not sticky-Block board (got {forged_row.get('status')})")
+
+    # Replaying an already server-stamped blocker still promotes (retry path).
+    s4 = _make_session(T3, A3, "run_promote_stamped")
+    upd = store.update_work_session(s4["work_session_id"], {
+        "status": "blocked",
+        "hygiene": {
+            "blocker": {
+                "route": "human",
+                "reason": "provider_acceptance_capacity_missing",
+                "completed_work": "checked capacity",
+                "minimum_human_action": "enroll host",
+                "resume_condition": "host online",
+                "next_automatic_step": "retry proof",
+                "evidence": {},
+                "source_tool": "agent_requires_human",
+                "binding": "registered_agent",
+                "agent_id": A3,
+                "actor": A3,
+                "provenance_stamp": "switchboard.resolve_write_actor.v1",
+            }
+        },
+    }, actor=A3, project=P)
+    ok(upd.get("updated") is True, f"stamped update_work_session lands ({upd.get('error')})")
     ok(bool(upd.get("human_blocker") and upd["human_blocker"].get("recorded")),
-       f"update_work_session promotes via human_blocker ({upd.get('human_blocker_error')})")
+       f"stamped update_work_session promotes via human_blocker ({upd.get('human_blocker_error')})")
     t3_row = store.get_task(T3, project=P)
     ok(t3_row.get("status") == "Blocked",
-       f"update_work_session promotes to Blocked (got {t3_row.get('status')})")
+       f"stamped update_work_session promotes to Blocked (got {t3_row.get('status')})")
     with _conn(P) as c:
         n3 = c.execute(
             "SELECT COUNT(*) AS n FROM attention_requests WHERE task_id=?",
             (T3,),
         ).fetchone()["n"]
-    ok(n3 >= 1, f"update_work_session created Needs-you (n={n3})")
+    ok(n3 >= 1, f"stamped update_work_session created Needs-you (n={n3})")
 
     contract = build_execution_assignment(
         task_id="COORD-69",

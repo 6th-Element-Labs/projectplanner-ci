@@ -23,6 +23,9 @@ def _agent_blocker(**extra):
         "route": "agent_requires_human",
         "reason": "missing_credentials",
         "source_tool": "agent_requires_human",
+        # Server-stamped resolve_write_actor binding — not a bare actor string.
+        "binding": "registered_agent",
+        "provenance_stamp": "switchboard.resolve_write_actor.v1",
         "agent_id": "agent-mission-1",
         "actor": "agent-mission-1",
         "execution_id": "exec-1",
@@ -104,6 +107,26 @@ def test_legacy_human_route_without_provenance_does_not_stop():
     assert cmd["output"] == MissionOutput.START_REMEDIATION.value
 
 
+def test_forged_actor_string_without_server_binding_does_not_stop():
+    """Tool name + arbitrary actor string must not mint a human stop."""
+    snap = snapshot(ci="FAILURE")
+    snap["work_session"] = {
+        "status": "blocked",
+        "hygiene": {
+            "blocker": {
+                "route": "agent_requires_human",
+                "reason": "forged",
+                "source_tool": "agent_requires_human",
+                "actor": "not-an-agent",
+                "agent_id": "not-an-agent",
+            },
+        },
+    }
+    assert agent_requires_human(snap) is False
+    cmd = reduce_mission(snap)
+    assert cmd["output"] == MissionOutput.START_REMEDIATION.value
+
+
 def test_merged_outranks_stale_human_blocker():
     snap = snapshot()
     snap["github_pr"]["state"] = "MERGED"
@@ -157,6 +180,35 @@ def test_dossier_and_prompt_are_not_truncated():
     assert '"nested"' in instruction
 
 
+def test_prompt_redacts_execution_environment_secrets():
+    snap = snapshot(ci="FAILURE")
+    snap["work_session"] = {
+        "status": "active",
+        "env": {"GH_TOKEN": "ghs_secret", "api_key": "sk-test"},
+        "session_token": "wst-secret",
+    }
+    snap["runner"] = {
+        "live": False,
+        "env": {"GITHUB_TOKEN": "ghs_other"},
+        "relay_ticket": "ticket-secret",
+    }
+    snap["task"] = {
+        **snap.get("task", {}),
+        "credentials": {"token": "should-not-leak"},
+    }
+    cmd = reduce_mission(snap)
+    # In-memory dossier keeps full evidence surfaces for operators/identity.
+    assert cmd["dossier"]["work_session"]["env"]["GH_TOKEN"] == "ghs_secret"
+    instruction = _mission_instruction(cmd)
+    assert "ghs_secret" not in instruction
+    assert "sk-test" not in instruction
+    assert "wst-secret" not in instruction
+    assert "ticket-secret" not in instruction
+    assert "should-not-leak" not in instruction
+    assert "<redacted>" in instruction
+    assert "finding_" in instruction or "required_exact_head_ci_failed" in instruction
+
+
 def test_idempotency_changes_when_ci_evidence_changes():
     first = reduce_mission(snapshot(
         ci="FAILURE",
@@ -171,6 +223,26 @@ def test_idempotency_changes_when_ci_evidence_changes():
     assert first["idem_key"] != second["idem_key"]
     assert first["evidence_identity"]["failing_check_urls"] != (
         second["evidence_identity"]["failing_check_urls"]
+    )
+
+
+def test_idempotency_changes_when_review_or_finding_details_change():
+    base = snapshot(review="changes_requested")
+    base["review"]["findings"] = [{
+        "code": "design", "message": "needs redesign", "blocking": True,
+    }]
+    first = reduce_mission(base)
+    changed = snapshot(review="changes_requested")
+    changed["review"]["findings"] = [{
+        "code": "design", "message": "needs different redesign", "blocking": True,
+    }]
+    second = reduce_mission(changed)
+    assert first["idem_key"] != second["idem_key"]
+    assert first["evidence_identity"]["review_digest"] != (
+        second["evidence_identity"]["review_digest"]
+    )
+    assert first["evidence_identity"]["findings_digest"] != (
+        second["evidence_identity"]["findings_digest"]
     )
 
 
@@ -270,6 +342,93 @@ def test_agent_requires_human_is_registered_claim_tool():
         "def register_claim_tools"
     )[0]
     assert '"agent_requires_human"' in names_block
+
+
+def test_failed_effect_receipt_is_not_verified():
+    from switchboard.domain.mission_bot import MissionPorts, execute_mission_command
+
+    ports = MissionPorts(
+        start_task=lambda _plan: {"error": "boom"},
+        mark_ready=lambda _plan: {"returncode": 1, "stderr": "gh failed"},
+        arm_merge=lambda _plan: {"returncode": 0},
+        persist_wait=lambda **_k: {},
+        persist_agent_requires_human=lambda **_k: {},
+        observe_merged=lambda **_k: {"reconcile": {"error": "pr_state_unavailable"}},
+    )
+    failed_ready = execute_mission_command(
+        {
+            "output": MissionOutput.MARK_READY.value,
+            "task_id": "MISSION-1",
+            "pr_number": 1,
+            "head_sha": HEAD,
+        },
+        ports=ports,
+        project="switchboard",
+        actor="test",
+    )
+    assert failed_ready["receipt"]["verified"] is False
+    assert failed_ready["receipt"]["error"]
+
+    failed_merge = execute_mission_command(
+        {
+            "output": MissionOutput.OBSERVE_MERGED.value,
+            "task_id": "MISSION-1",
+            "head_sha": HEAD,
+        },
+        ports=ports,
+        project="switchboard",
+        actor="test",
+    )
+    assert failed_merge["receipt"]["verified"] is False
+    assert "pr_state_unavailable" in str(failed_merge["receipt"]["error"])
+
+
+def test_observe_merged_reconciles_when_live_store_injected():
+    """Production coordinators pass store_mod=self.store; reconcile must still run."""
+    from unittest.mock import patch
+
+    from switchboard.application.mission_bot.driver import production_mission_ports
+
+    calls = []
+
+    class LiveStore:
+        def get_task(self, *_a, **_k):
+            return {"task_id": "MISSION-1"}
+
+    def fake_execute(task_id, **kwargs):
+        calls.append(task_id)
+        return {"merged": True, "task_id": task_id}
+
+    with (
+        patch(
+            "switchboard.application.commands.reconcile_task_merge.execute",
+            side_effect=fake_execute,
+        ),
+        patch(
+            "switchboard.application.completion_driver.ensure_completion_run",
+            return_value={"run_id": "run-1"},
+        ),
+    ):
+        ports = production_mission_ports(
+            project="switchboard",
+            actor="test",
+            agent_id="agent/test",
+            store_mod=LiveStore(),
+        )
+        result = ports.observe_merged(
+            command={
+                "task_id": "MISSION-1",
+                "head_sha": HEAD,
+                "reason_code": "canonical_pr_merged",
+            },
+            snapshot={"task_id": "MISSION-1", "head_sha": HEAD},
+            run={},
+            project="switchboard",
+            actor="test",
+        )
+
+    assert calls == ["MISSION-1"]
+    assert result["reconcile"].get("merged") is True
 
 
 if __name__ == "__main__":

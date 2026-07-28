@@ -194,9 +194,15 @@ def production_mission_ports(
             "board_projection": "Done",
             "effect": "reconcile_provenance",
         }
-        # Actually stamp merge provenance — do not invent Done from a dict.
+        # Always stamp merge provenance in production — do not invent Done.
+        # Hermetic conformance injects store_mod=object() with no task surface;
+        # skip network there. Production coordinators pass the live store, which
+        # previously skipped reconcile entirely when store_mod was truthy.
         reconcile_result: dict[str, Any] = {}
-        if store_mod is None:
+        live_store = store_mod is None or callable(
+            getattr(store_mod, "get_task", None)
+        )
+        if live_store:
             from switchboard.application.commands.reconcile_task_merge import (
                 execute as reconcile_task_merge,
             )
@@ -243,10 +249,13 @@ def production_mission_ports(
 
 
 def _mission_instruction(plan: Mapping[str, Any]) -> str:
-    """Render the full dossier as the mission tape — no truncation."""
+    """Render the dossier as the mission tape — full evidence, redacted env."""
     import json
 
+    from switchboard.domain.mission_bot.dossier import prompt_safe_dossier
+
     dossier = _map(plan.get("dossier"))
+    safe = prompt_safe_dossier(dossier)
     role = str(plan.get("role") or "")
     reason = str(plan.get("reason_code") or dossier.get("reason_code") or "")
     header = [
@@ -256,7 +265,7 @@ def _mission_instruction(plan: Mapping[str, Any]) -> str:
         f"head_sha={plan.get('head_sha') or dossier.get('head_sha') or ''}",
         f"reason_code={reason}",
         "DOSSIER_JSON_BEGIN",
-        json.dumps(dossier, sort_keys=True, default=str),
+        json.dumps(safe, sort_keys=True, default=str),
         "DOSSIER_JSON_END",
         "Use Switchboard MCP for the how. If you cannot proceed "
         "(credentials/authority/product intent), call agent_requires_human "

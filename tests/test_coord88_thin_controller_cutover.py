@@ -218,11 +218,13 @@ def test_production_adapter_set_has_no_legacy_lifecycle_side_doors():
 
 
 def test_retired_planner_is_not_loaded_by_production_reducer():
+    """Mission Bot owns the tick — no classify/normalize planner side door."""
     snapshot = {
         "schema": "switchboard.completion_snapshot.v1",
         "task_id": "COORD-88",
         "pr_number": 995,
         "head_sha": HEAD,
+        "board_status": "In Review",
         "observed_at": 10.0,
         "hydration_started_at": 10.0,
         "wait_started_at": 9.0,
@@ -231,22 +233,19 @@ def test_retired_planner_is_not_loaded_by_production_reducer():
             for row in LAW_BY_ACTION.values()
             for source in row.authoritative_sources
         },
-        "github_pr": {"state": "OPEN", "draft": False},
-        "status_contexts": {},
+        "github_pr": {"state": "OPEN", "draft": False, "number": 995,
+                      "head": {"sha": HEAD}},
+        "required_status_contexts": ["Switchboard CI / VM gate"],
+        "status_contexts": {
+            "Switchboard CI / VM gate": {"state": "PENDING"},
+        },
+        "review": {},
         "review_verdict": {},
         "merge_gate": {},
         "merge_queue": {},
         "runner": {"live": False},
     }
-    decision = {
-        "state": "waiting",
-        "route": "wait",
-        "reason_code": "required_exact_head_ci_pending",
-        "effect": "wait",
-    }
     with (
-        patch.object(completion_driver, "classify_completion",
-                     return_value=decision),
         patch.object(completion_driver, "ensure_completion_run",
                      return_value={"run_id": "run-1", "state_version": 1}),
         patch(
@@ -270,9 +269,13 @@ def test_retired_planner_is_not_loaded_by_production_reducer():
             adapters=CompletionEffectAdapters(),
             shadow_observer=lambda _observation: {"recorded": True},
         )
-    assert result["normalized"]["action"] == "WAIT"
+    assert result["controller"] == "mission_bot"
+    assert result["command"]["output"] == "WAIT"
+    assert result["command"]["effect"] == "wait"
     assert result["plan"]["effect"] == "wait"
-    assert result["observation"]["action"] == "WAIT"
+    assert result["observation"]["output"] == "WAIT"
+    assert "normalized" not in result
+    assert not hasattr(completion_driver, "classify_completion")
     assert not hasattr(completion_driver, "plan_effect")
     assert not hasattr(completion_executor, "plan_effect")
 

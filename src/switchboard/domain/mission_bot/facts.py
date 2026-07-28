@@ -19,6 +19,14 @@ _AGENT_HUMAN_TOOLS = frozenset({
     "record_human_blocker", "agent_requires_human",
 })
 
+#: Server-stamped write bindings from ``resolve_write_actor``. Payload
+#: ``actor`` / ``agent_id`` strings alone are forgeable and never suffice.
+AGENT_PROVENANCE_BINDINGS = frozenset({
+    "registered_agent",
+    "inferred_registered_agent",
+    "direct_session",
+})
+
 
 def _map(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
@@ -33,27 +41,30 @@ def _text_raw(value: Any) -> str:
 
 
 def _has_agent_provenance(blocker: Mapping[str, Any]) -> bool:
-    """True only when an authenticated agent authored the sticky receipt.
+    """True only when a server-stamped agent/direct-session authored the receipt.
 
-    Bare ``route=human``, schema tags, or attention stickiness are not enough —
-    Mission Bot requires the MCP-stamped tool name plus agent identity.
+    Bare ``route=human``, schema tags, attention stickiness, or client-supplied
+    ``actor`` / ``agent_id`` strings are not enough. Mission Bot requires the
+    MCP tool name plus a ``resolve_write_actor`` binding in
+    ``AGENT_PROVENANCE_BINDINGS``.
     """
     if _text(blocker.get("source_tool")) not in _AGENT_HUMAN_TOOLS:
         return False
-    if not (
-        _text_raw(blocker.get("agent_id"))
-        or _text_raw(blocker.get("actor"))
-    ):
+    # Binding must be one of the resolve_write_actor agent/direct-session
+    # values. A bare actor string (e.g. "not-an-agent") is forgeable.
+    if _text_raw(blocker.get("binding")) not in AGENT_PROVENANCE_BINDINGS:
+        return False
+    if not _text_raw(blocker.get("agent_id")):
         return False
     return True
 
 
 def agent_requires_human(snapshot: Mapping[str, Any]) -> bool:
-    """True only for an authenticated agent-authored sticky blocker receipt.
+    """True only for a server-stamped agent-authored sticky blocker receipt.
 
     Machine classifiers must never create this fact. It comes from
-    ``record_human_blocker`` / ``agent_requires_human`` MCP, stamped with
-    agent/actor identity (and preferably execution generation).
+    ``record_human_blocker`` / ``agent_requires_human`` MCP after
+    ``resolve_write_actor`` stamps an agent/direct-session binding.
     """
     session = _map(snapshot.get("work_session"))
     if _text(session.get("status")) == "blocked":
@@ -328,6 +339,7 @@ def gates_green(snapshot: Mapping[str, Any]) -> bool:
 
 
 __all__ = [
+    "AGENT_PROVENANCE_BINDINGS",
     "agent_requires_human",
     "blocking_findings",
     "branch_behind",
