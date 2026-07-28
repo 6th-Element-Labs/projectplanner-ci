@@ -1364,7 +1364,7 @@ const TeepPlan = {
             };
             const calm = decorated.filter((d) => healthy.includes(d.c[0].key));
             body = `<div class="p-2">${bucket('Needs you', ['waiting_on_you'])}${bucket('Broken', ['exited', 'lost_host'])}${bucket('Stalled', ['silent'])}`
-                + (calm.length ? `<details class="dock-healthy"><summary>${calm.length} working normally</summary>${calm.map((d) => this._dockRunnerHtml(d.s)).join('')}</details>` : '')
+                + (calm.length ? `<div class="dock-bucket-label">Working normally · ${calm.length}</div>${calm.map((d) => this._dockRunnerHtml(d.s)).join('')}` : '')
                 + (!decorated.length ? '<div class="p-3 text-secondary small">No live runners for this project.</div>' : '') + '</div>';
         } else if (tab === 'prs' && this._dockPrUnavailable) {
             // The server already knows why: build_open_prs returns `github_error: <exc>`
@@ -1400,15 +1400,12 @@ const TeepPlan = {
         } else {
             const manifest = deployments.filter((x) => !x.deployed);
             const shipped = deployments.filter((x) => x.deployed);
+            // Both buckets render the same card: an operator tracing what shipped
+            // needs PR number, merge SHA and age in every row, not just history.
+            // Nothing here collapses — this dock is the whole operator surface.
             body = this._dockDeploymentBanner(deploymentPayload)
-                + (manifest.length ? `<div class="p-2"><div class="dock-bucket-label">Not yet deployed · ${manifest.length}</div>${manifest.map((x) => {
-                    const task = (x.tasks || [])[0] || {};
-                    return `<div class="border rounded p-2 mb-1"><strong>${this.esc(task.task_id || `PR #${x.number}`)}</strong> · ${this.esc(task.title || x.title)}</div>`;
-                }).join('')}</div>` : '<div class="p-3 text-secondary small">Nothing waiting to ship.</div>')
-                // Shipped history (operator order 2026-07-28: the UI-72 rework
-                // dropped it). Native disclosure, newest first, full cards so
-                // merge SHA / deploy task / age stay visible.
-                + (shipped.length ? `<details class="px-2 pb-2"><summary class="text-secondary small py-1" style="cursor:pointer;">Recently shipped · ${shipped.length}</summary>${shipped.map((x) => this._dockDeploymentHtml(x)).join('')}</details>` : '');
+                + (manifest.length ? `<div class="p-2"><div class="dock-bucket-label">Not yet deployed · ${manifest.length}</div>${manifest.map((x) => this._dockDeploymentHtml(x)).join('')}</div>` : '<div class="p-3 text-secondary small">Nothing waiting to ship.</div>')
+                + (shipped.length ? `<div class="p-2"><div class="dock-bucket-label">Recently shipped · ${shipped.length}</div>${shipped.map((x) => this._dockDeploymentHtml(x)).join('')}</div>` : '');
         }
         const attnBadge = nAttn
             ? `<span class="ms-auto small text-danger"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:currentColor" class="me-1"></span>${nAttn} blocked</span>`
