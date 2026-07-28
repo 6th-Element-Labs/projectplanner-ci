@@ -1031,7 +1031,7 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
         or []
     )
     ui_gate = ui_playwright_evidence_gate(
-        task, merged_payload, session, project=project,
+        task, semantic_evidence, session, project=project,
         head_sha=review_head_sha, changed_files=changed_files)
     if not ui_gate.get("ok"):
         findings.append(_merge_gate_finding(
