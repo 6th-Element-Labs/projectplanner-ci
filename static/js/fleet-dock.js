@@ -51,6 +51,65 @@
             if (!out.length) out.push({ key: 'open', label: 'Open', tone: 'secondary', icon: 'git-pull-request' });
             return out;
         },
+        shortAge(seconds) {
+            const age = Math.max(0, Number(seconds) || 0);
+            if (age < 60) return `${Math.max(1, Math.round(age))}s`;
+            if (age < 3600) return `${Math.round(age / 60)}m`;
+            if (age < 86400) return `${Math.round(age / 3600)}h`;
+            return `${Math.round(age / 86400)}d`;
+        },
+        runnerOutputAge(s, nowSeconds) {
+            const faultAge = (s.progress_fault || {}).output_age_s;
+            if (faultAge != null && Number.isFinite(Number(faultAge))) {
+                return Math.max(0, Number(faultAge));
+            }
+            const lastOutput = (s.environment || {}).last_output_at;
+            if (lastOutput == null || !Number.isFinite(Number(lastOutput))) return null;
+            const now = nowSeconds == null ? Date.now() / 1000 : Number(nowSeconds);
+            return Math.max(0, now - Number(lastOutput));
+        },
+        // A runner may satisfy several conditions at once. Preserve every true
+        // signal worst-first, while keeping workspace dirtiness secondary.
+        runnerConditions(app, s, attention) {
+            const out = [];
+            const age = this.runnerOutputAge(s);
+            const status = String(s.status || 'unknown');
+            if (status !== 'running') {
+                out.push({ key: 'exited', label: 'Exited', tone: 'red', icon: 'square' });
+            }
+            if (s.stale) {
+                out.push({ key: 'lost_host', label: 'Lost host', tone: 'red', icon: 'server-off' });
+            }
+            if (attention) {
+                out.push({ key: 'waiting_on_you', label: 'Waiting on you', tone: 'orange', icon: 'user-question' });
+            }
+            if (age != null && age >= 600) {
+                out.push({ key: 'silent', label: `Silent ${this.shortAge(age)}`, tone: 'yellow', icon: 'volume-off' });
+            } else if (age != null && age >= 120) {
+                out.push({ key: 'idle', label: `Idle ${this.shortAge(age)}`, tone: 'azure', icon: 'zzz' });
+            } else if (age != null) {
+                out.push({ key: 'working', label: 'Working', tone: 'green', icon: 'activity' });
+            } else {
+                const uptime = (s.environment || {}).uptime_seconds;
+                out.push({
+                    key: 'running_unknown',
+                    label: uptime == null ? 'Running' : `Running up ${this.shortAge(uptime)}`,
+                    tone: 'secondary',
+                    icon: 'player-play',
+                });
+            }
+            const dirty = String((s.last_snapshot || {}).status_porcelain || '')
+                .split('\n').filter(Boolean).length;
+            if (dirty) {
+                out.push({
+                    key: 'dirty',
+                    label: `${dirty} uncommitted file${dirty === 1 ? '' : 's'}`,
+                    tone: 'secondary',
+                    icon: 'file-diff',
+                });
+            }
+            return out;
+        },
         // UI-66: one batched coverage read for every board task on the PR tab.
         // Advisory by contract: a failed read renders the dock without pills,
         // never blank.
@@ -78,17 +137,17 @@
             const cov = (app._dockAutopilot || {})[taskId];
             if (!cov) return '';
             const states = {
-                live: ['Autopilot', 'green', 'route',
+                live: ['Driving', 'green', 'route',
                        cov.coverage === 'deliverable'
                            ? `Driven by ${cov.deliverable_id}'s autopilot — click to pause`
                            : 'Task-scoped autopilot running — click to pause', 'pause'],
-                armed: ['Autopilot armed', 'azure', 'clock',
+                armed: ['Armed', 'azure', 'clock',
                         'Scope started; waiting for a coordinator host to pick it up — click to pause', 'pause'],
-                paused: ['Autopilot paused', 'yellow', 'player-pause',
+                paused: ['Paused', 'yellow', 'player-pause',
                          'Click to resume', 'resume'],
-                stale: ['Autopilot stale', 'orange', 'alert-triangle',
+                stale: ['Stale', 'orange', 'alert-triangle',
                         'Scope holder is dead (deploy restart?) — click to re-arm', 'start'],
-                none: ['Arm autopilot', 'secondary', 'player-play',
+                none: ['Arm', 'secondary', 'player-play',
                        `Start a task-scoped autopilot for ${taskId}`, 'start'],
             };
             const [label, tone, icon, title, action] = states[cov.liveness] || states.none;

@@ -1060,35 +1060,77 @@ const TeepPlan = {
             + `${i}<span class="text-truncate">${this.esc(text)}</span></span>`;
     },
     _dockRunnerHtml(s) {
-        const actions = s.available_actions || [];
         const env = s.environment || {};
-        const snap = s.last_snapshot || {};
-        const dead = s.stale || s.status !== 'running';
-        const tone = s.stale ? 'yellow' : (s.status === 'running' ? 'green' : 'secondary');
-        const uptime = env.uptime_seconds == null ? '' : `${Math.round(env.uptime_seconds / 60)}m`;
-        const dirty = String(snap.status_porcelain || '').split('\n').filter(Boolean).length;
-        const attn = [];
-        if (s.stale) attn.push(`Last seen ${this._fleetAge(s.updated_at || snap.captured_at)}`);
-        if (env.failure_reason) attn.push(env.failure_reason);
-        if (dirty) attn.push(`${dirty} uncommitted file${dirty === 1 ? '' : 's'} in its workspace`);
-        const btn = (action, icon, label, cls, disabled) =>
-            `<button class="btn btn-sm ${cls}" data-runner-task="${this.esc(s.task_id || '')}" data-runner-action="${action}"${disabled ? ' disabled' : ''}><i class="ti ti-${icon} me-1"></i>${label}</button>`;
-        const watch = s.task_id && !dead
-            ? `<button class="btn btn-sm btn-azure" data-runner-watch-task="${this.esc(s.task_id)}"><i class="ti ti-terminal-2 me-1"></i>Watch</button>` : '';
-        return `<div class="p-2 border rounded mb-2">
+        const attention = (this._dockAttention || {})[s.runner_session_id];
+        const conditions = window.SwitchboardFleetDock.runnerConditions(this, s, attention);
+        const primary = conditions[0];
+        const accent = `var(--tblr-${primary.tone}, var(--tblr-secondary, #626976))`;
+        const age = window.SwitchboardFleetDock.runnerOutputAge(s);
+        const uptime = env.uptime_seconds == null
+            ? '' : ` · up ${window.SwitchboardFleetDock.shortAge(env.uptime_seconds)}`;
+        const logLine = String(env.log_tail || '').split('\n').filter(Boolean).at(-1) || '';
+        const quiet = age == null ? '' : `quiet ${window.SwitchboardFleetDock.shortAge(age)}`;
+        const taskId = s.task_id || 'no task';
+        const title = s.task_id ? this._fleetTaskTitle(s.task_id) : 'Unscoped runner';
+        return `<div class="p-2 border rounded mb-2" style="border-left:2px solid ${accent} !important;border-top-left-radius:0;border-bottom-left-radius:0;">
             <div class="d-flex align-items-center gap-2">
-                <span class="font-monospace" style="font-size:12px;">${this.esc(s.runner_session_id)}</span>
-                <span class="badge bg-${tone}-lt">${this.esc(s.status || 'unknown')}${s.stale ? ' · stale' : ''}</span>
-                <span class="ms-auto text-secondary small">${this.esc(uptime)}</span>
+                <span class="text-truncate fw-medium" style="font-size:13px;" title="${this.esc(s.runner_session_id || '')}">${this.esc(taskId)} · ${this.esc(title)}</span>
+                <span class="ms-auto">${this._dockBadge(primary.label, primary.tone, primary.icon)}</span>
             </div>
-            <div class="text-secondary text-truncate" style="font-size:12px;">${this.esc(s.task_id || 'no task')} · ${this.esc(s.runtime || '?')} · ${this.esc(s.host_id || '?')} · ${this.esc(s.agent_id || '')}</div>
-            ${attn.length ? `<div class="text-${dead ? 'danger' : 'secondary'}" style="font-size:12px;">${this.esc(attn.join(' · '))}</div>` : ''}
-            <div class="mt-2 d-flex gap-2 align-items-center">
-                ${watch}
-                <span class="ms-auto"></span>
-                ${btn('kill', 'square', 'Kill', 'btn-outline-danger', !actions.includes('kill'))}
-            </div>
+            <div class="text-secondary text-truncate font-monospace" style="font-size:11px;">${this.esc(s.runtime || '?')} · ${this.esc(s.host_id || '?')} · ${this.esc(s.agent_id || '')}${this.esc(uptime)}</div>
+            ${logLine ? `<div class="text-truncate mt-1 font-monospace" style="font-size:11px;">${this.esc(logLine)}</div>` : ''}
+            ${quiet ? `<div class="text-secondary" style="font-size:11px;">${this.esc(quiet)}</div>` : ''}
+            ${this._dockRunnerActions(s, primary, attention)}
         </div>`;
+    },
+    _dockRunnerActions(s, condition, attention) {
+        const actions = s.available_actions || [];
+        let primary = '';
+        if (condition.key === 'waiting_on_you' && attention) {
+            primary = `<button class="btn btn-sm btn-orange" data-runner-answer="${this.esc(s.runner_session_id || '')}"><i class="ti ti-message-question me-1"></i>Answer</button>`;
+        } else if ((condition.key === 'silent' || condition.key === 'idle')
+                && s.task_id && actions.includes('open')) {
+            primary = `<button class="btn btn-sm btn-azure" data-runner-watch-task="${this.esc(s.task_id)}"><i class="ti ti-message me-1"></i>Nudge</button>`;
+        } else if (condition.key === 'exited' && s.task_id && actions.includes('restart')) {
+            primary = `<button class="btn btn-sm btn-azure" data-runner-task="${this.esc(s.task_id)}" data-runner-action="restart"><i class="ti ti-refresh me-1"></i>Restart</button>`;
+        }
+        const kill = s.task_id && actions.includes('kill')
+            ? `<button class="dropdown-item text-danger" data-runner-task="${this.esc(s.task_id)}" data-runner-action="kill"><i class="ti ti-square me-2"></i>Kill</button>`
+            : '';
+        const overflow = kill
+            ? `<div class="dropdown ms-auto">
+                <button class="btn btn-sm btn-ghost-secondary p-1" data-bs-toggle="dropdown" aria-label="Runner actions"><i class="ti ti-dots-vertical"></i></button>
+                <div class="dropdown-menu dropdown-menu-end">${kill}</div>
+            </div>` : '<span class="ms-auto"></span>';
+        return `<div class="mt-2 d-flex gap-2 align-items-center">${primary}${overflow}</div>`;
+    },
+    async _dockAnswer(attention) {
+        if (!attention || !attention.request_id) return;
+        const choices = attention.choices || [];
+        const recommended = attention.recommended_default;
+        const fallback = typeof recommended === 'string'
+            ? recommended : ((recommended || {}).id || ((choices[0] || {}).id));
+        const choiceId = window.prompt(attention.prompt || 'Choose an answer',
+            fallback || '');
+        if (!choiceId) return;
+        const p = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`;
+        try {
+            const res = await this._fetchTimeout(
+                `/api/attention/requests/${encodeURIComponent(attention.request_id)}/decide?${p}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        expected_version: attention.version,
+                        choice: { id: choiceId },
+                        idempotency_key: `dock-answer:${attention.request_id}:${attention.version}:${choiceId}`,
+                    }),
+                });
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(body.message || body.error || `HTTP ${res.status}`);
+        } catch (error) {
+            window.alert(`Could not answer: ${error.message || error}`);
+        }
+        await this._loadFleetDock(true);
     },
     // Fleet-dock presentation (PR condition ladder + the UI-66 autopilot pill)
     // lives in js/fleet-dock.js (window.SwitchboardFleetDock) — ARCH-MS-21
@@ -1198,7 +1240,7 @@ const TeepPlan = {
             const dot = nAttn ? 'var(--tblr-danger)' : 'var(--tblr-success)';
             host.innerHTML = `<button id="fleet-dock-pill" class="btn btn-sm shadow-sm" style="${anchor}border-radius:999px;display:inline-flex;align-items:center;gap:8px;">
                 <span style="width:8px;height:8px;border-radius:50%;background:${dot};"></span>
-                <span class="fw-medium">${nAttn ? this.esc(String(nAttn)) + ' blocked' : 'Fleet clear'}</span>
+                <span class="fw-medium">${nAttn ? this.esc(String(nAttn)) + ' blocked' : 'All clear'}</span>
                 <span class="text-secondary small">· ${running} working · ${prs.length} PR${prs.length === 1 ? '' : 's'}${undeployed ? ` · ${undeployed} un-deployed` : ''}</span>
                 <i class="ti ti-chevron-up"></i></button>`;
             document.getElementById('fleet-dock-pill').addEventListener('click', () => { this._dockCollapsed = false; rerender(); });
@@ -1253,7 +1295,7 @@ const TeepPlan = {
         host.innerHTML = `<div class="card shadow-sm" style="${anchor}width:380px;max-height:70vh;overflow:auto;">
             <div class="card-header py-2 d-flex align-items-center gap-2">
                 <i class="ti ti-server-bolt text-secondary"></i>
-                <span class="fw-medium">Fleet</span>
+                <span class="fw-medium">Autopilot</span>
                 <span class="text-secondary small">${running} working</span>
                 ${attnBadge}
                 <button id="fleet-dock-refresh" class="btn btn-sm btn-ghost-secondary p-1" title="Refresh"><i class="ti ti-refresh"></i></button>
@@ -1272,6 +1314,9 @@ const TeepPlan = {
                 b.getAttribute('data-runner-task'), b.getAttribute('data-runner-action'))));
         host.querySelectorAll('[data-runner-watch-task]').forEach((b) =>
             b.addEventListener('click', () => this.openRunnerSessionPanel(b.getAttribute('data-runner-watch-task'))));
+        host.querySelectorAll('[data-runner-answer]').forEach((b) =>
+            b.addEventListener('click', () => this._dockAnswer(
+                (this._dockAttention || {})[b.getAttribute('data-runner-answer')])));
         host.querySelectorAll('[data-deploy-pr]').forEach((b) =>
             b.addEventListener('click', () => this._requestDeployment(
                 b.getAttribute('data-deploy-pr'), b.getAttribute('data-deploy-title'))));
@@ -2059,6 +2104,7 @@ const TeepPlan = {
         const endpoints = {
             kill: `/api/tasks/${encodeURIComponent(taskId)}/execution/stop`,
             open: `/api/tasks/${encodeURIComponent(taskId)}/execution/open`,
+            restart: `/api/tasks/${encodeURIComponent(taskId)}/execution/restart`,
         };
         if (!endpoints[action]) return;
         try {
