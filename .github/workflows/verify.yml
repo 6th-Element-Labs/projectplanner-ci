@@ -5,7 +5,7 @@
 # invokes this workflow on the trusted default branch with that ref as input.
 # Agent-authored workflow files on the mirrored branch are never executed.
 name: verify
-run-name: verify ${{ inputs.source_sha }} (${{ inputs.purpose }}) [${{ inputs.source_ref }}]
+run-name: verify ${{ inputs.source_sha }} (${{ inputs.purpose }})
 
 on:
   workflow_dispatch:
