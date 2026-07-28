@@ -121,7 +121,7 @@ jobs:
 
       - name: Install Chromium
         # PR heads, merge groups, and CI repairs use the same full gate.
-        run: python -m playwright install --with-deps chromium
+        run: python -m playwright install chromium
 
       - name: Run Switchboard CI
         id: tests
