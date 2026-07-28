@@ -13,8 +13,11 @@ def main() -> None:
     board = (ROOT / "src/switchboard/api/routers/board.py").read_text()
     deployment = (ROOT / "deployment_status.py").read_text()
 
-    for label in ("Needs you", "Broken", "Stalled", "working normally"):
+    # Operator order 2026-07-28: healthy runners are a labelled bucket, not a
+    # disclosure. Nothing in the dock collapses — it is the whole operator surface.
+    for label in ("Needs you", "Broken", "Stalled", "Working normally"):
         assert label in app, label
+    assert "dock-healthy" not in app, "healthy runners are collapsed again"
     for text in ("Merge queue", "data-pr-merge", "data-pr-regate",
                  "Autodeploy failing", "Not yet deployed"):
         assert text in app, text

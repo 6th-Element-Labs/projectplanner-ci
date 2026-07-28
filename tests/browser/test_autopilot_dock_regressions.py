@@ -22,17 +22,21 @@ RUNNER_SILENT = {
     "condition": {"key": "silent"},
     "available_actions": ["inject", "kill"],
 }
+# merged_at is epoch seconds: deployment_status.deployments_payload normalises
+# GitHub's ISO mergedAt through open_prs._parse_github_ts before it reaches the UI.
 DEPLOYMENTS = [
     {
         "number": 900, "deployed": True, "status": "deployed",
-        "deploy_task_id": "COORD-9", "title": "Shipped one",
+        "deploy_task_id": "COORD-9", "deploy_task_status": "Done",
+        "title": "Shipped one",
         "url": "https://github.com/example/repo/pull/900",
-        "merged_at": "2026-07-27T10:00:00Z", "merge_sha": "abc1234def",
-        "tasks": [{"task_id": "COORD-9", "title": "Shipped one"}],
+        "merged_at": 1785200000, "merge_sha": "abc1234def",
     },
     {
         "number": 901, "deployed": False, "status": "undeployed",
-        "title": "Not yet", "tasks": [{"task_id": "COORD-10", "title": "Not yet"}],
+        "deploy_task_id": "COORD-10", "title": "Not yet",
+        "url": "https://github.com/example/repo/pull/901",
+        "merged_at": 1785210000, "merge_sha": "27e70797fbaeff9",
     },
 ]
 
@@ -92,21 +96,30 @@ with sync_playwright() as runtime:
                 const manifest = deployments.filter((x) => !x.deployed);
                 const shipped = deployments.filter((x) => x.deployed);
                 return ctx._dockDeploymentBanner({})
-                    + (manifest.length ? `<div class="p-2"><div class="dock-bucket-label">Not yet deployed · ${manifest.length}</div>${manifest.map((x) => {
-                        const task = (x.tasks || [])[0] || {};
-                        return `<div class="border rounded p-2 mb-1"><strong>${ctx.esc(task.task_id || `PR #${x.number}`)}</strong> · ${ctx.esc(task.title || x.title)}</div>`;
-                    }).join('')}</div>` : '<div class="p-3 text-secondary small">Nothing waiting to ship.</div>')
-                    + (shipped.length ? `<details class="px-2 pb-2"><summary class="text-secondary small py-1" style="cursor:pointer;">Recently shipped · ${shipped.length}</summary>${shipped.map((x) => TeepPlan._dockDeploymentHtml.call(ctx, x)).join('')}</details>` : '');
+                    + (manifest.length ? `<div class="p-2"><div class="dock-bucket-label">Not yet deployed · ${manifest.length}</div>${manifest.map((x) => TeepPlan._dockDeploymentHtml.call(ctx, x)).join('')}</div>` : '<div class="p-3 text-secondary small">Nothing waiting to ship.</div>')
+                    + (shipped.length ? `<div class="p-2"><div class="dock-bucket-label">Recently shipped · ${shipped.length}</div>${shipped.map((x) => TeepPlan._dockDeploymentHtml.call(ctx, x)).join('')}</div>` : '');
             }""", deployments)
 
     deploy_html = render_deploy_body(DEPLOYMENTS)
     page.locator("#mount").evaluate("(node, html) => node.innerHTML = html", deploy_html)
-    assert "Not yet deployed" in page.locator("#mount").inner_text()
-    details = page.locator("details")
-    assert details.count() == 1, deploy_html
-    assert "Recently shipped" in details.locator("summary").inner_text()
-    details.evaluate("(node) => node.open = true")
-    assert "COORD-9" in details.inner_text()
+    shown = page.locator("#mount").inner_text()
+    # Nothing in the dock may be collapsed: the operator reads this surface at a
+    # glance, and a disclosure hid what was shipping behind a click.
+    assert page.locator("details").count() == 0, deploy_html
+    assert "Not yet deployed" in shown
+    assert "Recently shipped" in shown
+    # Both buckets must speak the same language — PR number, merge SHA and age
+    # in every row, so what is shipping is never a mystery.
+    assert "COORD-9" in shown, shown
+    assert "abc1234" in shown, "shipped row lost its merge SHA"
+    assert "#901" in shown, "un-deployed row lost its PR number"
+    assert "#900" in shown, "shipped row lost its PR number"
+    assert "NaN" not in shown, "merged_at is epoch seconds; a bad type shows NaN"
+
+    # The Runners tab must not hide healthy runners behind a disclosure either.
+    source = (ROOT / "static/app.js").read_text()
+    assert "dock-healthy" not in source, "healthy runners are collapsed again"
+    assert "Working normally ·" in source
 
     assert errors == [], errors
     browser.close()
