@@ -96,6 +96,17 @@ JOB_CATALOG: Dict[str, JobSpec] = {
         task_anchors=("PERF-1",),
         description="Apply pending webhook-inbox events idempotently off the request path.",
     ),
+    "reconcile_open_pr_merges": JobSpec(
+        job_name="reconcile_open_pr_merges",
+        title="Recover merges whose webhooks were lost",
+        dbos_eligible=False,
+        task_anchors=("PERF-1",),
+        description=(
+            "Sweep tasks that still record an open PR and stamp any GitHub "
+            "reports merged. Recovers pull_request webhooks 502'd during a "
+            "deploy restart, which GitHub never redelivers."
+        ),
+    ),
     "compact_decision_snapshots": JobSpec(
         job_name="compact_decision_snapshots",
         title="Compact decision-corpus snapshot bodies",
@@ -351,6 +362,7 @@ def _step_handler(job_name: str) -> Callable[[str, Mapping[str, Any]], Dict[str,
         "receipt_projection_batch": _step_receipt_projection,
         "reconcile_alerts_resumable": _step_reconcile_alerts,
         "drain_webhook_inbox": _step_drain_webhook_inbox,
+        "reconcile_open_pr_merges": _step_reconcile_open_pr_merges,
         "compact_decision_snapshots": _step_compact_decision_snapshots,
         "promote_completion_scars": _step_promote_completion_scars,
     }
@@ -488,6 +500,83 @@ def _step_drain_webhook_inbox(project_id: str, params: Mapping[str, Any]) -> Dic
     import webhook_inbox
     store.init_db(project_id)
     return webhook_inbox.drain(project_id, limit=int(params.get("limit") or 500))
+
+
+def sweep_open_pr_merges(
+    project_id: str,
+    limit: int = 40,
+    *,
+    canonical_repo_for=None,
+    fetch_pull_request=None,
+) -> Dict[str, Any]:
+    """Stamp merge provenance for tasks whose merge webhook was lost.
+
+    A pull_request webhook that arrives while autodeploy is restarting the
+    server is 502'd at the edge and GitHub never redelivers it, so the board
+    keeps reporting an open PR on merged work (observed live on UI-72 /
+    PR #1017, 2026-07-28). This sweep re-reads fresh GitHub state through the
+    same per-task reconcile the operator route uses and stamps only what
+    GitHub itself reports merged. Bounded, idempotent, and per-task failures
+    are counted rather than fatal so one unreachable PR cannot block the rest.
+    """
+    from switchboard.application.commands.reconcile_task_merge import execute
+    from switchboard.storage.repositories.provenance import (
+        task_merge_reconcile_subject,
+    )
+    store.init_db(project_id)
+    repo_for = canonical_repo_for or store.get_project_github_repo
+    fetch = fetch_pull_request or (
+        lambda repo, number: store._github_pr(
+            repo, number, token=store._github_token(repo)))
+    with store._conn(project_id) as c:
+        rows = c.execute(
+            "SELECT g.task_id FROM task_git_state g "
+            "JOIN tasks t ON t.task_id = g.task_id "
+            "WHERE g.pr_number IS NOT NULL "
+            "AND (g.merged_sha IS NULL OR g.merged_sha = '') "
+            "AND t.status NOT IN ('Done', 'Cancelled') "
+            "ORDER BY g.updated_at DESC LIMIT ?",
+            (max(1, int(limit)),),
+        ).fetchall()
+    candidates = [str(r["task_id"]) for r in rows]
+    checked = stamped = errors = 0
+    stamped_tasks = []
+    for task_id in candidates:
+        checked += 1
+        try:
+            result = execute(
+                task_id=task_id,
+                project=project_id,
+                actor="reconcile/webhook-loss-sweep",
+                load_subject=task_merge_reconcile_subject,
+                canonical_repo_for=repo_for,
+                fetch_pull_request=fetch,
+                mark_merged=store.mark_task_merged,
+            )
+        except Exception:  # noqa: BLE001 - one bad PR must not block the rest
+            errors += 1
+            continue
+        if result.get("error"):
+            errors += 1
+        elif result.get("observed") in ("default_branch_merged", "pr_merged"):
+            stamped += 1
+            stamped_tasks.append(task_id)
+    return {
+        "schema": "switchboard.open_pr_merge_sweep.v1",
+        "project": project_id,
+        "candidates": len(candidates),
+        "checked": checked,
+        "stamped": stamped,
+        "stamped_tasks": stamped_tasks,
+        "errors": errors,
+    }
+
+
+def _step_reconcile_open_pr_merges(
+    project_id: str, params: Mapping[str, Any],
+) -> Dict[str, Any]:
+    return sweep_open_pr_merges(
+        project_id, limit=int(params.get("limit") or 40))
 
 
 def _record_plan_chat_failure(manifest: Mapping[str, Any], error: str) -> None:

@@ -691,6 +691,29 @@ class CoordinatorDaemon:
     def run_forever(self) -> None:
         signal.signal(signal.SIGTERM, self.stop)
         signal.signal(signal.SIGINT, self.stop)
+        # The daemon restarts on every autodeploy — exactly the window in which
+        # a pull_request webhook gets 502'd at the edge and lost forever
+        # (GitHub never redelivers; observed live on UI-72 / PR #1017,
+        # 2026-07-28). Recover on the way up: sweep tasks still recording an
+        # open PR and stamp any GitHub reports merged. Best-effort — a startup
+        # sweep failure must never keep the coordinator down.
+        for project in self.config.projects:
+            try:
+                from background_jobs import sweep_open_pr_merges
+                result = sweep_open_pr_merges(project)
+                if result.get("stamped"):
+                    print(json.dumps({
+                        "status": "webhook_loss_sweep",
+                        "project": project,
+                        "stamped_tasks": result.get("stamped_tasks"),
+                    }, sort_keys=True), flush=True)
+            except Exception as exc:  # noqa: BLE001 - startup must not fail closed
+                print(json.dumps({
+                    "status": "webhook_loss_sweep_failed",
+                    "project": project,
+                    "error": type(exc).__name__,
+                    "reason": str(exc),
+                }, sort_keys=True), flush=True)
         while not self._stop:
             result = self.tick()
             print(json.dumps(result, sort_keys=True, default=str), flush=True)
