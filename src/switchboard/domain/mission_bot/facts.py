@@ -33,8 +33,10 @@ MERGE_AUTHORIZATION_CONTEXT = "Switchboard / merge authorization"
 #: Findings that have typed Mission Bot routes other than factory remediation.
 _PROCESS_FINDINGS_NOT_FACTORY = frozenset({
     "draft_pr",
+    "review_required",
     "review_verdict_missing",
     "review_verdict_stale",
+    "stale_review_verdict",
 })
 
 

@@ -611,6 +611,24 @@ def test_passed_review_without_head_sha_does_not_arm_merge():
     assert cmd["output"] == MissionOutput.START_REVIEW.value
 
 
+def test_live_review_required_finding_starts_review_not_remediation():
+    """The merge gate's real review codes are mechanical review routing."""
+    snap = snapshot(review="missing")
+    snap["findings"] = [{
+        "code": "review_required",
+        "message": f"Review required for current head {HEAD}.",
+        "blocking": True,
+        "review_gate": {
+            "code": "review_required",
+            "head_sha": HEAD,
+            "current_head_sha": HEAD,
+        },
+    }]
+    cmd = reduce_mission(snap)
+    assert cmd["output"] == MissionOutput.START_REVIEW.value
+    assert cmd["reason_code"] == "review_required"
+
+
 def test_live_runner_waits():
     cmd = reduce_mission(snapshot(
         runner={"live": True, "role": "remediation", "head_sha": HEAD},
