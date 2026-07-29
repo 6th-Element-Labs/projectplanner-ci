@@ -43,6 +43,10 @@ class PullRequestRegateBody(BaseModel):
     ensure: bool = True
 
 
+class PullRequestCloseBody(BaseModel):
+    project: str
+
+
 def create_router(*, resolve_project: ProjectResolver,
                   etag_json: EtagJson,
                   saturation_snapshot: SaturationSnapshot,
@@ -138,6 +142,49 @@ def create_router(*, resolve_project: ProjectResolver,
             if result.get("returncode"):
                 raise HTTPException(409, result)
             return {"status": "enqueued", "pr_number": pr_number, "result": result}
+
+        @router.post("/api/pull-requests/{pr_number}/close")
+        async def close_pull_request(pr_number: int, request: Request,
+                                     body: PullRequestCloseBody):
+            """Close an open pull request the operator does not want.
+
+            GitHub has no delete; close is the real operation and it is
+            reversible — the PR can be reopened and the branch is untouched.
+            """
+            project = resolve_project(body.project)
+            principal = resolve_principal(
+                request, project, ("write:system",), dev_actor="web")
+            import open_prs
+            snapshot = open_prs.build_open_prs(project)
+            row = next((item for item in snapshot.get("prs") or []
+                        if int(item.get("number") or 0) == pr_number), None)
+            if not row:
+                raise HTTPException(404, "Open pull request not found")
+            # Closing something the merge queue is actively merging would race the
+            # queue and leave the operator guessing which side won.
+            if int(row.get("queue_position") or 0):
+                raise HTTPException(
+                    409, "Pull request is in the merge queue; dequeue it on GitHub first")
+            repo = str(snapshot.get("repo") or "")
+            token = open_prs._token(repo)
+            result = await asyncio.to_thread(
+                completion_driver._github_command,
+                ["pr", "close", str(pr_number), "--repo", repo],
+                token=token,
+            )
+            if result.get("returncode"):
+                raise HTTPException(409, result)
+            actor = auth.actor(principal)
+            for task in row.get("tasks") or []:
+                if task.get("task_id"):
+                    store.add_comment(
+                        task["task_id"], actor,
+                        json.dumps({"pr_number": pr_number, "result": result},
+                                   sort_keys=True),
+                        kind="pull_request.closed_by_operator", project=project,
+                        hydrate_task=False,
+                    )
+            return {"status": "closed", "pr_number": pr_number, "result": result}
 
         @router.post("/api/pull-requests/{pr_number}/regate")
         async def regate_pull_request(pr_number: int, request: Request,

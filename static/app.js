@@ -1217,10 +1217,21 @@ const TeepPlan = {
         const autopilot = this._dockAutopilotHtml(x);
         const failure = String((x.ci_failing || [])[0] || '');
         const reason = x.blocked_reason || failure;
-        const actions = x.queue_position ? ''
+        const primaryAction = x.queue_position ? ''
             : (x.ci_state === 'success' && x.mergeable_state !== 'dirty'
                 ? `<button class="btn btn-sm btn-primary dock-primary-action" data-pr-merge="${this.esc(String(x.number))}" data-pr-mode="${x.mergeable_state === 'clean' ? 'merge' : 'enqueue'}">${x.mergeable_state === 'clean' ? 'Merge' : 'Enqueue'}</button>`
                 : `<button class="btn btn-sm btn-outline-secondary dock-primary-action" data-pr-regate="${this.esc(String(x.number))}" data-pr-sha="${this.esc(x.head_sha || '')}" title="Request a fresh CI verification for this exact commit">Re-run CI</button>`);
+        // Close sits in the overflow, never as a primary button: it is the one
+        // action here that throws work away. Hidden while queued — closing a PR
+        // the queue is merging would race it. Same shape as Kill on runner cards.
+        const overflow = x.queue_position ? '' : `<div class="dropdown ms-auto">
+                <button class="btn btn-sm btn-ghost-secondary p-1" data-bs-toggle="dropdown" aria-label="Pull request actions"><i class="ti ti-dots-vertical"></i></button>
+                <div class="dropdown-menu dropdown-menu-end">
+                    <a href="${this.esc(x.url)}" target="_blank" rel="noopener" class="dropdown-item"><i class="ti ti-external-link me-2"></i>Open on GitHub</a>
+                    <button class="dropdown-item text-danger" data-pr-close="${this.esc(String(x.number))}" data-pr-label="${this.esc(x.title || '')}"><i class="ti ti-circle-x me-2"></i>Close PR</button>
+                </div>
+            </div>`;
+        const actions = primaryAction + overflow;
         return `<div class="p-2 border rounded mb-2" style="border-left:2px solid ${accent} !important;border-top-left-radius:0;border-bottom-left-radius:0;">
             <div class="d-flex align-items-center gap-2">
                 ${this._dockBadge(primary.label, primary.tone, primary.icon, primary.title)}
@@ -1350,6 +1361,29 @@ const TeepPlan = {
         if (!res.ok) window.alert(`Could not ${mode}: ${body.detail || body.message || res.status}`);
         await this._loadFleetDock(true);
     },
+    // Close a PR the operator does not want. GitHub has no delete — close is the
+    // operation, and it is reversible, so the confirm says so rather than implying
+    // the work is gone.
+    async _dockClosePr(prNumber, label) {
+        if (!window.confirm(
+            `Close PR #${prNumber}?\n\n${label || ''}\n\n`
+            + 'It leaves the dock and stops being tracked. The branch is kept and '
+            + 'you can reopen it on GitHub.')) return;
+        const res = await fetch(`/api/pull-requests/${encodeURIComponent(prNumber)}/close`, {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({project: window.PM_PROJECT || 'maxwell'}),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            window.alert(`Could not close PR #${prNumber}: ${body.detail || body.message || res.status}`);
+            return;
+        }
+        // Drop it now instead of waiting for the next poll. The feed only asks
+        // GitHub for open PRs, so once closed it never comes back on its own —
+        // but the operator should not watch a closed PR sit there for 10 seconds.
+        this._dockClosedPrs = [...(this._dockClosedPrs || []), Number(prNumber)];
+        await this._loadFleetDock(true);
+    },
     async _dockRegate(prNumber, sha) {
         const res = await fetch(`/api/pull-requests/${encodeURIComponent(prNumber)}/regate`, {
             method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -1362,6 +1396,20 @@ const TeepPlan = {
         const host = document.getElementById('fleet-dock');
         if (!host) return;
         runners = runners || []; prs = prs || [];
+        // A PR the operator just closed is gone from the dock immediately. The
+        // feed only asks GitHub for open PRs, so this list is a bridge across the
+        // one poll where the server has not caught up yet — never a hiding place:
+        // anything GitHub still reports as open is dropped from it again below.
+        if ((this._dockClosedPrs || []).length) {
+            const closed = new Set(this._dockClosedPrs.map(Number));
+            const stillReported = new Set(prs.map((x) => Number(x.number)));
+            prs = prs.filter((x) => !closed.has(Number(x.number)));
+            // Keep suppressing only while the server still reports it open. Once
+            // GitHub agrees it is closed the id is forgotten, so the list cannot
+            // grow without bound and cannot mask a PR that gets reopened.
+            this._dockClosedPrs = this._dockClosedPrs.filter(
+                (n) => stillReported.has(Number(n)));
+        }
         deploymentPayload = deploymentPayload || {};
         const deployments = deploymentPayload.deployments || [];
         const undeployed = Number(deploymentPayload.undeployed_count || 0);
@@ -1530,6 +1578,9 @@ const TeepPlan = {
         host.querySelectorAll('[data-pr-merge]').forEach((b) =>
             b.addEventListener('click', () => this._dockMerge(
                 b.getAttribute('data-pr-merge'), b.getAttribute('data-pr-mode'))));
+        host.querySelectorAll('[data-pr-close]').forEach((b) =>
+            b.addEventListener('click', () => this._dockClosePr(
+                b.getAttribute('data-pr-close'), b.getAttribute('data-pr-label'))));
         host.querySelectorAll('[data-pr-regate]').forEach((b) =>
             b.addEventListener('click', () => this._dockRegate(
                 b.getAttribute('data-pr-regate'), b.getAttribute('data-pr-sha'))));
