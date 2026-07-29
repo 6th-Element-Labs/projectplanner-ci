@@ -203,6 +203,25 @@ def _await_stream_ready(ready_path: Path, timeout_s: float | None = None) -> dic
     return {}
 
 
+def _existing_session_state(runner_session_id, runner_dir=None):
+    """Status of a leftover session dir, or None when it holds no readable meta."""
+    try:
+        return status_session(runner_session_id, runner_dir)
+    except Exception:
+        return None
+
+
+def _archive_stale_session_dir(root):
+    """Move dead session debris aside, keeping it for forensics.
+
+    The archived name must not match the ``run_*`` glob so list_sessions and
+    id-addressed commands never resurrect it.
+    """
+    stale = root.with_name(f"stale-{root.name}-{uuid.uuid4().hex[:8]}")
+    root.rename(stale)
+    return stale
+
+
 def start_session(command, agent_id, task_id="", claim_id="", cwd=None, runner_dir=None,
                   runner_session_id="", extra_env=None, use_pty=None,
                   wake_id="", wake_mode=""):
@@ -211,7 +230,18 @@ def start_session(command, agent_id, task_id="", claim_id="", cwd=None, runner_d
     runner_session_id = runner_session_id or "run_" + uuid.uuid4().hex[:16]
     root = _session_dir(runner_session_id, runner_dir)
     if root.exists():
-        raise ValueError(f"runner session already exists: {runner_session_id}")
+        # BUG-237: runner_session_id is wake-derived, so a retried dispatch
+        # reuses the id of a prior attempt — including debris a failed launch
+        # preserves for forensics. Only a live session for ANOTHER agent is a
+        # real collision; a live same-agent session is an idempotent no-op
+        # success (BUG-201), and dead debris must never block convergence.
+        existing = _existing_session_state(runner_session_id, runner_dir)
+        if existing is not None and existing.get("alive"):
+            if agent_id and str(existing.get("agent_id") or agent_id) != str(agent_id):
+                raise ValueError(
+                    f"runner session already exists for another agent: {runner_session_id}")
+            return {**existing, "idempotent_replay": True}
+        _archive_stale_session_dir(root)
     root.mkdir(parents=True)
     log_path = root / "stdout.log"
     env = _runner_environment(extra_env)
