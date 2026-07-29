@@ -98,6 +98,21 @@ ordinary coding work:
 - `superpowers/plans/` and `superpowers/specs/`: working designs and implementation plans;
   they do not override accepted ADRs.
 
+## Research and product exploration
+
+These documents are evidence and design exploration, not accepted architecture:
+
+- [`TOKEN-OPTIMIZATION-CLOUD-RESEARCH.md`](TOKEN-OPTIMIZATION-CLOUD-RESEARCH.md):
+  context-efficiency techniques, lineage, risks, and staged thesis.
+- [`TOKEN-OPTIMIZATION-MARKET-ANALYSIS.md`](TOKEN-OPTIMIZATION-MARKET-ANALYSIS.md):
+  dated market signals, threats, hypotheses, and evidence quality.
+- [`TOKEN-OPTIMIZER-TECH-DEEP-DIVE.md`](TOKEN-OPTIMIZER-TECH-DEEP-DIVE.md):
+  standalone protocol, state, transform, evidence, and trust design.
+- [`TOKEN-OPTIMIZER-FEASIBILITY-DEEP-DIVE.md`](TOKEN-OPTIMIZER-FEASIBILITY-DEEP-DIVE.md):
+  observed insertion evidence, coverage boundaries, and E1–E5 falsification plan.
+- [`WHY-NOT-FORK-ROUTELLM.md`](WHY-NOT-FORK-ROUTELLM.md):
+  RouteLLM build-versus-adopt analysis.
+
 ## Maintenance rules
 
 - Add a new ADR only for a durable choice with meaningful alternatives and consequences.

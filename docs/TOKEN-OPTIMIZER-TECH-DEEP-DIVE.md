@@ -2,14 +2,15 @@
 
 Status: engineering design draft, third in the series
 (TOKEN-OPTIMIZATION-CLOUD-RESEARCH.md → market analysis → this)
-Scope: the standalone product. It must be the best token optimizer in the world
-on its own merits, sold to any coding-agent fleet with a base-URL change.
+Scope: the standalone product. It must deliver independently measurable value
+on certified coding-agent lanes, without requiring Switchboard.
 The Switchboard synergy is an addendum (§13), not a dependency.
 
-**One-line contract:** For every request: identify the session by content, freeze
-what's frozen, transform only the new suffix under an exact-tokenizer never-worse
-gate and a cost-per-task (not tokens) objective, within a hard latency budget,
-fail-open always, and record enough evidence to prove every byte of the claim.
+**One-line contract:** For every certified request lane: resolve session state without
+cross-session ambiguity, freeze prior gateway output, evaluate only eligible suffix
+transforms against model-specific count and cache economics, pass through unchanged
+when optimization is uncertain, fail closed on security policy, and record the
+evidence needed to reproduce the decision.
 
 ---
 
@@ -17,25 +18,32 @@ fail-open always, and record enough evidence to prove every byte of the claim.
 
 Goals, in priority order:
 
-1. **Never worse.** No request may cost more (in dollars, after cache effects)
-   or carry less decision-relevant information than the untransformed request.
+1. **Bounded claims.** Deterministic gates can prove byte identity, source
+   recoverability, token counts, and projected cache economics. They cannot prove
+   that a different model-visible representation preserves all decision-relevant
+   information; that requires non-inferiority evidence at the task-outcome level.
 2. **Never slower where it counts.** p99 added gateway latency ≤ 150 ms
    non-streaming decision time; streaming responses pass through untouched.
    Net end-to-end latency should usually be *negative*: fewer input tokens =
    less prefill time. A good optimizer is also a latency product.
-3. **Zero integration.** One base-URL change. No SDK, no client library, no
-   agent modification for tiers 0–3.
+3. **Minimal integration.** One base-URL change for certified API lanes. Personal
+   subscriptions, closed Cursor features, artifact expansion, and some harness
+   improvements require explicit client or launcher integration.
 4. **Auditable to the byte.** Every transform is a recorded, replayable
    decision with the raw bytes recoverable.
-5. **Fail-open, everywhere.** Any component failure, timeout, unknown input
-   shape, or gate uncertainty ships the original request unchanged.
+5. **Optimization fails open; authority fails closed.** Transform failure, timeout,
+   unknown shape, or uncertain economics ships the original request unchanged.
+   Authentication, tenant isolation, retention, DLP, egress, and budget policy
+   failures reject the request; passthrough must never bypass them.
 
 Invariants (violating any of these is a P0 bug, not a tradeoff):
 
-- **I1 — Exact-count gate.** A candidate ships only if the exact per-model
-  tokenizer counts it strictly smaller than the original.
-- **I2 — Artifact-first.** Raw content is in the content-addressed store,
-  fsynced, before any compact form of it is eligible to ship.
+- **I1 — Authoritative-count gate.** A candidate ships only if the most
+  authoritative supported count for the certified model says it is strictly
+  smaller and the cache-economics model does not project higher billed cost.
+- **I2 — Recovery-before-reference.** When policy permits retention, raw content
+  is durably stored before a recoverable compact form is eligible. In
+  zero-retention mode, transforms requiring later recovery are disabled.
 - **I3 — Prefix freeze.** Once a transformed turn has been sent to a provider,
   its bytes are immutable for the life of the session. Only the suffix after
   the frozen high-water mark is ever processed.
@@ -45,8 +53,9 @@ Invariants (violating any of these is a P0 bug, not a tradeoff):
 - **I5 — Diagnostics are sacred.** Errors, warnings, failed-command output,
   exit codes, and stack-trace heads are never elided, projected, or compressed
   lossily.
-- **I6 — Escape hatch.** Any transform that removes bytes from the model's view
-  (tier 3+) must leave a hash-addressed path for the model to recover them.
+- **I6 — Certified escape hatch.** Any transform that removes bytes from the
+  model's view must leave a tenant/session-scoped capability the active
+  agent/model can demonstrably invoke; a bare content hash is not authorization.
 - **I7 — Cost objective is dollars-per-task.** Token reduction that degrades
   provider cache economics is a regression; the cache simulator (§7) has veto
   power over every transform.
@@ -55,7 +64,9 @@ Invariants (violating any of these is a P0 bug, not a tradeoff):
 
 ## 2. System architecture
 
-Three planes; the data plane is stateless-restartable with all state in stores.
+Three internal optimizer components; the data plane is stateless-restartable with
+all state in stores. These labels do not create lifecycle authority and are distinct
+from Switchboard's capacity, communication, and coordination planes in ADR-0008.
 
 ```
 agent ──HTTPS──▶ ┌────────────────── data plane ──────────────────┐
@@ -78,9 +89,11 @@ agent ──HTTPS──▶ ┌────────────────�
 
 ### 2.1 Request lifecycle (the whole product in twelve steps)
 
-1. **Ingress.** Accept OpenAI (`/v1/chat/completions`, `/v1/responses`) and
-   Anthropic (`/v1/messages`) wire formats, streaming and non-streaming.
-   BYO credentials pass through; we never store provider keys (§10).
+1. **Ingress.** Accept certified OpenAI (`/v1/responses`, and Chat Completions
+   only for clients that use it) and Anthropic (`/v1/messages`) wire formats,
+   streaming and non-streaming. The client authenticates to the gateway; an
+   upstream credential lease is resolved server-side and never returned to the
+   client (§10).
 2. **Dialect fingerprint** (§8): identify the agent family + version from
    request shape. Unknown dialect → tier 0–1 only (observe + hygiene).
 3. **Session resolution** (§3): match the request's message array against known
@@ -91,25 +104,27 @@ agent ──HTTPS──▶ ┌────────────────�
    to the frozen form (if the agent itself rewrote history — some agents
    compact client-side — declare a *fork*, re-resolve, and demote to
    conservative profile for the session).
-5. **Artifact capture.** New tool results and large content blocks in the
-   suffix are chunked (FastCDC), stored content-addressed, and indexed.
+5. **Artifact eligibility.** Under a retention mode that permits it, new tool
+   results and large suffix blocks may be chunked, encrypted, stored, and indexed.
+   Otherwise recovery-dependent candidates are disabled before generation.
 6. **Transform pipeline** (§5): run the dialect profile's enabled transforms
    over the suffix only, generating candidates in parallel.
 7. **Cache-economics veto** (§7): simulate the provider bill for
    original-vs-candidate including cache writes/reads/TTLs; drop any candidate
    that loses on dollars.
-8. **Exact-count gate** (§4): count surviving candidates with the pinned
-   per-model tokenizer; pick the argmin; if none beats the original, ship the
-   original (I1).
+8. **Count gate** (§4): use the certified counting method; if no candidate is
+   strictly smaller than the original, ship the original (I1). This establishes
+   mechanical eligibility, not outcome safety.
 9. **Deadline check.** Steps 5–8 run under a hard budget (default 120 ms). On
    expiry, ship the original (fail-open on time). Candidates that lose the
    race still get scored async for the evidence plane.
 10. **Freeze append** (I3): the shipped suffix representation is appended to
     the session's frozen ledger with its hash chain extended.
-11. **Dispatch + stream tee.** Forward to the provider; stream the response
-    back byte-for-byte while teeing a copy for capture. If the response
-    contains a call to one of *our* injected tools (`expand_artifact`), run
-    the gateway-satisfied-tool inner loop (§6.4) before returning.
+11. **Dispatch + response contract.** Ordinary certified passthrough profiles
+    stream provider events without semantic rewriting while teeing permitted
+    telemetry. Profiles with gateway-owned tools either expose the tool to the
+    harness or buffer the response for the bounded inner loop (§6.2); they cannot
+    simultaneously claim transparent streaming.
 12. **Decision log.** Emit a `transform_decision` record: transforms
     considered/applied/vetoed, token counts, simulated dollars, latency spent,
     artifact hashes, dialect, profile version. This record is the billing
@@ -117,15 +132,20 @@ agent ──HTTPS──▶ ┌────────────────�
 
 ---
 
-## 3. Session identity without session IDs
+## 3. Session identity: declared first, inferred second
 
 The hardest standalone problem: the wire protocols are stateless. Agents don't
 send session IDs; they resend a growing message array. Everything stateful we do
 (freeze, dedup, paging) depends on solving this well.
 
-**Mechanism: a Merkle hash chain over normalized turns.**
+**Mechanism: prefer declared session identity; use a scoped hash chain only as a
+conservative fallback.**
 
-- For each message in the array, compute `h_i = H(h_{i-1} ‖ normalize(m_i))`
+- Where a certified client supplies a stable conversation, response, launch, or
+  gateway-session identifier, bind it to tenant, principal, auth lane, agent
+  version, and model lane. Never discard declared identity in favor of inference.
+- Otherwise, for each message in the array, compute
+  `h_i = H(h_{i-1} ‖ normalize(m_i))`
   where `normalize` strips volatile fields (request IDs, timestamps in
   metadata) but not content.
 - The session store indexes sessions by the chain values of their frozen
@@ -138,34 +158,38 @@ send session IDs; they resend a growing message array. Everything stateful we do
 - Chains are cheap: O(new turns) per request since prefix chain values are
   cached; matching is a hash-table lookup on the last-known chain head, with
   fallback binary search over the chain only on miss.
-- Two agents replaying identical transcripts (CI, evals) would collide;
-  tenancy + API-key scoping partitions the space, and collisions within a
-  tenant are harmless — identical transcripts genuinely share frozen state.
+- Two agents can replay identical prefixes and then diverge. Tenancy alone does not
+  make that collision harmless. Partition fallback matching by tenant, principal,
+  launch/connection evidence where available, auth lane, and dialect. If multiple
+  live sessions remain plausible, create a new session and use the conservative
+  profile; never guess or share artifact capabilities across the candidates.
 
 This also yields the **high-water mark** for free (the deepest chain value we
 have frozen) and makes I3 mechanically checkable on every request.
 
 ---
 
-## 4. Tokenizer infrastructure — the gate must be exact
+## 4. Counting infrastructure — authoritative, versioned, and reconciled
 
-- **Registry of pinned tokenizers** per (provider, model, version): tiktoken
-  variants, HF tokenizers for open models, Anthropic's tokenizer via its
-  count-tokens API for ground truth. Every count is attributed to a tokenizer
-  build hash in the decision log.
+- **Registry of pinned counting methods** per (provider, model, version):
+  provider-authoritative count endpoints where available, pinned local tokenizers
+  for supported open encodings, and explicitly labeled estimates elsewhere. Every
+  count is attributed to a method and version in the decision log.
 - **Drift detection.** Continuously sample real payloads, compare local counts
   against provider-reported usage in responses (`usage.prompt_tokens`).
   Sustained divergence beyond tolerance auto-suspends enforce mode for that
   model (kill switch) and pages us. Providers change tokenization quietly;
   treating the response `usage` block as the oracle-of-record catches it.
-- **Incremental counting.** Token counts are memoized per artifact chunk and
+- **Incremental local counting.** Where a certified local tokenizer exists, counts
+  are memoized per artifact chunk and
   per frozen turn; a request's count is assembled from cached spans + the new
   suffix. Cost per request is O(suffix), not O(context). This — plus §3 — is
-  why we can afford exactness where competitors approximate: a stateless
-  compression API must re-tokenize the whole prompt every call; we never do.
+  why local counting can remain cheap. Provider-side counts may still require a
+  network call and full canonical payload; the latency budget must account for it.
 - **Chat-format overhead models** per dialect (message framing, role tokens,
   tool-schema serialization) validated against the same `usage` oracle, so
-  counts are exact at the *request* level, not just the string level.
+  local estimates are calibrated at the *request* level, not just the string level.
+  Provider-reported usage remains billing truth.
 
 ---
 
@@ -184,11 +208,12 @@ and its failure mode (which must be "original ships").
   (keep final frame only — the intermediate frames were never visible to a
   human either).
 
-### Tier 2 — Lossless (representation-equivalent)
+### Tier 2 — Exact-source references (model-visible representation changes)
 
 - **Line RLE** (`line-rle-v1`, from CodexZero): collapse consecutive identical
   complete lines to `line [repeated N times]` (prose marker, I4) or the JSON
-  runs form, whichever counts smaller.
+  runs form, whichever counts smaller. The source run is exactly recoverable,
+  but the model-visible text is not byte-equivalent and still needs outcome evidence.
 - **Exact-duplicate references.** Key simplification vs CodexZero, worth
   stating precisely: CodexZero needed *state proofs* (file hashes, git
   fingerprints) because it decided whether re-execution could be skipped. The
@@ -260,22 +285,25 @@ Tier 3 requires the escape hatch (I6). We inject one tool:
    "byte_range": {"type": "string"}}, "required": ["sha256"]}}
 ```
 
-### 6.4 Gateway-satisfied tools (the inner loop)
+### 6.2 Gateway-satisfied tools (the inner loop)
 
 The agent, not the gateway, executes tools — so a model call to
 `expand_artifact` would leak to an agent that doesn't implement it. Therefore:
 when a provider response contains a tool_use for a gateway-injected tool, the
-gateway does **not** return it to the agent. It satisfies the call from the
-artifact store, appends the tool result, re-issues the request to the provider,
-and loops (bounded: 3 inner iterations, 256 KB total expansion) until the
-response contains no gateway-owned calls; only then does it respond to the
-agent. The agent never knows the tool exists. Latency cost is one extra provider
-round-trip per fault — the virtual-memory page-fault cost, paid only when the
-eviction policy guessed wrong, and logged as a policy-quality signal (fault
-rate is the eviction tuner's loss function).
+gateway can satisfy it from the artifact store, append the tool result, and
+re-issue the request to the provider under a strict loop and byte budget.
 
-Streaming interacts here: we hold back only the *final* event frames needed to
-detect gateway-owned tool_use; ordinary content streams through unbuffered.
+This is not transparent streaming. A provider can emit visible content before a
+gateway-owned tool call; once those bytes are released, the gateway cannot safely
+hide the call and replace the response. A certified profile must therefore choose
+one of two explicit contracts:
+
+- expose `expand_artifact` to an agent/harness that implements it, preserving normal
+  streaming; or
+- use a buffered gateway-owned inner loop and accept the latency/streaming tradeoff.
+
+The gateway must not claim byte-for-byte streaming passthrough while silently
+intercepting tools. E1 and E4 certify the selected contract per dialect.
 
 ---
 
@@ -283,11 +311,11 @@ detect gateway-owned tool_use; ordinary content streams through unbuffered.
 
 Per-provider models, versioned in the control plane:
 
-- Anthropic: explicit `cache_control` breakpoints; write = 1.25x input, read =
-  0.1x; 5-minute base TTL (1-hour variant at higher write cost); up to 4
-  breakpoints.
-- OpenAI: automatic prefix caching ≥ 1,024 tokens, 50% read discount,
-  observed TTL bands.
+- Anthropic: explicit or automatic cache behavior depending on model and API
+  feature; current write/read prices, TTLs, and breakpoint limits are versioned
+  data, not constants in application code.
+- OpenAI: automatic prefix caching behavior and cached-input prices vary by model;
+  eligibility thresholds and retention are versioned data.
 - Self-hosted (vLLM/SGLang): radix-style prefix reuse — no discount to model,
   but real latency/throughput gains; the simulator optimizes hit length.
 
@@ -295,10 +323,10 @@ Functions:
 
 1. **Breakpoint placement.** For Anthropic dialects, place/normalize
    `cache_control` markers at the stable boundaries our freeze ledger already
-   defines (end of tools+system, end of frozen conversation). Agents that
-   place none get the full discount for free; agents that place them badly get
-   corrected placement (this alone — see the ProjectDiscovery 7%→84% case —
-   can halve a bill and is pure tier-2 safety).
+   defines (end of tools+system, end of frozen conversation). Marker changes alter
+   the provider request and must be certified for that dialect; ProjectDiscovery's
+   production result establishes potential on one workload, not an automatic saving
+   for every agent.
 2. **Veto simulation.** For every candidate: simulate this request *and* the
    projected next N requests (sessions are append-only, so the current suffix
    becomes the next request's cached prefix) under original vs candidate.
@@ -343,8 +371,9 @@ product's deepest defensibility (see §12).
   artifact hashes, tokenizer build, dialect+profile versions. Append-only;
   drives billing, audit, and learning.
 - **Shadow scoring**: disabled/losing candidates are still generated (async,
-  off the latency path) and scored, so we know the value of every technique on
-  every workload *before* anyone enables it. Shadow mode is not a trial phase;
+  off the latency path) and scored, so we estimate mechanical opportunity before
+  enabling a transform. Shadow mode cannot establish task-outcome safety by itself
+  and remains a permanent evidence source;
   it never turns off.
 - **Eval harness**: (a) deterministic fixture replay (CodexZero-style captured
   payload suites per dialect) run in CI on every profile change; (b) paired
@@ -371,9 +400,10 @@ product's deepest defensibility (see §12).
   + chain indexes + memoized counts, TTL = session idle window); artifact
   store (object storage, CAS layout `sha256/ab/cd/<hash>`, per-tenant
   encryption keys); decision log (append-only stream → warehouse).
-- **Keys**: provider keys pass through per request (`Authorization`
-  forwarded); never persisted. Optional key-vault mode for teams that want
-  server-held keys is separate and explicit.
+- **Keys**: clients use tenant-scoped gateway credentials. Upstream provider keys
+  are server-held or customer-vaulted, exposed only as short-lived internal leases,
+  and never logged, returned, or written into decision receipts. An explicit
+  passthrough-BYOK deployment mode may exist, but it is not the default trust model.
 - **Zero-retention mode**: artifacts encrypted with a tenant-held key
   (envelope encryption; we store ciphertext, tenant holds KEK) or artifact
   store disabled entirely (tier 3 then auto-disables — the tiers degrade
@@ -394,7 +424,8 @@ product's deepest defensibility (see §12).
 
 | Failure | Behavior |
 |---|---|
-| Any pipeline component errors/times out | Ship original (fail-open), log, alert |
+| Optimization component errors/times out | Ship original payload through the already-authorized route, log, alert |
+| Auth, tenant, retention, DLP, budget, or egress policy fails | Reject; never bypass policy through passthrough |
 | Session store unavailable | Tier 0–1 only (stateless transforms), degrade banner in dashboard |
 | Artifact store write fails | Transform ineligible (I2), original ships |
 | Tokenizer drift detected | Auto-suspend enforce for that model |
@@ -402,55 +433,55 @@ product's deepest defensibility (see §12).
 | expand-fault storm (bad eviction) | Auto-demote paging for that dialect |
 | Provider format change | Dialect auto-demotes to passthrough; alert |
 
-SLOs: 99.95% data-plane availability with fail-open passthrough beneath it
-(availability of *optimization* may degrade; availability of *the path* may
-not); zero tolerance for I1–I7 violations (each is monitored as an invariant
-check on sampled traffic, not assumed).
+SLO target: 99.95% authorized data-path availability. Optimization may degrade to
+the original payload, but passthrough still traverses authentication, tenancy,
+retention, DLP, budget, and egress policy. I1–I7 violations trigger automatic
+demotion or rejection according to the affected boundary.
 
 ---
 
-## 12. Why this is the world's best token optimizer, standalone
+## 12. Standalone differentiation hypotheses
 
-Each claim names the mechanism that competitors lack, not adjectives:
+These are mechanisms worth testing, not established superlatives or claims of
+competitive absence:
 
-1. **It is the only session-stateful optimizer.** The Merkle-chain session
+1. **Session-stateful optimization.** The scoped session model
    model (§3) turns a stateless wire protocol into incremental computation:
    O(suffix) work, memoized exact counts, frozen prefixes. Stateless
    compression APIs re-process the whole prompt every call — which forces them
    to approximate, breaks provider caches, and caps them at per-request
-   tricks. Statefulness is the unlock for every high-value transform (dedup,
+   tricks. Statefulness can unlock higher-value transforms (dedup,
    deltas, paging, cache shaping), and it is an architecture, not a feature
    a stateless competitor can patch in.
-2. **It optimizes dollars, not tokens.** The cache-economics veto (§7) is the
+2. **Optimize billed cost per outcome, not tokens.** The cache-economics veto (§7) is the
    difference between a demo and a product: "20x compression" that busts a
    90%-discounted prefix is a bill increase. To our knowledge no shipping
    optimizer simulates provider cache economics per candidate; the
-   ProjectDiscovery case shows cache shaping alone can halve real spend.
-3. **Never-worse is enforced by construction, not claimed.** I1–I7 with
-   fail-open on error *and on time*, exact tokenizers with drift detection
-   against the provider's own usage oracle, artifacts before transforms,
-   invariant monitors on live traffic. This is what lets a risk-averse
-   platform team turn it on: the failure mode of every component is "you got
-   exactly what you would have gotten without us."
+   ProjectDiscovery case shows cache shaping can materially reduce spend on one
+   production workload.
+3. **Bounded guarantees plus outcome evidence.** I1–I7 can establish identity,
+   counting, recoverability, authorization, and fallback properties. Paired
+   non-inferiority testing establishes whether model-visible substitutions preserve
+   task outcomes for a certified profile. Do not collapse those proof types into a
+   universal “never worse” claim.
 4. **It is agent-aware where everyone else is generic.** The dialect registry
    (§8) is the WAAS application-optimizer playbook applied to agents:
    fingerprints, parsers, per-dialect profiles, days-not-months response to
    harness releases. Generic gateways cannot touch transcript interiors
    safely *because* they lack this layer.
 5. **It has a memory hierarchy, not just a compressor.** Context paging with
-   gateway-satisfied faults (§6) means savings scale with session length —
-   exactly where agent spend explodes (400k–2M tokens/task) — while the
-   fault loop bounds the worst case to one extra round trip.
-6. **Its claims are evidence, not marketing.** Open decision schema,
+   certified expansion (§6) may make savings scale with session length. E2
+   measures the workload distribution; E4 measures whether faults and extra
+   round trips preserve outcomes and net value.
+6. **Make claims inspectable.** Open decision schema,
    always-on shadow scoring, promotion state machine, published latency and
    savings distributions, per-request audit. The customer can check every
    number we bill against.
 
-The compounding loop that keeps it best: every request generates shadow
-evidence → profiles improve per dialect × model → savings and safety records
-improve → more traffic → better evidence. Competitors would need not our code
-(most techniques are published) but our accumulated evidence and dialect
-corpus — which only time in the request path produces.
+The potential compounding loop is: requests generate consented shadow evidence →
+profiles improve per dialect × model → better measured savings and safety records →
+more trusted traffic → better evidence. E2/E4 and customer retention must establish
+whether that loop is real and defensible.
 
 ---
 
@@ -461,9 +492,8 @@ optimizer structurally lacks, and the optimizer repays Switchboard in kind:
 
 1. **True outcome ground truth.** Standalone eval uses proxies (§9).
    Switchboard has completion gates, CI receipts, review verdicts — the
-   promotion state machine upgrades from "no proxy regression" to "no
-   *verified-outcome* regression," the strongest safety claim in the
-   category, and one no competitor without an orchestration layer can make.
+   promotion state machine can evaluate cost against verified delivery outcomes
+   rather than transcript proxies alone.
 2. **The second lever.** The gateway can't touch personal-CLI lanes (auth must
    not proxy) or eliminate whole turns. Switchboard's runtime adapters can:
    lean prompts, terminal hygiene env, schema deferral, batched checks,
@@ -481,7 +511,7 @@ optimizer structurally lacks, and the optimizer repays Switchboard in kind:
    door sell independently — one flywheel, two products, and the flywheel is
    the part that compounds.
 
-2+2=5, precisely: Switchboard makes the optimizer's *evidence* categorically
-better (verified outcomes), and the optimizer makes Switchboard's *economics*
-categorically better (every fleet task cheaper, measured in the same ledger
-that proves it). Neither claim is available to either product alone.
+2+2=5, precisely: Switchboard can make the optimizer's *evidence* materially
+better through verified outcomes, while the optimizer can improve Switchboard's
+economics and throughput where E2/E4 show a real opportunity. Both products retain
+independent value and an explicit integration seam.

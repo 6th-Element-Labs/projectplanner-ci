@@ -5,13 +5,10 @@ Question answered: can we actually, provably, sit in the request path of Claude
 Code, Codex, and Cursor as a trusted middlebox — and how do we prove it before
 building the product?
 
-**One-line answer:** The middle position already exists, is officially documented
-by two of the big three, and carries enterprise traffic today through LiteLLM,
-Bedrock/Vertex, and commercial gateways; our transforms ride a sanctioned seam
-rather than creating a new one. The open question is not *whether* we can sit
-there — it is *how much of the traffic* is addressable per agent (measured below)
-and whether transforms survive protocol contracts (they do, with rules this doc
-inventories). The rest is a three-week falsifiable experiment plan.
+**One-line answer:** Supported API seams and live loopback canaries prove that
+provider-ready Codex and Claude Code requests can reach us; Cursor is partial and
+subscription OAuth remains out of path. Passthrough fidelity, addressable traffic,
+transform safety, and net outcome value remain experiment results—not conclusions.
 
 ---
 
@@ -47,16 +44,18 @@ position is already an ecosystem:
   corporate proxies, LiteLLM for key management and spend tracking, and
   Bedrock/Vertex/Azure-Foundry backends where the "provider" is itself a
   gateway translating wire formats.
-- **Claude Code actively cooperates with gateways**: on startup it calls
-  `GET /v1/models` against `ANTHROPIC_BASE_URL` and adds returned models to its
-  picker labeled "From gateway." The client is *designed* to talk to us.
+- **Claude Code actively cooperates with gateways** through
+  `ANTHROPIC_BASE_URL`. In the local 2.1.218 canary it called `HEAD /api/hello`
+  and then `/v1/messages?beta=true`. Optional model-discovery behavior must be
+  verified per client version rather than assumed.
 - **Commercial gateways (Portkey, Helicone, Cloudflare, Kong, LLM Gateway)
   carry coding-agent traffic today** — passthrough, observability, sometimes
-  caching. Nobody has protocol-level trouble being in the path; they simply
-  don't transform.
+  caching. Their existence is precedent for configured proxying, not proof that
+  every client feature, transform, or provider contract is compatible.
 
-So the novel part of our product is not the seat — it's what we do in it. That
-reduces feasibility risk to claims 2 and 3.
+So the novel part of our product is not basic configured proxying—it's certified
+wire fidelity, transformation, coverage proof, and outcome evidence. Existing
+gateways reduce path risk but do not prove our transforms or all client features.
 
 One caveat to carry honestly: Anthropic's docs note it doesn't endorse,
 maintain, or audit third-party gateways, and doesn't support routing Claude
@@ -126,7 +125,59 @@ core, env injection) for what the proxy can't reach.
 same red line as Claude Code's — harness lever only. Encrypted reasoning items
 must round-trip verbatim (same integrity argument as §3.1).
 
-### 3.3 Cursor — partial by architecture; be honest about it
+### 3.3 Local loopback evidence captured 2026-07-29
+
+The audit used a local HTTP listener with a dummy gateway credential. It recorded
+method, path, selected non-secret headers, body shape, and byte count, then returned
+`502` so no upstream provider was called. Credential values and full prompt bodies
+were not retained.
+
+| Client | Version/build | Observed gateway traffic | What it proves |
+|---|---|---|---|
+| Codex CLI | `0.144.5` | `GET /v1/models?client_version=0.144.5`; `POST /v1/responses`; authorization present; representative JSON request 57,691 bytes | custom-provider Responses request reaches configured gateway |
+| Claude Code | `2.1.218` | `HEAD /api/hello`; `POST /v1/messages?beta=true`; authorization present; representative JSON request 4,911 bytes | API/gateway Messages request reaches configured gateway |
+| Cursor Agent CLI | `2026.07.23-e383d2b` | `POST /aiserver.v1.DashboardService/GetMe`; `POST /auth/exchange_user_api_key` | `--endpoint` redirects Cursor control protocol, not provider-ready inference |
+| Cursor IDE | `3.13.25`, commit `31e8d61c448c7472e371505838a0fe34083dad50` | installed bundle exposes local OpenAI base-URL/key configuration; authenticated model canary not run | implementation seam exists; end-to-end coverage remains unproven |
+
+Both Codex and Claude retried after the intentional `502`, making request identity,
+attempt identity, and duplicate-safe usage accounting part of the minimum contract.
+
+Reproduction commands used:
+
+```bash
+CANARY_GATEWAY_KEY=canary-token \
+codex exec --ephemeral --ignore-user-config --skip-git-repo-check \
+  -C /tmp -m gpt-5.4 \
+  -c 'model_provider="switchboard_canary"' \
+  -c 'model_providers.switchboard_canary.name="Switchboard Canary"' \
+  -c 'model_providers.switchboard_canary.base_url="http://127.0.0.1:18765/v1"' \
+  -c 'model_providers.switchboard_canary.env_key="CANARY_GATEWAY_KEY"' \
+  -c 'model_providers.switchboard_canary.wire_api="responses"' \
+  'Reply only with canary'
+```
+
+```bash
+ANTHROPIC_BASE_URL=http://127.0.0.1:18765 \
+ANTHROPIC_AUTH_TOKEN=canary-token \
+DISABLE_TELEMETRY=1 \
+CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
+claude --bare --no-session-persistence -p \
+  --model claude-sonnet-4-5-20250929 \
+  'Reply only with canary'
+```
+
+```bash
+cursor agent \
+  --endpoint http://127.0.0.1:18765 \
+  --api-key canary-token \
+  --print --mode ask --output-format json \
+  'Reply only with canary'
+```
+
+The dummy values are intentionally nonfunctional. Future fixtures must log hashes and
+bounded structural metadata rather than source-bearing prompt prefixes.
+
+### 3.4 Cursor — partial by architecture; be honest about it
 
 Cursor's flow is unlike the CLIs: **client → Cursor's backend (api2.cursor.sh)
 → providers**. Prompt assembly happens on their servers.
@@ -134,7 +185,8 @@ Cursor's flow is unlike the CLIs: **client → Cursor's backend (api2.cursor.sh)
 **Lanes.**
 - Cursor-served models (their subscriptions, Composer/tab models): **closed to
   us.** Their backend is the middle, and there is no configuration surface.
-- BYO-key with base-URL override: **addressable.** Requests still transit
+- BYO-key with base-URL override: **plausibly addressable; E5 pending.** Available
+  configuration and third-party reports indicate requests can transit
   Cursor's backend for prompt processing, but egress goes to the customer's
   configured base URL with the customer's key — i.e., *Cursor's backend
   becomes our client*, and we sit between it and the provider. Documented
@@ -144,15 +196,15 @@ Cursor's flow is unlike the CLIs: **client → Cursor's backend (api2.cursor.sh)
   community-documented workaround is a custom model-name prefix (e.g.
   `cus-…`) to force the custom endpoint. Fragile — goes in the dialect
   registry as a Cursor-specific rule, monitored per release.
-- Tab autocomplete and inline edit (Cmd/K): **locked to Cursor's backend**,
-  not addressable, and also not the spend problem (agent-mode sessions are
-  where the 400k–2M-token tasks live).
+- Tab autocomplete and inline edit (Cmd/K): **locked to Cursor's backend** and
+  not addressable. Their share of cost, latency, and quota pressure is unknown
+  until measured; do not dismiss it without data.
 
-**Feasibility verdict for Cursor:** the agent-mode BYO-key lane — the
-expensive lane — is addressable; the rest is not. We say so plainly in
-positioning and measure the split in E2 rather than hand-waving it.
+**Feasibility verdict for Cursor:** the control endpoint is not an inference
+gateway, and the BYO-key agent lane remains a limited preview until an authenticated
+mock-provider canary proves the final request path and feature coverage.
 
-### 3.4 Addressability matrix
+### 3.5 Addressability matrix
 
 | Agent | Lane | In-path? | Mechanism | Notes |
 |---|---|---|---|---|
@@ -161,11 +213,11 @@ positioning and measure the split in E2 rather than hand-waving it.
 | Claude Code | Pro/Max OAuth | **No (red line)** | Harness lever only | CodexZero-class local techniques |
 | Codex | API key | **Yes** | `model_providers` + Responses API | Must speak Responses; explicit provider select |
 | Codex | ChatGPT OAuth | **No (red line)** | Harness lever only | |
-| Cursor | BYO-key agent/plan mode | **Yes** | Base-URL override | Via Cursor's backend as client; name-hijack quirk |
+| Cursor | BYO-key agent/plan mode | **Pending E5** | Base-URL override | Final provider payload and feature coverage not yet locally proven |
 | Cursor | Cursor-served models, tab, Cmd/K | **No** | — | Closed loop; also not the token-burn center |
 
-Every "No" above has a stated fallback or a stated reason it doesn't matter;
-every "Yes" has a documented mechanism used in production today by others.
+Every “Yes” must be backed by a versioned canary receipt. A documented configuration
+is discovery evidence; it is not equivalent to observed full-feature coverage.
 
 ---
 
@@ -174,8 +226,8 @@ every "Yes" has a documented mechanism used in production today by others.
 The middlebox contracts, inventoried:
 
 1. **Streaming**: SSE event grammar per provider passes through unbuffered
-   except the bounded hold-back for gateway-owned tool_use detection (tech doc
-   §6.4). Gateways already prove streaming passthrough at scale.
+   according to the certified response contract (tech doc §6.2). Transparent
+   streaming and a hidden gateway-owned tool loop are mutually exclusive.
 2. **Signed content**: thinking/reasoning blocks verbatim (I3-aligned, §3.1).
    Transforms operate on tool results and injected content only — the spans
    with no integrity seal, which are exactly the spans with the redundancy.
@@ -185,72 +237,109 @@ The middlebox contracts, inventoried:
    through-proxy vs direct.
 4. **Ancillary endpoints**: `/v1/models`, `count_tokens`, error/429/retry
    semantics — faithful proxying, verified by conformance fixtures.
-5. **Task success under transforms**: the existence proof is CodexZero's
-   repeated benchmark — 15% fewer tokens, identical 29/36 score — using the
-   same tier-1/2 transform families we ship first. Provider-side context
-   editing and compaction betas are second-source evidence that managed
-   history doesn't break agents when diagnostics and recency are preserved.
+5. **Task success under transforms**: CodexZero's reported benchmark is useful
+   existence evidence for a related implementation. It does not certify our
+   transforms, models, agent versions, or workloads; E4 supplies that evidence.
 6. **Client-side history rewriting** (agents' own compaction): detected as
    forks by the session chain (tech doc §3); the session degrades to
    conservative profile instead of breaking. E3 measures how often this
    actually happens per agent.
 
-Residual fidelity risk is therefore concentrated in one place: dialect drift —
-agents changing transcript shape between releases. That is a monitoring-and-
-cadence problem (dialect registry, auto-demote to passthrough on unrecognized
-shapes), not an architecture problem.
+Residual fidelity risks include dialect drift, signed or opaque state, streaming
+ordering, hidden provider state, retry duplication, ambiguous session identity,
+artifact reachability, and model sensitivity to changed representations. The
+dialect registry and auto-demotion address only part of this set.
 
 ---
 
-## 5. The proof plan — falsifiable, ~3 weeks, before any product build
+## 5. The E1–E5 proof plan — falsifiable before product build
 
 Each experiment has pass/fail criteria. Failing ones falsify specific product
-claims, not vibes.
+claims, not vibes. Sequence is evidence-gated rather than calendar-gated; collecting
+representative consenting traffic may take longer than three weeks.
 
-- **E1 — Passthrough fidelity.** Vanilla proxy (no transforms) in front of
-  each agent; run a fixed benchmark task set (terminal-bench-style subset)
-  through-proxy and direct.
-  *Pass:* zero protocol errors; task outcomes statistically indistinguishable;
-  provider cache-read rates preserved within noise; added latency p50 ≤ 25 ms.
-  *Falsifies if failed:* the seat itself (unlikely — see §2 precedent — but
-  this is the cheap check that finds cert pinning, header, or SSE surprises).
+- **E1 — Insertion and passthrough certification.** Put a no-transform mock/proxy
+  in front of every claimed `(client version, auth lane, feature profile)`.
+  Exercise discovery, non-streaming, SSE, tools, usage, caching metadata,
+  compaction where applicable, `401`, `429`, `500`, timeout, disconnect, and
+  retry behavior. Run direct and through-proxy paired tasks.
+  *Pass:* expected endpoints and wire events round-trip; no unsupported direct
+  inference egress; zero protocol/signature errors; usage fields reconcile; the
+  predeclared non-inferiority margin is met with adequate statistical power; added
+  latency meets a predeclared SLO. Emit `gateway_coverage_receipt.v1`.
+  *Falsifies if failed:* the claimed client/auth/feature lane, not unrelated lanes.
 - **E2 — Redundancy census (the prize measurement).** Capture N ≥ 100 real
-  sessions per agent (dogfood + consenting users); compute per-transform
+  sessions per target segment—not merely per brand—from dogfood and consenting
+  users. Stratify by agent, auth lane, model, task class, session length, and
+  cache state. Compute per-transform
   would-have-saved: duplicate output bytes, RLE potential, re-read frequency
   and diffability, schema resend volume, cache hit/miss economics, and the
-  addressable-lane split from §3.4.
-  *Pass:* aggregate tier-1..3 savings ≥ 10% of input tokens on tool-heavy
-  sessions.
-  *Falsifies if failed:* the market-size claim (the residual-waste graph from
-  the market doc, measured for real).
-- **E3 — Session-chain robustness.** Run the Merkle-chain matcher over E2's
-  captures. Measure: continuation match rate, fork rate per agent (client-side
-  compaction frequency), false-merge rate (must be zero).
-  *Pass:* ≥ 95% of turns matched as clean continuations for CLI agents;
-  forks detected, never mis-merged.
+  addressable-lane split from §3.5. Charge tokenizer calls, storage, optimizer
+  compute, cache writes, retries, and latency to the result.
+  *Pass:* the target segment shows a preregistered positive net billed-cost or
+  quota-throughput opportunity with confidence intervals; raw token reduction is
+  diagnostic only.
+  *Falsifies if failed:* the standalone optimization thesis for that segment.
+- **E3 — Session-identity robustness.** Evaluate declared IDs first and the scoped
+  hash-chain fallback over captures plus adversarial replay, parallel identical
+  starts, edited retry, compaction, and branch cases. Measure continuation,
+  ambiguity, fork, false-split, and false-merge rates.
+  *Pass:* zero false merges and zero cross-principal artifact exposure; ambiguous
+  cases create a new conservative session; continuation rate is high enough for
+  stateful transforms to beat their operating cost.
   *Falsifies if failed:* the stateful architecture (would force stateless-only
-  transforms — a different, weaker product).
-- **E4 — Transform survival.** Tier 1–2 enabled on the E1 benchmark set,
-  A/B against passthrough.
-  *Pass:* task score parity within confidence bounds; measured token
-  reduction ≥ 60% of E2's predicted savings; zero signature or protocol
-  errors; dollar savings positive after cache simulation (I7).
+  transforms for the affected lane).
+- **E4 — Transform survival and outcome non-inferiority.** Enable one transform
+  at a time on the E1 corpus, then test approved combinations. Preregister task
+  metrics, non-inferiority margins, sample sizes, model snapshots, seeds, and
+  rollback criteria.
+  *Pass:* the non-inferiority margin is met; provider-reported billed cost improves
+  after optimizer overhead; zero signature/protocol violations; artifact retrieval,
+  cache behavior, retries, and latency remain within guardrails.
 - **E5 — Cursor lane verification.** BYO-key agent-mode sessions through us:
-  confirm the backend-as-client flow, the model-name quirk workaround, and
-  capture Cursor's egress dialect for the registry.
-  *Pass:* agent-mode parity; documented dialect entry.
+  use a dedicated test account and mock OpenAI-compatible provider to determine
+  whether the final payload reaches us from the IDE or Cursor backend. Exercise
+  agent, plan, tools, background features, model families, Responses versus Chat
+  Completions, and known bypasses.
+  *Pass:* provider-ready payload and supported features are observed, direct
+  inference bypass is measured, parity meets the E1 standard, and the receipt says
+  `full` or `partial` with named exclusions. A control-endpoint call alone fails E5.
 
-Kill criteria, stated up front: E2 savings < 5% on realistic workloads, or E3
-fork rates so high that statefulness rarely engages, or E4 score regression —
-any of these means the standalone thesis fails and the effort folds back into
-harness-lever work inside Switchboard only.
+Kill criteria, stated up front: no economically material E2 opportunity in the
+chosen segment, unsafe/uneconomic session identity in E3, or failure to meet E4's
+non-inferiority margin. Any of these folds that lane back into observe-only or
+harness-lever work rather than averaging failure away across the fleet.
+
+### 5.1 `gateway_coverage_receipt.v1`
+
+Configuration is not proof of insertion. E1/E5 emit a machine-readable receipt:
+
+```json
+{
+  "schema": "gateway_coverage_receipt.v1",
+  "client": "codex",
+  "client_version": "0.144.5",
+  "auth_lane": "custom_api_provider",
+  "adapter": "openai-responses/v1",
+  "certified_features": ["models", "responses", "sse"],
+  "observed_endpoints": ["/v1/models", "/v1/responses"],
+  "direct_inference_egress_observed": false,
+  "coverage": "full",
+  "evidence_hash": "sha256:..."
+}
+```
+
+Coverage values are `full`, `partial`, `control_only`, `unsupported`, and
+`unknown`. A client, auth, adapter, feature, or endpoint-map change resets coverage
+to `unknown` until recertified.
 
 ---
 
 ## 6. The trust posture (what makes the man in the middle *trusted*)
 
 - **Consent is structural.** We exist in a session only because the operator
-  set our URL. Every request carries their key, forwarded, never stored.
+  set our URL. The client uses a gateway credential; upstream provider credentials
+  remain server-held or customer-vaulted and never appear in receipts or logs.
 - **Red lines respected mechanically, not by policy doc**: OAuth/subscription
   auth flows are refused at ingress (we never terminate them), so the
   ToS-sensitive lanes cannot transit us even by misconfiguration.
@@ -259,10 +348,10 @@ harness-lever work inside Switchboard only.
   routing to non-Claude models), keep transforms auditable, and pursue the
   partner conversation from a position of "we increase cache hit rates and
   reduce waste" — behavior providers have shipped features to encourage.
-- **Fail-open + invariant monitors + per-request audit** (tech doc §9–11): the
-  operator can verify, on any request, exactly what we did and what it would
-  have cost without us. Trust is a property of the audit trail, not the
-  brand.
+- **Optimization fail-open + policy fail-closed + per-request audit** (tech doc
+  §9–11): transform uncertainty sends the original payload only through an already
+  authorized route; auth, tenant, retention, DLP, budget, and egress failures reject.
+  Trust is a property of the enforced boundary and audit trail, not the brand.
 - The quality-incident history in this ecosystem (e.g. Anthropic's own 2026
   postmortem on Claude Code quality reports) shows even first parties break
   agent behavior through infrastructure changes — and that the recovery
@@ -274,27 +363,31 @@ harness-lever work inside Switchboard only.
 
 ## 7. Verdict
 
-- **Path:** proven by documentation and production precedent for Claude Code
-  and Codex API lanes; proven-with-caveats for Cursor's BYO-key agent lane;
+- **Path:** locally proven for the tested Claude Code and Codex API modes;
+  documented but still pending authenticated E5 proof for Cursor's BYO-key lane;
   correctly impossible for OAuth lanes (served by the harness lever instead).
   The seat is real and already warm.
-- **Fidelity:** the dangerous contracts (signatures, streaming, caching) are
-  inventoried and — notably — our pre-existing invariants (prefix freeze,
-  tool-result-only transforms, fail-open) are the *same rules the protocols
-  themselves enforce*. The architecture and the protocol point the same way.
+- **Fidelity:** dangerous contracts are inventoried, but streaming, hidden tool
+  loops, signatures, caching, retries, and outcome non-inferiority remain E1/E4
+  acceptance work.
 - **Trust:** structural consent, mechanical red lines, audit-trail-based
   verification.
-- **Remaining unknown:** the size of the prize on real fleets — which is
-  E2, a measurement, not a bet. Three weeks of experiments convert this
-  document's argument into numbers before a line of product code is written.
+- **Remaining unknowns:** addressable share, net economic prize, session identity,
+  transform non-inferiority, and Cursor coverage. E1–E5 convert those claims into
+  measured go/no-go decisions before a product build.
 
-Sources: code.claude.com/docs/en/llm-gateway · docs.litellm.ai Claude Code
-tutorials · morphllm.com / truefoundry.com / dsebastien.net LiteLLM setup
-guides · github.com/openai/codex issue #11698 and config.toml guides
-(ofox.ai, mcsaguru.com, openrouter.ai Codex tutorial) · Cursor gateway
-integrations (docs.llmgateway.io, openrouter.ai cookbook) and community
-routing analyses (dev.to Cursor proxy deep dive, forum.cursor.com) ·
-platform.claude.com docs on extended thinking and context editing ·
-anthropic.com April 2026 quality postmortem · Retro2512/CodexZero benchmark
-reports. Companions: TOKEN-OPTIMIZATION-CLOUD-RESEARCH.md ·
+Primary path sources:
+
+- [Anthropic Claude Code LLM gateway configuration](https://docs.anthropic.com/en/docs/claude-code/llm-gateway)
+- [Anthropic Claude Code corporate proxy configuration](https://docs.anthropic.com/en/docs/claude-code/corporate-proxy)
+- [Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference#configtoml)
+- [Codex model-provider implementation at the audited commit](https://github.com/openai/codex/blob/28f3f1f9ef4e9578a5f023f6b6eba018914a5342/codex-rs/model-provider-info/src/lib.rs)
+- [Codex client endpoints at the audited commit](https://github.com/openai/codex/blob/28f3f1f9ef4e9578a5f023f6b6eba018914a5342/codex-rs/core/src/client.rs)
+- [Cursor custom API keys and feature limitations](https://docs.cursor.com/settings/api-keys)
+
+LiteLLM tutorials, commercial gateway guides, Cursor community reports, and
+CodexZero benchmark reports are supporting discovery evidence, not substitutes for
+the local canaries or E1–E5.
+
+Companions: TOKEN-OPTIMIZATION-CLOUD-RESEARCH.md ·
 TOKEN-OPTIMIZATION-MARKET-ANALYSIS.md · TOKEN-OPTIMIZER-TECH-DEEP-DIVE.md.
