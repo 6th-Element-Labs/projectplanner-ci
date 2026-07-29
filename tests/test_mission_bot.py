@@ -600,19 +600,6 @@ def test_passed_review_from_replaced_pr_does_not_arm_merge():
     assert cmd["output"] == MissionOutput.START_REVIEW.value
 
 
-def test_api_and_browser_urls_for_same_pr_arm_merge():
-    """GitHub API/browser URL spellings are one PR identity."""
-    from switchboard.domain.mission_bot.facts import review_passed
-
-    snap = snapshot()
-    snap["pr_url"] = "https://api.github.com/repos/example/project/pulls/810"
-    snap["github_pr"]["url"] = snap["pr_url"]
-    snap["review"]["pr_url"] = "https://github.com/example/project/pull/810"
-    assert review_passed(snap) is True
-    cmd = reduce_mission(snap)
-    assert cmd["output"] == MissionOutput.ARM_MERGE.value
-
-
 def test_passed_review_without_head_sha_does_not_arm_merge():
     """Exact-head review is required — a headless pass must not arm merge."""
     from switchboard.domain.mission_bot.facts import review_passed

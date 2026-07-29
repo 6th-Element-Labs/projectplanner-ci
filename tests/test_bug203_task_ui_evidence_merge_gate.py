@@ -35,33 +35,11 @@ task = store.create_task(
     actor="bug203-test",
     project=P,
 )
-proof_session = store.create_work_session(
-    {
-        "task_id": task["task_id"],
-        "agent_id": "agent/bug203-test",
-        "runtime": "codex",
-        "repo_role": "canonical",
-        "branch": BRANCH,
-        "upstream": "origin/master",
-        "base_sha": "8" * 40,
-        "head_sha": HEAD,
-        "worktree_path": str(TMP),
-        "storage_mode": "worktree",
-        "status": "active",
-        "dirty_status": "clean",
-        "policy_profile": "code_strict",
-        "hygiene": {
-            "repo_preflight": {"ok": True, "verdict": "pass", "findings": []}
-        },
-    },
-    actor="bug203-test",
-    project=P,
-)["work_session"]
 receipt = {
     "schema": "switchboard.executed_test_run.v1",
     "test_kind": "ui_playwright",
     "task_id": task["task_id"],
-    "work_session_id": proof_session["work_session_id"],
+    "work_session_id": "",
     "branch": BRANCH,
     "head_sha": HEAD,
     "commands": ["python3 tests/browser/test_arch_ms126_service_boundary.py"],
