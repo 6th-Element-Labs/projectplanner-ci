@@ -2736,10 +2736,7 @@ def sweep_wake_intents(project: str = DEFAULT_PROJECT,
                     # leaves the wake pending with no selected host.  Re-evaluate
                     # that same wake from current Capacity facts when a host
                     # returns; otherwise every later sweep skips it forever.
-                    recovery_count = int(
-                        placement.get("host_loss_recovery_count") or 0)
-                    if (original_status != "pending" or recovery_count <= 0
-                            or not placement.get("lost_host_id")):
+                    if original_status != "pending":
                         continue
                     policy = dict(wake.get("policy") or {})
                     recovered = plan_hybrid_placement(
@@ -2750,17 +2747,22 @@ def sweep_wake_intents(project: str = DEFAULT_PROJECT,
                     if not recovered.get("selected_host_id"):
                         continue
                     recovered.update({
-                        "host_loss_recovery_count": recovery_count,
-                        "lost_host_id": placement.get("lost_host_id"),
-                        "requeued_at": placement.get("requeued_at") or now,
-                        "checkpoint_required": bool(
-                            placement.get("checkpoint_required")),
-                        "workspace_reconstruction": placement.get(
-                            "workspace_reconstruction")
-                            or "switchboard_claim_plus_git_provenance",
-                        "credential_rebind_required": bool(
-                            placement.get("credential_rebind_required")),
+                        key: placement[key]
+                        for key in (
+                            "host_loss_recovery_count",
+                            "lost_host_id",
+                            "requeued_at",
+                            "checkpoint_required",
+                            "workspace_reconstruction",
+                            "credential_rebind_required",
+                        )
+                        if key in placement
                     })
+                    recovery_reason = (
+                        "persistent_capacity_returned"
+                        if placement.get("lost_host_id")
+                        else "capacity_became_available"
+                    )
                     updated = c.execute(
                         "UPDATE wake_intents SET placement_json=? "
                         "WHERE wake_id=? AND status='pending'",
@@ -2775,7 +2777,7 @@ def sweep_wake_intents(project: str = DEFAULT_PROJECT,
                          "wake.placement_recovered",
                          json.dumps({
                              "wake_id": wake["wake_id"],
-                             "reason": "persistent_capacity_returned",
+                             "reason": recovery_reason,
                              "placement": recovered,
                          }, sort_keys=True), now),
                     )
@@ -2783,7 +2785,7 @@ def sweep_wake_intents(project: str = DEFAULT_PROJECT,
                     events.append({
                         "wake_id": wake["wake_id"],
                         "status": "pending",
-                        "reason": "persistent_capacity_returned",
+                        "reason": recovery_reason,
                         "selected_host_id": recovered.get("selected_host_id"),
                     })
                     continue

@@ -704,6 +704,49 @@ try:
         "an unassigned recovered wake is replanned when persistent capacity returns",
     )
 
+    initially_unassigned_task = task(
+        "CO-9 initially unassigned wake follows live capacity")
+    initially_unassigned = request(
+        initially_unassigned_task["task_id"], "initially-unassigned")
+    initially_unassigned_placement = {
+        key: value for key, value in initially_unassigned["placement"].items()
+        if key not in {
+            "host_loss_recovery_count",
+            "lost_host_id",
+            "requeued_at",
+            "checkpoint_required",
+            "workspace_reconstruction",
+            "credential_rebind_required",
+        }
+    }
+    initially_unassigned_placement.update({
+        "action": "provision_ephemeral",
+        "selected_host_id": None,
+        "reason_code": "no_eligible_persistent_capacity",
+    })
+    with store._conn(PROJECT) as c:
+        c.execute(
+            "UPDATE wake_intents SET placement_json=? WHERE wake_id=?",
+            (
+                json.dumps(initially_unassigned_placement, sort_keys=True),
+                initially_unassigned["wake_id"],
+            ),
+        )
+    initial_return = store.sweep_wake_intents(
+        project=PROJECT, now=BASE + 32)
+    initial_wake = {
+        wake["wake_id"]: wake for wake in store.list_wake_intents(project=PROJECT)
+    }[initially_unassigned["wake_id"]]
+    ok(
+        initial_wake["placement"].get("selected_host_id") is not None
+        and any(
+            event.get("wake_id") == initially_unassigned["wake_id"]
+            and event.get("reason") == "capacity_became_available"
+            for event in initial_return.get("events") or []
+        ),
+        "an initially unassigned pending wake is replanned from live Capacity facts",
+    )
+
     missing_rebind = store.claim_wake(
         bound_replacement, bound["wake_id"], actor="co9-rebind-missing", project=PROJECT)
     ok(not missing_rebind.get("claimed")
