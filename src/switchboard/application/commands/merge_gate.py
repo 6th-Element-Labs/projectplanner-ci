@@ -798,11 +798,11 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
                 "individually and this aggregate is never blocking by itself.",
                 "missing_data", severity="info", blocking=False,
                 details={"mergeable": pr.get("mergeable"), "merge_state": merge_state}))
-        expected_head = str(
-            merged_payload.get("head_sha")
-            or (task.get("git_state") or {}).get("head_sha")
-            or ""
-        ).strip()
+        # GitHub owns the live PR head.  Stored task/session heads are
+        # historical exact-head evidence, not an expectation that may reject a
+        # later provider-observed head.  Callers that need to fence a specific
+        # SHA must supply head_sha explicitly.
+        expected_head = str(merged_payload.get("head_sha") or "").strip()
         if expected_head and head_sha and expected_head != head_sha:
             findings.append(_merge_gate_finding(
                 "stale_head_sha",
