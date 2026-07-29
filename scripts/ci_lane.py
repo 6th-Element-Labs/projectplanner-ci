@@ -11,7 +11,7 @@ Lane selection is deliberately fail-closed:
 
 The merge-group lane remains the landing authority. This module only avoids
 running application dependencies and Playwright when the exact landing diff is
-provably Markdown-only.
+provably Markdown-only and does not alter a protected or test-consumed document.
 """
 from __future__ import annotations
 
@@ -82,6 +82,43 @@ def _changed_files(repo: Path, base_sha: str, source_sha: str) -> tuple[str, ...
         for item in result.stdout.split(b"\0")
         if item
     )
+
+
+def _direct_test_paths(repo: Path) -> tuple[Path, ...]:
+    candidates = set(repo.glob("test_*.py")) | set(repo.glob("*_test.py"))
+    tests_root = repo / "tests"
+    if tests_root.is_dir():
+        candidates |= set(tests_root.rglob("test_*.py"))
+        candidates |= set(tests_root.rglob("*_test.py"))
+    return tuple(sorted(path for path in candidates if path.is_file()))
+
+
+def _markdown_requires_full(repo: Path, changed: tuple[str, ...]) -> bool:
+    """Return true when Markdown participates in policy or an executable test contract."""
+    normative = {
+        "AGENTS.md",
+        "docs/CI-STRATEGY.md",
+        "docs/SWITCHBOARD-RUNBOOK.md",
+    }
+    for relative in changed:
+        normalized = relative.replace("\\", "/")
+        if (
+            normalized in normative
+            or normalized.startswith(("docs/decisions/", "docs/runbooks/"))
+            or normalized.endswith("-SPEC.md")
+        ):
+            return True
+
+    test_sources = [
+        path.read_text(encoding="utf-8", errors="replace")
+        for path in _direct_test_paths(repo)
+    ]
+    for relative in changed:
+        normalized = relative.replace("\\", "/")
+        basename = Path(normalized).name
+        if any(normalized in source or basename in source for source in test_sources):
+            return True
+    return False
 
 
 def _require_exact_checkout(repo: Path, source_sha: str) -> None:
@@ -165,6 +202,15 @@ def select_lane(
         return LaneDecision(
             lane="full",
             reason="non_markdown_path_requires_full",
+            purpose=normalized_purpose,
+            source_sha=source,
+            base_sha=base,
+            changed_files=changed,
+        )
+    if _markdown_requires_full(root, changed):
+        return LaneDecision(
+            lane="full",
+            reason="markdown_contract_requires_full",
             purpose=normalized_purpose,
             source_sha=source,
             base_sha=base,

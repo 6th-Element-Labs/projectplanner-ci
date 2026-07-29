@@ -68,6 +68,35 @@ with tempfile.TemporaryDirectory() as raw:
     receipt = verify_docs(docs, repo=repo)
     check(receipt["lane"] == "docs", "docs verification must return a docs receipt")
 
+    (repo / "docs").mkdir()
+    (repo / "docs" / "CI-STRATEGY.md").write_text("# Contract\n", encoding="utf-8")
+    protected_docs_head = commit(repo, "protected docs")
+    protected_docs = select_lane(
+        "merge_group", protected_docs_head, docs_head, repo=repo
+    )
+    check(
+        protected_docs.lane == "full"
+        and protected_docs.reason == "markdown_contract_requires_full",
+        "normative Markdown must run the full suite",
+    )
+
+    (repo / "guide.md").write_text("[Start](README.md)\n\nChanged\n", encoding="utf-8")
+    (repo / "test_guide_contract.py").write_text(
+        'from pathlib import Path\nPath("guide.md").read_text()\n',
+        encoding="utf-8",
+    )
+    contract_base = commit(repo, "add guide contract")
+    (repo / "guide.md").write_text(
+        "[Start](README.md)\n\nChanged again\n", encoding="utf-8"
+    )
+    contract_head = commit(repo, "change tested guide")
+    tested_docs = select_lane("merge_group", contract_head, contract_base, repo=repo)
+    check(
+        tested_docs.lane == "full"
+        and tested_docs.reason == "markdown_contract_requires_full",
+        "Markdown referenced by a direct test must run the full suite",
+    )
+
     missing_base = select_lane("merge_group", docs_head, "f" * 40, repo=repo)
     check(missing_base.lane == "full", "missing base evidence must fall back to full")
 

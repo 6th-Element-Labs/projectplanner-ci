@@ -1,7 +1,11 @@
 # Token Optimization as a Service — research & scoping
 
-Status: research and product-scoping draft; not accepted architecture or an implementation commitment
-Depends on: LiteLLM API-only boundary, Tally cost-to-outcome attribution, `routing_decision` records
+Status: reviewed research and product-scoping baseline; not accepted architecture
+or an implementation commitment
+Standalone prerequisites: certified provider protocol adapters, counting methods,
+session/evidence storage, and customer-controlled outcome joins
+Optional Switchboard integrations: LiteLLM boundary, Tally attribution, and
+`routing_decision` records
 
 **One-line contract:** Give coding-agent teams a context flight recorder and compiler:
 show where spend and reliability leak, remove deterministic waste on certified traffic
@@ -146,6 +150,13 @@ can actually invoke. Without a certified expansion path, remain in observe mode.
 Eviction policy is Redis's science — LRU/LFU approximations, TTLs, and the key
 insight that *recency and frequency both matter*: a file read 10 turns ago that the
 model keeps referencing must stay resident.
+
+A transparent gateway cannot retroactively replace a provider-visible frozen turn
+without breaking the very prefix stability that protects cache economics. Paging
+therefore requires projection before first exposure, a cooperative agent/harness or
+provider-native compaction event that starts a new context epoch, or an explicit
+cache-reset policy. Gateway-only residency scoring remains useful in observe mode;
+it is not permission to rewrite history.
 
 ### 2.6 Incremental view maintenance → prefix stability as a law
 
@@ -397,11 +408,14 @@ They remain subordinate to ADR-0008 in an integrated deployment.
 | Hard compression (LLMLingua) | Gateway | No | Small, risky; own-text only |
 | Semantic caching | Gateway | No | Small for coding; restricted |
 
-Note the split: the biggest gateway-only wins are dedup, paging, and cache shaping;
-the biggest total wins add harness cooperation. Switchboard uniquely holds both
-levers (LiteLLM lane + runtime adapters/launch env), including for personal-CLI
-lanes that the gateway must never proxy (per MODEL-CATALOG-ROUTING: personal CLI
-auth never goes through the gateway).
+Note the split: the biggest transparent gateway-only wins are model-visible exact
+dedup, typed suffix codecs, and cache shaping. Retroactive paging, schema deferral,
+and turn elimination require a certified harness, agent, or provider compaction
+path. Switchboard can hold both levers (API boundary plus runtime adapters/launch
+environment), but the standalone product supports equivalent customer-supplied
+hooks. Auth coverage is certified per provider lane: Claude Code documents an OAuth
+pass-through gateway mode, while other subscription lanes remain unknown until
+separately proven.
 
 ### 6.4 The constitution (non-negotiables, from CodexZero + Rocket Loader's grave)
 
@@ -422,6 +436,9 @@ auth never goes through the gateway).
 8. Gateway credentials and upstream provider credentials are distinct. Upstream
    credentials are server-held or customer-vaulted, never returned to the agent.
    Retention modes and every transform decision remain auditable per request.
+9. Maintain separate raw client-view and frozen provider-view ledgers. References
+   require proof that their exact source bytes remain model-visible in the replayed
+   provider view.
 
 ---
 
@@ -590,12 +607,15 @@ from demonstrated operational value, not the free tier being painful.
   provider usage, cache effects, retries, would-have-saved counters, and evaluator
   joins. Add Tally attribution in Switchboard. Go/no-go on net billed opportunity
   after cache discounts and optimizer overhead. No provider-request mutation.
-- **P1 — Exact-reference canary (API lanes).** Tier 1–2 transforms behind bounded gates;
-  artifact store; `transform_decision` records; verified-outcome regression watch.
+- **P1 — Exact-reference and codec canary (API lanes).** Tier 1–2 transforms behind
+  bounded gates; structured-data and command-aware codec registry; within-turn
+  overlap dedup; artifact store; expanded `transform_decision` economics; verified-
+  outcome regression watch.
 - **P2 — Harness lever (CLI + API lanes).** Lean prompt, terminal hygiene env,
   schema deferral via runtime adapters; A/B across fleet.
-- **P3 — Reversible tier + paging.** `expand_artifact` tool injection, stale-output
-  eviction, delta re-reads; fixture replay suite (CodexZero-style) as CI.
+- **P3 — Reversible tier + cooperative paging.** `expand_artifact` tool injection,
+  context-epoch compaction, delta re-reads, typed stack/check projections, and vision
+  budgets; fixture replay suite (CodexZero-style) as CI.
 - **P4 — Routing join + productization.** Per-wake tier+profile selection with the
   routing scope; standalone-mode hardening (empty attribution), external design
   partners, savings-share billing pilot.
@@ -613,7 +633,9 @@ FrugalGPT (2305.05176) · RouteLLM (2406.18665) · CodeAct (2402.01030) · Paged
 
 Repos: Retro2512/CodexZero · microsoft/LLMLingua · zilliz/GPTCache · BerriAI/litellm
 · lm-sys/RouteLLM · letta-ai/letta · sgl-project/sglang · vllm-project/vllm ·
-pleasedodisturb/awesome-llm-token-optimization.
+pleasedodisturb/awesome-llm-token-optimization. Landscape leads requiring independent
+license, maintenance, architecture, and claim verification: RTK, Headroom, lean-ctx,
+Compresr, Kompact.
 
 Market (2026): Redis LangCache and token-optimization guidance
 (redis.io/blog/llm-token-optimization-speed-up-apps) · PointFive token-optimization

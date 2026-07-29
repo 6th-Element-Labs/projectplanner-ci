@@ -1,7 +1,7 @@
 # Why we don't fork RouteLLM and "become the active version of it"
 
-Status: research note, fifth and last in the series (techniques → market →
-tech design → feasibility → this)
+Status: reviewed build-versus-adopt note, fifth in the series (techniques → market →
+tech design → feasibility → this); revisit if RouteLLM's maintained scope changes
 Question answered: RouteLLM is open source and does model routing — why not
 fork it and evolve it into the active, transforming optimizer we've designed?
 
@@ -81,17 +81,18 @@ exactly the operation our cache-economics engine must veto most of the time
 prefix is a routing input, not a free variable). RouteLLM has no concept of
 this constraint; our design treats it as first-class (tech doc §13, item 3).
 
-## 5. Reason 4 — the codebase is a paper artifact, not a living product
+## 5. Reason 4 — the repository is not the product foundation we need
 
-It is a research framework: evaluation-first, with published assets centered on
-the model generation studied by the project. Model landscapes
-turn over quarterly; a router is only as good as its most recent calibration.
+It is an evaluation-first research framework with published assets centered on
+the model generation studied by the project. Current maintenance and production
+support should be rechecked in any dependency spike rather than inferred from that
+origin. Model landscapes turn over quickly; a router is only as good as its most
+recent calibration.
 The durable thing to own is the **recalibration loop** (our promotion state
 machine and release-day re-validation, tech doc §9), not any particular
-trained router. Forking hands us deprecated weights and someone else's
-serving shim; the loop we still build ourselves. Licensing, for completeness,
-is not the obstacle — the obstacle is that the fork's inheritance is almost
-entirely the disposable part.
+trained router. Forking may hand us stale-for-our-workload weights and a serving
+shim while leaving the loop to build ourselves. Licensing is not the obstacle;
+fitness for our protocol, state, and outcome objective is.
 
 ## 6. Reason 5 — wrong strategic lane
 

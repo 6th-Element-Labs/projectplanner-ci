@@ -102,6 +102,8 @@ ordinary coding work:
 
 These documents are evidence and design exploration, not accepted architecture:
 
+- [`TOKEN-OPTIMIZATION-OVERVIEW.md`](TOKEN-OPTIMIZATION-OVERVIEW.md):
+  executive summary, table of contents, current product contract, and reading path.
 - [`TOKEN-OPTIMIZATION-CLOUD-RESEARCH.md`](TOKEN-OPTIMIZATION-CLOUD-RESEARCH.md):
   context-efficiency techniques, lineage, risks, and staged thesis.
 - [`TOKEN-OPTIMIZATION-MARKET-ANALYSIS.md`](TOKEN-OPTIMIZATION-MARKET-ANALYSIS.md):
@@ -112,6 +114,9 @@ These documents are evidence and design exploration, not accepted architecture:
   observed insertion evidence, coverage boundaries, and E1–E5 falsification plan.
 - [`WHY-NOT-FORK-ROUTELLM.md`](WHY-NOT-FORK-ROUTELLM.md):
   RouteLLM build-versus-adopt analysis.
+- [`TOKEN-OPTIMIZATION-BUSINESS-MODEL.md`](TOKEN-OPTIMIZATION-BUSINESS-MODEL.md)
+  and `TOKEN-OPTIMIZATION-BUSINESS-MODEL.xlsx`: assumption-driven market, revenue,
+  and unit-economics scenarios; not an investment-grade forecast.
 
 ## Maintenance rules
 

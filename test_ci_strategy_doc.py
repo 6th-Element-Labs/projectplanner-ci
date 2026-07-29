@@ -20,7 +20,8 @@ INVARIANT = """## The provenance invariant (non-negotiable)
 3. The merge webhook + reconcile stamp Done **only** from the canonical default-branch merge.
 4. `external_ci_mirror` verifies the **exact source SHA** on the mirror — the tested code *is* the code that merges.
 
-This is why Route A is safe for private code: the public mirror is a disposable test runner that can never speak for "Done."
+This is why Route A is provenance-safe, not confidentiality-safe: the public mirror is a
+disposable test runner that can never speak for "Done," but source is briefly public.
 """
 
 ok(INVARIANT in doc, "provenance invariant section is preserved verbatim")

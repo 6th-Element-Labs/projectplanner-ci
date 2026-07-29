@@ -1,6 +1,7 @@
 # Token Optimizer — technical deep dive
 
-Status: engineering design draft, third in the series
+Status: reviewed engineering-design baseline, third in the series; product design,
+not accepted Switchboard architecture
 (TOKEN-OPTIMIZATION-CLOUD-RESEARCH.md → market analysis → this)
 Scope: the standalone product. It must deliver independently measurable value
 on certified coding-agent lanes, without requiring Switchboard.
@@ -29,8 +30,9 @@ Goals, in priority order:
 3. **Minimal integration.** One base-URL change for certified API lanes. Personal
    subscriptions, closed Cursor features, artifact expansion, and some harness
    improvements require explicit client or launcher integration.
-4. **Auditable to the byte.** Every transform is a recorded, replayable
-   decision with the raw bytes recoverable.
+4. **Auditable to the permitted boundary.** Every transform is a recorded,
+   replayable decision. Model-visible removals are byte-recoverable when retention
+   is enabled; transforms requiring recovery are disabled in zero-retention mode.
 5. **Optimization fails open; authority fails closed.** Transform failure, timeout,
    unknown shape, or uncertain economics ships the original request unchanged.
    Authentication, tenant isolation, retention, DLP, egress, and budget policy
@@ -44,9 +46,11 @@ Invariants (violating any of these is a P0 bug, not a tradeoff):
 - **I2 — Recovery-before-reference.** When policy permits retention, raw content
   is durably stored before a recoverable compact form is eligible. In
   zero-retention mode, transforms requiring later recovery are disabled.
-- **I3 — Prefix freeze.** Once a transformed turn has been sent to a provider,
-  its bytes are immutable for the life of the session. Only the suffix after
-  the frozen high-water mark is ever processed.
+- **I3 — Dual-ledger prefix freeze.** Preserve a canonical client-view ledger
+  containing the raw history the agent resends and a provider-view ledger
+  containing the exact representation previously shown to the model. Match new
+  requests against the client-view prefix, replay the frozen provider-view prefix
+  byte-for-byte, and transform only the newly appended raw suffix.
 - **I4 — In-distribution output.** Compact forms are natural-language markers,
   standard JSON, unified diffs, or opaque hashes. Never invented symbol
   vocabularies.
@@ -96,14 +100,14 @@ agent ──HTTPS──▶ ┌────────────────�
    client (§10).
 2. **Dialect fingerprint** (§8): identify the agent family + version from
    request shape. Unknown dialect → tier 0–1 only (observe + hygiene).
-3. **Session resolution** (§3): match the request's message array against known
-   sessions by hash-chain prefix. New session → create; match → load frozen
-   ledger + suffix pointer.
-4. **Suffix extraction.** Diff the incoming message array against the frozen
-   ledger. Everything at or before the high-water mark must be byte-identical
-   to the frozen form (if the agent itself rewrote history — some agents
-   compact client-side — declare a *fork*, re-resolve, and demote to
-   conservative profile for the session).
+3. **Session resolution** (§3): prefer a certified declared session ID; otherwise
+   match the incoming raw message array against known client-view hash-chain
+   prefixes. New session → create; match → load both ledgers and suffix pointer.
+4. **Suffix extraction.** Verify the incoming raw prefix against the frozen
+   client-view ledger. Replay the corresponding provider-view prefix exactly and
+   isolate only the newly appended raw suffix. If the agent rewrote its own
+   history, declare a new context epoch or fork and demote it to a conservative
+   profile; never compare raw client history with transformed provider bytes.
 5. **Artifact eligibility.** Under a retention mode that permits it, new tool
    results and large suffix blocks may be chunked, encrypted, stored, and indexed.
    Otherwise recovery-dependent candidates are disabled before generation.
@@ -118,39 +122,43 @@ agent ──HTTPS──▶ ┌────────────────�
 9. **Deadline check.** Steps 5–8 run under a hard budget (default 120 ms). On
    expiry, ship the original (fail-open on time). Candidates that lose the
    race still get scored async for the evidence plane.
-10. **Freeze append** (I3): the shipped suffix representation is appended to
-    the session's frozen ledger with its hash chain extended.
+10. **Freeze append** (I3): append the accepted raw suffix to the client-view
+    ledger and the shipped suffix representation to the provider-view ledger;
+    extend both hash chains atomically.
 11. **Dispatch + response contract.** Ordinary certified passthrough profiles
     stream provider events without semantic rewriting while teeing permitted
     telemetry. Profiles with gateway-owned tools either expose the tool to the
     harness or buffer the response for the bounded inner loop (§6.2); they cannot
     simultaneously claim transparent streaming.
 12. **Decision log.** Emit a `transform_decision` record: transforms
-    considered/applied/vetoed, token counts, simulated dollars, latency spent,
-    artifact hashes, dialect, profile version. This record is the billing
-    substrate, the audit trail, and the evidence-plane input.
+    considered/applied/vetoed, input and output token effects, cache writes/reads,
+    gross and net dollars, latency, retries, expansion faults, artifact hashes,
+    dialect, codec/profile versions, and joined outcome evidence. This record is
+    the billing substrate, the audit trail, and the evidence-plane input.
 
 ---
 
 ## 3. Session identity: declared first, inferred second
 
-The hardest standalone problem: the wire protocols are stateless. Agents don't
-send session IDs; they resend a growing message array. Everything stateful we do
-(freeze, dedup, paging) depends on solving this well.
+Some lanes expose stable identity while others only resend a growing message array.
+For example, current Claude Code gateway traffic declares session, agent, and
+parent-agent IDs. Everything stateful we do depends on using declared identity when
+certified and treating inference as a conservative fallback.
 
 **Mechanism: prefer declared session identity; use a scoped hash chain only as a
 conservative fallback.**
 
 - Where a certified client supplies a stable conversation, response, launch, or
-  gateway-session identifier, bind it to tenant, principal, auth lane, agent
-  version, and model lane. Never discard declared identity in favor of inference.
+  gateway-session identifier—including Claude Code's session/agent headers—bind it
+  to tenant, principal, auth lane, agent version, and model lane. Never discard
+  declared identity in favor of inference.
 - Otherwise, for each message in the array, compute
   `h_i = H(h_{i-1} ‖ normalize(m_i))`
   where `normalize` strips volatile fields (request IDs, timestamps in
   metadata) but not content.
-- The session store indexes sessions by the chain values of their frozen
-  ledger. An incoming request is matched by **longest chain-prefix**: walk the
-  incoming array's chain until it diverges from every known ledger.
+- The session store indexes fallback sessions by the chain values of their raw
+  client-view ledger. An incoming request is matched by **longest chain-prefix**:
+  walk the incoming raw array's chain until it diverges from every known ledger.
 - Full-prefix match + longer array → session continuation (the normal case:
   agent appended turns). Divergence *before* a known high-water mark → the
   agent rewrote history (client-side compaction, edited retry) → **fork**:
@@ -164,8 +172,8 @@ conservative fallback.**
   live sessions remain plausible, create a new session and use the conservative
   profile; never guess or share artifact capabilities across the candidates.
 
-This also yields the **high-water mark** for free (the deepest chain value we
-have frozen) and makes I3 mechanically checkable on every request.
+This yields a client-view **high-water mark** and a paired provider-view replay
+boundary, making I3 mechanically checkable on every request.
 
 ---
 
@@ -201,7 +209,9 @@ and its failure mode (which must be "original ships").
 ### Tier 1 — Hygiene (content-preserving)
 
 - **ANSI/OSC strip**: remove SGR styling; preserve OSC-8 hyperlink text+URL.
-- **Line-ending normalization** when it counts smaller.
+- **Line-ending normalization** only for fields whose dialect contract declares
+  line endings presentation-only; never for source code, patches, signatures, or
+  opaque payloads.
 - **JSON minify** of tool results that are valid JSON (whitespace only —
   never key reordering; key order can carry meaning and breaks byte determinism).
 - **Trailing-noise trim**: spinner frames, carriage-return progress overwrites
@@ -219,11 +229,12 @@ and its failure mode (which must be "original ships").
   fingerprints) because it decided whether re-execution could be skipped. The
   gateway never skips execution — the command already ran; both outputs
   already exist. We are deduplicating the *representation* of an output that
-  is byte-identical to one already in frozen context. Content identity is the
-  entire proof. The reference form is
+  is byte-identical to one already in context. Content identity is necessary but
+  not sufficient: the exact source bytes must also be marked `model_visible` in
+  the replayed provider-view ledger. The reference form is
   `{"same_output_as": "<turn/tool_use_id>", "sha256": …, "note": "byte-identical output already shown above"}`
-  and it is valid iff the referenced turn is inside the frozen ledger (I3
-  guarantees it's still what the model saw) and the count is strictly smaller.
+  and it is valid iff the referenced span is still visible in the frozen
+  provider-view ledger and the count is strictly smaller.
 - **Sub-result chunk dedup.** FastCDC (target 2 KB, min 512 B, max 8 KB) over
   large tool results; chunks already present verbatim in frozen context can be
   referenced by quoting their first/last lines + `[unchanged from above]`
@@ -232,6 +243,15 @@ and its failure mode (which must be "original ships").
 - **Tool-schema dedup** (dialect-scoped): when a dialect resends identical
   schemas every request, the schemas become part of the frozen prefix by
   construction (I3) — the win here is cache shaping (§7), not rewriting.
+- **Parallel-output overlap dedup.** Within a fan-out turn, detect exact repeated
+  rows, files, or JSON subtrees across sibling tool results. Emit one canonical
+  model-visible span plus self-describing sibling references only after the
+  provider-view visibility and strict-count gates pass.
+- **Structured-data codecs.** For certified homogeneous JSON arrays or tables,
+  deterministically encode a schema plus ordered rows/columns. The codec is
+  versioned, self-describing, preserves ordering and scalar types, and must beat
+  ordinary JSON minification. This changes model-visible representation and
+  therefore requires outcome evidence even when decoding is exact.
 
 ### Tier 3 — Reversible (bytes leave the view, stay reachable)
 
@@ -240,19 +260,24 @@ and its failure mode (which must be "original ships").
   `File re-read; unified diff vs the copy shown at <ref> (full content: expand_artifact <hash>)`.
   Gate: diff must count < 60% of full content (diffs are token-dense);
   binary/high-churn files excluded.
-- **Stale-output eviction (context paging).** Residency policy scores every
-  tool result in context: recency, size, supersession (a newer run of the
-  same command family), and reference count (does later conversation mention
-  its content? cheap n-gram overlap check). Evict = replace with
-  `[output evicted: <one-line synopsis>; expand_artifact <hash> to restore]`.
-  Constraints: never evict from the last K turns (default 6); never evict
-  diagnostics (I5); eviction happens only at suffix-processing time for turns
-  not yet frozen — frozen turns are immutable (I3), so paging decisions are
-  made once, at the freeze boundary, not retroactively. This preserves prefix
-  stability *and* still wins because agents' contexts are append-only.
+- **Context projection and paging.** A transparent continuation cannot
+  retroactively evict a stale provider-visible turn without breaking prefix
+  stability. Projection is therefore eligible only (a) before content is first
+  shown to the provider, (b) through a cooperative agent/harness or provider-native
+  compaction event that opens a new context epoch, or (c) with an explicit cache
+  reset accepted by policy. Residency scoring may recommend candidates in observe
+  mode, but it cannot silently rewrite a frozen provider-view prefix.
 - **Successful-check projection** (CodexZero's): success-only, recognized
   check commands, ≥ 80 lines → head + diagnostic lines + tail, with the
   artifact hash attached.
+- **Command-aware codecs.** A versioned registry parses recognized `git`, test,
+  compiler, package-manager, search, and linter outputs into compact typed views.
+  Each codec declares required fields such as command, exit status, failures,
+  filenames, line numbers, and diagnostic head/tail. Unknown versions, parser
+  ambiguity, failed safety checks, or non-improving counts ship the original.
+- **Vision budgets.** For certified image-bearing tool results, bound dimensions,
+  tile count, metadata, and optional color conversion under a visual-task
+  non-inferiority profile. Report image-token economics separately from text.
 
 ### Tier 4 — Behavioral (opt-in, eval-gated)
 
@@ -262,7 +287,8 @@ and its failure mode (which must be "original ships").
 - **LLMLingua-2-style compression of our own injected text** (synopses,
   eviction stubs) — never of user or tool content.
 - **Output shaping**: `max_tokens` discipline per task class where the
-  dialect's response patterns make it safe.
+  dialect's response patterns make it safe. Attribute response-token savings
+  separately from input/context savings.
 
 ### Explicit non-transforms
 
@@ -367,9 +393,11 @@ product's deepest defensibility (see §12).
 ## 9. The evidence plane
 
 - **`transform_decision` log** (open schema): per request — transforms
-  considered/applied/vetoed and why, exact counts, simulated dollars, latency,
-  artifact hashes, tokenizer build, dialect+profile versions. Append-only;
-  drives billing, audit, and learning.
+  considered/applied/vetoed and why; input and output tokens; cache writes and
+  reads; gross and net dollars; gateway latency; retries; expansion faults;
+  artifact hashes; counting method; dialect, codec, and profile versions; and
+  joined outcome status where available. Append-only; drives billing, audit,
+  and learning.
 - **Shadow scoring**: disabled/losing candidates are still generated (async,
   off the latency path) and scored, so we estimate mechanical opportunity before
   enabling a transform. Shadow mode cannot establish task-outcome safety by itself

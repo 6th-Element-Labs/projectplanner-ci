@@ -119,7 +119,8 @@ The pull relay and duplicate backend/sharded workflows are retired.
 3. The merge webhook + reconcile stamp Done **only** from the canonical default-branch merge.
 4. `external_ci_mirror` verifies the **exact source SHA** on the mirror — the tested code *is* the code that merges.
 
-This is why Route A is safe for private code: the public mirror is a disposable test runner that can never speak for "Done."
+This is why Route A is provenance-safe, not confidentiality-safe: the public mirror is a
+disposable test runner that can never speak for "Done," but source is briefly public.
 
 ---
 
@@ -182,8 +183,9 @@ Helm routing is **unchanged**. projectplanner now uses the same push mirror engi
 GitHub's native merge queue tests merge-group head SHAs, not PR heads. The canonical
 `merge_group/checks_requested` webhook sends the exact temporary SHA and base SHA through
 the same mirror route. The trusted workflow posts only `Switchboard CI / VM gate`; code,
-mixed, empty, or unprovable diffs run the full suite and Playwright, while exact
-Markdown-only diffs run the bounded docs contract. Autopilot enqueues once and waits. It
+mixed, empty, unprovable, protected, or test-consumed Markdown diffs run the full suite and
+Playwright, while eligible exact Markdown-only diffs run the bounded docs contract.
+Autopilot enqueues once and waits. It
 does not requeue; a persistent GitHub/process failure uses the audited exact-SHA CI-repair
 administrator lane. See [`SWITCHBOARD-RUNBOOK.md`](SWITCHBOARD-RUNBOOK.md) → "Native
 merge queue".
