@@ -1495,13 +1495,16 @@ const TeepPlan = {
             ? `<span class="ms-auto small text-danger"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:currentColor" class="me-1"></span>${this.esc(this._dockAttnLabel(nAttn))}</span>`
             : `<span class="ms-auto small text-success"><i class="ti ti-check me-1"></i>all clear</span>`;
         host.innerHTML = `<div class="card shadow-sm" style="${anchor}width:380px;max-height:70vh;overflow:auto;">
+            <div id="fleet-dock-grab" class="dock-grab" aria-hidden="true"></div>
             <div class="card-header py-2 d-flex align-items-center gap-2">
-                <i class="ti ti-server-bolt text-secondary"></i>
-                <span class="fw-medium">Autopilot</span>
-                <span class="text-secondary small">${running} working</span>
-                ${attnBadge}
-                <button id="fleet-dock-refresh" class="btn btn-sm btn-ghost-secondary p-1" title="Refresh"><i class="ti ti-refresh"></i></button>
-                <button id="fleet-dock-min" class="btn btn-sm btn-ghost-secondary p-1" title="Collapse"><i class="ti ti-chevron-down"></i></button>
+                <button id="fleet-dock-min" class="btn btn-sm btn-ghost-secondary p-1 dock-hit dock-min-mobile" title="Collapse"><i class="ti ti-chevron-down"></i></button>
+                <i class="ti ti-server-bolt text-secondary dock-hd-icon"></i>
+                <span class="dock-hd-title">
+                    <span class="fw-medium">Autopilot</span>
+                    <span class="dock-hd-status"><span class="text-secondary small">${running} working</span>${attnBadge}</span>
+                </span>
+                <button id="fleet-dock-refresh" class="btn btn-sm btn-ghost-secondary p-1 dock-hit" title="Refresh"><i class="ti ti-refresh"></i></button>
+                <button id="fleet-dock-min-desktop" class="btn btn-sm btn-ghost-secondary p-1 dock-hit dock-min-desktop" title="Collapse"><i class="ti ti-chevron-down"></i></button>
             </div>
             <div class="d-flex px-2 border-bottom">
                 ${tabBtn('runners', 'Runners', runners.length, runnerTone)}
@@ -1533,7 +1536,19 @@ const TeepPlan = {
         host.querySelectorAll('[data-ap-task]').forEach((b) =>
             b.addEventListener('click', () => this._dockAutopilotAction(
                 b.getAttribute('data-ap-task'), b.getAttribute('data-ap-action'))));
-        document.getElementById('fleet-dock-min').addEventListener('click', () => { this._dockCollapsed = true; rerender(); });
+        const collapse = () => { this._dockCollapsed = true; rerender(); };
+        document.getElementById('fleet-dock-min').addEventListener('click', collapse);
+        document.getElementById('fleet-dock-min-desktop').addEventListener('click', collapse);
+        // The expanded dock is a full-screen sheet on a phone; dismiss like one.
+        const grab = document.getElementById('fleet-dock-grab');
+        if (grab) {
+            let y0 = null;
+            grab.addEventListener('touchstart', (e) => { y0 = e.touches[0].clientY; }, { passive: true });
+            grab.addEventListener('touchmove', (e) => {
+                if (y0 != null && e.touches[0].clientY - y0 > 40) { y0 = null; collapse(); }
+            }, { passive: true });
+            grab.addEventListener('click', collapse);
+        }
         document.getElementById('fleet-dock-refresh').addEventListener('click', () => this._loadFleetDock(true));
     },
     // UI-3: per-task Work Sessions panel (Dev tab) — who holds which worktree, on what

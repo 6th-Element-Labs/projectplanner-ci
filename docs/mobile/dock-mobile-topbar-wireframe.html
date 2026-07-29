@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<!--
+    dock-mobile-topbar-wireframe.html — the expanded Autopilot dock top bar on a
+    phone, in the house design system (Tabler 1.4.0 pinned + taikun tokens).
+
+    Measured on the live dock at 390px: the header is 56px tall but the refresh
+    and minimize controls inside it are 19x22px. The mobile pass gave the tab row
+    44px targets and missed the header. This wireframe sizes the bar and its
+    controls for a thumb and gives the sheet the dismiss gesture a phone expects.
+    Wireframe: all data is illustrative.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Autopilot dock mobile top bar | Taikun Switchboard</title>
+<link href="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/css/tabler.min.css" rel="stylesheet"/>
+<link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.44.0/dist/tabler-icons.min.css" rel="stylesheet"/>
+<style>
+:root{
+  --tblr-primary:#c0392b; --tblr-primary-rgb:192,57,43;
+  --tblr-body-bg:#ffffff; --tblr-body-color:#101114; --tblr-secondary:#5b626e;
+  --tblr-border-color:#e2e5ea; --tblr-border-radius:.65rem;
+  --tblr-font-sans-serif:'Inter Var','Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+body{ -webkit-font-smoothing:antialiased; letter-spacing:-.005em; background:#eef0f4 !important;
+  min-height:100vh; display:flex; flex-direction:column; align-items:center; gap:18px; padding:26px 14px 44px; }
+.card{ border:1px solid var(--tblr-border-color); border-radius:.9rem;
+  box-shadow:0 1px 2px rgba(16,24,40,.05),0 1px 3px rgba(16,24,40,.08); }
+.btn{ border-radius:.6rem; font-weight:600; }
+.page-h{ text-align:center; max-width:660px; }
+.page-h .ey{ font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.18em;
+  text-transform:uppercase; color:var(--tblr-primary); font-weight:600; }
+.page-h h1{ font-size:22px; font-weight:720; letter-spacing:-.02em; margin:6px 0 4px; }
+.page-h p{ color:var(--tblr-secondary); font-size:13.5px; margin:0; line-height:1.55; }
+.mono{ font-family:ui-monospace,Menlo,monospace; font-variant-numeric:tabular-nums; }
+.rack{ display:flex; gap:26px; flex-wrap:wrap; justify-content:center; align-items:flex-start; }
+.slot{ display:flex; flex-direction:column; align-items:center; gap:9px; }
+.slot .cap{ font-family:ui-monospace,Menlo,monospace; font-size:11px; color:var(--tblr-secondary);
+  text-align:center; max-width:378px; line-height:1.5; }
+.slot .cap b{ color:var(--tblr-body-color); }
+
+/* ── phone frame ── */
+.phone{ width:378px; border-radius:52px; padding:11px;
+  background:linear-gradient(160deg,#24262c,#0e0f12 60%);
+  box-shadow:0 2px 6px rgba(16,24,40,.06),0 30px 70px -20px rgba(16,24,40,.5); }
+.screen{ position:relative; border-radius:42px; overflow:hidden; background:#f6f7f9;
+  height:720px; display:flex; flex-direction:column; font-size:.85rem; }
+.island{ position:absolute; top:11px; left:50%; transform:translateX(-50%); width:112px; height:30px;
+  background:#000; border-radius:20px; z-index:40; }
+.sb{ height:50px; flex:0 0 auto; display:flex; align-items:flex-end; justify-content:space-between;
+  padding:0 26px 7px; font-size:13px; font-weight:650; background:#fff; }
+.homebar{ position:absolute; bottom:8px; left:50%; transform:translateX(-50%); width:128px; height:5px;
+  border-radius:999px; background:#111; opacity:.22; z-index:60; }
+.pane{ flex:1 1 auto; overflow:hidden; background:#f6f7f9; }
+
+/* ── dock chrome ── */
+.dock-hd{ background:#fff; border-bottom:1px solid var(--tblr-border-color); }
+.screen .dock-hd{ margin-top:22px; }
+.grab{ width:38px; height:5px; border-radius:999px; background:#c9ced6; margin:8px auto 2px; }
+.hit{ width:44px; height:44px; display:inline-flex; align-items:center; justify-content:center;
+  border-radius:12px; border:0; background:transparent; color:#5b626e; font-size:20px; }
+.hit:active{ background:#eef0f4; }
+.hit-old{ width:19px; height:22px; display:inline-flex; align-items:center; justify-content:center;
+  border:0; background:transparent; color:#5b626e; font-size:15px; }
+.tabs{ display:flex; background:#fff; border-bottom:1px solid var(--tblr-border-color); }
+.tab{ flex:1; min-height:44px; display:flex; align-items:center; justify-content:center; gap:6px;
+  font-size:13.5px; font-weight:600; color:var(--tblr-secondary); border-bottom:2px solid transparent; }
+.tab.on{ color:var(--tblr-body-color); border-bottom-color:var(--tblr-primary); }
+.dot{ width:7px; height:7px; border-radius:50%; display:inline-block; }
+.buck{ font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--tblr-secondary);
+  font-weight:650; padding:12px 14px 6px; }
+.rcard{ background:#fff; border:1px solid var(--tblr-border-color); border-radius:.65rem;
+  margin:0 12px 8px; padding:10px 12px; }
+.rcard.red{ border-left:3px solid #c0392b; border-top-left-radius:0; border-bottom-left-radius:0; }
+.rcard.green{ border-left:3px solid #2fb344; border-top-left-radius:0; border-bottom-left-radius:0; }
+.meta{ font-family:ui-monospace,Menlo,monospace; font-size:11px; color:var(--tblr-secondary); margin-top:2px; }
+.act{ display:flex; gap:8px; margin-top:10px; }
+.act .btn{ min-height:44px; display:inline-flex; align-items:center; justify-content:center; font-size:14px; }
+.badge-lg{ font-size:12px; padding:.3rem .5rem; border-radius:.5rem; font-weight:650; }
+
+/* annotation */
+.ann{ position:absolute; z-index:50; font-family:ui-monospace,Menlo,monospace; font-size:10.5px;
+  background:#101114; color:#fff; padding:3px 7px; border-radius:6px; white-space:nowrap; }
+.ann.bad{ background:#c0392b; }
+.ann.good{ background:#1f7a37; }
+.ring{ position:absolute; z-index:45; border:2px dashed #c0392b; border-radius:8px; }
+.ring.good{ border-color:#1f7a37; }
+.legend{ max-width:660px; width:100%; background:#fff; border:1px solid var(--tblr-border-color);
+  border-radius:.9rem; padding:16px 18px; }
+.legend h3{ font-size:13px; font-weight:700; margin:0 0 8px; letter-spacing:-.01em; }
+.legend li{ font-size:13px; color:#2b2f36; margin-bottom:6px; line-height:1.5; }
+.legend .n{ font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--tblr-primary); font-weight:650; }
+</style>
+</head>
+<body>
+
+<div class="page-h">
+  <div class="ey">Mobile · Autopilot dock</div>
+  <h1>A top bar you can actually hit</h1>
+  <p>Measured on the live dock at 390&nbsp;px: the header is 56&nbsp;px tall, but the refresh and
+  minimize controls inside it are <b class="mono">19×22&nbsp;px</b>. The mobile pass gave the tab row
+  44&nbsp;px targets and missed the header. Apple's minimum is 44×44.</p>
+</div>
+
+<div class="rack">
+
+  <!-- ─────────── TODAY ─────────── -->
+  <div class="slot">
+    <div class="phone"><div class="screen">
+      <div class="island"></div>
+      <div class="sb"><span>9:41</span><span><i class="ti ti-wifi"></i> <i class="ti ti-battery-3"></i></span></div>
+
+      <div class="dock-hd" style="position:relative;">
+        <div class="d-flex align-items-center gap-2 px-3" style="height:56px;">
+          <i class="ti ti-server-bolt text-secondary"></i>
+          <span class="fw-medium" style="font-size:14px;">Autopilot</span>
+          <span class="text-secondary" style="font-size:12px;">1 working</span>
+          <span class="ms-auto" style="font-size:12px;color:#c0392b;font-weight:600;">
+            <span class="dot" style="background:#c0392b;"></span> 1 needs you</span>
+          <button class="hit-old"><i class="ti ti-refresh"></i></button>
+          <button class="hit-old"><i class="ti ti-chevron-down"></i></button>
+        </div>
+        <div class="ring" style="right:8px; top:16px; width:52px; height:26px;"></div>
+        <div class="ann bad" style="right:6px; top:-2px;">19×22 — half a thumb</div>
+      </div>
+
+      <div class="tabs">
+        <div class="tab on"><span class="dot" style="background:#c0392b;"></span> Runners <b>2</b></div>
+        <div class="tab"><span class="dot" style="background:#2fb344;"></span> PRs <b>0</b></div>
+        <div class="tab"><span class="dot" style="background:#2fb344;"></span> Deploy <b>0</b></div>
+      </div>
+
+      <div class="pane">
+        <div class="buck">Failed · 1</div>
+        <div class="rcard red">
+          <div class="d-flex align-items-center gap-2">
+            <span class="fw-medium" style="font-size:13.5px;">BUG-218</span>
+            <span class="ms-auto badge bg-red-lt badge-lg">Failed · launch_failed</span>
+          </div>
+          <div class="meta">codex · steve-mbp · up 12m</div>
+          <div class="act">
+            <button class="btn btn-primary" style="flex:0 0 auto;padding:0 16px;">Restart</button>
+            <button class="btn btn-outline-secondary" style="flex:1;">Watch</button>
+          </div>
+        </div>
+        <div class="buck">Working normally · 1</div>
+        <div class="rcard green">
+          <div class="d-flex align-items-center gap-2">
+            <span class="fw-medium" style="font-size:13.5px;">QA-12</span>
+            <span class="ms-auto badge bg-green-lt badge-lg">Working 10s</span>
+          </div>
+          <div class="meta">codex · steve-mbp · up 3s</div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div></div>
+    <div class="cap"><b>Today.</b> Two 19×22 icons crowded into the corner,<br/>on one cramped 56&nbsp;px line. No dismiss gesture.</div>
+  </div>
+
+  <!-- ─────────── PROPOSED ─────────── -->
+  <div class="slot">
+    <div class="phone"><div class="screen">
+      <div class="island"></div>
+      <div class="sb"><span>9:41</span><span><i class="ti ti-wifi"></i> <i class="ti ti-battery-3"></i></span></div>
+
+      <div class="dock-hd" style="position:relative;">
+        <!-- grabber: the gesture a phone sheet is expected to have -->
+        <div class="grab"></div>
+        <div class="d-flex align-items-center px-2" style="height:60px; gap:4px;">
+          <button class="hit" title="Minimize"><i class="ti ti-chevron-down"></i></button>
+          <div style="min-width:0; flex:1 1 auto; line-height:1.25;">
+            <div class="fw-semibold" style="font-size:17px; letter-spacing:-.01em;">Autopilot</div>
+            <div style="font-size:12.5px; color:var(--tblr-secondary);">
+              <span style="color:#c0392b;font-weight:650;">1 needs you</span> · 1 working
+            </div>
+          </div>
+          <button class="hit" title="Refresh"><i class="ti ti-refresh"></i></button>
+        </div>
+        <div class="ring good" style="left:6px; top:14px; width:48px; height:48px;"></div>
+        <div class="ann good" style="left:4px; top:66px;">44×44</div>
+        <div class="ann" style="left:50%; transform:translateX(-50%); top:-20px;">swipe ↓ to minimize</div>
+      </div>
+
+      <div class="tabs">
+        <div class="tab on"><span class="dot" style="background:#c0392b;"></span> Runners <b>2</b></div>
+        <div class="tab"><span class="dot" style="background:#2fb344;"></span> PRs <b>0</b></div>
+        <div class="tab"><span class="dot" style="background:#2fb344;"></span> Deploy <b>0</b></div>
+      </div>
+
+      <div class="pane">
+        <div class="buck">Failed · 1</div>
+        <div class="rcard red">
+          <div class="d-flex align-items-center gap-2">
+            <span class="fw-medium" style="font-size:13.5px;">BUG-218</span>
+            <span class="ms-auto badge bg-red-lt badge-lg">Failed · launch_failed</span>
+          </div>
+          <div class="meta">codex · steve-mbp · up 12m</div>
+          <div class="act">
+            <button class="btn btn-primary" style="flex:0 0 auto;padding:0 16px;">Restart</button>
+            <button class="btn btn-outline-secondary" style="flex:1;">Watch</button>
+          </div>
+        </div>
+        <div class="buck">Working normally · 1</div>
+        <div class="rcard green">
+          <div class="d-flex align-items-center gap-2">
+            <span class="fw-medium" style="font-size:13.5px;">QA-12</span>
+            <span class="ms-auto badge bg-green-lt badge-lg">Working 10s</span>
+          </div>
+          <div class="meta">codex · steve-mbp · up 3s</div>
+        </div>
+      </div>
+      <div class="homebar"></div>
+    </div></div>
+    <div class="cap"><b>Proposed.</b> 44×44 controls, minimize on the left where<br/>a thumb reaches, status on its own line, grabber to swipe away.</div>
+  </div>
+
+</div>
+
+<div class="legend">
+  <h3>What changes, and why</h3>
+  <ol style="margin:0; padding-left:20px;">
+    <li><span class="n">44×44 hit targets.</span> Refresh and minimize become full-size buttons. The icon
+      stays 20&nbsp;px — only the tappable box grows, so nothing looks heavier.</li>
+    <li><span class="n">Minimize moves left.</span> On a 390&nbsp;px phone the top-right corner is the
+      hardest place for a right thumb to reach. Dismiss is the most-used control in the bar, so it
+      gets the easiest corner; refresh keeps the right.</li>
+    <li><span class="n">Two lines, not one.</span> Title on the first line at 17&nbsp;px, the attention
+      count and working count beneath it. Today five items compete on one 56&nbsp;px line and the
+      status ends up at 12&nbsp;px next to a red dot.</li>
+    <li><span class="n">A grabber.</span> The expanded dock is a full-screen sheet, so it should
+      dismiss the way every phone sheet does — swipe down, or tap the handle. The chevron stays for
+      people who prefer a button.</li>
+    <li><span class="n">Bar grows 56&nbsp;px → 60&nbsp;px</span> plus the grabber. That is the only
+      vertical cost, and the tab row and cards are untouched.</li>
+  </ol>
+  <p style="font-size:12.5px;color:var(--tblr-secondary);margin:10px 0 0;">
+    Desktop is unchanged — every rule here sits inside the existing
+    <span class="mono">@media (max-width: 640px)</span> block.</p>
+</div>
+
+</body>
+</html>
