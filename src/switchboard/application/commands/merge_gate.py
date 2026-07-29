@@ -604,7 +604,11 @@ def _merge_gate_pr_evidence(pr_url: str, pr_number: int,
     elif not repo or not pr_number:
         return {}, {"source": "missing", "reason": "pr_url_or_number_missing"}
     else:
-        pr = _github_pr(repo, pr_number, token)
+        try:
+            pr = _github_pr(repo, pr_number, token)
+        except Exception as exc:
+            return {}, {"source": "github_api", "reason": "unavailable",
+                        "error": f"{type(exc).__name__}: {exc}"}
         if not pr:
             return {}, {"source": "github_api", "reason": "unavailable"}
         source = {"source": "github_api"}

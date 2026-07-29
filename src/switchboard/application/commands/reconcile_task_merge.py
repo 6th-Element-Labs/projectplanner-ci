@@ -72,15 +72,23 @@ def execute(
             "canonical_repo": canonical_repo,
         }
 
-    pr = fetch_pull_request(pr_repo, pr_number)
+    fetch_error = ""
+    try:
+        pr = fetch_pull_request(pr_repo, pr_number)
+    except Exception as exc:
+        pr = None
+        fetch_error = f"{type(exc).__name__}: {exc}"
     if not pr:
-        return {
+        unavailable: dict[str, Any] = {
             "error": "pr_state_unavailable",
             "failure_class": "broken_connection",
             "task_id": normalized_task_id,
             "pr_number": pr_number,
             "repo": pr_repo,
         }
+        if fetch_error:
+            unavailable["detail"] = fetch_error
+        return unavailable
 
     base = pr.get("base") or {}
     base_ref = str(base.get("ref") or "").strip()

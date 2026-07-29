@@ -17,6 +17,7 @@ import re
 import sqlite3
 import subprocess
 import time
+import urllib.error
 import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -1054,6 +1055,21 @@ def _local_github_repo() -> str:
     return _github_repo_from_git_url(remote)
 
 
+class GitHubPRFetchError(RuntimeError):
+    """PR fetch failed for a reason other than the PR not existing.
+
+    ``None`` from ``_github_pr`` means only "GitHub answered 404". Every other
+    failure (rate limit, auth, timeout) raises this instead, keeping the
+    exception class and HTTP status observable — collapsing them all into None
+    turned an unknown HTTP failure into "pull request node_id unavailable"
+    during the 2026-07-30 Mission Bot incident and drove the #1086 rollback.
+    """
+
+    def __init__(self, message: str, *, status: Optional[int] = None):
+        super().__init__(message)
+        self.status = status
+
+
 def _github_pr(repo: str, pr_number: int, token: str = "") -> Optional[Dict[str, Any]]:
     if not repo or not pr_number:
         return None
@@ -1064,8 +1080,15 @@ def _github_pr(repo: str, pr_number: int, token: str = "") -> Optional[Dict[str,
     try:
         with urllib.request.urlopen(req, timeout=8) as r:
             return json.loads(r.read().decode())
-    except Exception:
-        return None
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None
+        raise GitHubPRFetchError(
+            f"github_pr {repo}#{int(pr_number)} HTTPError {exc.code}: {exc.reason}",
+            status=exc.code) from exc
+    except Exception as exc:
+        raise GitHubPRFetchError(
+            f"github_pr {repo}#{int(pr_number)} {type(exc).__name__}: {exc}") from exc
 
 
 def _github_prs_graphql(pr_keys: List[Tuple[str, int]], token: str = "") -> Dict[Tuple[str, int], Dict[str, Any]]:
@@ -1167,12 +1190,20 @@ def _fetch_github_prs(pr_keys: List[Tuple[str, int]], token: str = "") -> Tuple[
         checks["github_pr_rest_fallback_fetches"] = len(missing)
         concurrency = min(16, max(1, int(os.environ.get(
             "PM_RECON_GITHUB_CONCURRENCY", "8"))))
+        fetch_errors: Dict[str, str] = {}
+
+        def _fetch_one(key: Tuple[str, int]) -> Tuple[Tuple[str, int], Optional[Dict[str, Any]]]:
+            try:
+                return key, _store_facade()._github_pr(key[0], key[1], token=token)
+            except Exception as exc:
+                fetch_errors[f"{key[0]}#{key[1]}"] = str(exc)
+                return key, None
+
         with ThreadPoolExecutor(max_workers=min(concurrency, len(missing))) as pool:
-            fallback = dict(zip(
-                missing,
-                pool.map(lambda key: _store_facade()._github_pr(key[0], key[1], token=token), missing),
-            ))
+            fallback = dict(pool.map(_fetch_one, missing))
         fetched.update(fallback)
+        if fetch_errors:
+            checks["github_pr_fetch_errors"] = fetch_errors
         checks["github_pr_concurrency"] = min(concurrency, len(missing))
         if "github_pr_fetch_mode" not in checks:
             checks["github_pr_fetch_mode"] = "rest"
@@ -1486,9 +1517,14 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
             role_info = _store_facade().get_project_repo_role(pr_repo, project)
             pr = fetched_prs.get((pr_repo, int(state.get("pr_number") or 0)))
             if not pr:
+                fetch_error = (checks.get("github_pr_fetch_errors") or {}).get(
+                    f"{pr_repo}#{int(state.get('pr_number') or 0)}", "")
+                detail = f"Could not fetch recorded PR state from GitHub repo {pr_repo}."
+                if fetch_error:
+                    detail += f" cause: {fetch_error}"
                 findings.append({"severity": "medium", "task_id": task["task_id"],
                                  "code": "pr_state_unavailable",
-                                 "detail": f"Could not fetch recorded PR state from GitHub repo {pr_repo}."})
+                                 "detail": detail})
                 continue
             live_head_sha = ((pr.get("head") or {}).get("sha") or state.get("head_sha") or "")
             if live_head_sha and task.get("status") == "In Review":
@@ -2187,6 +2223,7 @@ __all__ = [
     "_github_repo_from_pr_url",
     "_normalize_repo_slug",
     "_local_github_repo",
+    "GitHubPRFetchError",
     "_github_pr",
     "_github_prs_graphql",
     "_fetch_github_prs",

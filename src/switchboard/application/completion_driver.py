@@ -226,10 +226,15 @@ def hydrate_completion_snapshot(
     # previously let the snapshot see an empty PR while the gate still observed
     # DIRTY, which the classifier then misreported as exact_head_pr_missing
     # (BUG-182).
-    github_pr = (
-        provenance._github_pr(repo, pr_number, token)
-        if repo and pr_number else {}
-    ) or {}
+    # Hydration must not crash on a GitHub outage: fall back to an empty PR and
+    # let merge_gate's own fetch record the failure cause in its finding.
+    try:
+        github_pr = (
+            provenance._github_pr(repo, pr_number, token)
+            if repo and pr_number else {}
+        ) or {}
+    except Exception:
+        github_pr = {}
     github_pr_observed_at = time.time()
     source_observed_at["github_pr"] = github_pr_observed_at
     gate_payload: dict[str, Any] = {
