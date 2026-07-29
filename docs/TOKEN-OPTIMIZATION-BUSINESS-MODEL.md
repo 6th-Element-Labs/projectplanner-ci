@@ -1,9 +1,11 @@
-# Token Optimization Cloud — business model and market potential
+# Compand — business model and market potential
 
 Status: assumption-driven operating model, not an investment-grade forecast
 Companion spreadsheet: `TOKEN-OPTIMIZATION-BUSINESS-MODEL.xlsx`
 (same directory; edit the blue Assumptions cells to stress the scenario)
 Series: techniques → market analysis → tech design → feasibility → RouteLLM note → **this**
+Product: **Compand**, the token-saving context gateway for coding agents; **Tally** is
+the Switchboard economics layer that can verify Compand savings against accepted work.
 
 **One-line thesis:** Under the model's explicit adoption, spend, addressability,
 savings, and pricing assumptions, coding-agent spend reaches ~$7B in 2026 and

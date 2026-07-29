@@ -5,6 +5,8 @@ Status: reviewed feasibility baseline, fourth in the series
 Question answered: can we actually, provably, sit in the request path of Claude
 Code, Codex, and Cursor as a trusted middlebox — and how do we prove it before
 building the product?
+Product under test: **Compand Gateway**, the token-saving context gateway for coding
+agents. “Middlebox” here means a user-configured endpoint, not TLS interception.
 
 **One-line answer:** Supported API seams and live loopback canaries prove that
 provider-ready Codex and Claude Code requests can reach us. Claude Code can also

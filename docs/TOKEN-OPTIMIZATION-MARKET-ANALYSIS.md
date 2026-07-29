@@ -1,8 +1,9 @@
-# Token Optimization Cloud — market analysis, threats, niche, and staying ahead
+# Compand — market analysis, threats, niche, and staying ahead
 
 Status: reviewed market-research baseline, companion to
 TOKEN-OPTIMIZATION-CLOUD-RESEARCH.md; dated evidence, not an investment forecast
 Depends on: same scope; informs P0 go/no-go and positioning
+Product: **Compand**, the token-saving context gateway for coding agents
 
 **One-line thesis:** Agentic coding creates a fast-growing and poorly attributed
 inference cost, latency, and quota problem. The defensible opportunity is not another

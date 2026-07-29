@@ -1,13 +1,15 @@
-# Token Optimizer — technical deep dive
+# Compand — technical deep dive
 
 Status: reviewed engineering-design baseline, third in the series; product design,
 not accepted Switchboard architecture
 (TOKEN-OPTIMIZATION-CLOUD-RESEARCH.md → market analysis → this)
 Scope: the standalone product. It must deliver independently measurable value
 on certified coding-agent lanes, without requiring Switchboard.
+Product: **Compand Gateway**; the standalone context-efficiency data path and evidence
+plane described here are Compand components, not Switchboard lifecycle authorities.
 The Switchboard synergy is an addendum (§13), not a dependency.
 
-**One-line contract:** For every certified request lane: resolve session state without
+**One-line contract:** For every certified Compand request lane: resolve session state without
 cross-session ambiguity, freeze prior gateway output, evaluate only eligible suffix
 transforms against model-specific count and cache economics, pass through unchanged
 when optimization is uncertain, fail closed on security policy, and record the

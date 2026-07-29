@@ -1,9 +1,11 @@
-# Why we don't fork RouteLLM and "become the active version of it"
+# Why Compand doesn't fork RouteLLM and "become the active version of it"
 
 Status: reviewed build-versus-adopt note, fifth in the series (techniques → market →
 tech design → feasibility → this); revisit if RouteLLM's maintained scope changes
 Question answered: RouteLLM is open source and does model routing — why not
 fork it and evolve it into the active, transforming optimizer we've designed?
+Product context: **Compand** is the token-saving context gateway; routing is one
+optional control-plane decision, not the product identity.
 
 **One-line answer:** Forking RouteLLM would adopt a research router trained for
 a different objective, workload, and protocol layer while leaving the optimizer's
