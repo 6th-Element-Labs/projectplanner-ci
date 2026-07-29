@@ -1062,6 +1062,17 @@ const TeepPlan = {
         }
         return taskId || 'task';
     },
+    // The title to show *next to* a task id. _fleetTaskTitle falls back to the id
+    // itself when the board title has not loaded yet, and the cards render
+    // "<id> · <title>" — which came out as "QA-12 · QA-12". Return '' when the
+    // title adds nothing, so the card shows the id once.
+    _dockTaskLabel(taskId) {
+        const id = String(taskId || '').trim();
+        if (!id) return '';
+        const title = String(this._fleetTaskTitle(id) || '').trim();
+        if (!title) return '';
+        return title.toUpperCase() === id.toUpperCase() ? '' : title;
+    },
     // The dock is 380px wide and one label — the failing check name — comes from GitHub, so it can
     // be arbitrarily long ("Switchboard CI / VM gate (ubuntu-latest, py3.12)"). The chip ellipsises
     // instead of clipping mid-word, and keeps the full text in its tooltip.
@@ -1083,10 +1094,13 @@ const TeepPlan = {
         const logLine = String(env.log_tail || '').split('\n').filter(Boolean).at(-1) || '';
         const quiet = age == null ? '' : `quiet ${window.SwitchboardFleetDock.shortAge(age)}`;
         const taskId = s.task_id || 'no task';
-        const title = s.task_id ? this._fleetTaskTitle(s.task_id) : 'Unscoped runner';
+        // _fleetTaskTitle falls back to the task id when the board title has not
+        // loaded, which rendered "QA-12 · QA-12". Only append a title that says
+        // something the id does not.
+        const title = s.task_id ? this._dockTaskLabel(s.task_id) : 'Unscoped runner';
         return `<div class="p-2 border rounded mb-2" style="border-left:2px solid ${accent} !important;border-top-left-radius:0;border-bottom-left-radius:0;">
             <div class="d-flex align-items-center gap-2">
-                <span class="text-truncate fw-medium" style="font-size:13px;" title="${this.esc(s.runner_session_id || '')}">${this.esc(taskId)} · ${this.esc(title)}</span>
+                <span class="text-truncate fw-medium" style="font-size:13px;" title="${this.esc(s.runner_session_id || '')}">${this.esc(taskId)}${title ? ` · ${this.esc(title)}` : ''}</span>
                 <span class="ms-auto">${this._dockBadge(primary.label, primary.tone, primary.icon)}</span>
             </div>
             <div class="text-secondary text-truncate font-monospace" style="font-size:11px;">${this.esc(s.runtime || '?')} · ${this.esc(s.host_id || '?')} · ${this.esc(s.agent_id || '')}${this.esc(uptime)}</div>
@@ -1192,7 +1206,10 @@ const TeepPlan = {
         const accent = `var(--tblr-${primary.tone}, var(--tblr-secondary, #626976))`;
         const task = (x.tasks || [])[0] || {};
         const taskId = task.task_id || 'No board task';
-        const taskTitle = task.title || this._fleetTaskTitle(task.task_id) || x.title || `PR #${x.number}`;
+        // Same "<id> · <id>" trap as the runner card: fall back to the PR's own
+        // title rather than repeating the task id back at the operator.
+        const taskTitle = task.title || this._dockTaskLabel(task.task_id)
+            || x.title || `PR #${x.number}`;
         const autopilot = this._dockAutopilotHtml(x);
         const failure = String((x.ci_failing || [])[0] || '');
         const reason = x.blocked_reason || failure;

@@ -11,7 +11,10 @@ def main() -> None:
 
     assert "runnerConditions(this, s, attention)" in card
     assert "border-left:2px solid ${accent}" in card
-    assert "${this.esc(taskId)} · ${this.esc(title)}" in card
+    # The title is appended only when it says something the id does not —
+    # _fleetTaskTitle falls back to the id, which rendered "QA-12 · QA-12".
+    assert "${this.esc(taskId)}${title ? ` · ${this.esc(title)}` : ''}" in card
+    assert "${this.esc(taskId)} · ${this.esc(title)}" not in card
     assert 'title="${this.esc(s.runner_session_id || \'\')}"' in card
     assert "env.log_tail" in card
     assert "quiet ${window.SwitchboardFleetDock.shortAge(age)}" in card
