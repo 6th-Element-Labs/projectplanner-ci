@@ -389,6 +389,11 @@ def enqueue_task(
             "dispatch_generation": generation,
         }
     suffix = generation or "initial"
+    # BUG-233: completion dispatch identity changed from interpreted diagnostics
+    # to the Task Execution-owned generation. Keep legacy implementation Starts
+    # on v1, but cut review/remediation over to a fresh key namespace so a
+    # persisted pre-cutover request hash cannot reject every replacement tick.
+    idem_version = "v2" if policy.get("effect_identity") else "v1"
     wake = coordination_repo.request_wake(
         selector=selector,
         reason=f"Connect assignment {task_id}",
@@ -400,7 +405,10 @@ def enqueue_task(
         caller_agent_id=caller_agent_id,
         enforce_task_ownership=True,
         project=project,
-        idem_key=f"connect-start:v1:{project}:{task_id}:{runtime_name}:{suffix}",
+        idem_key=(
+            f"connect-start:{idem_version}:"
+            f"{project}:{task_id}:{runtime_name}:{suffix}"
+        ),
     )
     if str(wake.get("error") or "") == "idempotency conflict":
         # Another start owns this generation with a different request body (a

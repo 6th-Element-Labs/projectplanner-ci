@@ -71,10 +71,14 @@ with patch.object(connect_dispatch.coordination_repo, "request_wake", request_wa
         task, project="switchboard", actor="coordinator/b",
         caller_agent_id="coordinator/b", generation_ref="decision-8",
         **{**decision, "source_sha": "b" * 40, "state_version": 8})
+    connect_dispatch.enqueue_task(
+        task, project="switchboard", actor="coordinator/b",
+        caller_agent_id="coordinator/b", generation_ref="implementation-1",
+        role="implementation")
 
 ok(first["assignment_id"] == second["assignment_id"],
    "same completion decision reuses the assignment receipt identity")
-one, replay, hints, successor, changed = captured
+one, replay, hints, successor, changed, implementation = captured
 ok(one["policy"]["effect_identity"] == replay["policy"]["effect_identity"],
    "effect identity excludes ephemeral coordinator identity")
 ok(one["policy"]["effect_identity"] == hints["policy"]["effect_identity"],
@@ -88,6 +92,11 @@ ok(one["policy"]["effect_identity"] != successor["policy"]["effect_identity"]
    "a terminal successor generation receives a fresh external effect")
 ok(one["policy"]["effect_identity"] != changed["policy"]["effect_identity"],
    "new exact head/state version creates a distinct effect identity")
+ok(":v2:" in one["idem_key"],
+   "review/remediation uses the post-cutover v2 idempotency namespace")
+ok(":v1:" in implementation["idem_key"]
+   and "effect_identity" not in implementation["policy"],
+   "ordinary implementation Starts retain their v1 idempotency namespace")
 
 key_one = make_external_effect_key(
     "wake", "agent_host", "completion:ADAPTER-26",
