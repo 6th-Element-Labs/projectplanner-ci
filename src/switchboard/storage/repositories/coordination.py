@@ -2002,6 +2002,77 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
                 try:
                     execution_context.require_current(context)
                 except execution_context.ExecutionContextError as exc:
+                    if wake["status"] not in {"pending", "claimed"}:
+                        return {
+                            "claimed": False,
+                            "reason": f"wake is {wake['status']}",
+                            "wake": wake,
+                        }
+                    result = {
+                        "reason": exc.code,
+                        "reason_codes": [exc.code],
+                        "message": str(exc),
+                        "failure_class": "stale_branch",
+                    }
+                    terminal = _terminalize_personal_connection_in(
+                        c, wake, target_status="failed", now=now)
+                    if not terminal.get("ok"):
+                        return {
+                            "claimed": False,
+                            "reason": "exact_binding_denied",
+                            "reason_codes": [str(
+                                terminal.get("reason_code")
+                                or "execution_connection_terminal_lost"
+                            )],
+                            "message": str(exc),
+                            "wake_id": wake_id,
+                        }
+                    updated = c.execute(
+                        "UPDATE wake_intents SET status='failed', completed_at=?, "
+                        "result_json=? WHERE wake_id=? "
+                        "AND status IN ('pending','claimed')",
+                        (now, json.dumps(result, sort_keys=True), wake_id),
+                    )
+                    released = 0
+                    if updated.rowcount:
+                        released = _surrender_execution_lease_for_wake_in(
+                            c, wake_id, now=now)
+                        c.execute(
+                            "INSERT INTO activity(task_id, actor, kind, payload, "
+                            "created_at) VALUES (?,?,?,?,?)",
+                            (
+                                wake.get("task_id"),
+                                "switchboard/wake",
+                                "wake.failed",
+                                json.dumps({
+                                    "wake_id": wake_id,
+                                    "reason": exc.code,
+                                    "reason_codes": [exc.code],
+                                    "message": str(exc),
+                                    "execution_leases_released": released,
+                                }, sort_keys=True),
+                                now,
+                            ),
+                        )
+                        if wake.get("effect_key"):
+                            _store_facade()._update_external_effect_in(
+                                c, wake["effect_key"], "failed",
+                                readback={
+                                    "wake_id": wake_id,
+                                    "status": "failed",
+                                    "reason": exc.code,
+                                    "message": str(exc),
+                                },
+                                last_error=exc.code,
+                                actor="switchboard/wake",
+                                task_id=wake.get("task_id"),
+                                project=project,
+                                now=now,
+                            )
+                    row = c.execute(
+                        "SELECT * FROM wake_intents WHERE wake_id=?",
+                        (wake_id,),
+                    ).fetchone()
                     return {
                         "claimed": False,
                         "reason": exc.code,
@@ -2009,6 +2080,8 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
                         "message": str(exc),
                         "failure_class": "stale_branch",
                         "wake_id": wake_id,
+                        "wake": _wake_row(row) if row else wake,
+                        "execution_leases_released": released,
                     }
             binding = dict(policy.get("account_binding") or {})
             ownership = dict(policy.get("ownership") or {})
