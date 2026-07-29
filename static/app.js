@@ -1095,7 +1095,9 @@ const TeepPlan = {
             primary = `<button class="btn btn-sm btn-orange" data-runner-answer="${this.esc(s.runner_session_id || '')}"><i class="ti ti-message-question me-1"></i>Answer</button>`;
         } else if (condition.key === 'silent' && s.task_id && actions.includes('inject')) {
             primary = `<button class="btn btn-sm btn-azure" data-runner-task="${this.esc(s.task_id)}" data-runner-action="inject"><i class="ti ti-wand me-1"></i>Nudge</button>`;
-        } else if (condition.key === 'exited' && s.task_id && actions.includes('restart')) {
+        } else if (['failed', 'lost_host', 'exited_unexpectedly', 'ended_unknown'].includes(condition.key)
+                && s.task_id && actions.includes('restart')) {
+            // Restart is for a runner that broke. A clean finish has nothing to redo.
             primary = `<button class="btn btn-sm btn-azure" data-runner-task="${this.esc(s.task_id)}" data-runner-action="restart"><i class="ti ti-refresh me-1"></i>Restart</button>`;
         }
         // Watch is the operator's window into any bound runner — always offered,
@@ -1339,15 +1341,28 @@ const TeepPlan = {
                 && !this._dockPrUnavailable && !this._dockDeploymentUnavailable) {
             host.innerHTML = ''; return;
         }
+        const FD = window.SwitchboardFleetDock;
+        // Finished runners do not belong on screen forever. Clean exits age out
+        // after a couple of minutes; failures stay until a newer runner for the
+        // same task supersedes them, so a crash is never silently swept away.
+        const allRunners = runners;
+        const nowMs = Date.now();
+        runners = runners.filter((s) => {
+            const key = FD.runnerConditions(
+                this, s, (this._dockAttention || {})[s.runner_session_id])[0].key;
+            return FD.runnerRetention(s, key, allRunners, nowMs) !== 'drop';
+        });
         const running = runners.filter((s) => !s.stale && s.status === 'running').length;
         const deadRunners = runners.filter((s) => s.stale || s.status !== 'running');
         const blockedPrs = prs.filter((x) => x.blocked);
-        const FD = window.SwitchboardFleetDock;
         const runnerKeys = runners.map((s) => FD.runnerConditions(
             this, s, (this._dockAttention || {})[s.runner_session_id])[0].key);
         const nAsking = runnerKeys.filter((k) => k === 'waiting_on_you').length;
         const nSilent = runnerKeys.filter((k) => k === 'silent').length;
-        const nBroken = runnerKeys.filter((k) => k === 'exited' || k === 'lost_host').length;
+        // A runner that finished its task is not broken and must not inflate the
+        // count of things needing you — only genuine failures do.
+        const nBroken = runnerKeys.filter((k) => ['failed', 'lost_host',
+            'exited_unexpectedly', 'ended_unknown'].includes(k)).length;
         const nAttn = nAsking + nBroken + blockedPrs.length;
         const collapsed = this._dockCollapsed == null ? (nAttn === 0) : this._dockCollapsed;
         const anchor = 'position:fixed;right:1rem;bottom:1rem;z-index:1031;';
@@ -1393,8 +1408,12 @@ const TeepPlan = {
                 return rows.length ? `<div class="dock-bucket-label">${name} · ${rows.length}</div>${rows.map((d) => this._dockRunnerHtml(d.s)).join('')}` : '';
             };
             const calm = decorated.filter((d) => healthy.includes(d.c[0].key));
-            body = `<div class="p-2">${bucket('Needs you', ['waiting_on_you'])}${bucket('Broken', ['exited', 'lost_host'])}${bucket('Stalled', ['silent'])}`
+            // Finished work goes last — a receipt, not a call to action. Same shape
+            // as the deploy tab's shipped history, and it ages out on its own.
+            const done = decorated.filter((d) => FD.RUNNER_CLEAN_EXITS.includes(d.c[0].key));
+            body = `<div class="p-2">${bucket('Needs you', ['waiting_on_you'])}${bucket('Failed', ['failed', 'lost_host', 'exited_unexpectedly', 'ended_unknown'])}${bucket('Stalled', ['silent'])}`
                 + (calm.length ? `<div class="dock-bucket-label">Working normally · ${calm.length}</div>${calm.map((d) => this._dockRunnerHtml(d.s)).join('')}` : '')
+                + (done.length ? `<div class="dock-bucket-label">Recently finished · ${done.length}</div>${done.map((d) => this._dockRunnerHtml(d.s)).join('')}` : '')
                 + (!decorated.length ? '<div class="p-3 text-secondary small">No live runners for this project.</div>' : '') + '</div>';
         } else if (tab === 'prs' && this._dockPrUnavailable) {
             // The server already knows why: build_open_prs returns `github_error: <exc>`

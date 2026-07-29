@@ -70,14 +70,59 @@
         },
         // A runner may satisfy several conditions at once. Preserve every true
         // signal worst-first, while keeping workspace dirtiness secondary.
+        // How a runner ended. `result.failure_class` is the server's own reason for
+        // a failure — surface it rather than a generic red badge.
+        runnerOutcome(s) {
+            const status = String(s.status || 'unknown');
+            const why = String((s.result || {}).failure_class
+                || (s.result || {}).reason || '').trim();
+            if (status === 'completed') {
+                return { key: 'finished', label: 'Finished', tone: 'green', icon: 'check' };
+            }
+            if (status === 'killed' || status === 'stopped') {
+                return { key: 'stopped', label: 'Stopped by you', tone: 'secondary', icon: 'hand-stop' };
+            }
+            if (status === 'expired') {
+                // lifecycle_cleanup reaping an old session — housekeeping, not a
+                // fault. It is 40% of all sessions on prod; flagging each one for
+                // the operator would bury the handful that actually broke.
+                return { key: 'expired', label: 'Expired', tone: 'secondary', icon: 'clock-off' };
+            }
+            if (status === 'failed') {
+                return {
+                    key: 'failed',
+                    label: why ? `Failed · ${why}` : 'Failed',
+                    tone: 'red',
+                    icon: 'alert-triangle',
+                };
+            }
+            if (status === 'exited') {
+                // The supervisor found the process gone with no completion report.
+                // Not provably a failure, definitely not a proven success.
+                return { key: 'exited_unexpectedly', label: 'Ended unexpectedly', tone: 'yellow', icon: 'help-circle' };
+            }
+            // Never guess a clean finish we cannot prove.
+            return { key: 'ended_unknown', label: 'Ended, cause unknown', tone: 'yellow', icon: 'help-circle' };
+        },
+        // Terminal states that mean nothing went wrong. Everything else still needs
+        // the operator and must not be aged out on a timer.
+        RUNNER_CLEAN_EXITS: ['finished', 'stopped', 'expired'],
+        RUNNER_TERMINAL: ['finished', 'stopped', 'expired', 'failed',
+                          'exited_unexpectedly', 'ended_unknown'],
         runnerConditions(app, s, attention) {
             const out = [];
             const age = this.runnerOutputAge(s);
             const status = String(s.status || 'unknown');
+            // A runner that finished its work is not broken. The server already
+            // distinguishes completed / killed / stopped / failed and carries a
+            // failure_class for the failures; collapsing all of them into one red
+            // "Exited" threw that away and counted clean finishes as attention.
             if (status !== 'running') {
-                out.push({ key: 'exited', label: 'Exited', tone: 'red', icon: 'square' });
+                const ended = this.runnerOutcome(s);
+                out.push(ended);
             }
-            if (s.stale) {
+            if (s.stale && status === 'running') {
+                // No orderly exit — the heartbeat simply stopped. This one *is* broken.
                 out.push({ key: 'lost_host', label: 'Lost host', tone: 'red', icon: 'server-off' });
             }
             if (attention) {
@@ -110,9 +155,43 @@
             }
             return out;
         },
+        // Should this finished runner still be on screen?
+        //
+        // A clean exit is a receipt: show it briefly, then drop it. A failure is
+        // not — auto-hiding a 3am crash on a timer makes the dock lie by morning.
+        // Failures instead clear when something supersedes them: the task picked
+        // up a newer runner, so the dead one is no longer the current truth.
+        // That keeps it hands-off — nothing to acknowledge, nothing sticks forever.
+        //
+        // NOTE: runner_sessions has no ended_at column; updated_at is the terminal
+        // write for a finished runner, so it stands in for "when it stopped".
+        CLEAN_EXIT_TTL_S: 120,
+        runnerRetention(s, conditionKey, allRunners, now) {
+            if (!this.RUNNER_TERMINAL.includes(conditionKey)) return 'live';
+            if (this.RUNNER_CLEAN_EXITS.includes(conditionKey)) {
+                const endedAt = Number(s.updated_at || 0);
+                if (!endedAt) return 'keep';   // unknown age — do not silently drop it
+                const age = Math.max(0, (now / 1000) - endedAt);
+                return age > this.CLEAN_EXIT_TTL_S ? 'drop' : 'keep';
+            }
+            // A failure is superseded once a newer runner exists for the same task.
+            const mine = String(s.task_id || '');
+            const endedAt = Number(s.updated_at || 0);
+            if (mine) {
+                const superseded = (allRunners || []).some((o) =>
+                    o !== s
+                    && String(o.task_id || '') === mine
+                    && Number(o.updated_at || 0) > endedAt);
+                if (superseded) return 'drop';
+            }
+            return 'keep';
+        },
         runnerRank(key) {
-            const order = ['exited', 'lost_host', 'waiting_on_you', 'silent',
-                           'idle', 'working', 'running_unknown'];
+            // Failures first, then things asking for you, then live work. Clean
+            // exits sort last — they are a receipt, not a call to action.
+            const order = ['failed', 'lost_host', 'exited_unexpectedly', 'ended_unknown',
+                           'waiting_on_you', 'silent', 'idle', 'working',
+                           'running_unknown', 'finished', 'stopped', 'expired'];
             const at = order.indexOf(key);
             return at === -1 ? order.length : at;
         },

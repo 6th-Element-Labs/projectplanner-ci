@@ -15,10 +15,13 @@ def main() -> None:
     assert "condition.key === 'silent'" in actions  # Nudge = inject on a silent runner
     assert "actions.includes('inject')" in actions  # Nudge injects; Watch is unconditional
     assert ">Nudge</button>" in actions
-    assert "condition.key === 'exited'" in actions
+    # Restart is offered for a runner that broke, never for a clean finish.
+    # 'exited' is gone: the dock now tells completed/stopped/failed apart.
+    assert "'failed', 'lost_host', 'exited_unexpectedly', 'ended_unknown'" in actions
     assert "actions.includes('restart')" in actions
     assert ">Restart</button>" in actions
-    assert "condition.key === 'lost_host'" not in actions
+    assert "condition.key === 'exited'" not in actions
+    assert "'finished'" not in actions, "a finished runner has nothing to restart"
     assert "actions.includes('kill')" in actions
     assert 'class="dropdown-item text-danger"' in actions
     assert "btn-outline-danger" not in actions
