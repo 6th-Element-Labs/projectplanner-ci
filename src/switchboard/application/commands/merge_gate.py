@@ -819,11 +819,14 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
         if task_id:
             from switchboard.storage.repositories.execution_publications import (
                 ExecutionPublicationError,
-                get_for_task_in,
+                get_for_task_event_in,
                 validate_event,
             )
             with _conn(project) as c:
-                publication = get_for_task_in(c, project, task_id)
+                publication = get_for_task_event_in(
+                    c, project, task_id, repository=repo,
+                    pr_number=pr_number, branch=head_ref,
+                )
             if publication:
                 try:
                     validate_event(

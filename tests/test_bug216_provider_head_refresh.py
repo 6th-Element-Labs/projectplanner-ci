@@ -57,6 +57,22 @@ with store._conn(P) as c:
             "sha256:bug216", 1.0, 1.0,
         ),
     )
+    # A later completion from another local generation branch must not outrank
+    # the publication matching GitHub's live PR branch.
+    c.execute(
+        "INSERT INTO execution_publications("
+        "publication_id,project_id,task_id,execution_id,"
+        "execution_generation,repo_role,repository,default_branch,base_sha,"
+        "branch,head_sha,pr_number,pr_url,scm_connection_ref,context_digest,"
+        "created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "execpub-bug216-late", P, TASK, "exec-bug216-late", 2,
+            "canonical", "6th-Element-Labs/projectplanner", "master",
+            "c" * 40, "codex/BUG-216-other-generation", "d" * 40,
+            PR_NUMBER, PR_URL, "scm-switchboard", "sha256:bug216-late",
+            2.0, 2.0,
+        ),
+    )
 
 # The Mission Bot hydrator supplies the live GitHub PR but no cached expected
 # head.  A stale task projection must not turn normal same-PR head movement into
@@ -90,6 +106,12 @@ live_head_codes = {
 }
 assert "stale_head_sha" not in live_head_codes, live_head_gate
 assert "execution_publication_event_mismatch" not in live_head_codes, live_head_gate
+
+with store._conn(P) as c:
+    c.execute(
+        "DELETE FROM execution_publications WHERE publication_id=?",
+        ("execpub-bug216-late",),
+    )
 
 advanced = store.mark_task_pr_opened(
     TASK, PR_NUMBER, PR_URL, BRANCH, HEAD_B,
