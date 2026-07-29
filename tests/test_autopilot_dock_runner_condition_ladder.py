@@ -17,7 +17,7 @@ const base = {status:'running', stale:false, task_id:'UI-72',
 // once we know how it ended — "Lost host" is now reserved for a runner that
 // was still supposed to be running when the host went away.
 if (JSON.stringify(keys({...base, status:'exited', stale:true}, {request_id:'a'}).slice(0,3))
-    !== JSON.stringify(['exited_unexpectedly','waiting_on_you','silent'])) throw Error('rank order');
+    !== JSON.stringify(['finished','waiting_on_you','silent'])) throw Error('rank order');
 if (keys({...base, stale:true}, null)[0] !== 'lost_host') throw Error('live lost host');
 if (keys(base, {request_id:'a'})[0] !== 'waiting_on_you') throw Error('attention rank');
 if (keys(base, null)[0] !== 'silent') throw Error('silent rank');

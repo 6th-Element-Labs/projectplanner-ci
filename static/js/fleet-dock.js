@@ -97,9 +97,11 @@
                 };
             }
             if (status === 'exited') {
-                // The supervisor found the process gone with no completion report.
-                // Not provably a failure, definitely not a proven success.
-                return { key: 'exited_unexpectedly', label: 'Ended unexpectedly', tone: 'yellow', icon: 'help-circle' };
+                // The normal end of a codex run: the supervisor observes the
+                // process finish and terminalizes the session. Every live 'exited'
+                // runner checked on prod had shipped a merged PR, so calling this
+                // a failure told the operator four successes had broken.
+                return { key: 'finished', label: 'Finished', tone: 'green', icon: 'check' };
             }
             // Never guess a clean finish we cannot prove.
             return { key: 'ended_unknown', label: 'Ended, cause unknown', tone: 'yellow', icon: 'help-circle' };
@@ -107,8 +109,7 @@
         // Terminal states that mean nothing went wrong. Everything else still needs
         // the operator and must not be aged out on a timer.
         RUNNER_CLEAN_EXITS: ['finished', 'stopped', 'expired'],
-        RUNNER_TERMINAL: ['finished', 'stopped', 'expired', 'failed',
-                          'exited_unexpectedly', 'ended_unknown'],
+        RUNNER_TERMINAL: ['finished', 'stopped', 'expired', 'failed', 'ended_unknown'],
         runnerConditions(app, s, attention) {
             const out = [];
             const age = this.runnerOutputAge(s);
@@ -163,16 +164,23 @@
         // up a newer runner, so the dead one is no longer the current truth.
         // That keeps it hands-off — nothing to acknowledge, nothing sticks forever.
         //
-        // NOTE: runner_sessions has no ended_at column; updated_at is the terminal
-        // write for a finished runner, so it stands in for "when it stopped".
-        CLEAN_EXIT_TTL_S: 120,
+        // NOTE: updated_at is NOT when the runner stopped. The host keeps
+        // heartbeating a terminalized session — observed on prod: a runner that
+        // started 274 minutes ago and exited long since still had updated_at 0.6
+        // minutes old. Ageing off it meant finished runners never left the dock.
+        //
+        // `expires_at` (heartbeat_at + heartbeat_ttl_s) is the platform's own
+        // answer to "is this lease still good", and `live` is its canonical
+        // liveness predicate. A finished runner therefore lingers only until its
+        // lease lapses — a couple of minutes after the host stops touching it —
+        // and then it is gone without us inventing a timestamp.
         runnerRetention(s, conditionKey, allRunners, now) {
             if (!this.RUNNER_TERMINAL.includes(conditionKey)) return 'live';
+            const nowS = now / 1000;
+            const expiresAt = Number(s.expires_at || 0);
+            const leaseLapsed = s.live === false && expiresAt > 0 && nowS > expiresAt;
             if (this.RUNNER_CLEAN_EXITS.includes(conditionKey)) {
-                const endedAt = Number(s.updated_at || 0);
-                if (!endedAt) return 'keep';   // unknown age — do not silently drop it
-                const age = Math.max(0, (now / 1000) - endedAt);
-                return age > this.CLEAN_EXIT_TTL_S ? 'drop' : 'keep';
+                return leaseLapsed ? 'drop' : 'keep';
             }
             // A failure is superseded once a newer runner exists for the same task.
             const mine = String(s.task_id || '');
@@ -189,7 +197,7 @@
         runnerRank(key) {
             // Failures first, then things asking for you, then live work. Clean
             // exits sort last — they are a receipt, not a call to action.
-            const order = ['failed', 'lost_host', 'exited_unexpectedly', 'ended_unknown',
+            const order = ['failed', 'lost_host', 'ended_unknown',
                            'waiting_on_you', 'silent', 'idle', 'working',
                            'running_unknown', 'finished', 'stopped', 'expired'];
             const at = order.indexOf(key);

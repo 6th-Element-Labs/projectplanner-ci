@@ -22,10 +22,11 @@ SCRIPTS = [
     "static/app.js",
 ]
 
-# Two dead runners and two blocked PRs: four things need the operator.
+# Two FAILED runners and two blocked PRs: four things need the operator.
+# (an exited runner finished its work and is deliberately not counted)
 RUNNERS = [
-    {"runner_session_id": "r1", "task_id": "A-1", "status": "exited", "stale": False},
-    {"runner_session_id": "r2", "task_id": "A-2", "status": "exited", "stale": False},
+    {"runner_session_id": "r1", "task_id": "A-1", "status": "failed", "stale": False},
+    {"runner_session_id": "r2", "task_id": "A-2", "status": "failed", "stale": False},
     {"runner_session_id": "r3", "task_id": "A-3", "status": "running", "stale": False},
 ]
 PRS = [
