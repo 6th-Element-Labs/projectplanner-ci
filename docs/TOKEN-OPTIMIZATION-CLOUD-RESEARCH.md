@@ -412,6 +412,65 @@ auth never goes through the gateway).
   the request path; infra incumbents ship the generic slice (LangCache, Kong
   plugin) but not agent-aware transforms + outcome-verified evidence.
 
+### 7.1 The pip-install wedge, concretely
+
+The try-before-paying experience is a local, single-process edition of the
+gateway, installable in one line and self-proving on the user's own traffic:
+
+```text
+pip install tokenlens        # name TBD; pipx/uvx work too
+tokenlens run claude         # or codex / cursor-agent / any command
+tokenlens report
+```
+
+- **`run` wraps the launch** (the CodexZero onboarding pattern): starts a
+  localhost proxy and launches the agent with the right env injected
+  (`ANTHROPIC_BASE_URL=http://127.0.0.1:8484`, or a consented Codex
+  `model_providers` block). `tokenlens up` exists for manual-env users and
+  prints the exact per-agent snippet.
+- **Default mode is observe**: pure passthrough, keys forwarded never stored,
+  streaming byte-for-byte. Day one is zero-risk by construction.
+- **`report` is the go-to-market in one screen**: tokens by session,
+  would-have-saved by technique (dedup, RLE, paging, cache shaping), and the
+  cache-hit-rate gap in dollars. Every number is traceable to per-request
+  records in local SQLite, with the provider's own `usage` fields as ground
+  truth — the report is verifiable from provider responses, not our claims.
+- **`optimize` flips on tier 1–2** (hygiene + lossless), and
+  `report --verified` shows before/after against provider-billed tokens. The
+  full trust ladder (observe → predicted → lossless → verified) compressed
+  into a CLI the user climbs alone in under an hour.
+
+Technical shape: pip as distribution, Rust as engine — the data-plane core
+ships as a compiled extension (maturin/PyO3, the ruff/uv/pydantic-core
+pattern) so install is universal and added latency stays single-digit ms.
+The same core runs locally, in the cloud, and in the self-host edition (one
+codebase, three deployments — the WAAS lesson). Local state lives in
+`~/.tokenlens/` (SQLite decisions + session chains, CAS artifacts); bundled
+version-pinned tokenizers run the drift check against provider `usage`
+locally, so the exactness story is part of the demo.
+
+Free-forever vs cloud: the local tier is a complete single-developer
+optimizer and never feels crippled. The paywall is what local structurally
+cannot do: fleet aggregation and team dashboards, continuously updated
+dialect profiles with the promotion state machine behind them, a hosted
+gateway for CI and cloud agents where localhost doesn't exist, team-shared
+tier-3 artifact stores, verified-savings billing exports, SLA/SSO.
+One-sentence seam: individuals optimize for free; organizations pay to know
+it's safe, everywhere, continuously.
+
+Two deliberate details: telemetry is opt-in and content-free (aggregate
+counters only — technique, token deltas, model, dialect version; never
+payloads), because conspicuous cleanliness is a sales asset for a product
+that lives in the request path. And the upgrade/share nudge fires once, only
+after the first report shows nonzero measured savings (the star-prompt
+pattern) — the report ends with a one-line paste-into-Slack summary, because
+"we'd save 15%, here's the receipt" spreading inside a company is what
+reaches the cloud buyer.
+
+P0 tie-in: this package *is* experiments E1–E2 from the feasibility doc
+(passthrough fidelity + redundancy census) productized — the go/no-go
+measurement and the top-of-funnel wedge are the same artifact.
+
 ---
 
 ## 8. Risks and open questions
