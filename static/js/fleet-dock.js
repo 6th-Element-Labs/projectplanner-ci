@@ -10,6 +10,40 @@
     'use strict';
 
     const FleetDock = {
+        // Preserve visual continuity when an open PR moves to Deploy. This is
+        // browser-local presentation only: disappearance never means "merged";
+        // a receipt is created only when the authoritative deployment feed has
+        // the same PR. Multiple quick merges stack for one minute.
+        updateMergeReceipts(app, prs, deployments, now = Date.now()) {
+            const current = new Set((prs || []).map((x) => Number(x.number)));
+            const merged = new Map((deployments || []).map((x) => [Number(x.number), x]));
+            const receipts = (app._dockMergeReceipts || [])
+                .filter((x) => Number(x.expires_at) > now);
+            if (app._dockPreviousPrs) {
+                for (const prior of app._dockPreviousPrs) {
+                    const number = Number(prior.number);
+                    const deployment = merged.get(number);
+                    if (current.has(number) || !deployment) continue;
+                    const receipt = {
+                        number,
+                        title: deployment.title || prior.title || `PR #${number}`,
+                        url: deployment.url || prior.url || '',
+                        merged_at: deployment.merged_at || '',
+                        expires_at: now + 60000,
+                    };
+                    const index = receipts.findIndex((x) => Number(x.number) === number);
+                    if (index >= 0) receipts[index] = receipt;
+                    else receipts.unshift(receipt);
+                }
+            }
+            app._dockPreviousPrs = (prs || []).map((x) => ({
+                number: Number(x.number),
+                title: x.title || '',
+                url: x.url || '',
+            }));
+            app._dockMergeReceipts = receipts;
+            return receipts;
+        },
         // A PR is usually several things at once (red CI *and* conflicting *and*
         // draft). Rank every condition that holds by how much it blocks the
         // merge and return them worst-first, so the card can show one
