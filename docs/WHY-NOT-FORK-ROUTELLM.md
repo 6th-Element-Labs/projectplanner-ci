@@ -5,11 +5,9 @@ tech design → feasibility → this)
 Question answered: RouteLLM is open source and does model routing — why not
 fork it and evolve it into the active, transforming optimizer we've designed?
 
-**One-line answer:** Forking RouteLLM would buy us a few thousand lines of
-research-grade router code trained on the wrong data for the wrong workload at
-the wrong layer, while giving us none of our product's hard parts — and it
-would position us in the one lane of this market that has already commoditized
-to zero margin. We take its *ideas* (threshold calibration, router
+**One-line answer:** Forking RouteLLM would adopt a research router trained for
+a different objective, workload, and protocol layer while leaving the optimizer's
+hard parts unbuilt. We should evaluate and borrow its *ideas* (threshold calibration, router
 architectures, evaluation metrics) into our tier-5 control plane and train
 them on our own outcome data; we do not take its code as a foundation.
 
@@ -43,11 +41,10 @@ RouteLLM's entire action space is a single decision per request: strong or
 weak. It never touches the payload. Our product's value is overwhelmingly in
 the payload path: session-stateful dedup, RLE, paging, delta re-reads, cache
 shaping, the artifact store, the exact-tokenizer gate, the evidence plane
-(tech deep dive §§3–9). Fork RouteLLM and you have inherited **zero** of
-those components — there is nothing in the codebase where they would even
-attach. "Becoming the active version of RouteLLM" means building 95% of the
-system from scratch either way; the fork decision only governs whether the
-remaining 5% (the routing decision function) starts from someone else's
+(tech deep dive §§3–9). Fork RouteLLM and those components remain unbuilt.
+"Becoming the active version of RouteLLM" still means building nearly all of the
+optimizer-specific system; the fork decision only governs whether the routing
+decision function starts from someone else's
 research scaffolding or from our own control plane, where it must live anyway
 (MODEL-CATALOG-ROUTING already specifies our routing contract: explainable
 `routing_decision` records, discover→promote→pin, fail-closed lanes — none of
@@ -82,12 +79,12 @@ architecture — and mid-session model switching, RouteLLM's core move, is
 exactly the operation our cache-economics engine must veto most of the time
 (switching models discards the provider prefix cache; a hot 1-hour Anthropic
 prefix is a routing input, not a free variable). RouteLLM has no concept of
-this constraint; our design treats it as first-class (tech doc §13.3).
+this constraint; our design treats it as first-class (tech doc §13, item 3).
 
 ## 5. Reason 4 — the codebase is a paper artifact, not a living product
 
-It is a research framework: evaluation-first, maintained at research cadence,
-with its assets frozen around the 2024 model generation. Model landscapes
+It is a research framework: evaluation-first, with published assets centered on
+the model generation studied by the project. Model landscapes
 turn over quarterly; a router is only as good as its most recent calibration.
 The durable thing to own is the **recalibration loop** (our promotion state
 machine and release-day re-validation, tech doc §9), not any particular
@@ -98,15 +95,14 @@ entirely the disposable part.
 
 ## 6. Reason 5 — wrong strategic lane
 
-The market doc (§1.3) mapped this precisely: routing is the **commoditized
-lane**. OpenRouter's auto-router, Martian, NotDiamond, and every gateway's
-built-in routing compete there, and per-token gateway margins have already
-raced to zero. "The active version of RouteLLM" is a positioning statement
+The market doc (§1.3) treats routing as a crowded and increasingly bundled lane.
+OpenRouter's auto-router, Martian, NotDiamond, and gateway routing features
+compete there. "The active version of RouteLLM" is a positioning statement
 that files us in that lane, against free, at exactly the moment the lane's
 differentiation collapsed. Our niche claim is the layer none of them occupy:
 outcome-verified payload optimization with routing as *one joined decision
 input* — tier + compression profile + cache state, chosen per wake, recorded
-in one explainable decision (MODEL-CATALOG-ROUTING + tech doc §13.3).
+in one explainable decision (MODEL-CATALOG-ROUTING + tech doc §13, item 3).
 Routing is a feature of our decision; it must not become our identity.
 
 ---
@@ -128,17 +124,20 @@ Borrow the ideas, cite the paper, reimplement inside our control plane:
    the right distribution shows routing's real headroom; it stacks with,
    rather than substitutes for, payload optimization.
 
-The routing decision function is a few hundred lines plus a trained model.
-The training data, the calibration loop, and the joined cache-aware decision
-are the actual product — all ours regardless. Reimplementation cost is days;
-fork-carrying cost (adapting, de-risking, and eventually deleting a research
-codebase embedded at our core) is far higher.
+The training data, calibration loop, compatibility contract, and joined
+cache-aware decision are the durable work regardless of whether code is reused.
+Before reimplementing, perform a bounded dependency spike: inventory reusable
+evaluation components, verify license and maintenance state, estimate adapter
+cost, and compare that with a small native implementation. The architectural
+verdict is “do not adopt it as the product foundation,” not “none of its code can
+ever be a useful dependency.”
 
 ---
 
 ## 8. Verdict
 
-Fork: no. Borrow: yes — abstractions, metrics, and architecture choices into
+Foundation fork: no. Evaluate components and borrow ideas: yes — abstractions,
+metrics, and architecture choices into
 the tier-5 routing join specified in MODEL-CATALOG-ROUTING and the tech deep
 dive, trained on the evidence plane's outcome data. RouteLLM answered "which
 model should answer this prompt?" for 2024 chat traffic. Our product answers

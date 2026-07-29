@@ -1,17 +1,40 @@
 # Token Optimization as a Service — research & scoping
 
-Status: research draft for the token-gateway scope (sibling of MODEL-CATALOG-ROUTING)
+Status: research and product-scoping draft; not accepted architecture or an implementation commitment
 Depends on: LiteLLM API-only boundary, Tally cost-to-outcome attribution, `routing_decision` records
 
-**One-line contract:** Sit in the model-API path of any coding agent, remove provably
-redundant tokens under an exact-tokenizer never-worse gate, keep raw bytes recoverable
-by hash, and continuously prove — against verified task outcomes — which optimizations
-are safe on which models.
+**One-line contract:** Give coding-agent teams a context flight recorder and compiler:
+show where spend and reliability leak, remove deterministic waste on certified traffic
+lanes, preserve recoverability where policy permits, and measure whether each
+optimization improves cost per verified outcome.
 
 The thesis in one sentence: WAN optimization for the token economy, delivered the way
 Cloudflare delivered WAN/edge services (SaaS via a one-line config change) instead of
 the way Cisco/Riverbed delivered them (boxes) — where the durable asset is not the
 proxy but the evidence flywheel that proves savings never cost outcomes.
+
+## 0. Product boundary: standalone layer, amplified by Switchboard
+
+This product must stand on its own in the agentic-AI coding stack. Its standalone
+contract is an agent- and provider-compatible context-efficiency layer that can sit
+between a supported agent API lane and a model provider, or run beside the agent as a
+local harness. It provides value without Switchboard: coverage attestation, context
+linting, request and usage receipts, safe transforms, bounded artifact recovery, and
+customer-supplied outcome joins.
+
+Switchboard is the 2+2=5 environment, not a hard dependency. It contributes task and
+project identity, runtime adapters, routing policy, CI/review/merge evidence, and
+Tally's cost-to-verified-outcome denominator. Gateway observations remain evidence;
+they cannot establish capacity, start work, acknowledge communication, complete a
+claim, or prove Done.
+
+The first product is not generic prompt compression. It is a no-mutation Context
+Doctor and flight recorder that answers:
+
+- which inference traffic is captured, bypassed, or unsupported;
+- which exact spans caused cache misses, repeated spend, retries, or unnecessary wakes;
+- what could have been saved after provider cache discounts and optimizer overhead;
+- whether a later enforced optimization changed task success, latency, or reliability.
 
 ---
 
@@ -40,8 +63,9 @@ distribution).
 
 The single most important discipline borrowed from all of them: **optimize the layer
 you're on without breaking the caching layer above you.** For us that layer is
-provider prompt caching (90% input discount on Anthropic, 50% on OpenAI). Any
-transform that is not deterministic and prefix-stable can *increase* the bill while
+provider prompt caching, whose write/read prices, eligibility, and retention vary by
+provider and model. Any transform that is not deterministic and prefix-stable can
+*increase* the bill while
 "saving tokens." This is the token-gateway version of the WAAS rule that DRE must not
 defeat downstream QoS or application caching.
 
@@ -53,8 +77,8 @@ defeat downstream QoS or application caching.
 
 WAAS DRE and Riverbed SDR kept synchronized dictionaries of previously-seen byte
 segments at both ends of a WAN link and replaced repeats with short references.
-The token gateway has it *easier*: both "ends" are us (we see every request in the
-session), and the reference format can be plain JSON the model already understands.
+On a certified API lane the gateway can observe each routed request in the session,
+and the reference format can be standard JSON the model already understands.
 CodexZero's exact-duplicate suppression is the proven miniature: replace a repeated
 read-only result with `{"same_output_as_tool_call": …, "source_state_sha256": …}`
 only when content is byte-identical, the command is proven read-only, source state
@@ -101,22 +125,24 @@ for them.
 ### 2.4 Conditional requests and content addressing → the artifact store
 
 HTTP's `If-None-Match`/304 pattern and git/Nix/Bazel content addressing combine into
-the evidence layer: every raw output is stored by SHA-256 *before* any compact
-candidate is chosen (fail-closed on hash mismatch), every compact form carries the
-raw hash, and an injected `expand_artifact` tool lets the model recover exact bytes
-on demand. This is what makes tier-3 "lossy" transforms actually reversible-in-
-reachability: lossy in presentation, lossless in access. ccache and Bazel's remote
-cache also prove the operational model: content-addressed caches can be shared
-fleet-wide safely because the address *is* the proof of identity.
+the evidence layer: when policy permits retention, raw output is stored before a
+compact candidate is eligible, compact forms carry opaque artifact capabilities, and
+a compatible `expand_artifact` path lets the model recover exact bytes on demand. In
+zero-retention mode, transforms that require later expansion are unavailable unless
+the customer supplies the store.
+
+A content hash proves byte identity, not authorization, freshness, tenancy, or safe
+reuse. Artifact capabilities must be tenant- and session-scoped; physical dedup must
+not let one tenant infer another tenant's content through hashes, errors, or timing.
 
 ### 2.5 Virtual memory → context paging
 
 Denning's working-set model maps directly: an agent session's context is a memory
 hierarchy where "resident" = in the prompt (expensive per turn) and "swapped" = in
 the artifact store (free until faulted). MemGPT (arXiv:2310.08560, now Letta) proved
-LLMs can drive their own paging via tools. The gateway version needs no agent
-cooperation: evict cold, superseded tool outputs (an old test log after a newer run
-exists) to a stub with hash + one-line summary, and let the model fault it back.
+LLMs can drive their own paging via tools. A gateway can identify candidates without
+agent cooperation, but reliable recovery requires a tool or protocol the agent/model
+can actually invoke. Without a certified expansion path, remain in observe mode.
 Eviction policy is Redis's science — LRU/LFU approximations, TTLs, and the key
 insight that *recency and frequency both matter*: a file read 10 turns ago that the
 model keeps referencing must stay resident.
@@ -193,8 +219,8 @@ the *proof-of-safety layer* is not.
 vLLM PagedAttention (SOSP '23), SGLang **RadixAttention** (prefix-tree KV reuse),
 CacheGen (SIGCOMM '24, KV-cache compression/streaming), CacheBlend. These are
 provider/self-host-side, but RadixAttention's radix-tree view of shared prefixes is
-exactly the mental model for **why prefix stability is law** (§2.6): every byte we
-keep stable is a byte the provider serves at 10–50% price. For customers running
+  exactly the mental model for **why prefix stability is law** (§2.6): stable bytes
+  may remain eligible for provider or self-hosted cache reuse. For customers running
 self-hosted models (vLLM/SGLang), the gateway can go further and actively shape
 requests to maximize radix-tree hits — a segment where our savings are largest.
 
@@ -226,7 +252,8 @@ harness-side hooks — in Switchboard, the runtime adapters are that hook.
 
 ### 3.8 Output-side economics [G+A]
 
-Output tokens cost 3–5x input. Levers: suppress reasoning summaries where the
+Output tokens are often materially more expensive than input, with ratios varying
+by provider and model. Levers: suppress reasoning summaries where the
 harness allows (CodexZero keeps encrypted reasoning, omits the summary), terse
 commentary instructions ("caveman mode" — works because commentary is for humans
 and doesn't affect task correctness), `max_tokens` discipline per task class, and
@@ -247,14 +274,14 @@ structured-output schemas that don't force verbose framing. Speculative decoding
 | lm-sys/RouteLLM | Trained model routing | Router features for the routing scope join |
 | letta-ai/letta (MemGPT) | Context paging via tools works | Page-fault UX for `expand_artifact` |
 | sgl-project/sglang, vllm-project/vllm | Prefix reuse economics | Request shaping for self-hosted lanes |
-| openai/tiktoken, huggingface/tokenizers, anthropic token-counting APIs | Exact counting | The gate. Approximate counting breaks the never-worse guarantee |
+| openai/tiktoken, huggingface/tokenizers, anthropic token-counting APIs | Model-specific or provider-authoritative counting | Candidate-size evidence; provider usage remains billing truth |
 | pleasedodisturb/awesome-llm-token-optimization | Curated field map | Ongoing scan for new techniques |
 
 2026 commercial landscape check (validation, not moat): The Token Company (YC W26)
 sells compression-as-API; TokenShift does endpoint-local compression for coding
 agents; Kong ships a prompt-compression plugin; Redis ships LangCache. The category
-is real and forming; nobody yet combines agent-aware transforms + outcome-verified
-evidence + savings-share billing.
+is real and forming. Agent-aware transforms plus outcome evidence and
+savings-aligned billing are a differentiation hypothesis to revalidate.
 
 ---
 
@@ -271,8 +298,9 @@ What worked, and transfers:
 - **The Central Manager sold the product.** Savings dashboards per link/application
   were the sales artifact — customers bought the *report*, then kept the box.
   Our `codex-zero savings` / shadow-mode savings report is the same wedge.
-- **Transparent interception** (WCCP/inline) meant no client changes. Our
-  equivalent: base-URL override, which every agent already supports.
+- **Transparent interception** (WCCP/inline) meant no client changes. Our preferred
+  equivalent is a supported base-URL override where available, with explicit
+  harness integration for personal-subscription and closed vendor lanes.
 - **Per-protocol AOs** were the roadmap engine — each new AO expanded the market.
   Ours: per-agent-family optimizers.
 
@@ -296,8 +324,9 @@ What failed, and warns:
   content untouched), earned trust, then shipped content-modifying features
   (Minify, Polish) as opt-in. **Rocket Loader** — their JS-rewriting feature — broke
   sites and taught the lesson: payload mutation without a provable-equivalence gate
-  burns trust fast. Our tier ladder (observe → lossless → reversible → behavioral)
-  is the same ladder with the CodexZero gate making tiers 2–3 provable.
+  burns trust fast. Our tier ladder follows the same adoption pattern, but every
+  tier must publish its narrower proof class. Strictly fewer tokens and retained
+  source bytes do not prove semantic equivalence.
 - **Railgun's retirement**: a delta-compression product whose residual shrank as
   the baseline improved (Brotli, HTTP/2, origin-pull caching). Expect the same
   pressure from provider-native caching/compaction, and plan the moat around
@@ -329,8 +358,11 @@ What failed, and warns:
 
 ### 6.1 Three planes
 
+These are internal optimizer components, not Switchboard lifecycle authorities.
+They remain subordinate to ADR-0008 in an integrated deployment.
+
 - **Data plane** — the proxy: OpenAI-/Anthropic-compatible endpoints, streaming
-  pass-through, per-model exact tokenizers, transform pipeline, artifact store,
+  fidelity, model-specific counting, transform pipeline, artifact store,
   session state. Stateless-restartable; state in the store.
 - **Control plane** — policy: which transform tiers per customer/lane/model,
   prefix-freeze ledger, agent-dialect registry, cache-economics model per provider
@@ -344,9 +376,9 @@ What failed, and warns:
 | Tier | Contents | Guarantee | Default |
 |---|---|---|---|
 | 0 Observe | Telemetry, would-have-saved counters | No mutation | On |
-| 1 Hygiene | ANSI/pager strip at source (env), whitespace/JSON compaction | Byte-lossless or presentation-only | On |
-| 2 Lossless | RLE, exact dedup w/ state proofs, schema dedup, cache-aware shaping | Strictly-smaller gate; raw retained; model-equivalent content | On |
-| 3 Reversible | Stale-output eviction, diagnostic projections, delta-encoded re-reads | Info recoverable via `expand_artifact`; success-only projections | Opt-out |
+| 1 Hygiene | ANSI/pager strip at source (env), whitespace/JSON compaction | Byte-preserving or bounded presentation change | On after dialect certification |
+| 2 Exact reference | RLE, byte-identical references, schema/cache shaping | Source identity proven; model-visible representation changed | Canary after outcome evidence |
+| 3 Recoverable projection | Stale-output eviction, successful-check projections, delta re-reads | Exact source retrievable through a certified expansion path | Opt-in |
 | 4 Behavioral | Lean prompts, terse commentary, LLMLingua on injected text, summarization | Eval-gated per model; paired outcome evidence | Opt-in |
 | 5 Routing | Tier + compression profile per wake (sibling scope join) | Explainable `routing_decision` | Opt-in |
 
@@ -356,12 +388,12 @@ What failed, and warns:
 |---|---|---|---|
 | Exact dedup + state proofs | Gateway | No | High (tool-heavy sessions) |
 | RLE / hygiene | Gateway | No (better with env injection) | Medium |
-| Stale-output paging | Gateway | No (tool injection) | High on long sessions |
-| Delta re-reads | Gateway | No | Medium |
+| Stale-output paging | Gateway plus certified tool loop | Usually | Unknown until E2/E4 |
+| Delta re-reads | Gateway plus expansion path | Usually | Unknown until E2/E4 |
 | Prefix-stability / cache shaping | Gateway | No | High (bill, not tokens) |
 | Lean prompt / schema minimization | Harness/launcher | Yes | Medium; big on cold start |
 | Turn elimination (event-wait, batching) | Harness/launcher | Yes | High per avoided wake |
-| Output-side (terse, summaries off) | Harness/launcher | Yes | Medium (3–5x-priced tokens) |
+| Output-side (terse, summaries off) | Harness/launcher | Yes | Unknown; model prices vary |
 | Hard compression (LLMLingua) | Gateway | No | Small, risky; own-text only |
 | Semantic caching | Gateway | No | Small for coding; restricted |
 
@@ -373,10 +405,11 @@ auth never goes through the gateway).
 
 ### 6.4 The constitution (non-negotiables, from CodexZero + Rocket Loader's grave)
 
-1. Candidate vs original decided by the **exact production tokenizer**; ship only
-   if strictly smaller. Fail open to the original.
-2. Raw bytes stored content-addressed **before** any transform is eligible;
-   fail closed on hash mismatch.
+1. Candidate eligibility uses the most authoritative available model-specific count;
+   ship only if strictly smaller and projected billed cost does not increase. Counts
+   alone never establish semantic safety.
+2. When retention policy permits, raw bytes are stored before a transform requiring
+   recovery is eligible. In zero-retention mode those transforms are disabled.
 3. **Prefix stability is law**: transformed history is frozen; only the suffix is
    processed. Objective is cost-per-task, not tokens.
 4. Never invent symbol vocabularies; compact forms must be in-distribution
@@ -386,8 +419,9 @@ auth never goes through the gateway).
 7. Every enforce-mode technique has shadow-mode history and paired outcome
    evidence on the target model before promotion; model releases trigger
    re-validation.
-8. BYO keys; zero-retention mode; transforms and savings are auditable per
-   request (the `routing_decision` discipline extended to `transform_decision`).
+8. Gateway credentials and upstream provider credentials are distinct. Upstream
+   credentials are server-held or customer-vaulted, never returned to the agent.
+   Retention modes and every transform decision remain auditable per request.
 
 ---
 
@@ -407,129 +441,118 @@ auth never goes through the gateway).
   quality loop no standalone gateway can close. Build behind the existing LiteLLM
   boundary with a clean seam (attribution via headers; empty = standalone mode) so
   spin-out stays cheap.
-- **Structural defense:** OpenRouter can't copy savings-share (it inverts their
-  take-rate model); providers won't optimize cross-vendor; frameworks aren't in
-  the request path; infra incumbents ship the generic slice (LangCache, Kong
-  plugin) but not agent-aware transforms + outcome-verified evidence.
+- **Structural-defense hypothesis:** cross-agent compatibility evidence, replay,
+  rollback, and verified outcomes are harder to copy than transforms. Revalidate
+  this against competitors and customer interviews; do not rely on assumptions
+  about another company's future business model.
 
 ### 7.1 The pip-install wedge, concretely
 
-The try-before-paying experience is a local, single-process edition of the
-gateway, installable in one line and self-proving on the user's own traffic:
+The try-before-paying experience is a local launcher and diagnostic proxy,
+installable in one line and explicit about which traffic it can observe:
 
 ```text
 pip install tokenlens        # name TBD; pipx/uvx work too
-tokenlens run claude         # or codex / cursor-agent / any command
+tokenlens doctor claude      # reports supported auth/feature lanes
+tokenlens run claude         # only when the selected lane is gateway-compatible
 tokenlens report
 ```
 
 - **`run` wraps the launch** (the CodexZero onboarding pattern): starts a
-  localhost proxy and launches the agent with the right env injected
-  (`ANTHROPIC_BASE_URL=http://127.0.0.1:8484`, or a consented Codex
-  `model_providers` block). `tokenlens up` exists for manual-env users and
-  prints the exact per-agent snippet.
-- **Default mode is observe**: pure passthrough, keys forwarded never stored,
-  streaming byte-for-byte. Day one is zero-risk by construction.
+  localhost proxy and launches a certified API-key/custom-provider lane with
+  the required environment or config. It must refuse to imply that Claude
+  Pro/Max OAuth, ChatGPT subscription OAuth, Cursor-hosted models, or Cursor Tab
+  traffic is routed through it. `tokenlens up` exists for manual configuration
+  and prints the exact supported snippet.
+- **Default mode is observe**: no request mutation. The client authenticates to
+  the local gateway, which resolves the configured upstream credential without
+  logging or returning it. Streaming and usage fidelity are claims earned by E1
+  per client/auth/feature profile—not assumed from startup success.
 - **`report` is the go-to-market in one screen**: tokens by session,
-  would-have-saved by technique (dedup, RLE, paging, cache shaping), and the
-  cache-hit-rate gap in dollars. Every number is traceable to per-request
-  records in local SQLite, with the provider's own `usage` fields as ground
-  truth — the report is verifiable from provider responses, not our claims.
-- **`optimize` flips on tier 1–2** (hygiene + lossless), and
-  `report --verified` shows before/after against provider-billed tokens. The
-  full trust ladder (observe → predicted → lossless → verified) compressed
-  into a CLI the user climbs alone in under an hour.
+  repeated-context findings, cache behavior, retries, coverage gaps, and
+  would-have-saved estimates. Provider `usage` fields are billing evidence;
+  locally computed transform deltas remain estimates until an enforced paired
+  run verifies them.
+- **`optimize` enables only profiles that passed E4.** The report distinguishes
+  `observed`, `estimated`, `mechanically verified`, and `outcome-validated`;
+  recoverability is not labeled semantic equivalence.
 
-Technical shape: pip as distribution, Rust as engine — the data-plane core
-ships as a compiled extension (maturin/PyO3, the ruff/uv/pydantic-core
-pattern) so install is universal and added latency stays single-digit ms.
-The same core runs locally, in the cloud, and in the self-host edition (one
-codebase, three deployments — the WAAS lesson). Local state lives in
-`~/.tokenlens/` (SQLite decisions + session chains, CAS artifacts); bundled
-version-pinned tokenizers run the drift check against provider `usage`
-locally, so the exactness story is part of the demo.
+Technical shape: pip is the distribution hypothesis, not a commitment to a Rust
+core. Start with the smallest implementation that can run E1–E2 and profile it;
+move bounded hot paths behind a compiled extension only if measured latency
+requires it. Local decisions can live in SQLite. Source-bearing artifacts are
+disabled by default or encrypted under explicit retention policy, never silently
+placed in a global content-addressed directory.
 
 Free-forever vs cloud: the local tier is a complete single-developer
-optimizer and never feels crippled. The paywall is what local structurally
-cannot do: fleet aggregation and team dashboards, continuously updated
-dialect profiles with the promotion state machine behind them, a hosted
-gateway for CI and cloud agents where localhost doesn't exist, team-shared
-tier-3 artifact stores, verified-savings billing exports, SLA/SSO.
-One-sentence seam: individuals optimize for free; organizations pay to know
-it's safe, everywhere, continuously.
+diagnostic and certified-lane optimizer. The paid hypothesis is what local
+structurally cannot do: fleet aggregation, team policy, hosted endpoints for
+API-based CI/cloud agents, continuously recertified profiles, governed shared
+artifacts, billing exports, SLA, and SSO. Hosted service does not unlock closed
+subscription or Cursor-hosted lanes.
 
 Two deliberate details: telemetry is opt-in and content-free (aggregate
 counters only — technique, token deltas, model, dialect version; never
 payloads), because conspicuous cleanliness is a sales asset for a product
 that lives in the request path. And the upgrade/share nudge fires once, only
-after the first report shows nonzero measured savings (the star-prompt
+after the first report shows nonzero measured opportunity (the star-prompt
 pattern) — the report ends with a one-line paste-into-Slack summary, because
-"we'd save 15%, here's the receipt" spreading inside a company is what
+"we observed this repeated spend; here's the receipt" spreading inside a company is what
 reaches the cloud buyer.
 
-P0 tie-in: this package *is* experiments E1–E2 from the feasibility doc
-(passthrough fidelity + redundancy census) productized — the go/no-go
-measurement and the top-of-funnel wedge are the same artifact.
+P0 tie-in: the package is the candidate E1–E2 harness. It becomes the
+top-of-funnel product only after E1 certifies fidelity and E2 measures an
+economically material segment.
 
 ### 7.2 Individual conversion: the free tier proves us, shadow mode prices the upgrade
 
-"Individuals free forever" needs a real upgrade path, and the architecture
-already contains it: **shadow mode perpetually demos the next tier on the
-user's own traffic.** The free edition runs tier 1–2 for real but
-shadow-computes the paid techniques too (tier-3 paging, delta re-reads,
-current cloud profiles) and shows the delta in every report:
+"Individuals free forever" needs a real upgrade path. Shadow mode can estimate
+mechanical opportunity for profiles not currently enabled, but it must not label
+those estimates safe or bill-verified before E4 and a paired run:
 
 ```text
-Saved this month (free tier):        1.4M tokens  ($19.20)
-Additional available (Pro):          2.2M tokens  ($31.70)
+Provider-reported billed input:       8.1M tokens
+Mechanically verified free savings:   1.4M tokens
+Estimated additional opportunity:     2.2M tokens
   paging 1.3M · delta re-reads 0.5M · current profiles 0.4M
 ```
 
-Nothing is crippled — but every `report` is a personalized,
-provider-verifiable quote for the upgrade, computed on the user's own
-workload. The WAAS savings-report lesson applied recursively to our own
-pricing tiers.
+The first two lines are reconcilable to actual requests; the third is a shadow
+estimate with confidence and eligibility labels. The report becomes a
+personalized upgrade hypothesis, not a promise.
 
 Three high-intent moments, instrumented (and the only places the nudge is
 allowed to fire):
 
-1. **Cap hits.** Individuals' binding constraint is usually subscription
-   usage limits, not dollars. We sit in the path, so we see the 429s and
-   limit warnings: "You hit your Max plan limit 3× this week; at Pro-tier
-   efficiency this week's sessions would have fit with ~2 days of headroom."
-   Token efficiency reframed as **more agent-hours per subscription** is the
-   individual's actual value proposition — measurable only by something in
-   the request path at the moment the limit bites.
-2. **The localhost wall.** Cloud agents (Claude Code web, Codex cloud) and
-   CI runners can't reach a local proxy. The report shows the gap: "38% of
-   your sessions ran outside your local gateway — unoptimized." Hosted
-   endpoint is Pro's second pillar.
+1. **API quota or rate-limit pressure.** On certified API lanes, the gateway can
+   observe provider `429` responses and estimate whether verified reductions
+   would have changed the request volume. Personal-subscription limits are not
+   visible to the gateway; a harness may report them only through an explicit,
+   separately certified local integration.
+2. **The localhost wall.** API-based CI runners and remote custom-provider agents
+   may need a hosted endpoint. Claude Code web, Codex cloud subscription, and
+   Cursor-hosted traffic do not become addressable merely because a hosted
+   gateway exists. Coverage receipts must show that distinction.
 3. **Model-release day.** Free gets dialect/profile updates at
    package-release cadence; Pro gets them continuously with the promotion
-   state machine behind them: "Sonnet 5.1 shipped today; Pro profiles
-   re-validated this morning, local profiles update in ~2 weeks." For daily
-   agent users, "safe on the model that shipped this morning" is a real
-   recurring reason to pay.
+   state machine behind them. The product reports `certified`, `unknown`, or
+   `suspended`; it does not claim same-day safety until the release canary and
+   outcome suite actually pass.
 
-The Pro tier ($10–19/mo): hosted endpoint with synced session state
-(CI/cloud/multi-device), tier 3+ enabled, continuously updated eval-backed
-profiles, personal dashboard with cap forecasting ("at this pace you hit
-your limit Thursday"). Priced under the noise floor of what it saves; the
-report proves the ROI monthly in the user's own numbers.
+Candidate paid packaging: hosted endpoint for supported API lanes, synced
+session state, governed recoverable transforms, continuously evaluated profiles,
+and quota/cost forecasting. Price and packaging remain interview and willingness-
+to-pay experiments; do not fix `$10–19/month` from desk research.
 
-Individuals are also the org motion: the paste-into-Slack report footer plus
-consent-based workspace detection ("3 people at yourcompany.com use this —
-combine into a team workspace to see fleet savings") makes the individual
-Pro user the champion who expenses it, and the aggregated team
-would-have-saved the CFO artifact that opens the org deal.
+Individuals can become the organization motion through an explicit share or
+invite flow. Do not infer coworkers or expose domain-level adoption from email,
+credentials, traffic, or telemetry without affirmative workspace consent.
 
 Anti-dark-pattern rules, explicit: the free tier never degrades over time,
-safety fixes are never withheld from free users, and the nudge fires only at
-the three moments above and is permanently dismissible. An opt-in-telemetry
-free user contributing dialect evidence is worth more to the moat than
-$12/month (Cloudflare's free-tier logic: free traffic trained their threat
-models; ours trains the evidence flywheel). Upgrades come from the delta
-being visible, not the free tier being painful.
+safety fixes are never withheld from free users, and nudges are permanently
+dismissible. Telemetry is opt-in, minimized, and purpose-bound; source content,
+credentials, raw prompts, and cross-user identity are excluded. Upgrades come
+from demonstrated operational value, not the free tier being painful.
 
 ---
 
@@ -544,11 +567,12 @@ being visible, not the free tier being painful.
    tokens.
 3. **Provider ToS / neutrality.** Stay BYO-key, transparent, and modification-
    disclosed; the WAAS-vs-TLS lesson says don't build on adversarial interception.
-4. **Quality liability.** Tier discipline + constitution; contractual scope: tiers
-   0–2 guaranteed-equivalent, 3+ evidence-gated opt-in.
+4. **Quality liability.** No blanket equivalence claim. Publish each decision's
+   proof class; model-visible substitutions remain outcome-tested even when omitted
+   bytes are exactly recoverable.
 5. **Privacy/state.** We hold customer code artifacts. Zero-retention mode,
    regional pinning, self-host option (as deployment, not product).
-6. **Tokenizer drift.** Exact counting per model version is load-bearing;
+6. **Tokenizer drift.** Model-specific counting and provider-usage reconciliation are load-bearing;
    re-validate on every provider release.
 7. **How big is the prize on real fleets?** Unknown until shadow mode runs.
    CodexZero's repeated benchmark says ~15% on Codex/terminal-bench; tool-heavy
@@ -559,10 +583,14 @@ being visible, not the free tier being painful.
 
 ## 9. Scoping (phases)
 
-- **P0 — Shadow (in Switchboard's gateway).** LiteLLM callbacks: per-request token
-  telemetry, would-have-saved counters for dedup/RLE/hygiene, Tally attribution,
-  savings dashboard. Go/no-go on measured prize. No behavior change.
-- **P1 — Lossless enforce (API lanes).** Tier 1–2 transforms behind the gate;
+- **P-1 — Compatibility and truth.** Certify the supported Codex and Claude API
+  lanes, preserve streaming/tools/errors/usage, issue coverage receipts, and detect
+  direct inference bypass. Cursor remains partial until E5 passes.
+- **P0 — Shadow (standalone first, Switchboard dogfood second).** Per-request
+  provider usage, cache effects, retries, would-have-saved counters, and evaluator
+  joins. Add Tally attribution in Switchboard. Go/no-go on net billed opportunity
+  after cache discounts and optimizer overhead. No provider-request mutation.
+- **P1 — Exact-reference canary (API lanes).** Tier 1–2 transforms behind bounded gates;
   artifact store; `transform_decision` records; verified-outcome regression watch.
 - **P2 — Harness lever (CLI + API lanes).** Lean prompt, terminal hygiene env,
   schema deferral via runtime adapters; A/B across fleet.
