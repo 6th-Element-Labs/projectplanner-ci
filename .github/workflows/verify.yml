@@ -18,8 +18,13 @@ on:
         description: "Exact canonical SHA to verify and stamp"
         required: true
         type: string
+      base_sha:
+        description: "Exact merge-group base SHA; empty outside merge_group"
+        required: false
+        default: ""
+        type: string
       purpose:
-        description: "Audit label only; every purpose runs the identical full gate"
+        description: "Trusted lane selector: head admission, merge-group docs/full, repair full"
         required: true
         default: head
         type: choice
@@ -48,11 +53,13 @@ jobs:
         env:
           SOURCE_REF: ${{ inputs.source_ref }}
           SOURCE_SHA: ${{ inputs.source_sha }}
+          BASE_SHA: ${{ inputs.base_sha }}
           PURPOSE: ${{ inputs.purpose }}
         run: |
           set -euo pipefail
           [[ "$SOURCE_REF" =~ ^refs/tags/ci/[A-Za-z0-9._/-]+$ ]]
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$PURPOSE" =~ ^(head|merge_group|ci_repair)$ ]]
 
       - name: Mint status-callback token
@@ -83,6 +90,7 @@ jobs:
       contents: read
     outputs:
       failure_class: ${{ steps.classify.outputs.failure_class }}
+      lane: ${{ steps.lane.outputs.lane }}
       summary: ${{ steps.classify.outputs.summary }}
     steps:
       - name: Check out exact scratchpad ref
@@ -109,22 +117,67 @@ jobs:
             requirements.txt
             requirements-ci.txt
 
+      - name: Select trusted verification lane
+        id: lane
+        env:
+          BASE_SHA: ${{ inputs.base_sha }}
+          POLICY_MODE: ${{ vars.SWITCHBOARD_CI_LANE_MODE || 'full' }}
+          PURPOSE: ${{ inputs.purpose }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          python scripts/ci_lane.py \
+            --purpose "$PURPOSE" \
+            --source-sha "$SOURCE_SHA" \
+            --base-sha "$BASE_SHA" \
+            --policy-mode "$POLICY_MODE" \
+            --github-output "$GITHUB_OUTPUT"
+
       - name: Set up Node
+        if: steps.lane.outputs.lane == 'full'
         uses: actions/setup-node@v5
         with:
           node-version: "22"
 
       - name: Install Python dependencies
+        if: steps.lane.outputs.lane == 'full'
         run: |
           python -m pip install --upgrade pip
           pip install --disable-pip-version-check -r requirements.txt -r requirements-ci.txt
 
       - name: Install Chromium
-        # PR heads, merge groups, and CI repairs use the same full gate.
+        if: steps.lane.outputs.lane == 'full'
         run: python -m playwright install chromium
 
-      - name: Run Switchboard CI
-        id: tests
+      - name: Run bounded PR-head admission
+        id: admission
+        if: steps.lane.outputs.lane == 'admission'
+        continue-on-error: true
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          python scripts/ci_lane.py \
+            --purpose head \
+            --source-sha "$SOURCE_SHA" \
+            --verify
+          python tests/test_ci_lane.py
+
+      - name: Validate Markdown-only merge group
+        id: docs
+        if: steps.lane.outputs.lane == 'docs'
+        continue-on-error: true
+        env:
+          BASE_SHA: ${{ inputs.base_sha }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          python scripts/ci_lane.py \
+            --purpose merge_group \
+            --source-sha "$SOURCE_SHA" \
+            --base-sha "$BASE_SHA" \
+            --verify
+
+      - name: Run full Switchboard CI
+        id: full
+        if: steps.lane.outputs.lane == 'full'
         continue-on-error: true
         env:
           SWITCHBOARD_CI_STRICT: "1"
@@ -138,7 +191,7 @@ jobs:
           bash scripts/switchboard_ci.sh
 
       - name: Upload CI result
-        if: always() && steps.checkout.outcome == 'success'
+        if: always() && steps.lane.outputs.lane == 'full'
         uses: actions/upload-artifact@v6
         with:
           name: ci-result-${{ inputs.source_sha }}
@@ -146,11 +199,19 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload Playwright receipt
-        if: always() && steps.checkout.outcome == 'success'
+        if: always() && steps.lane.outputs.lane == 'full'
         uses: actions/upload-artifact@v6
         with:
           name: ui-playwright-${{ inputs.source_sha }}
           path: .artifacts/ui-playwright-receipt.json
+          if-no-files-found: warn
+
+      - name: Upload lane receipt
+        if: always() && steps.checkout.outcome == 'success'
+        uses: actions/upload-artifact@v6
+        with:
+          name: ci-lane-${{ inputs.source_sha }}
+          path: .artifacts/ci-lane-result.json
           if-no-files-found: warn
 
       - name: Classify result
@@ -158,21 +219,40 @@ jobs:
         if: always()
         env:
           CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
-          TEST_OUTCOME: ${{ steps.tests.outcome }}
+          LANE: ${{ steps.lane.outputs.lane }}
+          LANE_OUTCOME: ${{ steps.lane.outcome }}
+          ADMISSION_OUTCOME: ${{ steps.admission.outcome }}
+          DOCS_OUTCOME: ${{ steps.docs.outcome }}
+          FULL_OUTCOME: ${{ steps.full.outcome }}
         run: |
           if [ "$CHECKOUT_OUTCOME" != "success" ]; then
             echo "failure_class=infra" >> "$GITHUB_OUTPUT"
             echo "summary=infra: exact scratchpad checkout failed" >> "$GITHUB_OUTPUT"
-          elif [ "$TEST_OUTCOME" != "success" ]; then
+            echo "passed=false" >> "$GITHUB_OUTPUT"
+          elif [ "$LANE_OUTCOME" != "success" ] || [ -z "$LANE" ]; then
+            echo "failure_class=infra" >> "$GITHUB_OUTPUT"
+            echo "summary=infra: fail-closed CI lane selection failed" >> "$GITHUB_OUTPUT"
+            echo "passed=false" >> "$GITHUB_OUTPUT"
+          elif [ "$LANE" = "admission" ] && [ "$ADMISSION_OUTCOME" != "success" ]; then
+            echo "failure_class=tests" >> "$GITHUB_OUTPUT"
+            echo "summary=tests: exact-SHA admission verification failed" >> "$GITHUB_OUTPUT"
+            echo "passed=false" >> "$GITHUB_OUTPUT"
+          elif [ "$LANE" = "docs" ] && [ "$DOCS_OUTCOME" != "success" ]; then
+            echo "failure_class=tests" >> "$GITHUB_OUTPUT"
+            echo "summary=tests: Markdown-only merge verification failed" >> "$GITHUB_OUTPUT"
+            echo "passed=false" >> "$GITHUB_OUTPUT"
+          elif [ "$LANE" = "full" ] && [ "$FULL_OUTCOME" != "success" ]; then
             echo "failure_class=tests" >> "$GITHUB_OUTPUT"
             echo "summary=tests: exact-SHA full verification failed" >> "$GITHUB_OUTPUT"
+            echo "passed=false" >> "$GITHUB_OUTPUT"
           else
             echo "failure_class=" >> "$GITHUB_OUTPUT"
-            echo "summary=tests: exact-SHA full verification passed" >> "$GITHUB_OUTPUT"
+            echo "summary=tests: exact-SHA $LANE verification passed" >> "$GITHUB_OUTPUT"
+            echo "passed=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Enforce suite result
-        if: always() && steps.tests.outcome != 'success'
+        if: always() && steps.classify.outputs.passed != 'true'
         run: exit 1
 
   report:
@@ -192,7 +272,7 @@ jobs:
           owner: 6th-Element-Labs
           repositories: projectplanner
 
-      - name: Post one terminal required status
+      - name: Post and verify terminal required status
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
           SOURCE_SHA: ${{ inputs.source_sha }}
@@ -208,8 +288,46 @@ jobs:
           elif [ -z "$FAILURE_CLASS" ]; then
             description="infra: verification job did not complete"
           fi
-          gh api "repos/$CANONICAL_REPO/statuses/$SOURCE_SHA" \
-            -f state="$state" \
-            -f context="$STATUS_CONTEXT" \
-            -f description="$description" \
-            -f target_url="$TARGET_URL"
+
+          # A terminal callback is coordination evidence, so a transient API error
+          # must not leave the pending announcement as the last visible state.
+          # Reposting an identical commit status is safe: GitHub statuses are
+          # append-only and the combined-status readback selects the newest
+          # matching context.
+          delays=(1 2 4 8 16)
+          for attempt in 1 2 3 4 5; do
+            post_rc=0
+            gh api "repos/$CANONICAL_REPO/statuses/$SOURCE_SHA" \
+              -f state="$state" \
+              -f context="$STATUS_CONTEXT" \
+              -f description="$description" \
+              -f target_url="$TARGET_URL" || post_rc=$?
+
+            readback="$(
+              gh api "repos/$CANONICAL_REPO/commits/$SOURCE_SHA/status" 2>/dev/null \
+                || true
+            )"
+            if jq -e \
+              --arg sha "$SOURCE_SHA" \
+              --arg context "$STATUS_CONTEXT" \
+              --arg state "$state" \
+              --arg target_url "$TARGET_URL" \
+              '
+                (.sha | ascii_downcase) == ($sha | ascii_downcase)
+                and (
+                  [.statuses[] | select(.context == $context)][0]
+                  | .state == $state
+                  and .target_url == $target_url
+                )
+              ' <<<"$readback" >/dev/null; then
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 5 ]; then
+              echo "Terminal status callback/readback attempt $attempt failed (post rc=$post_rc); retrying." >&2
+              sleep "${delays[$((attempt - 1))]}"
+            fi
+          done
+
+          echo "Terminal status callback did not verify after 5 bounded attempts for $SOURCE_SHA." >&2
+          exit 1
