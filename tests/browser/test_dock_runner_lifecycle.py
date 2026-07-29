@@ -73,11 +73,13 @@ with sync_playwright() as runtime:
     ok(expired["key"] == "expired" and expired["tone"] != "red",
        f"a reaped session is housekeeping, not an alarm: {expired}")
 
-    # 'exited' is the supervisor finding the process gone with no completion
-    # report — not provably a failure, definitely not a proven success.
+    # 'exited' is how a normal codex run ends: the supervisor sees the process
+    # finish and terminalizes the session. Every live 'exited' runner on prod had
+    # shipped a merged PR, so treating it as a fault reported four successes as
+    # broken. This is the operator-reported bug and must never come back.
     exited = outcome({"status": "exited"})
-    ok(exited["key"] == "exited_unexpectedly" and exited["tone"] == "yellow",
-       f"a vanished process is not reported as a clean finish: {exited}")
+    ok(exited["key"] == "finished" and exited["tone"] == "green",
+       f"an exited runner finished its work; it is not a failure: {exited}")
 
     # --- retention ---------------------------------------------------------
     def retention(session, key, others=None, now_ms=1_000_000_000_000):
@@ -88,20 +90,32 @@ with sync_playwright() as runtime:
     now_s = 1_000_000_000
     now_ms = now_s * 1000
 
-    fresh = {"status": "completed", "updated_at": now_s - 30, "task_id": "T-1"}
+    # Retention keys off the lease (`live` + `expires_at`), NOT updated_at: the
+    # host keeps heartbeating a terminalized session, so updated_at stays fresh
+    # forever. Observed on prod: a runner started 274 minutes ago and long since
+    # exited still had updated_at 0.6 minutes old, so it never aged out.
+    fresh = {"status": "exited", "live": False, "expires_at": now_s + 120,
+             "updated_at": now_s, "task_id": "T-1"}
     ok(retention(fresh, "finished", [fresh], now_ms) == "keep",
-       "a just-finished runner stays briefly as a receipt")
+       "a just-finished runner stays until its lease lapses")
 
-    old = {"status": "completed", "updated_at": now_s - 600, "task_id": "T-1"}
+    old = {"status": "exited", "live": False, "expires_at": now_s - 600,
+           "updated_at": now_s, "task_id": "T-1"}
     ok(retention(old, "finished", [old], now_ms) == "drop",
-       "a clean exit ages out instead of staying forever")
+       "a lapsed lease drops even though the host still heartbeats it")
 
-    no_ts = {"status": "completed", "updated_at": 0, "task_id": "T-1"}
+    no_ts = {"status": "exited", "live": False, "expires_at": 0, "task_id": "T-1"}
     ok(retention(no_ts, "finished", [no_ts], now_ms) == "keep",
-       "an unknown end time is kept, never silently dropped")
+       "an unknown lease is kept, never silently dropped")
+
+    still_live = {"status": "exited", "live": True, "expires_at": now_s - 600,
+                  "task_id": "T-1"}
+    ok(retention(still_live, "finished", [still_live], now_ms) == "keep",
+       "never drop something the platform still calls live")
 
     # A failure is NOT aged out, however old — that is the whole point.
-    stale_fail = {"status": "failed", "updated_at": now_s - 86400, "task_id": "T-2"}
+    stale_fail = {"status": "failed", "live": False, "expires_at": now_s - 86400,
+                  "updated_at": now_s - 86400, "task_id": "T-2"}
     ok(retention(stale_fail, "failed", [stale_fail], now_ms) == "keep",
        "a day-old failure is still shown; failures do not expire on a timer")
 
@@ -124,15 +138,18 @@ with sync_playwright() as runtime:
         """() => {
             const now = Math.floor(Date.now() / 1000);
             const runners = [
-                {runner_session_id: 'a', task_id: 'T-1', status: 'completed',
-                 updated_at: now - 30, stale: false},
+                // Freshly finished: lease still good, shows as a receipt.
+                {runner_session_id: 'a', task_id: 'T-1', status: 'exited',
+                 live: false, expires_at: now + 120, updated_at: now, stale: false},
                 {runner_session_id: 'b', task_id: 'T-2', status: 'failed',
-                 updated_at: now - 60, stale: false,
+                 live: false, expires_at: now - 60, updated_at: now - 60, stale: false,
                  result: {failure_class: 'launch_failed'}},
                 {runner_session_id: 'c', task_id: 'T-3', status: 'running',
-                 updated_at: now, stale: false},
-                {runner_session_id: 'd', task_id: 'T-4', status: 'completed',
-                 updated_at: now - 9999, stale: false},
+                 live: true, expires_at: now + 180, updated_at: now, stale: false},
+                // Long finished, but the host is STILL heartbeating it — the real
+                // prod shape. Its lease has lapsed, so it must be gone.
+                {runner_session_id: 'd', task_id: 'T-4', status: 'exited',
+                 live: false, expires_at: now - 9999, updated_at: now, stale: false},
             ];
             const host = document.getElementById('fleet-dock');
             const ctx = Object.create(TeepPlan);
