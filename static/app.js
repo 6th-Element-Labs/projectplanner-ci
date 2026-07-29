@@ -1062,17 +1062,6 @@ const TeepPlan = {
         }
         return taskId || 'task';
     },
-    // The title to show *next to* a task id. _fleetTaskTitle falls back to the id
-    // itself when the board title has not loaded yet, and the cards render
-    // "<id> · <title>" — which came out as "QA-12 · QA-12". Return '' when the
-    // title adds nothing, so the card shows the id once.
-    _dockTaskLabel(taskId) {
-        const id = String(taskId || '').trim();
-        if (!id) return '';
-        const title = String(this._fleetTaskTitle(id) || '').trim();
-        if (!title) return '';
-        return title.toUpperCase() === id.toUpperCase() ? '' : title;
-    },
     // The dock is 380px wide and one label — the failing check name — comes from GitHub, so it can
     // be arbitrarily long ("Switchboard CI / VM gate (ubuntu-latest, py3.12)"). The chip ellipsises
     // instead of clipping mid-word, and keeps the full text in its tooltip.
@@ -1081,6 +1070,21 @@ const TeepPlan = {
         return `<span class="badge bg-${tone}-lt d-inline-flex align-items-center text-truncate"`
             + ` style="min-width:0;max-width:100%;"${title ? ` title="${this.esc(title)}"` : ''}>`
             + `${i}<span class="text-truncate">${this.esc(text)}</span></span>`;
+    },
+    // The title to show *next to* a task id. _fleetTaskTitle falls back to the id
+    // itself when the board title has not loaded yet, and the cards render
+    // "<id> · <title>" — which came out as "QA-12 · QA-12". Return '' when the
+    // title adds nothing, so the card shows the id once.
+    //
+    // Lives inside the _dockBadge.._renderFleetDock span on purpose: that is the
+    // slice test_ui42_pr_status_chip.py extracts to run the real card renderer on
+    // node. Defined above it, the card called a function the harness never saw.
+    _dockTaskLabel(taskId) {
+        const id = String(taskId || '').trim();
+        if (!id) return '';
+        const title = String(this._fleetTaskTitle(id) || '').trim();
+        if (!title) return '';
+        return title.toUpperCase() === id.toUpperCase() ? '' : title;
     },
     _dockRunnerHtml(s) {
         const env = s.environment || {};
