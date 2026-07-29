@@ -1,6 +1,7 @@
 # Token Optimization Cloud — market analysis, threats, niche, and staying ahead
 
-Status: research draft, companion to TOKEN-OPTIMIZATION-CLOUD-RESEARCH.md
+Status: reviewed market-research baseline, companion to
+TOKEN-OPTIMIZATION-CLOUD-RESEARCH.md; dated evidence, not an investment forecast
 Depends on: same scope; informs P0 go/no-go and positioning
 
 **One-line thesis:** Agentic coding creates a fast-growing and poorly attributed
@@ -67,7 +68,7 @@ The 2026 category has settled into lanes:
 | Marketplaces/routers | OpenRouter (5.5% credit fee), Martian, NotDiamond | Model selection, price arbitrage | Revenue is a % of token flow — reducing tokens/task cuts their own take. They optimize $/token, never tokens/task |
 | Providers | Anthropic, OpenAI | Prompt caching; Anthropic server-side **context compaction (beta, compact-2026-01-12)**; batch APIs | Single-vendor by definition; "buy fewer of our tokens" is defensive, shipped to win deals, never cross-vendor, never harness-aware |
 | Agent vendors | Claude Code, Cursor, Codex | Internal context management, own compaction | Optimize their own silo with their own incentives (subscription margin), invisible and unverifiable to the buyer |
-| Early direct entrants | The Token Company (YC W26, compression API), TokenShift (endpoint-local for coding agents), Kong compression plugin | Compression as a feature | Compression-only, no outcome verification, no fleet evidence, no savings-verified billing — the commodity slice |
+| Early direct entrants | The Token Company (YC W26), TokenShift, Kong compression plugin; research leads include RTK, Headroom, lean-ctx, Compresr, and Kompact | Compression, command summarization, context management, or proxy features | Capabilities, licenses, maintenance, customer evidence, and savings claims require independent verification; outcome joining remains the differentiation hypothesis |
 
 The working hypothesis is that basic proxying is commoditizing and differentiation
 is moving toward policy, compatibility, evidence, and outcomes. Validate actual

@@ -1,14 +1,17 @@
 # How do we know it will work? — feasibility deep dive on sitting in the middle
 
-Status: research draft, fourth in the series (techniques → market → tech design → this)
+Status: reviewed feasibility baseline, fourth in the series
+(techniques → market → tech design → this); product evidence, not accepted repo architecture
 Question answered: can we actually, provably, sit in the request path of Claude
 Code, Codex, and Cursor as a trusted middlebox — and how do we prove it before
 building the product?
 
 **One-line answer:** Supported API seams and live loopback canaries prove that
-provider-ready Codex and Claude Code requests can reach us; Cursor is partial and
-subscription OAuth remains out of path. Passthrough fidelity, addressable traffic,
-transform safety, and net outcome value remain experiment results—not conclusions.
+provider-ready Codex and Claude Code requests can reach us. Claude Code can also
+retain its claude.ai login while routing through a configured gateway when the
+gateway preserves the documented OAuth capability; Cursor remains partial.
+Passthrough fidelity, terms/security approval, addressable traffic, transform safety,
+and net outcome value remain experiment results—not conclusions.
 
 ---
 
@@ -79,17 +82,24 @@ Bedrock/Vertex wire dialects (a scoped, known amount of work).
 - API key / enterprise gateway lane: **fully addressable**, officially
   documented. This is the lane enterprises use for spend control already —
   our buyer's lane.
-- Personal subscription (Pro/Max OAuth) lane: **not proxyable, by design and
-  by terms**. OAuth session auth must go direct to Anthropic. This is a hard
-  red line (consistent with MODEL-CATALOG-ROUTING: personal CLI auth never
-  transits a gateway). This lane is served by the harness lever
-  (CodexZero-style local techniques), not the proxy.
+- Personal subscription (Pro/Max OAuth) lane: **technically addressable but not
+  automatically certified**. Anthropic documents that, with
+  `ANTHROPIC_BASE_URL` set and no gateway credential configured, the saved
+  claude.ai login remains active and requests still route through the gateway.
+  The gateway must preserve the OAuth beta capability and must never terminate,
+  persist, log, or exchange the user's OAuth credential. E1 must separately
+  establish protocol fidelity, security boundaries, operator consent, and
+  acceptable terms for this lane before it is enabled.
 
 **Wire contracts we must honor** (the fidelity inventory):
 - `/v1/messages` with SSE streaming (event grammar: `content_block_delta`,
   `thinking_delta`, `signature_delta`, …) — pass-through untouched (tech doc §2).
 - `cache_control` breakpoints — forwarded, and optimized (tech doc §7).
 - `/v1/models` discovery and `/v1/messages/count_tokens` — implement both.
+- Preserve Claude Code's declared gateway identity headers, including
+  `x-claude-code-session-id`, `x-claude-code-agent-id`, and
+  `x-claude-code-parent-agent-id`; these are the preferred session keys, not
+  telemetry to discard.
 - **Thinking blocks carry cryptographic signatures and must round-trip
   unmodified**; on tool-use turns the last assistant message's thinking block
   is mandatory and verbatim. Any middlebox that edits assistant content breaks
@@ -110,20 +120,22 @@ Bedrock/Vertex wire dialects (a scoped, known amount of work).
 CLI through us. CodexZero separately proves the harness lever works (patched
 core, env injection) for what the proxy can't reach.
 
-**Sharp edges (both confirmed 2026):**
+**Sharp edges (current 2026 configuration):**
 1. `wire_api = "chat"` (or omitted) **fails on startup** as of February 2026 —
    Codex now requires the **Responses API** dialect. We must speak Responses
    (stateful items, encrypted reasoning items) natively, not just Chat
    Completions. This is real scoped work and a moat-ette: gateways that only
    speak chat-completions are locked out of Codex.
-2. Provider IDs `openai`, `ollama`, `lmstudio` are **reserved** — you cannot
-   silently repoint the built-in OpenAI provider. Users must select our
-   provider explicitly. Slightly more onboarding friction than Claude Code
-   (edit config + select provider vs. two env vars), still minutes.
+2. Codex supports `openai_base_url` for overriding the built-in OpenAI model
+   provider, and also supports explicit `[model_providers.<id>]` definitions.
+   Provider and base-URL settings are user-level trust configuration; a
+   project-local `.codex/config.toml` cannot silently override them. Onboarding
+   therefore requires an explicit user or managed-fleet configuration step.
 
 **Lanes.** API-key lane addressable as above. ChatGPT-subscription OAuth lane:
-same red line as Claude Code's — harness lever only. Encrypted reasoning items
-must round-trip verbatim (same integrity argument as §3.1).
+not certified by the local custom-provider canary. Treat it as `unknown`, not
+equivalent to Claude Code's documented gateway-OAuth lane. Encrypted reasoning
+items must round-trip verbatim (same integrity argument as §3.1).
 
 ### 3.3 Local loopback evidence captured 2026-07-29
 
@@ -185,13 +197,11 @@ Cursor's flow is unlike the CLIs: **client → Cursor's backend (api2.cursor.sh)
 **Lanes.**
 - Cursor-served models (their subscriptions, Composer/tab models): **closed to
   us.** Their backend is the middle, and there is no configuration surface.
-- BYO-key with base-URL override: **plausibly addressable; E5 pending.** Available
-  configuration and third-party reports indicate requests can transit
-  Cursor's backend for prompt processing, but egress goes to the customer's
-  configured base URL with the customer's key — i.e., *Cursor's backend
-  becomes our client*, and we sit between it and the provider. Documented
-  gateway integrations (OpenRouter, LLM Gateway) prove this works for the AI
-  panel: plan mode and agent mode route through the override.
+- BYO-key with base-URL override: **plausibly addressable; E5 pending.** Cursor
+  documents custom provider keys for standard chat models, but that does not
+  establish that Agent, Plan, background, Composer, or tool traffic uses the
+  override. Whether the IDE or Cursor backend becomes our immediate client is
+  an observation E5 must make, not an architecture assumption.
 - Known quirk: Cursor hijacks recognized model names to its own routing;
   community-documented workaround is a custom model-name prefix (e.g.
   `cus-…`) to force the custom endpoint. Fragile — goes in the dialect
@@ -210,9 +220,9 @@ mock-provider canary proves the final request path and feature coverage.
 |---|---|---|---|---|
 | Claude Code | API key / enterprise | **Yes** | `ANTHROPIC_BASE_URL` | Officially documented; model discovery cooperates |
 | Claude Code | Bedrock / Vertex | Yes, with work | Same seam, cloud dialects | Dialect cost, enterprise-heavy lane |
-| Claude Code | Pro/Max OAuth | **No (red line)** | Harness lever only | CodexZero-class local techniques |
-| Codex | API key | **Yes** | `model_providers` + Responses API | Must speak Responses; explicit provider select |
-| Codex | ChatGPT OAuth | **No (red line)** | Harness lever only | |
+| Claude Code | Pro/Max OAuth | **Pending E1 certification** | `ANTHROPIC_BASE_URL` with documented OAuth pass-through | Gateway must preserve OAuth capability without terminating or retaining the credential |
+| Codex | API key | **Yes** | `openai_base_url` or `model_providers` + Responses API | Must speak Responses; configuration is user-level |
+| Codex | ChatGPT OAuth | **Unknown** | Re-canary current supported configuration | Do not infer parity from the API-key lane |
 | Cursor | BYO-key agent/plan mode | **Pending E5** | Base-URL override | Final provider payload and feature coverage not yet locally proven |
 | Cursor | Cursor-served models, tab, Cmd/K | **No** | — | Closed loop; also not the token-burn center |
 
@@ -263,8 +273,10 @@ representative consenting traffic may take longer than three weeks.
   Exercise discovery, non-streaming, SSE, tools, usage, caching metadata,
   compaction where applicable, `401`, `429`, `500`, timeout, disconnect, and
   retry behavior. Run direct and through-proxy paired tasks.
-  *Pass:* expected endpoints and wire events round-trip; no unsupported direct
-  inference egress; zero protocol/signature errors; usage fields reconcile; the
+  *Pass:* expected endpoints and wire events round-trip; a declared process-level
+  network observation method and time window find no unsupported direct inference
+  egress; ancillary direct calls are classified separately; zero protocol/signature
+  errors; usage fields reconcile; the
   predeclared non-inferiority margin is met with adequate statistical power; added
   latency meets a predeclared SLO. Emit `gateway_coverage_receipt.v1`.
   *Falsifies if failed:* the claimed client/auth/feature lane, not unrelated lanes.
@@ -324,6 +336,12 @@ Configuration is not proof of insertion. E1/E5 emit a machine-readable receipt:
   "certified_features": ["models", "responses", "sse"],
   "observed_endpoints": ["/v1/models", "/v1/responses"],
   "direct_inference_egress_observed": false,
+  "egress_observation": {
+    "method": "process_network_capture",
+    "window_started_at": "2026-07-29T00:00:00Z",
+    "window_ended_at": "2026-07-29T00:05:00Z",
+    "ancillary_destinations": []
+  },
   "coverage": "full",
   "evidence_hash": "sha256:..."
 }
@@ -340,9 +358,10 @@ to `unknown` until recertified.
 - **Consent is structural.** We exist in a session only because the operator
   set our URL. The client uses a gateway credential; upstream provider credentials
   remain server-held or customer-vaulted and never appear in receipts or logs.
-- **Red lines respected mechanically, not by policy doc**: OAuth/subscription
-  auth flows are refused at ingress (we never terminate them), so the
-  ToS-sensitive lanes cannot transit us even by misconfiguration.
+- **OAuth is pass-through capability, never gateway identity**: a certified
+  subscription lane may transit the configured endpoint only when the provider
+  documents that mode. The gateway never terminates, stores, logs, exchanges, or
+  reuses the OAuth credential; an unrecognized OAuth flow fails closed.
 - **Anthropic's not-endorsed caveat** is managed, not ignored: stay
   Claude-to-Claude on the Claude Code seam (their stated non-support is about
   routing to non-Claude models), keep transforms auditable, and pursue the

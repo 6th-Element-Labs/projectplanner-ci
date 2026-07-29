@@ -1,47 +1,44 @@
 # Token Optimization Cloud — business model and market potential
 
-Status: research draft, companion spreadsheet: `TOKEN-OPTIMIZATION-BUSINESS-MODEL.xlsx`
-(same directory — all figures below are computed by that model; edit the blue
-Assumptions cells and everything recalculates)
+Status: assumption-driven operating model, not an investment-grade forecast
+Companion spreadsheet: `TOKEN-OPTIMIZATION-BUSINESS-MODEL.xlsx`
+(same directory; edit the blue Assumptions cells to stress the scenario)
 Series: techniques → market analysis → tech design → feasibility → RouteLLM note → **this**
 
-**One-line thesis:** Coding-agent inference is a ~$7B spend pool in 2026 growing
-to ~$38B by 2030; an outcome-verified optimizer that removes ~18% of addressable
-waste and takes 20% of verified savings — plus Pro subscriptions and platform
-fees — has a serviceable revenue pool crossing $1.8B by 2030, of which a
-credible base case captures ~$56M ARR at 85% gross margin, on the FinOps
-playbook (nOps/Zesty take rates; CloudHealth/Apptio exit paths).
+**One-line thesis:** Under the model's explicit adoption, spend, addressability,
+savings, and pricing assumptions, coding-agent spend reaches ~$7B in 2026 and
+~$38B by 2030; an outcome-verified optimizer could create a serviceable revenue
+pool above $1.8B and a base scenario of ~$56M ARR. These are scenario outputs to
+falsify with E1–E5 evidence, not established market facts or a forecast.
 
 ---
 
 ## 1. Why this market, why now (the demand evidence)
 
-Four load-bearing facts from the 2026 research (every figure sourced on the
-spreadsheet's Comps tab):
+Four inputs and hypotheses motivate the model. Evidence labels follow the market
+analysis; a citation on the Comps tab does not convert a secondary estimate into a
+primary fact:
 
-1. **The spend is exploding faster than budgets.** Per-developer AI consumption
-   grew ~18.6x in nine months; enterprise monthly AI spend averaged $85.5k in
-   2025 (+36% YoY); inference is now ~85% of enterprise AI budgets — the
-   second-largest line item after talent. Agentic workflows burn 5–30x the
-   tokens of chat, and a single agentic coding task consumes 400k–2M tokens.
-2. **The pain is public.** Uber exhausted its annual AI coding budget
-   two-thirds through 2026; Microsoft curtailed internal Claude Code access
-   over cost. OpenAI *doubled* GPT-5-line API prices in April 2026. This is
-   the cloud-cost crisis of 2015 replaying at 4x speed, before the FinOps
-   tooling exists.
-3. **The savings are proven, not hypothetical.** CodexZero: 15% fewer tokens
-   at an identical benchmark score, lossless-only, one agent. ProjectDiscovery:
-   cache-hit rate 7%→84%, total LLM spend cut 59–70%, no quality change. Our
-   18% blended verified-savings assumption is conservative against both.
-4. **The obvious competitors are structurally absent.** Gateway per-token
-   markups raced to zero (pipes can't monetize); marketplaces earn a % of
-   token flow (savings cut their own revenue); providers optimize only their
-   own silo. The FinOps analogy says a neutral savings-verified layer emerges
-   anyway — and gets bought (CloudHealth → VMware ~$500M; Apptio → IBM $4.6B).
+1. **Spend-growth signal, secondary.** Several sources repeat an 18.6x
+   per-developer consumption increase, but the underlying cohort and denominator
+   have not been located. It is motivation for E2, not an externally usable fact.
+2. **Budget-pressure signal.** Public reports describe coding-agent budget pressure
+   at large companies. GPT-5.5 also launched at higher API prices than GPT-5.4;
+   that supports measuring cost per outcome, not claiming an unchanged model's
+   price doubled.
+3. **Lever-existence evidence.** CodexZero reports ~15% fewer tokens at the same
+   observed benchmark score for one agent/run family. ProjectDiscovery reports a
+   7%→84% cache-hit improvement and 59–70% spend reduction on one production
+   workload. Neither establishes our 18% blended savings assumption.
+4. **Positioning hypothesis.** Existing gateways, routers, providers, and agent
+   vendors have different incentives and product boundaries. Their absence from
+   outcome-verified coding optimization is a claim to revalidate, not a structural
+   certainty.
 
 ## 2. Market sizing (bottoms-up; Market tab)
 
-Built from developer counts, not top-down percentages of AI market reports:
+Built from editable developer, adoption, metered-share, and spend assumptions rather
+than a claim that the resulting TAM has already been observed:
 
 | Driver ($ pools in $M/yr) | 2026 | 2030 |
 |---|---|---|
@@ -53,10 +50,9 @@ Built from developer counts, not top-down percentages of AI market reports:
 | + Subscription-lane spend ($35/mo blended) | $3,024M | $6,468M |
 | **Total coding-agent spend TAM** | **$7,344M** | **$38,220M** |
 
-Cross-check: the enterprise LLM market is forecast $5.9B (2025) → $91.5B
-(2036) at 28.3% CAGR, with inference at ~85% of AI budgets and coding agents
-the dominant agentic workload — a $32B metered coding-agent pool by 2030 sits
-inside those envelopes rather than exceeding them.
+The external enterprise-LLM forecasts cited in the workbook are only an envelope
+check. They do not prove that coding agents are the dominant workload or that the
+modeled $32B metered pool will materialize.
 
 **SAM — our monetizable revenue pool** (addressable × savings × take, plus the
 two subscription streams):
@@ -82,9 +78,9 @@ Penetration of the SAM pools, ramping over five years:
 
 | Scenario (ARR, $M) | 2026 | 2027 | 2028 | 2029 | 2030 | 2030 penetration |
 |---|---|---|---|---|---|---|
-| Conservative | 0.4 | 1.6 | 4.4 | 9.7 | 18.7 | 1.0% |
-| **Base** | **1.1** | **5.2** | **13.3** | **28.5** | **56.2** | **3.0%** |
-| Aggressive | 3.0 | 13.0 | 35.4 | 77.8 | 149.8 | 8.0% |
+| Conservative | 0.4 | 1.6 | 5.1 | 10.7 | 18.7 | 1.0% |
+| **Base** | **1.1** | **5.2** | **15.2** | **31.3** | **56.2** | **3.0%** |
+| Aggressive | 3.0 | 13.0 | 40.6 | 85.2 | 149.8 | 8.0% |
 
 Base-case revenue mix in 2030: ~40% savings-share, ~12% Pro subscriptions,
 ~48% enterprise platform fees. The platform-fee share growing over time is
@@ -99,7 +95,10 @@ vendors converged on.
   biggest slice — eval/shadow compute for the evidence flywheel).
 - **Illustrative enterprise customer**: 500 metered devs × $175/mo →
   $1.05M/yr coding-agent spend; we deliver ~$123k verified savings; ACV
-  ≈ **$60.6k** ($24.6k savings-share + $36k platform), customer nets ~$98k.
+  ≈ **$60.6k** ($24.6k savings-share + $36k platform). The customer retains
+  ~$98.3k after the savings share and ~$62.3k in net dollar savings after both
+  fees. Platform value such as SLA, SSO, policy, and evidence is additional,
+  not counted as cash savings.
   Base-2030 revenue implies ~**930 enterprise-equivalent customers** —
   comparable scale to Cloudability's 250 customers managing $9B of spend at
   acquisition.
@@ -115,8 +114,9 @@ The model's four load-bearing assumptions, in order of leverage:
 1. **Verified savings rate (18%).** Below ~8%, savings-share revenue thins and
    the business leans on platform fees — still viable, weaker story. This is
    exactly what feasibility experiment E2 measures before product build; the
-   two proven data points (15% lossless floor, 59–70% cache-shaping case)
-   bracket it from both sides.
+   the two existence data points (15% on one agent/run family and 59–70% on one
+   cache-shaping workload) show that levers exist but do not statistically bracket
+   our fleet result.
 2. **Metered share of agentic devs (25%→45%).** If providers win the world
    onto flat subscriptions, the dollars story shrinks — but the capped-lane
    value ("more agent-hours per subscription") grows in its place, monetized

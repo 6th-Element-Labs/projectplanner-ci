@@ -45,15 +45,18 @@ exact-SHA status decision.
    - GitHub supplied a full base SHA;
    - the base and source commits both exist in the mirrored checkout;
    - the base is an ancestor of the source;
-   - the exact base-to-source diff is non-empty; and
-   - every changed path has a case-insensitive `.md` suffix.
+   - the exact base-to-source diff is non-empty;
+   - every changed path has a case-insensitive `.md` suffix; and
+   - no changed document is a protected policy/architecture/runbook/spec path or
+     referenced by a directly executable repository test.
 5. Missing, malformed, unreachable, non-ancestor, empty, or mixed-path evidence selects the
    full lane. Classification errors never select a faster lane.
 6. The Markdown lane runs exact-diff whitespace checks, unresolved-conflict checks, and
    local-link target validation on changed Markdown files. Rename detection is disabled so a
    code-to-Markdown rename still exposes the removed code path and forces full CI. Markdown
    symlinks are ineligible. The lane does not install application dependencies, Node, or
-   Chromium.
+   Chromium. Markdown that participates in an executable test or protected normative
+   contract selects full CI instead.
 7. `ci_repair` always selects the full lane.
 8. Every lane emits `switchboard.ci_lane_result.v1` with the requested SHAs, selected lane,
    reason, changed paths, and executed checks. Purpose now selects a trusted verification
@@ -85,9 +88,10 @@ Only the work performed inside the trusted workflow differs by mechanically sele
 ## Safety argument
 
 The merge-group SHA is the only candidate GitHub can land. Code and mixed changes always run
-the full suite on that SHA. A false Markdown classification would require every changed path
-in the exact base-to-source Git diff to end in `.md`; any executable, workflow, fixture,
-configuration, lockfile, or asset path forces full CI.
+the full suite on that SHA. Markdown is not assumed non-executable: accepted ADRs, CI
+strategy, runbooks, specs, `AGENTS.md`, and documents referenced by direct tests select the
+full lane. Other exact Markdown-only changes run structural validation. Any executable,
+workflow, fixture, configuration, lockfile, or asset path also forces full CI.
 
 The PR-head admission lane can allow a deeper application failure to reach the queue. That is
 an intentional throughput tradeoff, not a false-green landing: the full merge-group lane
@@ -105,7 +109,7 @@ test to admission, not to restore duplicate full suites by default.
    still executes full CI.
 4. Set `SWITCHBOARD_CI_LANE_MODE=enforce` and prove three canaries:
    - PR head reports `admission`;
-   - Markdown-only merge group reports `docs`; and
+   - eligible Markdown-only merge group reports `docs`; and
    - code or mixed merge group reports `full`.
 5. For every canary, verify the required status target URL, exact source SHA, base SHA where
    required, lane receipt, and canonical merge provenance.
@@ -118,6 +122,7 @@ is required.
 ## Consequences
 
 Ordinary code changes pay for one short admission run plus one authoritative full
-merge-group run. Markdown-only changes pay for two short validations and no application
-suite. The queue still protects against stale bases and interacting agent changes without
-requiring agents to race each other through rebases.
+merge-group run. Eligible research/prose Markdown changes pay for two short validations and
+no application suite. Normative or test-consumed Markdown pays for full merge-group
+verification. The queue still protects against stale bases and interacting agent changes
+without requiring agents to race each other through rebases.
