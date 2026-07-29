@@ -471,6 +471,66 @@ P0 tie-in: this package *is* experiments E1–E2 from the feasibility doc
 (passthrough fidelity + redundancy census) productized — the go/no-go
 measurement and the top-of-funnel wedge are the same artifact.
 
+### 7.2 Individual conversion: the free tier proves us, shadow mode prices the upgrade
+
+"Individuals free forever" needs a real upgrade path, and the architecture
+already contains it: **shadow mode perpetually demos the next tier on the
+user's own traffic.** The free edition runs tier 1–2 for real but
+shadow-computes the paid techniques too (tier-3 paging, delta re-reads,
+current cloud profiles) and shows the delta in every report:
+
+```text
+Saved this month (free tier):        1.4M tokens  ($19.20)
+Additional available (Pro):          2.2M tokens  ($31.70)
+  paging 1.3M · delta re-reads 0.5M · current profiles 0.4M
+```
+
+Nothing is crippled — but every `report` is a personalized,
+provider-verifiable quote for the upgrade, computed on the user's own
+workload. The WAAS savings-report lesson applied recursively to our own
+pricing tiers.
+
+Three high-intent moments, instrumented (and the only places the nudge is
+allowed to fire):
+
+1. **Cap hits.** Individuals' binding constraint is usually subscription
+   usage limits, not dollars. We sit in the path, so we see the 429s and
+   limit warnings: "You hit your Max plan limit 3× this week; at Pro-tier
+   efficiency this week's sessions would have fit with ~2 days of headroom."
+   Token efficiency reframed as **more agent-hours per subscription** is the
+   individual's actual value proposition — measurable only by something in
+   the request path at the moment the limit bites.
+2. **The localhost wall.** Cloud agents (Claude Code web, Codex cloud) and
+   CI runners can't reach a local proxy. The report shows the gap: "38% of
+   your sessions ran outside your local gateway — unoptimized." Hosted
+   endpoint is Pro's second pillar.
+3. **Model-release day.** Free gets dialect/profile updates at
+   package-release cadence; Pro gets them continuously with the promotion
+   state machine behind them: "Sonnet 5.1 shipped today; Pro profiles
+   re-validated this morning, local profiles update in ~2 weeks." For daily
+   agent users, "safe on the model that shipped this morning" is a real
+   recurring reason to pay.
+
+The Pro tier ($10–19/mo): hosted endpoint with synced session state
+(CI/cloud/multi-device), tier 3+ enabled, continuously updated eval-backed
+profiles, personal dashboard with cap forecasting ("at this pace you hit
+your limit Thursday"). Priced under the noise floor of what it saves; the
+report proves the ROI monthly in the user's own numbers.
+
+Individuals are also the org motion: the paste-into-Slack report footer plus
+consent-based workspace detection ("3 people at yourcompany.com use this —
+combine into a team workspace to see fleet savings") makes the individual
+Pro user the champion who expenses it, and the aggregated team
+would-have-saved the CFO artifact that opens the org deal.
+
+Anti-dark-pattern rules, explicit: the free tier never degrades over time,
+safety fixes are never withheld from free users, and the nudge fires only at
+the three moments above and is permanently dismissible. An opt-in-telemetry
+free user contributing dialect evidence is worth more to the moat than
+$12/month (Cloudflare's free-tier logic: free traffic trained their threat
+models; ours trains the evidence flywheel). Upgrades come from the delta
+being visible, not the free tier being painful.
+
 ---
 
 ## 8. Risks and open questions
