@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+from switchboard.domain.pr_identity import same_pr_identity
+
 
 _PASS = {"success", "passed", "pass", "ok", "neutral", "skipped"}
 _PENDING = {"requested", "queued", "in_progress", "waiting", "pending", "expected"}
@@ -309,7 +311,9 @@ def review_passed(snapshot: Mapping[str, Any]) -> bool:
         snapshot.get("pr_url") or _map(snapshot.get("github_pr")).get("url")
     ).lower().rstrip("/")
     review_pr_url = _text_raw(review.get("pr_url")).lower().rstrip("/")
-    if snap_pr_url and review_pr_url and snap_pr_url != review_pr_url:
+    if snap_pr_url and review_pr_url and not same_pr_identity(
+        snap_pr_url, review_pr_url
+    ):
         return False
     return True
 
