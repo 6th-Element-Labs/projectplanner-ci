@@ -147,6 +147,27 @@ def get_for_task_in(c, project: str, task_id: str) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def get_for_task_event_in(c, project: str, task_id: str, *,
+                          repository: str, pr_number: int,
+                          branch: str) -> dict[str, Any] | None:
+    """Prefer the publication bound to the live GitHub PR branch.
+
+    Completion records can arrive out of order.  Their write timestamp is not
+    authority over the provider's current PR identity, so merge validation must
+    not select an unrelated local generation branch merely because it landed
+    last.
+    """
+    row = c.execute(
+        "SELECT * FROM execution_publications "
+        "WHERE project_id=? AND task_id=? AND lower(repository)=lower(?) "
+        "AND pr_number=? AND branch=? "
+        "ORDER BY execution_generation DESC, updated_at DESC, created_at DESC "
+        "LIMIT 1",
+        (project, task_id, repository, int(pr_number), branch),
+    ).fetchone()
+    return dict(row) if row else get_for_task_in(c, project, task_id)
+
+
 def validate_event(binding: Mapping[str, Any], *, project: str, repository: str,
                    pr_number: int, branch: str = "", head_sha: str = "",
                    base_branch: str = "",
