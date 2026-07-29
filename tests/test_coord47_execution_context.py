@@ -166,3 +166,15 @@ def test_stale_authority_is_fenced(monkeypatch):
         assert exc.code == "stale_execution_context"
     else:
         raise AssertionError("stale execution context was accepted")
+
+
+def test_canonical_base_advance_does_not_revoke_queued_execution(monkeypatch):
+    assigned = resolve("switchboard", "org/repo", "main", "a" * 40)
+    advanced = resolve("switchboard", "org/repo", "main", "b" * 40)
+
+    assert assigned["base_sha"] != advanced["base_sha"]
+    assert assigned["digest"] != advanced["digest"]
+    assert assigned["authority_digest"] == advanced["authority_digest"]
+
+    monkeypatch.setattr(execution_context, "resolve", lambda **_kwargs: advanced)
+    execution_context.require_current(assigned)

@@ -2,8 +2,11 @@
 
 The context is persisted with the wake.  Hosts receive references and digests,
 never provider or SCM credentials.  ``authority_digest`` deliberately excludes
-the execution generation so it can be re-resolved at claim time to fence policy,
-topology, connection, or canonical-base changes.
+the execution generation and the assigned canonical base so it can be
+re-resolved at claim time to fence policy, topology, or connection changes.
+The full context digest still signs the exact assigned base.  A later default
+branch advance is ordinary Git concurrency for the agent and merge queue to
+resolve, not an authority revocation.
 """
 from __future__ import annotations
 
@@ -256,7 +259,9 @@ def resolve(
         "topology_digest": _digest(topology),
         "policy_digest": _digest(policy),
     }
-    authority_digest = _digest(authority)
+    authority_digest = _digest({
+        key: value for key, value in authority.items() if key != "base_sha"
+    })
     context = {
         "schema": SCHEMA,
         **authority,
@@ -373,6 +378,6 @@ def require_current(context: Mapping[str, Any]) -> None:
     if current.get("authority_digest") != context.get("authority_digest"):
         raise ExecutionContextError(
             "stale_execution_context",
-            "execution policy, topology, connection metadata, or canonical base changed",
+            "execution policy, topology, or connection metadata changed",
             expected_digest=context.get("authority_digest"),
             current_digest=current.get("authority_digest"))
