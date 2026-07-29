@@ -3,10 +3,10 @@
     "terminal": "blocked",
     "reason_code": "stale_review_verdict",
     "role_sequence": [
-      "remediation"
+      "review_merge"
     ],
-    "route": "remediation",
-    "effect": "start_remediation"
+    "route": "review_merge",
+    "effect": "ensure_review_generation"
   },
   "id": "evidence_review_verdict_stale",
   "schema": "switchboard.completion_conformance.scenario.v1",

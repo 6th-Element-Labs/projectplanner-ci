@@ -780,8 +780,15 @@ def review_merge_gate(task_id: str, head_sha: str, *,
             f"stale head {requested_head}."
         )
     elif not verdict:
-        code = "review_required"
-        message = f"Review required for current head {requested_head}."
+        if int(summary.get("verdict_count") or 0) > 0:
+            code = "stale_review_verdict"
+            message = (
+                f"Review required for current head {requested_head}; "
+                "the recorded verdict is for an older head or PR."
+            )
+        else:
+            code = "review_required"
+            message = f"Review required for current head {requested_head}."
     elif int(verdict.get("open_finding_count") or 0) > 0:
         count = int(verdict.get("open_finding_count") or 0)
         message = (

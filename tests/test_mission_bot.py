@@ -612,8 +612,8 @@ def test_passed_review_without_head_sha_does_not_arm_merge():
 
 
 def test_live_review_required_finding_starts_review_not_remediation():
-    """The merge gate's real review codes are mechanical review routing."""
-    snap = snapshot(review="missing")
+    """A live gate finding outranks a contradictory cached passing review."""
+    snap = snapshot(review="passed")
     snap["findings"] = [{
         "code": "review_required",
         "message": f"Review required for current head {HEAD}.",
@@ -627,6 +627,18 @@ def test_live_review_required_finding_starts_review_not_remediation():
     cmd = reduce_mission(snap)
     assert cmd["output"] == MissionOutput.START_REVIEW.value
     assert cmd["reason_code"] == "review_required"
+
+
+def test_live_stale_review_finding_starts_review_not_merge():
+    snap = snapshot(review="passed")
+    snap["findings"] = [{
+        "code": "stale_review_verdict",
+        "message": f"Review required for current head {HEAD}.",
+        "blocking": True,
+    }]
+    cmd = reduce_mission(snap)
+    assert cmd["output"] == MissionOutput.START_REVIEW.value
+    assert cmd["reason_code"] == "stale_review_verdict"
 
 
 def test_live_runner_waits():
