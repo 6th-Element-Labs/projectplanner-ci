@@ -53,6 +53,20 @@ with patch.object(connect_dispatch.coordination_repo, "request_wake", request_wa
     second = connect_dispatch.enqueue_task(
         task, project="switchboard", actor="coordinator/b",
         caller_agent_id="coordinator/b", generation_ref="decision-7", **decision)
+    refreshed_hints = connect_dispatch.enqueue_task(
+        task, project="switchboard", actor="coordinator/b",
+        caller_agent_id="coordinator/b", generation_ref="decision-7",
+        **{
+            **decision,
+            "reason_code": "live_evidence_refreshed",
+            "acceptance_findings": [
+                {"code": "live_evidence_refreshed", "blocking": False},
+            ],
+        })
+    replacement = connect_dispatch.enqueue_task(
+        task, project="switchboard", actor="coordinator/b",
+        caller_agent_id="coordinator/b", generation_ref="decision-7:execution-2",
+        **decision)
     connect_dispatch.enqueue_task(
         task, project="switchboard", actor="coordinator/b",
         caller_agent_id="coordinator/b", generation_ref="decision-8",
@@ -60,9 +74,18 @@ with patch.object(connect_dispatch.coordination_repo, "request_wake", request_wa
 
 ok(first["assignment_id"] == second["assignment_id"],
    "same completion decision reuses the assignment receipt identity")
-one, replay, changed = captured
+one, replay, hints, successor, changed = captured
 ok(one["policy"]["effect_identity"] == replay["policy"]["effect_identity"],
    "effect identity excludes ephemeral coordinator identity")
+ok(one["policy"]["effect_identity"] == hints["policy"]["effect_identity"],
+   "refreshed diagnostic hints do not conflict with one mission generation")
+ok(one["idem_key"] == hints["idem_key"]
+   and first["assignment_id"] == refreshed_hints["assignment_id"],
+   "one mission generation keeps one idempotency and assignment identity")
+ok(one["policy"]["effect_identity"] != successor["policy"]["effect_identity"]
+   and one["idem_key"] != successor["idem_key"]
+   and first["assignment_id"] != replacement["assignment_id"],
+   "a terminal successor generation receives a fresh external effect")
 ok(one["policy"]["effect_identity"] != changed["policy"]["effect_identity"],
    "new exact head/state version creates a distinct effect identity")
 

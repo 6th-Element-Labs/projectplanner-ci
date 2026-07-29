@@ -371,9 +371,12 @@ def enqueue_task(
         "runtime": runtime_name,
     }
     policy["execution_context"] = context
-    # The external effect represents one durable completion decision, not the
-    # coordinator/lease that happened to request it. Generation and fence are
-    # allocated atomically below and intentionally do not participate either.
+    # The external effect represents one Task Execution-owned dispatch
+    # generation. Diagnostic hints are deliberately excluded: agents reload
+    # live evidence after boot, so changing a reason or finding must not turn
+    # one mission into a conflicting external effect. A terminal predecessor
+    # advances ``generation`` in Task Execution, which gives the replacement a
+    # new effect key without making wake delivery state lifecycle authority.
     if lifecycle["role"] in {"review_merge", "remediation"}:
         policy["effect_identity"] = {
             "schema": "switchboard.completion_effect_identity.v1",
@@ -381,12 +384,9 @@ def enqueue_task(
             "head_sha": lifecycle["head_sha"],
             "route": lifecycle["route"],
             "role": lifecycle["role"],
-            "reason_code": lifecycle["reason_code"],
             "attempt": lifecycle["attempt"],
             "state_version": lifecycle["state_version"],
-            "acceptance_findings_hash": hashlib.sha256(json.dumps(
-                lifecycle["acceptance_findings"], sort_keys=True,
-                separators=(",", ":"), default=str).encode()).hexdigest(),
+            "dispatch_generation": generation,
         }
     suffix = generation or "initial"
     wake = coordination_repo.request_wake(
