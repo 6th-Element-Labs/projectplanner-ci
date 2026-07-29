@@ -734,7 +734,8 @@ def review_merge_gate(task_id: str, head_sha: str, *,
                       project: str = DEFAULT_PROJECT,
                       max_rounds: int = REVIEW_MAX_ROUNDS,
                       now: Optional[float] = None,
-                      stall_seconds: float = REVIEW_STALL_ESCALATION_S) -> dict[str, Any]:
+                      stall_seconds: float = REVIEW_STALL_ESCALATION_S,
+                      current_head_sha: str = "") -> dict[str, Any]:
     """Return the deterministic exact-head review input consumed by merge_gate.
 
     ``now``/``stall_seconds`` fence review *liveness* (see REVIEW_STALL_ESCALATION_S) and are
@@ -742,7 +743,10 @@ def review_merge_gate(task_id: str, head_sha: str, *,
     requested_head = str(head_sha or "").strip()
     with _conn(project) as c:
         git_state = _current_git_state_in(c, task_id)
-        current_head = git_state["head_sha"]
+        # A caller that just observed GitHub may supply that live PR head.  The
+        # task projection can lag provider truth and must not make a current
+        # review request look stale.
+        current_head = str(current_head_sha or git_state["head_sha"] or "").strip()
         current_pr = git_state["pr_url"]
         summary = review_verdict_summary_in(
             c, task_id, current_head, current_pr)
@@ -851,11 +855,13 @@ def review_merge_gate_findings(task_id: str, head_sha: str, *,
                                max_rounds: int = REVIEW_MAX_ROUNDS,
                                now: Optional[float] = None,
                                stall_seconds: float = REVIEW_STALL_ESCALATION_S,
+                               current_head_sha: str = "",
                                ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Adapt the exact-head review gate to merge-gate blocking findings."""
     gate = review_merge_gate(
         task_id, head_sha, project=project, max_rounds=max_rounds,
         now=now, stall_seconds=stall_seconds,
+        current_head_sha=current_head_sha,
     )
     if gate.get("ok"):
         return gate, []
