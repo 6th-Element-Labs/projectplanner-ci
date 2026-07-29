@@ -10,7 +10,7 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 
 VALIDATION_POLICY_SCHEMA = "switchboard.validation_policy.v1"
@@ -263,7 +263,10 @@ def _run_candidates(evidence: Mapping[str, Any], session: Mapping[str, Any] | No
 def ui_playwright_evidence_gate(task: Mapping[str, Any], evidence: Mapping[str, Any],
                                 session: Mapping[str, Any] | None,
                                 *, project: str, head_sha: str = "",
-                                changed_files: Iterable[Any] | None = None) -> dict[str, Any]:
+                                changed_files: Iterable[Any] | None = None,
+                                resolve_work_session: Callable[
+                                    [str], Mapping[str, Any] | None
+                                ] | None = None) -> dict[str, Any]:
     classification = classify_task(task, project=project, existing=task,
                                    changed_files=changed_files)
     if not classification.get("ok"):
@@ -314,10 +317,32 @@ def ui_playwright_evidence_gate(task: Mapping[str, Any], evidence: Mapping[str, 
         if not (run.get("trace_hash") or run.get("screenshot_hash") or run.get("artifact_hash")):
             run_problems.append("missing_browser_artifact_hash")
         for key, expected in (("task_id", task.get("task_id")),
-                              ("work_session_id", expected_session),
                               ("branch", expected_branch), ("head_sha", expected_head)):
             if expected and str(run.get(key) or "") != str(expected):
                 run_problems.append(f"mismatched_{key}")
+        claimed_session_id = str(run.get("work_session_id") or "").strip()
+        if resolve_work_session:
+            claimed_session = (
+                resolve_work_session(claimed_session_id)
+                if claimed_session_id else None
+            )
+            claimed_identity = (
+                ("task_id", task.get("task_id")),
+                ("branch", run.get("branch") or expected_branch),
+                ("head_sha", run.get("head_sha") or expected_head),
+            )
+            if (
+                not claimed_session
+                or str(claimed_session.get("repo_role") or "") != "canonical"
+                or any(
+                    expected
+                    and str(claimed_session.get(key) or "") != str(expected)
+                    for key, expected in claimed_identity
+                )
+            ):
+                run_problems.append("mismatched_work_session_id")
+        elif expected_session and claimed_session_id != expected_session:
+            run_problems.append("mismatched_work_session_id")
         if not run_problems:
             clean = {key: value for key, value in run.items() if key != "_source"}
             return {"ok": True, "required": True, "waived": False,

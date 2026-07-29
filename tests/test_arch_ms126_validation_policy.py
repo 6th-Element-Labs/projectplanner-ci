@@ -119,6 +119,41 @@ gate = ui_playwright_evidence_gate(
 )
 ok(gate["ok"] and gate["required"], "valid exact-head Chromium receipt passes")
 
+# QA-18: a later remediation Work Session on the same exact head must not
+# invalidate proof produced by the original canonical session.
+newer_session = {
+    "work_session_id": "worksession-newer",
+    "task_id": "ARCH-MS-X",
+    "repo_role": "canonical",
+    "branch": "codex/x",
+    "head_sha": "a" * 40,
+    "hygiene": {},
+}
+original_session = {
+    **session,
+    "task_id": "ARCH-MS-X",
+    "repo_role": "canonical",
+}
+cross_session_gate = ui_playwright_evidence_gate(
+    task, {"executed_test_run": run}, newer_session,
+    project="switchboard", head_sha="a" * 40,
+    resolve_work_session=lambda session_id: (
+        original_session if session_id == "worksession-x" else None
+    ),
+)
+ok(cross_session_gate["ok"],
+   "canonical proof session remains valid after a newer same-head remediation session")
+
+wrong_proof_session = {**original_session, "head_sha": "b" * 40}
+rejected_cross_session = ui_playwright_evidence_gate(
+    task, {"executed_test_run": run}, newer_session,
+    project="switchboard", head_sha="a" * 40,
+    resolve_work_session=lambda _session_id: wrong_proof_session,
+)
+ok(not rejected_cross_session["ok"]
+   and "mismatched_work_session_id" in str(rejected_cross_session["problems"]),
+   "claimed proof session must be canonical and match task, branch, and exact head")
+
 for field, bad in (("executed_count", 0), ("skipped_count", 1),
                    ("console_errors", ["boom"]), ("head_sha", "b" * 40)):
     invalid = dict(run, **{field: bad})
