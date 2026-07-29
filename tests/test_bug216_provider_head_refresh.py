@@ -58,6 +58,39 @@ with store._conn(P) as c:
         ),
     )
 
+# The Mission Bot hydrator supplies the live GitHub PR but no cached expected
+# head.  A stale task projection must not turn normal same-PR head movement into
+# remediation; exact-head CI and review own freshness from here.
+live_head_gate = merge_gate_mod.merge_gate(
+    {
+        "task_id": TASK,
+        "pr_number": PR_NUMBER,
+        "pr_url": PR_URL,
+        "repo": "6th-Element-Labs/projectplanner",
+        "github_pr": {
+            "number": PR_NUMBER,
+            "state": "OPEN",
+            "draft": False,
+            "mergeable": True,
+            "base": {"ref": "master"},
+            "head": {"ref": BRANCH, "sha": HEAD_B},
+            "status_contexts": [{
+                "context": "Switchboard CI / VM gate",
+                "state": "PENDING",
+            }],
+        },
+    },
+    actor="bug218-test",
+    project=P,
+    record=False,
+)
+live_head_codes = {
+    str(finding.get("code") or "")
+    for finding in live_head_gate.get("findings") or []
+}
+assert "stale_head_sha" not in live_head_codes, live_head_gate
+assert "execution_publication_event_mismatch" not in live_head_codes, live_head_gate
+
 advanced = store.mark_task_pr_opened(
     TASK, PR_NUMBER, PR_URL, BRANCH, HEAD_B,
     actor="github-webhook", project=P, base_branch="master",
