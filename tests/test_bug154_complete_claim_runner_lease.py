@@ -245,6 +245,16 @@ with store._conn(P) as c:
         "SELECT status FROM task_claims WHERE id=?", (claim["claim_id"],)).fetchone()
 assert still_owned["status"] == "active"
 
+# The completion gates passed before the C3 surrender.  A cleanup racing the
+# physical stop may expire the Work Session while the host receipt is in flight;
+# the exact fenced acknowledgement must finalize the already-validated handoff
+# instead of re-running that mutable liveness gate.
+with store._conn(P) as c:
+    c.execute(
+        "UPDATE work_sessions SET status='expired' WHERE work_session_id=?",
+        (bound_work_session,),
+    )
+
 # The existing Agent Host expiry clock stops the supervised process, publishes
 # its terminal heartbeat, and leaves the later review generation alive.
 old_drain = agent_host._drain_runners
@@ -311,6 +321,11 @@ terminal = store.upsert_runner_session({
     },
 }, principal_id=HOST_PRINCIPAL, actor=HOST, project=P)
 assert terminal["status"] == "expired"
+with store._conn(P) as c:
+    completed_claim = c.execute(
+        "SELECT status FROM task_claims WHERE id=?", (claim["claim_id"],)
+    ).fetchone()
+assert completed_claim["status"] == "completed"
 
 # A successful physical kill followed by a failed POST remains durable across
 # daemon restart and is retried even though the supervisor no longer lists the

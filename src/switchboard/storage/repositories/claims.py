@@ -1276,8 +1276,42 @@ def _complete_claim_impl(claim_id: str, evidence: str = "", final_status: str = 
                     "status": row["status"]}
         task_row = c.execute("SELECT * FROM tasks WHERE task_id=?", (row["task_id"],)).fetchone()
         task_for_gate = _task_row(task_row) if task_row else {"task_id": row["task_id"]}
-        work_session_gate = _complete_claim_work_session_gate_in(
-            c, row, task_for_gate, evidence_obj, project, now)
+        if _terminal_ack:
+            # The exact completion handoff was already validated before C3
+            # surrendered and fenced this generation.  Host acknowledgement is
+            # the physical-death receipt that commits that durable decision; it
+            # must not re-run a mutable Work Session liveness gate after the
+            # runner has been stopped.  Cleanup may legitimately expire the
+            # session while the stop receipt is in flight.
+            session_row = c.execute(
+                "SELECT * FROM work_sessions WHERE claim_id=? "
+                "ORDER BY updated_at DESC, created_at DESC, work_session_id LIMIT 1",
+                (row["id"],),
+            ).fetchone()
+            session = (
+                _store_facade()._work_session_row(session_row)
+                if session_row else None
+            )
+            profile = _store_facade()._normalize_session_policy_profile(
+                str(
+                    evidence_obj.get("session_policy_profile")
+                    or evidence_obj.get("policy_profile")
+                    or (session or {}).get("policy_profile")
+                    or ""
+                )
+            )
+            required, profile = _store_facade()._work_session_required(
+                task_for_gate, profile, project=project)
+            work_session_gate = {
+                "ok": True,
+                "required": bool(required or session),
+                "policy_profile": profile,
+                "source": "validated_completion_handoff",
+                "work_session": session,
+            }
+        else:
+            work_session_gate = _complete_claim_work_session_gate_in(
+                c, row, task_for_gate, evidence_obj, project, now)
         if not work_session_gate.get("ok"):
             response = {"completed": False,
                         "reason": work_session_gate.get("reason") or "work_session_completion_gate_failed",
@@ -1687,6 +1721,14 @@ def terminal_ack_claim_completion_in(c: sqlite3.Connection, runner_session_id: s
             or int(handoff.get("lease_epoch") or 0)
             != int(metadata.get("lease_epoch") or 0)):
         return None
+    claim_id = str(handoff.get("claim_id") or "")
+    claim = c.execute("SELECT * FROM task_claims WHERE id=?", (claim_id,)).fetchone()
+    if not claim:
+        return None
+    if claim["status"] == "completed":
+        return {"completed": True, "idempotent": True, "claim_id": claim_id}
+    if claim["status"] != "active" or claim["task_id"] != handoff.get("task_id"):
+        return None
     execution_lease = c.execute(
         "SELECT * FROM resource_leases WHERE id=? AND resource_type='execution'",
         (str(metadata.get("execution_id") or ""),)).fetchone()
@@ -1696,14 +1738,6 @@ def terminal_ack_claim_completion_in(c: sqlite3.Connection, runner_session_id: s
             != int(handoff.get("generation") or 0)
             or int(execution_lease["fence_epoch"] or 0)
             != int(handoff.get("lease_epoch") or 0)):
-        return None
-    claim_id = str(handoff.get("claim_id") or "")
-    claim = c.execute("SELECT * FROM task_claims WHERE id=?", (claim_id,)).fetchone()
-    if not claim:
-        return None
-    if claim["status"] == "completed":
-        return {"completed": True, "idempotent": True, "claim_id": claim_id}
-    if claim["status"] != "active" or claim["task_id"] != handoff.get("task_id"):
         return None
     metadata["completion_handoff"] = {**handoff, "acknowledged_at": now,
                                       "acknowledged_by": actor}

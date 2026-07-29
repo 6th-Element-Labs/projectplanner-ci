@@ -669,6 +669,41 @@ try:
        and not bound_after_loss["policy"]["account_binding"].get("credential_lease_id"),
        "host loss fences the old lease and immediately replans for fresh binding")
 
+    # Regression: if the first host-loss replan found no eligible host, it
+    # persisted selected_host_id=null.  The old sweeper skipped that wake on
+    # every later pass, even after persistent capacity returned.
+    stranded_task = task("CO-9 unassigned recovery follows returned capacity")
+    stranded = request(stranded_task["task_id"], "stranded-recovery")
+    stranded_placement = {
+        **stranded["placement"],
+        "action": "provision_ephemeral",
+        "selected_host_id": None,
+        "reason_code": "no_eligible_persistent_capacity",
+        "host_loss_recovery_count": 1,
+        "lost_host_id": "host/co9-lost-before-return",
+        "requeued_at": BASE + 30,
+    }
+    with store._conn(PROJECT) as c:
+        c.execute(
+            "UPDATE wake_intents SET placement_json=? WHERE wake_id=?",
+            (json.dumps(stranded_placement, sort_keys=True), stranded["wake_id"]),
+        )
+    returned_host = "host/04-co9-returned-capacity"
+    register(returned_host, "persistent", ttl=3600)
+    returned = store.sweep_wake_intents(project=PROJECT, now=BASE + 31)
+    returned_wake = {
+        wake["wake_id"]: wake for wake in store.list_wake_intents(project=PROJECT)
+    }[stranded["wake_id"]]
+    ok(
+        returned_wake["placement"].get("selected_host_id") is not None
+        and any(
+            event.get("wake_id") == stranded["wake_id"]
+            and event.get("reason") == "persistent_capacity_returned"
+            for event in returned.get("events") or []
+        ),
+        "an unassigned recovered wake is replanned when persistent capacity returns",
+    )
+
     missing_rebind = store.claim_wake(
         bound_replacement, bound["wake_id"], actor="co9-rebind-missing", project=PROJECT)
     ok(not missing_rebind.get("claimed")
