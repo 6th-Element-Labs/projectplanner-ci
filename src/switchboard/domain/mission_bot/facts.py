@@ -315,7 +315,18 @@ def review_passed(snapshot: Mapping[str, Any]) -> bool:
 
 
 def review_needed(snapshot: Mapping[str, Any]) -> bool:
-    return not review_passed(snapshot)
+    return bool(review_finding_code(snapshot)) or not review_passed(snapshot)
+
+
+def review_finding_code(snapshot: Mapping[str, Any]) -> str:
+    """Return the live merge-gate review requirement, if any."""
+    for item in list(snapshot.get("findings") or []):
+        if not isinstance(item, Mapping) or item.get("blocking") is False:
+            continue
+        code = _text(item.get("code"))
+        if code in _PROCESS_FINDINGS_NOT_FACTORY and code != "draft_pr":
+            return code
+    return ""
 
 
 def queue_failed(snapshot: Mapping[str, Any]) -> bool:
@@ -428,7 +439,7 @@ def gates_green(snapshot: Mapping[str, Any]) -> bool:
         return False
     if ci_pending(snapshot):
         return False
-    if not review_passed(snapshot):
+    if review_needed(snapshot):
         return False
     required = list(snapshot.get("required_status_contexts") or [])
     contexts = _map(snapshot.get("status_contexts"))
@@ -462,6 +473,7 @@ __all__ = [
     "pr_closed_unmerged",
     "queue_failed",
     "queue_waiting",
+    "review_finding_code",
     "review_needed",
     "review_passed",
     "terminal_operator_outcome",

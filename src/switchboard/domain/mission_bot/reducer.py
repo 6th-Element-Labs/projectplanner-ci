@@ -297,7 +297,7 @@ def reduce_mission(snapshot: Mapping[str, Any]) -> dict[str, Any]:
 
     # 10. Review missing/stale — boot review.
     if facts.review_needed(snap):
-        reason = (
+        reason = facts.review_finding_code(snap) or (
             "review_verdict_stale"
             if _text(_map(snap.get("review")).get("status")
                      or _map(snap.get("review")).get("state")
