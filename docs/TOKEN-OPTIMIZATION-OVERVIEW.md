@@ -1,7 +1,8 @@
-# Token Optimization Gateway — product and evidence overview
+# Compand — product and evidence overview
 
 Status: reviewed series overview and reading path
 Scope: standalone agentic-coding infrastructure layer, optionally amplified by Switchboard
+Product: **Compand**, the token-saving context gateway for coding agents
 Authority: product research and engineering design; not an accepted Switchboard ADR or a
 claim that E1–E5 have passed
 
@@ -23,12 +24,12 @@ claim that E1–E5 have passed
 
 ## 1. Executive summary
 
-The product is a configured gateway and optional local harness for coding-agent LLM
+Compand is a configured gateway and optional local harness for coding-agent LLM
 traffic. It measures context waste, cache misses, retries, and coverage; applies only
 certified transforms; and proves savings against task outcomes. It is not primarily a
 generic proxy, prompt compressor, or model router.
 
-The initial product is a no-mutation **Context Doctor**:
+The initial product experience is a no-mutation **Compand Scan** (the Context Doctor):
 
 - show which agent/model/auth traffic is captured, bypassed, partial, or unknown;
 - explain where input, output, cache, retry, and idle-wake spend originates;
@@ -42,11 +43,11 @@ security, tenancy, retention, credential, DLP, egress, and budget failures rejec
 
 ## 2. The product
 
-The product has three cooperating surfaces:
+Compand has three cooperating surfaces:
 
-1. **Gateway data path.** OpenAI Responses and Anthropic Messages adapters preserve
+1. **Compand Gateway data path.** OpenAI Responses and Anthropic Messages adapters preserve
    streaming, tools, signed/encrypted blocks, errors, usage, and provider caching.
-2. **Optional harness path.** Agent or launcher integration enables turn elimination,
+2. **Optional Compand harness path.** Agent or launcher integration enables turn elimination,
    deferred schemas, cooperative context epochs, artifact retrieval, and lanes a
    transparent gateway cannot safely change.
 3. **Evidence plane.** Versioned coverage and transform receipts connect token and cache
@@ -72,6 +73,11 @@ metric is **net cost per accepted customer outcome**, with clearly labeled proxi
 the customer cannot provide a definitive outcome.
 
 ## 4. Why Switchboard makes it stronger
+
+The product family has distinct responsibilities: **Switchboard** coordinates and
+proves the work, **Compand** reduces model-context waste, and **Tally** measures spend
+and cost per verified outcome. Compand can run independently; Tally is the economics
+layer that joins Compand receipts to Switchboard's accepted-work evidence.
 
 Switchboard supplies unusually strong ground truth:
 
@@ -184,7 +190,7 @@ are assumptions to stress and replace with E1–E5 and customer data.
 
 Potential monetization:
 
-- free or low-cost Context Doctor;
+- free or low-cost Compand Scan (Context Doctor);
 - individual Pro subscription for local/harness optimization;
 - enterprise platform fee for fleet policy, evidence, SSO, SLA, and deployment options;
 - verified-savings share only where baseline and outcome attribution are auditable.
@@ -195,7 +201,7 @@ consumption claim, modeled TAM, competitive absence, or scenario ARR as establis
 ## 11. Build sequence and go/no-go gates
 
 1. **P-1 — Compatibility truth:** implement passthrough adapters and E1 coverage receipts.
-2. **P0 — Shadow Context Doctor:** run E2 redundancy/economics census with no mutation.
+2. **P0 — Shadow Compand Scan:** run E2 redundancy/economics census with no mutation.
 3. **P1 — Exact and typed codecs:** canary hygiene, exact references, structured data,
    command outputs, and within-turn overlap.
 4. **P2 — Harness integrations:** schema deferral, turn elimination, richer outcomes.

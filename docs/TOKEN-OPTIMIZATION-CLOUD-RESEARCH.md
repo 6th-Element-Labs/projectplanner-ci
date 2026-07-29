@@ -1,7 +1,8 @@
-# Token Optimization as a Service — research & scoping
+# Compand — research and scoping
 
 Status: reviewed research and product-scoping baseline; not accepted architecture
 or an implementation commitment
+Product: **Compand**, the token-saving context gateway for coding agents
 Standalone prerequisites: certified provider protocol adapters, counting methods,
 session/evidence storage, and customer-controlled outcome joins
 Optional Switchboard integrations: LiteLLM boundary, Tally attribution, and
@@ -19,7 +20,7 @@ proxy but the evidence flywheel that proves savings never cost outcomes.
 
 ## 0. Product boundary: standalone layer, amplified by Switchboard
 
-This product must stand on its own in the agentic-AI coding stack. Its standalone
+Compand must stand on its own in the agentic-AI coding stack. Its standalone
 contract is an agent- and provider-compatible context-efficiency layer that can sit
 between a supported agent API lane and a model provider, or run beside the agent as a
 local harness. It provides value without Switchboard: coverage attestation, context
@@ -32,8 +33,8 @@ Tally's cost-to-verified-outcome denominator. Gateway observations remain eviden
 they cannot establish capacity, start work, acknowledge communication, complete a
 claim, or prove Done.
 
-The first product is not generic prompt compression. It is a no-mutation Context
-Doctor and flight recorder that answers:
+The first Compand experience is not generic prompt compression. It is a no-mutation
+Compand Scan (the Context Doctor) and flight recorder that answers:
 
 - which inference traffic is captured, bypassed, or unsupported;
 - which exact spans caused cache misses, repeated spend, retries, or unnecessary wakes;
