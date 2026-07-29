@@ -307,6 +307,13 @@ for unit in "${RETIRED_LIFECYCLE_UNITS[@]}"; do
     sudo rm -f "/etc/systemd/system/$unit"
 done
 sudo cp deploy/*.service deploy/*.timer /etc/systemd/system/
+# Journald retention cap (2026-07-30 incident). The live drop-in must track
+# deploy/ like every other /etc file this script owns; restart journald only
+# when the file actually changes so routine deploys never blip logging.
+if ! sudo cmp -s deploy/journald-00-cap.conf /etc/systemd/journald.conf.d/00-cap.conf; then
+    sudo install -D -m 0644 deploy/journald-00-cap.conf /etc/systemd/journald.conf.d/00-cap.conf
+    sudo systemctl restart systemd-journald
+fi
 # HARDEN-55: re-assert the least-privilege posture (dedicated service account, root-owned
 # read-only code tree, service-owned data dir incl. the CI-12 source clone). Idempotent.
 sudo bash deploy/apply-least-privilege.sh

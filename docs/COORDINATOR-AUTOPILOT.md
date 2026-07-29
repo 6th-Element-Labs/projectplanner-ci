@@ -56,6 +56,7 @@ the Deliverables UI; pause/resume/stop is durable per scope.
 | `PM_COORDINATOR_AUTOPILOT_LEASE_TTL_SECONDS` | `120` | Leader failover TTL; at least 3x heartbeat |
 | `PM_COORDINATOR_AUTOPILOT_MAX_DELIVERABLES` | `64` | Bound per-project work per tick |
 | `PM_COORDINATOR_AUTOPILOT_MAX_TASKS_PER_SCOPE` | `64` | Ready-frontier fan-out bound per scope/tick |
+| `PM_COORDINATOR_AUTOPILOT_LOG_FULL` | `0` | Print the full tick JSON (dossiers/snapshots) instead of the bounded summary. Debug only: full ticks churned the entire journald cap in ~2h (2026-07-30 incident). The durable record lives in decision_records/decision_episodes and each scope's `last_result`. |
 
 ## Operator controls
 

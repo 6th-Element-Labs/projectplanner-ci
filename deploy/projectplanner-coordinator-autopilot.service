@@ -27,6 +27,9 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PM_COORDINATOR_AUTOPILOT_ACT=1
 Environment=PM_COORDINATOR_AUTOPILOT_MAX_DELIVERABLES=64
 Environment=PM_COORDINATOR_AUTOPILOT_MAX_TASKS_PER_SCOPE=64
+# Tick lines are bounded summaries; PM_COORDINATOR_AUTOPILOT_LOG_FULL=1 restores
+# the full tick JSON for live debugging. Never leave it on: full ticks churned
+# the whole journald cap in ~2h and destroyed forensics (2026-07-30 incident).
 RuntimeDirectory=projectplanner
 ExecStart=/opt/projectplanner/.venv/bin/python /opt/projectplanner/coordinator_daemon.py run
 Restart=always

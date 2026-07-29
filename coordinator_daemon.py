@@ -23,6 +23,7 @@ from switchboard.domain.completion import routing as completion_routing
 STATE_SCHEMA = "switchboard.coordinator_daemon_state.v1"
 CONTROL_SCHEMA = "switchboard.coordinator_daemon_control.v1"
 RUN_SCHEMA = "switchboard.coordinator_daemon_run.v1"
+TICK_SUMMARY_SCHEMA = "switchboard.coordinator_daemon_tick_summary.v1"
 LEADER_RESOURCE_TYPE = "coordinator_leader"
 TERMINAL_DELIVERABLE_STATUSES = frozenset({
     "archived", "cancelled", "canceled", "complete", "completed", "done",
@@ -46,6 +47,110 @@ def _csv(value: Any, *, upper: bool = False) -> tuple[str, ...]:
     return tuple(sorted(clean))
 
 
+def _clip(value: Any, limit: int = 500) -> str:
+    text = str(value)
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def _compact(entry: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: value for key, value in entry.items()
+            if value not in (None, "", [], {})}
+
+
+def _summarize_task_receipt(entry: Mapping[str, Any]) -> Dict[str, Any]:
+    row = dict(entry)
+    # Deliverable scopes wrap the completion tick under "completion";
+    # standalone task scopes store the raw completion tick itself.
+    tick = row.get("completion")
+    if not isinstance(tick, Mapping):
+        tick = row if str(row.get("schema") or "").startswith(
+            "switchboard.completion_tick") else {}
+    decision = tick.get("decision") or {}
+    observation = tick.get("observation") or {}
+    receipt = (tick.get("execution") or {}).get("receipt") or {}
+    wake = row.get("completion_wake")
+    return _compact({
+        "task_id": row.get("task_id") or tick.get("task_id"),
+        "task_project": row.get("task_project"),
+        "status": row.get("status") or ("completion_tick" if tick else None),
+        "output": observation.get("output") or decision.get("mission_output"),
+        "reason_code": (decision.get("reason_code")
+                        or observation.get("reason_code")),
+        "state": decision.get("state"),
+        "route": decision.get("route"),
+        "head_sha": observation.get("head_sha"),
+        "effect": receipt.get("effect") or decision.get("effect"),
+        "effect_verified": receipt.get("verified"),
+        "effect_pending": receipt.get("pending"),
+        "idempotent_replay": receipt.get("idempotent_replay"),
+        "effect_error": _clip(receipt["error"]) if receipt.get("error") else None,
+        "error": _clip(row["error"]) if row.get("error") else None,
+        "reason": _clip(row["reason"]) if row.get("reason") else None,
+        "completion_wake": (wake or {}).get("status")
+        if isinstance(wake, Mapping) else None,
+    })
+
+
+def _summarize_scope_receipt(entry: Mapping[str, Any]) -> Dict[str, Any]:
+    row = dict(entry)
+    tasks = row.get("task_receipts") or row.get("receipts") or []
+    return _compact({
+        "scope_id": row.get("scope_id"),
+        "scope_type": row.get("scope_type"),
+        "deliverable_id": row.get("deliverable_id"),
+        "task_id": row.get("task_id"),
+        "status": row.get("status"),
+        "candidate_count": row.get("candidate_count"),
+        "error": _clip(row["error"]) if row.get("error") else None,
+        "tasks": [_summarize_task_receipt(item) for item in tasks
+                  if isinstance(item, Mapping)],
+    })
+
+
+def _summarize_project(entry: Mapping[str, Any]) -> Dict[str, Any]:
+    row = dict(entry)
+    wakes = row.get("completion_wakes") or {}
+    summary = {
+        "project": row.get("project"),
+        "status": row.get("status"),
+        "leader": row.get("leader"),
+        "acting": row.get("acting"),
+        "reason_code": (row.get("decision") or {}).get("reason_code"),
+        "sequence": (row.get("state") or {}).get("sequence"),
+        "receipts": [_summarize_scope_receipt(item)
+                     for item in row.get("receipts") or []
+                     if isinstance(item, Mapping)],
+    }
+    if wakes:
+        summary["completion_wakes"] = {
+            key: int(wakes.get(key) or 0)
+            for key in ("checked", "accepted", "failed", "cancelled")
+        }
+    return _compact(summary)
+
+
+def summarize_tick(result: Mapping[str, Any]) -> Dict[str, Any]:
+    """Bounded journal line for one tick — routing facts only.
+
+    Printing the full tick (embedded dossier/snapshot JSON) at info level
+    churned the entire journald cap in ~2h and destroyed overnight forensics
+    (2026-07-30 Mission Bot incident). The durable full record already lives
+    in decision_records/decision_episodes and each scope's ``last_result``;
+    the journal keeps task_id/output/reason_code plus the effect receipt.
+    ``PM_COORDINATOR_AUTOPILOT_LOG_FULL=1`` restores the full line.
+    """
+    row = dict(result) if isinstance(result, Mapping) else {}
+    return _compact({
+        "schema": TICK_SUMMARY_SCHEMA,
+        "profile_id": row.get("profile_id"),
+        "instance_id": row.get("instance_id"),
+        "ok": row.get("ok"),
+        "projects": [_summarize_project(item)
+                     for item in row.get("projects") or []
+                     if isinstance(item, Mapping)],
+    })
+
+
 @dataclass(frozen=True)
 class DaemonConfig:
     profile_id: str = "autopilot-default"
@@ -66,6 +171,9 @@ class DaemonConfig:
     max_tasks_per_scope_tick: int = 64
     lifecycle_enabled: bool = True
     review_reserved_slots: int = 1
+    # Journald safety: the steady-state tick line is a bounded summary; the
+    # full tick JSON (dossiers/snapshots) is opt-in for live debugging only.
+    log_full_ticks: bool = False
 
     @classmethod
     def from_env(cls, environ: Optional[Mapping[str, str]] = None) -> "DaemonConfig":
@@ -93,6 +201,8 @@ class DaemonConfig:
                 "PM_COORDINATOR_AUTOPILOT_LIFECYCLE", True, env),
             review_reserved_slots=max(
                 1, int(env.get("PM_COORDINATOR_REVIEW_RESERVED_SLOTS", "1"))),
+            log_full_ticks=enabled_from_env(
+                "PM_COORDINATOR_AUTOPILOT_LOG_FULL", False, env),
         )
 
 
@@ -716,7 +826,8 @@ class CoordinatorDaemon:
                 }, sort_keys=True), flush=True)
         while not self._stop:
             result = self.tick()
-            print(json.dumps(result, sort_keys=True, default=str), flush=True)
+            line = result if self.config.log_full_ticks else summarize_tick(result)
+            print(json.dumps(line, sort_keys=True, default=str), flush=True)
             if not result.get("ok"):
                 raise RuntimeError("coordinator daemon tick failed closed")
             if not self._stop:
