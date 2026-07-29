@@ -803,9 +803,12 @@ const TeepPlan = {
         const q = Object.entries(attention || {}).map(([runner, request]) => [
             runner, (request || {}).request_id || '', (request || {}).version || 0,
         ]).sort((x, y) => String(x[0]).localeCompare(String(y[0])));
+        const m = (this._dockMergeReceipts || []).map((x) => [
+            x.number || 0, x.merged_at || '', x.expires_at || 0,
+        ]);
         return JSON.stringify([
             r, p, d, Number((deployments || {}).undeployed_count || 0),
-            prUnavailable || '', (deployments || {}).unavailable || '', a, q,
+            prUnavailable || '', (deployments || {}).unavailable || '', a, q, m,
         ]);
     },
     // A stalled request here used to hang forever (no timeout), which left
@@ -856,6 +859,10 @@ const TeepPlan = {
         this._dockAutopilot = await window.SwitchboardFleetDock.loadCoverage(this, prs);
         this._dockPrUnavailable = prPayload.unavailable || '';
         this._dockDeploymentUnavailable = deploymentPayload.unavailable || '';
+        if (!this._dockPrUnavailable && !this._dockDeploymentUnavailable) {
+            window.SwitchboardFleetDock.updateMergeReceipts(
+                this, prs, deploymentPayload.deployments || []);
+        }
         const sig = this._fleetSignature(
             runners, prs, deploymentPayload, this._dockPrUnavailable,
             this._dockAutopilot, this._dockAttention);
@@ -1441,9 +1448,16 @@ const TeepPlan = {
         } else if (tab === 'prs') {
             const queued = prs.filter((x) => x.queue_position);
             const unqueued = prs.filter((x) => !x.queue_position);
-            body = prs.length
+            const receipts = (this._dockMergeReceipts || []).map((x) =>
+                `<button type="button" class="alert alert-success py-2 px-3 mb-2 w-100 text-start border-0"
+                    data-dock-go-deploy role="status" title="Show PR #${this.esc(String(x.number))} in Deploy">
+                    <i class="ti ti-check me-1"></i><strong>PR #${this.esc(String(x.number))} merged</strong>
+                    <span class="text-secondary"> · moved to Deploy</span>
+                </button>`).join('');
+            const openPrs = prs.length
                 ? `${this._dockQueueHtml(queued)}<div class="p-2">${unqueued.map((x) => this._dockPrHtml(x)).join('')}</div>`
                 : `<div class="p-3 text-secondary small">No open PRs on the canonical repo.</div>`;
+            body = `${receipts ? `<div class="p-2 pb-0">${receipts}</div>` : ''}${openPrs}`;
         } else if (this._dockDeploymentUnavailable) {
             body = `<div class="p-3 text-secondary small">Deployment status is unavailable: ${this.esc(this._dockDeploymentUnavailable)}</div>`;
         } else {
@@ -1476,6 +1490,8 @@ const TeepPlan = {
             ${body}</div>`;
         host.querySelectorAll('[data-dock-tab]').forEach((b) =>
             b.addEventListener('click', () => { this._dockTab = b.getAttribute('data-dock-tab'); rerender(); }));
+        host.querySelectorAll('[data-dock-go-deploy]').forEach((b) =>
+            b.addEventListener('click', () => { this._dockTab = 'deployments'; rerender(); }));
         host.querySelectorAll('[data-runner-action]').forEach((b) =>
             b.addEventListener('click', () => this._fleetRunnerAction(
                 b.getAttribute('data-runner-task'), b.getAttribute('data-runner-action'))));

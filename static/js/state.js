@@ -22,6 +22,8 @@
     _fleetLiveTimer: null,
     _fleetSig: null,
     _fleetLoadBusy: false,
+    _dockPreviousPrs: null,
+    _dockMergeReceipts: [],
     _boardPollMs: 10000,   // live board (kanban) refresh interval while the tab is visible
     _boardLiveTimer: null,
     _boardSig: null,
