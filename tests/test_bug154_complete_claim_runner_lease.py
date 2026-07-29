@@ -321,17 +321,17 @@ pending = {
     "status": "expired", "metadata": {"terminalized_by": "runner_lease_expiry"},
 }
 agent_host._persist_pending_stop_receipt(pending)
-old_try = agent_host._try
+old_require = agent_host._require
 try:
-    agent_host._try = lambda *_args, **_kwargs: {"error": "network_down"}
+    agent_host._require = lambda *_args, **_kwargs: {"error": "network_down"}
     failed_retry = agent_host._drain_pending_stop_receipts("host/bug154")
     assert failed_retry[0]["expired"] is False
     assert agent_host._pending_stop_receipt_path("run-restart-proof").exists()
-    agent_host._try = lambda *_args, **_kwargs: {"ok": True}
+    agent_host._require = lambda *_args, **_kwargs: {"ok": True}
     recovered = agent_host._drain_pending_stop_receipts("host/bug154")
     assert recovered[0]["expired"] is True
     assert not agent_host._pending_stop_receipt_path("run-restart-proof").exists()
 finally:
-    agent_host._try = old_try
+    agent_host._require = old_require
 
 print("BUG-154 runner lease surrender tests passed")

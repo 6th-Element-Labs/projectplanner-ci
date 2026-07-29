@@ -120,6 +120,7 @@ _ENTRIES: tuple[ReasonCode, ...] = (
     _code("missing_review_verdict", "review", _MERGE_GATE, "transient", "agent"),
     _code("stale_review_verdict", "review", _MERGE_GATE, "transient", "agent"),
     _code("review_head_sha_required", "review", _MERGE_GATE, "transient", "agent"),
+    _code("review_pr_identity_required", "review", _MERGE_GATE, "transient", "agent"),
     _code("review_changes_requested", "review", _COMPLETION, "transient", "agent"),
     _code("review_not_passed", "review", _MERGE_GATE, "transient", "agent"),
     _code("open_review_findings", "review", _MERGE_GATE, "transient", "agent"),

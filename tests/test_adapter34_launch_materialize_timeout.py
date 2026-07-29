@@ -8,7 +8,6 @@ from unittest.mock import patch
 from path_setup import ROOT  # noqa: F401
 
 import adapters.agent_host as agent_host
-from adapters.repository_workspace import WorkspaceMaterializationError
 
 
 class LaunchMaterializeTimeoutTest(unittest.TestCase):
@@ -34,16 +33,19 @@ class LaunchMaterializeTimeoutTest(unittest.TestCase):
         }
         inventory = {"host_id": "host/mac", "repo_root": "/tmp/repo"}
 
-        def hang(**_kwargs):
+        def hang(timeout_s=None, **_kwargs):
             import time
-            time.sleep(5)
-            raise AssertionError("should have timed out")
+            time.sleep(float(timeout_s or 0))
+            raise agent_host.WorkspaceMaterializationError(
+                "workspace_materialize_timeout",
+                "repository workspace materialization deadline expired")
 
         with patch.object(agent_host, "wake_mode", return_value="connect"), \
                 patch.object(agent_host, "connect_workspace_request",
                              return_value={"repo": "x", "dest": "/tmp/x"}), \
                 patch.object(agent_host, "materialize_repository_workspace",
                              side_effect=hang), \
+                patch.object(agent_host, "_try", return_value={"ok": True}), \
                 patch.dict(agent_host.os.environ,
                            {"PM_CONNECT_MATERIALIZE_TIMEOUT_SECONDS": "0.2"}):
             rec = agent_host.launch(wake, inventory)

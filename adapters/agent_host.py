@@ -22,7 +22,6 @@ PM_HOST_MAX_SESSIONS, PM_AGENT_WORK_MODULE (real work_fn;
 absent -> --dry, which claims+abandons safely), PM_AGENT_HOST_ALLOW_WORK,
 PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM.
 """
-import concurrent.futures
 import hashlib
 import json
 import os
@@ -112,6 +111,8 @@ AGENT_HOST_VERSION = os.environ.get("PM_AGENT_HOST_VERSION", "0.2.0")
 # outbound relay). Placement keys off this instead of sniffing version strings.
 RUNNER_WATCH_CAPABILITY = "runner_watch"
 RUNNER_LEASE_CAPABILITIES = ("execution_lease_v2", "runner_lease_enforcement")
+_INFLIGHT_LAUNCHES = set()
+_INFLIGHT_LAUNCHES_LOCK = threading.Lock()
 
 
 def host_serves_runner_watch():
@@ -162,6 +163,24 @@ def _host_projects(inventory=None):
         projects = _csv(os.environ.get("PM_HOST_PROJECTS", PROJECT))
     return list(dict.fromkeys(str(project).strip() for project in projects
                               if str(project).strip()))
+
+
+def _fair_wake_order(wakes, projects):
+    """Interleave projects so one cold repository cannot starve another."""
+    preferred = [PROJECT]
+    preferred.extend(project for project in projects if project != PROJECT)
+    buckets = {project: [] for project in preferred}
+    extras = []
+    for wake in wakes:
+        project = _wake_project(wake)
+        (buckets[project] if project in buckets else extras).append(wake)
+    ordered = []
+    while any(buckets.values()):
+        for project in preferred:
+            if buckets[project]:
+                ordered.append(buckets[project].pop(0))
+    ordered.extend(extras)
+    return ordered
 
 
 def _wake_project(wake):
@@ -454,7 +473,12 @@ def _try(method, path, body=None):
     try:
         return sb._http(method, path, body)
     except Exception as e:
-        print(f"[agent_host] {method} {path} unavailable ({type(e).__name__}); skipping", flush=True)
+        detail = str(e).replace("\n", " ")[:500]
+        print(
+            f"[agent_host] {method} {path} unavailable "
+            f"({type(e).__name__}: {detail}); skipping",
+            flush=True,
+        )
         return None
 
 
@@ -732,31 +756,108 @@ def _delete_pending_wake_receipt(project, wake_id):
         pass
 
 
+def _pending_receipt_replay_limit():
+    """Bound callback work so stale receipts cannot consume the host tick."""
+    try:
+        configured = int(
+            os.environ.get("PM_PENDING_RECEIPT_REPLAY_LIMIT") or "16")
+    except (TypeError, ValueError):
+        configured = 16
+    return max(1, min(100, configured))
+
+
+def _receipt_refusal_is_irrecoverable(response):
+    """Return true only for receipt-specific refusals that retry cannot repair."""
+    if not isinstance(response, dict):
+        return False
+    if response.get("reason") == "exact_binding_denied":
+        return True
+    status = int(response.get("http_status") or 0)
+    # Authentication, rate limiting, and request timeout can recover without
+    # changing the immutable receipt. Malformed/missing/conflicting bindings
+    # cannot.
+    return status in {400, 404, 409, 410, 422}
+
+
+def _safe_receipt_error(response):
+    """Return bounded, non-secret failure evidence for host logs/readback."""
+    if not isinstance(response, dict):
+        return "control_plane_unavailable"
+    code = (
+        response.get("error_code")
+        or response.get("error")
+        or response.get("reason")
+    )
+    status = int(response.get("http_status") or 0)
+    if code and status:
+        return f"http_{status}:{str(code)[:120]}"
+    if code:
+        return str(code)[:120]
+    if status:
+        return f"http_{status}"
+    return "control_plane_unavailable"
+
+
+def _archive_pending_receipt(path, *, kind, response):
+    """Move one irrecoverable receipt out of the active replay queue."""
+    archive = path.parent.parent / "_terminal_receipt_archive"
+    archive.mkdir(parents=True, exist_ok=True)
+    suffix = f".{int(time.time() * 1000)}.{kind}.json"
+    target = archive / f"{path.stem}{suffix}"
+    os.replace(path, target)
+    print(
+        f"[agent_host] archived irrecoverable {kind} receipt "
+        f"path={target.name} error={_safe_receipt_error(response)}",
+        flush=True,
+    )
+    return target
+
+
+def _pending_receipt_paths(directory):
+    """Oldest attempted receipt first; transient failures rotate to the back."""
+    paths = list(directory.glob("*.json"))
+    return sorted(
+        paths,
+        key=lambda path: (
+            path.stat().st_mtime if path.exists() else float("inf"),
+            path.name,
+        ),
+    )
+
+
 def _drain_pending_wake_receipts():
     """Replay pre-registration terminal receipts before accepting fresh work."""
     outcomes = []
-    for path in sorted(_pending_wake_receipt_dir().glob("*.json")):
+    paths = _pending_receipt_paths(_pending_wake_receipt_dir())
+    for path in paths[:_pending_receipt_replay_limit()]:
         try:
             receipt = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
+            _archive_pending_receipt(
+                path, kind="wake_completion",
+                response={"error_code": "invalid_receipt_json",
+                          "http_status": 400})
             continue
-        terminal = _try("POST", P_COMPLETE_WAKE, receipt)
+        terminal = _require("POST", P_COMPLETE_WAKE, receipt)
         recorded = _wake_completion_recorded(terminal)
         if recorded:
             try:
                 path.unlink()
             except FileNotFoundError:
                 pass
+        elif _receipt_refusal_is_irrecoverable(terminal):
+            _archive_pending_receipt(
+                path, kind="wake_completion", response=terminal)
+        else:
+            path.touch()
         outcomes.append({
             "wake_id": receipt.get("wake_id"),
             "task_id": ((receipt.get("result") or {}).get("task_id")),
             "reason": "pending_wake_completion_retry",
             "completed": recorded,
-            "error": None if recorded else (
-                (terminal or {}).get("error")
-                or (terminal or {}).get("error_code")
-                or (terminal or {}).get("reason")
-            ),
+            "archived": (
+                not recorded and _receipt_refusal_is_irrecoverable(terminal)),
+            "error": None if recorded else _safe_receipt_error(terminal),
         })
     return outcomes
 
@@ -838,11 +939,15 @@ def default_inventory():
 def heartbeat_capacity(inventory):
     """Return the full non-secret admission record for each heartbeat."""
     active = active_session_count(inventory)
+    reserved = reserved_launch_count()
+    occupied = active + reserved
     maximum = int((inventory.get("limits") or {}).get("max_sessions") or 0)
     capacity = dict(inventory.get("capacity") or {})
     capacity.update({
         "active_sessions": active,
-        "headroom": max(0, maximum - active),
+        "reserved_launches": reserved,
+        "occupied_sessions": occupied,
+        "headroom": max(0, maximum - occupied),
         "allow_work": bool((inventory.get("policy") or {}).get("allow_work")),
         "drain_state": ((capacity.get("placement") or {}).get("drain_state")
                         or capacity.get("drain_state") or "accepting"),
@@ -854,6 +959,86 @@ def heartbeat_capacity(inventory):
         ]),
     })
     return capacity
+
+
+def reserved_launch_count():
+    """Capacity already claimed for a runner whose process is not live yet."""
+    with _INFLIGHT_LAUNCHES_LOCK:
+        return len(_INFLIGHT_LAUNCHES)
+
+
+def capacity_occupancy(inventory):
+    return active_session_count(inventory) + reserved_launch_count()
+
+
+def _reserve_launch(wake_id):
+    key = str(wake_id or f"anonymous-{threading.get_ident()}")
+    with _INFLIGHT_LAUNCHES_LOCK:
+        _INFLIGHT_LAUNCHES.add(key)
+    return key
+
+
+def _release_launch(key):
+    with _INFLIGHT_LAUNCHES_LOCK:
+        _INFLIGHT_LAUNCHES.discard(key)
+
+
+def _bounded_materialization_timeout():
+    """Keep the whole launch inside the server's claimed-wake hold window."""
+    try:
+        requested = float(
+            os.environ.get("PM_CONNECT_MATERIALIZE_TIMEOUT_SECONDS") or "45")
+    except (TypeError, ValueError):
+        requested = 45.0
+    try:
+        claim_hold = float(
+            os.environ.get("PM_CONNECT_CLAIM_HOLD_SECONDS") or "90")
+    except (TypeError, ValueError):
+        claim_hold = 90.0
+    claim_hold = max(5.0, claim_hold)
+    safety = max(2.0, min(10.0, claim_hold * 0.1))
+    return max(0.1, min(max(0.1, requested), claim_hold - safety))
+
+
+def _heartbeat_while_materializing(stop, inventory, interval_s):
+    """Preserve Capacity control while one bounded repository operation runs."""
+    while not stop.wait(interval_s):
+        capacity = heartbeat_capacity(inventory)
+        body = {
+            "project": PROJECT,
+            "host_id": inventory["host_id"],
+            "active_sessions": capacity["active_sessions"],
+            "capacity": capacity,
+        }
+        for project in _host_projects(inventory):
+            _try("POST", P_HEARTBEAT_HOST, {**body, "project": project})
+        # These are Capacity-plane operations only: renew the exact live
+        # execution leases and service explicit runner controls. Task status,
+        # review, remediation, merge, and Done remain outside this loop.
+        renew_live_direct_runners(inventory)
+        handle_runner_controls(inventory)
+
+
+def _materialize_for_launch(materialize_workspace, workspace_request,
+                            wake, inventory):
+    timeout_s = _bounded_materialization_timeout()
+    reservation = _reserve_launch((wake or {}).get("wake_id"))
+    stop = threading.Event()
+    interval_s = max(0.05, min(10.0, timeout_s / 3.0))
+    heartbeat = threading.Thread(
+        target=_heartbeat_while_materializing,
+        args=(stop, inventory, interval_s),
+        name=f"agent-host-materialize-{reservation}",
+        daemon=True,
+    )
+    heartbeat.start()
+    try:
+        return materialize_workspace(
+            **workspace_request, timeout_s=timeout_s)
+    finally:
+        stop.set()
+        heartbeat.join(timeout=min(1.0, interval_s + 0.1))
+        _release_launch(reservation)
 
 
 def registration_inventory(inventory, drain_request=None):
@@ -943,7 +1128,7 @@ def apply_authoritative_execution_policy(inventory, response):
     inventory["policy"] = host_policy
     inventory.setdefault("limits", {})["max_sessions"] = maximum
     capacity = inventory.setdefault("capacity", {})
-    capacity["headroom"] = max(0, maximum - active_session_count(inventory))
+    capacity["headroom"] = max(0, maximum - capacity_occupancy(inventory))
     placement = capacity.setdefault("placement", {})
     placement.setdefault("concurrency", {})["max_sessions"] = maximum
     after = json.dumps({
@@ -1636,45 +1821,12 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
             verify_workspace = (
                 verify_repository_workspace
                 if execution_context else verify_host_worktree)
-            # ADAPTER-34: materialize can hang (network/git/fs). Bound it so
-            # claim→launch cannot sit forever before complete_wake(started=false).
-            # Server claim-hold sweep is the DHCP safety net if this host dies.
-            try:
-                materialize_timeout_s = float(
-                    os.environ.get("PM_CONNECT_MATERIALIZE_TIMEOUT_SECONDS")
-                    or "120")
-            except (TypeError, ValueError):
-                materialize_timeout_s = 120.0
-            materialize_timeout_s = max(0.1, materialize_timeout_s)
-            # Do not use `with Executor`: on timeout the hung worker would
-            # block __exit__ (wait=True). Fail the wake immediately; orphan
-            # the worker so DHCP complete_wake can run in this tick.
-            pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-            fut = pool.submit(
-                materialize_workspace, **workspace_request)
-            try:
-                materialized_workspace = fut.result(
-                    timeout=materialize_timeout_s)
-            except concurrent.futures.TimeoutError:
-                pool.shutdown(wait=False, cancel_futures=True)
-                return {
-                    "runner_session_id": runner_session_id or None,
-                    "started": False,
-                    "wake_mode": mode,
-                    "host_id": inventory.get("host_id"),
-                    "runtime": (wake.get("selector") or {}).get("runtime") or "",
-                    "task_id": task_id,
-                    "reason": "workspace_materialize_timeout",
-                    "failure_class": "failed_gate",
-                    "provider_error": (
-                        f"materialize exceeded {materialize_timeout_s}s"),
-                    "workspace_materialization": {
-                        "error": "workspace_materialize_timeout",
-                        "timeout_seconds": materialize_timeout_s,
-                    },
-                }
-            else:
-                pool.shutdown(wait=True, cancel_futures=False)
+            # Capacity owns this bounded physical launch operation. One shared
+            # deadline covers lock acquisition and every git subprocess, so a
+            # timeout unwinds and releases the cache lock instead of orphaning
+            # a worker behind this heartbeat loop.
+            materialized_workspace = _materialize_for_launch(
+                materialize_workspace, workspace_request, wake, inventory)
             workspace_path = str(materialized_workspace.path)
         except WorkspaceMaterializationError as exc:
             return {
@@ -2824,26 +2976,45 @@ def _delete_pending_stop_receipt(runner_session_id):
 def _drain_pending_stop_receipts(host_id):
     """Retry exact terminal acknowledgements even after local process removal."""
     outcomes = []
-    for path in sorted(_pending_stop_receipt_dir().glob("*.json")):
+    paths = _pending_receipt_paths(_pending_stop_receipt_dir())
+    limit = _pending_receipt_replay_limit()
+    for path in paths:
+        if len(outcomes) >= limit:
+            break
         try:
             receipt = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
+            _archive_pending_receipt(
+                path, kind="runner_stop",
+                response={"error_code": "invalid_receipt_json",
+                          "http_status": 400})
             continue
         if str(receipt.get("host_id") or "") != str(host_id or ""):
             continue
-        terminal = _try("POST", P_HEARTBEAT_RUNNER, receipt)
-        ok = bool(terminal and not terminal.get("error"))
+        terminal = _require("POST", P_HEARTBEAT_RUNNER, receipt)
+        ok = bool(
+            terminal
+            and not terminal.get("error")
+            and not terminal.get("error_code")
+        )
         if ok:
             try:
                 path.unlink()
             except FileNotFoundError:
                 pass
+        elif _receipt_refusal_is_irrecoverable(terminal):
+            _archive_pending_receipt(
+                path, kind="runner_stop", response=terminal)
+        else:
+            path.touch()
         outcomes.append({
             "runner_session_id": receipt.get("runner_session_id"),
             "task_id": receipt.get("task_id"),
             "reason": "pending_terminal_ack_retry",
             "expired": ok,
-            "error": None if ok else (terminal or {}).get("error"),
+            "archived": (
+                not ok and _receipt_refusal_is_irrecoverable(terminal)),
+            "error": None if ok else _safe_receipt_error(terminal),
         })
     return outcomes
 
@@ -3798,6 +3969,7 @@ def run_once(inventory):
             # even when an older server response omits project_id.
             "_host_project": project,
         } for wake in wakes_bound_to_host(project_wakes))
+    wakes = _fair_wake_order(wakes, _host_projects(inventory))
     acted = list(finalized)
     refused = []
     cap = inventory["limits"]["max_sessions"]
@@ -3807,7 +3979,7 @@ def run_once(inventory):
         # tick. Adding len(acted) counts those children a second time (and also
         # counts failed launches), which silently cuts usable fanout roughly in
         # half. Treat the supervisor's live inventory as the capacity authority.
-        if active_session_count(inventory) >= cap:
+        if capacity_occupancy(inventory) >= cap:
             print("[agent_host] at capacity; leaving remaining wakes for other hosts", flush=True)
             break
         exact_binding = validate_personal_wake_binding(w, inventory)

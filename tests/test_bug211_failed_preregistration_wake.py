@@ -145,7 +145,7 @@ try:
     assert receipt_path.exists(), receipt_path
 
     with patch.object(
-            agent_host, "_try",
+            agent_host, "_require",
             return_value={"status": "failed",
                           "note": "idempotent terminal readback"}):
         drained = agent_host._drain_pending_wake_receipts()
@@ -154,6 +154,7 @@ try:
         "task_id": task_id,
         "reason": "pending_wake_completion_retry",
         "completed": True,
+        "archived": False,
         "error": None,
     }], drained
     assert not receipt_path.exists(), Path(receipt_path)

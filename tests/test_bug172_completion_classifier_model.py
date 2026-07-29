@@ -81,9 +81,8 @@ def _snapshot() -> dict:
 def _finding_oracle(rows: tuple[dict, ...]) -> tuple[str, str]:
     """Mission Bot: machine findings never invent a human route.
 
-    Route is independent of presentation order (always remediation when any
-    non-pending blocking finding exists). Reason follows the first such
-    finding in the supplied order — Mission Bot does not reorder evidence.
+    Route is independent of presentation order. Any repair finding outranks
+    missing review; review alone starts the review mission.
     """
     for row in rows:
         if row.get("blocking") is False:
@@ -94,9 +93,13 @@ def _finding_oracle(rows: tuple[dict, ...]) -> tuple[str, str]:
         if code in {
             "semantic_completion_failed",
             "canonical_repo_missing",
-            "review_required",
         }:
             return "remediation", code
+    if any(
+        row.get("blocking") is not False and row.get("code") == "review_required"
+        for row in rows
+    ):
+        return "review_merge", "review_required"
     # Pending-class findings alone do not block when required contexts are empty.
     return "review_merge", "exact_head_gates_passed"
 

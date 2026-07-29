@@ -55,13 +55,33 @@ class MaterializedWorkspace:
     workspace_root: Path | None = None
 
 
+def _remaining_timeout(deadline: float | None, requested: float) -> float:
+    timeout = max(0.01, float(requested))
+    if deadline is None:
+        return timeout
+    remaining = float(deadline) - time.monotonic()
+    if remaining <= 0:
+        raise WorkspaceMaterializationError(
+            "workspace_materialize_timeout",
+            "repository workspace materialization deadline expired")
+    return max(0.01, min(timeout, remaining))
+
+
 def _run(args: list[str], *, cwd: Path | None = None,
-         timeout: int = 120) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
-        args, cwd=str(cwd) if cwd else None, text=True, capture_output=True,
-        timeout=timeout, check=False,
-        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
-    )
+         timeout: float = 120, deadline: float | None = None
+         ) -> subprocess.CompletedProcess[str]:
+    effective_timeout = _remaining_timeout(deadline, timeout)
+    try:
+        result = subprocess.run(
+            args, cwd=str(cwd) if cwd else None, text=True, capture_output=True,
+            timeout=effective_timeout, check=False,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise WorkspaceMaterializationError(
+            "workspace_materialize_timeout",
+            "repository workspace materialization deadline expired",
+            command=args[:2], timeout_seconds=effective_timeout) from exc
     if result.returncode:
         raise WorkspaceMaterializationError(
             "git_command_failed", f"{args[0]} {args[1]} failed",
@@ -158,10 +178,16 @@ def _cache_key(repository: str) -> str:
 
 
 @contextlib.contextmanager
-def _locked(path: Path) -> Iterator[None]:
+def _locked(path: Path, *, deadline: float | None = None) -> Iterator[None]:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                _remaining_timeout(deadline, 0.05)
+                time.sleep(0.05)
         try:
             yield
         finally:
@@ -182,33 +208,43 @@ def _quarantine(path: Path, quarantine_root: Path, reason: str) -> Path | None:
 
 
 def _ensure_cache(cache_path: Path, remote: str, base_sha: str,
-                  quarantine_root: Path) -> tuple[bool, Path | None]:
+                  quarantine_root: Path, *,
+                  deadline: float | None = None) -> tuple[bool, Path | None]:
     created = False
     quarantined = None
     if cache_path.exists():
         try:
             actual = _run(
-                ["git", "--git-dir", str(cache_path), "remote", "get-url", "origin"]
+                ["git", "--git-dir", str(cache_path), "remote", "get-url", "origin"],
+                deadline=deadline,
             ).stdout.strip()
             if _redacted_remote(actual) != _redacted_remote(remote):
                 raise WorkspaceMaterializationError(
                     "repository_cache_origin_mismatch",
                     "repository cache origin disagrees with Execution Context")
             _run(["git", "--git-dir", str(cache_path), "fsck", "--no-dangling"],
-                 timeout=300)
-        except (WorkspaceMaterializationError, OSError):
+                 timeout=300, deadline=deadline)
+        except WorkspaceMaterializationError as exc:
+            if exc.code == "workspace_materialize_timeout":
+                raise
+            quarantined = _quarantine(
+                cache_path, quarantine_root, "invalid-repository-cache")
+        except OSError:
             quarantined = _quarantine(
                 cache_path, quarantine_root, "invalid-repository-cache")
     if not cache_path.exists():
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        _run(["git", "clone", "--mirror", remote, str(cache_path)], timeout=600)
+        _run(["git", "clone", "--mirror", remote, str(cache_path)],
+             timeout=600, deadline=deadline)
         created = True
     _run(["git", "--git-dir", str(cache_path), "fetch", "--prune", "origin"],
-         timeout=600)
+         timeout=600, deadline=deadline)
     try:
         _run(["git", "--git-dir", str(cache_path), "cat-file", "-e",
-              f"{base_sha}^{{commit}}"])
+              f"{base_sha}^{{commit}}"], deadline=deadline)
     except WorkspaceMaterializationError as exc:
+        if exc.code == "workspace_materialize_timeout":
+            raise
         raise WorkspaceMaterializationError(
             "base_sha_unreachable",
             "exact Execution Context base SHA is not present after fetch",
@@ -217,7 +253,8 @@ def _ensure_cache(cache_path: Path, remote: str, base_sha: str,
 
 
 def _check_workspace(path: Path, receipt_path: Path,
-                     expected: Mapping[str, Any]) -> dict[str, Any]:
+                     expected: Mapping[str, Any], *,
+                     deadline: float | None = None) -> dict[str, Any]:
     """Prove one checkout is still the exact authorized workspace.
 
     Returns the receipt.  Raises the typed refusal that names the first thing
@@ -247,9 +284,14 @@ def _check_workspace(path: Path, receipt_path: Path,
         raise WorkspaceMaterializationError(
             "workspace_missing", "authorized workspace no longer exists",
             workspace_path=str(path))
-    head = _run(["git", "rev-parse", "HEAD"], cwd=path).stdout.strip()
-    branch = _run(["git", "branch", "--show-current"], cwd=path).stdout.strip()
-    origin = _run(["git", "remote", "get-url", "origin"], cwd=path).stdout.strip()
+    head = _run(
+        ["git", "rev-parse", "HEAD"], cwd=path, deadline=deadline).stdout.strip()
+    branch = _run(
+        ["git", "branch", "--show-current"], cwd=path,
+        deadline=deadline).stdout.strip()
+    origin = _run(
+        ["git", "remote", "get-url", "origin"], cwd=path,
+        deadline=deadline).stdout.strip()
     if head != expected["base_sha"]:
         raise WorkspaceMaterializationError(
             "workspace_head_mismatch", "workspace HEAD is not the exact base SHA",
@@ -265,8 +307,10 @@ def _check_workspace(path: Path, receipt_path: Path,
     return receipt
 
 
-def _git_common_dir(path: Path) -> Path:
-    raw = _run(["git", "rev-parse", "--git-common-dir"], cwd=path).stdout.strip()
+def _git_common_dir(path: Path, *, deadline: float | None = None) -> Path:
+    raw = _run(
+        ["git", "rev-parse", "--git-common-dir"], cwd=path,
+        deadline=deadline).stdout.strip()
     common = Path(raw)
     if not common.is_absolute():
         common = path / common
@@ -276,6 +320,7 @@ def _git_common_dir(path: Path) -> Path:
 def _host_worktree_static_identity(
     *, project_id: str, task_id: str, execution_id: str, generation: int,
     branch: str, source_repo_root: str | Path, workspace_root: str | Path,
+    deadline: float | None = None,
 ) -> dict[str, Any]:
     """Validate the host-derived compatibility input and resolve private paths."""
     project = _safe_part(project_id, "project_id")
@@ -318,12 +363,16 @@ def _host_worktree_static_identity(
             "host checkout is not an available directory",
             source_repo_root=str(source_root))
     try:
-        source_common_dir = _git_common_dir(source_root)
+        source_common_dir = _git_common_dir(source_root, deadline=deadline)
         source_head = _run(
-            ["git", "rev-parse", "HEAD"], cwd=source_root).stdout.strip().lower()
+            ["git", "rev-parse", "HEAD"], cwd=source_root,
+            deadline=deadline).stdout.strip().lower()
         remote = _run(
-            ["git", "remote", "get-url", "origin"], cwd=source_root).stdout.strip()
+            ["git", "remote", "get-url", "origin"], cwd=source_root,
+            deadline=deadline).stdout.strip()
     except WorkspaceMaterializationError as exc:
+        if exc.code == "workspace_materialize_timeout":
+            raise
         raise WorkspaceMaterializationError(
             "legacy_source_repo_invalid",
             "host checkout is not a usable git worktree",
@@ -381,43 +430,58 @@ def _host_worktree_expected(
 
 
 def _verify_host_worktree_common_dir(
-    workspace_path: Path, expected: Mapping[str, Any],
+    workspace_path: Path, expected: Mapping[str, Any], *,
+    deadline: float | None = None,
 ) -> None:
-    common = _git_common_dir(workspace_path)
+    common = _git_common_dir(workspace_path, deadline=deadline)
     if common != Path(str(expected["source_git_common_dir"])).resolve():
         raise WorkspaceMaterializationError(
             "workspace_git_common_dir_mismatch",
             "private workspace is not a worktree of the enrolled host checkout")
 
 
-def _remove_host_worktree(source_root: Path, workspace_path: Path) -> None:
+def _remove_host_worktree(source_root: Path, workspace_path: Path, *,
+                          deadline: float | None = None) -> None:
     """Remove one registered worktree without deleting its task branch."""
-    result = subprocess.run(
-        ["git", "worktree", "remove", "--force", str(workspace_path)],
-        cwd=str(source_root), text=True, capture_output=True, check=False,
-        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
-    )
+    try:
+        result = subprocess.run(
+            ["git", "worktree", "remove", "--force", str(workspace_path)],
+            cwd=str(source_root), text=True, capture_output=True, check=False,
+            timeout=_remaining_timeout(deadline, 120),
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise WorkspaceMaterializationError(
+            "workspace_materialize_timeout",
+            "repository workspace materialization deadline expired",
+            command=["git", "worktree"], timeout_seconds=exc.timeout) from exc
     if result.returncode and workspace_path.exists():
         raise WorkspaceMaterializationError(
             "git_worktree_remove_failed",
             "private Connect worktree could not be removed",
             returncode=result.returncode, stderr=(result.stderr or "")[-2000:])
-    _run(["git", "worktree", "prune"], cwd=source_root)
+    _run(
+        ["git", "worktree", "prune"], cwd=source_root, deadline=deadline)
 
 
 def materialize_host_worktree(
     *, project_id: str, task_id: str, execution_id: str, generation: int,
     branch: str, source_repo_root: str | Path, workspace_root: str | Path,
+    timeout_s: float | None = None,
 ) -> MaterializedWorkspace:
     """Create or recover a private worktree for a context-less Connect wake.
 
     ``source_repo_root`` contributes committed git objects only.  It grants no
     execution, coordination, provider, SCM, or Done authority.
     """
+    deadline = (
+        time.monotonic() + max(0.01, float(timeout_s))
+        if timeout_s is not None else None)
     resolved = _host_worktree_static_identity(
         project_id=project_id, task_id=task_id, execution_id=execution_id,
         generation=generation, branch=branch,
-        source_repo_root=source_repo_root, workspace_root=workspace_root)
+        source_repo_root=source_repo_root, workspace_root=workspace_root,
+        deadline=deadline)
     workspace_path = resolved["workspace_path"]
     receipt_path = resolved["receipt_path"]
     workspace_root_path = resolved["workspace_root"]
@@ -427,7 +491,7 @@ def materialize_host_worktree(
         str(resolved["source_common_dir"]).encode()).hexdigest()[:20]
     lock_path = workspace_root_path / ".locks" / f"{lock_key}.lock"
 
-    with _locked(lock_path):
+    with _locked(lock_path, deadline=deadline):
         existing_receipt: dict[str, Any] = {}
         try:
             parsed = json.loads(receipt_path.read_text(encoding="utf-8"))
@@ -442,30 +506,43 @@ def materialize_host_worktree(
                 "host worktree receipt has an invalid base SHA")
         expected = _host_worktree_expected(resolved, base_sha=base_sha)
         if workspace_path.exists():
-            if _workspace_valid(workspace_path, receipt_path, expected):
-                _verify_host_worktree_common_dir(workspace_path, expected)
+            if _workspace_valid(
+                    workspace_path, receipt_path, expected, deadline=deadline):
+                _verify_host_worktree_common_dir(
+                    workspace_path, expected, deadline=deadline)
                 return MaterializedWorkspace(
                     workspace_path, resolved["branch"], base_sha,
                     resolved["source_common_dir"], receipt_path,
                     existing_receipt, reused=True,
                     workspace_root=workspace_root_path)
             try:
-                _remove_host_worktree(resolved["source_root"], workspace_path)
-            except WorkspaceMaterializationError:
+                _remove_host_worktree(
+                    resolved["source_root"], workspace_path, deadline=deadline)
+            except WorkspaceMaterializationError as exc:
+                if exc.code == "workspace_materialize_timeout":
+                    raise
                 _quarantine(
                     workspace_path, quarantine_root, "stale-host-worktree")
         workspace_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            branch_exists = subprocess.run(
-                ["git", "show-ref", "--verify", "--quiet",
-                 f"refs/heads/{resolved['branch']}"],
-                cwd=str(resolved["source_root"]), check=False,
-                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
-            ).returncode == 0
+            try:
+                branch_exists = subprocess.run(
+                    ["git", "show-ref", "--verify", "--quiet",
+                     f"refs/heads/{resolved['branch']}"],
+                    cwd=str(resolved["source_root"]), check=False,
+                    timeout=_remaining_timeout(deadline, 120),
+                    env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+                ).returncode == 0
+            except subprocess.TimeoutExpired as exc:
+                raise WorkspaceMaterializationError(
+                    "workspace_materialize_timeout",
+                    "repository workspace materialization deadline expired",
+                    command=["git", "show-ref"],
+                    timeout_seconds=exc.timeout) from exc
             if branch_exists:
                 branch_sha = _run(
                     ["git", "rev-parse", resolved["branch"]],
-                    cwd=resolved["source_root"]).stdout.strip()
+                    cwd=resolved["source_root"], deadline=deadline).stdout.strip()
                 if branch_sha != base_sha:
                     raise WorkspaceMaterializationError(
                         "workspace_branch_base_mismatch",
@@ -480,7 +557,9 @@ def materialize_host_worktree(
                     "git", "worktree", "add", "-b", resolved["branch"],
                     str(workspace_path), base_sha,
                 ]
-            _run(args, cwd=resolved["source_root"], timeout=600)
+            _run(
+                args, cwd=resolved["source_root"], timeout=600,
+                deadline=deadline)
             receipt = {
                 "schema": RECEIPT_SCHEMA,
                 **expected,
@@ -492,8 +571,10 @@ def materialize_host_worktree(
             temporary.write_text(
                 json.dumps(receipt, sort_keys=True), encoding="utf-8")
             temporary.replace(receipt_path)
-            checked = _check_workspace(workspace_path, receipt_path, expected)
-            _verify_host_worktree_common_dir(workspace_path, expected)
+            checked = _check_workspace(
+                workspace_path, receipt_path, expected, deadline=deadline)
+            _verify_host_worktree_common_dir(
+                workspace_path, expected, deadline=deadline)
             return MaterializedWorkspace(
                 workspace_path, resolved["branch"], base_sha,
                 resolved["source_common_dir"], receipt_path, checked,
@@ -502,7 +583,8 @@ def materialize_host_worktree(
             if workspace_path.exists():
                 try:
                     _remove_host_worktree(
-                        resolved["source_root"], workspace_path)
+                        resolved["source_root"], workspace_path,
+                        deadline=deadline)
                 except WorkspaceMaterializationError:
                     _quarantine(
                         workspace_path, quarantine_root,
@@ -543,10 +625,15 @@ def verify_host_worktree(
 
 
 def _workspace_valid(path: Path, receipt_path: Path,
-                     expected: Mapping[str, Any]) -> bool:
+                     expected: Mapping[str, Any], *,
+                     deadline: float | None = None) -> bool:
     try:
-        _check_workspace(path, receipt_path, expected)
-    except (OSError, ValueError, WorkspaceMaterializationError):
+        _check_workspace(path, receipt_path, expected, deadline=deadline)
+    except WorkspaceMaterializationError as exc:
+        if exc.code == "workspace_materialize_timeout":
+            raise
+        return False
+    except (OSError, ValueError):
         return False
     return True
 
@@ -635,9 +722,12 @@ def _resolved_identity(
 def materialize(
     execution_context: Mapping[str, Any], *, task_id: str, execution_id: str,
     branch: str, cache_root: str | Path, workspace_root: str | Path,
-    remote_url: str = "",
+    remote_url: str = "", timeout_s: float | None = None,
 ) -> MaterializedWorkspace:
     """Create or recover one exact isolated checkout and durable receipt."""
+    deadline = (
+        time.monotonic() + max(0.01, float(timeout_s))
+        if timeout_s is not None else None)
     resolved = _resolved_identity(
         execution_context, task_id=task_id, execution_id=execution_id,
         branch=branch, cache_root=cache_root, workspace_root=workspace_root,
@@ -654,11 +744,12 @@ def materialize(
     expected = resolved["expected"]
 
     lock_path = cache_root_path / ".locks" / f"{key}.lock"
-    with _locked(lock_path):
+    with _locked(lock_path, deadline=deadline):
         cache_created, cache_quarantined = _ensure_cache(
-            cache_path, remote, base_sha, quarantine_root)
+            cache_path, remote, base_sha, quarantine_root, deadline=deadline)
         if workspace_path.exists():
-            if _workspace_valid(workspace_path, receipt_path, expected):
+            if _workspace_valid(
+                    workspace_path, receipt_path, expected, deadline=deadline):
                 receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
                 return MaterializedWorkspace(
                     workspace_path, branch, base_sha, cache_path,
@@ -668,10 +759,17 @@ def materialize(
         workspace_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             _run(["git", "clone", "--no-checkout",
-                  str(cache_path), str(workspace_path)], timeout=600)
-            _run(["git", "remote", "set-url", "origin", remote], cwd=workspace_path)
-            _run(["git", "checkout", "-b", branch, base_sha], cwd=workspace_path)
-            head = _run(["git", "rev-parse", "HEAD"], cwd=workspace_path).stdout.strip()
+                  str(cache_path), str(workspace_path)], timeout=600,
+                 deadline=deadline)
+            _run(
+                ["git", "remote", "set-url", "origin", remote],
+                cwd=workspace_path, deadline=deadline)
+            _run(
+                ["git", "checkout", "-b", branch, base_sha],
+                cwd=workspace_path, deadline=deadline)
+            head = _run(
+                ["git", "rev-parse", "HEAD"], cwd=workspace_path,
+                deadline=deadline).stdout.strip()
             if head != base_sha:
                 raise WorkspaceMaterializationError(
                     "workspace_head_mismatch",
