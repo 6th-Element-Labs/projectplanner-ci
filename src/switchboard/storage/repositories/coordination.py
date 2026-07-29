@@ -2731,6 +2731,61 @@ def sweep_wake_intents(project: str = DEFAULT_PROJECT,
                     or ""
                 )
                 if not host_id:
+                    # A previous host-loss sweep may have run while no
+                    # persistent host was eligible.  That recovery deliberately
+                    # leaves the wake pending with no selected host.  Re-evaluate
+                    # that same wake from current Capacity facts when a host
+                    # returns; otherwise every later sweep skips it forever.
+                    recovery_count = int(
+                        placement.get("host_loss_recovery_count") or 0)
+                    if (original_status != "pending" or recovery_count <= 0
+                            or not placement.get("lost_host_id")):
+                        continue
+                    policy = dict(wake.get("policy") or {})
+                    recovered = plan_hybrid_placement(
+                        _host_rows_in(c, now), wake.get("selector") or {}, policy,
+                        project=project,
+                        reserved_by_host=_placement_reservations_in(c),
+                    )
+                    if not recovered.get("selected_host_id"):
+                        continue
+                    recovered.update({
+                        "host_loss_recovery_count": recovery_count,
+                        "lost_host_id": placement.get("lost_host_id"),
+                        "requeued_at": placement.get("requeued_at") or now,
+                        "checkpoint_required": bool(
+                            placement.get("checkpoint_required")),
+                        "workspace_reconstruction": placement.get(
+                            "workspace_reconstruction")
+                            or "switchboard_claim_plus_git_provenance",
+                        "credential_rebind_required": bool(
+                            placement.get("credential_rebind_required")),
+                    })
+                    updated = c.execute(
+                        "UPDATE wake_intents SET placement_json=? "
+                        "WHERE wake_id=? AND status='pending'",
+                        (json.dumps(recovered, sort_keys=True), wake["wake_id"]),
+                    )
+                    if updated.rowcount == 0:
+                        continue
+                    c.execute(
+                        "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                        "VALUES (?,?,?,?,?)",
+                        (wake.get("task_id"), "switchboard/wake",
+                         "wake.placement_recovered",
+                         json.dumps({
+                             "wake_id": wake["wake_id"],
+                             "reason": "persistent_capacity_returned",
+                             "placement": recovered,
+                         }, sort_keys=True), now),
+                    )
+                    requeued += 1
+                    events.append({
+                        "wake_id": wake["wake_id"],
+                        "status": "pending",
+                        "reason": "persistent_capacity_returned",
+                        "selected_host_id": recovered.get("selected_host_id"),
+                    })
                     continue
                 host_row = c.execute(
                     "SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)
