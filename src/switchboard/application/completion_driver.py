@@ -13,7 +13,6 @@ import uuid
 from typing import Any, Callable, Mapping, Optional
 
 from switchboard.application.mission_bot.driver import (
-    arm_squash_auto_merge,
     production_mission_ports,
     run_mission_tick,
 )
@@ -440,13 +439,25 @@ def production_effect_adapters(
 
     def enqueue(plan: Mapping[str, Any]) -> dict[str, Any]:
         """Arm squash auto-merge; GitHub's native queue owns serialization."""
-        return arm_squash_auto_merge(
-            repo=repo,
-            pr_number=int(plan.get("pr_number") or 0),
-            head_sha=str(plan.get("head_sha") or ""),
+        number = int(plan.get("pr_number") or 0)
+        pr = provenance._github_pr(repo, number, token) or {}
+        node_id = str(pr.get("node_id") or "")
+        if not node_id:
+            return {"returncode": 1, "stderr": "pull request node_id unavailable"}
+        return _normalize_already_queued(_github_command(
+            [
+                "api", "graphql",
+                "-f",
+                (
+                    "query=mutation($pullRequestId:ID!){"
+                    "enablePullRequestAutoMerge(input:{"
+                    "pullRequestId:$pullRequestId,mergeMethod:SQUASH})"
+                    "{pullRequest{id autoMergeRequest{mergeMethod enabledAt}}}}"
+                ),
+                "-F", f"pullRequestId={node_id}",
+            ],
             token=token,
-            command=_github_command,
-        )
+        ))
 
     return CompletionEffectAdapters(
         ensure_review_generation=start,

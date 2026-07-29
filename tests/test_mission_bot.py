@@ -550,64 +550,6 @@ def test_failed_boot_calls_task_execution_directly_on_the_next_tick():
     assert result["receipt"]["verified"] is True
 
 
-def test_failed_enqueue_stops_after_one_identical_retry():
-    """A broken GitHub arm must not burn one retry on every Mission Bot tick."""
-    from unittest.mock import patch
-
-    from switchboard.domain.mission_bot import MissionPorts, execute_mission_command
-
-    merge_calls = []
-    ports = MissionPorts(
-        start_task=lambda _plan: {"action": "started"},
-        mark_ready=lambda _plan: {"returncode": 0},
-        arm_merge=lambda plan: merge_calls.append(dict(plan)) or {
-            "returncode": 0,
-        },
-        observe_merged=lambda **_k: {},
-    )
-    failed_effect = {
-        "effect_key": "effect-enqueue",
-        "status": "failed",
-        "retry_count": 1,
-        "last_error": "GitHub App unavailable",
-        "readback": {
-            "returncode": 1,
-            "stderr": "GitHub App unavailable",
-        },
-    }
-    with (
-        patch(
-            "switchboard.storage.repositories.external_effects.claim_external_effect",
-            return_value={
-                "claimed": False,
-                "verified": False,
-                "effect_key": "effect-enqueue",
-                "effect": failed_effect,
-            },
-        ),
-        patch(
-            "switchboard.storage.repositories.external_effects.retry_external_effect",
-        ) as retry,
-    ):
-        result = execute_mission_command(
-            {
-                "output": MissionOutput.ARM_MERGE.value,
-                "task_id": "MISSION-1",
-                "pr_number": 1084,
-                "head_sha": HEAD,
-                "idem_key": "mission:MISSION-1:enqueue",
-            },
-            ports=ports,
-            project="switchboard",
-            actor="test",
-        )
-    retry.assert_not_called()
-    assert merge_calls == []
-    assert result["receipt"]["verified"] is False
-    assert result["receipt"]["pending"] is False
-    assert result["receipt"]["idempotent_replay"] is True
-
-
 def test_unmet_dependencies_wait_instead_of_start():
     snap = snapshot(
         board_status="Not Started",

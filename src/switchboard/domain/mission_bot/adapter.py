@@ -148,26 +148,12 @@ def _ledger_replay(
     if not ledger.get("claimed"):
         existing = _map(ledger.get("effect"))
         if str(existing.get("status") or "").lower() == "failed":
-            retry_count = int(existing.get("retry_count") or 0)
-            if effect == "enqueue" and retry_count >= 1:
-                return {
-                    "claimed": False,
-                    "ledger": ledger,
-                    "result": _map(existing.get("readback")) or {
-                        "returncode": 1,
-                        "stderr": str(existing.get("last_error") or ""),
-                    },
-                    "idempotent_replay": True,
-                    "verified": False,
-                    "pending": False,
-                    "retry_exhausted": True,
-                }
             # Mission Bot has no human/factory-failure classifier. A failed
             # boot is retried by a fresh tick through one ledger CAS; start_task
             # and the execution lease remain the duplicate-run authorities.
             retried = external_effects.retry_external_effect(
                 str(ledger.get("effect_key") or ""),
-                expected_retry_count=retry_count,
+                expected_retry_count=int(existing.get("retry_count") or 0),
                 actor=actor,
                 project=project,
             )
