@@ -2196,7 +2196,8 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
         if renewed is not None:
             return renewed
     previous_row = c.execute(
-        "SELECT status, metadata_json FROM runner_sessions WHERE runner_session_id=?",
+        "SELECT status, metadata_json, heartbeat_at, heartbeat_ttl_s "
+        "FROM runner_sessions WHERE runner_session_id=?",
         (runner_session_id,),
     ).fetchone()
     previous_metadata = _json_obj(previous_row["metadata_json"], {}) \
@@ -2304,6 +2305,21 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
     heartbeat_ttl_s = max(10, int(record.get("heartbeat_ttl_s") or record.get("ttl_s") or 60))
     started_at = record.get("started_at") or now
     heartbeat_at = record.get("heartbeat_at") or now
+    incoming_status = str(record.get("status") or "").strip().lower()
+    previous_status = str(previous_row["status"] or "").strip().lower() \
+        if previous_row else ""
+    if (previous_row
+            and previous_status in RUNNER_TERMINAL_STATUSES
+            and incoming_status in RUNNER_TERMINAL_STATUSES):
+        # BUG-228 / ADR-0008 C1: a terminal report is an observation, not a
+        # renewable execution lease. Agent Host may replay the receipt while
+        # completion acknowledgements converge, but that replay must not move
+        # the Capacity-plane clock or the row will remain "recently finished"
+        # forever. Preserve the first terminal observation's bounded expiry
+        # while still running the idempotent terminal side effects below.
+        heartbeat_at = float(previous_row["heartbeat_at"] or heartbeat_at)
+        heartbeat_ttl_s = max(
+            10, int(previous_row["heartbeat_ttl_s"] or heartbeat_ttl_s))
     c.execute(
         "INSERT INTO runner_sessions(runner_session_id, host_id, agent_id, runtime, task_id, "
         "claim_id, pid, status, cwd, control_json, metadata_json, last_snapshot_json, "
