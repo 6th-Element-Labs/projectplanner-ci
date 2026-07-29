@@ -235,6 +235,10 @@ class CompletionDriver(unittest.TestCase):
                 "switchboard.storage.repositories.provenance._github_token",
                 return_value="token",
             ),
+            patch(
+                "switchboard.storage.repositories.provenance._github_pr",
+                return_value={"node_id": "PR_node"},
+            ),
             patch.object(
                 completion_driver, "_github_command",
                 return_value={"returncode": 0},
@@ -244,19 +248,14 @@ class CompletionDriver(unittest.TestCase):
                 project="switchboard", actor="owner", agent_id="owner",
                 store_mod=Store,
             )
-            result = adapters.enqueue({
-                "pr_number": 811,
-                "head_sha": "a" * 40,
-            })
+            result = adapters.enqueue({"pr_number": 811})
         self.assertEqual(result["returncode"], 0)
         args = command.call_args.args[0]
-        self.assertEqual(args[:3], ["pr", "merge", "811"])
-        self.assertIn("--auto", args)
-        self.assertIn("--squash", args)
-        self.assertEqual(
-            args[args.index("--match-head-commit") + 1],
-            "a" * 40,
-        )
+        self.assertEqual(args[:2], ["api", "graphql"])
+        command_text = " ".join(args)
+        self.assertIn("enablePullRequestAutoMerge", command_text)
+        self.assertIn("mergeMethod:SQUASH", command_text)
+        self.assertNotIn("enqueuePullRequest", command_text)
 
     def test_update_branch_adapter_is_retired_from_production(self):
         class Store:

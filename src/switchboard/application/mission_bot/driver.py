@@ -50,29 +50,6 @@ def _normalize_already_queued(result: Mapping[str, Any]) -> dict[str, Any]:
     return row
 
 
-def arm_squash_auto_merge(
-    *,
-    repo: str,
-    pr_number: int,
-    head_sha: str,
-    token: str,
-    command: Callable[..., dict[str, Any]],
-) -> dict[str, Any]:
-    """Arm GitHub's native merge queue for one exact PR head."""
-    if not repo or int(pr_number or 0) < 1:
-        return {"returncode": 2, "stderr": "pull request identity unavailable"}
-    exact_head = str(head_sha or "").strip()
-    if not exact_head:
-        return {"returncode": 2, "stderr": "exact pull request head unavailable"}
-    return _normalize_already_queued(command(
-        [
-            "pr", "merge", str(int(pr_number)), "--repo", repo,
-            "--auto", "--squash", "--match-head-commit", exact_head,
-        ],
-        token=token,
-    ))
-
-
 def hydrate_mission_snapshot(
     task_id: str,
     *,
@@ -175,13 +152,25 @@ def production_mission_ports(
 
     def arm_merge(plan: Mapping[str, Any]) -> dict[str, Any]:
         require_scope(str(plan.get("task_id") or ""))
-        return arm_squash_auto_merge(
-            repo=repo,
-            pr_number=int(plan.get("pr_number") or 0),
-            head_sha=str(plan.get("head_sha") or ""),
+        number = int(plan.get("pr_number") or 0)
+        pr = provenance._github_pr(repo, number, token) or {}
+        node_id = str(pr.get("node_id") or "")
+        if not node_id:
+            return {"returncode": 1, "stderr": "pull request node_id unavailable"}
+        return _normalize_already_queued(_github_command(
+            [
+                "api", "graphql",
+                "-f",
+                (
+                    "query=mutation($pullRequestId:ID!){"
+                    "enablePullRequestAutoMerge(input:{"
+                    "pullRequestId:$pullRequestId,mergeMethod:SQUASH})"
+                    "{pullRequest{id autoMergeRequest{mergeMethod enabledAt}}}}"
+                ),
+                "-F", f"pullRequestId={node_id}",
+            ],
             token=token,
-            command=_github_command,
-        )
+        ))
 
     def observe_merged(
         *, command: Mapping[str, Any], snapshot: Mapping[str, Any],

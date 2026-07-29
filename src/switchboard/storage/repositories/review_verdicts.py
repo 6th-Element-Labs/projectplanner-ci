@@ -10,7 +10,6 @@ from typing import Any, Iterable, Mapping, Optional
 from constants import DEFAULT_PROJECT
 from db.connection import _conn, _write_through
 from switchboard.contracts.reviews import REVIEW_FINDING_SCHEMA, REVIEW_VERDICT_SCHEMA
-from switchboard.domain.pr_identity import same_pr_identity
 
 
 REVIEW_SUMMARY_SCHEMA = "switchboard.review_summary.v1"
@@ -108,10 +107,7 @@ def _verdict_from_row(c: sqlite3.Connection, row: sqlite3.Row,
     current_pr = str(current_pr_url or "").strip()
     valid = bool(
         (not current or current == row["head_sha"])
-        and (
-            not current_pr
-            or same_pr_identity(current_pr, row["pr_url"])
-        )
+        and (not current_pr or current_pr == row["pr_url"])
     )
     return {
         "schema": REVIEW_VERDICT_SCHEMA,
@@ -132,9 +128,7 @@ def _verdict_from_row(c: sqlite3.Connection, row: sqlite3.Row,
             current if current and current != row["head_sha"] else None
         ),
         "invalidated_by_pr_url": (
-            current_pr
-            if current_pr and not same_pr_identity(current_pr, row["pr_url"])
-            else None
+            current_pr if current_pr and current_pr != row["pr_url"] else None
         ),
         "source": row["source"],
     }
@@ -287,17 +281,13 @@ class ReviewVerdictRepository:
                     "task has no recorded PR URL; review cannot be fenced",
                     status_code=409,
                 )
-            if not same_pr_identity(payload.get("pr_url"), current_pr):
+            if payload.get("pr_url") != current_pr:
                 raise ReviewVerdictError(
                     "review_pr_mismatch",
                     "review pr_url does not match the task's current PR",
                     status_code=409,
                     details={"expected_pr_url": current_pr},
                 )
-            # Persist one representation so the existing exact unique key remains
-            # the sole stored authority. Equivalent API/browser URL spellings do
-            # not create parallel verdict rows or hashes.
-            payload["pr_url"] = current_pr
             # Reviewer independence is deliberately NOT enforced. It was added in COORD-18 and
             # removed here: every fleet agent authenticates through the same shared
             # `env-mcp-token` principal (377 of 391 recorded claims), so "reviewer principal
@@ -403,18 +393,11 @@ class ReviewVerdictRepository:
             if not selected_head:
                 return None
             if selected_pr:
-                rows = c.execute(
+                row = c.execute(
                     "SELECT * FROM review_verdicts "
-                    "WHERE task_id=? AND head_sha=? ORDER BY created_at",
-                    (task_id, selected_head),
-                ).fetchall()
-                matches = [
-                    candidate for candidate in rows
-                    if same_pr_identity(selected_pr, candidate["pr_url"])
-                ]
-                # Equivalent legacy URL spellings mapping to more than one row
-                # are ambiguous and fail closed.
-                row = matches[0] if len(matches) == 1 else None
+                    "WHERE task_id=? AND pr_url=? AND head_sha=?",
+                    (task_id, selected_pr, selected_head),
+                ).fetchone()
             else:
                 rows = c.execute(
                     "SELECT * FROM review_verdicts "
@@ -509,18 +492,11 @@ class ReviewVerdictRepository:
                     "task has no recorded PR URL; finding resolution cannot be fenced",
                     status_code=409,
                 )
-            verdict_rows = c.execute(
+            verdict_row = c.execute(
                 "SELECT * FROM review_verdicts "
-                "WHERE task_id=? AND head_sha=?",
-                (task_id, current_head),
-            ).fetchall()
-            matching_verdicts = [
-                row for row in verdict_rows
-                if same_pr_identity(current_pr, row["pr_url"])
-            ]
-            verdict_row = (
-                matching_verdicts[0] if len(matching_verdicts) == 1 else None
-            )
+                "WHERE task_id=? AND pr_url=? AND head_sha=?",
+                (task_id, current_pr, current_head),
+            ).fetchone()
             if not verdict_row:
                 raise ReviewVerdictError(
                     "review_verdict_not_found",

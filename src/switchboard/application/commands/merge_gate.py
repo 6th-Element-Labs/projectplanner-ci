@@ -1112,9 +1112,7 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
     )
     ui_gate = ui_playwright_evidence_gate(
         task, semantic_evidence, session, project=project,
-        head_sha=review_head_sha, changed_files=changed_files,
-        resolve_work_session=lambda session_id: get_work_session(
-            session_id, project=project))
+        head_sha=review_head_sha, changed_files=changed_files)
     if not ui_gate.get("ok"):
         findings.append(_merge_gate_finding(
             ui_gate.get("reason") or ui_gate.get("error") or "missing_ui_playwright_evidence",
