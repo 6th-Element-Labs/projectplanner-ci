@@ -106,6 +106,8 @@ live_head_codes = {
 }
 assert "stale_head_sha" not in live_head_codes, live_head_gate
 assert "execution_publication_event_mismatch" not in live_head_codes, live_head_gate
+assert "stale_review_verdict" not in live_head_codes, live_head_gate
+assert "review_required" in live_head_codes, live_head_gate
 
 with store._conn(P) as c:
     c.execute(

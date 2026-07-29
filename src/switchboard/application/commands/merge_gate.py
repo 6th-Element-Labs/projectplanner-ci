@@ -976,7 +976,8 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
         or (task.get("git_state") or {}).get("head_sha") or ""
     ).strip()
     review_gate, review_findings = review_merge_gate_findings(
-        task_id, review_head_sha, project=project)
+        task_id, review_head_sha, project=project,
+        current_head_sha=review_head_sha)
     findings.extend(review_findings)
 
     profile = _task_work_session_profile(
