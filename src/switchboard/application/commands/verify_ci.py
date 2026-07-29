@@ -173,6 +173,7 @@ def _ensure_dispatch(
         pr_number: int = 0,
         repo: str = "",
         source_fetch_ref: str = "",
+        source_base_sha: str = "",
 ) -> Dict[str, Any]:
     """Hidden ensure path — owns scratchpad / mirror dispatch."""
     import ci_scratchpad_dispatch as csd
@@ -199,6 +200,7 @@ def _ensure_dispatch(
                 sha,
                 fetch_ref,
                 label=label,
+                base_sha=source_base_sha,
                 repo=repo,
                 project=project,
                 source_path=path,
@@ -225,6 +227,7 @@ def verify(
         pr_number: int = 0,
         repo: str = "",
         source_fetch_ref: str = "",
+        source_base_sha: str = "",
         actor: str = "system",
         status_reader: Callable[[str], Mapping[str, Any]] | None = None,
 ) -> Dict[str, Any]:
@@ -262,6 +265,7 @@ def verify(
             pr_number=int(pr_number or 0),
             repo=repo,
             source_fetch_ref=source_fetch_ref,
+            source_base_sha=source_base_sha,
         )
 
     rows = external_ci_repo.list_external_ci_runs(
@@ -377,6 +381,7 @@ def execute_mapping_result(
         pr_number=int(payload.get("pr_number") or 0),
         repo=str(payload.get("repo") or ""),
         source_fetch_ref=str(payload.get("source_fetch_ref") or ""),
+        source_base_sha=str(payload.get("source_base_sha") or payload.get("base_sha") or ""),
         actor=actor,
         status_reader=status_reader,
     )

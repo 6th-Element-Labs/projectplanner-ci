@@ -269,6 +269,7 @@ def handle_merge_group(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
     mg = payload.get("merge_group") or {}
     head_sha = (mg.get("head_sha") or "").strip()
     head_ref = (mg.get("head_ref") or "").strip()
+    base_sha = (mg.get("base_sha") or "").strip()
     repo = payload.get("repository", {}).get("full_name", "?")
     role_info = _repo_role(repo, project)
     if not role_info.get("canonical"):
@@ -282,6 +283,7 @@ def handle_merge_group(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
         project=project,
         repo=repo,
         source_fetch_ref=head_ref or head_sha,
+        source_base_sha=base_sha,
         actor="github-webhook",
     )
     ensure = result.get("ensure_result") or {}
@@ -303,6 +305,7 @@ def handle_merge_group(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
         "repo": repo,
         "merge_group_head_sha": head_sha,
         "merge_group_head_ref": head_ref,
+        "merge_group_base_sha": base_sha,
         "scratchpad_dispatched": dispatched,
         "scratchpad_skip_reason": ensure.get("skip_reason") or result.get("error"),
         "scratchpad_run_id": result.get("run_id") or ensure.get("run_id"),

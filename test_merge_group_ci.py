@@ -24,6 +24,7 @@ import webhook_inbox  # noqa: E402
 
 P = "switchboard"
 VALID_SHA = "abcdef1234567890abcdef1234567890abcdef12"
+BASE_SHA = "1234567890abcdef1234567890abcdef12345678"
 passed = failed = 0
 
 
@@ -51,6 +52,7 @@ mg_payload = {
     },
     "merge_group": {
         "head_sha": VALID_SHA,
+        "base_sha": BASE_SHA,
         "head_ref": f"refs/heads/gh-readonly-queue/master/pr-999-{VALID_SHA}",
     },
 }
@@ -63,6 +65,7 @@ captured = {}
 def _stub_verify(sha, **k):
     captured["sha"] = sha
     captured["source_fetch_ref"] = k.get("source_fetch_ref")
+    captured["source_base_sha"] = k.get("source_base_sha")
     captured["ensure"] = k.get("ensure")
     return {
         "ok": True,
@@ -90,8 +93,9 @@ ok(res["action"] == "merge_group_ci_dispatched"
    "checks_requested on the canonical repo verifies the merge-group head SHA")
 ok(captured.get("sha") == VALID_SHA
    and captured.get("ensure") is True
+   and captured.get("source_base_sha") == BASE_SHA
    and str(captured.get("source_fetch_ref") or "").endswith(VALID_SHA),
-   "the exact merge-group head SHA + ref are passed through verify_ci")
+   "the exact merge-group head, base, and ref are passed through verify_ci")
 
 ignored = github_sync.handle_merge_group({**mg_payload, "action": "destroyed"}, P)
 ok(ignored["action"] == "ignored", "a non checks_requested merge_group action is ignored")

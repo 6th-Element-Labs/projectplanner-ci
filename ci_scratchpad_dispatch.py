@@ -200,6 +200,7 @@ def dispatch_scratchpad_ref(
     source_fetch_ref: str,
     *,
     label: str,
+    base_sha: str = "",
     repo: str = "",
     project: str = "switchboard",
     source_path: str = "",
@@ -232,6 +233,10 @@ def dispatch_scratchpad_ref(
     checkout = (source_path or source_checkout_path()).strip()
     mirror_branch = store.default_external_ci_mirror_branch(label, sha)
     fetch_ref = (source_fetch_ref or "").strip()
+    base = (base_sha or "").strip().lower()
+    if base and not cvd.GIT_SHA_RE.fullmatch(base):
+        raise cvd.CiVerifyDispatchError(
+            "dispatch_scratchpad_ref base_sha must be a full 40-character Git SHA.")
     result: Dict[str, Any] = {
         "schema": SCHEMA,
         "dispatched": False,
@@ -241,6 +246,7 @@ def dispatch_scratchpad_ref(
         "label": label,
         "head_sha": sha,
         "source_fetch_ref": fetch_ref,
+        "base_sha": base or None,
         "mirror_branch": mirror_branch,
         "workflow": DEFAULT_WORKFLOW,
         "workflow_ref": DEFAULT_WORKFLOW_REF,
@@ -266,6 +272,7 @@ def dispatch_scratchpad_ref(
         "workflow_ref": DEFAULT_WORKFLOW_REF,
         "workflow_inputs": {
             "source_ref": mirror_tag_ref(mirror_branch),
+            "base_sha": base,
             "purpose": purpose,
         },
         # Webhook intake is already accept-and-ack; this executes in the
@@ -288,6 +295,7 @@ def dispatch_scratchpad_ref(
             "mirror_ref_kind": "tag",
             "workflow_inputs": {
                 "source_ref": mirror_tag_ref(mirror_branch),
+                "base_sha": base,
                 "purpose": purpose,
             },
             "cleanup_mirror_branch": True,
@@ -323,6 +331,7 @@ def try_dispatch_merge_group(
     head_sha: str,
     head_ref: str = "",
     *,
+    base_sha: str = "",
     repo: str = "",
     project: str = "switchboard",
     source_path: str = "",
@@ -340,7 +349,8 @@ def try_dispatch_merge_group(
     try:
         out = dispatch_scratchpad_ref(
             sha, head_ref, label=f"mg-{sha[:12]}",
-            repo=repo, project=project, source_path=source_path, dry_run=False)
+            base_sha=base_sha, repo=repo, project=project,
+            source_path=source_path, dry_run=False)
         out["skip_reason"] = None
         return out
     except Exception as exc:

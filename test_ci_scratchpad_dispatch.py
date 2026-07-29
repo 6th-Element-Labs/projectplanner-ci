@@ -18,6 +18,7 @@ import store  # noqa: E402
 
 P = "switchboard"
 VALID_SHA = "abcdef1234567890abcdef1234567890abcdef12"
+BASE_SHA = "1234567890abcdef1234567890abcdef12345678"
 passed = failed = 0
 
 
@@ -101,7 +102,7 @@ ok(mirror_calls[0].get("mirror_ref_kind") == "tag",
    "projectplanner scratchpad transport uses non-triggering tags")
 ok(mirror_calls[0].get("workflow_ref") == "master"
    and mirror_calls[0].get("workflow_inputs", {}).get("purpose") == "head",
-   "PR heads dispatch the trusted default-branch full workflow")
+   "PR heads dispatch the trusted default-branch admission workflow")
 ok(mirror_calls[0].get("workflow_inputs", {}).get("source_ref")
    == f"refs/tags/{result['mirror_branch']}",
    "trusted workflow receives the exact disposable scratchpad ref")
@@ -117,6 +118,7 @@ ref_result = csd.dispatch_scratchpad_ref(
     VALID_SHA,
     "refs/heads/gh-readonly-queue/master/pr-412-merge",
     label="merge-group",
+    base_sha=BASE_SHA,
     project=P,
     source_path=source_path,
     dry_run=False,
@@ -129,8 +131,9 @@ ok(mirror_calls[0].get("source_sha") == VALID_SHA,
    "merge-group dispatch preserves the exact requested SHA")
 ok(mirror_calls[0].get("workflow_ref") == "master"
    and mirror_calls[0].get("workflow_inputs", {}).get("purpose") == "merge_group"
+   and mirror_calls[0].get("workflow_inputs", {}).get("base_sha") == BASE_SHA
    and mirror_calls[0].get("mirror_ref_kind") == "tag",
-   "merge groups dispatch the identical verification through the trusted workflow")
+   "merge groups dispatch exact base evidence through the trusted workflow")
 
 try:
     csd.dispatch_scratchpad(
@@ -160,7 +163,7 @@ repair_result = csd.dispatch_scratchpad(
 )
 ok(repair_result["dispatched"]
    and mirror_calls[0].get("workflow_inputs", {}).get("purpose") == "ci_repair",
-   "ci-repair dispatch runs the identical trusted workflow with audit-only purpose")
+   "ci-repair dispatch runs the trusted full workflow with an audited purpose")
 
 csd.cvd.resolve_head_sha = orig_resolve
 csd.cvd.verify_commit_exists = orig_verify

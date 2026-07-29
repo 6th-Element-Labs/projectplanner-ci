@@ -143,8 +143,15 @@ GitHub branch protection requires exactly one context: **`Switchboard CI / VM ga
 exact `refs/pull/<n>/head` SHA, and push it to a disposable `refs/tags/ci/**` tag. The dispatcher
 then invokes `master:verify.yml`; the tag cannot satisfy a branch-push trigger and mirrored
 agent code never supplies workflow authority.
-PR heads and merge-group SHAs run the identical `scripts/switchboard_ci.sh` full gate,
-including Playwright, and publish the same single context. There is no fast/full fork.
+PR heads run bounded exact-SHA admission. Merge-group SHAs run the full
+`scripts/switchboard_ci.sh` gate, including Playwright, unless the trusted workflow proves
+that the exact non-empty base-to-source diff contains only `.md` paths. Missing, malformed,
+unreachable, mixed, or empty diff evidence runs full CI. CI repair always runs full CI.
+All lanes publish the same required context and a `switchboard.ci_lane_result.v1` receipt.
+`SWITCHBOARD_CI_LANE_MODE` on `projectplanner-ci` controls rollout: missing/unknown/`full`
+forces full CI, `shadow` records candidates while running full CI, and `enforce` activates
+the selected lane. Set it to `full` for immediate rollback without changing branch
+protection or the merge queue.
 Wall-clock load ratchets run in the scheduled, non-required `performance-monitor` workflow.
 The Plan VM coordinates the mirror from the service-owned
 `/var/lib/projectplanner/ci-source` clone but never runs the test suite. If mirroring fails,
@@ -195,12 +202,13 @@ re-enable the old timers only for rollback diagnosis.
 ### Native merge queue
 
 The active native merge queue sends `merge_group/checks_requested` webhooks. Switchboard mirrors
-the exact temporary head SHA through the same scratchpad route, and `verify.yml` posts the single
-required `Switchboard CI / VM gate` verdict after the same full suite and Playwright used for
-PR heads. A transient dispatch failure keeps the webhook delivery retryable. No claim or merge
-authorization statuses are projected onto GitHub. Autopilot enqueues once and then waits for
-GitHub; it does not run a custom requeue lifecycle. Persistent queue failure uses the audited
-CI-repair administrator lane above.
+the exact temporary head and base SHAs through the same scratchpad route. `verify.yml` posts the
+single required `Switchboard CI / VM gate` verdict after full CI for code, mixed, or unprovable
+diffs, or after bounded docs validation for an exact Markdown-only diff. A transient dispatch
+failure keeps the webhook delivery retryable. No claim or merge authorization statuses are
+projected onto GitHub. Autopilot enqueues once and then waits for GitHub; it does not run a
+custom requeue lifecycle. Persistent queue failure uses the audited CI-repair administrator
+lane above.
 
 Verifier resume rule: review/audit workflows that spawn skeptic verifier agents should write a
 `switchboard.review_verifier_run.v1` checkpoint with one deterministic job per

@@ -1,6 +1,8 @@
 # ADR-0023 — Thin merge queue with one exact-SHA CI contract
 
-- **Status:** Accepted (operator decision, 2026-07-27)
+- **Status:** Accepted historical decision; Decisions 2 and the audit-only clause
+  of Decision 3 superseded by
+  [ADR-0024](0024-merge-queue-admission-and-docs-lanes.md) on 2026-07-29
 - **Date:** 2026-07-27
 - **Author:** CI simplification
 - **Supersedes:** ADR-0022 Decisions 2 and 5, and clarifies its manual recovery path

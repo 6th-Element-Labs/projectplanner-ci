@@ -268,7 +268,7 @@ class MergeGroupTechnicalCI(unittest.TestCase):
                         "head_sha": MERGE_GROUP_SHA,
                     },
                 },
-            ),
+            ) as verify_mock,
             mock.patch.object(
                 github_sync,
                 "_repo_role",
@@ -284,6 +284,7 @@ class MergeGroupTechnicalCI(unittest.TestCase):
                     },
                     "merge_group": {
                         "head_sha": MERGE_GROUP_SHA,
+                        "base_sha": "b" * 40,
                         "head_ref": (
                             f"refs/heads/gh-readonly-queue/master/"
                             f"pr-849-{MERGE_GROUP_SHA}"
@@ -295,6 +296,9 @@ class MergeGroupTechnicalCI(unittest.TestCase):
 
         self.assertEqual(res["action"], "merge_group_ci_dispatched")
         self.assertEqual(res["merge_group_head_sha"], MERGE_GROUP_SHA)
+        self.assertEqual(res["merge_group_base_sha"], "b" * 40)
+        verify_call = verify_mock.call_args
+        self.assertEqual(verify_call.kwargs["source_base_sha"], "b" * 40)
         self.assertNotIn("merge_authorization", res)
 
 
