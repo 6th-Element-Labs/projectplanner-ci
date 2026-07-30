@@ -247,11 +247,23 @@ class DaemonConfig:
     # Journald safety: the steady-state tick line is a bounded summary; the
     # full tick JSON (dossiers/snapshots) is opt-in for live debugging only.
     log_full_ticks: bool = False
+    # One audited completion-engine selector. ``shadow`` leaves legacy as the
+    # writer and runs v4 behind a blocking effect spy; ``v4`` is the cutover;
+    # ``legacy`` is the proof-window rollback.
+    # Direct construction stays legacy-compatible for embedded/test callers;
+    # the deployed from-env composition defaults to v4 below.
+    mission_engine: str = "legacy"
 
     @classmethod
     def from_env(cls, environ: Optional[Mapping[str, str]] = None) -> "DaemonConfig":
         env = os.environ if environ is None else environ
         heartbeat = max(10, int(env.get("PM_COORDINATOR_AUTOPILOT_HEARTBEAT_SECONDS", "30")))
+        mission_engine = (
+            env.get("PM_COORDINATOR_MISSION_ENGINE") or "v4"
+        ).strip().lower()
+        if mission_engine not in {"legacy", "shadow", "v4"}:
+            raise ValueError(
+                "PM_COORDINATOR_MISSION_ENGINE must be legacy, shadow, or v4")
         return cls(
             profile_id=(env.get("PM_COORDINATOR_AUTOPILOT_PROFILE")
                         or "autopilot-default").strip(),
@@ -276,6 +288,7 @@ class DaemonConfig:
                 1, int(env.get("PM_COORDINATOR_REVIEW_RESERVED_SLOTS", "1"))),
             log_full_ticks=enabled_from_env(
                 "PM_COORDINATOR_AUTOPILOT_LOG_FULL", False, env),
+            mission_engine=mission_engine,
         )
 
 

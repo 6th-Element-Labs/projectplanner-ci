@@ -176,6 +176,32 @@ def control_autopilot(deliverable_id: Any, *, project: str = DEFAULT_PROJECT,
         result = scopes_repo.control_autopilot_scope(**common, action=verb)
     if isinstance(result, dict) and result.get("error"):
         _raise_store_error(result)
+    if verb == "start":
+        # Operator Start is the v4 mission creation boundary. Initialize every
+        # exact task covered by the new/reused scope before the scoped worker
+        # can observe it; creation and mission_started append are idempotent.
+        from switchboard.application.commands import mission_journal
+        if kind == "task":
+            mission_journal.create_mission(
+                str(task_id).strip().upper(),
+                project=task_project or project,
+                requested_role="implementation",
+            )
+        else:
+            from switchboard.storage.repositories import deliverables
+            status = deliverables.get_mission_status(
+                project=project, deliverable_id=deliverable_id)
+            for linked in status.get("linked_tasks") or []:
+                linked_task_id = str(linked.get("task_id") or "").strip().upper()
+                linked_project = str(
+                    linked.get("project_id") or linked.get("task_project") or project
+                ).strip()
+                if linked_task_id:
+                    mission_journal.create_mission(
+                        linked_task_id,
+                        project=linked_project,
+                        requested_role="implementation",
+                    )
     return {
         "schema": SCHEMA, "command": "control_autopilot", "project": project,
         "action": verb, **_scope_fields(deliverable_id, common["scope_type"],
