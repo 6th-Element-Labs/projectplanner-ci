@@ -139,7 +139,7 @@ def create_router(*, resolve_project: ProjectResolver,
             deliverable_id=deliverable_id, project=resolved,
             active_only=not history and not status, include_archived=history,
             limit=limit + 1, before_requested_at=before_requested_at,
-            before_wake_id=before_wake_id, newest_first=True)
+            before_wake_id=before_wake_id, newest_first=history)
         control_plane_http(wakes)
         has_more = len(wakes) > limit
         wakes = wakes[:limit]
