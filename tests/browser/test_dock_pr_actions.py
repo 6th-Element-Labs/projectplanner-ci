@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""The PR card's overflow control must be findable, not a sliver on the border.
+"""The PR card's actions must be two labelled, equal-size buttons.
+
+Close PR first shipped inside a ghost icon button pinned to the card's right
+border, rendering 19x22 with no label; then as an icon-only overflow that showed
+as a BLANK SQUARE in the operator's browser when the glyph did not paint. Both
+passed markup-shape tests. This one measures the rendered boxes and requires
+text labels, so neither failure mode can ship again.
 
 Close PR shipped inside a `btn-ghost-secondary p-1` button pinned to the card's
 right edge by `ms-auto`. It rendered at 19x22 with no border, so in a 380px dock
@@ -77,39 +83,51 @@ with sync_playwright() as runtime:
 
     # ── desktop ────────────────────────────────────────────────────────────
     d = render(1280, PR)
-    ov = box(d, ".dock-overflow-btn")
     merge = box(d, "[data-pr-merge]")
-    ok(ov and ov["visible"], f"the overflow control renders on desktop: {ov}")
-    ok(ov and ov["w"] >= 28 and ov["h"] >= 28,
-       f"it is a real target, not a 19x22 sliver: {ov}")
-    # It must sit BESIDE the primary action, not exiled to the card's far edge.
-    ok(ov and merge and (ov["x"] - (merge["x"] + merge["w"])) < 120,
-       f"overflow sits beside the primary action, got merge={merge} overflow={ov}")
-    cls = d.evaluate(
-        "() => { const e = document.querySelector('.dock-overflow-btn');"
-        " return e ? e.className : null; }")
-    ok(cls is not None and "btn-ghost-secondary" not in cls,
-       f"the control carries a visible border, not a ghost style: {cls!r}")
-    # And Close PR is reachable through it.
-    ok(box(d, '[data-pr-close="1121"]') is not None,
-       "Close PR is present inside the overflow")
+    close = box(d, "[data-pr-close]")
+    ok(merge and merge["visible"], f"Merge renders: {merge}")
+    ok(close and close["visible"], f"Close renders: {close}")
+    ok(merge and close and merge["w"] == close["w"] and merge["h"] == close["h"],
+       f"the two actions are the same size: merge={merge} close={close}")
+    ok(merge and merge["w"] >= 60 and merge["h"] >= 24,
+       f"they are real targets, not slivers: {merge}")
+
+    labels = d.evaluate(
+        """() => {
+            const t = s => { const e = document.querySelector(s);
+                return e ? e.textContent.trim() : null; };
+            return {merge: t('[data-pr-merge]'), close: t('[data-pr-close]')};
+        }""")
+    ok(labels["merge"] in ("Merge", "Enqueue"), f"Merge is labelled: {labels}")
+    ok(labels["close"] == "Close", f"Close is labelled, not icon-only: {labels}")
+
+    tone = d.evaluate(
+        """() => {
+            const c = s => document.querySelector(s).className;
+            return {merge: c('[data-pr-merge]'), close: c('[data-pr-close]')};
+        }""")
+    ok("btn-success" in tone["merge"] or "btn-azure" in tone["merge"],
+       f"Merge is green/blue, never the red brand primary: {tone['merge']!r}")
+    ok("btn-danger" in tone["close"],
+       f"Close is red — it is the destructive action: {tone['close']!r}")
+    ok("btn-primary" not in tone["merge"],
+       "Merge must not use the red brand primary beside a red Close")
     d.close()
 
     # ── phone ──────────────────────────────────────────────────────────────
     m = render(500, PR)
-    ovm = box(m, ".dock-overflow-btn")
-    mergem = box(m, "[data-pr-merge]")
-    ok(ovm and ovm["w"] >= 44 and ovm["h"] >= 44,
-       f"44x44 on a phone: {ovm}")
-    # The primary action must not eat the row and squeeze the overflow away.
-    ok(mergem and ovm and mergem["w"] + ovm["w"] <= 380,
-       f"primary action leaves room for the overflow: merge={mergem} overflow={ovm}")
+    mm, mc = box(m, "[data-pr-merge]"), box(m, "[data-pr-close]")
+    ok(mm and mc and mm["w"] == mc["w"], f"equal width on a phone: {mm} {mc}")
+    ok(mm and mm["h"] >= 44 and mc["h"] >= 44, f"44px tall on a phone: {mm} {mc}")
+    ok(mm and mc and (mm["w"] + mc["w"]) <= 380, "both fit the dock row")
     m.close()
 
-    # ── a queued PR still offers nothing to close ─────────────────────────
+    # ── a queued PR offers neither ────────────────────────────────────────
     q = render(1280, QUEUED)
-    ok(box(q, ".dock-overflow-btn") is None,
-       "a PR the merge queue owns exposes no overflow")
+    ok(box(q, "[data-pr-close]") is None,
+       "a PR the merge queue owns exposes no Close")
+    ok(box(q, "[data-pr-merge]") is None,
+       "a queued PR exposes no Merge either")
     q.close()
     browser.close()
 
@@ -117,4 +135,4 @@ if failures:
     for line in failures:
         print("FAIL", line)
     raise SystemExit(1)
-print("PASS test_dock_pr_overflow_visible")
+print("PASS test_dock_pr_actions")

@@ -1217,26 +1217,20 @@ const TeepPlan = {
         const autopilot = this._dockAutopilotHtml(x);
         const failure = String((x.ci_failing || [])[0] || '');
         const reason = x.blocked_reason || failure;
+        // Two labelled buttons, equal width, no icon-only controls. Merge is green
+        // because the brand primary is red and a red Merge next to a red Close read
+        // as "both dangerous"; Close is red because it is the one action here that
+        // throws work away. An earlier icon-only overflow shipped as a blank square
+        // when the ti glyph did not paint in the operator's browser — a label cannot
+        // fail that way.
         const primaryAction = x.queue_position ? ''
             : (x.ci_state === 'success' && x.mergeable_state !== 'dirty'
-                ? `<button class="btn btn-sm btn-primary dock-primary-action" data-pr-merge="${this.esc(String(x.number))}" data-pr-mode="${x.mergeable_state === 'clean' ? 'merge' : 'enqueue'}">${x.mergeable_state === 'clean' ? 'Merge' : 'Enqueue'}</button>`
-                : `<button class="btn btn-sm btn-outline-secondary dock-primary-action" data-pr-regate="${this.esc(String(x.number))}" data-pr-sha="${this.esc(x.head_sha || '')}" title="Request a fresh CI verification for this exact commit">Re-run CI</button>`);
-        // Close sits in the overflow, never as a primary button: it is the one
-        // action here that throws work away. Hidden while queued — closing a PR
-        // the queue is merging would race it.
-        //
-        // It sits BESIDE the primary action, not shoved to the far edge by
-        // ms-auto: at 19x22 against the right border it was invisible in a 380px
-        // dock and the operator reported the feature as missing. A bordered
-        // 32x32 button next to the thing it belongs to is findable.
-        const overflow = x.queue_position ? '' : `<div class="dropdown dock-pr-overflow">
-                <button class="btn btn-sm btn-outline-secondary dock-overflow-btn" data-bs-toggle="dropdown" aria-label="Pull request actions"><i class="ti ti-dots-vertical"></i></button>
-                <div class="dropdown-menu dropdown-menu-end">
-                    <a href="${this.esc(x.url)}" target="_blank" rel="noopener" class="dropdown-item"><i class="ti ti-external-link me-2"></i>Open on GitHub</a>
-                    <button class="dropdown-item text-danger" data-pr-close="${this.esc(String(x.number))}" data-pr-label="${this.esc(x.title || '')}"><i class="ti ti-circle-x me-2"></i>Close PR</button>
-                </div>
-            </div>`;
-        const actions = primaryAction + overflow;
+                ? `<button class="btn btn-sm btn-success dock-primary-action dock-pr-action" data-pr-merge="${this.esc(String(x.number))}" data-pr-mode="${x.mergeable_state === 'clean' ? 'merge' : 'enqueue'}">${x.mergeable_state === 'clean' ? 'Merge' : 'Enqueue'}</button>`
+                : `<button class="btn btn-sm btn-outline-secondary dock-primary-action dock-pr-action" data-pr-regate="${this.esc(String(x.number))}" data-pr-sha="${this.esc(x.head_sha || '')}" title="Request a fresh CI verification for this exact commit">Re-run CI</button>`);
+        // Hidden while queued — closing a PR the queue is merging would race it.
+        const closeAction = x.queue_position ? ''
+            : `<button class="btn btn-sm btn-danger dock-pr-action" data-pr-close="${this.esc(String(x.number))}" data-pr-label="${this.esc(x.title || '')}">Close</button>`;
+        const actions = primaryAction + closeAction;
         return `<div class="p-2 border rounded mb-2" style="border-left:2px solid ${accent} !important;border-top-left-radius:0;border-bottom-left-radius:0;">
             <div class="d-flex align-items-center gap-2">
                 ${this._dockBadge(primary.label, primary.tone, primary.icon, primary.title)}

@@ -71,15 +71,18 @@ with sync_playwright() as runtime:
     page.evaluate(setup, [OPEN_PR, QUEUED_PR])
     page.wait_for_timeout(200)
 
-    # The control exists for an open PR, in the overflow, marked destructive.
+    # The control exists for an open PR as a labelled, destructive button beside
+    # the primary action. It was an icon-only overflow item until the operator
+    # reported it rendering as a blank square; sizing/tone is pinned in detail by
+    # tests/browser/test_dock_pr_actions.py.
     btn = page.locator('[data-pr-close="900"]')
     ok(btn.count() == 1, "an open PR offers Close")
-    ok("Close PR" in btn.inner_text(), f"the control says what it does: {btn.inner_text()!r}")
+    ok("Close" in btn.inner_text(),
+       f"the control carries a text label, not an icon: {btn.inner_text()!r}")
     cls = btn.get_attribute("class") or ""
-    ok("dropdown-item" in cls and "text-danger" in cls,
-       f"Close lives in the overflow and reads as destructive: {cls!r}")
-    ok(page.locator('[data-pr-close="900"].btn-primary').count() == 0,
-       "Close must never be the card's primary button")
+    ok("btn-danger" in cls, f"Close reads as destructive: {cls!r}")
+    ok("btn-primary" not in cls,
+       "Close must never wear the red brand primary used for the merge action")
 
     # A queued PR renders in the merge-queue stack, which carries no card actions
     # at all — so there is nothing to close from. The route-level refusal is the
