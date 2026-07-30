@@ -8,6 +8,23 @@ from typing import Any, Mapping
 SCHEMA = "switchboard.execution_assignment.v1"
 EXACT_HEAD_ROLES = frozenset({"review_merge", "remediation"})
 VALID_ROLES = frozenset({"implementation", *EXACT_HEAD_ROLES})
+OFFLINE_EVIDENCE_PROFILE = "offline_evidence"
+
+
+def claim_expectations_for(profile: str, role: str) -> dict[str, Any]:
+    """The one claim-expectation shape both mint and bind derive from.
+
+    Only the server-stamped ``offline_evidence`` profile relaxes the Work
+    Session requirement; an absent or unknown profile keeps the strict code
+    contract so pre-profile wakes and tampered contracts fail closed.
+    """
+    return {
+        "required": True,
+        "work_session_required": (
+            str(profile or "").strip().lower() != OFFLINE_EVIDENCE_PROFILE
+        ),
+        "role": role,
+    }
 
 
 class ExecutionAssignmentError(ValueError):
@@ -51,6 +68,10 @@ def build_execution_assignment(
     if not assignment_id:
         raise ExecutionAssignmentError("execution_assignment_id_missing")
 
+    # The profile is server-stamped into the lifecycle at wake mint. It is
+    # omitted (not defaulted) when absent so contracts minted before the
+    # profile existed rebuild byte-identically on the claim path.
+    profile = str(lifecycle.get("session_policy_profile") or "").strip().lower()
     contract: dict[str, Any] = {
         "schema": SCHEMA,
         "task_id": str(task_id or "").strip().upper(),
@@ -63,20 +84,19 @@ def build_execution_assignment(
             "number": int(lifecycle.get("pr_number") or 0),
             "url": str(lifecycle.get("pr_url") or ""),
         },
-        "claim_expectations": {
-            "required": True,
-            "work_session_required": True,
-            "role": role,
-        },
+        "claim_expectations": claim_expectations_for(profile, role),
         # Sibling of claim_expectations (not nested): the Connect claim bind
-        # hard-compares claim_expectations to a fixed three-key shape. Typed
-        # tool names live here so agents see them without breaking that bind.
+        # hard-compares claim_expectations to the exact shape derived by
+        # claim_expectations_for. Typed tool names live here so agents see
+        # them without breaking that bind.
         "typed_tools": {
             "executed_test_run": "record_executed_test_run",
             "agent_requires_human": "agent_requires_human",
             "stale_assignment": "report_stale_assignment",
         },
     }
+    if profile:
+        contract["session_policy_profile"] = profile
     # A launch pointer is intentionally not a diagnosis.  One trigger and one
     # starting URL save the agent a lookup while every current fact remains
     # discoverable through MCP/GitHub.

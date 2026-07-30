@@ -72,6 +72,9 @@ def append_failed_wake_events(
         wake_id = str(wake["wake_id"])
         execution_id, generation = _execution_identity(wake)
         result = wake.get("result") or {}
+        # host_loss_recovery_exhausted stores its reason one level down.
+        recovery = result.get("recovery") if isinstance(result, Mapping) else None
+        recovery = recovery if isinstance(recovery, Mapping) else {}
         event = repository.append_event(
             task_id,
             project=project,
@@ -83,7 +86,7 @@ def append_failed_wake_events(
             payload={
                 "wake_id": wake_id,
                 "status": str(wake.get("status") or "failed"),
-                "reason": str(result.get("reason") or ""),
+                "reason": str(result.get("reason") or recovery.get("reason") or ""),
             },
         )
         events.append({

@@ -617,6 +617,23 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
             policy, task_id=str(task_id or ""), project=project,
             require_execution_binding=False,
         )
+    # Stamp the task's resolved session-policy profile into the lifecycle
+    # BEFORE the write transaction (the task read must not nest inside it).
+    # The mint below copies it into the immutable execution assignment, so
+    # every dispatch door — Mission Bot, MCP, retry — carries the same
+    # evidence contract (BUG-249). A missing task or profile stays unstamped:
+    # the contract then keeps the strict code shape and fails closed.
+    lifecycle_request = policy.get("lifecycle")
+    if (isinstance(lifecycle_request, dict)
+            and lifecycle_request.get("schema") == "switchboard.execution_lifecycle.v1"
+            and not lifecycle_request.get("session_policy_profile")
+            and task_id):
+        profile_task = _store_facade().get_task(
+            str(task_id).strip().upper(), project=project) or {}
+        if profile_task:
+            lifecycle_request["session_policy_profile"] = (
+                _store_facade()._task_work_session_profile(
+                    profile_task, "", project=project))
     try:
         with _control_plane_conn(project) as c:
             active_claim = (
