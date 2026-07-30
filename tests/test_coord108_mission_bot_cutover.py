@@ -52,7 +52,7 @@ def test_standalone_first_boot_uses_mission_tick_with_scope_authority():
     )
     tick = {"controller": "mission_bot", "execution": {"action": "started"}}
     with patch(
-        "switchboard.application.completion_driver.run_completion_tick",
+        "switchboard.application.mission_bot_v4.run_v4_tick",
         return_value=tick,
     ) as run:
         result = owner._run_standalone_task_scope(

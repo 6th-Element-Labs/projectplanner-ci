@@ -15,6 +15,7 @@ wake, or resolves a runner id.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from constants import DEFAULT_PROJECT
@@ -164,44 +165,52 @@ def control_autopilot(deliverable_id: Any, *, project: str = DEFAULT_PROJECT,
         "scope_type": kind,
         "task_project": task_project, "task_id": task_id, "actor": actor,
     }
+    missions: list[tuple[str, str, dict[str, Any]]] = []
     if verb == "start" and common["scope_type"] == "task":
         invalid = scopes_repo.validate_autopilot_target(
             project=project, deliverable_id=deliverable_id, scope_type="task",
             task_project=task_project, task_id=task_id, runtime=runtime)
         if invalid:
             _raise_store_error(invalid)
+        from switchboard.storage.repositories import tasks as tasks_repo
+        exact_project = task_project or project
+        detail = tasks_repo.get_task(
+            str(task_id).strip().upper(), project=exact_project) or {}
+        missions.append((exact_project, str(task_id).strip().upper(), detail))
+    elif verb == "start":
+        from switchboard.storage.repositories import deliverables
+        status = deliverables.get_mission_status(
+            project=project, deliverable_id=deliverable_id)
+        if status.get("error"):
+            _raise_store_error(status)
+        for linked in status.get("linked_tasks") or []:
+            linked_task_id = str(linked.get("task_id") or "").strip().upper()
+            linked_project = str(
+                linked.get("project_id") or linked.get("task_project") or project
+            ).strip()
+            detail = linked.get("task_detail")
+            detail = detail if isinstance(detail, dict) else {}
+            provenance = detail.get("provenance")
+            provenance = provenance if isinstance(provenance, dict) else {}
+            if linked_task_id and not (
+                    detail.get("status") == "Done" and provenance.get("terminal") is True):
+                missions.append((linked_project, linked_task_id, detail))
     if verb == "start":
+        # No scope becomes visible until every task it can drive has its
+        # durable mission row and first event.  A mission without a scope is
+        # inert; a scope without a mission is a permanent silent stall.
+        from switchboard.application.commands import mission_journal
+        for mission_project, mission_task_id, detail in missions:
+            mission_journal.create_mission(
+                mission_task_id,
+                project=mission_project,
+                requested_role=mission_journal.initial_requested_role(detail),
+            )
         result = scopes_repo.start_autopilot_scope(**common, runtime=runtime)
     else:
         result = scopes_repo.control_autopilot_scope(**common, action=verb)
     if isinstance(result, dict) and result.get("error"):
         _raise_store_error(result)
-    if verb == "start":
-        # Operator Start is the v4 mission creation boundary. Initialize every
-        # exact task covered by the new/reused scope before the scoped worker
-        # can observe it; creation and mission_started append are idempotent.
-        from switchboard.application.commands import mission_journal
-        if kind == "task":
-            mission_journal.create_mission(
-                str(task_id).strip().upper(),
-                project=task_project or project,
-                requested_role="implementation",
-            )
-        else:
-            from switchboard.storage.repositories import deliverables
-            status = deliverables.get_mission_status(
-                project=project, deliverable_id=deliverable_id)
-            for linked in status.get("linked_tasks") or []:
-                linked_task_id = str(linked.get("task_id") or "").strip().upper()
-                linked_project = str(
-                    linked.get("project_id") or linked.get("task_project") or project
-                ).strip()
-                if linked_task_id:
-                    mission_journal.create_mission(
-                        linked_task_id,
-                        project=linked_project,
-                        requested_role="implementation",
-                    )
     return {
         "schema": SCHEMA, "command": "control_autopilot", "project": project,
         "action": verb, **_scope_fields(deliverable_id, common["scope_type"],

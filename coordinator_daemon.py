@@ -247,12 +247,10 @@ class DaemonConfig:
     # Journald safety: the steady-state tick line is a bounded summary; the
     # full tick JSON (dossiers/snapshots) is opt-in for live debugging only.
     log_full_ticks: bool = False
-    # One audited completion-engine selector. ``shadow`` leaves legacy as the
-    # writer and runs v4 behind a blocking effect spy; ``v4`` is the cutover;
-    # ``legacy`` is the proof-window rollback.
-    # Direct construction stays legacy-compatible for embedded/test callers;
-    # the deployed from-env composition defaults to v4 below.
-    mission_engine: str = "legacy"
+    # Mission Bot v4 is the sole production completion owner.  Retaining a
+    # runtime-selectable legacy writer after cutover allowed stale deployment
+    # configuration to resurrect the retired classifier.
+    mission_engine: str = "v4"
 
     @classmethod
     def from_env(cls, environ: Optional[Mapping[str, str]] = None) -> "DaemonConfig":
@@ -261,9 +259,9 @@ class DaemonConfig:
         mission_engine = (
             env.get("PM_COORDINATOR_MISSION_ENGINE") or "v4"
         ).strip().lower()
-        if mission_engine not in {"legacy", "shadow", "v4"}:
+        if mission_engine != "v4":
             raise ValueError(
-                "PM_COORDINATOR_MISSION_ENGINE must be legacy, shadow, or v4")
+                "PM_COORDINATOR_MISSION_ENGINE must be v4")
         return cls(
             profile_id=(env.get("PM_COORDINATOR_AUTOPILOT_PROFILE")
                         or "autopilot-default").strip(),

@@ -131,11 +131,11 @@ coordinator = scc.ScopedCompletionCoordinator(
     DaemonConfig(act=True), store_mod=store_stub,
     agent_id="switchboard/scoped-owner/test")
 
-import switchboard.application.completion_driver as completion_driver  # noqa: E402
+import switchboard.application.mission_bot_v4 as mission_bot_v4  # noqa: E402
 
 ticks = []
-_real_tick = completion_driver.run_completion_tick
-completion_driver.run_completion_tick = lambda t, **kw: ticks.append(
+_real_tick = mission_bot_v4.run_v4_tick
+mission_bot_v4.run_v4_tick = lambda t, **kw: ticks.append(
     {"task_id": t, **kw}
 ) or {
     "action": "start_task",
@@ -151,7 +151,7 @@ try:
         P, {"scope_id": scope_id, "scope_type": "task",
             "task_project": P, "task_id": tid, "deliverable_id": ""})
 finally:
-    completion_driver.run_completion_tick = _real_tick
+    mission_bot_v4.run_v4_tick = _real_tick
 
 ok(outcome.get("status") == "completion_tick",
    f"a standalone task scope dispatches (got {outcome.get('status')})")

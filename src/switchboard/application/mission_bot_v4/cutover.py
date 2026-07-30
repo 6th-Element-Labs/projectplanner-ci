@@ -5,12 +5,20 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from switchboard.application.commands import task_execution
+from switchboard.application.commands import (
+    github_mission_events,
+    mission_journal,
+    task_execution,
+)
 from switchboard.application.mission_bot_v4.worker import (
     ScopedMissionWorkerPorts,
     tick_scoped_mission,
 )
 from switchboard.storage.repositories import autopilot_scopes, runner
+from switchboard.storage.repositories.mission_journal import (
+    MissionJournalRepository,
+    default_mission_journal_repository,
+)
 
 
 @dataclass
@@ -33,6 +41,7 @@ def production_ports(
     *, actor: str, agent_id: str, scope_project: str,
     scope_authority: Mapping[str, Any], store_mod: Any,
     effect_spy: ReadOnlyEffectSpy | None = None,
+    journal: MissionJournalRepository = default_mission_journal_repository,
 ) -> ScopedMissionWorkerPorts:
     """Load the production service graph with exactly one work-driving port."""
 
@@ -85,6 +94,7 @@ def production_ports(
         get_task=get_task,
         has_live_execution=has_live,
         start_task=start,
+        journal=journal,
     )
 
 
@@ -92,22 +102,54 @@ def run_v4_tick(
     task_id: str, *, project: str, scope_project: str,
     scope_authority: Mapping[str, Any], actor: str, agent_id: str,
     store_mod: Any, effect_spy: ReadOnlyEffectSpy | None = None,
+    journal: MissionJournalRepository = default_mission_journal_repository,
 ) -> dict[str, Any]:
     """Run the production v4 pager, optionally with every effect blocked."""
-    return tick_scoped_mission(
+    ports = production_ports(
+        actor=actor,
+        agent_id=agent_id,
+        scope_project=scope_project,
+        scope_authority=scope_authority,
+        store_mod=store_mod,
+        effect_spy=effect_spy,
+        journal=journal,
+    )
+    authority = ports.validate_scope(
+        dict(scope_authority), project=project, task_project=project, task_id=task_id,
+    ) or {}
+    initialization: dict[str, Any] | None = None
+    if authority.get("allowed") is True:
+        item = ports.journal.get_item(task_id, project=project)
+        if item is None:
+            task = ports.get_task(task_id, project=project) or {}
+            role = mission_journal.initial_requested_role(task)
+            initialization = mission_journal.create_mission(
+                task_id,
+                project=project,
+                requested_role=role,
+                repository=ports.journal,
+            )
+        # W3 backstop: append one bounded observation fact for this exact
+        # WAITING task.  It does not change state or request Capacity.
+        github_mission_events.append_due_observations(
+            project=project,
+            task_id=task_id,
+            repository=ports.journal,
+        )
+    result = tick_scoped_mission(
         task_id,
         project=project,
         scope_authority=scope_authority,
         actor=actor,
-        ports=production_ports(
-            actor=actor,
-            agent_id=agent_id,
-            scope_project=scope_project,
-            scope_authority=scope_authority,
-            store_mod=store_mod,
-            effect_spy=effect_spy,
-        ),
+        ports=ports,
     )
+    if initialization is not None:
+        result["mission_initialization"] = {
+            "created": bool(initialization["event"].get("created")),
+            "requested_role": initialization["mission"].get("requested_role"),
+            "source": "active_scope_backfill",
+        }
+    return result
 
 
 __all__ = ["ReadOnlyEffectSpy", "production_ports", "run_v4_tick"]

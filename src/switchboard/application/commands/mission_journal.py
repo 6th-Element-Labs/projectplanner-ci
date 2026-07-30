@@ -11,6 +11,24 @@ from switchboard.storage.repositories.mission_journal import (
 from switchboard.storage.repositories import runner as runner_repository
 
 
+def initial_requested_role(task: Mapping[str, Any] | None) -> str:
+    """Choose the one mechanical cutover role without diagnosing the PR.
+
+    A task with any persisted PR identity is handed to ``review_merge`` so the
+    LLM can reread live GitHub.  A task without a PR needs implementation.
+    Checks, reviews, mergeability, and board prose deliberately do not enter
+    this decision.
+    """
+    detail = dict(task or {})
+    git_state = detail.get("git_state")
+    git_state = git_state if isinstance(git_state, Mapping) else {}
+    return (
+        "review_merge"
+        if git_state.get("pr_number") or git_state.get("pr_url")
+        else "implementation"
+    )
+
+
 def create_mission(
     task_id: str, *, project: str, requested_role: str = "implementation",
     repository: MissionJournalRepository = default_mission_journal_repository,
@@ -83,6 +101,6 @@ def yield_mission(
 
 
 __all__ = [
-    "MissionJournalError", "append_material_event", "create_mission", "transition_mission",
-    "yield_mission",
+    "MissionJournalError", "append_material_event", "create_mission",
+    "initial_requested_role", "transition_mission", "yield_mission",
 ]

@@ -706,23 +706,31 @@ def _arm_task_scope(task_id: str, *, project: str, role: str,
     }.get(str(runtime or "codex").strip().lower(), str(runtime or "codex"))
     from switchboard.storage.repositories import autopilot_scopes as scopes_repo
     try:
+        # The journal must exist before the scope becomes visible.  A scoped
+        # worker may acquire a newly-created scope immediately, so appending
+        # mission_started after scope creation leaves a race where the worker
+        # observes no mission.
+        from switchboard.application.commands import mission_journal
+        mission_journal.create_mission(
+            task_id,
+            project=project,
+            requested_role=(
+                str(role or "").strip().lower()
+                if str(role or "").strip().lower()
+                in {"implementation", "review_merge", "remediation"}
+                else "implementation"
+            ),
+        )
         live = scopes_repo.list_autopilot_scopes(
             project=project, status="active,paused", limit=500,
             include_last_result=False)
         for row in live:
             if (str(row.get("scope_type") or "") == "task"
                     and str(row.get("task_id") or "").upper() == task_id):
-                from switchboard.application.commands import mission_journal
-                mission_journal.create_mission(
-                    task_id, project=project, requested_role="implementation")
                 return {"scope_id": row.get("scope_id"), "already_started": True}
         started = scopes_repo.start_autopilot_scope(
             project=project, scope_type="task", task_project=project,
             task_id=task_id, runtime=scope_runtime, actor=actor)
-        if not started.get("error"):
-            from switchboard.application.commands import mission_journal
-            mission_journal.create_mission(
-                task_id, project=project, requested_role="implementation")
     except Exception as exc:  # noqa: BLE001
         # Capacity already started; report the gap rather than failing the start
         # or silently pretending the task can drive itself.

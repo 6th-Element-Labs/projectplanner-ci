@@ -1010,11 +1010,11 @@ class ScopedOwnerWiringContract(unittest.TestCase):
             store_mod=store,
             agent_id="codex/BUG-172",
         )
-        from switchboard.application import completion_driver
+        from switchboard.application import mission_bot_v4
 
         with patch.object(
-            completion_driver,
-            "run_completion_tick",
+            mission_bot_v4,
+            "run_v4_tick",
             return_value=tick,
         ):
             result = owner._run_standalone_task_scope(

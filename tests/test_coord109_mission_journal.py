@@ -4,7 +4,7 @@ import unittest
 from contextlib import contextmanager
 from pathlib import Path
 
-from path_setup import ROOT as _ROOT
+from path_setup import ROOT as _ROOT  # noqa: F401
 from switchboard.application.commands import mission_journal
 from switchboard.storage.migrations.runner import DDL_MIGRATIONS
 from switchboard.storage.repositories.mission_journal import (
@@ -124,6 +124,124 @@ class MissionJournalTest(unittest.TestCase):
             terminal_ref="sha", authority="canonical_provenance_projector",
         )
         self.assertEqual("DONE", done["state"])
+
+    def test_abnormal_terminal_is_one_same_role_wake_edge(self):
+        mission_journal.create_mission(
+            "T-1", project="alpha", requested_role="implementation",
+            repository=self.repository,
+        )
+        item = self.repository.get_item("T-1", project="alpha")
+        self.repository.update_item(
+            "T-1", project="alpha", state="ACTIVE",
+            requested_role="implementation", expected_version=item["version"],
+            handled_through=1,
+        )
+        first = self.repository.record_runner_terminal(
+            "T-1", project="alpha", runner_session_id="runner-1",
+            execution_id="execution-1", generation=1, status="failed",
+        )
+        replay = self.repository.record_runner_terminal(
+            "T-1", project="alpha", runner_session_id="runner-1",
+            execution_id="execution-1", generation=1, status="failed",
+        )
+        item = self.repository.get_item("T-1", project="alpha")
+        self.assertTrue(first["created"])
+        self.assertFalse(replay["created"])
+        self.assertEqual("ACTIVE", item["state"])
+        self.assertEqual("implementation", item["requested_role"])
+        self.assertEqual(1, item["handled_through"])
+        self.assertEqual(2, item["latest_sequence"])
+
+    def test_c3_terminal_switches_to_review_without_diagnosing_github(self):
+        mission_journal.create_mission(
+            "T-1", project="alpha", requested_role="implementation",
+            repository=self.repository,
+        )
+        item = self.repository.get_item("T-1", project="alpha")
+        self.repository.update_item(
+            "T-1", project="alpha", state="ACTIVE",
+            requested_role="implementation", expected_version=item["version"],
+            handled_through=1,
+        )
+        result = self.repository.record_runner_terminal(
+            "T-1", project="alpha", runner_session_id="runner-1",
+            execution_id="execution-1", generation=1, status="completed",
+            accepted_role="review_merge",
+        )
+        item = self.repository.get_item("T-1", project="alpha")
+        self.assertEqual("c3_completion", result["payload"]["handoff_kind"])
+        self.assertEqual("ACTIVE", item["state"])
+        self.assertEqual("review_merge", item["requested_role"])
+        self.assertEqual(1, item["handled_through"])
+        self.assertEqual(2, item["latest_sequence"])
+
+    def test_current_wait_yield_becomes_waiting_only_after_terminal_receipt(self):
+        mission_journal.create_mission(
+            "T-1", project="alpha", requested_role="review_merge",
+            repository=self.repository,
+        )
+        yielded = self.repository.append_event(
+            "T-1", project="alpha", event_type="agent_yielded",
+            source_plane="coordination", idempotency_key="yield-1",
+            execution_id="execution-1", generation=1,
+            payload={
+                "cursor_current": True,
+                "outcome": "waiting",
+                "requested_role": "review_merge",
+            },
+        )
+        item = self.repository.get_item("T-1", project="alpha")
+        self.repository.update_item(
+            "T-1", project="alpha", state="ACTIVE",
+            requested_role="review_merge", expected_version=item["version"],
+            handled_through=yielded["sequence"],
+        )
+        result = self.repository.record_runner_terminal(
+            "T-1", project="alpha", runner_session_id="runner-1",
+            execution_id="execution-1", generation=1, status="completed",
+        )
+        item = self.repository.get_item("T-1", project="alpha")
+        self.assertEqual("agent_yield", result["payload"]["handoff_kind"])
+        self.assertEqual("WAITING", item["state"])
+        self.assertEqual(item["latest_sequence"], item["handled_through"])
+
+    def test_event_after_wait_yield_remains_unhandled_after_terminal_receipt(self):
+        mission_journal.create_mission(
+            "T-1", project="alpha", requested_role="review_merge",
+            repository=self.repository,
+        )
+        yielded = self.repository.append_event(
+            "T-1", project="alpha", event_type="agent_yielded",
+            source_plane="coordination", idempotency_key="yield-1",
+            execution_id="execution-1", generation=1,
+            payload={
+                "cursor_current": True,
+                "outcome": "waiting",
+                "requested_role": "review_merge",
+            },
+        )
+        item = self.repository.get_item("T-1", project="alpha")
+        self.repository.update_item(
+            "T-1", project="alpha", state="ACTIVE",
+            requested_role="review_merge", expected_version=item["version"],
+            handled_through=yielded["sequence"],
+        )
+        changed = self.repository.append_event(
+            "T-1", project="alpha", event_type="github_changed",
+            source_plane="communication", idempotency_key="github-1",
+        )
+
+        result = self.repository.record_runner_terminal(
+            "T-1", project="alpha", runner_session_id="runner-1",
+            execution_id="execution-1", generation=1, status="completed",
+        )
+
+        item = self.repository.get_item("T-1", project="alpha")
+        self.assertEqual("none", result["payload"]["handoff_kind"])
+        self.assertEqual("ACTIVE", item["state"])
+        self.assertEqual("review_merge", item["requested_role"])
+        self.assertEqual(yielded["sequence"], item["handled_through"])
+        self.assertGreater(item["latest_sequence"], changed["sequence"])
 
 
 if __name__ == "__main__":

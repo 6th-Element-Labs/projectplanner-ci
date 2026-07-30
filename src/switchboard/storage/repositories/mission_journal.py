@@ -70,12 +70,19 @@ class MissionJournalRepository:
             ).fetchall()
         return [str(row["task_id"]) for row in rows]
 
-    def waiting_items_due(self, *, project: str, due_before: float) -> list[dict[str, Any]]:
+    def waiting_items_due(
+        self, *, project: str, due_before: float, task_id: str = "",
+    ) -> list[dict[str, Any]]:
+        where = "project_id=? AND state='WAITING' AND updated_at<=?"
+        params: list[Any] = [project, due_before]
+        if task_id:
+            where += " AND task_id=?"
+            params.append(task_id)
         with self._connection(project) as c:
             rows = c.execute(
                 "SELECT task_id,updated_at FROM mission_items "
-                "WHERE project_id=? AND state='WAITING' AND updated_at<=?",
-                (project, due_before),
+                f"WHERE {where}",
+                params,
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -256,6 +263,149 @@ class MissionJournalRepository:
             "created": True,
             "execution_identity": execution_identity,
         }
+
+    def record_runner_terminal(
+        self, task_id: str, *, project: str, runner_session_id: str,
+        execution_id: str, generation: int, status: str, head_sha: str = "",
+        accepted_role: str = "", now: float | None = None,
+    ) -> dict[str, Any]:
+        """Project one exact Capacity terminal receipt into the v4 inbox.
+
+        The receipt never chooses a role.  It either finalizes an already
+        authenticated yield/C3 handoff or keeps the mission's current role
+        eligible.  Replayed terminal heartbeats are idempotent.
+        """
+        task_id = str(task_id or "").strip().upper()
+        runner_session_id = str(runner_session_id or "").strip()
+        execution_id = str(execution_id or "").strip()
+        generation = int(generation or 0)
+        if not task_id or not runner_session_id or not execution_id or generation <= 0:
+            return {
+                "created": False,
+                "skipped": True,
+                "reason": "exact_execution_identity_required",
+            }
+        accepted_role = str(accepted_role or "").strip().lower()
+        if accepted_role and accepted_role not in ROLES:
+            raise MissionJournalError(
+                "invalid_role", f"unsupported requested role: {accepted_role}"
+            )
+        timestamp = time.time() if now is None else now
+        idem_key = f"runner_ended:{runner_session_id}"
+        with self._connection(project) as c:
+            c.execute("BEGIN IMMEDIATE")
+            item = c.execute(
+                "SELECT * FROM mission_items WHERE project_id=? AND task_id=?",
+                (project, task_id),
+            ).fetchone()
+            if item is None:
+                return {
+                    "created": False,
+                    "skipped": True,
+                    "reason": "mission_not_found",
+                    "task_id": task_id,
+                }
+            duplicate = c.execute(
+                "SELECT * FROM mission_events WHERE project_id=? AND idempotency_key=?",
+                (project, idem_key),
+            ).fetchone()
+            if duplicate is not None:
+                return {
+                    **dict(duplicate),
+                    "payload": json.loads(duplicate["payload_json"] or "{}"),
+                    "created": False,
+                }
+
+            yielded = c.execute(
+                "SELECT * FROM mission_events WHERE project_id=? AND task_id=? "
+                "AND event_type='agent_yielded' AND execution_id=? AND generation=? "
+                "ORDER BY sequence DESC LIMIT 1",
+                (project, task_id, execution_id, generation),
+            ).fetchone()
+            yielded_payload = (
+                json.loads(yielded["payload_json"] or "{}") if yielded else {}
+            )
+            latest = int(c.execute(
+                "SELECT COALESCE(MAX(sequence),0) FROM mission_events "
+                "WHERE project_id=? AND task_id=?",
+                (project, task_id),
+            ).fetchone()[0])
+            current_yield = bool(
+                yielded
+                and yielded_payload.get("cursor_current") is True
+                and str(yielded_payload.get("requested_role") or "") in ROLES
+                and int(yielded["sequence"]) == latest
+            )
+            handoff_kind = "none"
+            next_role = str(item["requested_role"])
+            outcome = "continue"
+            if accepted_role:
+                handoff_kind = "c3_completion"
+                next_role = accepted_role
+            elif current_yield:
+                handoff_kind = "agent_yield"
+                next_role = str(yielded_payload["requested_role"])
+                outcome = str(yielded_payload.get("outcome") or "continue")
+
+            sequence = latest + 1
+            event_id = f"missionevent-{uuid.uuid4().hex}"
+            payload = {
+                "runner_session_id": runner_session_id,
+                "status": str(status or "").strip().lower(),
+                "handoff_kind": handoff_kind,
+                "requested_role": next_role,
+                "outcome": outcome,
+                "yield_event_id": yielded["event_id"] if current_yield else None,
+            }
+            c.execute(
+                "INSERT INTO mission_events(event_id,project_id,task_id,sequence,event_type,"
+                "source_plane,occurred_at,head_sha,generation,execution_id,payload_json,"
+                "idempotency_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    event_id, project, task_id, sequence, "runner_ended", "capacity",
+                    timestamp, head_sha or None, generation, execution_id,
+                    json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                    idem_key,
+                ),
+            )
+
+            current_state = str(item["state"])
+            if current_state in {"DONE", "HUMAN"}:
+                next_state = current_state
+                handled_through = sequence
+            elif current_yield and not accepted_role and outcome == "waiting":
+                next_state = "WAITING"
+                handled_through = sequence
+            else:
+                # The terminal receipt is the wake edge.  Leaving it unhandled
+                # lets the fenced worker copy the already-persisted role into
+                # exactly one fresh start_task call.
+                next_state = "ACTIVE"
+                handled_through = int(item["handled_through"] or 0)
+            c.execute(
+                "UPDATE mission_items SET state=?,requested_role=?,handled_through=?,"
+                "version=version+1,updated_at=? WHERE project_id=? AND task_id=?",
+                (
+                    next_state, next_role, handled_through, timestamp, project, task_id,
+                ),
+            )
+        return {
+            "event_id": event_id,
+            "project_id": project,
+            "task_id": task_id,
+            "sequence": sequence,
+            "event_type": "runner_ended",
+            "source_plane": "capacity",
+            "execution_id": execution_id,
+            "generation": generation,
+            "payload": payload,
+            "idempotency_key": idem_key,
+            "created": True,
+            "state": next_state,
+            "requested_role": next_role,
+            "handled_through": handled_through,
+        }
+
     def ensure_item(
         self, task_id: str, *, project: str, requested_role: str = "implementation",
         state: str = "ACTIVE", now: float | None = None,

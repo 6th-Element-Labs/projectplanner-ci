@@ -175,12 +175,13 @@ def project_delivery(
 
 def append_due_observations(
     *, project: str, now: float | None = None, due_after_s: float = 300,
+    task_id: str = "",
     repository: MissionJournalRepository = default_mission_journal_repository,
 ) -> dict[str, Any]:
     """Append exactly one due event for each persisted WAITING timestamp."""
     timestamp = time.time() if now is None else now
     rows = repository.waiting_items_due(
-        project=project, due_before=timestamp - due_after_s,
+        project=project, due_before=timestamp - due_after_s, task_id=task_id,
     )
     events = []
     for row in rows:
