@@ -51,6 +51,9 @@ class FakeStore:
         del project
         return self.live
 
+    def list_wake_intents(self, **_kwargs):
+        return []
+
 
 class MissionBotV4CutoverTest(unittest.TestCase):
     def setUp(self):

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from switchboard.application.commands import (
+    capacity_mission_events,
     github_mission_events,
     mission_journal,
     task_execution,
@@ -135,6 +136,15 @@ def run_v4_tick(
             project=project,
             task_id=task_id,
             repository=ports.journal,
+        )
+        # Capacity edge: a wake that failed before any runner existed leaves
+        # no runner or GitHub fact, so copy that durable failure into the
+        # inbox here or the mission waits forever (BUG-248).
+        capacity_mission_events.append_failed_wake_events(
+            project=project,
+            task_id=task_id,
+            repository=ports.journal,
+            list_wakes=getattr(store_mod, "list_wake_intents", None),
         )
     result = tick_scoped_mission(
         task_id,
