@@ -8,6 +8,7 @@ from switchboard.storage.repositories.execution_publications import (
     build_binding,
     get_for_task_in,
     persist_in,
+    repair_event_binding_in,
     validate_event,
 )
 
@@ -112,7 +113,30 @@ def test_event_is_fenced_to_owner_repo_branch_head_and_pr():
             branch="codex/BUILD-1-work", head_sha="c" * 40))
 
 
+def test_same_pr_generation_advance_repairs_branch_and_head():
+    c = database()
+    saved = persist_in(c, binding())
+    event = validate_event(
+        saved, project="atlas", repository="acme/monorepo", pr_number=17,
+        branch="agent/atlas/BUILD-1/execlease-next-g4", head_sha="c" * 40,
+        base_branch="main", allow_head_advance=True,
+    )
+    assert event["branch_advanced"] is True
+    assert event["head_advanced"] is True
+    repaired = repair_event_binding_in(
+        c, saved,
+        branch="agent/atlas/BUILD-1/execlease-next-g4",
+        head_sha="c" * 40,
+    )
+    assert repaired["branch"] == "agent/atlas/BUILD-1/execlease-next-g4"
+    assert repaired["head_sha"] == "c" * 40
+    current = get_for_task_in(c, "atlas", "BUILD-1")
+    assert current["branch"] == repaired["branch"]
+    assert current["head_sha"] == repaired["head_sha"]
+
+
 if __name__ == "__main__":
     test_persists_exact_execution_and_scm_binding()
     test_publish_context_mismatches_fail_closed()
     test_event_is_fenced_to_owner_repo_branch_head_and_pr()
+    test_same_pr_generation_advance_repairs_branch_and_head()

@@ -168,6 +168,37 @@ def get_for_task_event_in(c, project: str, task_id: str, *,
     return dict(row) if row else get_for_task_in(c, project, task_id)
 
 
+def repair_event_binding_in(c, binding: Mapping[str, Any], *,
+                            branch: str = "", head_sha: str = "") -> dict[str, Any]:
+    """Persist mutable provider provenance after immutable PR identity validates."""
+    publication_id = _required(binding.get("publication_id"), "publication_id")
+    updates: dict[str, Any] = {}
+    if str(branch or "").strip() and binding.get("branch") != branch:
+        updates["branch"] = str(branch).strip()
+    normalized_head = str(head_sha or "").strip().lower()
+    if normalized_head and str(binding.get("head_sha") or "").lower() != normalized_head:
+        updates["head_sha"] = normalized_head
+    if not updates:
+        return dict(binding)
+    updates["updated_at"] = time.time()
+    assignments = ", ".join(f"{field}=?" for field in updates)
+    c.execute(
+        f"UPDATE execution_publications SET {assignments} WHERE publication_id=?",
+        tuple(updates.values()) + (publication_id,),
+    )
+    row = c.execute(
+        "SELECT * FROM execution_publications WHERE publication_id=?",
+        (publication_id,),
+    ).fetchone()
+    if not row:
+        raise ExecutionPublicationError(
+            "execution_publication_not_found",
+            "Execution publication disappeared before provider provenance repair.",
+            publication_id=publication_id,
+        )
+    return dict(row)
+
+
 def validate_event(binding: Mapping[str, Any], *, project: str, repository: str,
                    pr_number: int, branch: str = "", head_sha: str = "",
                    base_branch: str = "",
@@ -189,12 +220,16 @@ def validate_event(binding: Mapping[str, Any], *, project: str, repository: str,
                   for field, values in checks.items() if values[0] != values[1]}
     if (
         allow_head_advance
-        and set(mismatches) == {"head_sha"}
-        and str(head_sha or "").strip()
+        and mismatches
+        and set(mismatches).issubset({"branch", "head_sha"})
+        and (str(branch or "").strip() or str(head_sha or "").strip())
     ):
         return {
             "valid": True,
-            "head_advanced": True,
+            "branch_advanced": "branch" in mismatches,
+            "head_advanced": "head_sha" in mismatches,
+            "bound_branch": str(binding.get("branch") or ""),
+            "event_branch": str(branch or ""),
             "bound_head_sha": str(binding.get("head_sha") or "").lower(),
             "event_head_sha": str(head_sha).lower(),
         }
@@ -203,4 +238,4 @@ def validate_event(binding: Mapping[str, Any], *, project: str, repository: str,
             "execution_publication_event_mismatch",
             "GitHub event disagrees with the persisted Execution Context binding.",
             mismatches=mismatches)
-    return {"valid": True, "head_advanced": False}
+    return {"valid": True, "branch_advanced": False, "head_advanced": False}

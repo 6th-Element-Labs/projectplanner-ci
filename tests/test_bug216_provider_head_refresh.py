@@ -197,11 +197,19 @@ assert event_count_after_delayed == event_count_after_replay, (
     event_count_after_replay,
 )
 
-wrong_branch = store.mark_task_pr_opened(
+next_generation = store.mark_task_pr_opened(
     TASK, PR_NUMBER, PR_URL, "codex/OTHER-1", "d" * 40,
     actor="github-webhook", project=P, base_branch="master",
 )
-assert wrong_branch["error"] == "execution_publication_event_mismatch", wrong_branch
-assert store.get_task(TASK, project=P)["git_state"]["head_sha"] == HEAD_B
+assert not next_generation.get("error"), next_generation
+assert next_generation["git_state"]["branch"] == "codex/OTHER-1", next_generation
+assert next_generation["git_state"]["head_sha"] == "d" * 40, next_generation
+with store._conn(P) as c:
+    repaired_publication = c.execute(
+        "SELECT branch, head_sha FROM execution_publications "
+        "WHERE publication_id='execpub-bug216-a'"
+    ).fetchone()
+assert repaired_publication["branch"] == "codex/OTHER-1", dict(repaired_publication)
+assert repaired_publication["head_sha"] == "d" * 40, dict(repaired_publication)
 
 print("BUG-216 provider head refresh tests passed")

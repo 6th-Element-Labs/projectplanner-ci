@@ -375,10 +375,14 @@ def _mark_task_pr_opened_impl(task_id: str, pr_number: int, pr_url: str = "",
         from switchboard.storage.repositories.execution_publications import (
             ExecutionPublicationError,
             get_for_task_in,
+            repair_event_binding_in,
             validate_event,
         )
         publication = get_for_task_in(c, project, task_id)
-        publication_event = {"valid": True, "head_advanced": False}
+        publication_history = dict(publication) if publication else None
+        publication_event = {
+            "valid": True, "branch_advanced": False, "head_advanced": False,
+        }
         if publication:
             repo = _github_repo_from_pr_url(pr_url)
             try:
@@ -387,7 +391,24 @@ def _mark_task_pr_opened_impl(task_id: str, pr_number: int, pr_url: str = "",
                     pr_number=pr_number, branch=branch, head_sha=head_sha,
                     base_branch=base_branch, allow_head_advance=True)
             except ExecutionPublicationError as exc:
-                return exc.as_dict() | {"task_id": task_id}
+                rejection = exc.as_dict() | {
+                    "task_id": task_id,
+                    "accepted": False,
+                    "provenance_written": False,
+                    "retry_required": True,
+                }
+                c.execute(
+                    "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                    "VALUES (?,?,?,?,?)",
+                    (task_id, actor, "git.pr_opened_rejected",
+                     json.dumps(rejection, sort_keys=True), now),
+                )
+                return rejection
+            if (publication_event.get("branch_advanced")
+                    or publication_event.get("head_advanced")):
+                publication = repair_event_binding_in(
+                    c, publication, branch=branch, head_sha=head_sha,
+                )
         current = _load_git_state(c, task_id)
         current_evidence = dict(current.get("evidence") or {})
         current_observation = dict(
@@ -452,7 +473,8 @@ def _mark_task_pr_opened_impl(task_id: str, pr_number: int, pr_url: str = "",
                       (now, task_id))
         evidence = {"pr_number": pr_number, "pr_url": pr_url,
                     "branch": branch, "head_sha": head_sha}
-        if publication_event.get("head_advanced"):
+        if (publication_event.get("branch_advanced")
+                or publication_event.get("head_advanced")):
             prior_superseded = list(
                 current_observation.get("superseded_head_shas") or [])
             previous_head = str(current.get("head_sha") or
@@ -468,6 +490,8 @@ def _mark_task_pr_opened_impl(task_id: str, pr_number: int, pr_url: str = "",
             }
             evidence["provider_head_advance"] = {
                 "source": "github_pr_observation",
+                "previous_branch": publication_event.get("bound_branch"),
+                "current_branch": publication_event.get("event_branch"),
                 "previous_head_sha": previous_head,
                 "current_head_sha": publication_event.get("event_head_sha"),
                 "execution_publication_id": publication.get("publication_id"),
@@ -475,7 +499,7 @@ def _mark_task_pr_opened_impl(task_id: str, pr_number: int, pr_url: str = "",
                 "execution_generation": publication.get(
                     "execution_generation"),
             }
-            evidence["execution_publication_history"] = [dict(publication)]
+            evidence["execution_publication_history"] = [publication_history]
         git_state = _upsert_git_state(c, task_id, {
             "branch": branch or None,
             "head_sha": head_sha or None,
@@ -495,6 +519,10 @@ def _mark_task_pr_opened_impl(task_id: str, pr_number: int, pr_url: str = "",
                                    active_claim["agent_id"] if active_claim else None),
                                "provider_head_advanced": bool(
                                    publication_event.get("head_advanced")),
+                               "provider_branch_advanced": bool(
+                                   publication_event.get("branch_advanced")),
+                               "previous_branch": publication_event.get(
+                                   "bound_branch"),
                                "previous_head_sha": publication_event.get(
                                    "bound_head_sha")},
                               sort_keys=True), now))
@@ -571,27 +599,37 @@ def _mark_task_merged_impl(task_id: str, merged_sha: str, pr_number: Optional[in
         from switchboard.storage.repositories.execution_publications import (
             ExecutionPublicationError,
             get_for_task_in,
+            repair_event_binding_in,
             validate_event,
         )
         publication = get_for_task_in(c, project, task_id)
         if publication:
-            task_scoped_reconcile = (
-                provenance_source == "github_pr_merged_task_reconcile"
-            )
             try:
-                validate_event(
+                publication_event = validate_event(
                     publication, project=project,
                     repository=_github_repo_from_pr_url(pr_url),
                     pr_number=int(pr_number or 0),
-                    # A fresh exact-PR merge read may repair stale stored
-                    # publication branch/head. All immutable authority fields
-                    # still validate; the fresh provider head is then persisted
-                    # below as the repaired provenance.
-                    branch="" if task_scoped_reconcile else branch,
-                    head_sha="" if task_scoped_reconcile else head_sha,
-                    base_branch=base_branch)
+                    branch=branch, head_sha=head_sha,
+                    base_branch=base_branch, allow_head_advance=True)
             except ExecutionPublicationError as exc:
-                return exc.as_dict() | {"task_id": task_id}
+                rejection = exc.as_dict() | {
+                    "task_id": task_id,
+                    "accepted": False,
+                    "provenance_written": False,
+                    "retry_required": True,
+                }
+                c.execute(
+                    "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                    "VALUES (?,?,?,?,?)",
+                    (task_id, actor, "git.pr_merged_rejected",
+                     json.dumps(rejection, sort_keys=True), now),
+                )
+                return rejection
+            if (publication_event.get("branch_advanced")
+                    or publication_event.get("head_advanced")):
+                publication = repair_event_binding_in(
+                    c, publication, branch=branch, head_sha=head_sha,
+                )
         current = _load_git_state(c, task_id)
         task = _task_row(row)
         from switchboard.storage.repositories.attention import (
@@ -1587,6 +1625,19 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
                     git_states[task["task_id"]] = stamped.get("git_state") or state
                     task["status"] = "Done"
                     state = git_states[task["task_id"]]
+                else:
+                    findings.append({
+                        "severity": "high",
+                        "task_id": task["task_id"],
+                        "code": stamped.get("error")
+                                or "merge_provenance_write_rejected",
+                        "detail": stamped.get("message")
+                                  or "Canonical merge provenance write was rejected.",
+                        "failure_class": stamped.get(
+                            "failure_class", "failed_gate"),
+                        "retry_required": bool(
+                            stamped.get("retry_required", True)),
+                    })
             if merged and state.get("merged_sha") and merge_sha and state["merged_sha"] != merge_sha:
                 findings.append({"severity": "medium", "task_id": task["task_id"],
                                  "code": "merged_sha_mismatch",
