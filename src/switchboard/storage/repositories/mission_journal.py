@@ -79,6 +79,183 @@ class MissionJournalRepository:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_events(
+        self, task_id: str, *, project: str, after_sequence: int = 0,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Return one bounded, forward-only page of mission history."""
+        cursor = max(0, int(after_sequence))
+        page_size = max(1, min(int(limit), 200))
+        with self._connection(project) as c:
+            rows = c.execute(
+                "SELECT * FROM mission_events WHERE project_id=? AND task_id=? "
+                "AND sequence>? ORDER BY sequence ASC LIMIT ?",
+                (project, task_id, cursor, page_size),
+            ).fetchall()
+        events: list[dict[str, Any]] = []
+        for row in rows:
+            event = dict(row)
+            event["payload"] = json.loads(event.pop("payload_json") or "{}")
+            events.append(event)
+        return events
+
+    def yield_execution(
+        self, task_id: str, *, project: str, execution_id: str,
+        generation: int, observed_through: int, outcome: str,
+        requested_role: str, actor: str, head_sha: str = "",
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Record an authenticated exact-execution yield atomically.
+
+        Capacity terminalization performs the eventual WAITING transition.  A
+        stale cursor remains ACTIVE so a newly-arrived event cannot be hidden.
+        """
+        self._validate(state="ACTIVE", requested_role=requested_role)
+        normalized_outcome = str(outcome or "").strip().lower()
+        if normalized_outcome not in {"continue", "waiting"}:
+            raise MissionJournalError("invalid_outcome", "outcome must be continue or waiting")
+        timestamp = time.time() if now is None else now
+        with self._connection(project) as c:
+            c.execute("BEGIN IMMEDIATE")
+            item = c.execute(
+                "SELECT * FROM mission_items WHERE project_id=? AND task_id=?",
+                (project, task_id),
+            ).fetchone()
+            if item is None:
+                raise MissionJournalError("mission_not_found", "mission item does not exist")
+            runner = c.execute(
+                "SELECT * FROM runner_sessions WHERE task_id=? "
+                "AND status IN ('running','stopping') ORDER BY started_at DESC LIMIT 1",
+                (task_id,),
+            ).fetchone()
+            if runner is None:
+                raise MissionJournalError(
+                    "current_execution_required", "no current execution is authenticated"
+                )
+            metadata = json.loads(runner["metadata_json"] or "{}")
+            live_execution_id = str(
+                metadata.get("execution_id")
+                or (metadata.get("execution") or {}).get("execution_id")
+                or ""
+            )
+            live_generation = int(
+                metadata.get("execution_generation")
+                or (metadata.get("execution") or {}).get("generation")
+                or 0
+            )
+            live_head = str(
+                metadata.get("execution_head_sha")
+                or (metadata.get("execution") or {}).get("head_sha")
+                or ""
+            )
+            execution_role = str(
+                metadata.get("execution_role") or metadata.get("role") or ""
+            ).strip().lower()
+            if (execution_id != live_execution_id or int(generation) != live_generation
+                    or str(actor or "") != str(runner["agent_id"] or "")):
+                raise MissionJournalError(
+                    "stale_execution", "yield does not match the authenticated current execution"
+                )
+            if live_head and str(head_sha or "") != live_head:
+                raise MissionJournalError("stale_head", "yield head does not match assignment head")
+            lease = c.execute(
+                "SELECT fence_epoch FROM resource_leases "
+                "WHERE id=? AND resource_type='execution'",
+                (execution_id,),
+            ).fetchone()
+            if lease is None:
+                raise MissionJournalError(
+                    "execution_lease_required", "current execution lease is unavailable"
+                )
+            execution_identity = {
+                "runner_session_id": str(runner["runner_session_id"] or ""),
+                "execution_id": execution_id,
+                "execution_connection_id": str(
+                    metadata.get("execution_connection_id") or ""
+                ),
+                "generation": live_generation,
+                "fence_epoch": int(lease["fence_epoch"] or 0),
+                "role": execution_role,
+                "head_sha": live_head,
+            }
+            latest = int(c.execute(
+                "SELECT COALESCE(MAX(sequence),0) FROM mission_events "
+                "WHERE project_id=? AND task_id=?",
+                (project, task_id),
+            ).fetchone()[0])
+            current_cursor = int(observed_through)
+            idem_key = (
+                f"yield:{execution_id}:{generation}:{current_cursor}:{normalized_outcome}"
+            )
+            duplicate = c.execute(
+                "SELECT * FROM mission_events WHERE project_id=? AND idempotency_key=?",
+                (project, idem_key),
+            ).fetchone()
+            if duplicate is not None:
+                payload = json.loads(duplicate["payload_json"] or "{}")
+                return {
+                    "schema": "switchboard.mission_yield.v4",
+                    "task_id": task_id,
+                    "execution_id": execution_id,
+                    "generation": generation,
+                    "outcome": normalized_outcome,
+                    "observed_through": current_cursor,
+                    "latest_sequence": int(payload.get("latest_sequence_at_yield") or 0),
+                    "cursor_current": bool(payload.get("cursor_current")),
+                    "state": "ACTIVE",
+                    "pending_state": (
+                        "WAITING"
+                        if normalized_outcome == "waiting"
+                        and payload.get("cursor_current") else None
+                    ),
+                    "surrender_requested": True,
+                    "event_id": duplicate["event_id"],
+                    "created": False,
+                    "execution_identity": execution_identity,
+                }
+            sequence = latest + 1
+            event_id = f"missionevent-{uuid.uuid4().hex}"
+            current = current_cursor == latest
+            payload = {
+                "outcome": normalized_outcome,
+                "requested_role": requested_role,
+                "observed_through": current_cursor,
+                "latest_sequence_at_yield": latest,
+                "cursor_current": current,
+            }
+            c.execute(
+                "INSERT INTO mission_events(event_id,project_id,task_id,sequence,event_type,"
+                "source_plane,occurred_at,head_sha,generation,execution_id,payload_json,"
+                "idempotency_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (event_id, project, task_id, sequence, "agent_yielded", "coordination",
+                 timestamp, head_sha or None, generation, execution_id,
+                 json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                 idem_key),
+            )
+            # The yield event itself is an audit of the already-observed
+            # decision, not a new wake edge.
+            handled = sequence if current else int(item["handled_through"] or 0)
+            c.execute(
+                "UPDATE mission_items SET state='ACTIVE',requested_role=?,handled_through=?,"
+                "version=version+1,updated_at=? WHERE project_id=? AND task_id=?",
+                (requested_role, handled, timestamp, project, task_id),
+            )
+        return {
+            "schema": "switchboard.mission_yield.v4",
+            "task_id": task_id,
+            "execution_id": execution_id,
+            "generation": generation,
+            "outcome": normalized_outcome,
+            "observed_through": current_cursor,
+            "latest_sequence": latest,
+            "cursor_current": current,
+            "state": "ACTIVE",
+            "pending_state": "WAITING" if normalized_outcome == "waiting" and current else None,
+            "surrender_requested": True,
+            "event_id": event_id,
+            "created": True,
+            "execution_identity": execution_identity,
+        }
     def ensure_item(
         self, task_id: str, *, project: str, requested_role: str = "implementation",
         state: str = "ACTIVE", now: float | None = None,

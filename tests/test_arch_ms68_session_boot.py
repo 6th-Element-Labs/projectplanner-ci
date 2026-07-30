@@ -134,9 +134,10 @@ try:
         agreement,
     )
     tools = [c["tool"] for c in calls]
-    ok(tools[:4] == [
+    ok(tools[:5] == [
         "get_working_agreement",
         "register_agent",
+        "get_mission_context",
         "list_unacked_messages",
         "list_unblock_requests",
     ], "first_calls open with handshake sequence")

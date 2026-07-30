@@ -75,6 +75,19 @@ class MissionJournalTest(unittest.TestCase):
         ]
         self.assertEqual([1, 2, 3], values)
 
+    def test_history_is_cursor_paginated_and_bounded(self):
+        for index in range(4):
+            self.repository.append_event(
+                "T-1", project="alpha", event_type="task_changed",
+                source_plane="coordination", idempotency_key=f"page-{index}",
+                payload={"index": index},
+            )
+        page = self.repository.list_events(
+            "T-1", project="alpha", after_sequence=1, limit=2,
+        )
+        self.assertEqual([2, 3], [event["sequence"] for event in page])
+        self.assertEqual([1, 2], [event["payload"]["index"] for event in page])
+
     def test_project_isolation(self):
         for project in ("alpha", "beta"):
             mission_journal.create_mission("T-1", project=project, repository=self.repository)
