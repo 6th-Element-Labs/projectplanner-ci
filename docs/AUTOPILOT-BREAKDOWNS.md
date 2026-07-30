@@ -2101,6 +2101,214 @@ holder's execution generation is terminal — a dead generation's claim is not o
 
 ---
 
+## Validation run — thin Autopilot on UI-71 (2026-07-28)
+
+**Operator:** `codex/root` (observer mode after arming)
+**Host:** `host/steve-mbp-co16`
+**Deliverable:** `deliverable-autopilot-dock-honest-runner-liveness`
+**Task under observation:** UI-71
+**Autopilot scope:** `autopilot-7a735967f2ca4d6e`, generation 1
+
+> Standing instruction for this run: observe the slimmed Autopilot end to end. Do not
+> manually start, retry, remediate, dequeue, or merge UI-71. Record material failures
+> and successful hands-off transitions.
+
+### Precondition repair — UI-68 reconciled from canonical merge provenance
+
+UI-68 had remained red after PR #1007 merged because its recorded board head
+`da4cd565f1c321ac5ae3f4828e167139ad204f76` disagreed with the current tested PR head
+`e04265521b691ec97e09080b3762e30594df7e70`. The coordinator emitted:
+
+```
+action=BLOCK
+reason_code=board_pr_head_mismatch
+route=coordination_retry
+```
+
+This was a correct exact-head freshness refusal, not a failing test. MCP
+`reconcile_task_merge(UI-68)` observed canonical PR #1007 merge provenance at
+`45d7f74bfb9dfb69b636fcba6810b7ac08c9187b`, corrected the recorded head, moved UI-68
+to Done, and cancelled 240 stale attention requests. No manual Done write was used.
+
+### Observation — dependency-to-runner transition worked hands-off
+
+After UI-68 became canonically Done, UI-71 reported:
+
+```
+dependency_state.ready=true
+dependency_state.satisfied=true
+status=Not Started
+active_claims=[]
+```
+
+The deliverable Autopilot was armed once. Within one polling interval it selected UI-71
+and launched exactly one runner without an operator `start_task` call:
+
+```
+scope_id=autopilot-7a735967f2ca4d6e
+scope_status=active
+execution_id=run_30aaca136c7e049d
+generation=1
+runner_status=running
+host_id=host/steve-mbp-co16
+agent_id=agent/codex/ui-71
+```
+
+At `2026-07-28T01:17:01Z`, `get_execution_transcript` reported the execution running,
+terminal=false, stale=false, and failure_reason=null. This is a successful hands-off
+`eligible task -> exact runner generation` transition. The remaining acceptance path is
+implementation completion, exact-head review, required CI, queue landing, and canonical
+Done reconciliation.
+
+### BREAKDOWN 59 — successful Playwright command is not accepted as Playwright evidence
+
+**Severity:** high — completion contract mismatch
+**Observed on:** UI-71, PR #1011, exact head
+`9eff0d2f1031dc3dae122f2bf361733c1938a80d`
+
+The implementation runner completed the requested work, opened a ready PR, recorded a
+passing exact-head test receipt, and recorded a passing review verdict with zero findings.
+Its typed `executed_test_run` contains:
+
+```
+commands=[
+  "python3 tests/test_autopilot_dock_runner_attention_join.py",
+  "node --check static/js/fleet-dock.js",
+  "node --check static/app.js",
+  "git diff --check HEAD^ HEAD",
+  "python3 scripts/run_ui_playwright.py --task-id UI-71
+    --work-session-id worksession-b5a2d2aa3ca44c8c
+    --branch agent/switchboard/UI-71/execlease-efd3180e13244a9caca5-g1
+    --head-sha 9eff0d2f1031dc3dae122f2bf361733c1938a80d"
+]
+exit_code=0
+passed=true
+```
+
+`complete_claim` nevertheless refused the same Work Session:
+
+```
+kind=task.complete_blocked_work_session
+reason=missing_ui_playwright_evidence
+failure_class=missing_data
+severity=high
+```
+
+The task instructions explicitly told the runner to execute
+`scripts/run_ui_playwright.py` and record the result via `record_executed_test_run`.
+It did both. The completion gate does not recognize that receipt as the specialized
+Playwright evidence it requires, and the refusal provides no tool/field that would let the
+runner translate a successful run into the expected evidence shape.
+
+**Why it matters:** this is exactly the kind of well-tested work that Autopilot should
+advance mechanically. Instead, the implementation runner remains live with an active
+claim after opening the PR, while the required GitHub check runs independently. A green
+CI result cannot repair the missing Work Session evidence.
+
+**Suggested fix direction:** make `run_ui_playwright.py` emit and
+`record_executed_test_run` atomically persist the canonical UI evidence shape, or make the
+completion gate recognize the exact-head typed receipt produced by the documented
+command. There must be one documented producer and one accepted representation.
+
+**Not repaired.** Observation continues; no retry or manual completion was performed.
+
+**STATUS: SELF-RECOVERED in the same runner generation.**
+
+Before the runner exited, it attached a second exact-head
+`switchboard.executed_test_run.v1` artifact with:
+
+```
+test_kind=ui_playwright
+browser=chromium
+chromium_version=149.0.7827.55
+executed_count=1
+skipped_count=0
+console_error_count=0
+failed_request_count=0
+success=true
+```
+
+It then completed the Work Session, released the claim, and left UI-71 In Review without
+operator intervention. The classifier's live route became:
+
+```
+reason_code=required_exact_head_ci_pending
+route=wait
+effect=none
+```
+
+Reclassification: the initial refusal exposed an evidence-ordering retry, but it did not
+wedge the task. Keep this entry to measure retry churn; do not treat it as an open blocker
+unless a later runner fails to perform the same self-recovery.
+
+### BREAKDOWN 60 — merge gate discards the stored Playwright receipt and falsely blocks green work
+
+**Severity:** high — deterministic hands-off merge wedge
+**Observed on:** UI-71, PR #1011, exact head
+`9eff0d2f1031dc3dae122f2bf361733c1938a80d`
+
+The required exact-head GitHub context completed successfully. The live decision features
+show:
+
+```
+required_contexts_count=1
+any_required_context_pending=false
+any_required_context_failed=false
+pr_mergeable_state=clean
+review_verdict_status=pass
+```
+
+The successful Chromium receipt also remains stored at:
+
+```
+task.git_state.evidence.executed_test_runs[]
+  test_kind=ui_playwright
+  head_sha=9eff0d2f1031dc3dae122f2bf361733c1938a80d
+  work_session_id=worksession-b5a2d2aa3ca44c8c
+  success=true
+  executed_count=1
+  skipped_count=0
+  console_error_count=0
+  failed_request_count=0
+```
+
+Despite those facts, the classifier moved:
+
+```
+required_exact_head_ci_pending / wait
+  -> missing_ui_playwright_evidence / coordination_retry
+board status: In Review -> Blocked
+```
+
+The code path explains the contradiction. `merge_gate.py` constructs
+`semantic_evidence` by merging `task.git_state.evidence` with the request payload, but
+then calls:
+
+```
+ui_playwright_evidence_gate(task, merged_payload, session, ...)
+```
+
+instead of passing the already assembled `semantic_evidence`. The UI evidence reader
+therefore sees only the request payload and Work Session hygiene. The typed
+`record_executed_test_run` command cannot carry the specialized Playwright fields because
+its Pydantic contract forbids extras, so the valid specialized receipt exists only on the
+task evidence surface that this merge-gate call omits.
+
+**Why it matters:** CI, implementation, exact-head review, and Playwright all passed, but
+the one remaining classifier reads the wrong evidence surface and deterministically
+blocks the PR. Retrying tests or dispatching remediation cannot change the result.
+
+**Suggested fix direction:** pass `semantic_evidence` to
+`ui_playwright_evidence_gate`, and add a regression test in which the only valid
+specialized UI receipt is in `task.git_state.evidence.executed_test_runs`. Keep the typed
+generic executed-test record in Work Session hygiene; do not create another evidence
+authority.
+
+**Not repaired.** UI-71 remains Blocked with no active runner. No remediation, rerun, or
+merge was triggered during observation.
+
+---
+
 ## BREAKDOWN 58 — the dependency healer overwrites `Blocked(route=remediation)` ⚠️
 
 **Severity:** critical (the janitor mutates work state; ADR-0008 W3)
