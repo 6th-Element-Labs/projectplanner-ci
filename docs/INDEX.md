@@ -76,6 +76,10 @@ Legacy documents are retained with a visible banner or moved out of the active r
   event-persisted scoped LLM pager, including the exhaustive GitHub/CI-to-agent mapping,
   no-stuck merge invariant, and legacy-free cutover. It is explicitly not the deployed
   control path yet.
+- [`MISSION-BOT-EVIDENCE-AUDIT-2026-07-30.md`](MISSION-BOT-EVIDENCE-AUDIT-2026-07-30.md):
+  the evidence base for that design — the confirmed evidence-blindness findings and their
+  fixes, what adversarial verification disproved, the one gate relaxation policy rejected,
+  and the prerequisites carried into the v4 cutover.
 - [`decisions/0007-application-shell-cleanup.md`](decisions/0007-application-shell-cleanup.md):
   Caddy, growth redirection, and application-shell constraints. Its Decision 2 size counter
   is explicitly retired.
