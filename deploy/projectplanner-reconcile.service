@@ -11,6 +11,13 @@ Type=oneshot
 Nice=10
 IOSchedulingClass=idle
 MemoryMax=512M
+# BUG-245: an over-budget run must die fast, not wedge. Unlimited swap let a
+# ~1 GB parse sit in the kernel's memory.high throttle (mem_cgroup_handle_over_high)
+# for 11 hours holding the flock — never OOM-killed, 90%+ memory PSI box-wide.
+# Bounded swap restores the OOM kill at MemoryMax; the runtime ceiling reaps
+# anything else (a normal all-project cycle completes in ~1 minute, timer is 15).
+MemorySwapMax=64M
+RuntimeMaxSec=600
 # HARDEN-55: dedicated non-login service account (not the general `ubuntu` login).
 User=projectplanner
 Group=projectplanner

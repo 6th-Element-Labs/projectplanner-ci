@@ -11,3 +11,9 @@ CPUWeight=50
 CPUQuota=80%
 IOWeight=10
 MemoryHigh=512M
+# BUG-245: MemoryHigh throttling plus unlimited swap let one over-budget batch
+# job (reconcile parsing 229 MB of pre-BUG-243 snapshot bodies) wedge in the
+# kernel reclaim loop for 11 hours instead of OOM-killing at its MemoryMax —
+# and monopolize the box's entire 512M zram device. Bounding swap for the tier
+# restores fail-fast for every batch unit at once.
+MemorySwapMax=64M

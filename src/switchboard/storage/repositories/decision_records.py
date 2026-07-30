@@ -100,6 +100,15 @@ PRIVATE_COLUMNS = (
 )
 
 
+# BUG-245: hard ceiling on one persisted snapshot body. The compact TTL
+# (spec §5) budgets bodies at 5–50 KB; one pre-BUG-243 recursive Autopilot
+# payload wrote 47 MB bodies that every 24h window reader then had to carry.
+# The projected half is the corpus and always persists; an oversized body is
+# replaced at write time by the marker below (the autopilot_scopes
+# oversized-result pattern) with snapshot_retained=0.
+DECISION_SNAPSHOT_MAX_BYTES = 1024 * 1024
+
+
 class DecisionRecordError(ValueError):
     pass
 
@@ -116,6 +125,26 @@ def _map(value: Any) -> dict[str, Any]:
 
 def _canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _bounded_snapshot_json(snap: Mapping[str, Any]) -> tuple[str, int]:
+    """Serialize one snapshot body, refusing to persist it over the cap.
+
+    Returns ``(snapshot_json, snapshot_retained)``. The episode's identity and
+    projected half are untouched either way — only the private replay body is
+    replaced by the marker when a producer misbehaves (BUG-245).
+    """
+    body = _canonical_json(snap)
+    size = len(body.encode("utf-8"))
+    if size <= DECISION_SNAPSHOT_MAX_BYTES:
+        return body, 1
+    return _canonical_json({
+        "schema": "switchboard.decision_snapshot_summary.v1",
+        "snapshot_compacted": True,
+        "compaction_reason": (
+            f"snapshot exceeded {DECISION_SNAPSHOT_MAX_BYTES} bytes at write"),
+        "snapshot_bytes": size,
+    }), 0
 
 
 def _int(value: Any) -> int:
@@ -350,18 +379,19 @@ def record_decision_episode_in(
         )
 
     record_id = "decision-" + uuid.uuid4().hex[:20]
+    snapshot_json, snapshot_retained = _bounded_snapshot_json(snap)
     c.execute(
         "INSERT INTO decision_records("
         "record_id, project, task_id, pr_number, head_sha, generation, fence_epoch, "
         "deliverable_id, host_id, execution_id, snapshot_hash, snapshot_json, "
-        "decision_json, classifier_version, reason_code, route, desired_role, "
-        "features_json, features_version, advice_version, tick_count, "
+        "snapshot_retained, decision_json, classifier_version, reason_code, route, "
+        "desired_role, features_json, features_version, advice_version, tick_count, "
         "first_seen_at, last_seen_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
         (
             record_id, project, task_id, pr_number, head_sha, generation,
             fence_epoch, _deliverable_for(c, task_id, project), host_id,
-            execution_id, snapshot_hash, _canonical_json(snap),
+            execution_id, snapshot_hash, snapshot_json, snapshot_retained,
             _canonical_json(verdict), str(classifier_version), reason_code, route,
             desired_role, _canonical_json(stored_features), FEATURES_VERSION,
             advice_version or None, stamp, stamp,
@@ -790,6 +820,15 @@ def replay_decision_corpus(
     }
 
 
+# The window query reads exactly this projection. Detection uses the two
+# feature flags; everything else labels the finding. ``snapshot_json`` is
+# deliberately absent — see find_stale_runner_signals.
+_STALE_SIGNAL_COLUMNS = (
+    "record_id", "task_id", "head_sha", "features_json",
+    "first_seen_at", "last_seen_at", "tick_count",
+)
+
+
 def find_stale_runner_signals(
     *,
     project: str = DEFAULT_PROJECT,
@@ -797,15 +836,48 @@ def find_stale_runner_signals(
     until: Optional[float] = None,
     limit: int = 2000,
 ) -> list[dict[str, Any]]:
-    """Read stale-runner signals from recorded decision episodes only."""
+    """Read stale-runner signals from recorded decision episodes only.
+
+    BUG-245: projection-first. Detection reads only the projected feature
+    flags, so the window query never selects ``snapshot_json``; a body loads
+    afterwards, per record, only for episodes that already matched (to name
+    the pinned runner head). Memory here is bounded by the number of matches,
+    never by the size of the rows in the window — 229 MB of pre-BUG-243
+    snapshot bodies in one 24h window is what wedged the reconcile unit
+    against its cgroup limit for 11 hours.
+    """
     where, params = _window_clause(project, since, until, "", "", "")
+    columns = ", ".join(_STALE_SIGNAL_COLUMNS)
+    episodes: list[dict[str, Any]] = []
     with _conn(project) as c:
         rows = c.execute(
-            f"SELECT * FROM decision_records WHERE {where} "
+            f"SELECT {columns} FROM decision_records WHERE {where} "
             "ORDER BY first_seen_at ASC, record_id ASC LIMIT ?",
             (*params, max(int(limit or 0), 1)),
         ).fetchall()
-    episodes = [record for record in (_row(row) for row in rows) if record]
+        for row in rows:
+            features = _map(row["features_json"])
+            if features.get("runner_live") is not True:
+                continue
+            if features.get("runner_head_matches_exact_head") is not False:
+                continue
+            episodes.append({
+                "record_id": row["record_id"],
+                "task_id": row["task_id"],
+                "head_sha": row["head_sha"] or "",
+                "features": features,
+                "first_seen_at": row["first_seen_at"],
+                "last_seen_at": row["last_seen_at"],
+                "tick_count": _int(row["tick_count"]),
+                "snapshot": {},
+            })
+        for episode in episodes:
+            body = c.execute(
+                "SELECT snapshot_json FROM decision_records WHERE record_id=?",
+                (episode["record_id"],),
+            ).fetchone()
+            if body:
+                episode["snapshot"] = _map(body["snapshot_json"])
     return stale_runner_findings_from_episodes(episodes)
 
 
