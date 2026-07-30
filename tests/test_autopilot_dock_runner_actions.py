@@ -1,4 +1,4 @@
-"""UI-68: condition-led actions keep destructive Kill in overflow."""
+"""UI-68: condition-led actions; destructive Kill is a labelled red button."""
 
 from path_setup import ROOT
 
@@ -23,12 +23,15 @@ def main() -> None:
     assert "condition.key === 'exited'" not in actions
     assert "'finished'" not in actions, "a finished runner has nothing to restart"
     assert "actions.includes('kill')" in actions
-    assert 'class="dropdown-item text-danger"' in actions
+    # Kill was an overflow dropdown-item until the icon-only trigger rendered
+    # blank in the operator's browser; it is now a labelled destructive button.
+    assert 'btn-danger' in actions and '>Kill</button>' in actions
+    assert 'dropdown-item' not in actions
     assert "btn-outline-danger" not in actions
     assert "expected_version: attention.version" in actions
     assert "/decide?${p}" in actions
     assert "querySelectorAll('[data-runner-answer]')" in source
-    print("PASS: runner actions follow condition and hide Kill in overflow")
+    print("PASS: runner actions follow condition; Kill is a labelled red button")
 
 
 if __name__ == "__main__":

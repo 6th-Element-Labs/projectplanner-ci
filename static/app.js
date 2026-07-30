@@ -1117,28 +1117,29 @@ const TeepPlan = {
         const actions = s.available_actions || [];
         let primary = '';
         if (condition.key === 'waiting_on_you' && attention) {
-            primary = `<button class="btn btn-sm btn-orange" data-runner-answer="${this.esc(s.runner_session_id || '')}"><i class="ti ti-message-question me-1"></i>Answer</button>`;
+            primary = `<button class="btn btn-sm btn-orange dock-runner-action" data-runner-answer="${this.esc(s.runner_session_id || '')}">Answer</button>`;
         } else if (condition.key === 'silent' && s.task_id && actions.includes('inject')) {
-            primary = `<button class="btn btn-sm btn-azure" data-runner-task="${this.esc(s.task_id)}" data-runner-action="inject"><i class="ti ti-wand me-1"></i>Nudge</button>`;
+            primary = `<button class="btn btn-sm btn-azure dock-runner-action" data-runner-task="${this.esc(s.task_id)}" data-runner-action="inject">Nudge</button>`;
         } else if (['failed', 'lost_host', 'ended_unknown'].includes(condition.key)
                 && s.task_id && actions.includes('restart')) {
             // Restart is for a runner that broke. A clean finish has nothing to redo.
-            primary = `<button class="btn btn-sm btn-azure" data-runner-task="${this.esc(s.task_id)}" data-runner-action="restart"><i class="ti ti-refresh me-1"></i>Restart</button>`;
+            primary = `<button class="btn btn-sm btn-azure dock-runner-action" data-runner-task="${this.esc(s.task_id)}" data-runner-action="restart">Restart</button>`;
         }
         // Watch is the operator's window into any bound runner — always offered,
         // not condition-gated (UI-72 dropped it; restored by operator order).
         const watch = s.task_id
-            ? `<button class="btn btn-sm ${primary ? 'btn-outline-secondary' : 'btn-azure'}" data-runner-watch-task="${this.esc(s.task_id)}"><i class="ti ti-terminal-2 me-1"></i>Watch</button>`
+            ? `<button class="btn btn-sm ${primary ? 'btn-outline-secondary' : 'btn-azure'} dock-runner-action" data-runner-watch-task="${this.esc(s.task_id)}">Watch</button>`
             : '';
+        // Kill is a labelled red button beside Watch, not an icon-only overflow.
+        // The dropdown trigger was a 19x22 ghost pinned to the card edge by
+        // ms-auto, and rendered as a BLANK SQUARE when the ti glyph did not paint
+        // in the operator's browser — the same defect that hid Close on PR cards.
+        // Stopping a runner already demands typing the task id to confirm
+        // (_fleetRunnerAction), so the guard is the prompt, not obscurity.
         const kill = s.task_id && actions.includes('kill')
-            ? `<button class="dropdown-item text-danger" data-runner-task="${this.esc(s.task_id)}" data-runner-action="kill"><i class="ti ti-square me-2"></i>Kill</button>`
+            ? `<button class="btn btn-sm btn-danger dock-runner-action" data-runner-task="${this.esc(s.task_id)}" data-runner-action="kill">Kill</button>`
             : '';
-        const overflow = kill
-            ? `<div class="dropdown ms-auto">
-                <button class="btn btn-sm btn-ghost-secondary p-1" data-bs-toggle="dropdown" aria-label="Runner actions"><i class="ti ti-dots-vertical"></i></button>
-                <div class="dropdown-menu dropdown-menu-end">${kill}</div>
-            </div>` : '<span class="ms-auto"></span>';
-        return `<div class="mt-2 d-flex gap-2 align-items-center">${primary}${watch}${overflow}</div>`;
+        return `<div class="mt-2 d-flex gap-2 align-items-center">${primary}${watch}${kill}</div>`;
     },
     async _dockAnswer(attention) {
         if (!attention || !attention.request_id) return;

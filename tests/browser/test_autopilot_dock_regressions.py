@@ -78,8 +78,13 @@ with sync_playwright() as runtime:
     page.locator("#mount").evaluate("(node, html) => node.innerHTML = html", healthy_html)
     assert page.locator('[data-runner-watch-task="COORD-1"]').count() == 1, healthy_html
     assert "Watch" in page.locator('[data-runner-watch-task="COORD-1"]').inner_text()
-    assert page.locator(".dropdown-item.text-danger").count() == 1, "Kill missing from overflow"
-    assert "Kill" in page.locator(".dropdown-item.text-danger").inner_text()
+    # Kill is a labelled red button beside Watch (it was an icon-only overflow
+    # until that rendered as a blank square); geometry is pinned by
+    # tests/browser/test_dock_runner_actions.py.
+    kill = page.locator('[data-runner-action="kill"]')
+    assert kill.count() == 1, "Kill missing from the runner card"
+    assert "Kill" in kill.inner_text()
+    assert "btn-danger" in (kill.get_attribute("class") or "")
 
     silent_html = render_runner_actions(RUNNER_SILENT)
     page.locator("#mount").evaluate("(node, html) => node.innerHTML = html", silent_html)

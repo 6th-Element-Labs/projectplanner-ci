@@ -30,8 +30,10 @@ assert "condition.key" not in watch_line, "Watch must not be condition-gated"
 assert '"inject"' in actions or "data-runner-action=\"inject\"" in actions, \
     "Nudge must map to the inject action"
 
-# Kill lives in the overflow dropdown.
-assert 'data-runner-action="kill"' in actions and "dropdown-menu" in actions
+# Kill is a labelled destructive button, not hidden in an overflow: the icon-only
+# dropdown trigger rendered as a blank square and the operator lost the control.
+assert 'data-runner-action="kill"' in actions and ">Kill</button>" in actions
+assert "dropdown-menu" not in actions
 
 # Deploy tab renders shipped history as an always-visible bucket, and both
 # buckets reuse the full card so PR number / merge SHA / age are in every row.
