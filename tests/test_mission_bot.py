@@ -119,6 +119,40 @@ def test_expired_scope_fences_closed_pr_as_abandoned():
     assert cmd["terminal_outcome"] == "abandoned"
 
 
+def test_hyphenated_inactive_scope_always_waits_without_starting():
+    """ADR-0008 W2: an inactive lease fences every work-driving effect."""
+    from switchboard.domain.mission_bot import MissionPorts, execute_mission_command
+
+    starts = []
+    ports = MissionPorts(
+        start_task=lambda plan: starts.append(dict(plan)),
+        mark_ready=lambda _plan: (_ for _ in ()).throw(
+            AssertionError("inactive scope marked a PR ready")),
+        arm_merge=lambda _plan: (_ for _ in ()).throw(
+            AssertionError("inactive scope armed merge")),
+        observe_merged=lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("inactive scope reconciled provenance")),
+    )
+    for status in ("stopped", "closed", "expired", "superseded"):
+        snap = snapshot(pr_state="CLOSED")
+        snap["task_id"] = "QA-24"
+        snap["task"]["task_id"] = "QA-24"
+        snap["autopilot_scope"] = {
+            "status": status,
+            "scope_id": "scope-qa-24",
+            "task_id": "QA-24",
+        }
+        command = reduce_mission(snap)
+        result = execute_mission_command(
+            command, ports=ports, project="switchboard", actor="test",
+        )
+        assert command["task_id"] == "QA-24"
+        assert command["output"] == MissionOutput.WAIT.value
+        assert result["result"]["action"] == "wait"
+
+    assert starts == []
+
+
 def test_cancelled_task_fences_before_live_runner_or_closed_pr():
     snap = snapshot(
         board_status="Cancelled",

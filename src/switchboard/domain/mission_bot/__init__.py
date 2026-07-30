@@ -14,7 +14,7 @@ from switchboard.domain.mission_bot.outputs import (
     MISSION_DOSSIER_SCHEMA,
     MissionOutput,
 )
-from switchboard.domain.mission_bot.reducer import reduce_mission
+from switchboard.domain.mission_bot.reducer import canonical_task_id, reduce_mission
 
 __all__ = [
     "MISSION_BOT_VERSION",
@@ -23,6 +23,7 @@ __all__ = [
     "MissionOutput",
     "MissionPorts",
     "build_dossier",
+    "canonical_task_id",
     "execute_mission_command",
     "reduce_mission",
 ]

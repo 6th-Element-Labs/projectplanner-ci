@@ -12,6 +12,7 @@ from typing import Any, Callable, Mapping, Optional
 
 from switchboard.domain.mission_bot import (
     MissionPorts,
+    canonical_task_id,
     execute_mission_command,
     reduce_mission,
 )
@@ -146,7 +147,7 @@ def production_mission_ports(
         from switchboard.domain.mission_bot.dossier import prompt_safe_dossier
 
         dossier = prompt_safe_dossier(_map(plan.get("dossier")))
-        task_id = str(plan.get("task_id") or "")
+        task_id = canonical_task_id(plan.get("task_id"))
         require_scope(task_id)
         return task_execution.start_task(
             task_id,
@@ -372,7 +373,7 @@ def run_mission_tick(
         dossier["evidence_ref"] = {
             "schema": "switchboard.mission_evidence_ref.v1",
             "project": project,
-            "task_id": str(task_id or "").strip().upper(),
+            "task_id": canonical_task_id(task_id),
             "head_sha": str(command.get("head_sha") or ""),
             "decision_id": str(
                 decision_record.get("decision_id")
