@@ -1223,9 +1223,14 @@ const TeepPlan = {
                 : `<button class="btn btn-sm btn-outline-secondary dock-primary-action" data-pr-regate="${this.esc(String(x.number))}" data-pr-sha="${this.esc(x.head_sha || '')}" title="Request a fresh CI verification for this exact commit">Re-run CI</button>`);
         // Close sits in the overflow, never as a primary button: it is the one
         // action here that throws work away. Hidden while queued — closing a PR
-        // the queue is merging would race it. Same shape as Kill on runner cards.
-        const overflow = x.queue_position ? '' : `<div class="dropdown ms-auto">
-                <button class="btn btn-sm btn-ghost-secondary p-1" data-bs-toggle="dropdown" aria-label="Pull request actions"><i class="ti ti-dots-vertical"></i></button>
+        // the queue is merging would race it.
+        //
+        // It sits BESIDE the primary action, not shoved to the far edge by
+        // ms-auto: at 19x22 against the right border it was invisible in a 380px
+        // dock and the operator reported the feature as missing. A bordered
+        // 32x32 button next to the thing it belongs to is findable.
+        const overflow = x.queue_position ? '' : `<div class="dropdown dock-pr-overflow">
+                <button class="btn btn-sm btn-outline-secondary dock-overflow-btn" data-bs-toggle="dropdown" aria-label="Pull request actions"><i class="ti ti-dots-vertical"></i></button>
                 <div class="dropdown-menu dropdown-menu-end">
                     <a href="${this.esc(x.url)}" target="_blank" rel="noopener" class="dropdown-item"><i class="ti ti-external-link me-2"></i>Open on GitHub</a>
                     <button class="dropdown-item text-danger" data-pr-close="${this.esc(String(x.number))}" data-pr-label="${this.esc(x.title || '')}"><i class="ti ti-circle-x me-2"></i>Close PR</button>
