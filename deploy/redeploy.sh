@@ -306,7 +306,10 @@ for unit in "${RETIRED_LIFECYCLE_UNITS[@]}"; do
     sudo systemctl disable --now "$unit" >/dev/null 2>&1 || true
     sudo rm -f "/etc/systemd/system/$unit"
 done
-sudo cp deploy/*.service deploy/*.timer /etc/systemd/system/
+# BUG-247: sync every unit kind the repo carries. Omitting *.slice here meant
+# the PERF-4 batch-tier caps (CPUQuota/MemoryHigh, later MemorySwapMax) were
+# never installed on prod — discovered during the BUG-245 memory wedge.
+sudo cp deploy/*.service deploy/*.timer deploy/*.slice /etc/systemd/system/
 # Journald retention cap (2026-07-30 incident). The live drop-in must track
 # deploy/ like every other /etc file this script owns; restart journald only
 # when the file actually changes so routine deploys never blip logging.
