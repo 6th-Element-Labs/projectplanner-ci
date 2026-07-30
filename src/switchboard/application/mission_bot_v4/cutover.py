@@ -8,6 +8,7 @@ from typing import Any
 from switchboard.application.commands import (
     capacity_mission_events,
     github_mission_events,
+    human_mission_events,
     mission_journal,
     task_execution,
 )
@@ -145,6 +146,15 @@ def run_v4_tick(
             task_id=task_id,
             repository=ports.journal,
             list_wakes=getattr(store_mod, "list_wake_intents", None),
+        )
+        # Human edge: a HUMAN mission resumes only from the durable attention
+        # request; pulling it here means a dropped delivery cannot strand the
+        # mission (BUG-250).
+        human_mission_events.reconcile_human_answer(
+            project=project,
+            task_id=task_id,
+            repository=ports.journal,
+            get_request=getattr(store_mod, "get_attention_request", None),
         )
     result = tick_scoped_mission(
         task_id,

@@ -352,6 +352,18 @@ def promote_human_blocker(
 
     attention = attention_repo._write_through(project, write)
     request = _map(attention.get("request"))
+    # BUG-250: the v4 pager reads only the mission journal. Without a HUMAN
+    # transition the fenced runner's terminal receipt looks like runner loss
+    # and the pager relaunches over this open Human request. Missions the v4
+    # journal does not manage return mission_not_found and are unaffected.
+    from switchboard.application.commands import human_mission_events
+
+    mission = human_mission_events.record_human_requested(
+        project=project,
+        task_id=task_id,
+        request_id=_text(request.get("request_id")),
+        reason=reason,
+    )
     return {
         "schema": RESULT_SCHEMA,
         "recorded": True,
@@ -360,6 +372,7 @@ def promote_human_blocker(
         "work_session_id": work_session_id,
         "board_status": "Blocked",
         "reason": reason,
+        "mission": mission,
         "attention_request_id": request.get("request_id"),
         "attention": attention,
         "idempotent_replay": bool(attention.get("idempotent_replay")),
