@@ -1,0 +1,47 @@
+{
+  "schema": "switchboard.mission_bot_v4.incident_replay.v1",
+  "task_id": "COORD-98",
+  "captured_at": "2026-07-30",
+  "finding": "A newer active Work Session hid older authenticated human receipts.",
+  "receipts": [
+    {
+      "work_session_id": "worksession-coord98-g49",
+      "status": "blocked",
+      "agent_id": "agent/codex/coord-98",
+      "execution_generation": 49,
+      "blocker": {
+        "schema": "switchboard.work_session_human_blocker.v1",
+        "source_tool": "agent_requires_human",
+        "binding": "direct_session",
+        "agent_id": "agent/codex/coord-98",
+        "provenance_stamp": "switchboard.resolve_write_actor.v1"
+      }
+    },
+    {
+      "work_session_id": "worksession-c2a354f9ca6b4d15",
+      "status": "blocked",
+      "agent_id": "agent/codex/coord-98",
+      "execution_generation": null,
+      "blocker": {
+        "schema": "switchboard.work_session_human_blocker.v1",
+        "source_tool": "agent_requires_human",
+        "binding": "direct_session",
+        "agent_id": "agent/codex/coord-98",
+        "provenance_stamp": "switchboard.resolve_write_actor.v1"
+      }
+    },
+    {
+      "work_session_id": "worksession-2bc630e66301437a",
+      "status": "blocked",
+      "agent_id": "agent/codex/coord-98",
+      "execution_generation": 35,
+      "blocker": {
+        "schema": "switchboard.work_session_human_blocker.v1",
+        "source_tool": "agent_requires_human",
+        "binding": "direct_session",
+        "agent_id": "agent/codex/coord-98",
+        "provenance_stamp": "switchboard.resolve_write_actor.v1"
+      }
+    }
+  ]
+}
