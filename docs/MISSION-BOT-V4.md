@@ -624,11 +624,26 @@ auto-merge, or squash availability also append a material `github_changed` event
 missions. A five-minute live-policy refresh is the backstop when no repository-policy
 webhook is subscribed.
 
-Not every GraphQL aggregate transition has its own webhook action. A delivery is a wake edge,
-not the authoritative snapshot: after any material delivery, `get_mission_context` rereads
-the live PR, required context, reviews, auto-merge request, and queue entry. The trusted CI
-report callback may append the same exact-SHA/context event after verified readback; it and
-the GitHub `status` delivery deduplicate to one material fingerprint.
+Not every GraphQL aggregate transition has its own webhook action. The complete wake-edge
+inventory is:
+
+- a material GitHub/CI delivery, including the trusted CI report callback after verified
+  readback;
+- an exact terminal-runner receipt from Capacity; and
+- a wake that terminally fails before Capacity creates a runner.
+
+A GitHub/CI delivery is a wake edge, not the authoritative snapshot: after any material
+delivery, `get_mission_context` rereads the live PR, required context, reviews, auto-merge
+request, and queue entry. The trusted CI report callback may append the same exact-SHA/context
+event as the GitHub `status` delivery; they deduplicate to one material fingerprint.
+
+The terminal-runner edge appends `runner_ended` for the exact execution as described in
+[Terminal-runner precedence](#terminal-runner-precedence). The pre-runner failure edge
+appends `execution_ended` exactly once with
+`idempotency_key=execution_ended:<wake_id>` and `source_plane=capacity`. It deliberately
+omits `head_sha`: no runner was admitted for an exact code head, so pinning the failed
+attempt's head would be invented authority and could make the replacement generation stale.
+Without a head, the replacement resolves the current canonical default branch when it starts.
 
 ## Persistent mission context
 
