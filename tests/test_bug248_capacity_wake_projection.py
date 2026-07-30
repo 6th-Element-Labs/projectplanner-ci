@@ -24,6 +24,10 @@ from switchboard.application.mission_bot_v4.worker import (
     ScopedMissionWorkerPorts,
     tick_scoped_mission,
 )
+from switchboard.domain.coordination.wake_intents import (
+    genuine_wake_intents,
+    is_control_plane_unavailable,
+)
 from switchboard.storage.migrations.runner import DDL_MIGRATIONS
 from switchboard.storage.repositories.mission_journal import MissionJournalRepository
 
@@ -187,6 +191,36 @@ class CapacityWakeProjectionTest(unittest.TestCase):
         )
         self.assertEqual("ignored", missing["action"])
         self.assertEqual("mission_not_found", missing["reason"])
+
+    def test_shared_guard_excludes_sentinel_and_preserves_real_wake(self):
+        wake = _failed_wake()
+        sentinel = {
+            "error": "control_plane_unavailable",
+            "reason": "sqlite_busy",
+            "operation": "list_wake_intents",
+            "elapsed_ms": 12.5,
+        }
+        self.assertTrue(is_control_plane_unavailable(sentinel))
+        self.assertFalse(is_control_plane_unavailable(wake))
+        filtered = genuine_wake_intents([sentinel, wake])
+        self.assertEqual([wake], filtered)
+        self.assertIs(wake, filtered[0])
+
+    def test_sentinel_and_real_failed_wake_project_exactly_one_event(self):
+        wake = _failed_wake()
+        sentinel = {
+            "error": "control_plane_unavailable",
+            "reason": "sqlite_busy",
+            "operation": "list_wake_intents",
+            "elapsed_ms": 12.5,
+        }
+        first = self._project([sentinel, wake])
+        replay = self._project([sentinel, wake])
+        self.assertEqual(1, len(first["events"]))
+        self.assertEqual("wake-1", first["events"][0]["wake_id"])
+        self.assertTrue(first["events"][0]["created"])
+        self.assertEqual(1, len(replay["events"]))
+        self.assertFalse(replay["events"][0]["created"])
 
     def test_run_v4_tick_invokes_capacity_projector(self):
         class _Store:

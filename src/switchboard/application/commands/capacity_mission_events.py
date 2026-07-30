@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from switchboard.domain.coordination.wake_intents import genuine_wake_intents
 from switchboard.storage.repositories.mission_journal import (
     MissionJournalRepository,
     default_mission_journal_repository,
@@ -58,16 +59,12 @@ def append_failed_wake_events(
     mission_created_at = float(item.get("created_at") or 0.0)
 
     lister = list_wakes or _default_wake_lister
-    wakes = lister(
+    wakes = genuine_wake_intents(lister(
         status="failed", task_id=task_id, project=project, include_archived=True,
-    )
+    ))
 
     events: list[dict[str, Any]] = []
     for wake in wakes:
-        if not isinstance(wake, Mapping) or not wake.get("wake_id"):
-            # list_wake_intents surfaces sqlite_busy as a sentinel row; skipping
-            # it here is safe because the next tick re-reads the durable table.
-            continue
         if wake.get("runner_session_id"):
             continue  # a runner existed; the runner_ended projection owns it
         if float(wake.get("requested_at") or 0.0) < mission_created_at:

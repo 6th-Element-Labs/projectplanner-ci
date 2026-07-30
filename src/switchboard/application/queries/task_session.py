@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from switchboard.domain.coordination.wake_intents import genuine_wake_intents
 from switchboard.storage.repositories import coordination as coordination_repo
 from switchboard.storage.repositories import deliverables as deliverables_repo
 from switchboard.storage.repositories import runner as runner_repo
@@ -225,7 +226,11 @@ def execute_for(task_id: str, *, project: str,
         task_id, agent_state=task.get("agent_state") or {}, sessions=sessions,
         project=project)
     active_runner = resolution.get("session") if resolution.get("active") else None
-    wakes = coordination_repo.list_wake_intents(task_id=task_id, project=project, limit=100)
+    wakes = genuine_wake_intents(
+        coordination_repo.list_wake_intents(
+            task_id=task_id, project=project, limit=100,
+        )
+    )
     wakes = sorted(wakes, key=lambda row: float(row.get("requested_at") or 0), reverse=True)
     latest_wake = wakes[0] if wakes else None
     attempt = _attempt(latest_wake, sessions)

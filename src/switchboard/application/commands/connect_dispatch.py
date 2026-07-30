@@ -16,6 +16,7 @@ from typing import Any
 
 from switchboard.application.session_boot import ADVERTISED_LAUNCH_RUNTIMES
 from switchboard.connect import Assignment, ResourceLimits
+from switchboard.domain.coordination.wake_intents import genuine_wake_intents
 from switchboard.storage.repositories import coordination as coordination_repo
 from switchboard.application.commands import execution_context
 
@@ -147,8 +148,10 @@ def capacity_readback(
     try:
         hosts = coordination_repo.list_agent_hosts(
             runtime=runtime, lane=lane, project=project) or []
-        pending = coordination_repo.list_wake_intents(
-            status="pending", runtime=runtime, project=project) or []
+        pending = genuine_wake_intents(
+            coordination_repo.list_wake_intents(
+                status="pending", runtime=runtime, project=project) or []
+        )
     except Exception as exc:
         return {
             "schema": "switchboard.connect.capacity_readback.v1",
