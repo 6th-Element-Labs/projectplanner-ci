@@ -14,7 +14,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from path_setup import ROOT  # noqa: E402
-from playwright.sync_api import sync_playwright  # noqa: E402
+
+try:
+    from playwright.sync_api import sync_playwright  # noqa: E402
+except ImportError:
+    print("SKIP  playwright not installed")
+    sys.exit(0)
 
 tmp = Path(tempfile.mkdtemp(prefix="arch-ms111-browser-cut-"))
 project = "ms111-browser"
