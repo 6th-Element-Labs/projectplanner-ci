@@ -487,6 +487,56 @@ def _executed_test_gate_from_external_ci(external_ci: Dict[str, Any],
     }
 
 
+def _exact_head_preflight_for_task(task_id: str, project: str, head_sha: str,
+                                   exclude_session_id: str = "",
+                                   ) -> Optional[Dict[str, Any]]:
+    """Adopt a clean preflight recorded at the exact gated head by this task.
+
+    BUG-240, the sibling of BUG-234 clause 2: a fresh review or remediation
+    generation opens a NEW Work Session, and that session has no preflight of
+    its own. Reading only the caller-supplied session made merge_gate demand
+    evidence the review generation is not the actor that produces, so a task
+    whose implementation generation had already recorded a clean preflight on
+    this very commit looped START_REMEDIATION forever (prod QA-25 / PR #1100).
+
+    Evidence is validated on its own merits, never by which session is newest.
+    The fences: the run must be pinned to the exact gated head, and its Work
+    Session must belong to this task and be canonical — so neither a stale head
+    nor another task's proof can authorize this merge. ``preflight_runs.task_id``
+    is frequently NULL, so ownership is resolved through the Work Session rather
+    than trusted from the run row.
+    """
+    head = str(head_sha or "").strip()
+    task = str(task_id or "").strip()
+    if not head or not task:
+        return None
+    try:
+        from switchboard.storage.repositories.preflight_runs import list_preflight_runs
+        runs = list_preflight_runs(head_sha=head, project=project, limit=50)
+    except Exception:  # noqa: BLE001
+        return None
+    skip = str(exclude_session_id or "").strip()
+    for run in runs or []:
+        session_id = str(run.get("work_session_id") or "").strip()
+        if not session_id or session_id == skip:
+            continue
+        if str(run.get("repo_role") or "canonical") != "canonical":
+            continue
+        try:
+            owner = get_work_session(session_id, project=project) or {}
+        except Exception:  # noqa: BLE001
+            continue
+        if str(owner.get("task_id") or "").strip().upper() != task.upper():
+            continue
+        if str(owner.get("repo_role") or "") != "canonical":
+            continue
+        adopted = dict(run)
+        adopted["adopted_from_work_session_id"] = session_id
+        adopted["adopted_for_head_sha"] = head
+        return adopted
+    return None
+
+
 def _task_scoped_work_session(task_id: str, project: str,
                               head_sha: str = "") -> Optional[Dict[str, Any]]:
     """Resolve the canonical Work Session bound to a task.
@@ -1042,6 +1092,17 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
                 "failed_gate",
                 details={"work_session_id": session.get("work_session_id")}))
         preflight = ((session.get("hygiene") or {}).get("repo_preflight") or {})
+        adopted_preflight = None
+        if not preflight:
+            # BUG-240: a fresh review/remediation generation owns a new Work
+            # Session with no preflight of its own. Accept the task's own
+            # exact-head preflight rather than demanding the newest session
+            # re-run one it was never dispatched to run.
+            adopted_preflight = _exact_head_preflight_for_task(
+                task_id, project=project, head_sha=review_head_sha,
+                exclude_session_id=str(session.get("work_session_id") or ""))
+            if adopted_preflight:
+                preflight = adopted_preflight
         if not preflight:
             findings.append(_merge_gate_finding(
                 "missing_work_session_preflight",
@@ -1071,12 +1132,19 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
             if (
                     preflight_verdict == "deny"
                     or bool(blocking_preflight_findings)
-                    or (not preflight_verdict and preflight.get("ok") is False)):
+                    or (not preflight_verdict and preflight.get("ok") is False)
+                    # An adopted run (BUG-240) carries counts rather than an
+                    # inline findings list, so read its blocking tally directly.
+                    or (adopted_preflight is not None
+                        and int(preflight.get("blocking_count") or 0) > 0)):
                 findings.append(_merge_gate_finding(
                     "work_session_preflight_failed",
                     "Work Session preflight is not clean.",
                     "failed_gate",
                     details={"work_session_id": session.get("work_session_id"),
+                             "adopted_from_work_session_id": (
+                                 (adopted_preflight or {}).get(
+                                     "adopted_from_work_session_id") or None),
                              "preflight": preflight}))
     elif require_session:
         findings.append(_merge_gate_finding(
