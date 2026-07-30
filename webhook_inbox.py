@@ -35,6 +35,7 @@ from typing import Any, Dict, Mapping, Optional, Set, Union
 import github_sync
 import organic_github_ci
 import store
+from switchboard.application.commands import github_mission_events
 
 SCHEMA = "switchboard.webhook_inbox_depth.v1"
 
@@ -173,17 +174,23 @@ def _apply_row(row: Mapping[str, Any], project: str) -> Dict[str, Any]:
     """Apply one inbox row's provenance via the existing idempotent sync handlers."""
     event = row["event"]
     payload = json.loads(row["payload"])
+    result: Dict[str, Any]
     if event == "push":
-        return github_sync.handle_push(payload, project)
-    if event == "pull_request":
-        return github_sync.handle_pr(payload, project)
-    if event == "merge_group":
+        result = github_sync.handle_push(payload, project)
+    elif event == "pull_request":
+        result = github_sync.handle_pr(payload, project)
+    elif event == "merge_group":
         result = github_sync.handle_merge_group(payload, project)
         _require_merge_group_side_effects(result)
-        return result
-    if event in {"check_run", "check_suite", "status"}:
-        return organic_github_ci.handle_webhook(event, payload, project)
-    return {"action": "ignored", "event": event}
+    elif event in {"check_run", "check_suite", "status"}:
+        result = organic_github_ci.handle_webhook(event, payload, project)
+    else:
+        result = {"action": "ignored", "event": event}
+
+    projection = github_mission_events.project_delivery(event, payload, project=project)
+    if projection.get("events"):
+        return {**result, "mission_events": projection}
+    return result
 
 
 def drain(project: str, *, limit: int = 200,

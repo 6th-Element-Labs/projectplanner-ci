@@ -52,6 +52,33 @@ class MissionJournalRepository:
                 ).fetchone()[0])
             return item
 
+    def task_ids_for_head(self, head_sha: str, *, project: str) -> list[str]:
+        if not head_sha:
+            return []
+        with self._connection(project) as c:
+            rows = c.execute(
+                "SELECT task_id FROM task_git_state WHERE lower(head_sha)=lower(?)",
+                (head_sha,),
+            ).fetchall()
+        return [str(row["task_id"]) for row in rows]
+
+    def active_task_ids(self, *, project: str) -> list[str]:
+        with self._connection(project) as c:
+            rows = c.execute(
+                "SELECT task_id FROM mission_items WHERE project_id=? AND state<>'DONE'",
+                (project,),
+            ).fetchall()
+        return [str(row["task_id"]) for row in rows]
+
+    def waiting_items_due(self, *, project: str, due_before: float) -> list[dict[str, Any]]:
+        with self._connection(project) as c:
+            rows = c.execute(
+                "SELECT task_id,updated_at FROM mission_items "
+                "WHERE project_id=? AND state='WAITING' AND updated_at<=?",
+                (project, due_before),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def ensure_item(
         self, task_id: str, *, project: str, requested_role: str = "implementation",
         state: str = "ACTIVE", now: float | None = None,
