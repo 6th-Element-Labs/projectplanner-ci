@@ -251,6 +251,18 @@ def reduce_mission(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             dossier=dossier,
         )
 
+    # 7a. Blind snapshot — the PR fetch failed (rate limit/timeout/auth), so
+    #     PR-derived facts are absent, not false. Dispatching anything on a
+    #     blind read misfires (a review would examine a PR we cannot see; a
+    #     remediation would repair nothing). Wait for the next tick's fetch.
+    if not facts.has_pr(snap) and _map(snap.get("github_pr_fetch_error")).get("transient"):
+        return _command(
+            MissionOutput.WAIT,
+            snapshot=snap,
+            reason_code="github_pr_fetch_unavailable",
+            wait_reason="transient_fetch_failure",
+        )
+
     # 8. Factory failure — boot remediation with the full unchanged dossier.
     #    GitHub/Switchboard red never becomes human. Pending CI is not a failure.
     if facts.factory_failure(snap):
@@ -264,6 +276,20 @@ def reduce_mission(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             reason_code=reason,
             role="remediation",
             dossier=dossier,
+        )
+
+    # 8b. Review escalation — a COORD-6 stop signal (round limit reached, or
+    #     reviews keep dying without a verdict). No dispatched role can clear
+    #     it: with no factory red left to repair (step 8 already ran), and another review
+    #     generation is exactly what the limit exists to stop. Park it as an
+    #     explicit operator decision instead of looping dispatches.
+    escalation = facts.review_escalation_code(snap)
+    if escalation:
+        return _command(
+            MissionOutput.WAIT,
+            snapshot=snap,
+            reason_code=escalation,
+            wait_reason="operator_decision",
         )
 
     # 9. Draft PR — mark ready (free mechanical step; outranks pending CI).

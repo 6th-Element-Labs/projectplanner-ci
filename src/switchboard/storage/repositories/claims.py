@@ -2572,11 +2572,24 @@ def _executed_test_run_gate(evidence: Dict[str, Any],
             run_problems.append({"reason": "missing_test_completion_time",
                                  "message": "Executed test run must include completed_at/executed_at/finished_at."})
         run_session_id = str(run.get("work_session_id") or "").strip()
+        run_branch_probe = str(run.get("branch") or "").strip()
+        run_head_probe = str(run.get("head_sha") or "").strip()
         if session_id and run_session_id and run_session_id != session_id:
-            run_problems.append({"reason": "wrong_test_work_session",
-                                 "message": "Executed test run belongs to a different Work Session.",
-                                 "test_work_session_id": run_session_id,
-                                 "work_session_id": session_id})
+            # BUG-234 clause 2 merit rule (BUG-241): a run recorded by a sibling
+            # generation's Work Session still proves THIS commit when its own
+            # branch and head match the gated session's exactly — evidence is
+            # judged by what it proves, never by which session is newest. A run
+            # that cannot prove its branch+head keeps the hard fence.
+            same_identity = bool(
+                run_branch_probe and session_branch
+                and run_branch_probe == session_branch
+                and run_head_probe and session_head
+                and run_head_probe == session_head)
+            if not same_identity:
+                run_problems.append({"reason": "wrong_test_work_session",
+                                     "message": "Executed test run belongs to a different Work Session.",
+                                     "test_work_session_id": run_session_id,
+                                     "work_session_id": session_id})
         run_branch = str(run.get("branch") or "").strip()
         if session_branch and run_branch and run_branch != session_branch:
             run_problems.append({"reason": "stale_test_branch",

@@ -366,9 +366,37 @@ try:
        any(f["code"] == "missing_required_status_contexts" for f in missing_ci["findings"]),
        "merge_gate blocks missing required CI/status context")
 
+    # BUG-241 reframes this case. Two doctrines now supply executed-test proof
+    # that the old fixture accidentally suppressed: complete_claim's durable
+    # git_state mirror is finally readable by the gate, and a green required
+    # context on the exact head derives ENFORCE-16 proof. So "missing" now means
+    # what it says — no run recorded anywhere, and CI not yet green.
     tests_task, tests_claim, tests_branch, tests_sha = ready_task("missing executed tests blocks")
-    missing_tests_payload = gate_payload(tests_task, tests_claim, tests_branch, tests_sha)
+    proven_payload = gate_payload(tests_task, tests_claim, tests_branch, tests_sha)
+    proven_payload.pop("executed_test_run", None)
+    proven = store.merge_gate(proven_payload, actor="test", project=P)
+    ok(not any(f["code"] in ("missing_executed_test_run", "invalid_executed_test_run")
+               and f.get("blocking") is not False for f in proven["findings"]),
+       "durably recorded run + green exact-head context satisfy the gate (BUG-241)")
+
+    unproven_task = task("no executed test run recorded")
+    unproven_branch = f"codex/{unproven_task['task_id']}-safe-merge"
+    unproven_sha = "beefbeef" + "0" * 32
+    unproven_claim = store.claim_task(
+        unproven_task["task_id"], AGENT,
+        work_session=session_payload(
+            unproven_task["task_id"], unproven_branch, unproven_sha),
+        require_work_session=True, session_policy_profile="code_strict",
+        actor="test", project=P)
+    ok(unproven_claim.get("claimed") is True,
+       "no executed test run recorded: strict Work Session claim starts")
+    missing_tests_payload = gate_payload(
+        unproven_task, unproven_claim, unproven_branch, unproven_sha)
     missing_tests_payload.pop("executed_test_run", None)
+    missing_tests_payload["status_contexts"] = {CI_CONTEXT: "pending"}
+    missing_tests_payload["github_pr"] = github_pr(
+        unproven_task["task_id"], unproven_branch, unproven_sha,
+        status_contexts={CI_CONTEXT: "pending"})
     missing_tests = store.merge_gate(missing_tests_payload, actor="test", project=P)
     ok(missing_tests["ok"] is False and
        any(f["code"] == "missing_executed_test_run" for f in missing_tests["findings"]),

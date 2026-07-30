@@ -14,7 +14,7 @@ import copy
 import json
 import time
 import urllib.request
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from constants import DEFAULT_PROJECT, GITHUB_PR_URL_RE, MERGE_GATE_SCHEMA
 from switchboard.domain.provenance.semantic import semantic_completion_gate
@@ -485,6 +485,59 @@ def _executed_test_gate_from_external_ci(external_ci: Dict[str, Any],
             "status": "success",
         },
     }
+
+
+def _union_exact_head_session_hygiene(
+        session: Optional[Dict[str, Any]], task_id: str, *, project: str,
+        head_sha: str) -> Optional[Dict[str, Any]]:
+    """Fill hygiene keys the bound session lacks from exact-head siblings.
+
+    BUG-241, the resolver-layer form of BUG-234 clause 2: the execlease
+    generation pattern leaves several canonical Work Sessions pinned to ONE
+    commit (implementation, then review/remediation generations), and the
+    session-keyed gates read exactly one of them. Whichever session the gate
+    binds, evidence recorded by a sibling AT THE SAME EXACT HEAD still proves
+    this commit — workspace hygiene at a head is a property of the commit, the
+    same argument _branch_scoped_work_session already makes across tasks.
+
+    Fail-closed rules: only canonical siblings of THIS task in a usable status
+    and pinned to the exact gated head contribute; a key the bound session
+    already carries with content is never overwritten; contributions are
+    recorded under ``hygiene_contributed_by`` for provenance.
+    """
+    if not session or not task_id:
+        return session
+    head = str(head_sha or "").strip().lower()
+    if not head:
+        return session
+    try:
+        siblings = list_work_sessions(project, task_id=task_id, repo_role="canonical")
+    except Exception:  # noqa: BLE001
+        return session
+    self_id = str(session.get("work_session_id") or "")
+    hygiene = dict(session.get("hygiene") or {})
+    contributed: Dict[str, str] = {}
+    for sibling in siblings or []:
+        sibling_id = str(sibling.get("work_session_id") or "")
+        if not sibling_id or sibling_id == self_id:
+            continue
+        if str(sibling.get("status") or "").strip().lower() not in _MERGE_GATE_SESSION_STATUSES:
+            continue
+        if str(sibling.get("head_sha") or "").strip().lower() != head:
+            continue
+        for key, value in (sibling.get("hygiene") or {}).items():
+            if value in (None, "", {}, []):
+                continue
+            if hygiene.get(key) not in (None, "", {}, []):
+                continue
+            hygiene[key] = value
+            contributed[key] = sibling_id
+    if not contributed:
+        return session
+    merged = dict(session)
+    merged["hygiene"] = hygiene
+    merged["hygiene_contributed_by"] = contributed
+    return merged
 
 
 def _exact_head_preflight_for_task(task_id: str, project: str, head_sha: str,
@@ -982,7 +1035,18 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
         merged_payload.get("check_runs"),
         merged_payload.get("checks"),
     )
-    external_ci = _external_ci_review_gate(task, evidence=merged_payload, project=project)
+    # Fence the mirror summary on the LIVE gated head. Without an explicit
+    # head the gate falls back to task.git_state.head_sha — a board projection
+    # that lags the PR during a remediation push — making a green run on the
+    # live head invisible (and a stale-head run creditable) until reconcile
+    # catches up. Every other head-fenced gate here uses resolved_head.
+    external_ci = _external_ci_review_gate(
+        task,
+        evidence=(
+            {**merged_payload, "head_sha": resolved_head}
+            if resolved_head else merged_payload
+        ),
+        project=project)
     terminal_ci_receipt = _apply_terminal_external_ci_receipt(
         pr_contexts,
         external_ci,
@@ -1066,6 +1130,8 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
         _merge_gate_bool(merged_payload.get("require_work_session"), default=False)
         or bool(profile_rules.get("merge_requires_work_session"))
     )
+    session = _union_exact_head_session_hygiene(
+        session, task_id, project=project, head_sha=review_head_sha)
     if session:
         session_profile = _normalize_session_policy_profile(
             session.get("policy_profile") or profile or "")
@@ -1153,7 +1219,12 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
             "missing_data",
             details={"policy_profile": profile}))
     if profile_rules.get("requires_executed_tests"):
-        executed_test_gate = _executed_test_run_gate(merged_payload, session)
+        # BUG-241: read the task_git_state.evidence mirror too. record_executed_
+        # test_run deliberately writes both surfaces in one transaction so merge
+        # authorization can see the run after a generation change; passing only
+        # the caller payload made that mirror dead code on this read side while
+        # the sibling UI gate five lines down already receives semantic_evidence.
+        executed_test_gate = _executed_test_run_gate(semantic_evidence, session)
         if not executed_test_gate.get("ok"):
             derived_gate = _executed_test_gate_from_external_ci(
                 external_ci, review_head_sha)

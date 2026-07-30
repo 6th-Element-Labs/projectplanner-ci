@@ -41,6 +41,27 @@ _PROCESS_FINDINGS_NOT_FACTORY = frozenset({
     "stale_review_verdict",
 })
 
+#: COORD-6 review escalations. These are deliberate stop signals — "too many
+#: review rounds" / "reviews keep dying without a verdict" — so neither a
+#: remediation runner (there is no factory red to repair) nor another review
+#: generation (the limit exists to stop exactly that) can clear them. They
+#: park as an explicit operator decision instead of dispatching forever.
+REVIEW_ESCALATION_FINDINGS = frozenset({
+    "review_round_limit_reached",
+    "review_stalled_no_verdict",
+})
+
+
+def review_escalation_code(snapshot: Mapping[str, Any]) -> str:
+    """Return the blocking review-escalation finding code, if any."""
+    for item in list(snapshot.get("findings") or []):
+        if not isinstance(item, Mapping) or item.get("blocking") is False:
+            continue
+        code = _text(item.get("code"))
+        if code in REVIEW_ESCALATION_FINDINGS:
+            return code
+    return ""
+
 
 def _map(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
@@ -339,14 +360,24 @@ def queue_failed(snapshot: Mapping[str, Any]) -> bool:
     if state == "unmergeable":
         return True
     removal = _text(queue.get("last_removal_reason") or queue.get("removal_reason"))
-    if (
-        not state
-        and (
+    # An empty queue state is UNKNOWN, not an ejection: production hydrates the
+    # PR via REST, which never carries mergeQueueEntry, so state is empty on
+    # every tick — including the tick right after a SUCCESSFUL arm, when
+    # prior_enqueue_verified is true at this exact head. Treating that pair
+    # alone as "the queue ejected us" turned every armed-but-not-yet-merged PR
+    # into a merge_queue_ejected_tip_green factory failure. An ejection needs a
+    # positive signal: a recorded removal reason, or GitHub having CLEARED the
+    # auto_merge we verifiably armed (it disarms on eject; REST always carries
+    # the field). The age floor rides out read-after-write lag on a fresh arm.
+    if not state:
+        if removal in {"failed_checks", "checks_timed_out"}:
+            return True
+        if (
             queue.get("prior_enqueue_verified") is True
-            or removal in {"failed_checks", "checks_timed_out"}
-        )
-    ):
-        return True
+            and queue.get("live_auto_merge_active") is False
+            and float(queue.get("prior_enqueue_age_s") or 0) > 120.0
+        ):
+            return True
     if state == "locked" and queue.get("retry_exhausted"):
         return True
     return False
@@ -358,6 +389,10 @@ def blocking_findings(snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
         if isinstance(item, Mapping) and item.get("blocking") is not False:
             code = _text(item.get("code"))
             if code in _PROCESS_FINDINGS_NOT_FACTORY:
+                continue
+            if code in REVIEW_ESCALATION_FINDINGS:
+                # Routed by the reducer's escalation step, never to a
+                # remediation runner (there is nothing for it to repair).
                 continue
             rows.append(dict(item))
     return rows
@@ -391,6 +426,13 @@ def factory_failure_reason(snapshot: Mapping[str, Any]) -> str:
             or snapshot.get("pr_identity")
             or snapshot.get("pr_number")
         ):
+            # A failed FETCH is unknown, not a missing PR: the typed
+            # GitHubPRFetchError contract means a true 404 arrives as an empty
+            # body with no error, while rate-limit/timeout/auth arrives with
+            # this marker. Dispatching remediation on a transient outage boots
+            # runners that have nothing to repair; wait for the next tick.
+            if _map(snapshot.get("github_pr_fetch_error")).get("transient"):
+                return ""
             return "github_pr_state_unavailable"
         if _text(snapshot.get("board_status")) in {"in_review", "blocked"}:
             return "exact_head_pr_missing"

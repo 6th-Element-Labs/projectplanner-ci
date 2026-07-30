@@ -342,7 +342,16 @@ def ui_playwright_evidence_gate(task: Mapping[str, Any], evidence: Mapping[str, 
             ):
                 run_problems.append("mismatched_work_session_id")
         elif expected_session and claimed_session_id != expected_session:
-            run_problems.append("mismatched_work_session_id")
+            # BUG-234 clause 2 merit rule for resolver-less callers: a receipt
+            # from a sibling generation's session still proves this commit when
+            # its own branch and head match the gated identity exactly. The raw
+            # newest-session equality stays only for receipts that cannot prove
+            # their identity.
+            run_matches_identity = bool(
+                expected_branch and str(run.get("branch") or "") == expected_branch
+                and expected_head and str(run.get("head_sha") or "") == expected_head)
+            if not run_matches_identity:
+                run_problems.append("mismatched_work_session_id")
         if not run_problems:
             clean = {key: value for key, value in run.items() if key != "_source"}
             return {"ok": True, "required": True, "waived": False,

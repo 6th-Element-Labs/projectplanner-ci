@@ -86,6 +86,7 @@ def _merge_queue_snapshot(
     task_id: str,
     head_sha: str,
     project: str,
+    live_auto_merge_active: bool | None = None,
 ) -> dict[str, Any]:
     """Project live GitHub queue state plus Autopilot enqueue provenance.
 
@@ -133,6 +134,13 @@ def _merge_queue_snapshot(
     enriched["prior_enqueue_verified"] = True
     enriched["prior_enqueue_effect_key"] = str(newest.get("effect_key") or "")
     enriched["verified_queue_effect_count"] = len(matched)
+    if live_auto_merge_active is not None:
+        enriched["live_auto_merge_active"] = bool(live_auto_merge_active)
+    try:
+        enriched["prior_enqueue_age_s"] = max(
+            0.0, time.time() - float(newest.get("updated_at") or 0))
+    except (TypeError, ValueError):
+        pass
     removal = (
         enriched.get("last_removal_reason")
         or enriched.get("removal_reason")
@@ -205,8 +213,12 @@ def hydrate_completion_snapshot(
     )
     matching_scopes = [
         _map(scope) for scope in scopes
+        # Board ids keep their hyphens: `_text` is an enum normalizer that maps
+        # "QA-24" -> "qa_24", so filtering task_id through it matched nothing
+        # and snapshot["autopilot_scope"] was permanently {} — the W2 stopped-
+        # scope fence (reducer step 2) could never fire for a real board id.
         if _text(_map(scope).get("scope_type")) == "task"
-        and _text(_map(scope).get("task_id")).upper() == task_id
+        and str(_map(scope).get("task_id") or "").strip().upper() == task_id
     ]
     task_scope = max(
         matching_scopes,
@@ -228,13 +240,22 @@ def hydrate_completion_snapshot(
     # (BUG-182).
     # Hydration must not crash on a GitHub outage: fall back to an empty PR and
     # let merge_gate's own fetch record the failure cause in its finding.
+    github_pr_fetch_error: dict[str, Any] = {}
     try:
         github_pr = (
             provenance._github_pr(repo, pr_number, token)
             if repo and pr_number else {}
         ) or {}
-    except Exception:
+    except provenance.GitHubPRFetchError as exc:
+        # BUG-235's typed error means "the fetch failed", never "the PR is
+        # gone" (a true 404 returns None without raising). Preserve that
+        # distinction so facts can WAIT out a rate-limit/timeout instead of
+        # reading it as the definite verdict github_pr_state_unavailable.
         github_pr = {}
+        github_pr_fetch_error = {"transient": True, "detail": str(exc)[:200]}
+    except Exception as exc:  # noqa: BLE001
+        github_pr = {}
+        github_pr_fetch_error = {"transient": True, "detail": str(exc)[:200]}
     github_pr_observed_at = time.time()
     source_observed_at["github_pr"] = github_pr_observed_at
     gate_payload: dict[str, Any] = {
@@ -265,6 +286,28 @@ def hydrate_completion_snapshot(
     session_health = _map(task.get("session_health"))
     sessions = list(session_health.get("latest_sessions") or [])
     work_session = _map(sessions[0]) if sessions else {}
+    # BUG-241: the health projection carries no hygiene, and the newest session
+    # is exactly the fresh non-blocked one when a task keeps being dispatched —
+    # so a server-stamped agent_requires_human receipt (which lives in the
+    # BLOCKED session's hygiene.blocker) never reached the snapshot and
+    # facts.agent_requires_human could not fire in production. Prefer a blocked
+    # session and hydrate its full row so hygiene travels with it.
+    blocked_session = next(
+        (row for row in (_map(item) for item in sessions)
+         if str(row.get("status") or "").strip().lower() == "blocked"),
+        None,
+    )
+    session_pick = blocked_session or work_session
+    session_pick_id = str(session_pick.get("work_session_id") or "").strip()
+    if session_pick_id and not session_pick.get("hygiene"):
+        try:
+            from switchboard.storage.repositories.work_sessions import get_work_session
+            full_session = get_work_session(session_pick_id, project=project)
+            work_session = _map(full_session) if full_session else session_pick
+        except Exception:  # noqa: BLE001
+            work_session = session_pick
+    else:
+        work_session = session_pick
     runner_view = task_session.execute_for(task_id, project=project, task=task) or {}
     runner_observed_at = time.time()
     source_observed_at["runner_sessions"] = runner_observed_at
@@ -295,6 +338,12 @@ def hydrate_completion_snapshot(
         task_id=task_id,
         head_sha=head_sha,
         project=project,
+        # REST always carries auto_merge; GitHub clears it when the queue
+        # ejects a PR, so this is the only live disarm signal production has
+        # (mergeQueueEntry is GraphQL-only and never hydrated here).
+        live_auto_merge_active=(
+            None if not resolved_pr else bool(resolved_pr.get("auto_merge"))
+        ),
     )
     external_effects_observed_at = time.time()
     source_observed_at.update({
@@ -319,6 +368,8 @@ def hydrate_completion_snapshot(
     normalized["observed_at"] = observed_at
     normalized["hydration_started_at"] = hydration_started_at
     normalized["autopilot_scope"] = task_scope
+    if github_pr_fetch_error:
+        normalized["github_pr_fetch_error"] = github_pr_fetch_error
     current_run = completion_runs.get_active_completion_run(
         task_id, project=project,
     ) or {}
