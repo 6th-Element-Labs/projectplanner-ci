@@ -675,14 +675,34 @@ def _external_ci_summary(rows: List[Dict[str, Any]], source_sha: str = "",
 def _task_external_ci_summary_in(c: sqlite3.Connection, task_id: str,
                                  source_sha: str = "",
                                  project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
-    rows = [
-        _external_ci_row(row)
-        for row in c.execute(
-            "SELECT * FROM external_ci_runs WHERE task_id=? "
-            "ORDER BY updated_at DESC, run_id",
-            (task_id,),
-        ).fetchall()
-    ]
+    # BUG-239: the mirror/organic CI path keys runs by source_sha and leaves
+    # task_id NULL (83% of prod rows), so a task_id-only lookup reported
+    # `missing` while a green run sat on the exact gated head. That defeated
+    # ENFORCE-16's executed-test derivation and wedged merge_gate in an
+    # unsatisfiable `missing_executed_test_run` remediation loop. When a head is
+    # supplied it is the stronger identity: a run pinned to that commit is by
+    # construction a run of exactly this code. Cross-project credit stays fenced
+    # here, and _external_ci_summary re-filters with _sha_matches so no row on a
+    # different head can ever be counted.
+    if source_sha:
+        rows = [
+            _external_ci_row(row)
+            for row in c.execute(
+                "SELECT * FROM external_ci_runs "
+                "WHERE task_id=? OR (source_sha=? AND source_project=?) "
+                "ORDER BY updated_at DESC, run_id",
+                (task_id, source_sha, project),
+            ).fetchall()
+        ]
+    else:
+        rows = [
+            _external_ci_row(row)
+            for row in c.execute(
+                "SELECT * FROM external_ci_runs WHERE task_id=? "
+                "ORDER BY updated_at DESC, run_id",
+                (task_id,),
+            ).fetchall()
+        ]
     return _external_ci_summary(rows, source_sha=source_sha, project=project)
 
 
