@@ -1143,13 +1143,16 @@ path, assignment dossier, compatibility route projections, and stale active docu
 2. Red CI wakes `review_merge`; the LLM requests `remediation`; Mission Bot never diagnoses
    the failure.
 3. Remediation publishes a new head and requests a fresh `review_merge`.
-4. Old-head events remain in history and never become current evidence.
-5. Review and remediation generations never reuse the implementation execution.
-6. A dead runner produces a new event and one fresh same-role generation.
-7. A terminal receipt after an accepted C3/yield finalizes that handoff and never restarts
+4. W2 scope matching uses the dedicated board-ID normalizer (strip and uppercase, preserving
+   hyphens). With a hyphenated task ID, each `stopped`, `closed`, `expired`, and `superseded`
+   scope produces `WAIT` and performs no `start_task` or other work-driving effect.
+5. Old-head events remain in history and never become current evidence.
+6. Review and remediation generations never reuse the implementation execution.
+7. A dead runner produces a new event and one fresh same-role generation.
+8. A terminal receipt after an accepted C3/yield finalizes that handoff and never restarts
    the prior role; an abnormal terminal receipt without a yield restarts the same role.
-8. Communication timeout produces no mission transition or capacity mutation.
-9. Coordinator takeover with a higher scope fence cannot replay a stale write.
+9. Communication timeout produces no mission transition or capacity mutation.
+10. Coordinator takeover with a higher scope fence cannot replay a stale write.
 
 ### Crash and provider tests
 

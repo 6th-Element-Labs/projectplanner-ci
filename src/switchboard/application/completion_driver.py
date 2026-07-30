@@ -27,7 +27,7 @@ from switchboard.domain.completion.normalization_law import (
     NORMALIZATION_TABLE_VERSION,
 )
 from switchboard.domain.completion.state_machine import build_completion_snapshot
-from switchboard.domain.mission_bot import reduce_mission
+from switchboard.domain.mission_bot import canonical_task_id, reduce_mission
 from switchboard.domain.mission_bot.outputs import MISSION_BOT_VERSION
 
 
@@ -198,7 +198,7 @@ def hydrate_completion_snapshot(
 
     hydration_started_at = time.time()
     source_observed_at: dict[str, float] = {}
-    task_id = str(task_id or "").strip().upper()
+    task_id = canonical_task_id(task_id)
     task = get_task(task_id, project=project) or {}
     task_observed_at = time.time()
     source_observed_at.update({
@@ -218,7 +218,7 @@ def hydrate_completion_snapshot(
         # and snapshot["autopilot_scope"] was permanently {} — the W2 stopped-
         # scope fence (reducer step 2) could never fire for a real board id.
         if _text(_map(scope).get("scope_type")) == "task"
-        and str(_map(scope).get("task_id") or "").strip().upper() == task_id
+        and canonical_task_id(_map(scope).get("task_id")) == task_id
     ]
     task_scope = max(
         matching_scopes,

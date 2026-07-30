@@ -39,8 +39,8 @@ def _text(value: Any) -> str:
     return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
 
 
-def _task_id(value: Any) -> str:
-    """Preserve the canonical board identifier; it is not an enum value."""
+def canonical_task_id(value: Any) -> str:
+    """Normalize a board identifier without applying enum normalization."""
     return str(value or "").strip().upper()
 
 
@@ -57,7 +57,7 @@ def _command(
     evidence = evidence_identity(dossier or {})
     payload = {
         "output": output.value,
-        "task_id": _task_id(snap.get("task_id")),
+        "task_id": canonical_task_id(snap.get("task_id")),
         "pr_number": int(snap.get("pr_number") or 0),
         "head_sha": _text(snap.get("head_sha")).lower(),
         "reason_code": reason_code,
