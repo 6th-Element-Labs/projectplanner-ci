@@ -210,6 +210,7 @@ def hydrate_completion_snapshot(
         task_project=project,
         task_id=task_id,
         limit=500,
+        include_last_result=False,
     )
     matching_scopes = [
         _map(scope) for scope in scopes

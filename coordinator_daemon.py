@@ -24,6 +24,8 @@ STATE_SCHEMA = "switchboard.coordinator_daemon_state.v1"
 CONTROL_SCHEMA = "switchboard.coordinator_daemon_control.v1"
 RUN_SCHEMA = "switchboard.coordinator_daemon_run.v1"
 TICK_SUMMARY_SCHEMA = "switchboard.coordinator_daemon_tick_summary.v1"
+SCOPE_RESULT_SUMMARY_SCHEMA = "switchboard.autopilot_scope_result_summary.v1"
+SCOPE_RESULT_RECEIPT_LIMIT = 32
 LEADER_RESOURCE_TYPE = "coordinator_leader"
 TERMINAL_DELIVERABLE_STATUSES = frozenset({
     "archived", "cancelled", "canceled", "complete", "completed", "done",
@@ -52,6 +54,15 @@ def _clip(value: Any, limit: int = 500) -> str:
     return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
+def _receipt_scalar(value: Any, limit: int = 160) -> Any:
+    """Keep one receipt field scalar and small without interpreting it."""
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return _clip(value, limit)
+    return f"<{type(value).__name__}>"
+
+
 def _compact(entry: Dict[str, Any]) -> Dict[str, Any]:
     return {key: value for key, value in entry.items()
             if value not in (None, "", [], {})}
@@ -70,30 +81,91 @@ def _summarize_task_receipt(entry: Mapping[str, Any]) -> Dict[str, Any]:
     receipt = (tick.get("execution") or {}).get("receipt") or {}
     wake = row.get("completion_wake")
     return _compact({
-        "task_id": row.get("task_id") or tick.get("task_id"),
-        "task_project": row.get("task_project"),
-        "status": row.get("status") or ("completion_tick" if tick else None),
-        "output": observation.get("output") or decision.get("mission_output"),
-        "reason_code": (decision.get("reason_code")
-                        or observation.get("reason_code")),
-        "state": decision.get("state"),
-        "route": decision.get("route"),
-        "head_sha": observation.get("head_sha"),
-        "effect": receipt.get("effect") or decision.get("effect"),
-        "effect_verified": receipt.get("verified"),
-        "effect_pending": receipt.get("pending"),
-        "idempotent_replay": receipt.get("idempotent_replay"),
-        "effect_error": _clip(receipt["error"]) if receipt.get("error") else None,
+        "task_id": _receipt_scalar(
+            row.get("task_id") or tick.get("task_id"), 100),
+        "task_project": _receipt_scalar(row.get("task_project"), 100),
+        "status": _receipt_scalar(
+            row.get("status") or ("completion_tick" if tick else None), 60),
+        "output": _receipt_scalar(
+            row.get("output") or observation.get("output")
+            or decision.get("mission_output"), 100),
+        "reason_code": _receipt_scalar(
+            row.get("reason_code") or decision.get("reason_code")
+            or observation.get("reason_code"), 160),
+        "state": _receipt_scalar(row.get("state") or decision.get("state"), 80),
+        "route": _receipt_scalar(row.get("route") or decision.get("route"), 80),
+        "head_sha": _receipt_scalar(
+            row.get("head_sha") or observation.get("head_sha"), 80),
+        "effect": _receipt_scalar(
+            row.get("effect") or receipt.get("effect")
+            or decision.get("effect"), 80),
+        "effect_verified": (
+            row.get("effect_verified")
+            if "effect_verified" in row else receipt.get("verified")
+        ),
+        "effect_pending": (
+            row.get("effect_pending")
+            if "effect_pending" in row else receipt.get("pending")
+        ),
+        "idempotent_replay": (
+            row.get("idempotent_replay")
+            if "idempotent_replay" in row else receipt.get("idempotent_replay")
+        ),
+        "effect_error": (
+            _clip(row["effect_error"]) if row.get("effect_error")
+            else (_clip(receipt["error"]) if receipt.get("error") else None)
+        ),
         "error": _clip(row["error"]) if row.get("error") else None,
         "reason": _clip(row["reason"]) if row.get("reason") else None,
-        "completion_wake": (wake or {}).get("status")
-        if isinstance(wake, Mapping) else None,
+        "completion_wake": (
+            _receipt_scalar(
+                (wake or {}).get("status")
+                if isinstance(wake, Mapping) else wake,
+                80,
+            )
+        ),
+    })
+
+
+def summarize_scope_result(entry: Mapping[str, Any]) -> Dict[str, Any]:
+    """The complete durable scope receipt: bounded facts, never tick history."""
+    row = dict(entry)
+    tasks = [
+        item for item in (row.get("task_receipts") or row.get("receipts") or [])
+        if isinstance(item, Mapping)
+    ]
+    kept_tasks = tasks[-SCOPE_RESULT_RECEIPT_LIMIT:]
+    receipts = [_summarize_task_receipt(item) for item in kept_tasks]
+    return _compact({
+        "schema": SCOPE_RESULT_SUMMARY_SCHEMA,
+        "scope_id": row.get("scope_id"),
+        "scope_type": row.get("scope_type"),
+        "deliverable_id": row.get("deliverable_id"),
+        "task_id": row.get("task_id"),
+        "task_project": row.get("task_project"),
+        "status": row.get("status"),
+        "candidate_count": row.get("candidate_count"),
+        "receipt_count": len(tasks),
+        "receipts_truncated": max(0, len(tasks) - len(kept_tasks)),
+        "generation": row.get("generation"),
+        "fence_epoch": row.get("fence_epoch"),
+        "waiting_reason": row.get("waiting_reason"),
+        "error": _clip(row["error"]) if row.get("error") else None,
+        "reason": _clip(row["reason"]) if row.get("reason") else None,
+        "completion_wake": (
+            (row.get("completion_wake") or {}).get("status")
+            if isinstance(row.get("completion_wake"), Mapping)
+            else row.get("completion_wake")
+        ),
+        "ticked_at": row.get("ticked_at"),
+        # The UI counts ``receipts`` and operators need the last outcome, but
+        # no consumer needs the completion snapshot/dossier a second time.
+        "receipts": receipts,
     })
 
 
 def _summarize_scope_receipt(entry: Mapping[str, Any]) -> Dict[str, Any]:
-    row = dict(entry)
-    tasks = row.get("task_receipts") or row.get("receipts") or []
+    row = summarize_scope_result(entry)
     return _compact({
         "scope_id": row.get("scope_id"),
         "scope_type": row.get("scope_type"),
@@ -102,8 +174,7 @@ def _summarize_scope_receipt(entry: Mapping[str, Any]) -> Dict[str, Any]:
         "status": row.get("status"),
         "candidate_count": row.get("candidate_count"),
         "error": _clip(row["error"]) if row.get("error") else None,
-        "tasks": [_summarize_task_receipt(item) for item in tasks
-                  if isinstance(item, Mapping)],
+        "tasks": row.get("receipts") or [],
     })
 
 
@@ -135,9 +206,11 @@ def summarize_tick(result: Mapping[str, Any]) -> Dict[str, Any]:
     Printing the full tick (embedded dossier/snapshot JSON) at info level
     churned the entire journald cap in ~2h and destroyed overnight forensics
     (2026-07-30 Mission Bot incident). The durable full record already lives
-    in decision_records/decision_episodes and each scope's ``last_result``;
-    the journal keeps task_id/output/reason_code plus the effect receipt.
-    ``PM_COORDINATOR_AUTOPILOT_LOG_FULL=1`` restores the full line.
+    in decision_records/decision_episodes. Scope and daemon ``last_result``
+    fields deliberately keep this same bounded receipt, not another history.
+    The journal keeps task_id/output/reason_code plus the effect receipt.
+    ``PM_COORDINATOR_AUTOPILOT_LOG_FULL=1`` restores the full coordinator
+    envelope, but completion snapshots remain in their authoritative stores.
     """
     row = dict(result) if isinstance(result, Mapping) else {}
     return _compact({
@@ -311,7 +384,7 @@ class CoordinatorDaemon:
         try:
             rows = self.store.list_autopilot_scopes(
                 project=project, profile_id=self.config.profile_id,
-                status="active,paused")
+                status="active,paused", include_last_result=False)
         except Exception:
             return False
         return bool(rows)
@@ -506,7 +579,7 @@ class CoordinatorDaemon:
         """Round-robin only through durable scopes an operator explicitly started."""
         rows = list(self.store.list_autopilot_scopes(
             project=project, profile_id=self.config.profile_id,
-            status="active", limit=2000))
+            status="active", limit=2000, include_last_result=False))
         rows.sort(key=lambda row: str(row.get("scope_id") or ""))
         last = state.get("last_scope_id") or ""
         ids = [str(row.get("scope_id") or "") for row in rows]
@@ -730,7 +803,7 @@ class CoordinatorDaemon:
             deliverable_id = str(scope.get("deliverable_id") or "")
             sequence = int(state.get("sequence") or 0)
             result = self._drive_scope(project, scope)
-            receipts.append({
+            receipt = summarize_scope_result({
                 "scope_id": scope.get("scope_id"),
                 "scope_type": scope.get("scope_type"),
                 "deliverable_id": deliverable_id,
@@ -740,6 +813,7 @@ class CoordinatorDaemon:
                 "task_receipts": result.get("receipts") or result.get("task_receipts") or [],
                 "error": result.get("error"),
             })
+            receipts.append(receipt)
             # Persist only after the scope's idempotent task ticks return. A crash
             # before this write reuses the same candidate revision keys on restart.
             state.update({
@@ -749,7 +823,7 @@ class CoordinatorDaemon:
                 "last_activity_cursor": int(self.store._activity_cursor(project)),
                 "last_heartbeat_at": float(self.clock()),
                 "status": "running",
-                "last_result": receipts[-1],
+                "last_result": receipt,
             })
             self._save_state(project, state)
 

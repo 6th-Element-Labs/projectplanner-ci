@@ -4,7 +4,11 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, Iterable
 
-from coordinator_daemon import CoordinatorDaemon, DaemonConfig
+from coordinator_daemon import (
+    CoordinatorDaemon,
+    DaemonConfig,
+    summarize_scope_result,
+)
 
 
 class ScopedCompletionCoordinator(CoordinatorDaemon):
@@ -111,7 +115,8 @@ class ScopedCompletionCoordinator(CoordinatorDaemon):
                       "task_id": task_id, "receipts": []}
             self.store.update_autopilot_scope(
                 scope["scope_id"], project=project, status="completed",
-                last_result=result, ticked_at=float(self.clock()))
+                last_result=summarize_scope_result(result),
+                ticked_at=float(self.clock()))
             return result
 
         if not self.config.act:
@@ -157,7 +162,8 @@ class ScopedCompletionCoordinator(CoordinatorDaemon):
                 "receipts": [],
             }
         self.store.update_autopilot_scope(
-            scope["scope_id"], project=project, last_result=result,
+            scope["scope_id"], project=project,
+            last_result=summarize_scope_result(result),
             ticked_at=float(self.clock()))
         return result
 
@@ -196,7 +202,8 @@ class ScopedCompletionCoordinator(CoordinatorDaemon):
             }
             self.store.update_autopilot_scope(
                 scope["scope_id"], project=project, status="completed",
-                last_result=result, ticked_at=float(self.clock()))
+                last_result=summarize_scope_result(result),
+                ticked_at=float(self.clock()))
             return result
 
         candidates = self._scope_candidates(scope, mission_status)
@@ -262,7 +269,8 @@ class ScopedCompletionCoordinator(CoordinatorDaemon):
             "ticked_at": time.time(),
         }
         self.store.update_autopilot_scope(
-            scope["scope_id"], project=project, last_result=result,
+            scope["scope_id"], project=project,
+            last_result=summarize_scope_result(result),
             ticked_at=float(self.clock()))
         return result
 

@@ -3,10 +3,10 @@
 
 The autopilot printed the full tick result — embedded dossier/snapshot JSON
 included — every poll, churning the whole 222MB journald cap in ~2h and
-destroying overnight forensics. The durable record already lives in
-decision_records/decision_episodes and autopilot_scopes.last_result, so the
-journal line only needs the routing facts: task_id, output, reason_code, and
-the effect receipt. Full JSON stays available behind
+destroying overnight forensics. The durable full record already lives in
+decision_records/decision_episodes; scope state now keeps the same bounded
+receipt as the journal: task_id, output, reason_code, and the effect receipt.
+Full JSON stays available behind
 PM_COORDINATOR_AUTOPILOT_LOG_FULL=1.
 """
 from __future__ import annotations

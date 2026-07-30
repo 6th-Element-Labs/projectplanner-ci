@@ -172,7 +172,7 @@
         const scope = this._autopilotScope('deliverable');
         const status = scope && scope.status;
         const last = (scope && scope.last_result) || {};
-        const taskReceipts = (last.receipts || []).length;
+        const taskReceipts = Number(last.receipt_count || (last.receipts || []).length);
         const reason = last.waiting_reason || '';
         const stateLabel = status === 'paused' ? 'Paused'
             : (last.status === 'waiting'

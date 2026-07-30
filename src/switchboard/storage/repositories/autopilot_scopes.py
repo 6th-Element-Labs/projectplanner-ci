@@ -18,6 +18,111 @@ SCOPE_TYPES = frozenset({"deliverable", "task"})
 SUPPORTED_RUNTIMES = frozenset({
     "claude-code", "codex", "cursor", "langgraph", "openai-loop",
 })
+AUTOPILOT_SCOPE_RESULT_MAX_BYTES = 64 * 1024
+_SCOPE_METADATA_COLUMNS = (
+    "scope_id",
+    "profile_id",
+    "scope_type",
+    "deliverable_id",
+    "task_project",
+    "task_id",
+    "runtime",
+    "status",
+    "requested_by",
+    "generation",
+    "created_at",
+    "updated_at",
+    "last_tick_at",
+    "lease_id",
+    "holder_agent_id",
+    "fence_epoch",
+    "heartbeat_at",
+    "expires_at",
+    "started_by",
+    "started_at",
+)
+_SCOPE_METADATA_SELECT = ",".join(_SCOPE_METADATA_COLUMNS)
+_OVERSIZED_RESULT_MARKER = (
+    '{"schema":"switchboard.autopilot_scope_result_summary.v1",'
+    '"result_compacted":true,'
+    '"compaction_reason":"stored_result_exceeded_65536_bytes"}'
+)
+
+
+def _scope_select(*, include_last_result: bool) -> str:
+    if not include_last_result:
+        return _SCOPE_METADATA_SELECT
+    result_bytes = (
+        "length(CAST(COALESCE(last_result_json,'{}') AS BLOB))"
+    )
+    return (
+        f"{_SCOPE_METADATA_SELECT},"
+        f"{result_bytes} AS last_result_bytes,"
+        f"CASE WHEN {result_bytes}<="
+        f"{AUTOPILOT_SCOPE_RESULT_MAX_BYTES} "
+        "THEN COALESCE(last_result_json,'{}') ELSE "
+        f"'{_OVERSIZED_RESULT_MARKER}' END AS last_result_json"
+    )
+
+
+def _clip_result_text(value: Any, limit: int = 500) -> str:
+    text = str(value or "")
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def _serialize_last_result(value: Optional[Dict[str, Any]]) -> str:
+    """Persist a bounded receipt, never another completion-state archive."""
+    result = dict(value) if isinstance(value, dict) else {}
+    encoded = json.dumps(result, sort_keys=True, default=str)
+    encoded_bytes = len(encoded.encode("utf-8"))
+    if encoded_bytes <= AUTOPILOT_SCOPE_RESULT_MAX_BYTES:
+        return encoded
+
+    compact = {
+        "schema": "switchboard.autopilot_scope_result_summary.v1",
+        "result_compacted": True,
+        "compaction_reason": (
+            f"last_result exceeded {AUTOPILOT_SCOPE_RESULT_MAX_BYTES} bytes"
+        ),
+        "original_bytes": encoded_bytes,
+    }
+    for key in (
+        "status",
+        "scope_id",
+        "scope_type",
+        "deliverable_id",
+        "task_id",
+        "task_project",
+        "candidate_count",
+        "generation",
+        "fence_epoch",
+        "output",
+        "reason_code",
+        "effect",
+        "head_sha",
+        "effect_verified",
+        "effect_pending",
+        "completion_wake",
+        "ticked_at",
+    ):
+        item = result.get(key)
+        if isinstance(item, (str, int, float, bool)) and item not in (None, ""):
+            compact[key] = item
+    for key in ("error", "reason"):
+        if result.get(key):
+            compact[key] = _clip_result_text(result[key])
+    for key in ("latest_start", "scope_transition"):
+        if isinstance(result.get(key), dict):
+            compact[key] = {
+                name: _clip_result_text(item)
+                if isinstance(item, str) else item
+                for name, item in result[key].items()
+                if isinstance(item, (str, int, float, bool))
+            }
+    compact_encoded = json.dumps(compact, sort_keys=True, default=str)
+    if len(compact_encoded.encode("utf-8")) <= AUTOPILOT_SCOPE_RESULT_MAX_BYTES:
+        return compact_encoded
+    return _OVERSIZED_RESULT_MARKER
 
 
 def _scope_result_with_transition(row: Any, transition: Dict[str, Any]) -> str:
@@ -33,7 +138,7 @@ def _scope_result_with_transition(row: Any, transition: Dict[str, Any]) -> str:
         history = []
     result["scope_transition"] = transition
     result["scope_transitions"] = [*history, transition][-20:]
-    return json.dumps(result, sort_keys=True)
+    return _serialize_last_result(result)
 
 
 def transition_deliverable_scopes_in(
@@ -57,7 +162,8 @@ def transition_deliverable_scopes_in(
                 "deliverable_id": source}
 
     rows = connection.execute(
-        "SELECT * FROM autopilot_scopes WHERE deliverable_id=? "
+        f"SELECT {_scope_select(include_last_result=True)} "
+        "FROM autopilot_scopes WHERE deliverable_id=? "
         "AND status IN ('active','paused') ORDER BY created_at, scope_id",
         (source,),
     ).fetchall()
@@ -179,16 +285,19 @@ def transition_deliverable_scopes_in(
     }
 
 
-def _row(row: Any) -> Dict[str, Any]:
+def _row(row: Any, *, include_last_result: bool = True) -> Dict[str, Any]:
     item = dict(row)
-    try:
-        result = json.loads(item.pop("last_result_json") or "{}")
-    except (TypeError, ValueError):
-        result = {}
-    item.update({
-        "schema": AUTOPILOT_SCOPE_SCHEMA,
-        "last_result": result if isinstance(result, dict) else {},
-    })
+    raw_result = item.pop("last_result_json", None)
+    item["schema"] = AUTOPILOT_SCOPE_SCHEMA
+    if include_last_result:
+        try:
+            result = json.loads(raw_result or "{}")
+        except (TypeError, ValueError):
+            result = {}
+        item["last_result"] = result if isinstance(result, dict) else {}
+        original_bytes = int(item.get("last_result_bytes") or 0)
+        if original_bytes > AUTOPILOT_SCOPE_RESULT_MAX_BYTES:
+            item["last_result_compacted"] = True
     return item
 
 
@@ -196,8 +305,12 @@ def list_autopilot_scopes(*, project: str = DEFAULT_PROJECT,
                           profile_id: str = "autopilot-default",
                           deliverable_id: str = "", status: str = "",
                           task_project: str = "", task_id: str = "",
-                          limit: int = 500) -> List[Dict[str, Any]]:
-    sql = "SELECT * FROM autopilot_scopes WHERE profile_id=?"
+                          limit: int = 500,
+                          include_last_result: bool = True) -> List[Dict[str, Any]]:
+    sql = (
+        f"SELECT {_scope_select(include_last_result=include_last_result)} "
+        "FROM autopilot_scopes WHERE profile_id=?"
+    )
     params: List[Any] = [profile_id]
     if deliverable_id:
         sql += " AND deliverable_id=?"
@@ -216,13 +329,25 @@ def list_autopilot_scopes(*, project: str = DEFAULT_PROJECT,
     sql += " ORDER BY updated_at, scope_id LIMIT ?"
     params.append(max(1, min(int(limit or 500), 2000)))
     with _conn(project) as c:
-        return [_row(row) for row in c.execute(sql, params).fetchall()]
+        return [
+            _row(row, include_last_result=include_last_result)
+            for row in c.execute(sql, params).fetchall()
+        ]
 
 
-def get_autopilot_scope(scope_id: str, *, project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+def get_autopilot_scope(
+        scope_id: str, *, project: str = DEFAULT_PROJECT,
+        include_last_result: bool = True) -> Optional[Dict[str, Any]]:
     with _conn(project) as c:
-        row = c.execute("SELECT * FROM autopilot_scopes WHERE scope_id=?", (scope_id,)).fetchone()
-        return _row(row) if row else None
+        row = c.execute(
+            f"SELECT {_scope_select(include_last_result=include_last_result)} "
+            "FROM autopilot_scopes WHERE scope_id=?",
+            (scope_id,),
+        ).fetchone()
+        return (
+            _row(row, include_last_result=include_last_result)
+            if row else None
+        )
 
 
 def scope_liveness(scope: Dict[str, Any], *, now: Optional[float] = None) -> str:
@@ -285,13 +410,14 @@ def autopilot_coverage_for_tasks(
         for task_id in wanted:
             candidates: List[Dict[str, Any]] = []
             rows = c.execute(
-                "SELECT * FROM autopilot_scopes WHERE profile_id=? AND "
+                f"SELECT {_scope_select(include_last_result=False)} "
+                "FROM autopilot_scopes WHERE profile_id=? AND "
                 "scope_type='task' AND task_id=? AND status IN ('active','paused') "
                 "ORDER BY updated_at DESC",
                 (profile_id, task_id),
             ).fetchall()
             for row in rows:
-                scope = _row(row)
+                scope = _row(row, include_last_result=False)
                 candidates.append({"coverage": "task", "scope": scope})
             try:
                 links = deliverables_repo.list_task_deliverable_links(
@@ -303,11 +429,12 @@ def autopilot_coverage_for_tasks(
                 if not deliverable_id:
                     continue
                 for row in c.execute(
-                        "SELECT * FROM autopilot_scopes WHERE profile_id=? AND "
+                        f"SELECT {_scope_select(include_last_result=False)} "
+                        "FROM autopilot_scopes WHERE profile_id=? AND "
                         "scope_type='deliverable' AND deliverable_id=? AND "
                         "status IN ('active','paused') ORDER BY updated_at DESC",
                         (profile_id, deliverable_id)).fetchall():
-                    scope = _row(row)
+                    scope = _row(row, include_last_result=False)
                     candidates.append(
                         {"coverage": "deliverable", "scope": scope})
             if not candidates:
@@ -433,7 +560,8 @@ def start_autopilot_scope(*, project: str = DEFAULT_PROJECT,
         # Start on one of those tasks is an idempotent readback, not a second run.
         if kind == "task" and deliverable_id:
             covering = c.execute(
-                "SELECT * FROM autopilot_scopes WHERE profile_id=? AND scope_type='deliverable' "
+                f"SELECT {_scope_select(include_last_result=True)} "
+                "FROM autopilot_scopes WHERE profile_id=? AND scope_type='deliverable' "
                 "AND deliverable_id=? AND status IN ('active','paused') ORDER BY updated_at DESC LIMIT 1",
                 (profile_id, deliverable_id),
             ).fetchone()
@@ -443,7 +571,8 @@ def start_autopilot_scope(*, project: str = DEFAULT_PROJECT,
                              "covered_task_id": task_id})
                 return item
         existing = c.execute(
-            "SELECT * FROM autopilot_scopes WHERE profile_id=? AND scope_type=? "
+            f"SELECT {_scope_select(include_last_result=True)} "
+            "FROM autopilot_scopes WHERE profile_id=? AND scope_type=? "
             "AND deliverable_id=? AND task_project=? AND task_id=? "
             "AND status IN ('active','paused') ORDER BY updated_at DESC LIMIT 1",
             (profile_id, kind, deliverable_id, task_project, task_id),
@@ -454,8 +583,11 @@ def start_autopilot_scope(*, project: str = DEFAULT_PROJECT,
                           "fence_epoch=fence_epoch+1,lease_id='',holder_agent_id='',"
                           "expires_at=NULL,updated_at=? WHERE scope_id=?",
                           (now, existing["scope_id"]))
-            row = c.execute("SELECT * FROM autopilot_scopes WHERE scope_id=?",
-                            (existing["scope_id"],)).fetchone()
+            row = c.execute(
+                f"SELECT {_scope_select(include_last_result=True)} "
+                "FROM autopilot_scopes WHERE scope_id=?",
+                (existing["scope_id"],),
+            ).fetchone()
             item = _row(row)
             item["already_started"] = True
             return item
@@ -483,7 +615,11 @@ def start_autopilot_scope(*, project: str = DEFAULT_PROJECT,
                          "deliverable_id": deliverable_id, "task_project": task_project,
                          "task_id": task_id, "runtime": runtime}, sort_keys=True), now),
         )
-        row = c.execute("SELECT * FROM autopilot_scopes WHERE scope_id=?", (scope_id,)).fetchone()
+        row = c.execute(
+            f"SELECT {_scope_select(include_last_result=True)} "
+            "FROM autopilot_scopes WHERE scope_id=?",
+            (scope_id,),
+        ).fetchone()
         return _row(row)
 
 
@@ -507,7 +643,8 @@ def start_task_scope_in(
     if runtime not in SUPPORTED_RUNTIMES:
         raise ValueError(f"unsupported autopilot runtime: {runtime}")
     existing = connection.execute(
-        "SELECT * FROM autopilot_scopes WHERE profile_id=? AND scope_type='task' "
+        f"SELECT {_scope_select(include_last_result=True)} "
+        "FROM autopilot_scopes WHERE profile_id=? AND scope_type='task' "
         "AND deliverable_id='' AND task_project=? AND task_id=? "
         "AND status IN ('active','paused') ORDER BY updated_at DESC LIMIT 1",
         (profile_id, project, canonical_task),
@@ -527,15 +664,19 @@ def start_task_scope_in(
         result = json.loads(existing["last_result_json"] or "{}")
         result = result if isinstance(result, dict) else {}
         result["latest_start"] = provenance
+        encoded_result = _serialize_last_result(result)
         connection.execute(
             "UPDATE autopilot_scopes SET status='active',runtime=?,updated_at=?,"
             "last_result_json=? WHERE scope_id=?",
-            (runtime, now, json.dumps(result, sort_keys=True), scope_id),
+            (runtime, now, encoded_result, scope_id),
         )
         row = connection.execute(
-            "SELECT * FROM autopilot_scopes WHERE scope_id=?", (scope_id,),
+            f"SELECT {_scope_select(include_last_result=False)} "
+            "FROM autopilot_scopes WHERE scope_id=?",
+            (scope_id,),
         ).fetchone()
-        item = _row(row)
+        item = _row(row, include_last_result=False)
+        item["last_result"] = json.loads(encoded_result)
         item["already_started"] = True
         return item
     scope_id = "autopilot-" + uuid.uuid4().hex[:16]
@@ -546,7 +687,7 @@ def start_task_scope_in(
         "VALUES (?,?,?,'',?,?,?,?,?,1,1,?,?,?,?,?)",
         (scope_id, profile_id, "task", project, canonical_task, runtime,
          "active", actor, now, now,
-         json.dumps({"latest_start": provenance}, sort_keys=True), actor, now),
+         _serialize_last_result({"latest_start": provenance}), actor, now),
     )
     connection.execute(
         "INSERT INTO activity(task_id,actor,kind,payload,created_at) "
@@ -558,9 +699,14 @@ def start_task_scope_in(
              "runtime": runtime, "start_provenance": provenance,
          }, sort_keys=True), now),
     )
-    return _row(connection.execute(
-        "SELECT * FROM autopilot_scopes WHERE scope_id=?", (scope_id,),
-    ).fetchone())
+    row = connection.execute(
+        f"SELECT {_scope_select(include_last_result=False)} "
+        "FROM autopilot_scopes WHERE scope_id=?",
+        (scope_id,),
+    ).fetchone()
+    item = _row(row, include_last_result=False)
+    item["last_result"] = {"latest_start": provenance}
+    return item
 
 
 def acquire_autopilot_scope_lease(
@@ -587,7 +733,11 @@ def acquire_autopilot_scope_lease(
                 "holder_agent_id": holder,
             }
         row = c.execute(
-            "SELECT * FROM autopilot_scopes WHERE scope_id=?", (scope_id,)).fetchone()
+            "SELECT scope_id,status,lease_id,holder_agent_id,generation,"
+            "fence_epoch,expires_at,scope_type,deliverable_id,task_project,task_id "
+            "FROM autopilot_scopes WHERE scope_id=?",
+            (scope_id,),
+        ).fetchone()
         if not row:
             return {"error": "autopilot scope not found", "scope_id": scope_id}
         if row["status"] != "active":
@@ -646,7 +796,11 @@ def validate_autopilot_scope_authority(
         return {"allowed": False, "error": "scope_authority_required"}
     with _conn(project) as c:
         row = c.execute(
-            "SELECT * FROM autopilot_scopes WHERE scope_id=?", (scope_id,)).fetchone()
+            "SELECT scope_id,status,lease_id,holder_agent_id,generation,"
+            "fence_epoch,expires_at,scope_type,deliverable_id,task_project,task_id "
+            "FROM autopilot_scopes WHERE scope_id=?",
+            (scope_id,),
+        ).fetchone()
         target_linked = True
         if row and row["scope_type"] == "deliverable" and task_id:
             target_linked = bool(c.execute(
@@ -682,7 +836,11 @@ def validate_autopilot_scope_authority(
     if failed:
         return {"allowed": False, "error": "scope_authority_denied",
                 "scope_id": scope_id, "reason_codes": failed}
-    return {"allowed": True, "scope": _row(row), "authority": supplied}
+    return {
+        "allowed": True,
+        "scope": _row(row, include_last_result=False),
+        "authority": supplied,
+    }
 
 
 def control_autopilot_scope(*, project: str = DEFAULT_PROJECT,
@@ -700,7 +858,8 @@ def control_autopilot_scope(*, project: str = DEFAULT_PROJECT,
     now = time.time()
     with _conn(project) as c:
         row = c.execute(
-            "SELECT * FROM autopilot_scopes WHERE profile_id=? AND scope_type=? "
+            f"SELECT {_scope_select(include_last_result=True)} "
+            "FROM autopilot_scopes WHERE profile_id=? AND scope_type=? "
             "AND deliverable_id=? AND task_project=? AND task_id=? "
             "AND status IN ('active','paused') ORDER BY updated_at DESC LIMIT 1",
             (profile_id, kind, deliverable_id, task_project, task_id),
@@ -718,8 +877,11 @@ def control_autopilot_scope(*, project: str = DEFAULT_PROJECT,
              json.dumps({"scope_id": row["scope_id"], "deliverable_id": deliverable_id,
                          "task_id": task_id}, sort_keys=True), now),
         )
-        current = c.execute("SELECT * FROM autopilot_scopes WHERE scope_id=?",
-                            (row["scope_id"],)).fetchone()
+        current = c.execute(
+            f"SELECT {_scope_select(include_last_result=True)} "
+            "FROM autopilot_scopes WHERE scope_id=?",
+            (row["scope_id"],),
+        ).fetchone()
         return _row(current)
 
 
@@ -727,8 +889,12 @@ def update_autopilot_scope(scope_id: str, *, project: str = DEFAULT_PROJECT,
                            status: str = "", last_result: Optional[Dict[str, Any]] = None,
                            ticked_at: Optional[float] = None) -> Dict[str, Any]:
     now = time.time() if ticked_at is None else float(ticked_at)
+    encoded_result = _serialize_last_result(last_result)
     with _conn(project) as c:
-        row = c.execute("SELECT * FROM autopilot_scopes WHERE scope_id=?", (scope_id,)).fetchone()
+        row = c.execute(
+            "SELECT scope_id,status FROM autopilot_scopes WHERE scope_id=?",
+            (scope_id,),
+        ).fetchone()
         if not row:
             return {"error": "autopilot scope not found", "scope_id": scope_id}
         next_status = status or row["status"]
@@ -739,18 +905,26 @@ def update_autopilot_scope(scope_id: str, *, project: str = DEFAULT_PROJECT,
                 "fence_epoch=fence_epoch+1,lease_id='',holder_agent_id='',"
                 "heartbeat_at=NULL,expires_at=NULL,updated_at=?,last_tick_at=?,"
                 "last_result_json=? WHERE scope_id=?",
-                (next_status, now, now, json.dumps(last_result or {}, sort_keys=True),
-                 scope_id),
+                (next_status, now, now, encoded_result, scope_id),
             )
         else:
             c.execute(
                 "UPDATE autopilot_scopes SET status=?, updated_at=?, last_tick_at=?, "
                 "last_result_json=? WHERE scope_id=?",
-                (next_status, now, now, json.dumps(last_result or {}, sort_keys=True),
-                 scope_id),
+                (next_status, now, now, encoded_result, scope_id),
             )
-        current = c.execute("SELECT * FROM autopilot_scopes WHERE scope_id=?", (scope_id,)).fetchone()
-        return _row(current)
+        current = c.execute(
+            f"SELECT {_scope_select(include_last_result=False)} "
+            "FROM autopilot_scopes WHERE scope_id=?",
+            (scope_id,),
+        ).fetchone()
+        item = _row(current, include_last_result=False)
+        item["last_result"] = json.loads(encoded_result)
+        item["last_result_bytes"] = len(encoded_result.encode("utf-8"))
+        item["last_result_compacted"] = bool(
+            item["last_result"].get("result_compacted")
+        )
+        return item
 
 
 class StoreAutopilotScopeRepository:
@@ -782,6 +956,7 @@ def default_autopilot_scope_repository() -> StoreAutopilotScopeRepository:
 
 __all__ = [
     "AUTOPILOT_SCOPE_SCHEMA", "AUTOPILOT_SCOPE_AUTHORITY_SCHEMA",
+    "AUTOPILOT_SCOPE_RESULT_MAX_BYTES",
     "LIVE_SCOPE_STATUSES", "SCOPE_TYPES", "SUPPORTED_RUNTIMES",
     "StoreAutopilotScopeRepository", "default_autopilot_scope_repository",
     "list_autopilot_scopes", "get_autopilot_scope", "validate_autopilot_target",

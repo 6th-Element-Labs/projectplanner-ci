@@ -707,7 +707,8 @@ def _arm_task_scope(task_id: str, *, project: str, role: str,
     from switchboard.storage.repositories import autopilot_scopes as scopes_repo
     try:
         live = scopes_repo.list_autopilot_scopes(
-            project=project, status="active,paused", limit=500)
+            project=project, status="active,paused", limit=500,
+            include_last_result=False)
         for row in live:
             if (str(row.get("scope_type") or "") == "task"
                     and str(row.get("task_id") or "").upper() == task_id):

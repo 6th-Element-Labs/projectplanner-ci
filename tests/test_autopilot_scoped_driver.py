@@ -90,6 +90,7 @@ ok(not str(monitor2.get("head_sha") or ""),
 class _Store:
     def __init__(self):
         self.drove = []
+        self.scope_updates = []
 
     def heartbeat(self, *a, **k):
         return {"ok": True}
@@ -101,6 +102,7 @@ class _Store:
         return {"scope_id": sid, "generation": 1, "fence_epoch": 1}
 
     def update_autopilot_scope(self, sid, **k):
+        self.scope_updates.append({"scope_id": sid, **k})
         return {"scope_id": sid}
 
     def get_mission_status(self, **k):
@@ -126,8 +128,9 @@ except AssertionError:
     raised = True
 ok(raised, "the base daemon _drive_scope is the janitor path (reads a mission, drives nothing)")
 
+scoped_store = _Store()
 scoped = ScopedCompletionCoordinator(
-    DaemonConfig(act=True), store_mod=_Store(),
+    DaemonConfig(act=True), store_mod=scoped_store,
     agent_id="switchboard/scoped-owner/test")
 ok(scoped._drive_scope.__func__ is ScopedCompletionCoordinator._drive_scope,
    "the scoped coordinator overrides _drive_scope to drive")
@@ -135,13 +138,33 @@ ok(scoped._drive_scope.__func__ is ScopedCompletionCoordinator._drive_scope,
 # touching the legacy deliverable coordinator.
 with patch(
     "switchboard.application.completion_driver.run_completion_tick",
-    return_value={"controller": "mission_bot", "execution": {"action": "started"}},
+    return_value={
+        "schema": "switchboard.completion_tick.v1",
+        "task_id": "PROTO-X",
+        "snapshot": {"blob": "must-not-be-persisted"},
+        "decision": {
+            "mission_output": "wait",
+            "reason_code": "ci_pending",
+            "effect": "wait",
+        },
+        "observation": {"output": "wait", "head_sha": HEAD},
+        "execution": {
+            "action": "started",
+            "receipt": {"effect": "wait", "pending": True, "verified": False},
+        },
+    },
 ):
     outcome = scoped._drive_scope("switchboard", {
         "scope_id": "s1", "scope_type": "task", "deliverable_id": "",
         "task_project": "switchboard", "task_id": "PROTO-X"})
 ok(outcome.get("status") == "completion_tick",
    f"the scoped driver acts on a standalone task scope (got {outcome.get('status')})")
+persisted = (scoped_store.scope_updates[-1].get("last_result") or {})
+persisted_text = str(persisted)
+ok(persisted.get("schema") == "switchboard.autopilot_scope_result_summary.v1"
+   and "snapshot" not in persisted_text
+   and "must-not-be-persisted" not in persisted_text,
+   "the scoped driver persists a bounded receipt, never its completion snapshot")
 
 
 # --- 3. construction: ACT decides the class --------------------------------
