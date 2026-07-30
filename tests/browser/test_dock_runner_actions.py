@@ -94,8 +94,12 @@ with sync_playwright() as runtime:
     kill = box(d, '[data-runner-action="kill"]')
     ok(watch and watch["visible"], f"Watch renders: {watch}")
     ok(kill and kill["visible"], f"Kill renders as its own button: {kill}")
-    ok(watch and kill and watch["w"] == kill["w"] and watch["h"] == kill["h"],
-       f"Watch and Kill are the same size: watch={watch} kill={kill}")
+    ok(watch and kill and watch["h"] == kill["h"],
+       f"Watch and Kill share a height: watch={watch} kill={kill}")
+    ok(watch and kill and watch["w"] < 120 and kill["w"] < 120,
+       f"actions size to their label, not the row: watch={watch} kill={kill}")
+    ok(watch and kill and kill["x"] > watch["x"] + watch["w"] + 40,
+       f"Kill is pushed right, away from Watch: watch={watch} kill={kill}")
 
     labels = d.evaluate(
         """() => {
@@ -123,8 +127,9 @@ with sync_playwright() as runtime:
     # ── phone ──────────────────────────────────────────────────────────────
     m = render(500, RUNNER)
     mw, mk = box(m, "[data-runner-watch-task]"), box(m, '[data-runner-action="kill"]')
-    ok(mw and mk and mw["w"] == mk["w"], f"equal width on a phone: {mw} {mk}")
     ok(mw and mw["h"] >= 44 and mk["h"] >= 44, f"44px tall on a phone: {mw} {mk}")
+    ok(mw and mk and mw["w"] < 160 and mk["w"] < 160,
+       f"phone actions still size to their label: {mw} {mk}")
     ok(mw and mk and (mw["w"] + mk["w"]) <= 380,
        "Watch must not crowd Kill off the row")
     m.close()

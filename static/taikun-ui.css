@@ -244,15 +244,15 @@ body.tk-density-control .h1{ font-variant-numeric:tabular-nums; }
   margin: 0 auto 4px; width: 40px;
 }
 .dock-answer-choice, .dock-answer-submit, .dock-answer-cancel { min-height: 44px; }
-/* PR-card actions: two labelled buttons of equal width. Previous revisions used
-   an icon-only overflow, which rendered as a blank square when the glyph did not
-   paint. Text labels cannot fail that way, and equal widths stop the primary
-   action from crowding the destructive one off the row. */
-#fleet-dock .dock-pr-action { flex: 1 1 0; min-width: 0; }
-/* Runner-card actions share the row the same way. Kill used to hide behind an
-   icon-only dropdown trigger that rendered as a blank square when the glyph did
-   not paint; every dock action is now a text label. */
-#fleet-dock .dock-runner-action { flex: 1 1 0; min-width: 0; }
+/* Dock actions are labelled text buttons at their natural width. Full-bleed
+   equal-width buttons read as a call to action and pulled the eye away from the
+   card's content, so they size to their label and the destructive one is pushed
+   to the right edge instead of sharing the row. Icons are gone entirely: an
+   icon-only control rendered as a blank square when the glyph did not paint,
+   and that is how Close and Kill each went missing. */
+#fleet-dock .dock-pr-action,
+#fleet-dock .dock-runner-action { flex: 0 0 auto; width: auto; }
+#fleet-dock .dock-destructive-action { margin-left: auto; }
 /* Header chrome: on desktop the bar keeps its compact single line — the grabber
    and the left-hand minimize are phone-only, where the dock is a full sheet. */
 .dock-grab, .dock-min-mobile { display: none; }
@@ -298,11 +298,10 @@ body.tk-density-control .h1{ font-variant-numeric:tabular-nums; }
     height: 5px; margin: 8px auto 0; width: 38px;
   }
   #fleet-dock .dock-tab { flex: 1; justify-content: center; min-height: 44px; }
-  #fleet-dock .dock-primary-action { min-height: 44px; width: 100%; }
-  /* …but the primary action must not consume the whole row: PR actions share it
-     evenly so the destructive button keeps a full-size thumb target. */
-  #fleet-dock .dock-pr-action { flex: 1 1 0; min-height: 44px; width: auto; }
-  #fleet-dock .dock-runner-action { flex: 1 1 0; min-height: 44px; width: auto; }
+  /* On a phone the actions keep a 44px thumb height but still size to their
+     label — a full-width button per action turned every card into a wall. */
+  #fleet-dock .dock-pr-action,
+  #fleet-dock .dock-runner-action { flex: 0 0 auto; min-height: 44px; width: auto; }
   #fleet-dock .p-2.border.rounded { width: 100%; }
   body:has(#fleet-dock > .card) { overflow: hidden; }
 }

@@ -87,10 +87,17 @@ with sync_playwright() as runtime:
     close = box(d, "[data-pr-close]")
     ok(merge and merge["visible"], f"Merge renders: {merge}")
     ok(close and close["visible"], f"Close renders: {close}")
-    ok(merge and close and merge["w"] == close["w"] and merge["h"] == close["h"],
-       f"the two actions are the same size: merge={merge} close={close}")
-    ok(merge and merge["w"] >= 60 and merge["h"] >= 24,
-       f"they are real targets, not slivers: {merge}")
+    # Natural width — full-bleed buttons read as a call to action and pulled the
+    # eye off the card's content. Same height, sized to their labels.
+    ok(merge and close and merge["h"] == close["h"],
+       f"the two actions share a height: merge={merge} close={close}")
+    ok(merge and merge["w"] < 120 and close["w"] < 120,
+       f"actions size to their label, not the row: merge={merge} close={close}")
+    ok(merge and merge["w"] >= 36 and merge["h"] >= 24,
+       f"still a real target, not a sliver: {merge}")
+    # Primary left, destructive right — they must not sit adjacent.
+    ok(merge and close and close["x"] > merge["x"] + merge["w"] + 40,
+       f"the destructive action is pushed right: merge={merge} close={close}")
 
     labels = d.evaluate(
         """() => {
@@ -117,8 +124,9 @@ with sync_playwright() as runtime:
     # ── phone ──────────────────────────────────────────────────────────────
     m = render(500, PR)
     mm, mc = box(m, "[data-pr-merge]"), box(m, "[data-pr-close]")
-    ok(mm and mc and mm["w"] == mc["w"], f"equal width on a phone: {mm} {mc}")
     ok(mm and mm["h"] >= 44 and mc["h"] >= 44, f"44px tall on a phone: {mm} {mc}")
+    ok(mm and mm["w"] < 160 and mc["w"] < 160,
+       f"phone actions still size to their label: {mm} {mc}")
     ok(mm and mc and (mm["w"] + mc["w"]) <= 380, "both fit the dock row")
     m.close()
 

@@ -1137,7 +1137,7 @@ const TeepPlan = {
         // Stopping a runner already demands typing the task id to confirm
         // (_fleetRunnerAction), so the guard is the prompt, not obscurity.
         const kill = s.task_id && actions.includes('kill')
-            ? `<button class="btn btn-sm btn-danger dock-runner-action" data-runner-task="${this.esc(s.task_id)}" data-runner-action="kill">Kill</button>`
+            ? `<button class="btn btn-sm btn-danger dock-runner-action dock-destructive-action" data-runner-task="${this.esc(s.task_id)}" data-runner-action="kill">Kill</button>`
             : '';
         return `<div class="mt-2 d-flex gap-2 align-items-center">${primary}${watch}${kill}</div>`;
     },
@@ -1230,7 +1230,7 @@ const TeepPlan = {
                 : `<button class="btn btn-sm btn-outline-secondary dock-primary-action dock-pr-action" data-pr-regate="${this.esc(String(x.number))}" data-pr-sha="${this.esc(x.head_sha || '')}" title="Request a fresh CI verification for this exact commit">Re-run CI</button>`);
         // Hidden while queued — closing a PR the queue is merging would race it.
         const closeAction = x.queue_position ? ''
-            : `<button class="btn btn-sm btn-danger dock-pr-action" data-pr-close="${this.esc(String(x.number))}" data-pr-label="${this.esc(x.title || '')}">Close</button>`;
+            : `<button class="btn btn-sm btn-danger dock-pr-action dock-destructive-action" data-pr-close="${this.esc(String(x.number))}" data-pr-label="${this.esc(x.title || '')}">Close</button>`;
         const actions = primaryAction + closeAction;
         return `<div class="p-2 border rounded mb-2" style="border-left:2px solid ${accent} !important;border-top-left-radius:0;border-bottom-left-radius:0;">
             <div class="d-flex align-items-center gap-2">
@@ -1261,10 +1261,17 @@ const TeepPlan = {
                 // Queue dwell, not edit age: a PR's updated_at moves for unrelated
                 // reasons, so "1h ago" told the operator nothing about being stuck.
                 const dwell = this._dockQueueDwell(x.queue_enqueued_at);
+                // A queued PR keeps the same identity it had as a card. This used to
+                // read "PR #1126 · task" because _fleetTaskTitle('') returns the
+                // placeholder 'task', which is truthy and beat the real PR title.
+                // _dockTaskLabel returns '' for anything that adds nothing.
+                const qId = task.task_id || `PR #${x.number}`;
+                const qTitle = task.title || this._dockTaskLabel(task.task_id)
+                    || x.title || '';
                 return `<div class="border rounded p-2 mb-1">
                     <div class="d-flex align-items-center gap-2" style="min-width:0;">
                         <span class="badge bg-azure-lt" style="flex:none;">#${this.esc(String(x.queue_position))}</span>
-                        <span class="text-truncate" style="min-width:0;">${this.esc(task.task_id || `PR #${x.number}`)} · ${this.esc(task.title || this._fleetTaskTitle(task.task_id) || x.title)}</span>
+                        <span class="text-truncate" style="min-width:0;">${this.esc(qId)}${qTitle ? ` · ${this.esc(qTitle)}` : ''}</span>
                         ${i === 0 ? '<span class="badge bg-yellow-lt ms-auto" style="flex:none;">Merging</span>' : ''}
                     </div>
                     <div class="text-secondary font-monospace mt-1" style="font-size:11px;">PR #${this.esc(String(x.number))} · ${dwell.text}${dwell.slow ? ' <span class="text-red">stuck</span>' : ''}</div>
