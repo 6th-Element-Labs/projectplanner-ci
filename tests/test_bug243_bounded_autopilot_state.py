@@ -187,6 +187,56 @@ try:
        and len(many.get("receipts") or []) == 32,
        "daemon metadata remains bounded under a 100-receipt adversarial tick")
 
+    # Standalone task scopes have an empty deliverable_id.  The compactor
+    # correctly omits that optional value, and the daemon's activity projection
+    # must accept the compact receipt instead of crashing on a missing key.
+    class ActivityStore:
+        def __init__(self):
+            self.activities = []
+
+        @staticmethod
+        def get_meta(_key, default=None, **_kwargs):
+            return default
+
+        @staticmethod
+        def _activity_cursor(_project):
+            return 0
+
+        def append_activity(self, kind, actor, payload, **kwargs):
+            self.activities.append((kind, actor, payload, kwargs))
+
+    activity_store = ActivityStore()
+    daemon = coordinator_daemon.CoordinatorDaemon(
+        coordinator_daemon.DaemonConfig(projects=("switchboard",)),
+        store_mod=activity_store,
+        instance_id="bug243-compact-consumer",
+        clock=lambda: 1.0,
+    )
+    daemon._admitted_projects = ("switchboard",)
+    daemon._execution_policy = lambda _project: {"configured": False}
+    daemon._register_or_heartbeat = lambda _project: {}
+    daemon._state = lambda _project: {"sequence": 0}
+    daemon._acquire_leadership = lambda _project, _state: {"leader": True}
+    daemon._ordered_scopes = lambda _project, _state: [{
+        "scope_id": scope_id,
+        "scope_type": "task",
+        "deliverable_id": "",
+        "task_id": task_id,
+    }]
+    daemon._drive_scope = lambda _project, _scope: {
+        "status": "completion_tick",
+        "receipts": [],
+    }
+    daemon._save_state = lambda _project, _state: None
+    daemon.tick_project("switchboard")
+    tick_activity = next(
+        payload for kind, _actor, payload, _kwargs in activity_store.activities
+        if kind == "coordinator.daemon.tick"
+    )
+    ok(tick_activity.get("scope_ids") == [scope_id]
+       and tick_activity.get("deliverable_ids") == [""],
+       "compact standalone-task receipt remains valid daemon activity")
+
     # The completion snapshot itself asks for metadata only. This is the exact
     # recursion cut: ``snapshot.autopilot_scope`` cannot contain last_result.
     observed_list_args = {}

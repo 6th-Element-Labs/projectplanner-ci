@@ -847,8 +847,13 @@ class CoordinatorDaemon:
              },
              "decision_stream": decision_stream,
              "receipt_count": len(receipts),
-             "scope_ids": [row["scope_id"] for row in receipts],
-             "deliverable_ids": [row["deliverable_id"] for row in receipts],
+             # Compact receipts omit empty optional values.  Standalone task
+             # scopes legitimately have no deliverable id, so this diagnostic
+             # projection must never require the omitted key.
+             "scope_ids": [str(row.get("scope_id") or "") for row in receipts],
+             "deliverable_ids": [
+                 str(row.get("deliverable_id") or "") for row in receipts
+             ],
              "sequence": state.get("sequence")},
             project=project,
         )
