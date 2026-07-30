@@ -43,7 +43,10 @@ def decide_mission_transition(context: Mapping[str, Any]) -> dict[str, Any]:
         return {"state": "DONE", "action": "wait", "reason": "terminal_provenance"}
     if not context.get("dependencies_satisfied", False):
         return {"state": "WAITING", "action": "wait", "reason": "dependencies_unmet"}
-    if _authenticated_human_request(context.get("human_request")):
+    if (
+        str(context.get("mission_state") or "").upper() == "HUMAN"
+        or _authenticated_human_request(context.get("human_request"))
+    ):
         return {
             "state": "HUMAN",
             "action": "wait",
@@ -59,6 +62,9 @@ def decide_mission_transition(context: Mapping[str, Any]) -> dict[str, Any]:
             "state": "ACTIVE",
             "action": "start_task",
             "requested_role": requested_role,
-            "event_pointer": latest_sequence,
+            # The journal is gap-free per mission, so the oldest unhandled
+            # event is always the cursor successor.  Pointing at the latest
+            # event would skip history that arrived while a runner was live.
+            "event_pointer": handled_through + 1,
         }
     return {"state": "WAITING", "action": "wait", "reason": "no_unhandled_event"}
