@@ -45,9 +45,26 @@ __all__ = [
 # cache_size is measured in KiB (rather than pages), so it stays stable if the
 # SQLite page size changes.  The larger autocheckpoint threshold amortizes EBS
 # checkpoint I/O while keeping the WAL bounded to roughly 16 MiB at 4 KiB/page.
-_SQLITE_CACHE_KIB = 32 * 1024
+#
+# BUG-246: the private page cache is PER CONNECTION, and the pool holds several
+# connections per database — at the old 32 MiB default the same hot pages were
+# duplicated in heap once per handle (the live web app held 49 connections to
+# switchboard.db). The OS page cache already caches the file once, shared by
+# every connection and process, so the private cache defaults small and the
+# rare hot path that measurably benefits can raise PM_SQLITE_CACHE_KIB.
+_SQLITE_CACHE_KIB = 8 * 1024
 _SQLITE_MMAP_BYTES = 256 * 1024 * 1024
 _SQLITE_WAL_AUTOCHECKPOINT_PAGES = 4_000
+
+
+def _sqlite_cache_kib() -> int:
+    raw = (os.environ.get("PM_SQLITE_CACHE_KIB") or "").strip()
+    if not raw:
+        return _SQLITE_CACHE_KIB
+    value = int(raw)
+    if value <= 0:
+        raise ValueError("PM_SQLITE_CACHE_KIB must be > 0")
+    return value
 
 
 def _sqlite_mmap_bytes() -> int:
@@ -160,7 +177,10 @@ _wal_confirmed_paths: set = set()
 
 
 def _open_sqlite(db_path: str, timeout_s: float) -> sqlite3.Connection:
-    c = sqlite3.connect(db_path, timeout=timeout_s)
+    # BUG-246: connections live in a process-wide pool and may be checked out by
+    # any thread (checkout is exclusive, so no two threads ever share a handle
+    # concurrently) — the same-thread guard must therefore be off.
+    c = sqlite3.connect(db_path, timeout=timeout_s, check_same_thread=False)
     c.row_factory = sqlite3.Row
     try:
         c.execute(f"PRAGMA busy_timeout={int(timeout_s * 1000)}")
@@ -173,7 +193,7 @@ def _open_sqlite(db_path: str, timeout_s: float) -> sqlite3.Connection:
         # can roll back a recently committed transaction, which is the documented
         # WAL+NORMAL durability tradeoff accepted for this control-plane store.
         c.execute("PRAGMA synchronous=NORMAL")
-        c.execute(f"PRAGMA cache_size={-_SQLITE_CACHE_KIB}")
+        c.execute(f"PRAGMA cache_size={-_sqlite_cache_kib()}")
         c.execute(f"PRAGMA mmap_size={_sqlite_mmap_bytes()}")
         c.execute(f"PRAGMA wal_autocheckpoint={_SQLITE_WAL_AUTOCHECKPOINT_PAGES}")
         return c
@@ -341,33 +361,78 @@ class _LifecycleGuardedConnection:
         return self._conn.__exit__(exc_type, exc, tb)
 
 
-_conn_pool = threading.local()
+# BUG-246: ONE process-wide pool of idle connections per database, protected by
+# a plain lock. The old design cached one connection per (thread, db_path) in a
+# ``threading.local`` with no eviction and no close-on-thread-death: every dead
+# worker thread (anyio pool churn, reconcile's ThreadPoolExecutor) left its
+# connections to the cyclic garbage collector, which starves exactly when
+# memory pressure throttles the process. The live web app measured 210 SQLite
+# FDs on 23 threads; the wedged BUG-245 reconcile run held 164. Checkout is
+# exclusive and check-in CLOSES anything over the idle cap, so connection
+# lifetime never depends on a thread staying alive or on GC running, and the
+# worst case is idle-cap x databases handles instead of threads-ever x databases.
+_conn_pool_lock = threading.Lock()
+_conn_pool_idle: Dict[str, list] = {}
 
 
 def _conn_reuse_enabled() -> bool:
     return (os.environ.get("PM_SQLITE_CONN_REUSE", "1") or "1").strip().lower() in {"1", "true", "on", "yes"}
 
 
-def _conn_pool_state() -> Dict[str, Any]:
-    state = getattr(_conn_pool, "state", None)
-    if state is None:
-        state = {"cache": {}, "active": set()}
-        _conn_pool.state = state
-    return state
+def _pool_idle_cap() -> int:
+    raw = (os.environ.get("PM_SQLITE_POOL_IDLE_PER_DB") or "").strip()
+    if not raw:
+        return 4
+    value = int(raw)
+    if value < 0:
+        raise ValueError("PM_SQLITE_POOL_IDLE_PER_DB must be >= 0")
+    return value
+
+
+def _pool_checkout(db_path: str, timeout_s: float) -> sqlite3.Connection:
+    with _conn_pool_lock:
+        idle = _conn_pool_idle.get(db_path)
+        c = idle.pop() if idle else None
+    if c is None:
+        return _open_sqlite(db_path, timeout_s)
+    # Re-apply the settings that vary per call (busy_timeout) or per env
+    # (mmap_size, e.g. a background job opting into a bounded map). These are
+    # pure connection settings — no DB access — while the ~1.2ms lazy open is
+    # what reuse skips. The fixed PRAGMAs (synchronous/cache/wal) persist from open.
+    c.execute(f"PRAGMA busy_timeout={int(timeout_s * 1000)}")
+    c.execute(f"PRAGMA mmap_size={_sqlite_mmap_bytes()}")
+    return c
+
+
+def _pool_checkin(db_path: str, c: sqlite3.Connection) -> None:
+    with _conn_pool_lock:
+        idle = _conn_pool_idle.setdefault(db_path, [])
+        if len(idle) < _pool_idle_cap():
+            idle.append(c)
+            return
+    # Over the cap: close NOW. Deterministic release is the whole point.
+    try:
+        c.close()
+    except Exception:
+        pass
+
+
+def _sqlite_pool_stats() -> Dict[str, int]:
+    """Idle-handle count per database, for saturation/observability surfaces."""
+    with _conn_pool_lock:
+        return {path: len(idle) for path, idle in _conn_pool_idle.items() if idle}
 
 
 def _close_pooled_conns() -> None:
-    """Close and drop this thread's cached connections (lifecycle / tests)."""
-    state = getattr(_conn_pool, "state", None)
-    if not state:
-        return
-    for c in list(state["cache"].values()):
+    """Close and drop every idle pooled connection (lifecycle / tests)."""
+    with _conn_pool_lock:
+        drained = [c for idle in _conn_pool_idle.values() for c in idle]
+        _conn_pool_idle.clear()
+    for c in drained:
         try:
             c.close()
         except Exception:
             pass
-    state["cache"].clear()
-    state["active"].clear()
 
 
 @contextmanager
@@ -376,27 +441,15 @@ def _conn(project: str = DEFAULT_PROJECT, timeout_s: Optional[float] = None,
     timeout = _sqlite_timeout_s("PM_SQLITE_TIMEOUT_S", 5.0) if timeout_s is None else timeout_s
     project_config = _resolve(project)
     db_path = project_config["db"]
-    # Reuse a per-thread connection to skip the ~1.2ms lazy DB-open (WAL attach + shared lock)
-    # every fresh connection pays. A re-entrant _conn on the same thread+db falls back to a
-    # fresh, uncached connection so nested `with c:` transactions never collide on one
-    # connection — preserving the exact pre-reuse behavior. PM_SQLITE_CONN_REUSE=0 disables it.
-    state = _conn_pool_state() if _conn_reuse_enabled() else None
-    reuse = state is not None and db_path not in state["active"]
-    if reuse:
-        c = state["cache"].get(db_path)
-        if c is None:
-            c = _open_sqlite(db_path, timeout)
-            state["cache"][db_path] = c
-        else:
-            # Re-apply the settings that vary per call (busy_timeout) or per env
-            # (mmap_size, e.g. a background job opting into a bounded map). These are pure
-            # connection settings — no DB access, ~0.01ms total — while the ~1.2ms lazy open
-            # is what reuse skips. The fixed PRAGMAs (synchronous/cache/wal) persist from open.
-            c.execute(f"PRAGMA busy_timeout={int(timeout * 1000)}")
-            c.execute(f"PRAGMA mmap_size={_sqlite_mmap_bytes()}")
-        state["active"].add(db_path)
-    else:
-        c = _open_sqlite(db_path, timeout)
+    # BUG-246: exclusive checkout from the process-wide pool skips the ~1.2ms
+    # lazy DB-open (WAL attach + shared lock) a fresh connection pays. A nested
+    # _conn simply checks out a SECOND handle, so `with c:` transactions can
+    # never collide on one connection — no re-entrancy special case needed.
+    # Check-in at exit is deterministic: over-cap handles close immediately,
+    # and a connection's lifetime never depends on its thread staying alive.
+    # PM_SQLITE_CONN_REUSE=0 disables pooling (always fresh, always closed).
+    reuse = _conn_reuse_enabled()
+    c = _pool_checkout(db_path, timeout) if reuse else _open_sqlite(db_path, timeout)
     try:
         with c:
             # sqlite3 does not begin a transaction for SELECT statements by default.
@@ -410,17 +463,17 @@ def _conn(project: str = DEFAULT_PROJECT, timeout_s: Optional[float] = None,
                 exposed = c
             yield _LifecycleGuardedConnection(project, exposed)
     except sqlite3.OperationalError:
-        # A locked/broken connection must not stay cached — drop it so the next use reopens.
-        if reuse:
-            state["cache"].pop(db_path, None)
-            try:
-                c.close()
-            except Exception:
-                pass
+        # A locked/broken connection must not return to the pool — close it so
+        # the next checkout opens fresh.
+        reuse = False
+        try:
+            c.close()
+        except Exception:
+            pass
         raise
     finally:
         if reuse:
-            state["active"].discard(db_path)
+            _pool_checkin(db_path, c)
         else:
             try:
                 c.close()

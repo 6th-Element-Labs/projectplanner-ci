@@ -30,8 +30,12 @@ with store._conn("maxwell", timeout_s=1.25) as conn:
           conn.execute("PRAGMA synchronous").fetchone()[0] == 1)
     check("busy timeout remains bound to the requested connection timeout",
           conn.execute("PRAGMA busy_timeout").fetchone()[0] == 1_250)
-    check("cache is a stable 32 MiB rather than a page count",
-          conn.execute("PRAGMA cache_size").fetchone()[0] == -(32 * 1024))
+    # BUG-246: the cache is PER CONNECTION and the pool holds several per db —
+    # a big private cache multiplied duplicate copies of the same hot pages in
+    # heap while the OS page cache already shares them. Small stable default,
+    # PM_SQLITE_CACHE_KIB to override for a measured hot path.
+    check("cache is a stable 8 MiB rather than a page count",
+          conn.execute("PRAGMA cache_size").fetchone()[0] == -(8 * 1024))
     check("256 MiB memory mapping is enabled",
           conn.execute("PRAGMA mmap_size").fetchone()[0] == 256 * 1024 * 1024)
     check("WAL checkpoints are amortized across 4,000 pages",
@@ -71,26 +75,28 @@ check("a WAL-confirmed path skips the journal_mode PRAGMA (fresh db stays non-WA
       _skip_mode != "wal")
 
 
-# --- per-thread connection REUSE skips the ~1.2ms lazy DB-open; re-entrancy stays fresh ---
+# --- pooled connection REUSE skips the ~1.2ms lazy DB-open; nesting checks out
+# a second handle (BUG-246: process-wide pool, deterministic check-in/close) ---
 os.environ["PM_SQLITE_CONN_REUSE"] = "1"
 _dbc._close_pooled_conns()
 _pm = _dbc._resolve("maxwell")["db"]
 
 with _dbc._conn("maxwell"):
     pass
-_c_first = _dbc._conn_pool_state()["cache"].get(_pm)
+_c_first = (_dbc._conn_pool_idle.get(_pm) or [None])[0]
 with _dbc._conn("maxwell"):
     pass
-_c_second = _dbc._conn_pool_state()["cache"].get(_pm)
-check("connection is cached and reused across non-nested _conn calls",
+_c_second = (_dbc._conn_pool_idle.get(_pm) or [None])[0]
+check("connection is pooled and reused across non-nested _conn calls",
       _c_first is not None and _c_first is _c_second)
 
 with _dbc._conn("maxwell"):
-    _active_during = _pm in _dbc._conn_pool_state()["active"]
-    with _dbc._conn("maxwell"):   # nested on same thread+db: must open fresh, not collide
+    _idle_during = len(_dbc._conn_pool_idle.get(_pm) or [])
+    with _dbc._conn("maxwell"):   # nested on same thread+db: second checkout, never collides
         pass
-check("nested _conn is re-entrancy-safe (path is marked active while in use)", _active_during)
-check("active set is released after the block", _pm not in _dbc._conn_pool_state()["active"])
+check("outer handle is checked out (not idle) while in use", _idle_during == 0)
+check("both handles return to the idle pool after the block",
+      len(_dbc._conn_pool_idle.get(_pm) or []) == 2)
 
 store.init_db("maxwell")  # this test file never seeded the db; needed for a real write+read
 store.set_meta("reuse_probe", "v1", project="maxwell")
@@ -117,8 +123,8 @@ os.environ["PM_SQLITE_CONN_REUSE"] = "0"
 _dbc._close_pooled_conns()
 with _dbc._conn("maxwell"):
     pass
-check("PM_SQLITE_CONN_REUSE=0 kill switch disables caching (fresh conn per op)",
-      not _dbc._conn_pool_state()["cache"])
+check("PM_SQLITE_CONN_REUSE=0 kill switch disables pooling (fresh conn per op)",
+      not any(_dbc._conn_pool_idle.values()))
 os.environ["PM_SQLITE_CONN_REUSE"] = "1"
 _dbc._close_pooled_conns()
 
