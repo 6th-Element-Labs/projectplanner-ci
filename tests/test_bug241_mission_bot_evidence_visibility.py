@@ -248,6 +248,47 @@ class SessionHygieneUnion(unittest.TestCase):
             "review")
 
 
+class BlockedSessionHeadScope(unittest.TestCase):
+    def test_superseded_head_blocker_does_not_govern_current_head(self):
+        from switchboard.application import completion_driver as cd
+
+        selected = cd._blocked_session_for_head(
+            [{
+                "work_session_id": "ws-old-review",
+                "status": "blocked",
+                "head_sha": "a" * 40,
+            }],
+            "b" * 40,
+        )
+        self.assertEqual(selected, {})
+
+    def test_same_head_blocker_remains_sticky(self):
+        from switchboard.application import completion_driver as cd
+
+        selected = cd._blocked_session_for_head(
+            [{
+                "work_session_id": "ws-current-review",
+                "status": "blocked",
+                "head_sha": _HEAD,
+            }],
+            _HEAD,
+        )
+        self.assertEqual(selected.get("work_session_id"), "ws-current-review")
+
+    def test_unscoped_blocker_remains_sticky(self):
+        from switchboard.application import completion_driver as cd
+
+        selected = cd._blocked_session_for_head(
+            [{
+                "work_session_id": "ws-pre-pr",
+                "status": "blocked",
+                "head_sha": "",
+            }],
+            _HEAD,
+        )
+        self.assertEqual(selected.get("work_session_id"), "ws-pre-pr")
+
+
 class HyphenatedScopeFilter(unittest.TestCase):
     def test_stopped_scope_with_hyphenated_task_id_reaches_snapshot(self):
         from switchboard.application import completion_driver as cd

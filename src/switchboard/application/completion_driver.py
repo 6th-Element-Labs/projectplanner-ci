@@ -35,6 +35,26 @@ def _map(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+def _blocked_session_for_head(
+    sessions: list[Mapping[str, Any]],
+    current_head_sha: str,
+) -> dict[str, Any]:
+    """Return a blocked session only when it can govern the current PR head."""
+    current_head = str(current_head_sha or "").strip().lower()
+    for item in sessions:
+        session = _map(item)
+        if str(session.get("status") or "").strip().lower() != "blocked":
+            continue
+        session_head = str(session.get("head_sha") or "").strip().lower()
+        # Preserve headless/pre-PR human blockers. When both identities are
+        # known, a blocker on a superseded head is audit history rather than
+        # coordination authority over the replacement head.
+        if current_head and session_head and session_head != current_head:
+            continue
+        return session
+    return {}
+
+
 def _text(value: Any) -> str:
     return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
 
@@ -283,6 +303,11 @@ def hydrate_completion_snapshot(
     # Prefer the PR merge_gate resolved so a successful gate fetch still reaches
     # the classifier when the hydrator's direct call returned empty.
     resolved_pr = _map(gate.get("github_pr")) or github_pr
+    current_head_sha = str(
+        _map(resolved_pr.get("head")).get("sha")
+        or git_state.get("head_sha")
+        or ""
+    ).strip()
     verdict = _map(_map(task.get("review_verdict")).get("current_verdict"))
     session_health = _map(task.get("session_health"))
     sessions = list(session_health.get("latest_sessions") or [])
@@ -293,11 +318,7 @@ def hydrate_completion_snapshot(
     # BLOCKED session's hygiene.blocker) never reached the snapshot and
     # facts.agent_requires_human could not fire in production. Prefer a blocked
     # session and hydrate its full row so hygiene travels with it.
-    blocked_session = next(
-        (row for row in (_map(item) for item in sessions)
-         if str(row.get("status") or "").strip().lower() == "blocked"),
-        None,
-    )
+    blocked_session = _blocked_session_for_head(sessions, current_head_sha)
     session_pick = blocked_session or work_session
     session_pick_id = str(session_pick.get("work_session_id") or "").strip()
     if session_pick_id and not session_pick.get("hygiene"):
@@ -329,11 +350,7 @@ def hydrate_completion_snapshot(
         "role": identity.get("role") or active_runner.get("execution_role"),
         "head_sha": identity.get("head_sha") or active_runner.get("head_sha"),
     }
-    head_sha = str(
-        _map(resolved_pr.get("head")).get("sha")
-        or git_state.get("head_sha")
-        or ""
-    ).strip()
+    head_sha = current_head_sha
     merge_queue = _merge_queue_snapshot(
         resolved_pr.get("mergeQueueEntry"),
         task_id=task_id,
