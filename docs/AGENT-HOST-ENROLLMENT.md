@@ -61,6 +61,65 @@ import, and both service templates. Update accepts only a strictly newer semanti
 and swaps the `current` release symlink atomically. A service restart failure rolls the
 symlink back to the prior release.
 
+## Publish a release, so hosts stay in sync on their own
+
+Building a bundle does not tell the fleet anything. Publishing does: the promoted release
+is what every host is measured against, what a host downloads when it finds itself behind,
+and what the Fleet card's readiness light compares to.
+
+```bash
+python adapters/agent_host_enrollment.py publish-release \
+  --source-root . \
+  --signing-key /secure/release/agent-host-ed25519-private.pem \
+  --project switchboard
+```
+
+One command: build, sign, upload, promote. The private key never leaves this machine —
+only the signed archive is uploaded, and the server verifies the signature and every
+per-file hash before writing a row. The server can therefore check what it is given but
+can never mint a release nobody signed.
+
+The server stores the archive and serves it back at
+`/ixp/v1/host_releases/<release_id>/bundle`, so `download_url` points at Switchboard
+itself and no external hosting is involved.
+
+### Enforcement is a second, deliberate step
+
+A freshly promoted release runs in **observe**: readiness is computed, the Fleet card shows
+red or amber, the Update host button appears — and no work is withheld from anybody.
+
+This is not timidity. The first promotion on any fleet meets hosts that predate
+attestation; they report no contract fingerprint, so they are judged incompatible, and the
+self-update that would rescue them ships *inside the release they do not have*. Enforcing
+on day one strands every host at once with no way back.
+
+So the rollout is:
+
+1. `publish-release` — hosts show `incompatible · observing` or `update available`
+2. let them update — the first hop is manual for hosts that predate self-update; every
+   hop after that is automatic on the next heartbeat
+3. turn enforcement on once the lights are green:
+
+```bash
+curl -X POST -H "Authorization: Bearer $SWITCHBOARD_TOKEN" \
+  "https://plan.taikunai.com/ixp/v1/host_releases/enforcement?project=switchboard&enforce=true"
+```
+
+Enforcement is reversible with `enforce=false`, and a newer promotion resets to observe —
+every artifact earns enforcement on its own evidence rather than inheriting it.
+
+### What a host does once a release is promoted
+
+On each heartbeat the server returns `required_host_release`. A host whose payload digest
+differs stops accepting new wakes, waits for its live runners to finish (it never
+interrupts them), downloads the bundle, verifies the signature, switches atomically,
+restarts, and rolls back if it does not come up.
+
+Both waits are bounded so a stuck update cannot quietly remove a host from the fleet: the
+drain is abandoned after 15 minutes, and the server stops believing a stale `updating`
+claim after 20. A release that fails to install is recorded and not retried until a
+different one is promoted, with the reason shown on the host card.
+
 ## Create the device bootstrap
 
 From an operator session, call `begin_agent_host_enrollment` through MCP or
