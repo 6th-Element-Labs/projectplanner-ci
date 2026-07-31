@@ -143,8 +143,8 @@ def terminal_task_cleanup_for_host_in(
     Done/Cancelled tasks are an automatic capacity event: this projection
     force-stales the host's nonterminal runners (and fences a bound execution
     generation when present) so ``expire_runner_leases`` can kill them. It never
-    sends a process signal. Work Sessions and non-execution leases close now
-    because the task is already the stronger lifecycle authority.
+    sends a process signal or completes coordination state: the matching host
+    terminal receipt is the authority that finalizes the claim and Work Session.
     """
     now = time.time() if now is None else float(now)
     host_id = str(host_id or "").strip()
@@ -172,39 +172,6 @@ def terminal_task_cleanup_for_host_in(
         "ORDER BY r.started_at,r.runner_session_id",
         (host_id, *terminal_tasks, *terminal_runners),
     ).fetchall()
-    task_statuses = {
-        str(row["task_id"] or ""): str(row["task_status"] or "")
-        for row in rows if row["task_id"]
-    }
-    closed_work_sessions = 0
-    released_resource_leases = 0
-    released_file_leases = 0
-    for task_id, task_status in sorted(task_statuses.items()):
-        changed = c.execute(
-            "UPDATE work_sessions SET status='completed', completed_at=COALESCE(completed_at,?), "
-            "updated_at=?, updated_by=? WHERE task_id=? "
-            "AND status IN ('active','proposed','blocked')",
-            (now, now, actor, task_id),
-        )
-        closed_work_sessions += changed.rowcount
-        # Execution leases stay owned until the host lease reaper acks stop;
-        # only non-execution resource holds are released immediately.
-        released_resource_leases += c.execute(
-            "UPDATE resource_leases SET released_at=? WHERE task_id=? AND released_at IS NULL "
-            "AND COALESCE(resource_type,'') != 'execution'",
-            (now, task_id),
-        ).rowcount
-        released_file_leases += c.execute(
-            "UPDATE file_leases SET released_at=? WHERE task_id=? AND released_at IS NULL",
-            (now, task_id),
-        ).rowcount
-        if changed.rowcount:
-            c.execute(
-                "INSERT INTO activity(task_id,actor,kind,payload,created_at) VALUES (?,?,?,?,?)",
-                (task_id, actor, "work_session.completed_by_terminal_task",
-                 json.dumps({"closed_count": changed.rowcount,
-                             "terminal_status": task_status}, sort_keys=True), now),
-            )
     directives: List[Dict[str, Any]] = []
     for row in rows:
         metadata = _json_obj(row["metadata_json"], {})
@@ -274,9 +241,9 @@ def terminal_task_cleanup_for_host_in(
         **empty,
         "sessions": directives,
         "session_count": len(directives),
-        "closed_work_session_count": closed_work_sessions,
-        "released_resource_lease_count": released_resource_leases,
-        "released_file_lease_count": released_file_leases,
+        "closed_work_session_count": 0,
+        "released_resource_lease_count": 0,
+        "released_file_lease_count": 0,
     }
 
 
@@ -1794,6 +1761,90 @@ def _release_terminal_runner_ownership_in(
     return handoff
 
 
+def _complete_terminal_task_runner_cleanup_in(
+        c: sqlite3.Connection, record: Dict[str, Any], metadata: Dict[str, Any],
+        runner_session_id: str, actor: str, now: float) -> Optional[Dict[str, Any]]:
+    """Finish a terminal-task surrender after the enrolled host reports stop.
+
+    A canonical merge can mark a task Done while its implementation runner is
+    still alive.  The terminal-task projection only fences that runner; this
+    receipt is the first point at which Capacity has confirmed process death,
+    so it is safe to close the exact active claim and Work Session.  It is
+    deliberately separate from lease-expiry recovery: this is expected cleanup,
+    never an orphaned execution.
+    """
+    surrender = metadata.get("lease_surrender") or {}
+    if (str(metadata.get("terminalized_by") or "")
+            != "terminal_lease_surrendered"
+            or str(surrender.get("authority") or "") != "terminal_task"):
+        return None
+    task_id = str(record.get("task_id") or "").strip()
+    agent_id = str(record.get("agent_id") or "").strip()
+    if not task_id or not agent_id:
+        return None
+    task = c.execute("SELECT status FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+    if not task or str(task["status"] or "") != "Done":
+        return None
+    claim_id = str(record.get("claim_id") or "").strip()
+    if not claim_id:
+        claim = c.execute(
+            "SELECT * FROM task_claims WHERE runner_session_id=? AND task_id=? "
+            "AND agent_id=? ORDER BY claimed_at DESC LIMIT 1",
+            (runner_session_id, task_id, agent_id),
+        ).fetchone()
+    else:
+        claim = c.execute("SELECT * FROM task_claims WHERE id=?", (claim_id,)).fetchone()
+    if (not claim or str(claim["task_id"] or "") != task_id
+            or str(claim["agent_id"] or "") != agent_id):
+        return None
+    work_session_id = str(metadata.get("work_session_id") or "").strip()
+    if not work_session_id:
+        session = c.execute(
+            "SELECT work_session_id FROM work_sessions WHERE claim_id=? "
+            "ORDER BY updated_at DESC,created_at DESC LIMIT 1",
+            (claim["id"],),
+        ).fetchone()
+        work_session_id = str(session["work_session_id"] or "") if session else ""
+    idempotent = str(claim["status"] or "") == "completed"
+    if str(claim["status"] or "") not in {"active", "completed"}:
+        return None
+    if work_session_id:
+        session = c.execute(
+            "SELECT work_session_id FROM work_sessions WHERE work_session_id=? AND claim_id=?",
+            (work_session_id, claim["id"]),
+        ).fetchone()
+        if not session:
+            return None
+    changed = False
+    if not idempotent:
+        c.execute("UPDATE task_claims SET status='completed',completed_at=? WHERE id=?",
+                  (now, claim["id"]))
+        c.execute(
+            "UPDATE resource_leases SET released_at=? WHERE resource_type='task' "
+            "AND task_id=? AND agent_id=? AND released_at IS NULL",
+            (now, task_id, claim["agent_id"]),
+        )
+        changed = True
+    if work_session_id:
+        session_update = c.execute(
+            "UPDATE work_sessions SET status='completed',completed_at=COALESCE(completed_at,?), "
+            "updated_at=?,updated_by=? WHERE work_session_id=? "
+            "AND claim_id=? AND status IN ('active','proposed','blocked')",
+            (now, now, actor, work_session_id, claim["id"]),
+        )
+        changed = changed or bool(session_update.rowcount)
+    if changed:
+        c.execute(
+            "INSERT INTO activity(task_id,actor,kind,payload,created_at) VALUES (?,?,?,?,?)",
+            (task_id, actor, "task.claim.completed_by_terminal_task_receipt",
+             json.dumps({"claim_id": claim["id"], "runner_session_id": runner_session_id,
+                         "work_session_id": work_session_id or None,
+                         "idempotent": idempotent}, sort_keys=True), now),
+        )
+    return {"completed": True, "idempotent": idempotent,
+            "claim_id": claim["id"], "work_session_id": work_session_id or None}
+
+
 def _renew_personal_claim_from_runner_in(
         c: sqlite3.Connection, record: Dict[str, Any], principal_id: str,
         now: float) -> bool:
@@ -2207,7 +2258,7 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
         if isinstance(record.get("metadata"), dict) else {}
     terminalizing_fenced_generation = (
         incoming_metadata.get("terminalized_by") in {
-            "runner_lease_expiry", "host_supervisor"})
+            "runner_lease_expiry", "host_supervisor", "terminal_lease_surrendered"})
     # SIMPLIFY-18 / ADR-0008 C2-C3: runner_sessions is the authoritative
     # heartbeat boundary. Once a managed generation has a server-owned fence,
     # every nonterminal renewal must present that exact epoch. Checking only a
@@ -2380,6 +2431,10 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
         completion_resume = terminal_ack_claim_completion_in(
             c, runner_session_id, actor, principal_id, narrow_host, now,
             project=project)
+    terminal_task_cleanup = None
+    if runner_status in RUNNER_TERMINAL_STATUSES and not completion_resume:
+        terminal_task_cleanup = _complete_terminal_task_runner_cleanup_in(
+            c, record, metadata, runner_session_id, actor, now)
     # A supervised execution ends when its process does.  The lease is acquired at
     # dispatch and promoted to 'active' above; this is its only other half.  Without
     # it a lease outlives its own runner for the whole TTL, and the next start
@@ -2417,7 +2472,7 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
                              "work_session_id": work_session_id,
                              "runner_status": runner_status}, sort_keys=True), now),
             )
-    if not completion_resume:
+    if not completion_resume and not terminal_task_cleanup:
         _release_terminal_runner_ownership_in(
             c, record, metadata, runner_session_id, actor, now)
     if runner_status in RUNNER_TERMINAL_STATUSES:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BUG-111 / BUG-175: terminal tasks make runner leases due for the sole stop clock.
+"""BUG-111 / BUG-175 / BUG-258: terminal tasks make runner leases due for the sole stop clock.
 
 SIMPLIFY-17 retired process-kill-from-task-status. Terminal tasks must still
 reclaim capacity by making the renewable runner lease due (force-stale + fence)
@@ -53,12 +53,22 @@ try:
     runner_id = "run_bug111_terminal"
     work_session = store.create_work_session({
         "agent_id": f"codex/{task_id}", "task_id": task_id,
-        "repo_role": "canonical", "branch": f"codex/{task_id}-proof",
+        "runtime": "codex", "repo_role": "canonical",
+        "branch": f"codex/{task_id}-proof", "upstream": "origin/master",
+        "base_sha": "a" * 40, "head_sha": "a" * 40,
         "storage_mode": "worktree", "worktree_path": str(TMP),
         "status": "active", "dirty_status": "clean",
         "policy_profile": "code_strict",
         "hygiene": {"repo_preflight": {"ok": True, "verdict": "pass", "findings": []}},
     }, actor="bug111-test", project=P)["work_session"]
+    claim = store.claim_task(
+        task_id, f"codex/{task_id}", principal_id=principal_id,
+        actor="bug111-test", project=P,
+        work_session_id=work_session["work_session_id"],
+        session_policy_profile="code_strict", require_work_session=True,
+    )
+    ok(claim.get("claimed") is True,
+       "test runner has an exact active claim and Work Session binding")
     store.register_host({
         "host_id": host_id, "agent_host_version": "0.2.25",
         "runtimes": [{"runtime": "codex", "lanes": ["BUG"]}],
@@ -69,7 +79,8 @@ try:
     store.upsert_runner_session({
         "runner_session_id": runner_id, "host_id": host_id,
         "agent_id": f"codex/{task_id}", "runtime": "codex",
-        "task_id": task_id, "status": "running", "pid": 111,
+        "task_id": task_id, "claim_id": claim.get("claim_id"),
+        "status": "running", "pid": 111,
         "heartbeat_ttl_s": 180,
         "metadata": {
             "work_session_id": work_session["work_session_id"],
@@ -99,8 +110,8 @@ try:
        == "terminal_task",
        "terminal task makes the exact runner lease due without process kill")
     closed = store.get_work_session(work_session["work_session_id"], project=P)
-    ok(closed.get("status") == "completed" and closed.get("completed_at"),
-       "terminal task completes its active Work Session")
+    ok(closed.get("status") == "active" and not closed.get("completed_at"),
+       "terminal task leaves its Work Session active until host stop receipt")
 
     second = store.heartbeat_host(
         host_id, active_sessions=1,
@@ -110,7 +121,7 @@ try:
         principal_id=principal_id, actor=host_id, project=P)
     ok((second.get("terminal_runner_cleanup") or {}).get(
         "closed_work_session_count") == 0,
-       "a repeated heartbeat does not complete the Work Session twice")
+       "a repeated heartbeat still does not complete the Work Session")
     with _conn(P) as c:
         activity_count = c.execute(
             "SELECT COUNT(*) FROM activity WHERE task_id=? "
@@ -190,9 +201,19 @@ try:
         agent_host.supervisor_action = original_supervisor
         agent_host._drop_host_bridge = original_drop
         agent_host._try = original_try
-    ok(expired and expired[0].get("expired") is True
+    ok(expired and expired[0].get("terminalized") is True
+       and expired[0].get("reason") == "terminal_lease_surrendered"
        and any(c[:2] == ("kill", runner_id) for c in expire_calls),
-       "lease expiry kills a surrendered runner even when heartbeat is still fresh")
+       "terminal surrender kills the runner even when heartbeat is still fresh")
+    receipt = next(call[2] for call in renew_calls
+                   if len(call) == 3 and call[0] == "POST"
+                   and call[1] == agent_host.P_HEARTBEAT_RUNNER
+                   and call[2].get("status") == "stopped")
+    ok(receipt.get("status") == "stopped"
+       and (receipt.get("metadata") or {}).get("terminalized_by")
+       == "terminal_lease_surrendered"
+       and not (receipt.get("metadata") or {}).get("failure_reason"),
+       "terminal-task stop receipt is not classified as a heartbeat failure")
 
     # Compatibility: host still refuses legacy kill directives.
     refuse_calls = []
@@ -214,13 +235,28 @@ try:
        and outcomes[0].get("error") == "lease expiry is the only kill authority",
        "legacy terminal-task kill directives stay refused")
 
-    store.upsert_runner_session({
-        "runner_session_id": runner_id, "host_id": host_id,
-        "task_id": task_id, "status": "expired",
-        "metadata": {"work_session_id": work_session["work_session_id"],
-                     "terminalized_by": "runner_lease_expiry",
-                     "failure_reason": "runner heartbeat lease expired"},
-    }, principal_id=principal_id, actor=host_id, project=P)
+    store.upsert_runner_session(receipt,
+                                principal_id=principal_id, actor=host_id, project=P)
+    store.upsert_runner_session(receipt,
+                                principal_id=principal_id, actor=host_id, project=P)
+    closed_after_receipt = store.get_work_session(work_session["work_session_id"], project=P)
+    with _conn(P) as c:
+        claim_status = c.execute("SELECT status FROM task_claims WHERE id=?", (
+            claim["claim_id"],)).fetchone()[0]
+        receipt_events = c.execute(
+            "SELECT COUNT(*) FROM activity WHERE task_id=? "
+            "AND kind='task.claim.completed_by_terminal_task_receipt'", (task_id,)
+        ).fetchone()[0]
+        recovery_events = c.execute(
+            "SELECT COUNT(*) FROM activity WHERE task_id=? "
+            "AND payload LIKE '%orphan_claim_after_runner_lease_expiry%'", (task_id,)
+        ).fetchone()[0]
+    ok(claim_status == "completed" and closed_after_receipt.get("status") == "completed",
+       "host stop receipt finalizes the active claim and Work Session")
+    ok(recovery_events == 0,
+       "terminal-task receipt creates no false orphan-recovery finding")
+    ok(receipt_events == 1,
+       "replayed terminal-task receipt is an idempotent cleanup")
     final_heartbeat = store.heartbeat_host(
         host_id, active_sessions=0, principal_id=principal_id,
         actor=host_id, project=P)

@@ -2978,14 +2978,19 @@ def expire_runner_leases(inventory, *, now=None):
             continue
         runner_id = str(session.get("runner_session_id") or "")
         task_id = str(session.get("task_id") or "")
-        reason = ("runner_lease_surrendered" if surrendered and not session.get("stale")
-                  else "runner_lease_expired")
+        terminal_task_surrender = (
+            str((metadata.get("lease_surrender") or {}).get("authority") or "")
+            == "terminal_task")
+        reason = (
+            "terminal_lease_surrendered" if terminal_task_surrender
+            else ("runner_lease_surrendered" if surrendered and not session.get("stale")
+                  else "runner_lease_expired"))
         outcome = {"runner_session_id": runner_id, "task_id": task_id,
                    "reason": reason}
         stop_reason = (
-            "runner lease surrendered"
-            if reason == "runner_lease_surrendered"
-            else "runner heartbeat lease expired")
+            "terminal lease surrendered" if reason == "terminal_lease_surrendered"
+            else ("runner lease surrendered" if reason == "runner_lease_surrendered"
+                  else "runner heartbeat lease expired"))
         stopped = supervisor_action("kill", runner_id, {
             "reason": stop_reason, "task_id": task_id})
         ok = bool(stopped and not stopped.get("error") and stopped.get("alive") is not True)
@@ -3002,10 +3007,19 @@ def expire_runner_leases(inventory, *, now=None):
                 "host_id": host_id, "task_id": task_id,
                 "claim_id": session.get("claim_id") or "",
                 "agent_id": session.get("agent_id") or f"codex/{task_id}",
-                "status": "expired",
-                "metadata": {**metadata, "terminalized_by": "runner_lease_expiry",
-                             "lease_expired_at": now,
-                             "failure_reason": stop_reason},
+                "status": ("stopped" if reason == "terminal_lease_surrendered"
+                           else "expired"),
+                "metadata": {
+                    **metadata,
+                    "terminalized_by": (
+                        "terminal_lease_surrendered"
+                        if reason == "terminal_lease_surrendered"
+                        else "runner_lease_expiry"),
+                    **({"terminal_lease_surrendered_at": now}
+                       if reason == "terminal_lease_surrendered"
+                       else {"lease_expired_at": now,
+                             "failure_reason": stop_reason}),
+                },
             }
             # The process death and central acknowledgement are separate durable
             # steps.  Persist first so a network loss or daemon restart cannot
@@ -3014,9 +3028,15 @@ def expire_runner_leases(inventory, *, now=None):
             terminal = _try("POST", P_HEARTBEAT_RUNNER, receipt)
             if terminal and not terminal.get("error"):
                 _delete_pending_stop_receipt(runner_id)
-            outcome["expired"] = bool(terminal and not terminal.get("error"))
+            if reason == "terminal_lease_surrendered":
+                outcome["terminalized"] = bool(terminal and not terminal.get("error"))
+            else:
+                outcome["expired"] = bool(terminal and not terminal.get("error"))
         else:
-            outcome["expired"] = False
+            if reason == "terminal_lease_surrendered":
+                outcome["terminalized"] = False
+            else:
+                outcome["expired"] = False
             outcome["error"] = (stopped or {}).get("error")
         outcomes.append(outcome)
     return outcomes
