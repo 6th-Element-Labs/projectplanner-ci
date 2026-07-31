@@ -266,7 +266,9 @@ def agent_requires_human(blocker_json: str, ctx: Context,
     )
     if not binding.get("ok"):
         return services.dumps(binding)
-    from switchboard.domain.mission_bot.facts import AGENT_PROVENANCE_BINDINGS
+    from switchboard.application.commands.human_blocker import (
+        AGENT_PROVENANCE_BINDINGS,
+    )
     stamped_binding = str(binding.get("binding") or "")
     if stamped_binding not in AGENT_PROVENANCE_BINDINGS:
         return services.dumps({

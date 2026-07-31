@@ -719,16 +719,15 @@ def replay_decision_corpus(
     task_id: str = "",
     limit: int = 1000,
 ) -> dict[str, Any]:
-    """Replay retained snapshots through today's classifier without mutating state.
+    """Report the retained v1 decision corpus without replaying it.
 
-    The comparison is decision-to-decision. Snapshot hashes, classifier versions,
-    timestamps, and feature projections are deliberately excluded: a newly hydrated
-    snapshot that produces the same verdict is not a behavioral change.
+    SIMPLIFY-30 deleted the Mission Bot v1 classifier this replay used to run
+    snapshots through. The corpus stays readable for audit (episodes, recorded
+    verdicts, projections), but every retained snapshot is now reported as
+    skipped with reason ``classifier_retired`` instead of being re-decided:
+    Mission Bot v4 decides from the mission journal, not from these snapshots.
     """
-    from switchboard.domain.completion.state_machine import (
-        COMPLETION_CLASSIFIER_VERSION,
-        classify_completion,
-    )
+    COMPLETION_CLASSIFIER_VERSION = "retired"
 
     where, params = _window_clause(project, since, until, task_id, "", "")
     with _conn(project) as c:
@@ -761,31 +760,13 @@ def replay_decision_corpus(
                 "snapshot_schema": snapshot.get("schema") or "",
             })
             continue
-        recorded = _map(row["decision_json"])
-        current = classify_completion(None, snapshot)
-        replayed += 1
-        if _canonical_json(recorded) == _canonical_json(current):
-            continue
-        old_code = canonical_reason_code(recorded.get("reason_code"))
-        new_code = canonical_reason_code(current.get("reason_code"))
-        movement = movements.setdefault((old_code, new_code), {
-            "recorded_reason_code": old_code,
-            "current_reason_code": new_code,
-            "episodes": 0,
-            "tasks": set(),
-        })
-        movement["episodes"] += 1
-        movement["tasks"].add(str(row["task_id"]))
-        changes.append({
+        # The v1 classifier is deleted; retained snapshots are audit records,
+        # not replayable inputs to any current decision authority.
+        skipped.append({
             "record_id": row["record_id"],
             "task_id": row["task_id"],
-            "first_seen_at": row["first_seen_at"],
-            "last_seen_at": row["last_seen_at"],
+            "reason": "classifier_retired",
             "recorded_classifier_version": row["classifier_version"],
-            "current_classifier_version": COMPLETION_CLASSIFIER_VERSION,
-            "recorded_verdict": recorded,
-            "current_verdict": current,
-            "snapshot": snapshot,
         })
 
     reason_code_movements = []

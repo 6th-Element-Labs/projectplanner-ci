@@ -23,16 +23,11 @@ make a silent recurrence impossible by failing on the pattern itself (§3).
 """
 from __future__ import annotations
 
-import ast
-import pathlib
 import unittest
 
 from path_setup import ROOT  # noqa: F401
 
 from switchboard.application.commands.merge_gate import _merge_gate_finding
-from switchboard.domain.mission_bot import facts
-from switchboard.domain.mission_bot.dossier import build_dossier
-from switchboard.domain.mission_bot.reducer import reduce_mission
 
 
 # Every detail-carrying blocking finding the gate emits, as the gate emits it.
@@ -71,145 +66,10 @@ class FindingShapeIsFlatTest(unittest.TestCase):
         self.assertIn("facts", doc)
 
 
-# ---------------------------------------------------------------------------
-# §2 the accessor, and every consumer through it
-# ---------------------------------------------------------------------------
-
-class FindingDetailAccessorTest(unittest.TestCase):
-    def test_it_reads_the_flat_shape_the_gate_emits(self):
-        finding = _finding("pr_not_mergeable", "m", mergeable=False,
-                           merge_state="dirty")
-        self.assertIs(facts.finding_detail(finding, "mergeable"), False)
-        self.assertEqual(facts.finding_detail(finding, "merge_state"), "dirty")
-
-    def test_it_still_reads_a_nested_finding(self):
-        # Preflight findings (work_sessions.py) genuinely nest under "details".
-        nested = {"code": "pr_not_mergeable",
-                  "details": {"mergeable": False, "merge_state": "dirty"}}
-        self.assertIs(facts.finding_detail(nested, "mergeable"), False)
-        self.assertEqual(facts.finding_detail(nested, "merge_state"), "dirty")
-
-    def test_it_tries_each_alias_in_order(self):
-        finding = _finding("pr_not_mergeable", "m", mergeStateStatus="DIRTY")
-        self.assertEqual(
-            facts.finding_detail(finding, "merge_state", "mergeStateStatus"), "DIRTY")
-
-    def test_a_missing_detail_is_none_not_an_error(self):
-        self.assertIsNone(facts.finding_detail({}, "mergeable"))
-        self.assertIsNone(
-            facts.finding_detail({"details": "not-a-mapping"}, "mergeable")
-        )
-
-
-class ConsumersReadRealFindingsTest(unittest.TestCase):
-    """Both live consumers, driven by the gate's own constructor."""
-
-    def test_the_conflict_decomposer_fires_on_a_finding_only_conflict(self):
-        """BUG-182's whole purpose: PR hydration empty, finding is the only evidence."""
-        finding = _finding("pr_not_mergeable",
-                           "GitHub PR state is not cleanly mergeable.",
-                           mergeable=False, merge_state="dirty")
-        decision = reduce_mission({
-            "task_id": "BUG-194",
-            "board_status": "In Review",
-            "pr_number": 194,
-            "board_pr_number": 194,
-            "head_sha": "a" * 40,
-            "findings": [finding],
-        })
-        self.assertEqual(decision["reason_code"], "pr_merge_conflict")
-        self.assertEqual(decision["output"], "START_REMEDIATION")
-
-    def test_the_artifact_lift_fires_on_a_real_evidence_finding(self):
-        finding = _merge_gate_finding(
-            "missing_executed_test_run", "m", "missing_data",
-            details={"executed_test_gate": {"missing_artifact": {
-                "expected_key": "executed_test_run"}}})
-        dossier = build_dossier(
-            {"task_id": "BUG-194", "findings": [finding]},
-            reason_code="missing_executed_test_run",
-            mission="remediate",
-        )
-        self.assertEqual(
-            dossier["missing_artifact"],
-            {"expected_key": "executed_test_run"},
-        )
-
-    def test_a_clean_pr_produces_no_conflict_decision(self):
-        self.assertFalse(facts.merge_conflict({"github_pr": {"mergeable": True}}))
-        self.assertFalse(facts.merge_conflict({}))
-
-
-# ---------------------------------------------------------------------------
-# §3 the guard — the pattern itself is what recurs
-# ---------------------------------------------------------------------------
-
-_MISSION_PACKAGE = pathlib.Path(ROOT) / "src" / "switchboard" / "domain" / "mission_bot"
-
-#: The accessor is allowed to read the nested form; it is the thing that knows about it.
-_DETAILS_READERS_ALLOWED = {
-    "finding_detail",
-    # This reads review.details from a mission dossier, not finding.details.
-    "evidence_identity",
-}
-
-
-def _direct_details_reads(path: pathlib.Path) -> list[str]:
-    """Every ``<expr>.get("details")`` outside the sanctioned accessor."""
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    offenders: list[str] = []
-
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        if node.name in _DETAILS_READERS_ALLOWED:
-            continue
-        for inner in ast.walk(node):
-            if not isinstance(inner, ast.Call):
-                continue
-            func = inner.func
-            if not isinstance(func, ast.Attribute) or func.attr != "get":
-                continue
-            if not inner.args:
-                continue
-            first = inner.args[0]
-            if isinstance(first, ast.Constant) and first.value == "details":
-                offenders.append(f"{path.name}:{inner.lineno} in {node.name}()")
-    return offenders
-
-
-class NobodyReadsFindingDetailsByHandTest(unittest.TestCase):
-    def test_the_completion_domain_goes_through_the_accessor(self):
-        """Fail on the pattern, not just on its consequences.
-
-        Two correct call sites do not stop a third author writing
-        ``finding.get("details")`` in a new consumer — it reads perfectly, matches the
-        constructor's parameter name, and silently returns nothing. This is the only
-        check that catches that before it ships.
-        """
-        offenders: list[str] = []
-        for path in sorted(_MISSION_PACKAGE.glob("*.py")):
-            offenders.extend(_direct_details_reads(path))
-        self.assertEqual(
-            offenders, [],
-            "read merge-gate finding details via facts.finding_detail(); "
-            "_merge_gate_finding splats them, so .get('details') is always empty. "
-            f"Offenders: {offenders}",
-        )
-
-    def test_the_guard_actually_detects_the_pattern(self):
-        # A guard that cannot fail is not a guard.
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmp:
-            probe = pathlib.Path(tmp) / "probe.py"
-            probe.write_text(
-                "def consume(finding):\n"
-                "    return (finding.get('details') or {}).get('mergeable')\n",
-                encoding="utf-8",
-            )
-            self.assertEqual(len(_direct_details_reads(probe)), 1)
+# §2-§4 (retired with SIMPLIFY-30): the v1 facts accessor and its reducer
+# consumers were deleted with the Mission Bot v1 controller; §1 above remains
+# the contract for the live merge gate's finding shape.
 
 
 if __name__ == "__main__":
-    unittest.main()
+    unittest.main(verbosity=2)

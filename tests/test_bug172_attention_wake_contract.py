@@ -14,7 +14,6 @@ from path_setup import ROOT  # noqa: F401
 
 import app_impl
 from switchboard.api.routers.attention import create_router
-from switchboard.domain.completion.executor import mark_human_resume_receipt
 from switchboard.storage.migrations.attention import upgrade_attention_schema
 from switchboard.storage.repositories import attention as attention_repo
 from switchboard.storage.repositories import autopilot_scopes
@@ -285,18 +284,9 @@ class CompletionAttentionWakeContract(unittest.TestCase):
         self.assertTrue(replay.json()["idempotent_replay"])
         self.assertEqual(len(self.wake_calls), call_count)
 
-        with self.assertRaises(attention_repo.AttentionStoreError) as forged:
-            mark_human_resume_receipt(
-                request["request_id"],
-                expected_version=3,
-                host_id="any-host",
-                actor="forger",
-                receipt={"schema": "fake", "claimed": True},
-                project=PROJECT,
-            )
-        self.assertEqual(
-            forged.exception.code, "attention_completion_owner_required")
-
+        # SIMPLIFY-30: the v1 executor's mark_human_resume_receipt side door
+        # is deleted outright — only an exact fenced completion-owner tick can
+        # resolve a wake, and no API exists to forge a resume receipt.
         tick = {
             "schema": "switchboard.completion_tick.v1",
             "task_id": TASK,

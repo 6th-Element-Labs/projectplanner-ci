@@ -1,45 +1,22 @@
-"""Exact-head completion snapshot, route classification, and pure planners.
+"""Live completion-domain contracts that outlived the Mission Bot v1 controller.
 
-Side-effecting effect execution lives in ``executor`` and must be imported from
-that module directly. Importing it here would create a circular dependency
-through ``storage.repositories`` → ``db.connection`` → ``domain``.
+SIMPLIFY-30 deleted the retired v1 reducer, normalization law/state machine,
+and effect executor. What remains here is the small set of contracts
+production still runs on:
+
+- ``human_closeout`` — the frozen PROTO-7 closeout payload for route=human
+  attention requests (agent_requires_human / record_human_blocker, and the
+  attention repository's follow-up request).
+- ``routing`` — route-aware dispatch selection shared by the coordinator
+  daemon, mission coordinator, and deliverables repository.
+- ``repair_proof`` — cross-task review-repair classification used by the
+  review-remediation repository.
 """
 
-from .effects import effect_key, plan_effect
 from .human_closeout import build_human_closeout_request
-from .normalization_law import (
-    NORMALIZATION_LAW_SCHEMA,
-    NORMALIZED_TICK_SCHEMA,
-    FreshTick,
-    NormalizedAction,
-    normalize_fresh_tick,
-    validate_law_table,
-)
 from .routing import task_ready_for_dispatch
-from .state_machine import (
-    COMPLETION_CLASSIFIER_VERSION,
-    COMPLETION_DECISION_SCHEMA,
-    COMPLETION_SNAPSHOT_SCHEMA,
-    MERGE_AUTHORIZATION_CONTEXT,
-    build_completion_snapshot,
-    classify_completion,
-)
 
 __all__ = [
-    "COMPLETION_CLASSIFIER_VERSION",
-    "COMPLETION_DECISION_SCHEMA",
-    "COMPLETION_SNAPSHOT_SCHEMA",
-    "MERGE_AUTHORIZATION_CONTEXT",
-    "NORMALIZATION_LAW_SCHEMA",
-    "NORMALIZED_TICK_SCHEMA",
-    "FreshTick",
-    "NormalizedAction",
-    "build_completion_snapshot",
     "build_human_closeout_request",
-    "classify_completion",
-    "effect_key",
-    "normalize_fresh_tick",
-    "plan_effect",
     "task_ready_for_dispatch",
-    "validate_law_table",
 ]

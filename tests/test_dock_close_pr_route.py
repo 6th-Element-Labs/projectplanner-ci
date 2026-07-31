@@ -27,7 +27,6 @@ try:
     from fastapi.testclient import TestClient  # noqa: E402
     from app import app  # noqa: E402
     import open_prs  # noqa: E402
-    from switchboard.application import completion_driver  # noqa: E402
 except ModuleNotFoundError as exc:
     print(f"  SKIP  close-PR route proof requires optional dependency: {exc.name}")
     shutil.rmtree(TMP, ignore_errors=True)
@@ -50,12 +49,12 @@ calls: list = []
 
 client = TestClient(app)
 real_build, real_cmd, real_token = (
-    open_prs.build_open_prs, completion_driver._github_command, open_prs._token)
+    open_prs.build_open_prs, open_prs.gh_command, open_prs._token)
 try:
     open_prs.build_open_prs = lambda *a, **k: {
         "repo": "acme/widgets", "prs": [OPEN_PR, QUEUED_PR]}
     open_prs._token = lambda *a, **k: "tok"
-    completion_driver._github_command = lambda argv, **k: (
+    open_prs.gh_command = lambda argv, **k: (
         calls.append(list(argv)) or {"returncode": 0, "stdout": "closed"})
 
     r = client.post("/api/pull-requests/900/close", json={"project": P})
@@ -78,7 +77,7 @@ try:
     r = client.post("/api/pull-requests/4242/close", json={"project": P})
     ok(r.status_code == 404, f"an unknown PR is a 404: {r.status_code}")
 finally:
-    open_prs.build_open_prs, completion_driver._github_command, open_prs._token = (
+    open_prs.build_open_prs, open_prs.gh_command, open_prs._token = (
         real_build, real_cmd, real_token)
     shutil.rmtree(TMP, ignore_errors=True)
 
