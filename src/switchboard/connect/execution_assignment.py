@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, Mapping
 
 
@@ -9,6 +11,50 @@ SCHEMA = "switchboard.execution_assignment.v1"
 EXACT_HEAD_ROLES = frozenset({"review_merge", "remediation"})
 VALID_ROLES = frozenset({"implementation", *EXACT_HEAD_ROLES})
 OFFLINE_EVIDENCE_PROFILE = "offline_evidence"
+
+#: Every field name this module can put in a contract, including the optional
+#: ones. ``require_exact_execution_assignment`` compares whole dicts, so an
+#: Agent Host running an older copy of THIS FILE derives a different field set
+#: and every launch is refused — the failure only surfaces after the wake is
+#: claimed and the 90s hold expires.
+#:
+#: Adding a field here (BUG-249 added ``session_policy_profile``) is therefore a
+#: wire-breaking change. The fingerprint below turns that into something the
+#: control plane can see at heartbeat instead of discovering at launch: hosts
+#: report the fingerprint their bundled copy produces, and a host whose
+#: fingerprint differs from the server's is not eligible for work.
+#:
+#: KEEP IN SYNC with build_execution_assignment. The conformance test
+#: tests/test_host_contract_fingerprint.py fails if a field is added to the
+#: builder without being listed here.
+CONTRACT_FIELDS: tuple[str, ...] = (
+    "schema",
+    "task_id",
+    "execution_id",
+    "assignment_id",
+    "generation",
+    "desired_role",
+    "exact_head_sha",
+    "exact_pr",
+    "claim_expectations",
+    "typed_tools",
+    "session_policy_profile",
+    "launch_pointer",
+)
+
+
+def contract_fingerprint() -> str:
+    """Stable id of the contract SHAPE this build produces.
+
+    Derived from the schema plus the sorted field set — not from any one
+    contract's values — so two builds agree if and only if they can produce
+    byte-identical contracts for the same lifecycle.
+    """
+    payload = json.dumps(
+        {"schema": SCHEMA, "fields": sorted(CONTRACT_FIELDS)},
+        sort_keys=True, separators=(",", ":"),
+    )
+    return "eac1:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 def claim_expectations_for(profile: str, role: str) -> dict[str, Any]:

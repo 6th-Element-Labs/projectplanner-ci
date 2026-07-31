@@ -24,10 +24,12 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 from typing import Any, Callable, Iterable
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from cryptography.exceptions import InvalidSignature
@@ -302,6 +304,48 @@ def create_signed_bundle(source_root: Path, output_dir: Path, version: str,
         raise EnrollmentError("bundle signing key must be Ed25519")
     _write_built_bundle(output_dir, manifest, key)
     return manifest
+
+
+def publish_release(*, source_root: Path, signing_key: Path, base_url: str,
+                    project: str, token: str = "", version: str = "auto",
+                    promote: bool = True, notes: str = "") -> dict[str, Any]:
+    """Build, sign, and hand the server the release the fleet should run.
+
+    One command, because the failure this prevents is a skew nobody noticed —
+    and a three-step publish is a step somebody skips. The private key stays on
+    the machine that runs this; only the signed archive crosses the wire, so the
+    server can verify what it is given but can never mint a release itself.
+    """
+    resolved = version if version != "auto" else _auto_bundle_version(source_root)
+    staging = Path(tempfile.mkdtemp(prefix="switchboard-host-release-"))
+    try:
+        bundle_dir = staging / "bundle"
+        manifest = create_signed_bundle(source_root, bundle_dir, resolved, signing_key)
+        archive = staging / "bundle.tar.gz"
+        with tarfile.open(archive, "w:gz") as tar:
+            tar.add(bundle_dir, arcname="bundle")
+        body = archive.read_bytes()
+        url = (f"{base_url.rstrip('/')}/ixp/v1/host_releases"
+               f"?project={urllib.parse.quote(project, safe='')}"
+               f"&promote={'true' if promote else 'false'}"
+               f"&notes={urllib.parse.quote(notes, safe='')}")
+        boundary = "----switchboard" + hashlib.sha256(body[:4096]).hexdigest()[:16]
+        header = (f"--{boundary}\r\n"
+                  f'Content-Disposition: form-data; name="file"; '
+                  f'filename="{resolved}.tar.gz"\r\n'
+                  f"Content-Type: application/gzip\r\n\r\n")
+        payload = b"".join([header.encode("ascii"), body,
+                            f"\r\n--{boundary}--\r\n".encode("ascii")])
+        request = urllib.request.Request(url, data=payload, method="POST")
+        request.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
+        if token:
+            request.add_header("Authorization", f"Bearer {token}")
+        with urllib.request.urlopen(request, timeout=300) as response:
+            published = json.loads(response.read().decode("utf-8") or "{}")
+        published["files"] = published.get("files") or len(manifest.get("files") or [])
+        return published
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def verify_bundle(bundle_dir: Path, public_key_path: Path) -> dict[str, Any]:
@@ -2191,6 +2235,15 @@ def main(argv: list[str] | None = None) -> int:
     build.add_argument("--output", type=Path, required=True)
     build.add_argument("--version", required=True)
     build.add_argument("--signing-key", type=Path, required=True)
+    publish = sub.add_parser("publish-release")
+    publish.add_argument("--source-root", type=Path, required=True)
+    publish.add_argument("--signing-key", type=Path, required=True)
+    publish.add_argument("--base-url", default="https://plan.taikunai.com")
+    publish.add_argument("--project", required=True, type=_non_blank_project)
+    publish.add_argument("--version", default="auto")
+    publish.add_argument("--token", default=os.environ.get("SWITCHBOARD_TOKEN", ""))
+    publish.add_argument("--notes", default="")
+    publish.add_argument("--no-promote", action="store_true")
     verify = sub.add_parser("verify-bundle")
     verify.add_argument("--bundle", type=Path, required=True)
     verify.add_argument("--public-key", type=Path, required=True)
@@ -2254,6 +2307,12 @@ def main(argv: list[str] | None = None) -> int:
                        else _auto_bundle_version(args.source_root))
             result = create_signed_bundle(
                 args.source_root, args.output, version, args.signing_key)
+        elif args.command == "publish-release":
+            result = publish_release(
+                source_root=args.source_root, signing_key=args.signing_key,
+                base_url=args.base_url, project=args.project,
+                token=args.token, version=args.version,
+                promote=not args.no_promote, notes=args.notes)
         elif args.command == "verify-bundle":
             result = verify_bundle(args.bundle, args.public_key)
         elif args.command == "install":

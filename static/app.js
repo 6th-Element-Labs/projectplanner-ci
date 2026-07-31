@@ -2199,12 +2199,35 @@ const TeepPlan = {
         if (count) { count.className = live.length ? 'badge bg-green-lt ms-2' : 'badge bg-secondary-lt ms-2'; count.textContent = `${live.length} live`; }
         if (!hosts.length) { body.innerHTML = `<div class="text-secondary small">No runner capacity is registered for this project.</div>`; return; }
         body.innerHTML = `<div class="table-responsive"><table class="table table-sm mb-0 align-middle">
-            <thead><tr><th>Host</th><th>Heartbeat</th><th>Capacity</th><th>Runtimes</th><th class="text-end">Actions</th></tr></thead>
+            <thead><tr><th>Host</th><th>Heartbeat</th><th>Release</th><th>Capacity</th><th>Runtimes</th><th class="text-end">Actions</th></tr></thead>
             <tbody>${hosts.map((h) => this._hostRow(h)).join('')}</tbody></table></div>`;
         body.querySelectorAll('[data-wake-runtimes]').forEach((b) =>
             b.addEventListener('click', () => this._openWakeModal(b.getAttribute('data-wake-runtimes'))));
         body.querySelectorAll('[data-host-policy]').forEach((b) =>
             b.addEventListener('click', () => this._configureHostPolicy(b.getAttribute('data-host-policy'))));
+        body.querySelectorAll('[data-host-update]').forEach((b) =>
+            b.addEventListener('click', () => this._updateHost(b.getAttribute('data-host-update'))));
+    },
+    // Liveness and readiness are two different lights. A host can heartbeat
+    // perfectly while running a bundle whose execution-assignment contract this
+    // server will refuse at launch — that is exactly how the 2026-07-31 canary
+    // lost three missions to a host showing green. This renders the second one.
+    _hostReadiness(h) {
+        const r = h.readiness || {};
+        const state = String(r.state || (h.stale ? 'offline' : 'ready'));
+        const map = {
+            ready: { dot: 'green', label: 'ready' },
+            update_available: { dot: 'yellow', label: 'update available' },
+            blocked: { dot: 'red', label: 'incompatible' },
+            updating: { dot: 'blue', label: 'updating' },
+            offline: { dot: 'secondary', label: 'offline' },
+        };
+        const chosen = map[state] || map.ready;
+        const versions = r.required_version && r.required_version !== r.installed_version
+            ? `${this.esc(r.installed_version || '?')} → ${this.esc(r.required_version)}`
+            : this.esc(r.installed_version || '');
+        return { state, ...chosen, versions, detail: String(r.detail || ''),
+                 actionable: !!r.actionable };
     },
     _hostRow(h) {
         const cap = h.capacity || {}; const lim = h.limits || {};
@@ -2212,6 +2235,7 @@ const TeepPlan = {
         const max = lim.max_sessions != null ? lim.max_sessions
             : (h.available_sessions != null ? active + h.available_sessions : '—');
         const color = h.stale ? 'yellow' : 'green';
+        const ready = this._hostReadiness(h);
         const rnames = (h.runtimes || []).map((r) => (typeof r === 'string' ? r : (r && (r.runtime || r.name)) || '')).filter(Boolean);
         const runtimes = rnames.map((r) => `<span class="badge bg-secondary-lt me-1">${this.esc(r)}</span>`).join('') || '<span class="text-secondary">—</span>';
         const policy = (h.enrollment || {}).execution_policy || {};
@@ -2220,14 +2244,58 @@ const TeepPlan = {
         const policyText = policy.max_sessions
             ? `<div class="text-secondary small">Authorized: ${this.esc(laneText)} · ${this.esc(String(policy.max_sessions))} parallel</div>` : '';
         const configure = this.isAdmin && h.enrollment && !h.enrollment.error
-            ? `<button class="btn btn-sm btn-outline-primary" data-host-policy="${this.esc(h.host_id || '')}"><i class="ti ti-adjustments me-1"></i>Concurrency</button>` : '';
+            ? `<button class="btn btn-sm btn-outline-primary" data-host-policy="${this.esc(h.host_id || '')}">Concurrency</button>` : '';
+        // Only offered when there is actually something to install. A button
+        // that cannot help is worse than no button: it reads as "I tried".
+        const update = ready.actionable
+            ? `<button class="btn btn-sm ${ready.state === 'blocked' ? 'btn-danger' : 'btn-outline-warning'} dock-host-action" data-host-update="${this.esc(h.host_id || '')}">Update host</button>` : '';
+        const readinessCell = `<div class="d-flex align-items-center gap-1">
+                <span class="status-dot status-dot-animated bg-${ready.dot}" title="${this.esc(ready.detail)}"></span>
+                <span class="small">${this.esc(ready.label)}</span>
+            </div>${ready.versions ? `<div class="text-secondary small font-monospace">${ready.versions}</div>` : ''}`;
         return `<tr>
             <td><div class="font-monospace small">${this.esc(h.host_id || '')}</div><div class="text-secondary small">${this.esc(h.hostname || '')}</div>${policyText}</td>
             <td><span class="badge bg-${color}-lt">${h.stale ? 'stale' : 'live'}</span> <span class="text-secondary small">${this.esc(this._fleetAge(h.heartbeat_at))}</span></td>
+            <td>${readinessCell}</td>
             <td class="font-monospace small">${this.esc(String(active))} / ${this.esc(String(max))}</td>
             <td>${runtimes}</td>
-            <td class="text-end"><div class="btn-list justify-content-end">${configure}<button class="btn btn-sm" data-wake-runtimes="${this.esc(rnames.join(','))}"><i class="ti ti-player-play me-1"></i>Launch…</button></div></td>
+            <td class="text-end"><div class="btn-list justify-content-end">${update}${configure}<button class="btn btn-sm dock-host-action" data-wake-runtimes="${this.esc(rnames.join(','))}">Launch…</button></div></td>
         </tr>`;
+    },
+    // The manual path. The host normally updates itself on its next heartbeat;
+    // this exists for when it cannot — no download URL on the promoted release,
+    // an unenrolled host, or a bundle that already failed to install. In those
+    // cases the light is red and the operator needs the real instruction, not a
+    // button that quietly does nothing.
+    async _updateHost(hostId) {
+        const host = String(hostId || '').trim();
+        if (!host) return;
+        let release = {};
+        try {
+            const res = await fetch(`/ixp/v1/host_releases/promoted?project=${encodeURIComponent(this.project || '')}`);
+            release = (await res.json()) || {};
+        } catch (e) { release = {}; }
+        const url = String(release.download_url || '').trim();
+        const version = String(release.version || '').trim();
+        // Only offer the link when the bytes are actually stored. A row whose
+        // archive is missing would hand the operator a 404 and look like the
+        // feature is broken rather than unpublished.
+        if (url && release.archive_present) { window.open(url, '_blank', 'noopener'); return; }
+        if (!version) {
+            window.alert(
+                'No Agent Host release has been published yet, so hosts have '
+                + 'nothing to sync to.\n\nPublish one with:\n'
+                + '  python3 adapters/agent_host_enrollment.py publish-release \\\n'
+                + '    --source-root . --signing-key <key.pem> --project '
+                + `${this.project || 'switchboard'}`);
+            return;
+        }
+        window.alert(
+            `Release ${version} is promoted but its bundle is not stored on the `
+            + `server, so ${host} cannot download it.\n\nRe-publish it with:\n`
+            + '  python3 adapters/agent_host_enrollment.py publish-release \\\n'
+            + '    --source-root . --signing-key <key.pem> --project '
+            + `${this.project || 'switchboard'}`);
     },
     async _configureHostPolicy(hostId) {
         const host = String(hostId || '').trim();

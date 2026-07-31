@@ -251,7 +251,8 @@ body.tk-density-control .h1{ font-variant-numeric:tabular-nums; }
    icon-only control rendered as a blank square when the glyph did not paint,
    and that is how Close and Kill each went missing. */
 #fleet-dock .dock-pr-action,
-#fleet-dock .dock-runner-action { flex: 0 0 auto; width: auto; }
+#fleet-dock .dock-runner-action,
+#fleet-dock .dock-host-action { flex: 0 0 auto; width: auto; }
 #fleet-dock .dock-destructive-action { margin-left: auto; }
 /* Header chrome: on desktop the bar keeps its compact single line — the grabber
    and the left-hand minimize are phone-only, where the dock is a full sheet. */
@@ -301,7 +302,8 @@ body.tk-density-control .h1{ font-variant-numeric:tabular-nums; }
   /* On a phone the actions keep a 44px thumb height but still size to their
      label — a full-width button per action turned every card into a wall. */
   #fleet-dock .dock-pr-action,
-  #fleet-dock .dock-runner-action { flex: 0 0 auto; min-height: 44px; width: auto; }
+  #fleet-dock .dock-runner-action,
+  #fleet-dock .dock-host-action { flex: 0 0 auto; min-height: 44px; width: auto; }
   #fleet-dock .p-2.border.rounded { width: 100%; }
   body:has(#fleet-dock > .card) { overflow: hidden; }
 }

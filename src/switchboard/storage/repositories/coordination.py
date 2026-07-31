@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from constants import *  # noqa: F401,F403
 from db.connection import _conn, _control_plane_conn, _control_plane_unavailable
 from db.core import _json_obj  # noqa: F401
+from switchboard.domain import host_readiness
 from switchboard.domain.coordination.delivery import (
     build_message_delivery_receipt,
     classify_agent_delivery,
@@ -79,7 +80,12 @@ def _wake_row(row: sqlite3.Row) -> Dict[str, Any]:
 
 def _host_rows_in(c: sqlite3.Connection, now: float) -> List[Dict[str, Any]]:
     rows = c.execute("SELECT * FROM agent_hosts ORDER BY heartbeat_at DESC").fetchall()
-    return [_host_row(row, now=now) for row in rows]
+    # Imported here, not at module scope: this module is loaded while the
+    # repositories package is still initialising, so a sibling import would
+    # cycle through tasks -> claims -> coordination.
+    from switchboard.storage.repositories import host_releases
+    required = host_releases.get_promoted_release_in(c)
+    return [_host_row(row, now=now, required_release=required) for row in rows]
 
 
 def _placement_reservations_in(c: sqlite3.Connection) -> Dict[str, int]:
@@ -3668,7 +3674,8 @@ def list_active_agents(lane: str = "", project: str = DEFAULT_PROJECT) -> List[D
     return active
 
 
-def _host_row(row: sqlite3.Row, now: Optional[float] = None) -> Dict[str, Any]:
+def _host_row(row: sqlite3.Row, now: Optional[float] = None,
+              required_release: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     now = time.time() if now is None else now
     d = dict(row)
     runtimes = _json_obj(d.pop("runtimes_json", "[]"), [])
@@ -3705,6 +3712,11 @@ def _host_row(row: sqlite3.Row, now: Optional[float] = None) -> Dict[str, Any]:
         "fault": (dict(relay_auth.get("fault"))
                   if isinstance(relay_auth.get("fault"), dict) else None),
     })
+    # Readiness is computed, never stored: it is a function of this row and the
+    # promoted release, and caching it would let a stale verdict outlive the
+    # release that produced it. Callers that already hold a connection pass the
+    # release in; the default None means "no opinion", which is fail-open.
+    d["readiness"] = host_readiness.evaluate(d, required_release)
     return d
 
 
@@ -3721,6 +3733,15 @@ def _runtime_matches_selector(runtime: Dict[str, Any], selector: Dict[str, Any])
 
 def _host_can_handle(host: Dict[str, Any], selector: Dict[str, Any]) -> bool:
     if host.get("stale"):
+        return False
+    # A host whose bundled execution-assignment contract disagrees with this
+    # server cannot launch anything: admission compares whole dicts and refuses.
+    # Before this gate existed the mismatch was only discovered AFTER the wake
+    # was claimed and the 90s hold burned (2026-07-31 drain canary, Wave A x3),
+    # so an incompatible host looked healthy and silently consumed capacity.
+    # Refusing here makes it a placement decision with a reason instead.
+    readiness = host.get("readiness") or {}
+    if readiness.get("withholds_work"):
         return False
     target_host_id = str(selector.get("host_id") or "").strip()
     if target_host_id and str(host.get("host_id") or "") != target_host_id:
@@ -3935,6 +3956,21 @@ def heartbeat_host(host_id: str, active_sessions: Optional[int] = None,
             reported_host_version = str(
                 profile_components.get("agent_host_version") or ""
             ).strip()
+            # Attestation is a sibling of runtime_profile, deliberately NOT inside
+            # its components: those are canonically hashed for eligibility
+            # matching, so adding fields there would move every host's profile
+            # hash and churn placement for a reason unrelated to capability.
+            # The digest is the identity — a hand-patched tree keeps its version
+            # string but changes its bytes, which is exactly how the 0.4.15 host
+            # looked healthy while carrying an incompatible contract.
+            attestation = current.get("host_attestation") or {}
+            if not isinstance(attestation, dict):
+                attestation = {}
+            reported_digest = str(attestation.get("bundle_digest") or "").strip()
+            reported_contract = str(
+                attestation.get("contract_fingerprint") or "").strip()
+            reported_update_state = str(attestation.get("update_state") or "").strip()
+            reported_update_error = str(attestation.get("update_error") or "").strip()
             stored_runtimes = _json_obj(row["runtimes_json"], [])
             stored_limits = _json_obj(row["limits_json"], {})
             inventory_error = _enrollment_inventory_error(
@@ -3944,10 +3980,16 @@ def heartbeat_host(host_id: str, active_sessions: Optional[int] = None,
                 return inventory_error
             c.execute(
                 "UPDATE agent_hosts SET heartbeat_at=?, capacity_json=?, status=?, last_error=?, "
-                "agent_host_version=CASE WHEN ?!='' THEN ? ELSE agent_host_version END "
+                "agent_host_version=CASE WHEN ?!='' THEN ? ELSE agent_host_version END, "
+                "bundle_digest=CASE WHEN ?!='' THEN ? ELSE bundle_digest END, "
+                "contract_fingerprint=CASE WHEN ?!='' THEN ? ELSE contract_fingerprint END, "
+                "update_state=?, update_error=? "
                 "WHERE host_id=?",
                 (now, json.dumps(current, sort_keys=True), status or "online",
-                 last_error or None, reported_host_version, reported_host_version, host_id),
+                 last_error or None, reported_host_version, reported_host_version,
+                 reported_digest, reported_digest,
+                 reported_contract, reported_contract,
+                 reported_update_state, reported_update_error, host_id),
             )
             if isinstance(relay_auth_fault, dict) and relay_auth_fault:
                 # HARDEN-79: the host's own account of the lockout. It reaches
@@ -3999,8 +4041,15 @@ def heartbeat_host(host_id: str, active_sessions: Optional[int] = None,
         if _store_facade()._sqlite_busy(exc):
             return _control_plane_unavailable("heartbeat_host", project, started_at, exc)
         raise
-    result = _host_row(row, now=now)
+    from switchboard.storage.repositories import host_releases
+    with _conn(project) as c:
+        required_release = host_releases.get_promoted_release_in(c)
+    result = _host_row(row, now=now, required_release=required_release)
     result["terminal_runner_cleanup"] = terminal_cleanup
+    # The heartbeat response is where a host learns it is behind. Returning the
+    # promoted release here is what makes the update automatic: the host does
+    # not have to poll a second endpoint or wait for an operator to notice.
+    result["required_host_release"] = dict(required_release or {})
     if identity.get("required"):
         result["authoritative_execution_policy"] = dict(
             identity.get("execution_policy") or {})
@@ -4128,11 +4177,15 @@ def list_agent_hosts(runtime: str = "", lane: str = "", capability: str = "",
     try:
         with _control_plane_conn(project) as c:
             rows = c.execute("SELECT * FROM agent_hosts ORDER BY heartbeat_at DESC").fetchall()
+            # Read on the same connection as the rows, so the readiness verdict
+            # and the hosts it judges come from one consistent snapshot.
+            from switchboard.storage.repositories import host_releases
+            required_release = host_releases.get_promoted_release_in(c)
     except sqlite3.OperationalError as exc:
         if _store_facade()._sqlite_busy(exc):
             return [_control_plane_unavailable("list_agent_hosts", project, started_at, exc)]
         raise
-    hosts = [_host_row(r, now=now) for r in rows]
+    hosts = [_host_row(r, now=now, required_release=required_release) for r in rows]
     out = []
     for host in hosts:
         if host.get("stale") and not include_stale:
@@ -4153,7 +4206,9 @@ def host_status(host_id: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
             if not row:
                 return {"error": "host not registered", "host_id": host_id}
-            host = _host_row(row, now=now)
+            from switchboard.storage.repositories import host_releases
+            host = _host_row(row, now=now,
+                             required_release=host_releases.get_promoted_release_in(c))
             counts = c.execute(
                 "SELECT status, COUNT(*) n FROM wake_intents WHERE claimed_by_host=? GROUP BY status",
                 (host_id,),

@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from fastapi import APIRouter, Body, HTTPException, Query, Request
+from fastapi import APIRouter, Body, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse
 
 import auth
 import store
@@ -278,6 +279,86 @@ def create_router(*, resolve_project: ProjectResolver,
                                        project=resolved)
         control_plane_http(hosts)
         return {"hosts": hosts}
+
+    @router.post("/ixp/v1/host_releases")
+    async def ixp_publish_host_release(request: Request, project: str = Query(...),
+                                       promote: bool = Query(True),
+                                       notes: str = Query(""),
+                                       file: UploadFile = File(...)):
+        """Publish a signed Agent Host bundle and make it the release hosts run.
+
+        The archive is verified here, with the public key this deployment already
+        ships, before a single row is written. The private key never comes near
+        the server: bundles are signed where the key lives and uploaded already
+        signed, so publishing cannot mint a release nobody signed.
+
+        The digest recorded is computed from the payload the same way a host
+        computes it from its installed tree. That equality is the whole contract
+        — if the two ever diverged, every host would sit permanently at
+        "update available" and re-download forever.
+        """
+        resolved = resolve_project(project)
+        resolve_principal(request, resolved, ("admin", "write:system"),
+                          dev_actor="host-release-publish")
+        data = await file.read()
+        if not data:
+            raise HTTPException(400, "empty bundle archive")
+        from switchboard.application.commands import publish_host_release
+        try:
+            return publish_host_release.execute(
+                archive=data, project=resolved, promote=promote, notes=notes,
+                actor=str(getattr(request.state, "actor", "") or "operator"))
+        except publish_host_release.PublishError as exc:
+            raise HTTPException(400, str(exc))
+
+    @router.get("/ixp/v1/host_releases")
+    async def ixp_list_host_releases(request: Request, project: str = Query(...),
+                                     limit: int = Query(20)):
+        resolved = resolve_project(project)
+        resolve_principal(request, resolved, ("read",), dev_actor="host-release-list")
+        from switchboard.storage.repositories import host_releases
+        return {"releases": host_releases.list_releases(project=resolved, limit=limit)}
+
+    @router.get("/ixp/v1/host_releases/{release_id}/bundle")
+    async def ixp_host_release_bundle(request: Request, release_id: str,
+                                      project: str = Query(...)):
+        """Serve the signed bundle bytes.
+
+        Read scope is enough. The archive is signed and the installer verifies
+        that signature before anything is installed, so serving it grants no
+        authority — and a host that cannot fetch its own update is the outage
+        this whole path exists to end.
+        """
+        resolved = resolve_project(project)
+        resolve_principal(request, resolved, ("read",), dev_actor="host-release-download")
+        from switchboard.storage.repositories import host_releases
+        path = host_releases.archive_path(release_id)
+        if not path.is_file():
+            raise HTTPException(404, "no archive stored for this release")
+        return FileResponse(str(path), media_type="application/gzip",
+                            filename=f"{release_id}.tar.gz")
+
+    @router.get("/ixp/v1/host_releases/promoted")
+    async def ixp_promoted_host_release(request: Request, project: str = Query(...)):
+        """The Agent Host release every host on this board should be running.
+
+        Read-only and non-secret: it is a version, a digest, and where to get
+        the bundle. The signature still gates what may be installed, so
+        publishing the location grants nothing on its own.
+        """
+        resolved = resolve_project(project)
+        resolve_principal(request, resolved, ("read",), dev_actor="host-release-read")
+        from switchboard.storage.repositories import host_releases
+        release = host_releases.get_promoted_release(project=resolved) or {}
+        return {"release_id": release.get("release_id") or "",
+                "version": release.get("version") or "",
+                "bundle_digest": release.get("bundle_digest") or "",
+                "contract_fingerprint": release.get("contract_fingerprint") or "",
+                "download_url": release.get("download_url") or "",
+                # Whether the bytes are actually here. A row without its archive
+                # would otherwise hand the operator a link that 404s.
+                "archive_present": bool(release.get("archive_present")),
+                "promoted_at": release.get("promoted_at") or 0}
 
     @router.get("/ixp/v1/control_plane_probe")
     async def ixp_control_plane_probe(project: str = Query(...), lane: str = "",

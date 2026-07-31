@@ -48,6 +48,8 @@ if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 import switchboard_core as sb  # noqa: E402  (reuses _http + agent_id, same contract)
 import co_drain  # noqa: E402
+import host_attestation  # noqa: E402
+import host_self_update  # noqa: E402
 import relay_auth  # noqa: E402
 from agent_host_enrollment import (  # noqa: E402
     ACCOUNT_AFFINITIES_FILENAME,
@@ -936,6 +938,12 @@ def default_inventory():
     }
 
 
+#: In-process only, and deliberately so: a successful update restarts the
+#: service, so the next process starts clean and finds itself already current.
+#: Persisting the phase would let it outlive the update it described.
+_UPDATE_STATE: dict = {}
+
+
 def heartbeat_capacity(inventory):
     """Return the full non-secret admission record for each heartbeat."""
     active = active_session_count(inventory)
@@ -957,6 +965,14 @@ def heartbeat_capacity(inventory):
             entry.get("runtime") for entry in inventory.get("runtimes") or []
             if isinstance(entry, dict)
         ]),
+        # What this bundle can actually DO, as opposed to the fact that it is
+        # alive. A heartbeat proved liveness and nothing proved compatibility,
+        # which is how a green 0.4.15 host ate three Wave A missions on
+        # 2026-07-31. Sibling of runtime_profile, never inside it: profile
+        # components are canonically hashed for placement eligibility.
+        "host_attestation": host_attestation.attestation(
+            update_state=str(_UPDATE_STATE.get("phase") or ""),
+            update_error=str(_UPDATE_STATE.get("failed_error") or "")),
     })
     return capacity
 
@@ -1055,6 +1071,63 @@ def registration_inventory(inventory, drain_request=None):
         placement = ((advertised.get("capacity") or {}).get("placement") or {})
         placement["drain_state"] = "draining"
     return advertised
+
+
+def apply_required_host_release(inventory, response, capacity):
+    """Keep this host on the release the server says it should be running.
+
+    The server already computed the answer; before this, nothing on the host
+    read it. A contract-breaking change therefore surfaced as a fleet-wide
+    launch outage that an operator had to diagnose by hand and repair by
+    re-running the installer.
+
+    Returns the live plan when an update is in flight, so the caller can stop
+    claiming work for this tick. Draining is the whole reason the drain ends:
+    the server withholds work from a host in ``draining``, and this stops it
+    asking for any.
+    """
+    required = (response or {}).get("required_host_release") or {}
+    plan = host_self_update.decide(
+        required=required,
+        installed_digest=host_attestation.bundle_digest(),
+        installed_version=AGENT_HOST_VERSION,
+        state=_UPDATE_STATE,
+        enrolled=bool(str(os.environ.get("PM_AGENT_HOST_STATE_PATH") or "").strip()),
+    )
+    if plan.get("abandon"):
+        # The drain never quiesced. Go back to work on the installed bundle and
+        # keep the reason visible: a host that silently gives up looks identical
+        # to one that succeeded.
+        print(f"[agent_host] abandoned self-update: {plan.get('error')}", flush=True)
+        _UPDATE_STATE.clear()
+        _UPDATE_STATE["failed_error"] = str(plan.get("error") or "")
+        return None
+    if not plan.act:
+        _UPDATE_STATE.pop("phase", None)
+        return None
+
+    _UPDATE_STATE.setdefault("started_at", plan.get("started_at") or time.time())
+    plan = host_self_update.advance(
+        plan=plan, active_sessions=int(capacity.get("active_sessions") or 0))
+    _UPDATE_STATE["phase"] = plan["phase"]
+
+    if plan["phase"] != host_self_update.INSTALLING:
+        print(f"[agent_host] draining for update to "
+              f"{plan.get('target_version') or plan.get('target_digest')}: "
+              f"{capacity.get('active_sessions')} runner(s) still live", flush=True)
+        return plan
+
+    try:
+        result = host_self_update.install(plan)
+        print(f"[agent_host] installed {result.get('version')}; restarting", flush=True)
+    except Exception as exc:
+        # Record the digest that failed so the next heartbeat does not retry the
+        # same bad bundle forever. The operator sees the reason on the host card.
+        print(f"[agent_host] self-update failed: {exc}", flush=True)
+        _UPDATE_STATE.clear()
+        _UPDATE_STATE["failed_digest"] = str(plan.get("target_digest") or "")
+        _UPDATE_STATE["failed_error"] = str(exc)
+    return plan
 
 
 def apply_authoritative_execution_policy(inventory, response):
@@ -3907,6 +3980,20 @@ def run_once(inventory):
         advertised = _try("POST", P_REGISTER_HOST, registration_inventory(inventory))
         apply_authoritative_execution_policy(inventory, advertised)
         capacity = heartbeat_capacity(inventory)
+    # Stay on the release the server says to run. While an update is in flight
+    # this host stops asking for wakes: the server withholds work from a
+    # draining host, and a host that kept claiming would never reach the quiet
+    # state its own update is waiting for.
+    update_plan = apply_required_host_release(inventory, heartbeat, capacity)
+    if update_plan is not None:
+        return {
+            "host_id": host_id,
+            "pending": 0,
+            "acted": finalized,
+            "refused": [],
+            "runner_controls": [],
+            "host_update": dict(update_plan),
+        }
     # Renew before expiry kill. The previous order marked a just-due lease stale
     # and SIGTERM'd a live Codex before this tick could extend the heartbeat.
     runner_heartbeats = renew_live_direct_runners(inventory)

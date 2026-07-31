@@ -211,6 +211,21 @@ ADDITIVE_COLUMN_MIGRATIONS: List[Tuple[str, str, str, str]] = [
     # longer authenticate anything, including its own heartbeat.
     ("0121_agent_hosts_relay_auth_json", "agent_hosts", "relay_auth_json",
      "ALTER TABLE agent_hosts ADD COLUMN relay_auth_json TEXT NOT NULL DEFAULT '{}'"),
+    # Host release attestation. A version string is a label; the digest is the
+    # identity. The 2026-07-31 drain canary was recovered by hand-copying one
+    # file into the deployed 0.4.15 tree, so the version never changed while the
+    # bundle did — only a digest catches that. The contract fingerprint is what
+    # makes a launch refusal predictable at heartbeat instead of at admission.
+    ("0127_agent_hosts_bundle_digest", "agent_hosts", "bundle_digest",
+     "ALTER TABLE agent_hosts ADD COLUMN bundle_digest TEXT NOT NULL DEFAULT ''"),
+    ("0128_agent_hosts_contract_fingerprint", "agent_hosts", "contract_fingerprint",
+     "ALTER TABLE agent_hosts ADD COLUMN contract_fingerprint TEXT NOT NULL DEFAULT ''"),
+    ("0129_agent_hosts_update_state", "agent_hosts", "update_state",
+     "ALTER TABLE agent_hosts ADD COLUMN update_state TEXT NOT NULL DEFAULT ''"),
+    ("0130_agent_hosts_update_error", "agent_hosts", "update_error",
+     "ALTER TABLE agent_hosts ADD COLUMN update_error TEXT NOT NULL DEFAULT ''"),
+    ("0131_agent_hosts_self_test_at", "agent_hosts", "self_test_at",
+     "ALTER TABLE agent_hosts ADD COLUMN self_test_at REAL"),
 ]
 
 # Idempotent DDL migrations (``CREATE ... IF NOT EXISTS``) applied after the column set,
@@ -253,6 +268,25 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
     ("0125_ix_mission_events_task_sequence",
      "CREATE INDEX IF NOT EXISTS ix_mission_events_task_sequence "
      "ON mission_events(project_id, task_id, sequence)"),
+    # The promoted host release. One row, deliberately: hosts are compared to an
+    # explicitly promoted artifact, never to whatever is on master, or every
+    # merge would block the fleet.
+    ("0132_host_releases",
+     "CREATE TABLE IF NOT EXISTS host_releases ("
+     "release_id TEXT PRIMARY KEY, "
+     "version TEXT NOT NULL, "
+     "bundle_digest TEXT NOT NULL, "
+     "contract_fingerprint TEXT NOT NULL DEFAULT '', "
+     "download_url TEXT NOT NULL DEFAULT '', "
+     "signature TEXT NOT NULL DEFAULT '', "
+     "notes TEXT NOT NULL DEFAULT '', "
+     "promoted INTEGER NOT NULL DEFAULT 0, "
+     "promoted_at REAL, "
+     "promoted_by TEXT NOT NULL DEFAULT '', "
+     "created_at REAL NOT NULL)"),
+    ("0133_ux_host_releases_promoted",
+     "CREATE UNIQUE INDEX IF NOT EXISTS ux_host_releases_promoted "
+     "ON host_releases(promoted) WHERE promoted = 1"),
     ("0126_ix_mission_events_task_head",
      "CREATE INDEX IF NOT EXISTS ix_mission_events_task_head "
      "ON mission_events(project_id, task_id, head_sha, sequence)"),
