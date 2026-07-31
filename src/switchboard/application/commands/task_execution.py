@@ -1061,12 +1061,30 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
         started=bool(result.get("started")),
         attached=bool(result.get("attached")),
         execution_id=execution_id or None,
+        runner_session_id=execution_id or None,
         wake_id=wake_id or None,
         host_id=host_id or None,
-        # Role describes the newly created generation only. Attaching to an
-        # existing/pending execution must not pretend the caller replaced its
-        # lifecycle authority.
-        role=role if action == "started" else None,
+        # An attach reports the identity already persisted on the live runner;
+        # it does not grant or replace lifecycle authority.  Workers must be
+        # able to compare this readback with their immutable assignment instead
+        # of treating omitted fence fields as an unbound generation.
+        execution=live_identity if result.get("attached") else None,
+        execution_lease_id=(
+            live_identity.get("execution_id") if result.get("attached") else None
+        ),
+        assignment_id=(
+            live_identity.get("assignment_id") if result.get("attached") else None
+        ),
+        generation=(
+            live_identity.get("generation") if result.get("attached") else None
+        ),
+        head_sha=(
+            live_identity.get("head_sha") if result.get("attached") else None
+        ),
+        role=(
+            live_identity.get("role") if result.get("attached")
+            else role if action == "started" else None
+        ),
         lifecycle_phase=("running" if result.get("attached")
                          else "starting" if action in {"started", "starting"} else None),
         transport=descriptor.get("transport"),

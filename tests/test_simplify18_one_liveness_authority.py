@@ -167,6 +167,14 @@ attached = task_execution.start_task(
 ok(attached["action"] == "attach"
    and attached.get("execution_id") == "run-s18-live",
    "same role/head start_task attaches to the existing generation")
+ok(attached.get("runner_session_id") == "run-s18-live"
+   and attached.get("execution_lease_id") == "exec-s18-1"
+   and attached.get("assignment_id") == "assign-s18-1"
+   and attached.get("generation") == 1
+   and attached.get("role") == "implementation"
+   and attached.get("head_sha") == "a" * 40
+   and attached.get("execution") == identity,
+   "attach readback preserves the persisted execution assignment and fence")
 try:
     task_execution.start_task(
         tid, agent_id=agent, role="implementation",
