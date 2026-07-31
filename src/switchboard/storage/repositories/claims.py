@@ -31,7 +31,6 @@ from switchboard.domain.validation_policy import (
     ui_playwright_evidence_gate,
 )
 from switchboard.connect.execution_assignment import (
-    OFFLINE_EVIDENCE_PROFILE,
     ExecutionAssignmentError,
     build_execution_assignment,
     claim_expectations_for,
@@ -1572,30 +1571,6 @@ def _complete_claim_impl(claim_id: str, evidence: str = "", final_status: str = 
         response, evidence_obj, project, mission_project, actor)
 
 
-def _stamped_session_policy_profile_in(
-        c: sqlite3.Connection, metadata: Dict[str, Any]) -> str:
-    """Read the server-stamped profile from the wake that admitted this runner.
-
-    The wake's policy_json is server-owned lifecycle authority; a missing wake
-    or absent stamp yields "" so completion falls back to the strict code
-    contract rather than trusting anything the runner presented.
-    """
-    wake_id = str((metadata or {}).get("wake_id") or "")
-    if not wake_id:
-        return ""
-    row = c.execute(
-        "SELECT policy_json FROM wake_intents WHERE wake_id=?", (wake_id,),
-    ).fetchone()
-    if not row:
-        return ""
-    try:
-        policy = json.loads(row["policy_json"] or "{}")
-    except (TypeError, json.JSONDecodeError):
-        return ""
-    contract = policy.get("execution_assignment") or {}
-    return str(contract.get("session_policy_profile") or "").strip().lower()
-
-
 def _stage_managed_completion_stop_in(
         c: sqlite3.Connection, claim: sqlite3.Row, work_session_gate: Dict[str, Any],
         evidence: Dict[str, Any], requested_status: str, actor: str,
@@ -1663,22 +1638,20 @@ def _stage_managed_completion_stop_in(
         match = re.search(r"/pull/(\d+)(?:/|$)", str(evidence.get("pr_url") or ""))
         pr_number = int(match.group(1)) if match else 0
     head_sha = str(evidence.get("head_sha") or "").strip().lower()
-    if _stamped_session_policy_profile_in(c, metadata) == OFFLINE_EVIDENCE_PROFILE:
-        # A server-stamped offline_evidence execution completes on truthful
-        # offline evidence: no PR/head exists to demand. The task still only
-        # reaches In Review here; Done stays with the offline verifier.
+    if pr_number <= 0 or len(head_sha) < 7:
+        # No PR identity: honest offline evidence is enough to enter the
+        # managed stopping/In Review handoff (BUG-251). Done authority is the
+        # real fence and is unchanged — only canonical merge provenance or the
+        # privileged offline verifier can stamp Done, so mismatched evidence
+        # can never fake a terminal state; it just waits, visibly, In Review.
         offline_keys = (
             "offline_evidence", "artifact_url", "artifact_or_review_note",
             "verification_note",
         )
         if not any(str(evidence.get(key) or "").strip() for key in offline_keys):
-            return {"completed": False, "reason": "offline_evidence_missing",
+            return {"completed": False, "reason": "completion_identity_incomplete",
                     "failure_class": "missing_data", "claim_id": claim["id"],
                     "task_id": claim["task_id"]}
-    elif pr_number <= 0 or len(head_sha) < 7:
-        return {"completed": False, "reason": "completion_identity_incomplete",
-                "failure_class": "missing_data", "claim_id": claim["id"],
-                "task_id": claim["task_id"]}
     work_session = work_session_gate.get("work_session") or {}
     ws_id = str(work_session.get("work_session_id") or "")
     next_epoch = epoch + 1

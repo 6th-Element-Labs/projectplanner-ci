@@ -2059,6 +2059,36 @@ def _coerce_work_session_payload(value: Any) -> Tuple[Dict[str, Any], str]:
     return {}, "work_session must be a JSON object"
 
 
+def _deliverable_session_policy_for_task(task: Dict[str, Any],
+                                         project: str = DEFAULT_PROJECT) -> str:
+    """The deliverable's declared session_policy covers its linked tasks.
+
+    Task authors declare the evidence contract ONCE, on the deliverable
+    (metadata.session_policy); no per-task text marker is required (BUG-251).
+    Zero or conflicting declarations fall through to ordinary resolution.
+    """
+    task_id = str((task or {}).get("task_id") or "").strip().upper()
+    if not task_id:
+        return ""
+    try:
+        links = _store_facade().list_task_deliverable_links(task_id, project=project)
+    except Exception:
+        # Degrades to project defaults — identical to pre-link behavior; the
+        # claim/completion gates still enforce whatever resolves downstream.
+        return ""
+    declared: list[str] = []
+    for link in links or []:
+        if not isinstance(link, dict):
+            continue
+        raw = str(link.get("deliverable_session_policy") or "").strip().lower()
+        if raw and raw not in declared:
+            declared.append(raw)
+    if len(declared) != 1:
+        return ""
+    profile = _normalize_session_policy_profile(declared[0])
+    return profile if _session_policy_profile_rules(profile, project=project) else ""
+
+
 def _task_work_session_profile(task: Dict[str, Any],
                                requested_profile: str = "",
                                project: str = DEFAULT_PROJECT) -> str:
@@ -2076,6 +2106,9 @@ def _task_work_session_profile(task: Dict[str, Any],
     match = re.search(r"(?:policy_profile|session_profile)\s*[:=]\s*([A-Za-z0-9_-]+)", text)
     if match:
         return _normalize_session_policy_profile(match.group(1))
+    deliverable_profile = _deliverable_session_policy_for_task(task, project=project)
+    if deliverable_profile:
+        return deliverable_profile
     defaults = _project_session_policy_defaults(project)
     if _task_looks_like_code_work(task):
         return defaults.get("code_task_default_profile") or "code_strict"

@@ -3161,7 +3161,8 @@ def list_task_deliverable_links(task_id: str, project: str = DEFAULT_PROJECT) ->
     links: List[Dict[str, Any]] = []
     seen: set = set()
     query = (
-        """SELECT l.*, d.title AS deliverable_title, d.status AS deliverable_status
+        """SELECT l.*, d.title AS deliverable_title, d.status AS deliverable_status,
+                  d.metadata_json AS deliverable_metadata_json
            FROM deliverable_task_links l
            JOIN deliverables d ON d.id = l.deliverable_id
            WHERE l.task_id=? AND l.project_id=?
@@ -3185,6 +3186,16 @@ def list_task_deliverable_links(task_id: str, project: str = DEFAULT_PROJECT) ->
                 link["deliverable_home_project"] = deliverable_project
                 link["deliverable_title"] = row["deliverable_title"]
                 link["deliverable_status"] = row["deliverable_status"]
+                # The deliverable's declared evidence policy covers its linked
+                # tasks (BUG-251): expose it so dispatch resolves the contract
+                # from the deliverable instead of per-task text markers.
+                try:
+                    deliverable_meta = json.loads(
+                        row["deliverable_metadata_json"] or "{}")
+                except (TypeError, ValueError):
+                    deliverable_meta = {}
+                link["deliverable_session_policy"] = str(
+                    (deliverable_meta or {}).get("session_policy") or "").strip().lower()
                 if link.get("board_id"):
                     board_row = c.execute("SELECT * FROM project_boards WHERE id=?",
                                           (link["board_id"],)).fetchone()

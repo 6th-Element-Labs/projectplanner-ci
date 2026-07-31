@@ -28,10 +28,7 @@ from switchboard.connect.execution_assignment import (
     require_exact_execution_assignment,
 )
 from switchboard.storage.migrations.runner import DDL_MIGRATIONS
-from switchboard.storage.repositories.claims import (
-    _stage_managed_completion_stop_in,
-    _stamped_session_policy_profile_in,
-)
+from switchboard.storage.repositories.claims import _stage_managed_completion_stop_in
 from switchboard.storage.repositories.mission_journal import MissionJournalRepository
 
 TASK = "QA-33"
@@ -188,42 +185,39 @@ def _stage(c: sqlite3.Connection, evidence: dict) -> dict:
         c, claim, {}, evidence, "", "bug249-test", time.time())
 
 
-class ManagedCompletionProfileTest(unittest.TestCase):
-    def test_stamp_reader_uses_only_the_server_wake(self):
-        c = _completion_db(stamped_profile="offline_evidence")
-        self.assertEqual(
-            "offline_evidence",
-            _stamped_session_policy_profile_in(c, {"wake_id": WAKE}))
-        self.assertEqual("", _stamped_session_policy_profile_in(c, {}))
-        self.assertEqual(
-            "", _stamped_session_policy_profile_in(c, {"wake_id": "wake-missing"}))
+class ManagedCompletionEvidenceTest(unittest.TestCase):
+    """BUG-251 rule: honest evidence completes; no policy stamp is consulted.
 
-    def test_offline_execution_completes_on_truthful_offline_evidence(self):
-        c = _completion_db(stamped_profile="offline_evidence")
-        result = _stage(c, {"offline_evidence": "drain canary A1 transcript",
-                            "verification_note": "no PR by design"})
-        self.assertTrue(result["stopping"])
-        self.assertFalse(result["completed"])
-        self.assertEqual("stopping", result["lifecycle_phase"])
+    PR identity OR offline evidence enters the managed stopping/In Review
+    handoff. Done authority (canonical merge provenance or the privileged
+    offline verifier) is unchanged and remains the real fence.
+    """
 
-    def test_offline_execution_still_requires_some_offline_evidence(self):
-        c = _completion_db(stamped_profile="offline_evidence")
-        result = _stage(c, {"note": "empty-handed"})
-        self.assertEqual("offline_evidence_missing", result["reason"])
+    def test_offline_evidence_completes_without_any_stamp(self):
+        for db in (
+            _completion_db(),                        # no profile stamped
+            _completion_db(stamped_profile="docs_review"),
+            _completion_db(stamped_profile="offline_evidence"),
+            _completion_db(with_wake=False),         # wake row gone entirely
+        ):
+            result = _stage(db, {"offline_evidence": "drain canary transcript",
+                                 "verification_note": "no PR by design"})
+            self.assertTrue(result["stopping"])
+            self.assertFalse(result["completed"])
+
+    def test_empty_handed_completion_is_still_rejected(self):
+        result = _stage(_completion_db(), {"note": "no evidence at all"})
+        self.assertEqual("completion_identity_incomplete", result["reason"])
         self.assertEqual("missing_data", result["failure_class"])
 
-    def test_code_execution_keeps_the_pr_head_requirement(self):
-        for db in (
-            _completion_db(),                       # stamped nothing
-            _completion_db(stamped_profile="code_strict"),
-            _completion_db(with_wake=False),        # wake row gone -> fail closed
-        ):
-            result = _stage(db, {"offline_evidence": "not a code substitute"})
-            self.assertEqual("completion_identity_incomplete", result["reason"])
+    def test_pr_identity_still_completes(self):
+        result = _stage(_completion_db(), {
+            "pr_number": 77, "head_sha": "a" * 40})
+        self.assertTrue(result["stopping"])
 
     def test_replayed_offline_completion_is_idempotent(self):
-        c = _completion_db(stamped_profile="offline_evidence")
-        evidence = {"offline_evidence": "drain canary A1 transcript"}
+        c = _completion_db()
+        evidence = {"offline_evidence": "drain canary transcript"}
         first = _stage(c, evidence)
         self.assertTrue(first["stopping"])
         replay = _stage(c, evidence)
