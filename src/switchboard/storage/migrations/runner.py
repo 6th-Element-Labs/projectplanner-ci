@@ -48,6 +48,15 @@ from switchboard.storage.migrations.decisions import DECISION_RECORDS_SQL
 # or reuse one. Each tuple is (name, table, column, ddl); every entry adds one column and
 # mirrors, in order, the additive ALTER statements this module replaced.
 ADDITIVE_COLUMN_MIGRATIONS: List[Tuple[str, str, str, str]] = [
+    # Staged rollout for host-release enforcement. Defaults to 0 — OBSERVE —
+    # because the first promotion on any fleet meets hosts that predate
+    # attestation, report no contract fingerprint, and are therefore judged
+    # incompatible. Withholding work from all of them at once would take the
+    # fleet down with no way back: the self-update that would rescue them ships
+    # inside the release they do not have. Observe shows the red lights and
+    # withholds nothing; enforcement is a separate, deliberate flip.
+    ("0134_host_releases_enforce", "host_releases", "enforce",
+     "ALTER TABLE host_releases ADD COLUMN enforce INTEGER NOT NULL DEFAULT 0"),
     ("0001_tasks_agent_state", "tasks", "agent_state",
      "ALTER TABLE tasks ADD COLUMN agent_state TEXT"),
     ("0002_agent_messages_signal", "agent_messages", "signal",

@@ -311,6 +311,27 @@ def create_router(*, resolve_project: ProjectResolver,
         except publish_host_release.PublishError as exc:
             raise HTTPException(400, str(exc))
 
+    @router.post("/ixp/v1/host_releases/enforcement")
+    async def ixp_host_release_enforcement(request: Request, project: str = Query(...),
+                                           enforce: bool = Query(...)):
+        """Start (or stop) withholding work from incompatible hosts.
+
+        Deliberately not part of publishing. A fresh promotion always meets
+        hosts that predate attestation; enforcing in the same breath would
+        strand all of them, since the self-update that rescues them ships in the
+        release they do not have. Publish, watch the lights, then enforce.
+        """
+        resolved = resolve_project(project)
+        resolve_principal(request, resolved, ("admin", "write:system"),
+                          dev_actor="host-release-enforcement")
+        from switchboard.storage.repositories import host_releases
+        try:
+            return host_releases.set_enforcement(
+                enforce=enforce, project=resolved,
+                actor=str(getattr(request.state, "actor", "") or "operator"))
+        except host_releases.HostReleaseError as exc:
+            raise HTTPException(400, exc.code)
+
     @router.get("/ixp/v1/host_releases")
     async def ixp_list_host_releases(request: Request, project: str = Query(...),
                                      limit: int = Query(20)):
@@ -358,6 +379,7 @@ def create_router(*, resolve_project: ProjectResolver,
                 # Whether the bytes are actually here. A row without its archive
                 # would otherwise hand the operator a link that 404s.
                 "archive_present": bool(release.get("archive_present")),
+                "enforce": bool(release.get("enforce")),
                 "promoted_at": release.get("promoted_at") or 0}
 
     @router.get("/ixp/v1/control_plane_probe")

@@ -2222,7 +2222,11 @@ const TeepPlan = {
             updating: { dot: 'blue', label: 'updating' },
             offline: { dot: 'secondary', label: 'offline' },
         };
-        const chosen = map[state] || map.ready;
+        const chosen = { ...(map[state] || map.ready) };
+        // Red but not enforcing is a real distinction: the host is running the
+        // wrong bundle AND is still being given work. Saying only "incompatible"
+        // would imply the fleet is protected when it is not yet.
+        if (state === 'blocked' && r.enforcing === false) chosen.label = 'incompatible · observing';
         const versions = r.required_version && r.required_version !== r.installed_version
             ? `${this.esc(r.installed_version || '?')} → ${this.esc(r.required_version)}`
             : this.esc(r.installed_version || '');

@@ -129,6 +129,11 @@ try:
     old_host = {"stale": False, "agent_host_version": "0.4.15",
                 "bundle_digest": "sha256:old",
                 "contract_fingerprint": "eac1:0000000000000000"}
+    # Enforcement is staged: a fresh promotion observes rather than withholds, so
+    # publishing cannot strand hosts that predate attestation. Turn it on to
+    # assert the protection itself.
+    host_releases.set_enforcement(enforce=True, project=PROJECT)
+    promoted = host_releases.get_promoted_release(project=PROJECT)
     verdict = hr.evaluate(old_host, promoted)
     ok(verdict["state"] == hr.BLOCKED,
        f"a host on an older contract is blocked, not merely behind: {verdict['state']}")

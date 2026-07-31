@@ -49,8 +49,11 @@ def ok(condition, message):
 
 
 SERVER_FP = ea.contract_fingerprint()
+# enforce=True: withholding is what this file is about. Enforcement is staged
+# separately (tests/test_host_release_staged_enforcement.py) precisely so a
+# fresh promotion cannot strand a fleet that predates attestation.
 REQUIRED = {"version": "0.4.16", "bundle_digest": "sha256:bbbb",
-            "contract_fingerprint": SERVER_FP}
+            "contract_fingerprint": SERVER_FP, "enforce": True}
 
 
 def host(**over):

@@ -65,6 +65,7 @@ def _row(row: Any) -> Optional[Dict[str, Any]]:
     d = dict(row)
     d["schema"] = SCHEMA
     d["promoted"] = bool(d.get("promoted"))
+    d["enforce"] = bool(d.get("enforce"))
     # Reported, not assumed: a row without its archive cannot serve a download,
     # and the caller needs to know that before telling a host to fetch one.
     try:
@@ -163,6 +164,33 @@ def record_release(payload: Mapping[str, Any], *, actor: str = "system",
             return _row(c.execute(
                 "SELECT * FROM host_releases WHERE release_id = ?",
                 (release_id,)).fetchone()) or {}
+
+    return _write_through(project, write)
+
+
+def set_enforcement(*, enforce: bool, actor: str = "system",
+                    project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Turn work-withholding on or off for the promoted release.
+
+    Separate from promotion on purpose. Promoting says "this is the release the
+    fleet should run"; enforcing says "and I will stop work on hosts that do
+    not". Doing both at once strands every host that predates attestation,
+    because the self-update that would rescue them ships in the release they do
+    not have. Publish, let the fleet converge, then enforce.
+    """
+    def write() -> Dict[str, Any]:
+        with _conn(project) as c:
+            if not _table_present_in(c):
+                raise HostReleaseError("host_releases_absent")
+            row = c.execute(
+                "SELECT release_id FROM host_releases WHERE promoted = 1").fetchone()
+            if row is None:
+                raise HostReleaseError("host_release_none_promoted")
+            c.execute("UPDATE host_releases SET enforce = ? WHERE release_id = ?",
+                      (1 if enforce else 0, row["release_id"]))
+            return _row(c.execute(
+                "SELECT * FROM host_releases WHERE release_id = ?",
+                (row["release_id"],)).fetchone()) or {}
 
     return _write_through(project, write)
 

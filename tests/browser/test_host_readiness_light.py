@@ -126,6 +126,18 @@ with sync_playwright() as runtime:
     ok("btn-danger" in blocked["updateClass"],
        f"and it is the loud button: {blocked['updateClass']}")
 
+    # Blocked-but-not-enforcing must read differently from blocked-and-enforcing.
+    # Both are red; only one is actually protecting the fleet, and an operator
+    # who cannot tell them apart will believe work is stopped when it is not.
+    observing = page.evaluate(RENDER, host({**BLOCKED, "enforcing": False}))
+    ok("observing" in observing["text"],
+       f"a non-enforcing block says so: {observing['text'][:100]}")
+    ok("bg-red" in observing["dotClass"],
+       "and is still red — the host is still running the wrong bundle")
+    enforcing = page.evaluate(RENDER, host({**BLOCKED, "enforcing": True}))
+    ok("observing" not in enforcing["text"],
+       f"an enforcing block does not: {enforcing['text'][:100]}")
+
     behind = page.evaluate(RENDER, host(BEHIND))
     ok("yellow" in behind["dotClass"],
        f"a behind-but-working host is amber, not red: {behind['dotClass']}")
