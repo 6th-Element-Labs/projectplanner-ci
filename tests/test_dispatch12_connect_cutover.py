@@ -58,12 +58,22 @@ try:
          "updated_at": 1784662000.0},
         project="switchboard", actor="another-start-surface", runtime="codex",
     )
+    connect_dispatch.enqueue_task(
+        {"task_id": "DISPATCH-12", "_wsId": "DISPATCH",
+         "updated_at": 1784662000.0},
+        project="switchboard", actor="mission-bot-v4", runtime="codex",
+        session_policy_profile="offline_evidence",
+    )
 finally:
     connect_dispatch.coordination_repo.request_wake = original_request_wake
     connect_dispatch.execution_context.resolve = original_resolve
     project_execution_policy.get_project_execution_policy = original_policy
 
 request_payload_fields = ("selector", "reason", "source", "policy", "task_id")
+offline_start = captured.pop()
+offline_lifecycle = offline_start["policy"]["lifecycle"]
+ok(offline_lifecycle.get("session_policy_profile") == "offline_evidence",
+   "Task Execution can carry its resolved offline policy into Connect admission")
 ok(captured[0]["idem_key"] == captured[-1]["idem_key"]
    and all(captured[0][field] == captured[-1][field]
            for field in request_payload_fields),
@@ -95,6 +105,16 @@ for row in captured:
     words = {str(key).lower() for key in assignment}
     ok(not words.intersection(forbidden),
        "Connect assignment contains no communication or orchestration fields")
+
+task_execution_source = (
+    ROOT / "src" / "switchboard" / "application" / "commands"
+    / "task_execution.py"
+).read_text(encoding="utf-8")
+ok(
+    "session_policy_profile=work_sessions_repo._task_work_session_profile("
+    in task_execution_source,
+    "Task Execution resolves policy from the admitted task snapshot",
+)
 
 app = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
 runner_ui = (ROOT / "static" / "js" / "runner-session.js").read_text(encoding="utf-8")

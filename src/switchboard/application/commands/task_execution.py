@@ -27,6 +27,7 @@ from switchboard.storage.repositories import coordination as coordination_repo
 from switchboard.storage.repositories import external_effects as external_effects_repo
 from switchboard.storage.repositories import runner as runner_repo
 from switchboard.storage.repositories import task_completion as completion_repo
+from switchboard.storage.repositories import work_sessions as work_sessions_repo
 
 SCHEMA = "switchboard.task_execution.v1"
 ERROR_SCHEMA = "switchboard.task_execution_error.v1"
@@ -1006,6 +1007,11 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
                 state_version=state_version,
                 mission_key=logical_mission,
                 mission_dossier=dict(mission_dossier or {}),
+                # Task Execution owns admission. Resolve the evidence policy
+                # from the same task snapshot used to create this generation,
+                # rather than relying on a later wake-layer task re-read.
+                session_policy_profile=work_sessions_repo._task_work_session_profile(
+                    task, "", project=project),
             )
         else:
             # Test/adapter seam retained while all product surfaces use Connect.

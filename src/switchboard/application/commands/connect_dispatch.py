@@ -243,6 +243,7 @@ def enqueue_task(
     state_version: int = 0,
     mission_key: str = "",
     mission_dossier: dict[str, Any] | None = None,
+    session_policy_profile: str = "",
 ) -> dict[str, Any]:
     """Persist one provider-neutral assignment for any Start surface.
 
@@ -326,6 +327,9 @@ def enqueue_task(
         "ttl_seconds": int(
             os.environ.get("PM_CONNECT_MAX_RUNTIME_SECONDS", "7200")),
     }
+    if session_policy_profile:
+        lifecycle["session_policy_profile"] = str(
+            session_policy_profile).strip().lower()
     # DISPATCH-12: ordinary implementation Starts leave identity allocation to
     # the server. Extra lifecycle fields are only for review/remediation or an
     # explicit coordination route (BUG-174 repair claims need route/task_id).
