@@ -41,6 +41,18 @@ class AttentionService:
         return self._repository.get_request(
             request_id, project=self._project(ctx))
 
+    def delete_requests(
+        self, ctx: ProjectContext, *, request_id: str = "",
+    ) -> dict[str, Any]:
+        """Permanently erase one or all project-scoped attention alerts."""
+        if not ctx.principal_id:
+            raise AttentionStoreError(
+                "attention_principal_unbound",
+                "an authenticated principal is required to delete attention")
+        return self._repository.delete_requests(
+            project=self._project(ctx), request_id=request_id,
+            queue_only=not request_id)
+
     def decide(
         self, ctx: ProjectContext, request_id: str, data: Mapping[str, Any],
         *, actor: str,

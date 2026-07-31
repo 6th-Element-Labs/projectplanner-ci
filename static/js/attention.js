@@ -123,13 +123,38 @@
         Object.keys(SRC).forEach((k) => { counts[k] = items.filter((i) => i.source === k).length; });
         fw.innerHTML = [['all', 'ti-inbox', 'All']].concat(Object.keys(SRC).map((k) => [k, SRC[k][1], SRC[k][2]]))
             .map((c) => `<button type="button" class="btn btn-sm ${filter === c[0] ? 'btn-primary' : 'btn-outline-secondary'}" data-nf="${c[0]}">
-                <i class="ti ${c[1]} me-1"></i>${c[2]} <span class="tk-mono ms-1">${counts[c[0]] || 0}</span></button>`).join('');
+                <i class="ti ${c[1]} me-1"></i>${c[2]} <span class="tk-mono ms-1">${counts[c[0]] || 0}</span></button>`).join('')
+            + (counts.provider ? `<button type="button" class="btn btn-sm btn-outline-danger" id="needs-delete-all">
+                <i class="ti ti-trash me-1"></i>Delete all alerts</button>` : '');
         fw.querySelectorAll('[data-nf]').forEach((b) => b.addEventListener('click', () => {
             filter = b.dataset.nf;
             const vis = items.filter(match);
             sel = vis.length ? vis[0].attention_id : null;
             render();
         }));
+        const deleteAll = el('needs-delete-all');
+        if (deleteAll) deleteAll.addEventListener('click', async () => {
+            const count = counts.provider;
+            if (!window.confirm(
+                `Permanently delete all ${count} provider alert${count === 1 ? '' : 's'} `
+                + `from ${proj()}? This cannot be undone.`
+            )) return;
+            deleteAll.disabled = true;
+            try {
+                const res = await fetch(
+                    `api/attention/requests?project=${encodeURIComponent(proj())}`,
+                    { method: 'DELETE' },
+                );
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(apiError(data, res.status));
+                sel = null;
+                lastFlash = null;
+                await load();
+            } catch (e) {
+                deleteAll.disabled = false;
+                window.alert('Delete all alerts failed: ' + e.message);
+            }
+        });
 
         const shown = items.filter(match);
         if (!shown.length) {
@@ -271,8 +296,14 @@
                 <div class="tk-eyebrow mb-2">Authoritative source</div>
                 <div class="card card-sm mb-2"><div class="card-body p-2">${datagrid(it.links)}</div></div>
                 <div class="text-secondary small">Resolve this item through its owning provider, mission, or plan-decision workflow.</div>`}
+            ${isProvider ? `<div class="mt-3 pt-3 border-top">
+                <button type="button" class="btn btn-sm btn-ghost-danger" id="needs-delete">
+                    <i class="ti ti-trash me-1"></i>Delete this alert
+                </button>
+                <span class="text-secondary small ms-2">Permanently removes this alert and its decision history.</span>
+            </div>` : ''}
             <div id="needs-flash" class="small text-secondary"></div>
-            <div class="text-secondary small mt-3 pt-2 border-top">Decisions route to the store that owns the item — this queue adds no new write path.</div>`;
+            <div class="text-secondary small mt-3 pt-2 border-top">Decisions and deletion route to the store that owns the alert.</div>`;
 
         const flash = setFlash;
         if (isAgent) {
@@ -372,6 +403,32 @@
             detail.querySelectorAll('[data-choice]').forEach((btn) => btn.addEventListener('click', () => decide({ id: btn.dataset.choice })));
             const recover = el('needs-recover');
             if (recover) recover.addEventListener('click', () => pollRequest(p.request_id));
+            const remove = el('needs-delete');
+            if (remove) remove.addEventListener('click', async () => {
+                const taskLabel = it.task_id ? ` for ${it.task_id}` : '';
+                if (!window.confirm(
+                    `Permanently delete this alert${taskLabel}? This cannot be undone.`
+                )) return;
+                remove.disabled = true;
+                flash('Deleting alert…');
+                try {
+                    const res = await fetch(
+                        `api/attention/requests/${encodeURIComponent(p.request_id)}`
+                        + `?project=${encodeURIComponent(proj())}`,
+                        { method: 'DELETE' },
+                    );
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) throw new Error(apiError(data, res.status));
+                    sel = null;
+                    tracked = null;
+                    delivering = false;
+                    lastFlash = null;
+                    await load();
+                } catch (e) {
+                    remove.disabled = false;
+                    flash('Delete failed: ' + e.message, 'text-danger');
+                }
+            });
         }
         detail.querySelectorAll('[data-open-session]').forEach((button) => button.addEventListener('click', () => {
             window.dispatchEvent(new CustomEvent('switchboard:open-session', {

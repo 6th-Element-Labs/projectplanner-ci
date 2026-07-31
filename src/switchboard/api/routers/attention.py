@@ -106,6 +106,14 @@ class AttentionDeliveryBody(BaseModel):
     work_session_id: str = ""
 
 
+class AttentionDeleteResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project: str
+    deleted: int = Field(ge=0)
+    request_ids: list[str]
+
+
 def _age_s(ts: Any) -> int:
     try:
         return max(0, int(time.time() - float(ts)))
@@ -485,6 +493,20 @@ def create_router(*, resolve_project: ProjectResolver,
         return service.count_operator_queue(
             _context(project_id, principal, source="query"))
 
+    @router.delete(
+        "/api/attention/requests", response_model=AttentionDeleteResponse)
+    async def delete_all_attention_requests(
+        request: Request, project: str = Query(...),
+    ):
+        project_id = resolve_project(project)
+        principal = resolve_principal(
+            request, project_id, ("admin",), dev_actor="attention-operator")
+        try:
+            return service.delete_requests(
+                _context(project_id, principal, source="query"))
+        except AttentionStoreError as exc:
+            _raise_attention_error(exc)
+
     @router.get("/api/attention/requests/{request_id}")
     async def get_attention_request(
         request_id: str, request: Request, project: str = Query(...),
@@ -495,6 +517,23 @@ def create_router(*, resolve_project: ProjectResolver,
         try:
             return service.get_request(
                 _context(project_id, principal, source="query"), request_id)
+        except AttentionStoreError as exc:
+            _raise_attention_error(exc)
+
+    @router.delete(
+        "/api/attention/requests/{request_id}",
+        response_model=AttentionDeleteResponse,
+    )
+    async def delete_attention_request(
+        request_id: str, request: Request, project: str = Query(...),
+    ):
+        project_id = resolve_project(project)
+        principal = resolve_principal(
+            request, project_id, ("admin",), dev_actor="attention-operator")
+        try:
+            return service.delete_requests(
+                _context(project_id, principal, source="query"),
+                request_id=request_id)
         except AttentionStoreError as exc:
             _raise_attention_error(exc)
 

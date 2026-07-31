@@ -856,6 +856,62 @@ def get_attention_request_in(
     return result
 
 
+def delete_attention_requests_in(
+    c: sqlite3.Connection, *, project: str, request_id: str = "",
+    queue_only: bool = False, now: Optional[float] = None,
+) -> dict[str, Any]:
+    """Permanently erase one or all project-scoped attention requests.
+
+    This explicit operator erasure removes only communication-plane records.
+    It does not change a task, claim, completion run, Work Session, or runner.
+    """
+    where = "project_id=?"
+    params: tuple[Any, ...] = (project,)
+    if request_id:
+        where += " AND request_id=?"
+        params += (request_id,)
+    elif queue_only:
+        now_value = float(now if now is not None else time.time())
+        reconcile_attention_lifecycle_in(c, project=project, now=now_value)
+        queue_clause, queue_params = _operator_queue_clause(now_value)
+        where = queue_clause
+        params = (project, *queue_params)
+    rows = c.execute(
+        f"SELECT request_id FROM attention_requests WHERE {where} "
+        "ORDER BY request_id",
+        params,
+    ).fetchall()
+    request_ids = [str(row["request_id"]) for row in rows]
+    if request_id and not request_ids:
+        raise AttentionStoreError(
+            "attention_request_not_found", "request does not exist")
+    if not request_ids:
+        return {"project": project, "deleted": 0, "request_ids": []}
+
+    target_sql = f"SELECT request_id FROM attention_requests WHERE {where}"
+    c.execute(
+        f"DELETE FROM attention_completion_wakes WHERE request_id IN ({target_sql})",
+        params,
+    )
+    c.execute(
+        f"DELETE FROM attention_decisions WHERE request_id IN ({target_sql})",
+        params,
+    )
+    c.execute(
+        f"DELETE FROM attention_events WHERE request_id IN ({target_sql})",
+        params,
+    )
+    deleted = c.execute(
+        f"DELETE FROM attention_requests WHERE {where}",
+        params,
+    ).rowcount
+    return {
+        "project": project,
+        "deleted": deleted,
+        "request_ids": request_ids,
+    }
+
+
 def claim_attention_decision_in(
     c: sqlite3.Connection, *, project: str, host_id: str, actor: str,
     provider: str = "", request_id: str = "", runner_session_id: str = "",
@@ -1684,6 +1740,20 @@ class AttentionRepository:
         with _conn(project) as c:
             return get_attention_request_in(c, request_id, project=project)
 
+    def delete_requests(self, *, project: str, request_id: str = "",
+                        queue_only: bool = False) -> dict[str, Any]:
+        return _write_through(
+            project, lambda: self._delete_requests(
+                project=project, request_id=request_id, queue_only=queue_only))
+
+    @staticmethod
+    def _delete_requests(*, project: str,
+                         request_id: str, queue_only: bool) -> dict[str, Any]:
+        with _conn(project) as c:
+            return delete_attention_requests_in(
+                c, project=project, request_id=request_id,
+                queue_only=queue_only)
+
     def claim_decision(self, *, project: str, host_id: str, actor: str,
                        provider: str = "", request_id: str = "",
                        runner_session_id: str = "", work_session_id: str = "",
@@ -1725,6 +1795,7 @@ __all__ = [
     "count_attention_requests_in",
     "create_attention_request_in",
     "default_attention_repository",
+    "delete_attention_requests_in",
     "drain_completion_wakes",
     "get_attention_request_in",
     "is_reserved_completion_provider",

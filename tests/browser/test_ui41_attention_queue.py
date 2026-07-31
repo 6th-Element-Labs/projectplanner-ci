@@ -168,6 +168,8 @@ try:
         page.wait_for_selector("#tab-needs.active")
         page.wait_for_selector("text=Implementation complete, human action required")
         assert page.locator('[data-nid^="provider:"]').count() == 1
+        assert page.locator("#needs-delete").is_visible()
+        assert page.locator("#needs-delete-all").is_visible()
         page.reload(wait_until="domcontentloaded")
         page.wait_for_function("document.querySelector('#ack-inbox-count').textContent === '1'")
         page.locator("#btn-ack-inbox").click()
@@ -296,11 +298,55 @@ try:
         )
         assert receipt["status"] == "resolved", receipt
         page.wait_for_selector("text=Resumed — provider receipt verified.")
+
+        # UI-73: exercise both destructive controls in real Chromium, including
+        # the browser confirmation and the post-delete queue refresh.
+        def create_delete_fixture(number):
+            return default_attention_repository.create_request({
+                "task_id": task_id,
+                "provider": "provider-neutral",
+                "provider_request_id": f"ui73-delete-{number}",
+                "schema_version": "provider.question.v1",
+                "prompt": f"Delete fixture {number}",
+                "choices": [{"id": "yes"}, {"id": "no"}],
+                "idempotency_key": f"ui73-delete-{number}",
+                "host_id": "host/ui73",
+                "runner_session_id": "run-ui73",
+                "context": {},
+            }, actor="ui73-browser", project="switchboard")
+
+        create_delete_fixture(1)
+        page.evaluate("window.PMAttention.load()")
+        page.wait_for_selector("#needs-delete")
+        page.once("dialog", lambda dialog: dialog.accept())
+        with page.expect_response(
+            lambda response: response.request.method == "DELETE"
+            and "/api/attention/requests/" in response.url
+        ) as delete_one_response:
+            page.locator("#needs-delete").click()
+        assert delete_one_response.value.ok
+        page.wait_for_function(
+            "() => document.querySelectorAll('[data-nid^=\"provider:\"]').length === 0")
+
+        create_delete_fixture(2)
+        create_delete_fixture(3)
+        page.evaluate("window.PMAttention.load()")
+        page.wait_for_selector("#needs-delete-all")
+        page.once("dialog", lambda dialog: dialog.accept())
+        with page.expect_response(
+            lambda response: response.request.method == "DELETE"
+            and response.url.endswith("api/attention/requests?project=switchboard")
+        ) as delete_all_response:
+            page.locator("#needs-delete-all").click()
+        assert delete_all_response.value.ok
+        page.wait_for_function(
+            "() => document.querySelectorAll('[data-nid^=\"provider:\"]').length === 0")
         assert not errors, errors
         browser.close()
     print("PASS UI-41 #812 handoff appears once and survives reload")
     print("PASS UI-41 versioned decide shows Resuming, then receipt-gated Resumed")
     print("PASS UI-41 desktop and narrow screenshots captured")
+    print("PASS UI-73 per-alert and whole-Inbox deletion survive refresh")
 finally:
     if server.poll() is None:
         server.terminate()

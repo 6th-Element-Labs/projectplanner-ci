@@ -101,6 +101,28 @@ try:
     ok(isolated.status_code == 404,
        "detail lookup cannot cross the authorized project boundary")
 
+    # UI-73: permanent deletion removes the request and its dependent audit
+    # rows, while project isolation prevents deleting the same id elsewhere.
+    erasable = client.post(
+        "/ixp/v1/attention/requests", json=question(90)).json()["request"]
+    erasable_id = erasable["request_id"]
+    client.post(
+        f"/api/attention/requests/{erasable_id}/decide?project=switchboard",
+        json={"expected_version": 1, "choice": {"id": "yes"},
+              "idempotency_key": "decision-delete-one"},
+    )
+    isolated_delete = client.delete(
+        f"/api/attention/requests/{erasable_id}?project=helm")
+    deleted = client.delete(
+        f"/api/attention/requests/{erasable_id}?project=switchboard")
+    missing_after_delete = client.get(
+        f"/api/attention/requests/{erasable_id}?project=switchboard")
+    ok(isolated_delete.status_code == 404
+       and deleted.status_code == 200
+       and deleted.json()["deleted"] == 1
+       and missing_after_delete.status_code == 404,
+       "operator permanently deletes one alert without crossing projects")
+
     # Bell count and list use the same durable queue predicate.
     queue = client.get("/api/attention/requests?project=switchboard").json()
     bell = client.get("/api/attention/count?project=switchboard").json()
@@ -176,6 +198,22 @@ try:
         results = list(pool.map(lambda _index: race_claim(), range(8)))
     ok(sum(result is not None for result in results) == 1,
        "concurrent Agent Host claimers produce exactly one delivery")
+
+    client.post("/ixp/v1/attention/requests", json=question(3))
+    client.post("/ixp/v1/attention/requests", json=question(4))
+    before_delete_all = client.get(
+        "/api/attention/requests?project=switchboard").json()["count"]
+    deleted_all = client.delete(
+        "/api/attention/requests?project=switchboard")
+    queue_after_delete = client.get(
+        "/api/attention/requests?project=switchboard").json()
+    resolved_history = client.get(
+        f"/api/attention/requests/{request_id}?project=switchboard")
+    ok(deleted_all.status_code == 200
+       and deleted_all.json()["deleted"] == before_delete_all
+       and queue_after_delete["count"] == 0
+       and resolved_history.status_code == 200,
+       "operator deletes the whole Inbox without erasing resolved history")
 
     router_source = (
         ROOT / "src/switchboard/api/routers/attention.py"
