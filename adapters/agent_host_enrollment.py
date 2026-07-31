@@ -41,6 +41,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 
 
 AGENT_HOST_VERSION = "0.2.0"
+DEFAULT_HOST_HEARTBEAT_TTL_S = 180
+MIN_HOST_HEARTBEAT_TTL_S = 180
+MAX_HOST_HEARTBEAT_TTL_S = 3600
 BUNDLE_SCHEMA = "switchboard.agent_host_bundle.v1"
 LOCAL_STATE_SCHEMA = "switchboard.agent_host_local_state.v1"
 IDENTITY_SCHEMA = "switchboard.agent_host_identity.v1"
@@ -83,6 +86,15 @@ _COORDINATION_CREDENTIAL_ENV = {
 
 class EnrollmentError(RuntimeError):
     """Fail-closed lifecycle error with a stable operator-facing message."""
+
+
+def host_heartbeat_ttl_s(value: Any = None) -> int:
+    """Return the bounded Capacity lease advertised by an Agent Host."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = DEFAULT_HOST_HEARTBEAT_TTL_S
+    return min(MAX_HOST_HEARTBEAT_TTL_S, max(MIN_HOST_HEARTBEAT_TTL_S, parsed))
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -1567,6 +1579,7 @@ def _install_host_unlocked(*, bundle_dir: Path, public_key_path: Path, bootstrap
         "log_root": str(log_root),
         "user_home": str(user_home),
         "agent_host_version": manifest["version"],
+        "host_heartbeat_ttl_s": DEFAULT_HOST_HEARTBEAT_TTL_S,
     }
     # Journal the only returned bearer and all validated endpoint data before the
     # first post-completion write. Any later boundary can resume or revoke locally.
@@ -2161,6 +2174,8 @@ def service_run(identity_path: Path, config_path: Path) -> None:
         "PM_HOST_LANES": ",".join(config.get("lanes") or []),
         "PM_HOST_CAPABILITIES": ",".join(config.get("capabilities") or []),
         "PM_HOST_MAX_SESSIONS": str(config.get("max_sessions") or 1),
+        "PM_HOST_HEARTBEAT_TTL_S": str(host_heartbeat_ttl_s(
+            config.get("host_heartbeat_ttl_s"))),
         "PM_PERSONAL_AGENT_HOST_EXECUTION": "1" if config.get("personal_wakes_only") else "0",
         "PM_PERSONAL_AGENT_HOST_RECOVERY": "1",
         "PM_PERSONAL_WORKSPACE_ROOT": config.get("workspace_root") or "",

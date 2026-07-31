@@ -125,9 +125,14 @@ An Agent Host must register separately from individual agent sessions.
     "max_sessions_per_runtime": {"claude-code": 1, "codex": 1},
     "max_cost_usd_per_hour": 5.0
   },
-  "heartbeat_ttl_s": 60
+  "heartbeat_ttl_s": 180
 }
 ```
+
+The enrolled host persists `host_heartbeat_ttl_s` and exports it as
+`PM_HOST_HEARTBEAT_TTL_S`. Values are bounded to 180–3600 seconds: three minutes
+survives the daemon's bounded control-plane work, while the upper fence still
+lets Capacity expire a host that has genuinely disappeared.
 
 Host policy is part of the contract, not an operator assumption:
 

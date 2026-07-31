@@ -54,6 +54,7 @@ import relay_auth  # noqa: E402
 from agent_host_enrollment import (  # noqa: E402
     ACCOUNT_AFFINITIES_FILENAME,
     ACCOUNT_AFFINITY_IDS_KEY,
+    host_heartbeat_ttl_s,
     preflight_codex_local_auth,
 )
 from codex.cloud_adapter import launch_wake as launch_codex_cloud_wake  # noqa: E402
@@ -934,7 +935,8 @@ def default_inventory():
             "local_auth": local_auth,
             "runtime_profile": runtime_profile,
         },
-        "heartbeat_ttl_s": 60,
+        "heartbeat_ttl_s": host_heartbeat_ttl_s(
+            os.environ.get("PM_HOST_HEARTBEAT_TTL_S")),
     }
 
 
