@@ -777,8 +777,27 @@ try:
         # closing the modal here would silently delete the live panel/terminal
         # along with the modal content and leak its WebSocket. It must instead
         # pop back out to the sidecar first.
-        page.evaluate("() => window.bootstrap.Modal.getOrCreateInstance(document.getElementById('task-modal')).hide()")
-        page.wait_for_timeout(300)
+        page.evaluate("""
+            () => {
+                const modal = document.getElementById('task-modal');
+                modal.dispatchEvent(new Event('hide.bs.modal'));
+                window.bootstrap.Modal.getOrCreateInstance(modal).dispose();
+                modal.classList.remove('show');
+                modal.style.display = 'none';
+                modal.setAttribute('aria-hidden', 'true');
+                modal.removeAttribute('aria-modal');
+                modal.removeAttribute('role');
+                document.querySelectorAll('.modal-backdrop').forEach((backdrop) => backdrop.remove());
+                document.body.classList.remove('modal-open');
+                document.body.style.removeProperty('overflow');
+                document.body.style.removeProperty('padding-right');
+            }
+        """)
+        page.wait_for_function("""
+            () => !document.getElementById('task-modal').classList.contains('show')
+                && document.querySelectorAll('.modal-backdrop').length === 0
+                && !document.body.classList.contains('modal-open')
+        """)
         page.evaluate("() => document.getElementById('m-dev').remove()")  # simulate openTask()'s regeneration
         undocked = page.evaluate("""
             () => ({
@@ -797,7 +816,9 @@ try:
 
         # ---- close tears down cleanly, no leaked timers/sockets -------------
         page.evaluate("() => TeepPlan._runnerPtyClose()")
-        page.wait_for_timeout(300)
+        page.wait_for_function(
+            "() => document.getElementById('runner-pty-panel').hidden"
+        )
         closed_state = page.evaluate("({ rpNull: TeepPlan._runnerPty === null, hidden: document.getElementById('runner-pty-panel').hidden })")
         ok(closed_state["rpNull"], "close() tears down the session state")
         ok(closed_state["hidden"], "close() hides the panel")
@@ -814,6 +835,10 @@ try:
         """)
         page.locator('.mission-dag-node[data-linked-task="FAKE-TASK-1"]').click()
         page.wait_for_selector('#dl-node-modal.show')
+        page.wait_for_function("""
+            () => !window.bootstrap.Modal.getInstance(
+                document.getElementById('dl-node-modal'))?._isTransitioning
+        """)
         clicked_node = page.evaluate("""
             () => ({
                 visible: !document.getElementById('runner-pty-panel').hidden,
@@ -828,15 +853,27 @@ try:
         page.evaluate("""
             () => {
                 const modal = document.getElementById('dl-node-modal');
-                window.bootstrap.Modal.getOrCreateInstance(modal).hide();
+                const instance = window.bootstrap.Modal.getOrCreateInstance(modal);
                 // The fixture is not opened through a native Bootstrap trigger,
-                // so reset its visible class synchronously before the explicit
-                // runner-path assertions below.
+                // so finish teardown synchronously before the explicit runner-
+                // path assertions below. Calling hide() would schedule focus
+                // restoration against a trigger this fixture does not have.
+                instance.dispose();
                 modal.classList.remove('show');
                 modal.style.display = 'none';
+                modal.setAttribute('aria-hidden', 'true');
+                modal.removeAttribute('aria-modal');
+                modal.removeAttribute('role');
                 document.querySelectorAll('.modal-backdrop').forEach((backdrop) => backdrop.remove());
                 document.body.classList.remove('modal-open');
+                document.body.style.removeProperty('overflow');
+                document.body.style.removeProperty('padding-right');
             }
+        """)
+        page.wait_for_function("""
+            () => !document.getElementById('dl-node-modal').classList.contains('show')
+                && document.querySelectorAll('.modal-backdrop').length === 0
+                && !document.body.classList.contains('modal-open')
         """)
 
         # ---- repeat Deliverable-node intent survives close + stale runner ---
