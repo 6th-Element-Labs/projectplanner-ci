@@ -147,6 +147,16 @@ def run_v4_tick(
             repository=ports.journal,
             list_wakes=getattr(store_mod, "list_wake_intents", None),
         )
+        # Capacity edge: an operator kill writes the terminal status straight
+        # onto the runner session row without the runner's own terminal report,
+        # so no runner_ended event lands and the mission wedges on a dead
+        # handler.  Copy the persisted terminal receipt here (BUG-253).
+        capacity_mission_events.append_terminal_runner_events(
+            project=project,
+            task_id=task_id,
+            repository=ports.journal,
+            list_runners=getattr(store_mod, "list_runner_sessions", None),
+        )
         # Human edge: a HUMAN mission resumes only from the durable attention
         # request; pulling it here means a dropped delivery cannot strand the
         # mission (BUG-250).
