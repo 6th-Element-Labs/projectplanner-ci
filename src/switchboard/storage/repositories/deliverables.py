@@ -900,6 +900,27 @@ def _rows_for_task_ids(c: sqlite3.Connection, table: str, task_ids: List[str],
     return rows
 
 
+def _external_ci_rows_for_heads(c: sqlite3.Connection, project: str,
+                                source_shas: List[str]) -> List[sqlite3.Row]:
+    """Read project-fenced exact-head CI rows in bounded batches."""
+    rows: List[sqlite3.Row] = []
+    heads = list(dict.fromkeys(
+        str(source_sha or "").strip().lower()
+        for source_sha in source_shas
+        if str(source_sha or "").strip()
+    ))
+    for i in range(0, len(heads), 400):
+        batch = heads[i:i + 400]
+        placeholders = ",".join("?" * len(batch))
+        rows.extend(c.execute(
+            "SELECT * FROM external_ci_runs "
+            f"WHERE source_project=? AND source_sha IN ({placeholders}) "
+            "ORDER BY source_sha, updated_at DESC, run_id",
+            [project, *batch],
+        ).fetchall())
+    return rows
+
+
 def _deliverable_task_snapshots(project: str,
                                 task_ids: List[str]) -> Dict[str, Dict[str, Any]]:
     """Load the compact task shape used by deliverable links in bounded queries.
@@ -919,9 +940,41 @@ def _deliverable_task_snapshots(project: str,
         canonical_ids = [task["task_id"] for task in tasks.values()]
         git_states = _store_facade()._git_states_by_task(c, canonical_ids)
         external_rows: Dict[str, List[Dict[str, Any]]] = {}
+        external_run_ids: Dict[str, set] = {}
+
+        def _add_external_row(folded_id: str, row: sqlite3.Row) -> None:
+            run_id = str(row["run_id"])
+            seen = external_run_ids.setdefault(folded_id, set())
+            if run_id in seen:
+                return
+            seen.add(run_id)
+            external_rows.setdefault(folded_id, []).append(
+                _store_facade()._external_ci_row(row))
+
         for row in _rows_for_task_ids(c, "external_ci_runs", canonical_ids,
                                       "updated_at DESC, run_id"):
-            external_rows.setdefault(row["task_id"].upper(), []).append(_store_facade()._external_ci_row(row))
+            _add_external_row(row["task_id"].upper(), row)
+
+        tasks_by_head: Dict[str, List[str]] = {}
+        for folded_id, task in tasks.items():
+            head_sha = str(
+                git_states.get(
+                    task["task_id"], _store_facade()._git_state_row(None)
+                ).get("head_sha") or ""
+            ).strip().lower()
+            if head_sha:
+                tasks_by_head.setdefault(head_sha, []).append(folded_id)
+        for row in _external_ci_rows_for_heads(c, project, list(tasks_by_head)):
+            for folded_id in tasks_by_head.get(
+                    str(row["source_sha"] or "").strip().lower(), []):
+                _add_external_row(folded_id, row)
+        for rows in external_rows.values():
+            rows.sort(key=lambda item: str(item.get("run_id") or ""))
+            rows.sort(
+                key=lambda item: float(item.get("updated_at") or 0),
+                reverse=True,
+            )
+
         publication_rows: Dict[str, List[Dict[str, Any]]] = {}
         for row in _rows_for_task_ids(c, "publication_evidence", canonical_ids,
                                       "updated_at DESC, publication_id"):

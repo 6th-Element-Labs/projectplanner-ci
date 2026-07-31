@@ -29,6 +29,12 @@ def ok(condition, message):
 try:
     store.init_project_registry()
     store.init_db(P)
+    store.set_project_repo_topology(
+        project=P,
+        canonical_repo="6th-Element-Labs/projectplanner",
+        public_ci_repo="6th-Element-Labs/projectplanner-ci",
+        public_ci_required_status_contexts="public-ci/full-suite",
+    )
     store.create_project(
         "Private Product",
         project_id="private-product",
@@ -173,6 +179,110 @@ try:
        linked["progress"]["external_ci_passed_count"] == 1 and
        linked["progress"]["done_with_proof_count"] == 0,
        "mission progress counts external CI proof without counting Done")
+
+    orphan_sha = "1234567890abcdef1234567890abcdef12345678"
+    orphan_task = store.create_task(
+        {
+            "workstream_id": "CIQA",
+            "title": "exact-head external CI evidence",
+            "description": "policy_profile:no_repo\nSynthetic exact-head CI fixture.",
+            "exit_criteria": "external_ci_passed required before merge",
+        },
+        actor="test",
+        project=P,
+    )
+    orphan_claim = store.claim_task(
+        orphan_task["task_id"], "codex/CIQA-orphan",
+        idem_key="ciqa-orphan", project=P)
+    store.complete_claim(
+        orphan_claim["claim_id"],
+        {
+            "branch": "codex/CIQA-orphan",
+            "head_sha": orphan_sha,
+            "external_ci_required": True,
+        },
+        actor="test",
+        project=P,
+    )
+    orphan_deliverable = store.create_deliverable(
+        {
+            "id": "ci-exact-head-mission",
+            "title": "Exact-head CI proof mission",
+            "status": "in_progress",
+            "end_state": "A deliverable credits exact-head external CI evidence.",
+        },
+        actor="test",
+        project=P,
+    )
+    store.link_task_to_deliverable(
+        orphan_deliverable["id"],
+        P,
+        orphan_task["task_id"],
+        data={
+            "role": "verification",
+            "proof_required": {"external_ci_passed": True},
+        },
+        actor="test",
+        project=P,
+    )
+
+    cross_project_run = store.create_external_ci_run(
+        {
+            "source_project": "private-product",
+            "source_branch": "codex/CIQA-orphan",
+            "source_sha": orphan_sha,
+            "workflow": "strict.yml",
+        },
+        actor="test",
+        project=P,
+    )
+    store.update_external_ci_run(
+        cross_project_run["run_id"],
+        {
+            "status": "success",
+            "conclusion": "success",
+            "run_url": "https://github.com/6th-Element-Labs/public-ci/actions/runs/43",
+            "result": {"tested_public_sha": "public456", "source_sha": orphan_sha},
+        },
+        actor="test",
+        project=P,
+    )
+    cross_project = store.get_deliverable(orphan_deliverable["id"], project=P)
+    ok(cross_project["progress"]["external_ci_passed_count"] == 0 and
+       cross_project["progress"]["external_ci_blocked_count"] == 1,
+       "deliverable does not credit exact-head CI from another source project")
+
+    exact_head_run = store.create_external_ci_run(
+        {
+            "source_project": P,
+            "source_branch": "codex/CIQA-orphan",
+            "source_sha": orphan_sha,
+            "workflow": "strict.yml",
+        },
+        actor="test",
+        project=P,
+    )
+    store.update_external_ci_run(
+        exact_head_run["run_id"],
+        {
+            "status": "success",
+            "conclusion": "success",
+            "run_url": "https://github.com/6th-Element-Labs/projectplanner-ci/actions/runs/44",
+            "result": {"tested_public_sha": "public789", "source_sha": orphan_sha},
+        },
+        actor="test",
+        project=P,
+    )
+    exact_head_task = store.get_task(orphan_task["task_id"], project=P)
+    exact_head_deliverable = store.get_deliverable(
+        orphan_deliverable["id"], project=P)
+    ok(exact_head_task["external_ci"]["passed"] is True,
+       "task detail credits exact-head CI without task_id")
+    ok(exact_head_deliverable["task_links"][0]["task"]["external_ci"]["passed"] is True and
+       exact_head_deliverable["progress"]["external_ci_required_count"] == 1 and
+       exact_head_deliverable["progress"]["external_ci_passed_count"] == 1 and
+       exact_head_deliverable["progress"]["external_ci_blocked_count"] == 0,
+       "deliverable rollup credits exact-head CI without task_id")
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 
