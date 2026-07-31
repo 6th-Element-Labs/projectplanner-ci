@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""SIMPLIFY-31: v1 is the only Mission Bot runtime on master."""
+"""SIMPLIFY-31/COORD-112: v1 is the only Mission Bot runtime on master."""
+import re
 from pathlib import Path
 
 from path_setup import ROOT
@@ -19,24 +20,66 @@ for required in (
     assert (Path(ROOT) / required).is_file(), required
 
 for quarantined in (
-    "docs/MISSION-BOT-V4.md",
     "src/switchboard/application/mission_bot_v4",
     "src/switchboard/domain/mission_bot_v4",
+):
+    assert not (Path(ROOT) / quarantined).exists(), quarantined
+
+for passive_contract in (
     "src/switchboard/application/commands/mission_journal.py",
     "src/switchboard/storage/repositories/mission_journal.py",
 ):
-    assert not (Path(ROOT) / quarantined).exists(), quarantined
+    assert (Path(ROOT) / passive_contract).is_file(), passive_contract
 
 coordinator = read("scoped_completion_coordinator.py")
 daemon = read("coordinator_daemon.py")
 service = read("deploy/projectplanner-coordinator-autopilot.service")
 migrations = read("src/switchboard/storage/migrations/runner.py")
+command_exports = read("src/switchboard/application/commands/__init__.py")
+passive_commands = read(
+    "src/switchboard/application/commands/mission_journal.py"
+)
+passive_repository = read(
+    "src/switchboard/storage/repositories/mission_journal.py"
+)
 
 assert "run_completion_tick" in coordinator
 assert "run_v4_tick" not in coordinator
 assert "mission_engine" not in daemon
 assert "PM_COORDINATOR_MISSION_ENGINE" not in service
-assert "0123_mission_items" not in migrations
-assert "0124_mission_events" not in migrations
+assert "0123_mission_items" in migrations
+assert "0124_mission_events" in migrations
 
-print("SIMPLIFY-31 v1-only runtime: PASS")
+for live_runtime in (
+    coordinator, daemon, service, command_exports,
+):
+    assert "mission_journal" not in live_runtime
+
+for forbidden_effect in (
+    "start_task(",
+    "make_runner_lease_due",
+    "runner_control",
+    "github_mission_events",
+    "human_mission_events",
+):
+    assert forbidden_effect not in passive_commands
+    assert forbidden_effect not in passive_repository
+
+passive_paths = {
+    (Path(ROOT) / "src/switchboard/application/commands/mission_journal.py").resolve(),
+    (Path(ROOT) / "src/switchboard/storage/repositories/mission_journal.py").resolve(),
+    (Path(ROOT) / "src/switchboard/storage/migrations/runner.py").resolve(),
+}
+production_files = list((Path(ROOT) / "src/switchboard").rglob("*.py"))
+production_files += list((Path(ROOT) / "adapters").rglob("*.py"))
+production_files += list((Path(ROOT) / "db").rglob("*.py"))
+production_files += list(Path(ROOT).glob("*.py"))
+for path in production_files:
+    if path.resolve() in passive_paths:
+        continue
+    source = path.read_text(encoding="utf-8")
+    assert re.search(r"\bmission_journal\b", source) is None, path
+    assert re.search(r"\bmission_items\b", source) is None, path
+    assert re.search(r"\bmission_events\b", source) is None, path
+
+print("SIMPLIFY-31/COORD-112 v1 runtime + passive journal: PASS")
