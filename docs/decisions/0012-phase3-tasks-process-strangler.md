@@ -1,6 +1,11 @@
 # ADR-0012 — Phase 3 Tasks process strangler charter (Mode A)
 
-- **Status:** Accepted — ARCH-MS-85 (plan-of-record for deliverable `arch-ms-phase-3`).
+> **Completed Tasks-cut charter — superseded by
+> [ADR-0025](0025-bounded-context-service-extraction.md).** The thin surface,
+> parity, and rollback detail remain as-built service history.
+
+- **Status:** Superseded completed charter (2026-07-31); deliverable
+  `arch-ms-phase-3` is archived.
 - **Date:** 2026-07-15
 - **Author:** Platform modernization lane (ARCH-MS) — Phase 3 charter session
 - **Relates to:** [ADR-0011](0011-phase2-process-strangler.md) (Phase 2 Auth strangler; playbook

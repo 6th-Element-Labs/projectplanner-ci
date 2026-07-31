@@ -1,6 +1,11 @@
 # ADR-0011 — Phase 2 process strangler charter (auth-first, cut conditional)
 
-- **Status:** Accepted — ARCH-MS-72 (plan-of-record for deliverable `arch-ms-phase-2`).
+> **Completed Auth-cut charter — superseded by
+> [ADR-0025](0025-bounded-context-service-extraction.md).** Service-specific
+> routes, independence evidence, and rollback procedures remain as-built records.
+
+- **Status:** Superseded completed charter (2026-07-31); deliverable
+  `arch-ms-phase-2` is archived.
 - **Date:** 2026-07-15
 - **Author:** Platform modernization lane (ARCH-MS) — Phase 2 charter session
 - **Relates to:** [ADR-0009](0009-microservices-modernization.md) (Phase 0 charter; Decision 4

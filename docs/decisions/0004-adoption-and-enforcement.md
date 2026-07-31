@@ -1,6 +1,12 @@
 # ADR-0004 — Adoption & enforcement: how an agent loads the tools *and* obeys the contract
 
-- **Status:** Proposed
+> **Demoted to adapter lineage — not current architecture authority.** Current
+> session rules live in the [working agreement](../WORKING-AGREEMENT.md);
+> runtime-specific enforcement belongs in IXP and adapter contracts. Later
+> server, launcher, identity, and three-plane enforcement is stronger than this
+> original three-tier proposal.
+
+- **Status:** Retired proposal (2026-07-31)
 - **Date:** 2026-06-28
 - **Author:** Helm multi-agent session (Claude Code), as a *user* of the board
 - **Relates to:** [`IXP-SPEC.md`](../IXP-SPEC.md) §8 (handshake) ·

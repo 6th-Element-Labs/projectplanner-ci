@@ -1,6 +1,11 @@
 # ADR-0002 — LLM cost attribution by project / task / agent
 
-- **Status:** Proposed
+> **Superseded product design — not current authority.** The implemented,
+> broader cost-to-outcome model is owned by
+> [`TALLY-SPEC.md`](../TALLY-SPEC.md). This proposal remains as lineage for
+> the original two-stream spend model.
+
+- **Status:** Superseded proposal (2026-07-31)
 - **Date:** 2026-06-27
 - **Author:** Helm multi-agent session (Claude Code)
 - **Relates to:** [`docs/PRODUCT_ROADMAP.md`](../PRODUCT_ROADMAP.md) Bet 1;
@@ -135,4 +140,4 @@ stated, not hidden; future work can reconcile against Anthropic's usage API.
 - **Reconciliation** with provider billing APIs (Anthropic/OpenAI usage endpoints) to true-up
   Stream B — deferred.
 
-[fail-and-fix-early policy]: ../../CLAUDE.md
+[fail-and-fix-early policy]: ../WORKING-AGREEMENT.md#fail-and-fix-early

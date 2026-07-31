@@ -1,6 +1,12 @@
 # ADR-0017 — Boundary delivery of ordinary messages (mid-turn inbox drain)
 
-- **Status:** Proposed
+> **Retired unimplemented proposal.** The proposed `boundary_delivery`,
+> `runtime_injected`, and `mark_delivered` ordinary-message path did not ship.
+> [ADR-0008/three-plane](0008-three-plane-separation.md) owns communication
+> authority and delivery-state honesty. Any future boundary-injection feature
+> belongs in a communication protocol specification and task, not a revived ADR.
+
+- **Status:** Retired proposal (2026-07-31)
 - **Date:** 2026-07-21
 - **Author:** codor-comparison session (Claude Code), from the inbox-concept analysis thread
 - **Relates to:** [`IXP-SPEC.md`](../IXP-SPEC.md) §7.4 (delivery & the instruction boundary) ·

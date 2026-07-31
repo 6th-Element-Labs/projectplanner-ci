@@ -1,6 +1,12 @@
 # ADR-0021 — Ratify the decision corpus and pay its subtraction debt
 
-- **Status:** Accepted
+> **Unresolved remediation record — do not archive as completed.** The
+> 2026-07-31 corpus audit still found `coordination_receipts.py`,
+> `receipt_projection_batch`, and `get_preflight_calibration` in source. The
+> deletion verdicts below remain binding debt until executable evidence proves
+> each overlapping path removed or explicitly superseded.
+
+- **Status:** Accepted decision with unresolved implementation debt
 - **Date:** 2026-07-26
 - **Owner:** Task Execution / Coordinator (COORD-59)
 - **Relates to:** [ADR-0006](0006-control-plane-done-enough.md) ·

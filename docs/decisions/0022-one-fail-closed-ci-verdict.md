@@ -1,7 +1,9 @@
 # ADR-0022 — One fail-closed CI verdict
 
-- **Status:** Accepted historical decision; Decisions 2 and 5 superseded by
-  [ADR-0023](0023-thin-merge-queue-ci.md) on 2026-07-27
+- **Status:** Superseded historical decision. Current CI authority is
+  [ADR-0023](0023-thin-merge-queue-ci.md),
+  [ADR-0024](0024-merge-queue-admission-and-docs-lanes.md), and
+  [`CI-STRATEGY.md`](../CI-STRATEGY.md).
 - **Date:** 2026-07-27
 - **Author:** CI-16 simplification
 - **Amends:** [ADR-0020 — Merge gates observe](0020-merge-gates-observe-not-enforce.md)

@@ -1,6 +1,13 @@
 # ADR-0015 — Tally / economics process strangler charter (Mode A)
 
-- **Status:** Accepted — ARCH-MS-98 (plan-of-record for deliverable `arch-ms-tally-service`).
+> **Archived No-Go/incomplete process-cut charter — superseded by
+> [ADR-0025](0025-bounded-context-service-extraction.md).** The repository does
+> not contain a standalone Tally service or a `:8125` Caddy route. Current Tally
+> product behavior is defined by [`TALLY-SPEC.md`](../TALLY-SPEC.md) and code,
+> not by the hypothetical process surface below.
+
+- **Status:** Superseded historical charter (2026-07-31); deliverable
+  `arch-ms-tally-service` is archived with unresolved blocked work.
 - **Date:** 2026-07-16
 - **Author:** Platform modernization lane (ARCH-MS) — Tally charter session
 - **Relates to:** [ADR-0014](0014-deliverables-mission-process-strangler.md) (Deliverables Mode A) ·

@@ -1,7 +1,14 @@
 # ADR-0007 — The application shell: hold the line (keep Caddy, ratchet the monoliths, redirect new growth, census the surfaces)
 
-- **Status:** Accepted — ARCH-20 merged as PR #260. Decision 2 was later retired by
-  ADR-0009/ADR-0010; the remaining decisions stay active.
+> **Historical mixed program record — superseded as current authority.** Caddy,
+> code placement, typed adapter, and storage-placement rules now live in
+> [`AGENTS.md`](../../AGENTS.md), [ADR-0019](0019-repo-constitution.md), and
+> [ADR-0025](0025-bounded-context-service-extraction.md). The contradictory
+> ratchet, cleanup program, and modernization amendments below are retained for
+> rationale, not current instruction.
+
+- **Status:** Superseded as active architecture (2026-07-31); ARCH-20 and later
+  amendments remain historical evidence.
 - **Date:** 2026-07-11
 - **Author:** application-shell audit session (Claude Code / Fable 5) — four parallel audit
   threads (app/MCP surface, store.py regrowth, frontend/polling, repo hygiene) plus a

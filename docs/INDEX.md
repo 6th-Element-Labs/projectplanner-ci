@@ -11,6 +11,7 @@ looking like current instruction.
 | Contribute code or operate as an agent | [`AGENTS.md`](../AGENTS.md) |
 | Understand the system | [Current architecture](#current-architecture) below |
 | Understand lifecycle authority | [Three-plane architecture packet](#three-plane-architecture-packet) |
+| Understand Compand evidence and certification | [`ADR-0026 — Compand benchmark publication`](decisions/0026-compand-benchmark-publication.md) and [`CES-1`](COMPAND-BENCHMARK-STANDARD.md) |
 | Find an architectural decision | [`decisions/INDEX.md`](decisions/INDEX.md) |
 | Follow fleet workflow and Done rules | [`WORKING-AGREEMENT.md`](WORKING-AGREEMENT.md), unless the live agreement is available |
 | Operate production | [`SWITCHBOARD-RUNBOOK.md`](SWITCHBOARD-RUNBOOK.md) |
@@ -33,8 +34,10 @@ not replaced in one rewrite:
 | Selected ingest/intake routes | `:8126` |
 | LiteLLM gateway | `:8095` |
 
-[`deploy/Caddyfile`](../deploy/Caddyfile) is route truth. The service-cut ADRs explain why
-the boundaries exist; Caddy, service units, and tests show the current as-built routing.
+[`deploy/Caddyfile`](../deploy/Caddyfile) is route truth.
+[ADR-0025](decisions/0025-bounded-context-service-extraction.md) explains the reusable
+independence and process-cut policy; Caddy, service units, tests, and deployment evidence
+show the current as-built routing.
 
 New product code belongs in `src/switchboard/`. Root `app.py`, `mcp_server.py`, and other
 root modules are compatibility entrypoints or grandfathered implementation surfaces.
@@ -70,16 +73,20 @@ Legacy documents are retained with a visible banner or moved out of the active r
 
 - [`decisions/0006-control-plane-done-enough.md`](decisions/0006-control-plane-done-enough.md):
   provenance model, subtraction rule, and control-plane stop condition.
+- [`decisions/0003-work-provenance-and-reconciliation.md`](decisions/0003-work-provenance-and-reconciliation.md):
+  Git/default-branch-proven Done, evidence-backed completion, and reconciliation.
 - [Three-plane architecture packet](#three-plane-architecture-packet): lifecycle authority.
-- [`decisions/0007-application-shell-cleanup.md`](decisions/0007-application-shell-cleanup.md):
-  Caddy, growth redirection, and application-shell constraints. Its Decision 2 size counter
-  is explicitly retired.
-- [`decisions/0009-microservices-modernization.md`](decisions/0009-microservices-modernization.md):
-  vertical-slice modernization and adapter boundaries.
-- [`decisions/0010-ci-concurrency.md`](decisions/0010-ci-concurrency.md): commutative CI and
-  merge-concurrency principles.
+- [`decisions/0019-repo-constitution.md`](decisions/0019-repo-constitution.md):
+  checkout layout and front doors, distinct from repository topology.
 - [`decisions/0020-merge-gates-observe-not-enforce.md`](decisions/0020-merge-gates-observe-not-enforce.md):
   dispatch enforcement, advisory merge observation, and GitHub landing authority.
+- [`decisions/0023-thin-merge-queue-ci.md`](decisions/0023-thin-merge-queue-ci.md) and
+  [`decisions/0024-merge-queue-admission-and-docs-lanes.md`](decisions/0024-merge-queue-admission-and-docs-lanes.md):
+  one trusted CI/status/queue contract with bounded admission and fail-closed lane selection.
+- [`decisions/0025-bounded-context-service-extraction.md`](decisions/0025-bounded-context-service-extraction.md):
+  one reusable independence, No-Go, cutover, and rollback policy for process boundaries.
+- [`decisions/0026-compand-benchmark-publication.md`](decisions/0026-compand-benchmark-publication.md):
+  Compand evidence authority, whole-task economics, bounded claims, and Value Index gates.
 - [`CI-STRATEGY.md`](CI-STRATEGY.md): current CI routing and provenance expectations.
 - [`PROVIDER-AUTH-POLICY.md`](PROVIDER-AUTH-POLICY.md): provider credential and identity boundary.
 - [`BACKUP-RESTORE-RUNBOOK.md`](BACKUP-RESTORE-RUNBOOK.md): data recovery procedure.
@@ -89,10 +96,12 @@ Legacy documents are retained with a visible banner or moved out of the active r
 These retain important rationale and boundary detail, but should not be the first stop for
 ordinary coding work:
 
-- [`ARCH-MS-EXECUTION.md`](ARCH-MS-EXECUTION.md) and ADRs 0009, 0011-0016: modernization
-  program and bounded-context process cuts.
-- [`DATA-PORT-EXECUTION.md`](DATA-PORT-EXECUTION.md) and the storage-ports ADR: storage
-  abstraction program.
+- [`ARCH-MS-EXECUTION.md`](ARCH-MS-EXECUTION.md) and ADRs 0009, 0011-0016:
+  completed modernization programs and process-cut history, superseded as current
+  policy by ADR-0025.
+- [`DATA-PORT-EXECUTION.md`](DATA-PORT-EXECUTION.md) and
+  [`ADR-0018/storage-ports`](decisions/0018-storage-ports-backend-agnostic-data-layer.md):
+  retained unaccepted storage-abstraction proposal; not current architecture.
 - `phase2/`, `phase3/`, and `runbooks/`: cutover evidence and rollback procedures.
 - `evidence/`, `dispatches/`, and dated audits: proof and history.
 - `superpowers/plans/` and `superpowers/specs/`: working designs and implementation plans;
@@ -114,6 +123,9 @@ These documents are evidence and design exploration, not accepted architecture:
   observed insertion evidence, coverage boundaries, and E1–E5 falsification plan.
 - [`WHY-NOT-FORK-ROUTELLM.md`](WHY-NOT-FORK-ROUTELLM.md):
   RouteLLM build-versus-adopt analysis.
+- [`COMPAND-BENCHMARK-STANDARD.md`](COMPAND-BENCHMARK-STANDARD.md):
+  normative CES-1 experiment, grading, publication, and reproduction procedure
+  governed by ADR-0026.
 - [`TOKEN-OPTIMIZATION-BUSINESS-MODEL.md`](TOKEN-OPTIMIZATION-BUSINESS-MODEL.md)
   and `TOKEN-OPTIMIZATION-BUSINESS-MODEL.xlsx`: assumption-driven market, revenue,
   and unit-economics scenarios; not an investment-grade forecast.

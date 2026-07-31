@@ -1,6 +1,11 @@
 # ADR-0014 — Deliverables / mission process strangler charter (Mode A)
 
-- **Status:** Accepted — ARCH-MS-97 (plan-of-record for deliverable `arch-ms-deliverables-service`).
+> **Completed Deliverables-cut charter — superseded by
+> [ADR-0025](0025-bounded-context-service-extraction.md).** Current routes are
+> determined by Caddy, service code, tests, and deployment evidence.
+
+- **Status:** Superseded completed charter (2026-07-31); deliverable
+  `arch-ms-deliverables-service` is archived.
 - **Date:** 2026-07-16
 - **Author:** Platform modernization lane (ARCH-MS) — Deliverables charter session
 - **Relates to:** [ADR-0013](0013-coord-board-process-strangler.md) (Coord Mode A) ·

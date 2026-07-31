@@ -1,7 +1,12 @@
 # ADR-0018 — Storage ports charter: backend-agnostic data layer (DATA-PORT)
 
-- **Status:** Proposed — plan-of-record for deliverable `data-port-storage-abstraction`
-  (operator accepts when the deliverable is scoped on the board).
+> **Unaccepted design proposal — not current authority.** The referenced
+> `data-port-storage-abstraction` deliverable is not present on the live board,
+> and the documented SQLite boundary leaks remain in current source. If this
+> work is revived, it must be freshly scoped and accepted rather than treated as
+> a shipped architecture.
+
+- **Status:** Retired proposal (2026-07-31)
 - **Date:** 2026-07-21
 - **Canonical reference:** `ADR-0018/storage-ports`
 - **Author:** Data abstraction lane (DATA-PORT) — charter session

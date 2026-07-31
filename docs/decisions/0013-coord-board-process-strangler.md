@@ -1,6 +1,11 @@
 # ADR-0013 — Coordination / board process strangler charter (Mode A)
 
-- **Status:** Accepted — ARCH-MS-96 (plan-of-record for deliverable `arch-ms-coord-service`).
+> **Completed Coordination-cut charter — superseded by
+> [ADR-0025](0025-bounded-context-service-extraction.md).** Current routes are
+> determined by Caddy, service code, tests, and deployment evidence.
+
+- **Status:** Superseded completed charter (2026-07-31); deliverable
+  `arch-ms-coord-service` is archived.
 - **Date:** 2026-07-16
 - **Author:** Platform modernization lane (ARCH-MS) — Coord charter session
 - **Relates to:** [ADR-0012](0012-phase3-tasks-process-strangler.md) (Tasks Mode A live) ·

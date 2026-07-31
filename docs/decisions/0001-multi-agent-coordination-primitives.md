@@ -1,6 +1,13 @@
 # ADR-0001 — Multi-agent coordination: build the lease layer first
 
-- **Status:** Proposed
+> **Historical precursor — not current authority.** File leases, directed
+> messaging, Git reconciliation, and execution identity evolved under
+> [ADR-0003](0003-work-provenance-and-reconciliation.md),
+> [ADR-0008/three-plane](0008-three-plane-separation.md), and the
+> [working agreement](../WORKING-AGREEMENT.md). The phased order below is
+> retained as product history.
+
+- **Status:** Retired proposal (2026-07-31)
 - **Date:** 2026-06-27
 - **Author:** NATIVE agent (Claude Code), Helm multi-agent session
 - **Relates to:** [`docs/MULTI_AGENT_COORDINATION.md`](../MULTI_AGENT_COORDINATION.md)

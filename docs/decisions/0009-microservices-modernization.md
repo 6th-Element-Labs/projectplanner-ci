@@ -1,6 +1,12 @@
 # ADR-0009 — Microservices modernization: Phase 0 charter (ADR-007 rails + `src/switchboard/` scaffold)
 
-- **Status:** Accepted — ARCH-MS-1 merged as PR #314; Phase 0 exit is enforced by ARCH-MS-24.
+> **Completed program charter — superseded by
+> [ADR-0025](0025-bounded-context-service-extraction.md).** The archived Phase 0
+> record and its evidence remain useful; new service extraction follows the
+> single current policy rather than reopening this execution plan.
+
+- **Status:** Superseded completed charter (2026-07-31); ARCH-MS-1…24 remain
+  as-built evidence.
 - **Date:** 2026-07-12
 - **Author:** Platform modernization lane (ARCH-MS) — charter session
 - **Relates to:** [ADR-0007](0007-application-shell-cleanup.md) (Decision 7 upgrade: compass → committed

@@ -1,7 +1,12 @@
 # ADR-0010 — CI concurrency: many agents land PRs without blocking each other
 
-- **Status:** Accepted program charter (2026-07-12). Umbrella over the CI-concurrency work;
-  execution tracked on `project=switchboard`, deliverable `ci-concurrency` (HARDEN lane).
+> **Historical concurrency charter — superseded for current CI behavior by
+> [ADR-0023](0023-thin-merge-queue-ci.md),
+> [ADR-0024](0024-merge-queue-admission-and-docs-lanes.md), and
+> [`CI-STRATEGY.md`](../CI-STRATEGY.md).** This file explains the original
+> traffic jam but does not define today's lanes or queue behavior.
+
+- **Status:** Superseded program charter (2026-07-31)
 - **Owner:** Platform / CI
 - **Relates to:** [ADR-0007](0007-application-shell-cleanup.md) (Decision 2 ratchet — **retired**),
   [ADR-0009](0009-microservices-modernization.md) (ARCH-MS extraction reduces code-level conflicts),

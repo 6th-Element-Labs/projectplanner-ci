@@ -1,6 +1,11 @@
 # ADR-0016 — Ingest / inbox process strangler charter (Mode A)
 
-- **Status:** Accepted — ARCH-MS-99 (plan-of-record for deliverable `arch-ms-ingest-service`).
+> **Completed Ingest-cut charter — superseded by
+> [ADR-0025](0025-bounded-context-service-extraction.md).** Current routes are
+> determined by Caddy, service code, tests, and deployment evidence.
+
+- **Status:** Superseded completed charter (2026-07-31); deliverable
+  `arch-ms-ingest-service` is archived.
 - **Date:** 2026-07-16
 - **Author:** Platform modernization lane (ARCH-MS) — Ingest charter session
 - **Relates to:** [ADR-0015](0015-tally-economics-process-strangler.md) (Tally Mode A) ·

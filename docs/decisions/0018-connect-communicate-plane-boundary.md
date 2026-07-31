@@ -1,6 +1,11 @@
 # ADR-0018 — Separate Connect call control from Communicate agent work
 
-- **Status:** Accepted
+> **Superseded as a separate architecture decision by
+> [ADR-0008/three-plane](0008-three-plane-separation.md).** Its useful
+> content-blind Connect and execution-host-blind Communicate rules remain
+> normative product detail in [`SWITCHBOARD-CONNECT.md`](../SWITCHBOARD-CONNECT.md).
+
+- **Status:** Superseded (2026-07-31)
 - **Date:** 2026-07-21
 - **Canonical reference:** `ADR-0018/connect-communicate`
 - **Author:** Codex with operator direction

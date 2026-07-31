@@ -1,6 +1,7 @@
 # ADR-0003 — Work provenance & reconciliation: make the board the ground truth for *where work is*
 
-- **Status:** Proposed
+- **Status:** Accepted (operator ratification, 2026-07-31); original proposal
+  dated 2026-06-28
 - **Date:** 2026-06-28
 - **Author:** Helm multi-agent session (Claude Code), as a *user* of the board
 - **Relates to:** [`MULTI_AGENT_COORDINATION.md`](../MULTI_AGENT_COORDINATION.md) §1.2/§1.3/§3.1 ·
@@ -39,6 +40,13 @@ source of truth for work-state**, not just task status — and to hand every age
 rules at connect so 20 agents stop each inventing their own flow.
 
 ## Decision
+
+The durable authority in this record is Git/default-branch-proven Done,
+evidence-backed completion into In Review, squash-aware reconciliation, and a
+connect-time working agreement. Build sequencing and open implementation
+questions below are retained as original design history; current executable
+behavior is defined by code, the live working agreement, and later accepted
+authority decisions.
 
 Build a small, sharp **work-provenance + reconciliation layer**, in three parts. The
 governing principle:

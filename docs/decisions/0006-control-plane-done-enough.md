@@ -1,5 +1,12 @@
 # ADR-0006 — Done enough: freeze the control plane, one provenance model, a subtraction rule, a kill list
 
+> **Current authority after the 2026-07-31 corpus consolidation:** canonical
+> provenance owns Done, overlapping control-plane mechanisms must subtract, and
+> the control plane has an operator-owned stop condition. The kill list,
+> delivery horizons, and PR-by-PR as-built amendments below are retained program
+> history. [ADR-0008/three-plane](0008-three-plane-separation.md) owns current
+> lifecycle authority where the records overlap.
+
 - **Status:** Accepted — H1 cuts shipped (CONSOL-1…4, PRs #177/#178/#183/#189); as-built
   divergences recorded here (CONSOL-5, 2026-07-11). Operator may declare *done enough* once
   this amendment is merged.
