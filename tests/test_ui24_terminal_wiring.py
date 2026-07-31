@@ -103,13 +103,15 @@ ok("runner-pty-details-mount" in APP and "modalDetailsMount || modalDevMount" in
 ok("dockInto: mount || undefined" in APP or "dockInto:" in APP,
    "the Dev tab's Watch/Chat button docks in place instead of opening a duplicate sidecar")
 
-# ---- ambient trigger: click a task box on the Mission dependency graph ------
-ok("openRunnerSessionPanel" in MISSION, "Mission graph node clicks can open the terminal panel")
-ok("fallbackIfNotWatchable" in MISSION,
-   "a task with no live runner falls back to the existing node-actions modal instead of a dead panel")
-ok("openNodeModal" in MISSION, "the pre-existing deliverable-link node modal is preserved as the fallback")
-ok("mission-dag-node" in APP and "await this.openRunnerSessionPanel" in APP,
-   "the visible dependency-map pills use the same runner-first path as Mermaid graph nodes")
+# ---- Deliverables graph: inspect first; Watch/Chat is explicit -------------
+ok("openNodeModal(hit.id, hit.project_id)" in MISSION,
+   "Mission graph node clicks expand the deliverable task controls")
+ok("data-mission-watch-task" in MISSION,
+   "the expanded node view offers an explicit Watch/Chat action")
+node_delegate = APP[APP.index("const node = e.target.closest('.mission-dag-node')"):
+                    APP.index("const a = e.target.closest('[data-linked-task]')")]
+ok("this.openNodeModal" in node_delegate and "openRunnerSessionPanel" not in node_delegate,
+   "dependency-map pills expand task controls instead of hijacking the click for Watch/Chat")
 ok("_runnerPtyIntentTask" in RUNNER_SESSION and "has_ended_session" in RUNNER_SESSION,
    "closing a watched runner remembers task intent while server history stays authoritative")
 ok("has_ended_session" in RUNNER_SESSION and "!sessions.length" in RUNNER_SESSION,

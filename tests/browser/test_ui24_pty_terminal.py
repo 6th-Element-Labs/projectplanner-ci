@@ -802,11 +802,9 @@ try:
         ok(closed_state["rpNull"], "close() tears down the session state")
         ok(closed_state["hidden"], "close() hides the panel")
 
-        # ---- REAL dependency-map pill click survives close + stale runner ----
-        # BUG-91's first regression test called openRunnerSessionPanel directly,
-        # but the compact pill the operator actually clicks had a separate
-        # app.js delegation path that always opened the node-actions modal. Drive
-        # that real click target so the browser proves the complete interaction.
+        # ---- REAL dependency-map pill expands task controls -----------------
+        # A Deliverables click is for planning/inspection. It must not open a
+        # live terminal merely because the linked task happens to have a runner.
         page.evaluate("""
             () => {
                 const missionPage = document.getElementById('mission-page');
@@ -815,25 +813,31 @@ try:
             }
         """)
         page.locator('.mission-dag-node[data-linked-task="FAKE-TASK-1"]').click()
-        # The delegated click performs an async runner lookup before reopening
-        # the sidecar.  A fixed 300 ms delay was fast enough locally but raced
-        # under the full GitHub runner load.  Wait for the user-visible state
-        # this assertion actually cares about instead.
-        page.wait_for_function("""
-            () => !document.getElementById('runner-pty-panel').hidden
-                && TeepPlan._runnerPtyIntentTask === 'FAKE-TASK-1'
-        """, timeout=5_000)
-        clicked_reopen = page.evaluate("""
+        page.wait_for_selector('#dl-node-modal.show')
+        clicked_node = page.evaluate("""
             () => ({
                 visible: !document.getElementById('runner-pty-panel').hidden,
-                rememberedTask: TeepPlan._runnerPtyIntentTask || '',
                 nodeModalOpen: document.getElementById('dl-node-modal').classList.contains('show'),
+                hasWatch: !!document.querySelector('#dl-node-body [data-mission-watch-task="FAKE-TASK-1"]'),
             })
         """)
-        ok(clicked_reopen["visible"] and clicked_reopen["rememberedTask"] == "FAKE-TASK-1",
-           "clicking the visible dependency-map pill reopens the remembered runner sidecar")
-        ok(not clicked_reopen["nodeModalOpen"],
-           "the real dependency-map pill click does not fall through to the node-actions modal")
+        ok(clicked_node["nodeModalOpen"] and clicked_node["hasWatch"],
+           "clicking a visible dependency-map pill expands task controls with an explicit Watch/Chat action")
+        ok(not clicked_node["visible"],
+           "a dependency-map pill does not hijack the click by opening a terminal")
+        page.evaluate("""
+            () => {
+                const modal = document.getElementById('dl-node-modal');
+                window.bootstrap.Modal.getOrCreateInstance(modal).hide();
+                // The fixture is not opened through a native Bootstrap trigger,
+                // so reset its visible class synchronously before the explicit
+                // runner-path assertions below.
+                modal.classList.remove('show');
+                modal.style.display = 'none';
+                document.querySelectorAll('.modal-backdrop').forEach((backdrop) => backdrop.remove());
+                document.body.classList.remove('modal-open');
+            }
+        """)
 
         # ---- repeat Deliverable-node intent survives close + stale runner ---
         # The task's live bind can disappear between closing the sidecar and
@@ -843,7 +847,7 @@ try:
         reopened = page.evaluate("""
             async () => {
                 const opened = await TeepPlan.openRunnerSessionPanel(
-                    'FAKE-TASK-1', { fallbackIfNotWatchable: true });
+                    'FAKE-TASK-1', { fallbackIfNotWatchable: false });
                 return {
                     opened,
                     visible: !document.getElementById('runner-pty-panel').hidden,
@@ -860,7 +864,7 @@ try:
             async () => {
                 TeepPlan._runnerPtyClose();
                 const opened = await TeepPlan.openRunnerSessionPanel(
-                    'FAKE-TASK-1', { fallbackIfNotWatchable: true });
+                    'FAKE-TASK-1', { fallbackIfNotWatchable: false });
                 await new Promise((resolve) => setTimeout(resolve, 250));
                 return opened && !document.getElementById('runner-pty-panel').hidden;
             }
@@ -899,7 +903,7 @@ try:
 
         page.route("**/api/tasks/FAKE-TASK-1/execution?**", _stale_watch)
         page.evaluate("() => { TeepPlan._runnerPtyIntentTask = null; }")
-        page.locator('.mission-dag-node[data-linked-task="FAKE-TASK-1"]').click()
+        page.evaluate("() => TeepPlan.openRunnerSessionPanel('FAKE-TASK-1', { includeStale: true, fallbackIfNotWatchable: false })")
         page.wait_for_timeout(300)
         fresh_stale_open = page.evaluate("""
             () => ({
@@ -923,7 +927,7 @@ try:
         # while the selected stale identity keeps the click on the runner surface.
         page.get_by_role("button", name="Close Watch/Chat").click()
         page.wait_for_timeout(300)
-        page.locator('.mission-dag-node[data-linked-task="FAKE-TASK-1"]').click()
+        page.evaluate("() => TeepPlan.openRunnerSessionPanel('FAKE-TASK-1', { includeStale: true, fallbackIfNotWatchable: false })")
         page.wait_for_timeout(300)
         stale_reopen_after_empty_lookup = page.evaluate("""
             () => ({
@@ -1004,7 +1008,7 @@ try:
         """)
         ok(savedConnect, "the newer-runner case stubs the relay handshake to stay hermetic")
         page.evaluate("() => { TeepPlan._runnerPtyIntentTask = null; }")
-        page.locator('.mission-dag-node[data-linked-task="FAKE-TASK-1"]').click()
+        page.evaluate("() => TeepPlan.openRunnerSessionPanel('FAKE-TASK-1', { includeStale: true, fallbackIfNotWatchable: false })")
         page.wait_for_timeout(300)
         pinned_to_dead = page.evaluate(
             "() => document.getElementById('runner-pty-title').textContent")
@@ -1013,7 +1017,7 @@ try:
 
         page.get_by_role("button", name="Close Watch/Chat").click()
         page.wait_for_timeout(300)
-        page.locator('.mission-dag-node[data-linked-task="FAKE-TASK-1"]').click()
+        page.evaluate("() => TeepPlan.openRunnerSessionPanel('FAKE-TASK-1', { includeStale: true, fallbackIfNotWatchable: false })")
         page.wait_for_timeout(400)
         after_newer = page.evaluate("""
             () => ({
@@ -1078,7 +1082,7 @@ try:
 
         page.route("**/api/tasks/FAKE-TASK-1/start**", _resume_review)
         page.evaluate("() => { TeepPlan._runnerPtyIntentTask = null; }")
-        page.evaluate("() => TeepPlan.openRunnerSessionPanel('FAKE-TASK-1', {includeStale: true, taskStatus: 'In Review'})")
+        page.evaluate("() => TeepPlan.openRunnerSessionPanel('FAKE-TASK-1', {includeStale: true, taskStatus: 'In Review', fallbackIfNotWatchable: false})")
         page.wait_for_timeout(300)
         ok(page.get_by_role("button", name="Resume review").is_visible(),
            "a stale In Review runner shows the prominent Resume review action")

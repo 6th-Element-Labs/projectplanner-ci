@@ -799,17 +799,13 @@
                 const nid = String(n.id || '').toUpperCase();
                 return boldId ? nid === boldId : label.includes(nid);
             });
-            nodeEl.addEventListener('click', async (e) => {
+            nodeEl.addEventListener('click', (e) => {
                 e.preventDefault();
                 if (!hit) return;
-                // UI-24: a task with a live/watchable runner opens straight into its
-                // bound terminal (the sidecar); otherwise fall back to the existing
-                // deliverable-link node-actions modal (UI-1).
-                if (typeof this.openRunnerSessionPanel === 'function') {
-                    const opened = await this.openRunnerSessionPanel(
-                        hit.id, { fallbackIfNotWatchable: true, includeStale: true });
-                    if (opened) return;
-                }
+                // A graph click means "show me this deliverable task", not
+                // "attach me to its terminal". Keep Watch/Chat an explicit
+                // action in the expanded node view so an active runner cannot
+                // hijack ordinary planning and inspection.
                 this.openNodeModal(hit.id, hit.project_id);
             });
             // Native SVG hover tooltip: narration + who's working it now.
@@ -1616,7 +1612,10 @@
             </div>
             <label class="form-check mb-3"><input class="form-check-input" type="checkbox" id="dl-node-blocks"${link.blocks_deliverable ? ' checked' : ''}>
                 <span class="form-check-label">This task blocks the deliverable</span></label>
-            <a href="#" class="small" id="dl-node-open"><i class="ti ti-external-link me-1"></i>Open task detail</a>`;
+            <div class="d-flex flex-wrap gap-2">
+                <a href="#" class="small" id="dl-node-open"><i class="ti ti-external-link me-1"></i>Open task detail</a>
+                <button type="button" class="btn btn-sm btn-outline-azure" data-mission-watch-task="${this.esc(id)}"><i class="ti ti-terminal-2 me-1"></i>Open Watch / Chat</button>
+            </div>`;
         const detail = link.task_detail || link.task || {};
         if (detail.status !== 'Done') {
             body.insertAdjacentHTML('beforeend', `<div class="mt-3" id="dl-node-autopilot">${this._taskAutopilotButtonHtml(id, taskProject, false)}</div>`);

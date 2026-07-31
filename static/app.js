@@ -5277,16 +5277,9 @@ const TeepPlan = {
                 if (node && missionPage.contains(node)) {
                     e.preventDefault();
                     const taskId = node.getAttribute('data-linked-task');
-                    // UI-24 / BUG-91: the compact task pills are the visible
-                    // dependency-map boxes most operators actually click. Keep
-                    // them on the same runner-first path as Mermaid SVG nodes;
-                    // previously only the SVG handler tried Watch/Chat while
-                    // these pills always opened the authoring modal.
-                    if (typeof this.openRunnerSessionPanel === 'function') {
-                        const opened = await this.openRunnerSessionPanel(
-                            taskId, { fallbackIfNotWatchable: true, includeStale: true });
-                        if (opened) return;
-                    }
+                    // The Deliverables page is primarily a planning/inspection
+                    // surface. A pill expands its task controls; Watch/Chat is
+                    // an explicit action there, never an implicit click outcome.
                     this.openNodeModal(taskId, node.getAttribute('data-linked-project'));
                     return;
                 }
