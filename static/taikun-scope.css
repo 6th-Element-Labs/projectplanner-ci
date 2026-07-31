@@ -51,3 +51,26 @@
 .scope-verdict{ border:1px solid rgba(247,103,7,.35); background:rgba(247,103,7,.05); border-radius:.6rem; padding:.8rem 1rem;
   display:flex; align-items:flex-start; gap:.7rem; }
 .scope-verdict.ok{ border-color:rgba(47,179,68,.35); background:rgba(47,179,68,.05); }
+/* UI-74 · Deliverables page density and responsive task controls. */
+.mission-work-item{ transition:background-color .12s ease; }
+.mission-work-item:hover{ background:var(--tblr-bg-surface-secondary); }
+.mission-work-item-live{ box-shadow:inset 3px 0 var(--tblr-green); }
+.mission-task-controls > .btn-list{ justify-content:flex-end; }
+
+@media (max-width: 767.98px){
+  #mission-page .mission-summary-metrics .card-body{ padding:.75rem; }
+  #mission-page .mission-work-table thead{ display:none; }
+  #mission-page .mission-work-table tbody,
+  #mission-page .mission-work-table tr,
+  #mission-page .mission-work-table td{ display:block; width:100%; }
+  #mission-page .mission-work-table tr{ padding:.85rem 1rem; border-bottom:1px solid var(--tblr-border-color); }
+  #mission-page .mission-work-table td{ padding:.25rem 0; border:0; text-align:left !important; }
+  #mission-page .mission-work-table td[data-label]::before{ content:attr(data-label); display:block; color:var(--tblr-secondary); font-size:.7rem; letter-spacing:.04em; text-transform:uppercase; margin-bottom:.15rem; }
+  #mission-page .mission-work-table td[data-label="Title"]::before{ display:none; }
+  #mission-page .mission-task-controls{ margin-top:.25rem; }
+  #mission-page .mission-task-controls > .btn-list{ justify-content:flex-start; }
+  #mission-page .nav-tabs{ overflow-x:auto; flex-wrap:nowrap; }
+  #mission-page .nav-tabs .nav-link{ white-space:nowrap; }
+  #mission-page > .d-flex:first-child > .text-end{ width:100%; text-align:left !important; }
+  #mission-page > .d-flex:first-child > .text-end > div{ align-items:flex-start !important; }
+}

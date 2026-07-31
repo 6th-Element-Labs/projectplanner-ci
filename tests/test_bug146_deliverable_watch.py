@@ -12,7 +12,8 @@ assert 'data-mission-watch-task="${this.esc(taskId)}"' in mission
 assert ">Watch</button>" in mission
 assert ">Live</span>" in mission
 assert 'data-mission-task-active="true"' in mission
-assert 'class="table-primary"' in mission
+assert "mission-work-item-live" in mission
+assert "table-primary mission-work-item-live" in mission
 assert "runner.session" in mission
 assert "[data-mission-watch-task]" in app
 assert "openRunnerSessionPanel(" in app

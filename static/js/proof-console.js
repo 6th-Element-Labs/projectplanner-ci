@@ -381,8 +381,8 @@
             <div class="card-header">
                 <div class="d-flex flex-wrap align-items-center gap-2">
                     <i class="ti ti-terminal-2 text-primary"></i>
-                    <h3 class="card-title mb-0">Proof console</h3>
-                    <span class="badge bg-secondary-lt">browser-only acceptance</span>
+                    <h3 class="card-title mb-0">Detailed verification</h3>
+                    <span class="badge bg-secondary-lt">operator diagnostics</span>
                     <span id="proof-verdict">${verdict.badge}</span>
                     <div class="ms-auto btn-list">
                         <button type="button" class="btn btn-sm btn-outline-secondary" id="proof-refresh" ${operator ? '' : 'disabled'}><i class="ti ti-refresh me-1"></i>Refresh</button>

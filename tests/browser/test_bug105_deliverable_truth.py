@@ -153,24 +153,25 @@ try:
         assert page.locator("#mission-detail").get_attribute("open") is None
         assert ledger.locator("tbody tr").count() == 4
         headings = ledger.locator("thead").inner_text().lower()
-        assert "role" in headings and "autopilot" in headings, headings
+        assert "verification" in headings and "controls" in headings, headings
         for expected_status in ("Not Started", "In Progress", "In Review", "Done"):
             assert ledger.locator(f'tr[data-task-status="{expected_status}"]').count() == 1
         active_row = ledger.locator(f'tr[data-mission-task-row="{task_ids[1]}"]')
-        assert "implementation" in active_row.inner_text()
         assert active_row.get_attribute("data-mission-task-active") == "true"
         assert "table-primary" in (active_row.get_attribute("class") or "")
         watch = active_row.get_by_role("button", name="Watch")
         assert watch.is_visible()
         runner_attr = watch.get_attribute("data-mission-watch-runner")
         assert runner_attr == "runner-bug146-live", (runner_attr, status["active_work"])
-        assert active_row.locator('[data-autopilot-scope="task"]').count() == 1
+        assert active_row.get_by_role("button", name="Kill").is_visible()
         watch.click()
         page.locator("#runner-pty-panel").wait_for(state="visible")
         assert task_ids[1] in page.locator("#runner-pty-title").inner_text()
+        page.locator("#runner-pty-close").click()
         inactive_row = ledger.locator(f'tr[data-mission-task-row="{task_ids[0]}"]')
         assert inactive_row.get_attribute("data-mission-task-active") is None
         assert inactive_row.get_by_role("button", name="Watch").count() == 0
+        assert inactive_row.get_by_role("button", name="Start").is_visible()
         done_row = ledger.locator(f'tr[data-mission-task-row="{task_ids[-1]}"]')
         assert done_row.is_visible()
         assert "Merged code" in done_row.inner_text()
@@ -179,6 +180,15 @@ try:
         assert "1 of 4 linked tasks complete" in page_text
         assert "0 of 4 linked tasks complete" not in page_text
         assert "Stored narrative is updating; counts above are live." in page_text
+
+        # The same work ledger becomes stacked task cards on a phone without
+        # changing its task-detail or runner-control contracts.
+        page.set_viewport_size({"width": 390, "height": 844})
+        assert active_row.evaluate("el => getComputedStyle(el).display") == "block"
+        assert active_row.get_by_role("button", name="Watch").is_visible()
+        assert active_row.get_by_role("button", name="Kill").is_visible()
+        inactive_row.locator('[data-linked-task]').first.click()
+        page.locator("#task-modal.show").wait_for(state="visible")
         assert not console_errors, console_errors
         browser.close()
     print("PASS BUG-105 all lifecycle states remain visible in the primary work ledger")

@@ -5250,6 +5250,16 @@ const TeepPlan = {
                     );
                     return;
                 }
+                const kill = e.target.closest('[data-mission-kill-task]');
+                if (kill && missionPage.contains(kill)) {
+                    e.preventDefault();
+                    await this.requestRunnerControl(
+                        kill.getAttribute('data-mission-kill-runner'),
+                        'kill',
+                        kill.getAttribute('data-mission-kill-task'),
+                    );
+                    return;
+                }
                 const autopilot = e.target.closest('[data-autopilot-action]');
                 if (autopilot && missionPage.contains(autopilot)) {
                     e.preventDefault();

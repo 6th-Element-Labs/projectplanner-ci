@@ -113,6 +113,7 @@ try:
         # Start two individual tasks. AUTO-2 is dependency-blocked but must stay
         # durably armed rather than failing or silently disappearing.
         for task_id in ("AUTO-1", "AUTO-2"):
+            page.locator('[data-mission-view="map"]').click()
             page.locator(f'.mission-dag-node[data-linked-task="{task_id}"]').click()
             page.wait_for_selector("#dl-node-modal.show")
             with page.expect_response(
@@ -126,6 +127,7 @@ try:
             # durable across navigation and avoids coupling the contract test to
             # Bootstrap's non-contractual fade timing.
             page.reload(wait_until="domcontentloaded")
+            page.locator('[data-mission-view="map"]').click()
             page.wait_for_selector(f'.mission-dag-node[data-linked-task="{task_id}"]')
         scopes = page.evaluate("""async () => (await (await fetch(
           'api/deliverables/ui27-browser/autopilot')).json()).scopes""")
