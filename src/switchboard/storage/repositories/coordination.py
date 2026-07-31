@@ -3841,6 +3841,21 @@ def _enrollment_inventory_error(identity: Dict[str, Any],
     return None
 
 
+ENROLLED_HOST_MIN_HEARTBEAT_TTL_S = 180
+
+
+def _registered_host_heartbeat_ttl_s(
+        inventory: Dict[str, Any], identity: Dict[str, Any]) -> int:
+    """Apply the Capacity lease floor only to server-enrolled Agent Hosts."""
+    advertised = max(
+        10,
+        int(inventory.get("heartbeat_ttl_s") or inventory.get("ttl_s") or 60),
+    )
+    if identity.get("enrollment_id"):
+        return max(ENROLLED_HOST_MIN_HEARTBEAT_TTL_S, advertised)
+    return advertised
+
+
 def register_host(inventory: Dict[str, Any], principal_id: str = "",
                   actor: str = "system",
                   project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
@@ -3863,7 +3878,7 @@ def register_host(inventory: Dict[str, Any], principal_id: str = "",
         return inventory_error
     if "active_sessions" in inventory and "active_sessions" not in capacity:
         capacity["active_sessions"] = inventory.get("active_sessions")
-    ttl_s = max(10, int(inventory.get("heartbeat_ttl_s") or inventory.get("ttl_s") or 60))
+    ttl_s = _registered_host_heartbeat_ttl_s(inventory, identity)
     try:
         with _control_plane_conn(project) as c:
             # An Agent Host re-registers on a keepalive cadence (adapters/agent_host.py
