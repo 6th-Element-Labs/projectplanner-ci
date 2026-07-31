@@ -240,6 +240,65 @@ class MissionJournalRepository:
         with self._connection(project) as connection:
             return self._item_in(connection, task_id, project)
 
+    def task_ids_for_head(self, head_sha: str, *, project: str) -> list[str]:
+        """Return tasks whose canonical git projection names this exact head."""
+        normalized = str(head_sha or "").strip()
+        if not normalized:
+            return []
+        with self._connection(project) as connection:
+            rows = connection.execute(
+                "SELECT task_id FROM task_git_state WHERE lower(head_sha)=lower(?)",
+                (normalized,),
+            ).fetchall()
+        return [str(row["task_id"]) for row in rows]
+
+    def task_ids_for_pr_number(self, pr_number: int, *, project: str) -> list[str]:
+        """Return tasks bound to one canonical pull-request number."""
+        if isinstance(pr_number, bool) or not isinstance(pr_number, int) or pr_number <= 0:
+            return []
+        with self._connection(project) as connection:
+            rows = connection.execute(
+                "SELECT task_id FROM task_git_state WHERE pr_number=?",
+                (pr_number,),
+            ).fetchall()
+        return [str(row["task_id"]) for row in rows]
+
+    def active_task_ids(self, *, project: str) -> list[str]:
+        """Return existing nonterminal missions for repository-wide observations."""
+        with self._connection(project) as connection:
+            rows = connection.execute(
+                "SELECT task_id FROM mission_items "
+                "WHERE project_id=? AND state<>'DONE' ORDER BY task_id",
+                (project,),
+            ).fetchall()
+        return [str(row["task_id"]) for row in rows]
+
+    def waiting_items_due(
+        self,
+        *,
+        project: str,
+        due_before: float,
+        task_id: str = "",
+    ) -> list[dict[str, Any]]:
+        """Read persisted waits eligible for the passive observation backstop."""
+        where = (
+            "m.project_id=? AND m.state='WAITING' AND m.updated_at<=? "
+            "AND NOT EXISTS ("
+            "SELECT 1 FROM mission_events e "
+            "WHERE e.project_id=m.project_id AND e.task_id=m.task_id "
+            "AND e.occurred_at>m.updated_at)"
+        )
+        params: list[Any] = [project, due_before]
+        if task_id:
+            where += " AND m.task_id=?"
+            params.append(task_id)
+        with self._connection(project) as connection:
+            rows = connection.execute(
+                f"SELECT m.task_id,m.updated_at FROM mission_items m WHERE {where}",
+                params,
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def list_events(
         self,
         task_id: str,
