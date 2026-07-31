@@ -339,6 +339,51 @@ try:
        different_ref["failure_class"] == "mirror_sync_failed",
        "an existing mirror ref at a different SHA fails closed")
 
+    retry_task = store.create_task(
+        {"workstream_id": "CIQA", "title": "persisted retry ref"}, actor="test", project=P)
+    original_retry_request = make_request(retry_task["task_id"])
+    original_retry_request.update({
+        "source_sha": "7777771234567890abcdef1234567890abcdef12",
+        "mirror_branch": "ci/original-retry-ref",
+        "mirror_ref_kind": "tag",
+        "workflow_ref": "main",
+        "workflow_inputs": {"source_ref": "refs/tags/ci/original-retry-ref"},
+        "request": {
+            "mirror_ref_kind": "tag",
+            "workflow_ref": "main",
+            "workflow_inputs": {"source_ref": "refs/tags/ci/original-retry-ref"},
+        },
+    })
+    aborted_retry = external_ci_mirror.request_external_ci_mirror_run(
+        original_retry_request, source_path, actor="test", project=P,
+        runner=FakeRunner("trigger_fail"), sleep_fn=clock.sleep, now_fn=clock.time)
+    changed_retry_request = {
+        **original_retry_request,
+        "mirror_branch": "ci/caller-recomputed-ref",
+        "workflow_inputs": {"source_ref": "refs/tags/ci/caller-recomputed-ref"},
+        "request": {
+            "mirror_ref_kind": "tag",
+            "workflow_ref": "main",
+            "workflow_inputs": {"source_ref": "refs/tags/ci/caller-recomputed-ref"},
+        },
+        "retry_terminal_error": True,
+    }
+    retry_runner = FakeRunner()
+    retried = external_ci_mirror.request_external_ci_mirror_run(
+        changed_retry_request, source_path, actor="test", project=P,
+        runner=retry_runner, sleep_fn=clock.sleep, now_fn=clock.time)
+    retry_pushes = [cmd for cmd in retry_runner.commands if cmd[:2] == ["git", "push"]]
+    retry_dispatches = [
+        cmd for cmd in retry_runner.commands if cmd[:3] == ["gh", "workflow", "run"]
+    ]
+    ok(aborted_retry["status"] == "error" and retried["status"] == "success" and
+       retry_pushes and retry_pushes[0][-1].endswith(":refs/tags/ci/original-retry-ref") and
+       retry_dispatches and
+       "source_ref=refs/tags/ci/original-retry-ref" in retry_dispatches[0] and
+       not any("caller-recomputed-ref" in str(arg)
+               for cmd in retry_runner.commands for arg in cmd),
+       "abortive retry uses the original persisted ref for push and workflow input")
+
     for mode, expected_class, source_sha in (
         ("push_fail", "mirror_sync_failed",
          "3333333333333333333333333333333333333333"),

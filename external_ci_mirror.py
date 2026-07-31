@@ -503,15 +503,20 @@ def request_external_ci_mirror_run(request: Dict[str, Any], source_path: str,
             run = {**reset, "retried_from_terminal": True}
         else:
             return run
+    # An idempotent create returns the durable run selected by exact source SHA.  Its
+    # request is the dispatch contract: a retry caller may have derived a different
+    # mirror label or workflow input in the meantime, but mixing that new request with
+    # the persisted mirror_branch would make push and workflow checkout disagree.
+    execution_request = {**request, **(run.get("request") or {})}
     try:
         result = _execute_run(run, source_path, actor, project, runner, sleep_fn, now_fn,
-                              request)
+                              execution_request)
     except ExternalCiError as e:
         result = _update_failure(run, e.failure_class, e.message, e.result,
                                  actor=actor, project=project)
-    if _should_cleanup_terminal_ref(request or {}, result):
+    if _should_cleanup_terminal_ref(execution_request, result):
         result = _cleanup_terminal_mirror_branch(
-            result, source_path, request or {}, actor, project, runner)
+            result, source_path, execution_request, actor, project, runner)
     return result
 
 
