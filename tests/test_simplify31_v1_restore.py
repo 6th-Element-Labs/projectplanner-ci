@@ -19,11 +19,11 @@ for required in (
 ):
     assert (Path(ROOT) / required).is_file(), required
 
-for quarantined in (
+for staged_v4 in (
     "src/switchboard/application/mission_bot_v4",
     "src/switchboard/domain/mission_bot_v4",
 ):
-    assert not (Path(ROOT) / quarantined).exists(), quarantined
+    assert (Path(ROOT) / staged_v4).is_dir(), staged_v4
 
 for passive_contract in (
     "src/switchboard/application/commands/mission_journal.py",
@@ -49,6 +49,7 @@ webhook_projection = read("webhook_inbox.py")
 
 assert "run_completion_tick" in coordinator
 assert "run_v4_tick" not in coordinator
+assert "run_scoped_mission_tick" not in coordinator
 assert "mission_engine" not in daemon
 assert "PM_COORDINATOR_MISSION_ENGINE" not in service
 assert "0123_mission_items" in migrations
@@ -90,7 +91,7 @@ assert passive_commands.count("make_runner_lease_due") == 1
 assert "expected_identity=identity" in passive_commands
 assert "run_v4_tick" not in passive_commands
 
-passive_paths = {
+staged_paths = {
     (Path(ROOT) / "src/switchboard/application/commands/mission_journal.py").resolve(),
     (Path(ROOT) / "src/switchboard/application/commands/github_mission_events.py").resolve(),
     (Path(ROOT) / "src/switchboard/application/queries/mission_context.py").resolve(),
@@ -99,16 +100,39 @@ passive_paths = {
     (Path(ROOT) / "src/switchboard/storage/migrations/runner.py").resolve(),
     (Path(ROOT) / "webhook_inbox.py").resolve(),
 }
+staged_paths.update(
+    path.resolve()
+    for root in (
+        Path(ROOT) / "src/switchboard/application/mission_bot_v4",
+        Path(ROOT) / "src/switchboard/domain/mission_bot_v4",
+    )
+    for path in root.rglob("*.py")
+)
 production_files = list((Path(ROOT) / "src/switchboard").rglob("*.py"))
 production_files += list((Path(ROOT) / "adapters").rglob("*.py"))
 production_files += list((Path(ROOT) / "db").rglob("*.py"))
 production_files += list(Path(ROOT).glob("*.py"))
 for path in production_files:
-    if path.resolve() in passive_paths:
+    if path.resolve() in staged_paths:
         continue
     source = path.read_text(encoding="utf-8")
+    assert "mission_bot_v4" not in source, path
     assert re.search(r"\bmission_journal\b", source) is None, path
     assert re.search(r"\bmission_items\b", source) is None, path
     assert re.search(r"\bmission_events\b", source) is None, path
 
-print("SIMPLIFY-31/COORD-112 v1 runtime + passive journal: PASS")
+runtime = read("src/switchboard/application/mission_bot_v4/runtime.py")
+worker = read("src/switchboard/application/mission_bot_v4/worker.py")
+for forbidden_caller in (
+    "coordinator_daemon.py",
+    "scoped_completion_coordinator.py",
+    "src/switchboard/application/mission_bot/driver.py",
+    "src/switchboard/application/commands/__init__.py",
+):
+    assert "mission_bot_v4" not in read(forbidden_caller), forbidden_caller
+assert "start_task" in runtime
+assert "task_has_live_execution" in runtime
+assert "validate_autopilot_scope_authority" in runtime
+assert "while " not in worker
+
+print("SIMPLIFY-31/COORD-113 v1 runtime + opt-in scoped v4 pager: PASS")
