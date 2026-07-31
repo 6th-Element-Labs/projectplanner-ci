@@ -39,36 +39,6 @@ def _token(repo: str = "") -> str:
         env_order=("PM_GITHUB_TOKEN", "GITHUB_TOKEN", "SWITCHBOARD_CI_GITHUB_TOKEN"))
 
 
-def gh_command(args: List[str], *, token: str = "") -> Dict[str, Any]:
-    """Run one bounded ``gh`` CLI command and return a small typed receipt.
-
-    Relocated from the retired Mission Bot v1 completion driver (SIMPLIFY-30):
-    the operator PR-dock routes (merge/close) still shell out to ``gh`` for the
-    two effects GitHub's REST surface makes awkward (merge-queue enqueue and
-    close), and this is their only remaining home.
-    """
-    import subprocess
-    env = dict(os.environ)
-    if token:
-        env["GH_TOKEN"] = token
-    try:
-        proc = subprocess.run(
-            ["gh", *args], text=True, capture_output=True, check=False, env=env,
-            timeout=30,
-        )
-    except subprocess.TimeoutExpired as exc:
-        return {
-            "returncode": 124,
-            "stdout": str(exc.stdout or "")[:1000],
-            "stderr": "GitHub command timed out after 30 seconds",
-        }
-    return {
-        "returncode": proc.returncode,
-        "stdout": (proc.stdout or "").strip()[:1000],
-        "stderr": (proc.stderr or "").strip()[:1000],
-    }
-
-
 class RateLimitedError(RuntimeError):
     """GitHub refused because the credential's hourly budget is spent.
 

@@ -109,41 +109,6 @@ def _update_run(run: Dict[str, Any], fields: Dict[str, Any], actor: str,
     return updated
 
 
-def _project_terminal_mission_event(
-        updated: Dict[str, Any], *, project: str) -> Dict[str, Any]:
-    """Persist one exact-SHA v4 wake edge for a terminal mirror observation."""
-    status = str(updated.get("status") or "").strip().lower()
-    if status not in VERDICT_TERMINAL_STATUSES | ABORTIVE_TERMINAL_STATUSES:
-        return {"action": "ignored", "reason": "external_ci_not_terminal"}
-    state = {
-        "success": "success",
-        "failure": "failure",
-        "error": "error",
-        "cancelled": "error",
-    }[status]
-    try:
-        from switchboard.application.commands.github_mission_events import (
-            project_delivery,
-        )
-        return project_delivery(
-            "status",
-            {
-                "sha": updated.get("source_sha"),
-                "context": updated.get("status_context"),
-                "state": state,
-                "target_url": updated.get("run_url") or updated.get("logs_url"),
-                "repository": {"full_name": updated.get("source_repo")},
-            },
-            project=project,
-        )
-    except Exception as exc:  # noqa: BLE001 - the CI verdict is already durable
-        return {
-            "action": "projection_failed",
-            "error": type(exc).__name__,
-            "detail": str(exc)[:300],
-        }
-
-
 def _default_run(args: List[str], cwd: str) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     if not env.get("GH_TOKEN"):
@@ -354,7 +319,6 @@ def _update_failure(run: Dict[str, Any], failure_class: str, reason: str,
             run["effect_key"], reason, readback=readback,
             dead_letter=failure_class in {"mirror_sync_failed", "workflow_failed"},
             actor=actor, project=project)
-    _project_terminal_mission_event(updated, project=project)
     updated["ok"] = False
     return updated
 
@@ -807,7 +771,6 @@ def _poll_run(run: Dict[str, Any], source_path: str, actor: str,
             if run.get("effect_key"):
                 store.verify_external_effect(run["effect_key"], readback=result,
                                              actor=actor, project=project)
-            _project_terminal_mission_event(updated, project=project)
             updated["ok"] = True
             return updated
         raise ExternalCiError(

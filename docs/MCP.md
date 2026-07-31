@@ -101,15 +101,6 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
 - `move_task(task_id, project_from, project_to, reason?, new_task_id?, dependency_policy?)`
 - `archive_task(task_id, project, reason?)`
 - `register_agent(...)`, `heartbeat(...)`, `list_active_agents(...)`
-- `get_mission_context(task_id, project)` — bounded v4 instrument panel hydrated from
-  the mission journal, live GitHub PR/status facts, exact-head Switchboard evidence,
-  canonical runner liveness, dependencies, and persisted terminal provenance. Missing
-  authorities are named in `missing_sources`; the read never derives a route.
-- `list_mission_history(task_id, after_sequence, limit, project)` — forward-only,
-  bounded cursor pagination over the append-only v4 mission journal.
-- `yield_mission(task_id, execution_id, generation, observed_through, outcome,
-  requested_role, ...)` — authenticated exact-execution wait/continue handoff. A stale
-  cursor cannot hide a newer event, and a stale execution cannot change mission state.
 - `register_host(...)`, `heartbeat_host(...)`, `list_agent_hosts(...)`, `host_status(...)`
 - `register_runner_session(...)`, `list_runner_sessions(...)`,
   `list_runner_control_requests(...)`, `claim_runner_control(...)`,

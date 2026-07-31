@@ -18,13 +18,21 @@ export boundary, it is bounded, and it changes no route.
 """
 from __future__ import annotations
 
+import json
+import sqlite3
 import unittest
+from unittest.mock import patch
 
 from path_setup import ROOT  # noqa: F401
 
 from constants import EXECUTED_TEST_RUN_SCHEMA, MISSING_ARTIFACT_SCHEMA
+from switchboard.domain.completion import state_machine
+from switchboard.domain.mission_bot.dossier import build_dossier
 from switchboard.domain.decisions import features as features_mod
+from switchboard.storage.migrations import runner as migrations
+from switchboard.application.commands.merge_gate import _merge_gate_finding
 from switchboard.storage.repositories import claims as claims_repo
+from switchboard.storage.repositories import completion_runs, decision_records
 
 
 HEAD = "a" * 40
@@ -39,6 +47,49 @@ CO21_HYGIENE = {
     ],
     "git_diff_check": "clean",
 }
+
+
+def _gate_finding(missing_artifact: dict | None = None,
+                  code: str = "missing_executed_test_run") -> dict:
+    """One merge_gate finding, built by the gate's OWN constructor.
+
+    BUG-192 follow-up: this helper used to hand-build the dict with a nested
+    ``details`` key. That is not the shape the gate emits — ``_merge_gate_finding``
+    splats ``details`` onto the top level — so the tests below were asserting against
+    an invented shape and passed while the production lift returned nothing. Building
+    through the real constructor is what makes them regression tests instead of
+    restatements of an assumption.
+    """
+    gate = {
+        "ok": False,
+        "schema": EXECUTED_TEST_RUN_SCHEMA,
+        "reason": code,
+        "problems": [],
+    }
+    if missing_artifact is not None:
+        gate["missing_artifact"] = missing_artifact
+    return _merge_gate_finding(
+        code,
+        "Merge gate requires a passing executed test run.",
+        "missing_data",
+        details={"executed_test_gate": gate, "policy_profile": "code_strict"},
+    )
+
+
+def _snapshot(findings, *, head=HEAD):
+    return state_machine.build_completion_snapshot(
+        task={"task_id": "CO-21", "status": "In Review",
+              "git_state": {"head_sha": head, "pr_number": 810, "pr_url": PR_URL}},
+        github_pr={"number": 810, "state": "OPEN", "draft": False, "mergeable": True,
+                   "mergeStateStatus": "CLEAN", "head": {"sha": head},
+                   "status_contexts": [{"context": "Switchboard CI / VM gate",
+                                        "state": "SUCCESS"}],
+                   "url": PR_URL},
+        required_status_contexts=["Switchboard CI / VM gate"],
+        review={"status": "passed", "head_sha": head, "pr_url": PR_URL},
+        merge_gate={"findings": findings, "pr_url": PR_URL},
+        runner={"live": False, "generation": 1, "host_id": "host-1"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -128,10 +179,185 @@ class MissingArtifactReportTest(unittest.TestCase):
         self.assertNotIn("missing_artifact", gate)
 
 
-# (retired with SIMPLIFY-30) The v1 classifier/dossier lift and the decision-
-# corpus write path that carried this report were deleted with the Mission Bot
-# v1 controller. The live contract is the gate report above and the bounded
-# feature projection below.
+# ---------------------------------------------------------------------------
+# the classifier stops discarding it
+# ---------------------------------------------------------------------------
+
+class ClassifierCarriesMissingArtifactTest(unittest.TestCase):
+    def _report(self):
+        return claims_repo._executed_test_run_gate(
+            {}, {"work_session_id": CO21_SESSION_ID,
+                 "hygiene": dict(CO21_HYGIENE)})["missing_artifact"]
+
+    def test_the_decision_carries_the_report(self):
+        decision = state_machine.classify_completion(
+            None, _snapshot([_gate_finding(self._report())]))
+        self.assertEqual(decision["reason_code"], "missing_executed_test_run")
+        self.assertEqual(
+            decision["missing_artifact"]["found_near_miss"][0]["work_session_id"],
+            CO21_SESSION_ID,
+        )
+
+    def test_carrying_the_report_changes_no_route(self):
+        """Feature-only, same contract as COORD-51 §3.3."""
+        routing_keys = ("state", "route", "reason_code", "desired_role",
+                        "retry_policy", "board_projection", "effect")
+        for code in ("missing_executed_test_run", "invalid_executed_test_run",
+                     "missing_ui_playwright_evidence", "work_session_required"):
+            bare = state_machine.classify_completion(
+                None, _snapshot([_gate_finding(None, code=code)])) or {}
+            rich = state_machine.classify_completion(
+                None, _snapshot([_gate_finding(self._report(), code=code)])) or {}
+            self.assertEqual(
+                {key: bare.get(key) for key in routing_keys},
+                {key: rich.get(key) for key in routing_keys},
+                f"the missing-artifact report moved the route for {code}",
+            )
+
+    def test_a_finding_without_a_report_adds_no_key(self):
+        decision = state_machine.classify_completion(
+            None, _snapshot([_gate_finding(None)]))
+        self.assertNotIn("missing_artifact", decision)
+
+    def test_the_lift_reads_the_shape_the_gate_actually_emits(self):
+        """Regression: the first cut read finding["details"], which never exists.
+
+        _merge_gate_finding returns {code, message, failure_class, severity, blocking,
+        **details} — details are splatted. Looking under a "details" key returned {} for
+        every real finding, so the report the gate wrote was dropped one layer later:
+        the same discard this whole line of work removes, reintroduced by its own fix.
+        """
+        finding = _gate_finding(self._report())
+        self.assertNotIn("details", finding, "the gate splats details; it does not nest")
+        self.assertIn("executed_test_gate", finding)
+        dossier = build_dossier(
+            {"task_id": "CO-21", "findings": [finding]},
+            reason_code="missing_executed_test_run",
+            mission="remediate",
+        )
+        self.assertTrue(dossier["missing_artifact"])
+
+    def test_a_nested_details_finding_is_still_accepted(self):
+        # Belt and braces: a caller that hands us an unsplatted finding still works.
+        nested = {"code": "missing_executed_test_run", "blocking": True,
+                  "details": {"executed_test_gate": {"missing_artifact": self._report()}}}
+        dossier = build_dossier(
+            {"task_id": "CO-21", "findings": [nested]},
+            reason_code="missing_executed_test_run",
+            mission="remediate",
+        )
+        self.assertTrue(dossier["missing_artifact"])
+
+    def test_a_non_blocking_finding_is_not_mined_for_a_report(self):
+        finding = _gate_finding(self._report())
+        finding["blocking"] = False
+        decision = state_machine.classify_completion(None, _snapshot([finding])) or {}
+        self.assertNotIn("missing_artifact", decision)
+
+
+# ---------------------------------------------------------------------------
+# it reaches the corpus, and stops at the export boundary
+# ---------------------------------------------------------------------------
+
+class MissingArtifactInTheCorpusTest(unittest.TestCase):
+    project = "switchboard"
+
+    def setUp(self):
+        self.db = sqlite3.connect(":memory:")
+        self.db.row_factory = sqlite3.Row
+        self.db.execute(
+            "CREATE TABLE deliverable_task_links ("
+            "id TEXT PRIMARY KEY, deliverable_id TEXT NOT NULL, "
+            "project_id TEXT NOT NULL, task_id TEXT NOT NULL, created_at REAL)")
+        for name, sql in migrations.DDL_MIGRATIONS:
+            if name in {"0117_decision_records",
+                        "0118_ix_decision_records_projection",
+                        "0119_ix_decision_records_convergence"}:
+                self.db.execute(sql)
+        self.patches = [
+            patch.object(decision_records, "_conn", return_value=self.db),
+            patch.object(decision_records, "_write_through",
+                         side_effect=lambda _project, fn: fn()),
+            patch.object(completion_runs, "_conn", return_value=self.db),
+            patch.object(completion_runs, "_write_through",
+                         side_effect=lambda _project, fn: fn()),
+        ]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.db.close()
+
+    def _co21_episode(self):
+        report = claims_repo._executed_test_run_gate(
+            {}, {"work_session_id": CO21_SESSION_ID,
+                 "hygiene": dict(CO21_HYGIENE)})["missing_artifact"]
+        snapshot = _snapshot([_gate_finding(report)])
+        decision = state_machine.classify_completion(None, snapshot)
+        return decision_records.record_decision_episode(
+            project=self.project, snapshot=snapshot, decision=decision,
+            classifier_version=state_machine.COMPLETION_CLASSIFIER_VERSION,
+            now=1_700_000_000.0,
+        )
+
+    def test_the_co21_episode_names_the_contract_and_the_near_miss(self):
+        """The amendment's acceptance criterion, end to end."""
+        self._co21_episode()
+        episode = decision_records.list_decision_episodes(
+            project=self.project, task_id="CO-21")[0]
+
+        self.assertEqual(episode["reason_code"], "missing_executed_test_run")
+        artifact = episode["features"]["missing_artifact"]
+        self.assertEqual(artifact["expected_key"], "executed_test_run")
+        self.assertEqual(artifact["expected_schema"], EXECUTED_TEST_RUN_SCHEMA)
+        self.assertIn("output_sha256", artifact["accepted_hash_keys"])
+        self.assertEqual(
+            artifact["found_near_miss"],
+            [{"key": "executed_tests", "surface": "hygiene.executed_tests",
+              "work_session_id": CO21_SESSION_ID}],
+        )
+
+    def test_the_poolable_allowlist_is_untouched(self):
+        self._co21_episode()
+        episode = decision_records.list_decision_episodes(
+            project=self.project, task_id="CO-21")[0]
+        self.assertEqual(
+            set(features_mod.FEATURE_FIELDS) - set(episode["features"]), set())
+
+    def test_the_report_never_crosses_the_export_boundary(self):
+        """Work-session ids and internal key names are environment identity."""
+        self._co21_episode()
+        exported = decision_records.export_projection(project=self.project)
+        raw = json.dumps(exported[0])
+        for leak in (CO21_SESSION_ID, "executed_tests", "missing_artifact",
+                     "hygiene.executed_tests"):
+            self.assertNotIn(leak, raw, f"{leak!r} crossed the export boundary")
+        features = json.loads(exported[0]["features_json"])
+        self.assertEqual(set(features), set(features_mod.FEATURE_FIELDS))
+
+    def test_missing_artifact_is_a_declared_diagnostic_field(self):
+        self.assertIn("missing_artifact", features_mod.DIAGNOSTIC_FIELDS)
+        self.assertNotIn("missing_artifact", features_mod.FEATURE_FIELDS)
+
+    def test_the_report_does_not_fragment_an_episode(self):
+        # Two ticks whose reports differ only in a stray key must stay one episode;
+        # the diagnostic is not part of episode identity.
+        first = self._co21_episode()
+        report = claims_repo._executed_test_run_gate(
+            {"other_test_results": [{"ok": True}]},
+            {"work_session_id": CO21_SESSION_ID,
+             "hygiene": dict(CO21_HYGIENE)})["missing_artifact"]
+        snapshot = _snapshot([_gate_finding(report)])
+        second = decision_records.record_decision_episode(
+            project=self.project, snapshot=snapshot,
+            decision=state_machine.classify_completion(None, snapshot),
+            classifier_version=state_machine.COMPLETION_CLASSIFIER_VERSION,
+            now=1_700_000_001.0,
+        )
+        self.assertEqual(first["record_id"], second["record_id"])
+        self.assertEqual(second["tick_count"], 2)
 
 
 class MissingArtifactProjectionBoundsTest(unittest.TestCase):

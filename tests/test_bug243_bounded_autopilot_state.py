@@ -30,7 +30,11 @@ for name in (
 from path_setup import ROOT  # noqa: E402,F401
 import coordinator_daemon  # noqa: E402
 import store  # noqa: E402
+from switchboard.application import completion_driver  # noqa: E402
+from switchboard.application.commands import merge_gate as merge_gate_command  # noqa: E402
+from switchboard.application.queries import task_session  # noqa: E402
 from switchboard.storage.repositories import autopilot_scopes  # noqa: E402
+from switchboard.storage.repositories import completion_runs  # noqa: E402
 
 
 passed = failed = 0
@@ -233,6 +237,51 @@ try:
        and tick_activity.get("deliverable_ids") == [""],
        "compact standalone-task receipt remains valid daemon activity")
 
+    # The completion snapshot itself asks for metadata only. This is the exact
+    # recursion cut: ``snapshot.autopilot_scope`` cannot contain last_result.
+    observed_list_args = {}
+
+    def list_scopes(**kwargs):
+        observed_list_args.update(kwargs)
+        return [{
+            **metadata[0],
+            "last_result": nested,  # would recurse if the driver accepted it
+        }] if kwargs.get("include_last_result") is not False else metadata
+
+    class SnapshotStore:
+        @staticmethod
+        def get_task(_task_id, **_kwargs):
+            return {
+                "task_id": task_id,
+                "status": "In Review",
+                "git_state": {},
+                "provenance": {},
+                "session_health": {},
+            }
+
+        @staticmethod
+        def get_project_github_repo(_project):
+            return ""
+
+    with (
+        patch.object(autopilot_scopes, "list_autopilot_scopes",
+                     side_effect=list_scopes),
+        patch.object(merge_gate_command, "merge_gate", return_value={
+            "required_status_contexts": [],
+            "status_contexts": [],
+            "review_gate": {},
+        }),
+        patch.object(task_session, "execute_for", return_value={}),
+        patch.object(completion_runs, "get_active_completion_run",
+                     return_value={}),
+    ):
+        snapshot = completion_driver.hydrate_completion_snapshot(
+            task_id, project=project, actor="test/BUG-243",
+            store_mod=SnapshotStore)
+    ok(observed_list_args.get("include_last_result") is False,
+       "completion hydration explicitly requests metadata-only scopes")
+    ok("last_result" not in (snapshot.get("autopilot_scope") or {}),
+       "new completion snapshots cannot contain a prior scope result")
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 

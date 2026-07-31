@@ -137,7 +137,7 @@ ok(scoped._drive_scope.__func__ is ScopedCompletionCoordinator._drive_scope,
 # A standalone task scope drives through the one Mission Bot tick without ever
 # touching the legacy deliverable coordinator.
 with patch(
-    "switchboard.application.mission_bot_v4.run_v4_tick",
+    "switchboard.application.completion_driver.run_completion_tick",
     return_value={
         "schema": "switchboard.completion_tick.v1",
         "task_id": "PROTO-X",

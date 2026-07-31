@@ -25,9 +25,6 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 # Starts a task or deliverable, and dormant scopes stay dormant until then.
 # Emergency dry-run rollback: set to 0 and restart this unit.
 Environment=PM_COORDINATOR_AUTOPILOT_ACT=1
-# Mission Bot v4 is the code default and the only work-driving engine.
-# Emergency proof-window rollback: set PM_COORDINATOR_MISSION_ENGINE=legacy
-# in .env and restart. Do not hard-code it here or .env could not override it.
 Environment=PM_COORDINATOR_AUTOPILOT_MAX_DELIVERABLES=64
 Environment=PM_COORDINATOR_AUTOPILOT_MAX_TASKS_PER_SCOPE=64
 # Tick lines are bounded summaries; PM_COORDINATOR_AUTOPILOT_LOG_FULL=1 restores

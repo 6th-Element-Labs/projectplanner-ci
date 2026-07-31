@@ -1,0 +1,730 @@
+"""Execute exactly one planned completion effect, then stop.
+
+The planner is pure. This module is the side-effect boundary: persist the
+completion run projection, perform the one effect, and return a receipt that
+duplicate ticks can replay.
+"""
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+from typing import Any, Callable, Mapping, Optional
+
+from switchboard.domain.completion.effects import canonical_findings
+from switchboard.domain.completion.human_closeout import build_human_closeout_request
+from switchboard.domain.completion.normalization_law import (
+    NormalizedAction,
+    command_idempotency_key,
+)
+
+
+FenceFn = Callable[[Any], Any]
+WakeFn = Callable[[Mapping[str, Any]], Any]
+EffectFn = Callable[[Mapping[str, Any]], Any]
+
+
+@dataclass(frozen=True)
+class CompletionEffectAdapters:
+    """Concrete side-effect ports owned by the production completion driver."""
+
+    ensure_review_generation: Optional[EffectFn] = None
+    start_remediation: Optional[EffectFn] = None
+    mark_ready: Optional[EffectFn] = None
+    update_branch: Optional[EffectFn] = None
+    retry_ci: Optional[EffectFn] = None
+    enqueue: Optional[EffectFn] = None
+    repair_dispatch: Optional[EffectFn] = None
+    fence_runner: Optional[EffectFn] = None
+    reconcile_provenance: Optional[EffectFn] = None
+    escalate_human: Optional[EffectFn] = None
+
+    def for_effect(self, effect: str) -> Optional[EffectFn]:
+        return getattr(self, effect, None)
+
+
+def _map(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _completion_run_data(
+    decision: Mapping[str, Any],
+    snapshot: Mapping[str, Any],
+    plan: Mapping[str, Any],
+) -> dict[str, Any]:
+    decision, snapshot, plan = _map(decision), _map(snapshot), _map(plan)
+    return {
+        "task_id": plan.get("task_id") or snapshot.get("task_id"),
+        "pr_number": plan.get("pr_number") or snapshot.get("pr_number"),
+        "head_sha": plan.get("head_sha") or snapshot.get("head_sha"),
+        "state": decision.get("state") or "blocked",
+        "route": plan.get("route") or decision.get("route"),
+        "reason_code": plan.get("reason_code") or decision.get("reason_code"),
+        "desired_role": plan.get("role") or decision.get("desired_role") or "",
+        "board_status": (
+            decision.get("board_projection")
+            or plan.get("board_projection")
+            or "In Review"
+        ),
+        "evidence_refs": {
+            "decision": {
+                "route": plan.get("route"),
+                "reason_code": plan.get("reason_code"),
+                "idem_key": plan.get("idem_key"),
+                "head_sha": plan.get("head_sha"),
+                "effect": plan.get("effect"),
+                "normalized_command": _map(plan.get("normalized_command")),
+            },
+            "ci": {
+                "head_sha": plan.get("head_sha"),
+                "status": "observed",
+                "status_contexts": _map(snapshot.get("status_contexts")),
+            },
+            "review": _map(snapshot.get("review")),
+            "merge_gate": _map(snapshot.get("merge_gate")),
+            "work_session": _map(snapshot.get("work_session")),
+            "runner": _map(snapshot.get("runner")),
+            "acceptance_findings": list(
+                decision.get("acceptance_findings") or []),
+            "escalated_findings": list(
+                decision.get("escalated_findings") or []),
+        },
+    }
+
+
+def _persist_run(
+    *,
+    decision: Mapping[str, Any],
+    snapshot: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    actor: str,
+    project: str,
+) -> dict[str, Any]:
+    # Lazy import keeps domain.completion importable during db.connection boot.
+    from switchboard.storage.repositories import completion_runs
+
+    return completion_runs.transition_completion_run(
+        _completion_run_data(decision, snapshot, plan),
+        actor=actor,
+        project=project,
+    )
+
+
+def ensure_completion_run(
+    *,
+    decision: Mapping[str, Any],
+    snapshot: Mapping[str, Any],
+    current: Mapping[str, Any] | None,
+    actor: str,
+    project: str,
+) -> dict[str, Any]:
+    """Persist classified authority before deriving an effect identity.
+
+    A first tick has no durable ``run_id``, ``state_version``, or ``attempt``.
+    Persisting that authority first gives the initial effect and every replay
+    the same identity. If authority already matches, preserve the current row
+    so this bootstrap step cannot discard richer execution evidence.
+    """
+    decision, snapshot, current = (
+        _map(decision), _map(snapshot), _map(current))
+    expected = {
+        "task_id": str(snapshot.get("task_id") or "").strip().upper(),
+        "pr_number": int(snapshot.get("pr_number") or 0),
+        "head_sha": str(snapshot.get("head_sha") or "").strip().lower(),
+        "state": str(decision.get("state") or "blocked").strip().lower(),
+        "route": str(decision.get("route") or "").strip().lower(),
+        "reason_code": str(decision.get("reason_code") or "").strip(),
+        "desired_role": str(decision.get("desired_role") or "").strip(),
+        "board_status": str(
+            decision.get("board_projection") or "In Review").strip(),
+    }
+    if current and all(
+        (
+            int(current.get(key) or 0) == value
+            if key == "pr_number"
+            else str(current.get(key) or "").strip().lower()
+            == str(value or "").strip().lower()
+        )
+        for key, value in expected.items()
+    ):
+        return current
+    return _persist_run(
+        decision=decision,
+        snapshot=snapshot,
+        plan={},
+        actor=actor,
+        project=project,
+    )
+
+
+def _escalate_human(
+    plan: Mapping[str, Any],
+    *,
+    decision: Mapping[str, Any],
+    snapshot: Mapping[str, Any],
+    run: Mapping[str, Any],
+    project: str,
+    actor: str,
+    fence_generation: Optional[FenceFn] = None,
+) -> dict[str, Any]:
+    from switchboard.storage.repositories import attention as attention_store
+    from switchboard.storage.repositories import completion_runs
+
+    def write() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+        with attention_store._conn(project) as c:
+            persisted_row = completion_runs.transition_completion_run_in(
+                c,
+                _completion_run_data(decision, snapshot, plan),
+                actor=actor,
+            )
+            # Prefer the durable run identity for the frozen closeout context.
+            closeout_run = {
+                **_map(run),
+                "run_id": (
+                    persisted_row.get("run_id") or _map(run).get("run_id")
+                ),
+                "state_version": (
+                    persisted_row.get("state_version")
+                    or _map(run).get("state_version")
+                ),
+                "attempt": (
+                    persisted_row.get("attempt") or _map(run).get("attempt")
+                ),
+            }
+            # Keep the normalized command authoritative while attaching the
+            # persisted audit identity. Replanning here would create a second
+            # lifecycle decision inside the effect boundary.
+            durable = {
+                **_map(plan),
+                "completion_run_id": closeout_run.get("run_id"),
+                "state_version": closeout_run.get("state_version"),
+                "decision_attempt": closeout_run.get("attempt"),
+            }
+            durable["idem_key"] = command_idempotency_key(
+                action=NormalizedAction.BLOCK,
+                decision={
+                    **_map(decision),
+                    "reason_code": durable.get("reason_code"),
+                },
+                snapshot=snapshot,
+                run=closeout_run,
+                role=str(durable.get("role") or ""),
+            )
+            request_data = build_human_closeout_request(
+                plan=durable,
+                decision=decision,
+                snapshot=snapshot,
+                run=closeout_run,
+            )
+            request = attention_store.create_attention_request_in(
+                c, request_data, actor=actor, project=project,
+            )
+            return persisted_row, durable, request
+
+    persisted, durable_plan, attention = attention_store._write_through(
+        project, write)
+    if attention.get("created") and isinstance(attention.get("request"), Mapping):
+        from switchboard.application.attention_push import deliver_attention_request
+        attention["push_delivery"] = deliver_attention_request(
+            attention["request"], project=project, actor=actor)
+    fenced_generation = None
+    # Terminalize the live generation once when the human closeout is first
+    # persisted. Replays must not re-fence Watch/session evidence.
+    if (
+        attention.get("created")
+        and durable_plan.get("fence_required")
+        and fence_generation is not None
+    ):
+        fence_generation(_map(durable_plan.get("fence_identity")))
+        fenced_generation = durable_plan.get("fence_generation")
+    return {
+        "effect": "escalate_human",
+        "route": "human",
+        "run": persisted,
+        "plan": durable_plan,
+        "attention": attention,
+        "fenced_generation": fenced_generation,
+        "receipt": {
+            "schema": "switchboard.completion_effect_receipt.v1",
+            "effect": "escalate_human",
+            "idem_key": durable_plan.get("idem_key"),
+            "attention_request_id": attention["request"]["request_id"],
+            "verified": True,
+            "pending": False,
+            "idempotent_replay": bool(attention.get("idempotent_replay")),
+        },
+    }
+
+
+#: Wake states that mean the dispatch this effect points at is over and did not
+#: deliver a runner.  Anything else (pending/claimed/completed) is still viable.
+_DEAD_WAKE_STATES = frozenset({"failed", "cancelled", "expired"})
+
+
+def _dead_wake(result: Any) -> str:
+    """Return a reason when the readback's wake is terminal-without-a-runner.
+
+    BUG-189: ``start_task`` reports ``started: true`` when it binds to an already
+    requested generation, and its capacity readback carries that wake's real
+    status.  A dispatch that attaches to a dead wake therefore looked like a
+    success, verified in the external-effect ledger, and left the task pointing
+    at a wake that would never produce a runner.  The wake row records why it
+    died (``result_json.failure_class`` / ``reason``); surface that rather than
+    inventing a generic message.
+    """
+    row = _map(result)
+    capacity = _map(row.get("capacity"))
+    status = str(capacity.get("wake_status") or row.get("wake_status") or "").strip().lower()
+    if status not in _DEAD_WAKE_STATES:
+        return ""
+    wake_id = str(capacity.get("wake_id") or row.get("wake_id") or "") or "(unknown)"
+    detail = str(capacity.get("wake_failure_reason")
+                 or capacity.get("failure_class") or "").strip()
+    return (f"dispatch bound to wake {wake_id} which is {status}"
+            + (f": {detail}" if detail else ""))
+
+
+def _effect_diagnostics(existing_effect: Mapping[str, Any]) -> dict[str, Any]:
+    """The ledger's own account of why a suppressed effect is not progressing.
+
+    BUG-189: every early return below already holds the ledger row, which
+    carries ``last_error``, ``retry_count`` and ``resource``.  Dropping them
+    turned "start_task refused: Project execution readiness is blocked." into a
+    contentless ``effect_retry_backoff`` on every tick for eight hours, and cost
+    a full day of rediscovering a string the system had the whole time.  A
+    suppressed effect must always say what it is suppressed *by*.
+    """
+    row = _map(existing_effect)
+    out: dict[str, Any] = {}
+    if row.get("last_error"):
+        out["last_error"] = str(row.get("last_error"))
+    if row.get("resource"):
+        out["resource"] = str(row.get("resource"))
+    try:
+        out["retry_count"] = int(row.get("retry_count") or 0)
+    except (TypeError, ValueError):
+        out["retry_count"] = 0
+    return out
+
+
+def _effect_failed(result: Any) -> str:
+    row = _map(result)
+    if row.get("error") or row.get("refused"):
+        return str(row.get("error") or row.get("reason") or "effect refused")
+    if row.get("action") == "refused":
+        return str(row.get("reason") or "effect refused")
+    dead = _dead_wake(row)
+    if dead:
+        return dead
+    try:
+        if int(row.get("returncode") or 0) != 0:
+            return str(row.get("stderr") or f"returncode={row['returncode']}")
+    except (TypeError, ValueError):
+        return "invalid effect returncode"
+    return ""
+
+
+def _effect_pending(result: Any) -> bool:
+    row = _map(result)
+    return str(row.get("action") or row.get("status") or "").strip().lower() in {
+        "transitioning", "pending", "stopping", "starting",
+    }
+
+
+def _execute_mutating_effect(
+    effect: str,
+    plan: Mapping[str, Any],
+    *,
+    decision: Mapping[str, Any],
+    snapshot: Mapping[str, Any],
+    project: str,
+    actor: str,
+    adapters: CompletionEffectAdapters,
+    fence_generation: Optional[FenceFn],
+) -> dict[str, Any]:
+    adapter = adapters.for_effect(effect)
+    if adapter is None:
+        raise NotImplementedError(f"completion effect adapter missing: {effect}")
+
+    persisted = _persist_run(
+        decision=decision, snapshot=snapshot, plan=plan, actor=actor,
+        project=project,
+    )
+    from switchboard.storage.repositories import external_effects
+
+    payload = {
+        "idem_key": plan.get("idem_key"),
+        "effect": effect,
+        "route": plan.get("route"),
+        "role": plan.get("role"),
+        "head_sha": plan.get("head_sha"),
+        "pr_number": plan.get("pr_number"),
+        "failing_contexts": list(plan.get("failing_contexts") or []),
+        "failing_check_url": plan.get("failing_check_url"),
+        "fence_identity": _map(plan.get("fence_identity")),
+        "acceptance_findings": canonical_findings(
+            plan.get("acceptance_findings")),
+        "escalated_findings": canonical_findings(
+            plan.get("escalated_findings")),
+    }
+    ledger = external_effects.claim_external_effect(
+        "completion_effect",
+        str(plan.get("task_id") or ""),
+        effect,
+        payload,
+        task_id=str(plan.get("task_id") or ""),
+        idem_key=str(plan.get("idem_key") or ""),
+        actor=actor,
+        project=project,
+    )
+    existing_effect = _map(ledger.get("effect"))
+    if ledger.get("verified"):
+        # COORD-77: a verified replay of a mutating effect is the livelock
+        # loop point — a stable decision no-ops here forever while the task
+        # sits frozen. Count it so the classifier's convergence ladder can
+        # escalate deterministically instead of relying on someone noticing.
+        # The count is advisory pressure, never authority: a failure to count
+        # must not break the replay receipt, but it is reported on it — a
+        # discarded cause is the defect class this board keeps re-finding.
+        from switchboard.storage.repositories import completion_runs
+        stable_replay_error = None
+        try:
+            stable_replays = completion_runs.note_stable_replay(
+                str(plan.get("task_id") or ""),
+                str(plan.get("head_sha") or ""),
+                actor=actor,
+                project=project,
+            )
+        except Exception as exc:  # noqa: BLE001 - bookkeeping stays non-fatal
+            stable_replays = None
+            stable_replay_error = f"{type(exc).__name__}: {exc}"
+        return {
+            "effect": effect,
+            "route": plan.get("route"),
+            "run": persisted,
+            "plan": dict(plan),
+            "result": ledger.get("proof") or {},
+            "receipt": {
+                "schema": "switchboard.completion_effect_receipt.v1",
+                "effect": effect,
+                "idem_key": plan.get("idem_key"),
+                "effect_key": ledger.get("effect_key"),
+                "verified": True,
+                "pending": False,
+                "idempotent_replay": True,
+                "stable_replays": stable_replays,
+                **({"stable_replay_error": stable_replay_error}
+                   if stable_replay_error else {}),
+                **_effect_diagnostics(existing_effect),
+            },
+        }
+    if not ledger.get("claimed") and existing_effect.get("status") == "issued":
+        # The adapter crossed its external boundary. Reissuing before
+        # authoritative readback could duplicate a runner, merge-queue
+        # admission, or GitHub mutation.
+        return {
+            "effect": effect,
+            "route": plan.get("route"),
+            "run": persisted,
+            "plan": dict(plan),
+            "result": existing_effect.get("readback") or {},
+            "receipt": {
+                "schema": "switchboard.completion_effect_receipt.v1",
+                "effect": effect,
+                "idem_key": plan.get("idem_key"),
+                "effect_key": ledger.get("effect_key"),
+                "verified": False,
+                "pending": True,
+                "idempotent_replay": True,
+                "reason": "effect_issued_awaiting_readback",
+                **_effect_diagnostics(existing_effect),
+            },
+        }
+    if (
+        not ledger.get("claimed")
+        and existing_effect.get("status") == "claimed"
+        and time.time() - float(existing_effect.get("updated_at") or time.time()) < 60
+    ):
+        # Another tick currently owns issuance. A stale claim is recoverable
+        # after the bounded window; a fresh one must never double-fire.
+        return {
+            "effect": effect,
+            "route": plan.get("route"),
+            "run": persisted,
+            "plan": dict(plan),
+            "result": existing_effect.get("readback") or {},
+            "receipt": {
+                "schema": "switchboard.completion_effect_receipt.v1",
+                "effect": effect,
+                "idem_key": plan.get("idem_key"),
+                "effect_key": ledger.get("effect_key"),
+                "verified": False,
+                "pending": True,
+                "idempotent_replay": True,
+                "reason": "effect_claim_in_flight",
+                **_effect_diagnostics(existing_effect),
+            },
+        }
+    if not ledger.get("claimed") and existing_effect.get("status") == "failed":
+        if plan.get("retry_policy") == "live_facts_only":
+            raise RuntimeError(
+                "completion effect failed and requires a fresh authoritative "
+                "reassessment: "
+                + str(
+                    existing_effect.get("last_error")
+                    or ledger.get("reason")
+                    or effect
+                )
+            )
+        retry_count = int(existing_effect.get("retry_count") or 0)
+        retry_after = min(300.0, 5.0 * (2 ** min(max(retry_count - 1, 0), 6)))
+        age = time.time() - float(
+            existing_effect.get("updated_at") or time.time())
+        if age < retry_after:
+            return {
+                "effect": effect,
+                "route": plan.get("route"),
+                "run": persisted,
+                "plan": dict(plan),
+                "result": existing_effect.get("readback") or {},
+                "receipt": {
+                    "schema": "switchboard.completion_effect_receipt.v1",
+                    "effect": effect,
+                    "idem_key": plan.get("idem_key"),
+                    "effect_key": ledger.get("effect_key"),
+                    "verified": False,
+                    "pending": True,
+                    "idempotent_replay": True,
+                    "reason": "effect_retry_backoff",
+                    "retry_after_seconds": retry_after - age,
+                    **_effect_diagnostics(existing_effect),
+                },
+            }
+        ledger = external_effects.retry_external_effect(
+            str(ledger.get("effect_key") or ""),
+            expected_retry_count=retry_count,
+            actor=actor,
+            project=project,
+        )
+        if not ledger.get("claimed"):
+            return {
+                "effect": effect,
+                "route": plan.get("route"),
+                "run": persisted,
+                "plan": dict(plan),
+                "result": _map(ledger.get("effect")).get("readback") or {},
+                "receipt": {
+                    "schema": "switchboard.completion_effect_receipt.v1",
+                    "effect": effect,
+                    "idem_key": plan.get("idem_key"),
+                    "effect_key": ledger.get("effect_key"),
+                    "verified": False,
+                    "pending": True,
+                    "idempotent_replay": True,
+                    "reason": "effect_retry_claim_lost",
+                    **_effect_diagnostics(existing_effect),
+                },
+            }
+    elif (
+        not ledger.get("claimed")
+        and existing_effect.get("status") in {"dead_letter", "void"}
+    ):
+        raise RuntimeError(
+            f"completion effect is {existing_effect.get('status')}: "
+            f"{existing_effect.get('last_error') or ledger.get('reason') or ''}"
+        )
+
+    fenced_generation = None
+    if plan.get("fence_required") and fence_generation is not None:
+        fence_generation(_map(plan.get("fence_identity")))
+        fenced_generation = plan.get("fence_generation")
+
+    # All production adapters are idempotent at their own boundary. Reissuing a
+    # claimed-but-unverified effect is the crash-recovery path; the durable
+    # external-effect ledger prevents a verified effect from firing twice.
+    try:
+        result = adapter(plan)
+        failure = _effect_failed(result)
+        if failure:
+            raise RuntimeError(failure)
+        if _effect_pending(result):
+            verified = external_effects.mark_external_effect_issued(
+                str(ledger.get("effect_key") or ""),
+                readback=_map(result),
+                actor=actor,
+                project=project,
+            )
+        else:
+            verified = external_effects.verify_external_effect(
+                str(ledger.get("effect_key") or ""),
+                readback=_map(result),
+                actor=actor,
+                project=project,
+            )
+    except Exception as exc:
+        external_effects.fail_external_effect(
+            str(ledger.get("effect_key") or ""),
+            str(exc),
+            actor=actor,
+            project=project,
+        )
+        raise
+    return {
+        "effect": effect,
+        "route": plan.get("route"),
+        "run": persisted,
+        "plan": dict(plan),
+        "result": result,
+        "fenced_generation": fenced_generation,
+        "receipt": {
+            "schema": "switchboard.completion_effect_receipt.v1",
+            "effect": effect,
+            "idem_key": plan.get("idem_key"),
+            "effect_key": ledger.get("effect_key"),
+            "verified": (
+                not _effect_pending(result)
+                and not bool(verified.get("error"))
+            ),
+            "pending": _effect_pending(result),
+            "idempotent_replay": not bool(ledger.get("claimed")),
+        },
+    }
+
+
+def execute_effect(
+    plan: Mapping[str, Any],
+    *,
+    decision: Mapping[str, Any],
+    snapshot: Mapping[str, Any],
+    run: Mapping[str, Any] | None = None,
+    project: str,
+    actor: str,
+    fence_generation: Optional[FenceFn] = None,
+    wake_completion_owner: Optional[WakeFn] = None,
+    adapters: Optional[CompletionEffectAdapters] = None,
+) -> dict[str, Any]:
+    """Perform the single planned effect for this tick."""
+    del wake_completion_owner  # used by resume helpers; tick execution stays one-effect
+    plan = _map(plan)
+    effect = str(plan.get("effect") or "")
+    if effect == "escalate_human":
+        observe_adapter = (adapters or CompletionEffectAdapters()).escalate_human
+        if observe_adapter is not None:
+            result = observe_adapter(plan)
+            return {
+                "effect": effect,
+                "route": plan.get("route"),
+                "run": _map(run),
+                "plan": plan,
+                "result": result,
+                "receipt": {
+                    "schema": "switchboard.completion_effect_receipt.v1",
+                    "effect": effect,
+                    "idem_key": plan.get("idem_key"),
+                    "verified": True,
+                    "pending": False,
+                    "observed": True,
+                },
+            }
+        return _escalate_human(
+            plan,
+            decision=decision,
+            snapshot=snapshot,
+            run=_map(run),
+            project=project,
+            actor=actor,
+            fence_generation=fence_generation,
+        )
+    if effect in {"wait", "none", "attach_and_wait"}:
+        persisted = _persist_run(
+            decision=decision, snapshot=snapshot, plan=plan, actor=actor,
+            project=project,
+        )
+        return {
+            "effect": effect,
+            "route": plan.get("route"),
+            "run": persisted,
+            "plan": plan,
+            "receipt": {
+                "schema": "switchboard.completion_effect_receipt.v1",
+                "effect": effect,
+                "idem_key": plan.get("idem_key"),
+                "verified": True,
+                "pending": False,
+            },
+        }
+    if effect in {
+        "ensure_review_generation", "start_remediation", "mark_ready",
+        "update_branch", "retry_ci", "enqueue", "repair_dispatch", "fence_runner",
+        "reconcile_provenance",
+    }:
+        return _execute_mutating_effect(
+            effect,
+            plan,
+            decision=decision,
+            snapshot=snapshot,
+            project=project,
+            actor=actor,
+            adapters=adapters or CompletionEffectAdapters(),
+            fence_generation=fence_generation,
+        )
+    raise NotImplementedError(f"completion effect not implemented: {effect}")
+
+
+def resume_after_human_decision(
+    decided: Mapping[str, Any],
+    *,
+    project: str,
+    actor: str,
+    wake_completion_owner: Optional[WakeFn] = None,
+) -> dict[str, Any]:
+    """Compatibility readback for the durable completion-wake outbox.
+
+    Production wake issuance belongs to
+    ``attention.attempt_completion_wake``.  Calling an arbitrary callback from
+    this helper would bypass the transactional decision/outbox boundary.
+    """
+    del project, actor, wake_completion_owner
+    decided = _map(decided)
+    request = _map(decided.get("request"))
+    wake = _map(decided.get("completion_wake"))
+    return {
+        "status": request.get("status") or "decision_recorded",
+        "resumed": False,
+        "wake": wake,
+        "wake_receipt": wake.get("wake_receipt"),
+        "reason": "awaiting_delivery_or_execution_receipt",
+    }
+
+
+def mark_human_resume_receipt(
+    request_id: str,
+    *,
+    expected_version: int,
+    host_id: str,
+    actor: str,
+    receipt: Mapping[str, Any],
+    project: str,
+) -> dict[str, Any]:
+    """Reject unbound receipts; only an exact fenced owner tick may resolve."""
+    del request_id, expected_version, host_id, actor, receipt, project
+    from switchboard.storage.repositories.attention import AttentionStoreError
+
+    raise AttentionStoreError(
+        "attention_completion_owner_required",
+        "completion resume receipts require an exact fenced completion-owner tick",
+    )
+
+
+# Expose resume helpers as attributes for the test import style
+# ``execute_effect.resume_after_human_decision``.
+execute_effect.resume_after_human_decision = resume_after_human_decision  # type: ignore[attr-defined]
+execute_effect.mark_human_resume_receipt = mark_human_resume_receipt  # type: ignore[attr-defined]
+
+
+__all__ = [
+    "CompletionEffectAdapters",
+    "ensure_completion_run",
+    "execute_effect",
+    "mark_human_resume_receipt",
+    "resume_after_human_decision",
+]

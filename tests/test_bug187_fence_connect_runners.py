@@ -36,6 +36,7 @@ os.environ["PM_DYNAMIC_PROJECTS_DIR"] = TMP
 os.environ["PM_AUTH_MODE"] = "dev-open"
 
 from switchboard.application.commands import task_execution  # noqa: E402
+from switchboard.domain.completion import effects  # noqa: E402
 
 P = "switchboard"
 passed = failed = 0
@@ -151,9 +152,21 @@ try:
 finally:
     task_execution.runner_repo.make_runner_lease_due = saved_due
 
-# 6. (retired with SIMPLIFY-30) The v1 completion hydrator that projected
-#    execution_connection_id was deleted; the fence contract below is the
-#    remaining authority on which fields pin a generation.
+# 6. The hydrator still projects the field, so the comparison has both sides.
+identity = effects._runner_fence_identity({
+    "runner_session_id": "run_x", "execution": {"execution_id": "exec_x",
+                                                "generation": 1, "fence_epoch": 2,
+                                                "role": "review_merge",
+                                                "head_sha": "abc"},
+    "metadata": {},
+})
+ok(identity.get("execution_connection_id") == "",
+   "a Connect runner projects an empty execution_connection_id rather than omitting it")
+ok(effects._runner_fence_identity(
+    {"metadata": {"execution_connection_id": "conn-1"}}
+).get("execution_connection_id") == "conn-1",
+   "a runner carrying a connection id in metadata still projects it")
+
 # 7. The required tuple itself is pinned, so the field cannot be quietly re-added.
 #    Read the literal rather than the surrounding prose -- the explanatory comment
 #    above it names the field on purpose, and must not trip this assertion.

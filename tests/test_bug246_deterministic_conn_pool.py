@@ -32,6 +32,7 @@ pool drain releases every descriptor — is pinned explicitly.
 from __future__ import annotations
 
 import gc
+import fcntl
 import os
 import sqlite3
 import threading
@@ -48,14 +49,20 @@ def _db_fd_count(db_path: str) -> int:
     target = os.path.realpath(db_path)
     count = 0
     # BUG-246 asserts that a pool drain releases the test process's OWN file
-    # descriptors — /proc/self is state about this very process, not about the
-    # host, and there is no fixture that can stand in for the kernel's fd table.
-    fd_dir = "/proc/self/fd"  # ci-hermetic: allow -- asserting release of this process's own descriptors is the point of BUG-246
+    # descriptors. /dev/fd exposes this very process's descriptor table, and
+    # there is no fixture that can stand in for that kernel-owned state.
+    fd_dir = "/dev/fd"
     for fd in os.listdir(fd_dir):
         try:
-            if os.path.realpath(os.path.join(fd_dir, fd)) == target:
+            if hasattr(fcntl, "F_GETPATH"):
+                raw_path = fcntl.fcntl(
+                    int(fd), fcntl.F_GETPATH, b"\0" * 1024)
+                open_path = raw_path.split(b"\0", 1)[0].decode()
+            else:
+                open_path = os.path.realpath(os.path.join(fd_dir, fd))
+            if os.path.realpath(open_path) == target:
                 count += 1
-        except OSError:
+        except (OSError, ValueError):
             continue
     return count
 

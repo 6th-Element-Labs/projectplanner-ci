@@ -11,7 +11,6 @@ looking like current instruction.
 | Contribute code or operate as an agent | [`AGENTS.md`](../AGENTS.md) |
 | Understand the system | [Current architecture](#current-architecture) below |
 | Understand lifecycle authority | [Three-plane architecture packet](#three-plane-architecture-packet) |
-| Understand the next Mission Bot design | [`MISSION-BOT-V4.md`](MISSION-BOT-V4.md) |
 | Find an architectural decision | [`decisions/INDEX.md`](decisions/INDEX.md) |
 | Follow fleet workflow and Done rules | [`WORKING-AGREEMENT.md`](WORKING-AGREEMENT.md), unless the live agreement is available |
 | Operate production | [`SWITCHBOARD-RUNBOOK.md`](SWITCHBOARD-RUNBOOK.md) |
@@ -72,14 +71,6 @@ Legacy documents are retained with a visible banner or moved out of the active r
 - [`decisions/0006-control-plane-done-enough.md`](decisions/0006-control-plane-done-enough.md):
   provenance model, subtraction rule, and control-plane stop condition.
 - [Three-plane architecture packet](#three-plane-architecture-packet): lifecycle authority.
-- [`MISSION-BOT-V4.md`](MISSION-BOT-V4.md): implementation target for a four-state,
-  event-persisted scoped LLM pager, including the exhaustive GitHub/CI-to-agent mapping,
-  no-stuck merge invariant, and legacy-free cutover. It is explicitly not the deployed
-  control path yet.
-- [`MISSION-BOT-EVIDENCE-AUDIT-2026-07-30.md`](MISSION-BOT-EVIDENCE-AUDIT-2026-07-30.md):
-  the evidence base for that design — the confirmed evidence-blindness findings and their
-  fixes, what adversarial verification disproved, the one gate relaxation policy rejected,
-  and the prerequisites carried into the v4 cutover.
 - [`decisions/0007-application-shell-cleanup.md`](decisions/0007-application-shell-cleanup.md):
   Caddy, growth redirection, and application-shell constraints. Its Decision 2 size counter
   is explicitly retired.

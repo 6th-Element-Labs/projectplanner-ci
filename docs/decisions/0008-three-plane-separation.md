@@ -239,20 +239,6 @@ Outcomes are `merged(provenance)` or `blocked(reason)`. A blocked result remains
 first-class task and operator state and may create a fresh remediation round on
 the original task through the same door.
 
-### Wake-edge inventory
-
-Capacity publishes `execution_ended` when a wake fails before runner creation.
-Capacity owns and persists that launch failure; Coordination only copies the
-fact into the append-only mission inbox. The scoped pager diagnoses nothing,
-copies the persisted role, and, if another generation is required, requests it
-through `start_task`, the single capacity door.
-
-This edge is necessary because a pre-runner failure produces neither a runner
-terminal receipt nor a GitHub fact to wake the mission. It does not restore an
-implicit retry loop: the legacy v1 retry-by-reclassification path was
-intentionally removed in PR 1118. `execution_ended` records the missing
-authoritative observation; it is not a replacement retry counter.
-
 ## Authoritative roadmap
 
 Board decision-849 and the following dependency graph implement this ADR:

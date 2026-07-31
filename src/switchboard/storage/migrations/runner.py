@@ -255,28 +255,6 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
     ("0122_ix_execution_publications_head",
      "CREATE INDEX IF NOT EXISTS ix_execution_publications_head "
      "ON execution_publications(project_id, repository, head_sha)"),
-    ("0123_mission_items",
-     "CREATE TABLE IF NOT EXISTS mission_items ("
-     "project_id TEXT NOT NULL, task_id TEXT NOT NULL, "
-     "state TEXT NOT NULL CHECK(state IN ('ACTIVE','WAITING','HUMAN','DONE')), "
-     "requested_role TEXT NOT NULL CHECK(requested_role IN "
-     "('implementation','review_merge','remediation')), "
-     "handled_through INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1, "
-     "human_request_id TEXT NOT NULL DEFAULT '', terminal_kind TEXT NOT NULL DEFAULT '' "
-     "CHECK(terminal_kind IN ('','github_merge','offline')), "
-     "terminal_ref TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL, "
-     "updated_at REAL NOT NULL, PRIMARY KEY(project_id, task_id))"),
-    ("0124_mission_events",
-     "CREATE TABLE IF NOT EXISTS mission_events ("
-     "event_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, task_id TEXT NOT NULL, "
-     "sequence INTEGER NOT NULL, event_type TEXT NOT NULL, source_plane TEXT NOT NULL, "
-     "occurred_at REAL NOT NULL, pr_number INTEGER, head_sha TEXT, generation INTEGER, "
-     "execution_id TEXT, external_ref TEXT NOT NULL DEFAULT '', "
-     "payload_json TEXT NOT NULL DEFAULT '{}', idempotency_key TEXT NOT NULL, "
-     "UNIQUE(project_id, task_id, sequence), UNIQUE(project_id, idempotency_key))"),
-    ("0125_ix_mission_events_task_sequence",
-     "CREATE INDEX IF NOT EXISTS ix_mission_events_task_sequence "
-     "ON mission_events(project_id, task_id, sequence)"),
     # The promoted host release. One row, deliberately: hosts are compared to an
     # explicitly promoted artifact, never to whatever is on master, or every
     # merge would block the fleet.
@@ -296,9 +274,6 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
     ("0133_ux_host_releases_promoted",
      "CREATE UNIQUE INDEX IF NOT EXISTS ux_host_releases_promoted "
      "ON host_releases(promoted) WHERE promoted = 1"),
-    ("0126_ix_mission_events_task_head",
-     "CREATE INDEX IF NOT EXISTS ix_mission_events_task_head "
-     "ON mission_events(project_id, task_id, head_sha, sequence)"),
     ("0062_ingest_operations",
      "CREATE TABLE IF NOT EXISTS ingest_operations ("
      "idem_key TEXT PRIMARY KEY, request_hash TEXT NOT NULL, status TEXT NOT NULL, "

@@ -23,6 +23,7 @@ from switchboard.application.commands import create_task as create_task_command
 from switchboard.application.commands import task_execution as task_execution_command
 from switchboard.application.commands import update_task as update_task_command
 from switchboard.application.commands import verify_ci as verify_ci_command
+from switchboard.application import completion_driver
 
 
 ProjectResolver = Callable[[str], str]
@@ -124,7 +125,7 @@ def create_router(*, resolve_project: ProjectResolver,
             repo = str(snapshot.get("repo") or "")
             token = open_prs._token(repo)
             result = await asyncio.to_thread(
-                open_prs.gh_command,
+                completion_driver._github_command,
                 ["pr", "merge", str(pr_number), "--repo", repo, "--auto"],
                 token=token,
             )
@@ -167,7 +168,7 @@ def create_router(*, resolve_project: ProjectResolver,
             repo = str(snapshot.get("repo") or "")
             token = open_prs._token(repo)
             result = await asyncio.to_thread(
-                open_prs.gh_command,
+                completion_driver._github_command,
                 ["pr", "close", str(pr_number), "--repo", repo],
                 token=token,
             )

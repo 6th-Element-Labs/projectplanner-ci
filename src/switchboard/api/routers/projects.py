@@ -191,19 +191,11 @@ def create_router(*, resolve_project: ProjectResolver,
         base = str(request.base_url).rstrip("/")
         payload_url = f"{base}/api/github/webhook?project={project}"
         gh_command = ""
-        lifecycle_events = [
-            "push", "pull_request", "status", "check_run", "check_suite",
-            "pull_request_review", "pull_request_review_comment",
-            "pull_request_review_thread", "issue_comment", "merge_group",
-            "repository_ruleset", "branch_protection_rule", "repository",
-        ]
         if repo:
-            event_flags = " ".join(
-                f"-f 'events[]={event}'" for event in lifecycle_events
-            )
             gh_command = (
                 f"gh api -X POST repos/{repo}/hooks -f name=web -F active=true "
-                f"{event_flags} "
+                f"-f 'events[]=push' -f 'events[]=pull_request' "
+                f"-f 'events[]=check_run' -f 'events[]=check_suite' -f 'events[]=status' "
                 f"-f 'config[url]={payload_url}' -f config[content_type]=json "
                 f"-f 'config[secret]=$PM_GITHUB_WEBHOOK_SECRET'"
             )
@@ -219,7 +211,7 @@ def create_router(*, resolve_project: ProjectResolver,
                 "content_type": "application/json",
                 "secret_env": "PM_GITHUB_WEBHOOK_SECRET",
                 "secret_configured": webhook_secret_configured(),
-                "events": lifecycle_events,
+                "events": ["push", "pull_request", "check_run", "check_suite", "status"],
                 "gh_command": gh_command,
             },
             "verification": {**deliveries, "status": status, "repo_reachable": reachable},

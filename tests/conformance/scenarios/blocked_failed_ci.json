@@ -1,0 +1,29 @@
+{
+  "schema": "switchboard.completion_conformance.scenario.v1",
+  "id": "blocked_failed_ci",
+  "expect": {
+    "terminal": "blocked",
+    "reason_code": "required_exact_head_ci_failed",
+    "role_sequence": ["remediation"],
+    "route": "remediation",
+    "effect": "start_remediation"
+  },
+  "world": {
+    "draft": false,
+    "ci": "fail",
+    "ci_context": "Switchboard CI / VM gate",
+    "ci_attribution": "product",
+    "review": "passed",
+    "mergeable": true,
+    "merge_state_status": "BLOCKED",
+    "queue": "none",
+    "runner": {"live": false, "role": "none", "head": "none"}
+  },
+  "timing": {
+    "ci_delay_seconds": 0,
+    "never_report": false,
+    "hang_seconds": 0,
+    "close_pr_while_runner_live": false,
+    "move_head_during_assessment": false
+  }
+}

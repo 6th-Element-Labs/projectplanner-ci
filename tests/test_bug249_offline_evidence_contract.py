@@ -1,35 +1,27 @@
 #!/usr/bin/env python3
-"""BUG-249: the immutable execution contract must carry the task's evidence policy.
+"""BUG-249: the immutable execution contract carries the task's evidence policy.
 
-v4 dispatch minted every managed execution with the strict code contract, so a
-task whose session policy is ``offline_evidence`` could launch but never
-truthfully complete (QA-33: completion_identity_incomplete on honest offline
-evidence). The mint now stamps the resolved profile into the contract, the
-claim bind derives its expected shape from that stamp, and managed completion
-accepts offline evidence for exactly the stamped offline profile. code_strict
-behavior and pre-profile contracts stay byte-identical.
+A managed execution minted with the strict code contract could launch an
+``offline_evidence`` task but never truthfully complete it. The assignment now
+stamps the resolved profile into the contract, and claim binding derives its
+expected shape from that stamp. ``code_strict`` behavior and pre-profile
+contracts stay byte-identical.
 """
 from __future__ import annotations
 
 import json
 import sqlite3
-import tempfile
 import time
 import unittest
-from contextlib import contextmanager
-from pathlib import Path
 
 from path_setup import ROOT as _ROOT  # noqa: F401
-from switchboard.application.commands import capacity_mission_events, mission_journal
 from switchboard.connect.execution_assignment import (
     ExecutionAssignmentError,
     build_execution_assignment,
     claim_expectations_for,
     require_exact_execution_assignment,
 )
-from switchboard.storage.migrations.runner import DDL_MIGRATIONS
 from switchboard.storage.repositories.claims import _stage_managed_completion_stop_in
-from switchboard.storage.repositories.mission_journal import MissionJournalRepository
 
 TASK = "QA-33"
 RUNNER = "run-bug249"
@@ -225,59 +217,6 @@ class ManagedCompletionEvidenceTest(unittest.TestCase):
         phases = c.execute(
             "SELECT COUNT(*) FROM task_execution_completion_phases").fetchone()[0]
         self.assertEqual(1, phases)
-
-
-class CapacityProjectorReasonFallbackTest(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.paths = {}
-
-        @contextmanager
-        def connector(project):
-            path = self.paths.setdefault(project, Path(self.temp.name) / f"{project}.db")
-            conn = sqlite3.connect(path)
-            conn.row_factory = sqlite3.Row
-            for name, sql in DDL_MIGRATIONS:
-                if name in {
-                    "0123_mission_items", "0124_mission_events",
-                    "0125_ix_mission_events_task_sequence",
-                    "0126_ix_mission_events_task_head",
-                }:
-                    conn.execute(sql)
-            try:
-                yield conn
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
-            finally:
-                conn.close()
-
-        self.repository = MissionJournalRepository(connector)
-        mission_journal.create_mission(
-            TASK, project="switchboard", requested_role="implementation",
-            repository=self.repository)
-
-    def tearDown(self):
-        self.temp.cleanup()
-
-    def test_recovery_nested_reason_reaches_the_journal(self):
-        receipt = capacity_mission_events.append_failed_wake_events(
-            project="switchboard", task_id=TASK, repository=self.repository,
-            list_wakes=lambda **kwargs: [{
-                "wake_id": "wake-recovery",
-                "task_id": TASK,
-                "status": "failed",
-                "requested_at": time.time() + 60.0,
-                "runner_session_id": None,
-                "result": {"recovery": {"reason": "host_loss_recovery_exhausted"}},
-                "policy": {},
-            }])
-        self.assertEqual(1, len(receipt["events"]))
-        event = self.repository.list_events(
-            TASK, project="switchboard", after_sequence=1, limit=5)[0]
-        self.assertEqual(
-            "host_loss_recovery_exhausted", event["payload"]["reason"])
 
 
 if __name__ == "__main__":

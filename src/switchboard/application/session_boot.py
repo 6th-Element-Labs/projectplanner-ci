@@ -258,13 +258,6 @@ def build_first_calls(
     calls: list[dict[str, Any]] = [
         {"tool": "get_working_agreement", "args": {"project": project}},
         {"tool": "register_agent", "args": register_args},
-    ]
-    if task_id and session_mode != "launcher":
-        calls.append({
-            "tool": "get_mission_context",
-            "args": {"task_id": task_id, "project": project},
-        })
-    calls.extend([
         {"tool": "list_unacked_messages", "args": {"to_agent": agent_id, "project": project}},
         {"tool": "list_unblock_requests", "args": {"owner_agent": agent_id, "project": project}},
         {"tool": "get_project_contract", "args": {
@@ -274,7 +267,7 @@ def build_first_calls(
             "mission_id": mission_id or "",
             "milestone_id": milestone_id or "",
         }},
-    ])
+    ]
     if session_mode == "launcher":
         if task_id:
             calls.append({

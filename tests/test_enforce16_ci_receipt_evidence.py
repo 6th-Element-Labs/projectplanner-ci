@@ -189,10 +189,47 @@ result = run_gate(review_gate_summary(
 ok("missing_executed_test_run" in finding_codes(result),
    "pending CI run keeps the refusal")
 
-# 7. (retired with SIMPLIFY-30) The end-to-end classifier leg of this proof
-# died with the Mission Bot v1 state machine; sections 1-6 above remain the
-# live contract: the merge gate derives executed-test evidence from its own
-# CI receipt and never fabricates it.
+# 7. Loop death, end to end: feed the classifier the REAL finding set the fixed
+# gate produces (only the non-blocking derivation finding) and assert the
+# completion state machine no longer plans an evidence-repair dispatch — the
+# exact effect that ran 50 times on COORD-57.
+from switchboard.domain.completion import (  # noqa: E402
+    build_completion_snapshot, classify_completion,
+)
+from switchboard.domain.completion.normalize import normalize_snapshot  # noqa: E402
+
+derived_result = run_gate(review_gate_summary([ci_row(HEAD)], source_sha=HEAD))
+derived_findings = list(derived_result.get("findings") or [])
+snapshot = normalize_snapshot(build_completion_snapshot(
+    task={
+        "task_id": "COORD-57",
+        "status": "In Review",
+        "git_state": {"head_sha": HEAD, "pr_number": 936, "pr_url": PR_URL},
+    },
+    github_pr={
+        "number": 936,
+        "html_url": PR_URL,
+        "state": "OPEN",
+        "draft": False,
+        "mergeable": True,
+        "mergeStateStatus": "BLOCKED",
+        "head": {"sha": HEAD},
+        "status_contexts": [{"context": VM_GATE, "state": "SUCCESS"}],
+    },
+    required_status_contexts=[VM_GATE],
+    review={"status": "passed", "head_sha": HEAD, "pr_url": PR_URL},
+    merge_gate={"findings": [
+        f for f in derived_findings
+        if f.get("code") == "executed_test_run_derived_from_external_ci"
+    ]},
+))
+decision = classify_completion(None, snapshot)
+ok(decision.get("reason_code") != "missing_executed_test_run",
+   "classifier no longer sees missing_executed_test_run")
+ok(decision.get("route") != "coordination_retry",
+   "classifier no longer routes the repair loop (coordination_retry)")
+ok(decision.get("route") == "review_merge",
+   "green PR with derived evidence routes review_merge (toward enqueue)")
 
 print(f"\nenforce16 CI-receipt evidence: {passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)

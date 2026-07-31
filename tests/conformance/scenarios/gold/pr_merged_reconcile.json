@@ -1,0 +1,34 @@
+{
+  "expect": {
+    "terminal": "reconcile_done",
+    "reason_code": "canonical_pr_merged",
+    "role_sequence": [],
+    "route": "reconcile",
+    "effect": "reconcile_provenance"
+  },
+  "id": "pr_merged_reconcile",
+  "schema": "switchboard.completion_conformance.scenario.v1",
+  "timing": {
+    "ci_delay_seconds": 0,
+    "close_pr_while_runner_live": false,
+    "hang_seconds": 0,
+    "move_head_during_assessment": false,
+    "never_report": false
+  },
+  "world": {
+    "ci": "pass",
+    "ci_attribution": "product",
+    "ci_context": "Switchboard CI / VM gate",
+    "draft": false,
+    "merge_state_status": "CLEAN",
+    "mergeable": true,
+    "pr_state": "merged",
+    "queue": "none",
+    "review": "passed",
+    "runner": {
+      "head": "none",
+      "live": false,
+      "role": "none"
+    }
+  }
+}

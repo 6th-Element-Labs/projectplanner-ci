@@ -707,21 +707,6 @@ def _arm_task_scope(task_id: str, *, project: str, role: str,
     }.get(str(runtime or "codex").strip().lower(), str(runtime or "codex"))
     from switchboard.storage.repositories import autopilot_scopes as scopes_repo
     try:
-        # The journal must exist before the scope becomes visible.  A scoped
-        # worker may acquire a newly-created scope immediately, so appending
-        # mission_started after scope creation leaves a race where the worker
-        # observes no mission.
-        from switchboard.application.commands import mission_journal
-        mission_journal.create_mission(
-            task_id,
-            project=project,
-            requested_role=(
-                str(role or "").strip().lower()
-                if str(role or "").strip().lower()
-                in {"implementation", "review_merge", "remediation"}
-                else "implementation"
-            ),
-        )
         live = scopes_repo.list_autopilot_scopes(
             project=project, status="active,paused", limit=500,
             include_last_result=False)

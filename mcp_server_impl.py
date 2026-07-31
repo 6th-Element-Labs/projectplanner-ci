@@ -32,7 +32,6 @@ from switchboard.mcp.tools import board as board_tools
 from switchboard.mcp.tools import boot as boot_tools
 from switchboard.mcp.tools import decisions as decision_tools
 from switchboard.mcp.tools import monitors as monitor_tools
-from switchboard.mcp.tools import mission as mission_tools
 from switchboard.mcp.tools import narration as narration_tools
 from switchboard.mcp.tools import observability as observability_tools
 from switchboard.mcp.tools import ops as ops_tools
@@ -374,16 +373,6 @@ _boot_tool_functions = boot_tools.register_boot_tools(
     boot_tools.BootToolServices(dumps=_dumps),
 )
 globals().update(_boot_tool_functions)
-
-_mission_tool_functions = mission_tools.register_mission_tools(
-    mcp,
-    mission_tools.MissionToolServices(
-        dumps=_dumps,
-        require_write=_require_write,
-        resolve_write_actor=_resolve_write_actor,
-    ),
-)
-globals().update(_mission_tool_functions)
 
 _monitor_tool_functions = monitor_tools.register_monitor_tools(
     mcp,

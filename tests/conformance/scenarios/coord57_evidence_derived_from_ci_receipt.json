@@ -1,0 +1,35 @@
+{
+  "schema": "switchboard.completion_conformance.scenario.v1",
+  "id": "coord57_evidence_derived_from_ci_receipt",
+  "expect": {
+    "terminal": "merged",
+    "reason_code": "exact_head_gates_passed",
+    "role_sequence": ["review_merge"],
+    "route": "review_merge",
+    "effect": "enqueue"
+  },
+  "world": {
+    "draft": false,
+    "ci": "pass",
+    "ci_context": "Switchboard CI / VM gate",
+    "ci_attribution": "product",
+    "review": "passed",
+    "mergeable": true,
+    "merge_state_status": "CLEAN",
+    "queue": "none",
+    "runner": {"live": false, "role": "none", "head": "none"},
+    "evidence": {
+      "executed_test_run": "missing",
+      "external_ci": "green_exact_head",
+      "work_session": "present",
+      "review_verdict": "pass"
+    }
+  },
+  "timing": {
+    "ci_delay_seconds": 0,
+    "never_report": false,
+    "hang_seconds": 0,
+    "close_pr_while_runner_live": false,
+    "move_head_during_assessment": false
+  }
+}

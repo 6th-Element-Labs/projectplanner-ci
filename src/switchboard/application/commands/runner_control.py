@@ -5,7 +5,6 @@ Adapters own auth and transport serialization. Persistence lives in
 """
 from __future__ import annotations
 
-import sqlite3
 from typing import Any, Optional
 
 from constants import DEFAULT_PROJECT
@@ -20,52 +19,6 @@ def upsert_session_mapping_result(
     project = record.pop("project", None) or DEFAULT_PROJECT
     result = runner_repo.upsert_runner_session(
         record, principal_id=principal_id, actor=actor, project=project)
-    status = str(result.get("status") or record.get("status") or "").strip().lower()
-    if not result.get("error") and status in runner_repo.RUNNER_TERMINAL_STATUSES:
-        metadata = result.get("metadata")
-        metadata = metadata if isinstance(metadata, dict) else {}
-        completion = result.get("completion")
-        completion = completion if isinstance(completion, dict) else {}
-        from switchboard.storage.repositories.mission_journal import (
-            default_mission_journal_repository,
-        )
-        execution = metadata.get("execution")
-        execution = execution if isinstance(execution, dict) else {}
-        try:
-            default_mission_journal_repository.record_runner_terminal(
-                str(result.get("task_id") or record.get("task_id") or ""),
-                project=project,
-                runner_session_id=str(
-                    result.get("runner_session_id")
-                    or record.get("runner_session_id")
-                    or record.get("id")
-                    or ""
-                ),
-                execution_id=str(
-                    metadata.get("execution_id") or execution.get("execution_id") or ""
-                ),
-                generation=int(
-                    metadata.get("execution_generation")
-                    or execution.get("generation")
-                    or 0
-                ),
-                status=status,
-                head_sha=str(
-                    metadata.get("execution_head_sha")
-                    or metadata.get("head_sha")
-                    or execution.get("head_sha")
-                    or ""
-                ),
-                accepted_role=(
-                    "review_merge" if completion.get("completed") is True else ""
-                ),
-            )
-        except sqlite3.OperationalError as exc:
-            # Compatibility for deliberately tiny embedded/test schemas that
-            # predate the v4 migrations.  Real journal write failures remain
-            # visible so the Agent Host retries the terminal receipt.
-            if "no such table: mission_items" not in str(exc):
-                raise
     # SIMPLIFY-9: every authenticated registration/heartbeat renews the
     # executor's short-lived outbound relay ticket. It is response-only and is
     # never persisted with the runner row.

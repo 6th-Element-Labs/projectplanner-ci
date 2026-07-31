@@ -183,8 +183,7 @@ READ_TOOLS = frozenset({
     "explain_task_block", "get_saturation_signals", "get_task",
     "get_task_execution", "get_task_session",
     "task_session_doctor", "get_task_tally", "get_work_session",
-    "get_work_session_health", "get_working_agreement", "get_mission_context",
-    "host_status",
+    "get_work_session_health", "get_working_agreement", "host_status",
     "list_active_agents", "list_active_leases", "list_active_resource_leases",
     "list_agent_hosts", "list_background_job_runs", "list_coordinator_decisions",
     "list_decision_episodes", "replay_decision_corpus",
@@ -199,8 +198,7 @@ READ_TOOLS = frozenset({
     "list_runner_control_requests", "list_runner_sessions", "list_session_health",
     "list_unacked_messages", "list_unblock_requests", "list_wake_intents",
     "get_project_execution_policy", "get_project_execution_readiness",
-    "list_work_sessions", "list_mission_history", "mission_status",
-    "prepare_agent_session",
+    "list_work_sessions", "mission_status", "prepare_agent_session",
     "search_tasks",
 })
 
@@ -249,7 +247,6 @@ WRITE_TOOLS = frozenset({
     "rotate_provider_connection", "rotate_scm_connection",
     "run_background_job", "run_mission_coordinator",
     "send_agent_message", "send_message", "set_agent_state", "set_project_github_repo",
-    "yield_mission",
     "set_project_execution_policy",
     "set_project_repo_topology", "start_task", "stop_task", "submit_bug",
     "submit_deliverable_outcome",

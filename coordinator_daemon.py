@@ -247,21 +247,11 @@ class DaemonConfig:
     # Journald safety: the steady-state tick line is a bounded summary; the
     # full tick JSON (dossiers/snapshots) is opt-in for live debugging only.
     log_full_ticks: bool = False
-    # Mission Bot v4 is the sole production completion owner.  Retaining a
-    # runtime-selectable legacy writer after cutover allowed stale deployment
-    # configuration to resurrect the retired classifier.
-    mission_engine: str = "v4"
 
     @classmethod
     def from_env(cls, environ: Optional[Mapping[str, str]] = None) -> "DaemonConfig":
         env = os.environ if environ is None else environ
         heartbeat = max(10, int(env.get("PM_COORDINATOR_AUTOPILOT_HEARTBEAT_SECONDS", "30")))
-        mission_engine = (
-            env.get("PM_COORDINATOR_MISSION_ENGINE") or "v4"
-        ).strip().lower()
-        if mission_engine != "v4":
-            raise ValueError(
-                "PM_COORDINATOR_MISSION_ENGINE must be v4")
         return cls(
             profile_id=(env.get("PM_COORDINATOR_AUTOPILOT_PROFILE")
                         or "autopilot-default").strip(),
@@ -286,7 +276,6 @@ class DaemonConfig:
                 1, int(env.get("PM_COORDINATOR_REVIEW_RESERVED_SLOTS", "1"))),
             log_full_ticks=enabled_from_env(
                 "PM_COORDINATOR_AUTOPILOT_LOG_FULL", False, env),
-            mission_engine=mission_engine,
         )
 
 

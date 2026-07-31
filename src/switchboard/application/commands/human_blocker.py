@@ -18,17 +18,9 @@ from switchboard.domain.completion.human_closeout import (
     PROVIDER,
     _human_action,
 )
+from switchboard.domain.mission_bot.facts import AGENT_PROVENANCE_BINDINGS
 from switchboard.storage.repositories import attention as attention_repo
 from switchboard.storage.repositories import work_sessions as work_sessions_repo
-
-#: Principal bindings that may author an agent-side human-blocker receipt.
-#: Relocated from the retired Mission Bot v1 ``domain.mission_bot.facts``
-#: (SIMPLIFY-30); the provenance rule outlived the reducer that first named it.
-AGENT_PROVENANCE_BINDINGS = frozenset({
-    "registered_agent",
-    "inferred_registered_agent",
-    "direct_session",
-})
 
 HUMAN_BLOCKER_TOOL = "record_human_blocker"
 #: Canonical Mission Bot name for the same agent-authored sticky receipt.
@@ -360,18 +352,6 @@ def promote_human_blocker(
 
     attention = attention_repo._write_through(project, write)
     request = _map(attention.get("request"))
-    # BUG-250: the v4 pager reads only the mission journal. Without a HUMAN
-    # transition the fenced runner's terminal receipt looks like runner loss
-    # and the pager relaunches over this open Human request. Missions the v4
-    # journal does not manage return mission_not_found and are unaffected.
-    from switchboard.application.commands import human_mission_events
-
-    mission = human_mission_events.record_human_requested(
-        project=project,
-        task_id=task_id,
-        request_id=_text(request.get("request_id")),
-        reason=reason,
-    )
     return {
         "schema": RESULT_SCHEMA,
         "recorded": True,
@@ -380,7 +360,6 @@ def promote_human_blocker(
         "work_session_id": work_session_id,
         "board_status": "Blocked",
         "reason": reason,
-        "mission": mission,
         "attention_request_id": request.get("request_id"),
         "attention": attention,
         "idempotent_replay": bool(attention.get("idempotent_replay")),
