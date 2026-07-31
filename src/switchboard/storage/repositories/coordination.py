@@ -3851,7 +3851,7 @@ def _registered_host_heartbeat_ttl_s(
         10,
         int(inventory.get("heartbeat_ttl_s") or inventory.get("ttl_s") or 60),
     )
-    if identity.get("enrollment_id"):
+    if identity.get("required") is True:
         return max(ENROLLED_HOST_MIN_HEARTBEAT_TTL_S, advertised)
     return advertised
 
