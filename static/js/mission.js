@@ -184,7 +184,7 @@
         if (!scope) {
             return `<div class="d-flex flex-column align-items-end gap-1">
                 <button class="btn btn-primary" type="button" data-autopilot-action="start" data-autopilot-scope="deliverable">
-                    <i class="ti ti-player-play me-1"></i>Start deliverable</button>
+                    <i class="ti ti-player-play me-1"></i>Autopilot</button>
                 <span class="text-secondary small">Starts every ready task and keeps advancing.</span>
                 <span id="mission-autopilot-flash" class="small"></span></div>`;
         }
@@ -217,13 +217,11 @@
         const taskId = link.task_id;
         const taskProject = link.project_id;
         const runner = (activeWork || {}).active_runner;
-        const autopilot = this._taskAutopilotButtonHtml(taskId, taskProject, true);
-        if (!runner) return autopilot;
+        if (!runner) return this._taskAutopilotButtonHtml(taskId, taskProject, true);
         const runnerSessionId = ((runner.session || {}).runner_session_id || runner.runner_session_id || '');
         return `<div class="btn-list flex-nowrap justify-content-end">
-            <span class="badge bg-green-lt" title="A live runner is bound to this task"><span class="status-dot status-dot-animated bg-green me-1"></span>Live</span>
             <button class="btn btn-sm btn-azure" type="button" data-mission-watch-task="${this.esc(taskId)}" data-mission-watch-project="${this.esc(taskProject || '')}" data-mission-watch-runner="${this.esc(runnerSessionId)}"><i class="ti ti-terminal-2 me-1"></i>Watch</button>
-            ${autopilot}
+            <button class="btn btn-sm btn-outline-danger" type="button" data-mission-kill-task="${this.esc(taskId)}" data-mission-kill-runner="${this.esc(runnerSessionId)}"><i class="ti ti-player-stop me-1"></i>Kill</button>
         </div>`;
     },
 
@@ -944,12 +942,10 @@
         const prog = s.progress || {};
         const pctDone = Math.round((prog.done_with_proof_ratio || 0) * 100);
         const proofOn = typeof this._proofModeFromUrl === 'function' && this._proofModeFromUrl();
-        const proofToggle = `<button type="button" class="btn btn-sm ${proofOn ? 'btn-primary' : 'btn-outline-secondary'}" id="mission-proof-toggle" title="Operator Proof Console deep link (?proof=1)">
-            <i class="ti ti-terminal-2 me-1"></i>${proofOn ? 'Exit proof' : 'Proof console'}</button>`;
         const header = `<div class="d-flex flex-wrap align-items-start gap-3 mb-4"><div class="flex-fill">
             <div class="text-secondary small mb-1">${this.esc(s.project_id || window.PM_PROJECT || '')}${s.board_id ? ' · ' + this.esc(s.board_id) : ''}</div>
             <h2 class="mb-2">${this.esc(d.title || s.deliverable_id || 'Mission')}</h2>
-            <div class="btn-list">${this._missionBadge(d.status, this.DELIVERABLE_STATUS_COLOR)} ${this._missionConfidence(board.confidence)} ${proofToggle}</div>
+            <div class="btn-list">${this._missionBadge(d.status, this.DELIVERABLE_STATUS_COLOR)} ${this._missionConfidence(board.confidence)}</div>
         </div>
         <div class="text-end"><div class="mb-2">${this._missionAutopilotControlsHtml()}</div><div class="mb-2"></div>
             <span class="badge bg-green-lt" title="Live — auto-refreshes as agents update tasks"><span class="status-dot status-dot-animated bg-green me-1"></span>Live</span>
@@ -959,14 +955,12 @@
         const proofHtml = (proofOn && typeof this.proofConsoleHtml === 'function')
             ? this.proofConsoleHtml(s, this._proofBind || {})
             : '';
-        const kpi = `<div class="row row-cards mb-4">${[
+        const kpi = `<div class="row row-cards mb-4 mission-summary-metrics">${[
             ['Done with proof', prog.done_with_proof_count || 0, 'ti-circle-check', 'green'],
-            ['In review', prog.in_review_count || 0, 'ti-eye-check', 'azure'],
             ['Active / claimed', (s.active_work || []).length, 'ti-bolt', 'blue'],
             ['Blockers', (s.blockers || []).length, 'ti-alert-triangle', 'red'],
-            ['Linked tasks', prog.linked_task_count || 0, 'ti-link', 'secondary'],
             ['Progress', `${pctDone}%`, 'ti-chart-donut', 'primary'],
-        ].map(([label, value, icon, color]) => `<div class="col-6 col-md-4 col-xl-2"><div class="card card-sm"><div class="card-body">
+        ].map(([label, value, icon, color]) => `<div class="col-6 col-xl-3"><div class="card card-sm"><div class="card-body">
             <div class="d-flex"><div class="subheader">${this.esc(label)}</div><div class="ms-auto text-${color}"><i class="ti ${icon}"></i></div></div>
             <div class="h2 mb-0 mt-1">${this.esc(value)}</div></div></div></div>`).join('')}</div>`;
         const narrative = this._missionBriefHtml(s);
@@ -989,20 +983,30 @@
         const ledgerRows = (s.linked_tasks || []).map((link) => {
             const dtl = link.task_detail || link.task || {};
             const provenance = dtl.provenance || {};
-            const proof = provenance.label || (dtl.status === 'Done' ? 'Done — proof missing' : '—');
-            const completion = this.completionProjectionHtml(dtl, true) || '<span class="text-secondary">—</span>';
+            const proof = provenance.label || (dtl.status === 'Done' ? 'Done — proof missing' : '');
+            const completionRoute = this.completionProjectionHtml(dtl, true);
+            const completion = `${completionRoute || (!proof ? '<span class="text-secondary">—</span>' : '')}`
+                + `${proof ? `<div class="text-secondary small mt-1">${this.esc(proof)}</div>` : ''}`;
             const activeWork = activeWorkByTask.get(`${link.project_id || ''}:${String(link.task_id || '').toUpperCase()}`);
             const action = dtl.status === 'Done'
                 ? '<span class="text-secondary small">Done</span>'
                 : this._taskLedgerActionHtml(link, activeWork);
-            const activeRow = activeWork && activeWork.active_runner ? ' class="table-primary" data-mission-task-active="true"' : '';
-            return `<tr data-mission-task-row="${this.esc(link.task_id)}" data-task-status="${this.esc(dtl.status || 'missing')}"${activeRow}><td>${this.esc(link.project_id || '')}</td><td><a href="#" data-linked-task="${this.esc(link.task_id)}" data-linked-project="${this.esc(link.project_id)}">${this.esc(link.task_id)}</a></td><td>${this.esc(dtl.title || dtl.error || '')}</td><td>${this._missionBadge(dtl.status || 'missing', this.STATUS_COLOR)}</td><td>${completion}</td><td>${this.esc(link.milestone_id || '—')}</td><td>${this.esc(link.role || '—')}</td><td>${this.esc(proof)}</td><td class="text-end">${action}</td></tr>`;
-        }).join('') || '<tr><td colspan="9" class="text-secondary">No linked tasks</td></tr>';
-        const workLedger = `<div class="card mb-4" data-mission-work-ledger="all-linked-tasks"><div class="card-header"><div><h3 class="card-title">Work ledger — all linked tasks</h3><div class="text-secondary small">Lifecycle transitions update these rows in place. Completed work remains visible with its proof.</div></div></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Project</th><th>Task</th><th>Title</th><th>Status</th><th>Completion</th><th>Milestone</th><th>Role</th><th>Proof</th><th class="text-end">Autopilot</th></tr></thead><tbody>${ledgerRows}</tbody></table></div></div>`;
+            const activeRow = activeWork && activeWork.active_runner ? ' data-mission-task-active="true"' : '';
+            const owner = (activeWork || {}).assignee || dtl.assignee || dtl.owner_person_or_role || 'Unassigned';
+            const live = activeWork && activeWork.active_runner;
+            return `<tr class="mission-work-item${live ? ' table-primary mission-work-item-live' : ''}" data-mission-task-row="${this.esc(link.task_id)}" data-task-status="${this.esc(dtl.status || 'missing')}"${activeRow}>
+                <td data-label="Task"><a href="#" class="fw-semibold" data-linked-task="${this.esc(link.task_id)}" data-linked-project="${this.esc(link.project_id)}">${this.esc(link.task_id)}</a>${live ? '<span class="status-dot status-dot-animated bg-green ms-2" title="Live runner"></span>' : ''}<div class="text-secondary small mt-1">${this.esc(link.milestone_id || 'No milestone')}</div></td>
+                <td data-label="Title"><a href="#" class="text-reset fw-medium text-decoration-none" data-linked-task="${this.esc(link.task_id)}" data-linked-project="${this.esc(link.project_id)}">${this.esc(dtl.title || dtl.error || '')}</a></td>
+                <td data-label="Status">${this._missionBadge(dtl.status || 'missing', this.STATUS_COLOR)}</td>
+                <td data-label="Verification">${completion}</td>
+                <td data-label="Owner" class="text-secondary small">${this.esc(owner)}</td>
+                <td data-label="Controls" class="text-end"><div class="mission-task-controls">${action}</div></td>
+            </tr>`;
+        }).join('') || '<tr><td colspan="6" class="text-secondary">No linked tasks</td></tr>';
+        const workLedger = `<div class="card mb-4" data-mission-work-ledger="all-linked-tasks"><div class="card-header"><div><h3 class="card-title">Work</h3><div class="text-secondary small">Open a task for details. Start ready work, or Watch / Kill a live runner.</div></div></div><div class="table-responsive"><table class="table table-vcenter card-table mission-work-table"><thead><tr><th>Task</th><th>Title</th><th>Status</th><th>Verification</th><th>Owner</th><th class="text-end">Controls</th></tr></thead><tbody>${ledgerRows}</tbody></table></div></div>`;
         // Blockers box removed — it dumped raw kinds like "dependency_unsatisfied". The
         // dependency map already outlines blockers with a thick dark border.
         const blockerHtml = '';
-        const nextActions = this._missionActionsHtml(s);
         const agents = (s.active_agents || []).length ? `<div class="card mb-4"><div class="card-header"><h3 class="card-title">Live agents</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Agent</th><th>Task</th><th>Mailbox</th><th>Project</th></tr></thead><tbody>${(s.active_agents || []).map((a) => {
             const mailbox = a.mailbox || {};
             const count = Number(mailbox.unacked_count || 0);
@@ -1029,13 +1033,19 @@
         const _prevDetail = el.querySelector('#mission-detail');
         const detailOpen = _prevDetail ? _prevDetail.open : !!this._missionDetailOpen;
         this._missionDetailOpen = detailOpen;
-        // Lead with the story: headline → plain-English → what's blocked → the map →
-        // breakdown/outcomes review → next action.
-        const essentials = header + proofHtml + this._missionCeoHeaderHtml(s) + blockerHtml
-            + this._missionDependencyGraphHtml() + workLedger + this._missionBreakdownHtml() + nextActions;
+        const selectedView = el.querySelector('[data-mission-view].active')?.getAttribute('data-mission-view') || 'overview';
+        const verificationButton = `<button type="button" class="btn btn-sm ${proofOn ? 'btn-primary' : 'btn-outline-secondary'}" id="mission-proof-toggle"><i class="ti ti-shield-check me-1"></i>${proofOn ? 'Hide detailed verification' : 'Open detailed verification'}</button>`;
+        const verification = `<div class="card mb-4"><div class="card-header"><div><h3 class="card-title">Completion verification</h3><div class="text-secondary small">Finalized task proof and operator diagnostics.</div></div><div class="card-actions">${verificationButton}</div></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Task</th><th>Title</th><th>Provenance</th><th>PR</th></tr></thead><tbody>${doneRows}</tbody></table></div></div>${proofHtml}`;
+        const tab = (id, label, icon) => `<button class="nav-link${selectedView === id ? ' active' : ''}" type="button" data-bs-toggle="tab" data-bs-target="#mission-view-${id}" data-mission-view="${id}" aria-selected="${selectedView === id ? 'true' : 'false'}"><i class="ti ti-${icon} me-1"></i>${label}</button>`;
+        const essentials = header + `<div class="nav nav-tabs mb-4" role="tablist">${tab('overview', 'Overview', 'list-details')}${tab('map', 'Work map', 'git-fork')}${tab('verification', 'Verification', 'shield-check')}</div>
+            <div class="tab-content">
+                <div class="tab-pane${selectedView === 'overview' ? ' active show' : ''}" id="mission-view-overview">${kpi}${this._missionCeoHeaderHtml(s)}${blockerHtml}${workLedger}${this._missionBreakdownHtml()}</div>
+                <div class="tab-pane${selectedView === 'map' ? ' active show' : ''}" id="mission-view-map">${this._missionDependencyGraphHtml()}</div>
+                <div class="tab-pane${selectedView === 'verification' ? ' active show' : ''}" id="mission-view-verification">${verification}</div>
+            </div>`;
         // The rest (KPIs, brief, milestones, work tables, agents, linked tasks, policy) folds
         // into a disclosure so it's there when you want it, not a wall of ~15 cards up front.
-        const detail = kpi + this._missionEconomicsHtml(s.economics) + this._missionKpiOutcomesHtml() + narrative + endState + milestoneMap +
+        const detail = this._missionEconomicsHtml(s.economics) + this._missionKpiOutcomesHtml() + narrative + endState + milestoneMap +
             `<div class="row g-3 mb-4"><div class="col-lg-6"><div class="card h-100"><div class="card-header"><div><h3 class="card-title">Active nonterminal work</h3><div class="text-secondary small">This is the active subset; the primary work ledger above retains every linked task.</div></div></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Task</th><th>Title</th><th>Status</th><th>Session</th><th>Assignee</th><th>Claims</th></tr></thead><tbody>${activeRows}</tbody></table></div></div></div>
             <div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Done with proof</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Task</th><th>Title</th><th>Provenance</th><th>PR</th></tr></thead><tbody>${doneRows}</tbody></table></div></div></div></div>` +
             agents +

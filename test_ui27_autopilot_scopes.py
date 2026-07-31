@@ -160,7 +160,7 @@ try:
     source = open("static/js/mission.js", encoding="utf-8").read()
     app = open("static/app.js", encoding="utf-8").read()
     routes = open("src/switchboard/api/routers/deliverables.py", encoding="utf-8").read()
-    ok("Start deliverable" in source and "Start task" in source
+    ok("Autopilot" in source and "Start task" in source
        and "data-autopilot-action" in app,
        "Deliverables UI exposes direct deliverable and task Start actions")
     ok("/{deliverable_id}/autopilot" in routes

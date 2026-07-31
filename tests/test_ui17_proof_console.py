@@ -56,8 +56,8 @@ ok("proofMode" in INDEX or "modeParam" in INDEX,
    "index.html deep-links Mission for proof query")
 ok("mission-proof-toggle" in MISSION and "proofConsoleHtml" in MISSION,
    "Mission page toggles and embeds Proof Console")
-ok("Proof console" in MISSION or "proof console" in MISSION.lower(),
-   "Mission header exposes Proof console control")
+ok("Open detailed verification" in MISSION and "mission-view-verification" in MISSION,
+   "Mission Verification tab exposes detailed diagnostics")
 
 # ---- Surface: identity, providers, Arm, Watch reuse --------------------------
 needles = (
