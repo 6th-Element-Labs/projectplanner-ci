@@ -109,6 +109,128 @@ class MissionJournalTest(unittest.TestCase):
         self.assertFalse(replay["created"])
         self.assertEqual(first["sequence"], replay["sequence"])
 
+    def test_history_is_cursor_paginated_and_bounded(self):
+        self.repository.create_mission("T-1", project="alpha")
+        for index in range(4):
+            self.repository.append_event(
+                "T-1",
+                project="alpha",
+                event_type="task_changed",
+                source_plane="coordination",
+                idempotency_key=f"page-{index}",
+                external_ref=f"change-{index}",
+            )
+        page = self.repository.list_events(
+            "T-1", project="alpha", after_sequence=1, limit=2,
+        )
+        self.assertEqual([2, 3], [event["sequence"] for event in page])
+        self.assertEqual(
+            ["change-0", "change-1"],
+            [event["external_ref"] for event in page],
+        )
+        bounded = self.repository.list_events(
+            "T-1", project="alpha", after_sequence=0, limit=10_000,
+        )
+        self.assertEqual(5, len(bounded))
+
+    def test_yield_fences_exact_execution_and_stale_cursor_stays_active(self):
+        connection = sqlite3.connect(self.paths["alpha"])
+        try:
+            connection.executescript("""
+                CREATE TABLE runner_sessions (
+                    runner_session_id TEXT PRIMARY KEY,
+                    task_id TEXT,
+                    status TEXT,
+                    started_at REAL,
+                    metadata_json TEXT,
+                    agent_id TEXT
+                );
+                CREATE TABLE resource_leases (
+                    id TEXT PRIMARY KEY,
+                    resource_type TEXT,
+                    execution_generation INTEGER,
+                    fence_epoch INTEGER
+                );
+            """)
+            connection.execute(
+                "INSERT INTO runner_sessions VALUES (?,?,?,?,?,?)",
+                (
+                    "runner-1", "T-1", "running", 10.0,
+                    '{"execution_id":"exec-1","execution_generation":2,'
+                    '"execution_connection_id":"connection-1",'
+                    '"execution_role":"implementation",'
+                    '"execution_head_sha":"abc"}',
+                    "codex/T-1",
+                ),
+            )
+            connection.execute(
+                "INSERT INTO resource_leases VALUES (?,?,?,?)",
+                ("exec-1", "execution", 2, 7),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        self.repository.create_mission("T-1", project="alpha")
+        self.repository.append_event(
+            "T-1", project="alpha", event_type="task_changed",
+            source_plane="coordination", idempotency_key="newer",
+            external_ref="change-1",
+        )
+        yielded = self.repository.yield_execution(
+            "T-1", project="alpha", execution_id="exec-1", generation=2,
+            observed_through=1, outcome="waiting",
+            requested_role="review_merge", actor="codex/T-1", head_sha="abc",
+        )
+        self.assertFalse(yielded["cursor_current"])
+        self.assertIsNone(yielded["pending_state"])
+        self.assertEqual("ACTIVE", yielded["state"])
+        self.assertEqual(7, yielded["execution_identity"]["fence_epoch"])
+        replay = self.repository.yield_execution(
+            "T-1", project="alpha", execution_id="exec-1", generation=2,
+            observed_through=1, outcome="waiting",
+            requested_role="review_merge", actor="codex/T-1", head_sha="abc",
+        )
+        self.assertFalse(replay["created"])
+        with self.assertRaises(MissionJournalError) as raised:
+            self.repository.yield_execution(
+                "T-1", project="alpha", execution_id="exec-old", generation=1,
+                observed_through=1, outcome="waiting",
+                requested_role="review_merge", actor="codex/T-1", head_sha="abc",
+            )
+        self.assertEqual("stale_execution", raised.exception.code)
+
+    def test_yield_command_retries_capacity_surrender_on_event_replay(self):
+        class ReplayRepository:
+            @staticmethod
+            def yield_execution(*_args, **_kwargs):
+                return {
+                    "created": False,
+                    "execution_identity": {
+                        "runner_session_id": "runner-1",
+                        "execution_id": "exec-1",
+                        "execution_connection_id": "connection-1",
+                        "generation": 2,
+                        "fence_epoch": 7,
+                        "role": "implementation",
+                        "head_sha": "abc",
+                    },
+                }
+
+        with patch.object(
+            mission_journal.runner_repository,
+            "make_runner_lease_due",
+            return_value={"updated": True, "idempotent": True},
+        ) as surrender:
+            result = mission_journal.yield_mission(
+                "T-1", project="alpha", execution_id="exec-1", generation=2,
+                observed_through=1, outcome="waiting",
+                requested_role="review_merge", actor="codex/T-1", head_sha="abc",
+                repository=ReplayRepository(),
+            )
+        surrender.assert_called_once()
+        self.assertTrue(result["surrender_requested"])
+        self.assertTrue(result["surrender"]["updated"])
+
     def test_event_append_is_evidence_only(self):
         with self.assertRaisesRegex(MissionJournalError, "existing mission item"):
             self.repository.append_event(

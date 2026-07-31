@@ -134,12 +134,20 @@ try:
         agreement,
     )
     tools = [c["tool"] for c in calls]
-    ok(tools[:4] == [
+    ok(tools[:5] == [
         "get_working_agreement",
         "register_agent",
+        "get_mission_context",
         "list_unacked_messages",
         "list_unblock_requests",
     ], "first_calls open with handshake sequence")
+
+    launcher_calls = session_boot.build_first_calls(
+        "switchboard", "codex/launcher", "codex", "", tid, "BOOT",
+        agreement, mode="launcher",
+    )
+    ok("get_mission_context" not in [call["tool"] for call in launcher_calls],
+       "launcher boot remains outside the task mission protocol")
     ok(any(c["tool"] == "get_project_contract"
            and c["args"]["project"] == "switchboard" for c in calls),
        "first_calls include project-bound get_project_contract")

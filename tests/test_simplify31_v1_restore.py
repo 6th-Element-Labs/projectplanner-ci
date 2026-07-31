@@ -57,7 +57,6 @@ for live_runtime in (
 
 for forbidden_effect in (
     "start_task(",
-    "make_runner_lease_due",
     "runner_control",
     "github_mission_events",
     "human_mission_events",
@@ -65,8 +64,15 @@ for forbidden_effect in (
     assert forbidden_effect not in passive_commands
     assert forbidden_effect not in passive_repository
 
+assert "make_runner_lease_due" not in passive_repository
+assert passive_commands.count("make_runner_lease_due") == 1
+assert "expected_identity=identity" in passive_commands
+assert "run_v4_tick" not in passive_commands
+
 passive_paths = {
     (Path(ROOT) / "src/switchboard/application/commands/mission_journal.py").resolve(),
+    (Path(ROOT) / "src/switchboard/application/queries/mission_context.py").resolve(),
+    (Path(ROOT) / "src/switchboard/mcp/tools/mission.py").resolve(),
     (Path(ROOT) / "src/switchboard/storage/repositories/mission_journal.py").resolve(),
     (Path(ROOT) / "src/switchboard/storage/migrations/runner.py").resolve(),
 }

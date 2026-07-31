@@ -240,6 +240,278 @@ class MissionJournalRepository:
         with self._connection(project) as connection:
             return self._item_in(connection, task_id, project)
 
+    def list_events(
+        self,
+        task_id: str,
+        *,
+        project: str,
+        after_sequence: int = 0,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Return one bounded, forward-only page of persisted evidence."""
+        if isinstance(after_sequence, bool):
+            raise MissionJournalError(
+                "invalid_event_cursor", "after_sequence must be nonnegative",
+            )
+        try:
+            cursor = int(after_sequence)
+            page_size = int(limit)
+        except (TypeError, ValueError) as exc:
+            raise MissionJournalError(
+                "invalid_history_page", "history cursor and limit must be integers",
+            ) from exc
+        if cursor < 0:
+            raise MissionJournalError(
+                "invalid_event_cursor", "after_sequence must be nonnegative",
+            )
+        page_size = max(1, min(page_size, 201))
+        with self._connection(project) as connection:
+            rows = connection.execute(
+                "SELECT * FROM mission_events WHERE project_id=? AND task_id=? "
+                "AND sequence>? ORDER BY sequence ASC LIMIT ?",
+                (project, task_id, cursor, page_size),
+            ).fetchall()
+        return [self._event_from_row(row) for row in rows]
+
+    def yield_execution(
+        self,
+        task_id: str,
+        *,
+        project: str,
+        execution_id: str,
+        generation: int,
+        observed_through: int,
+        outcome: str,
+        requested_role: str,
+        actor: str,
+        head_sha: str = "",
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Record an authenticated exact-execution yield.
+
+        This coordination write does not stop a process.  The application
+        command separately asks Capacity to expire this exact execution lease.
+        A stale history cursor remains ACTIVE so it cannot hide a newer event.
+        """
+        self._validate(state="ACTIVE", requested_role=requested_role)
+        normalized_outcome = str(outcome or "").strip().lower()
+        if normalized_outcome not in {"continue", "waiting"}:
+            raise MissionJournalError(
+                "invalid_outcome", "outcome must be continue or waiting",
+            )
+        if isinstance(generation, bool) or isinstance(observed_through, bool):
+            raise MissionJournalError(
+                "invalid_execution_identity", "generation and cursor must be integers",
+            )
+        try:
+            exact_generation = int(generation)
+            cursor = int(observed_through)
+        except (TypeError, ValueError) as exc:
+            raise MissionJournalError(
+                "invalid_execution_identity", "generation and cursor must be integers",
+            ) from exc
+        if exact_generation <= 0 or cursor < 0:
+            raise MissionJournalError(
+                "invalid_execution_identity",
+                "generation must be positive and cursor nonnegative",
+            )
+        exact_execution_id = str(execution_id or "").strip()
+        exact_actor = str(actor or "").strip()
+        if not exact_execution_id or not exact_actor:
+            raise MissionJournalError(
+                "exact_execution_identity_required",
+                "execution_id and authenticated actor are required",
+            )
+        timestamp = time.time() if now is None else now
+
+        def write() -> dict[str, Any]:
+            with self._connection(project) as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                item = connection.execute(
+                    "SELECT * FROM mission_items WHERE project_id=? AND task_id=?",
+                    (project, task_id),
+                ).fetchone()
+                if item is None:
+                    raise MissionJournalError(
+                        "mission_not_found", "mission item does not exist",
+                    )
+                runners = connection.execute(
+                    "SELECT * FROM runner_sessions WHERE task_id=? "
+                    "AND status IN ('running','stopping') "
+                    "ORDER BY started_at DESC, runner_session_id DESC",
+                    (task_id,),
+                ).fetchall()
+                if not runners:
+                    raise MissionJournalError(
+                        "current_execution_required",
+                        "no current execution is authenticated",
+                    )
+                if len(runners) != 1:
+                    raise MissionJournalError(
+                        "ambiguous_current_execution",
+                        "more than one current execution is registered for this task",
+                    )
+                runner = runners[0]
+                metadata = json.loads(runner["metadata_json"] or "{}")
+                live_execution_id = str(metadata.get("execution_id") or "")
+                live_generation = int(metadata.get("execution_generation") or 0)
+                live_head = str(metadata.get("execution_head_sha") or "").strip()
+                live_role = str(
+                    metadata.get("execution_role") or metadata.get("role") or ""
+                ).strip().lower()
+                if (
+                    exact_execution_id != live_execution_id
+                    or exact_generation != live_generation
+                    or exact_actor != str(runner["agent_id"] or "")
+                ):
+                    raise MissionJournalError(
+                        "stale_execution",
+                        "yield does not match the authenticated current execution",
+                    )
+                supplied_head = str(head_sha or "").strip()
+                if live_head and supplied_head != live_head:
+                    raise MissionJournalError(
+                        "stale_head", "yield head does not match assignment head",
+                    )
+                lease = connection.execute(
+                    "SELECT * FROM resource_leases WHERE id=? "
+                    "AND resource_type='execution'",
+                    (exact_execution_id,),
+                ).fetchone()
+                if (
+                    lease is None
+                    or int(lease["execution_generation"] or 0) != live_generation
+                ):
+                    raise MissionJournalError(
+                        "execution_lease_required",
+                        "current execution lease is unavailable",
+                    )
+                identity = {
+                    "runner_session_id": str(runner["runner_session_id"] or ""),
+                    "execution_id": exact_execution_id,
+                    "execution_connection_id": str(
+                        metadata.get("execution_connection_id") or ""
+                    ),
+                    "generation": live_generation,
+                    "fence_epoch": int(lease["fence_epoch"] or 0),
+                    "role": live_role,
+                    "head_sha": live_head,
+                }
+                latest = int(connection.execute(
+                    "SELECT COALESCE(MAX(sequence),0) FROM mission_events "
+                    "WHERE project_id=? AND task_id=?",
+                    (project, task_id),
+                ).fetchone()[0])
+                if cursor > latest:
+                    raise MissionJournalError(
+                        "invalid_event_cursor", "observed_through exceeds history",
+                    )
+                cursor_current = cursor == latest
+                idempotency_key = (
+                    f"yield:{task_id}:{exact_execution_id}:{exact_generation}:"
+                    f"{cursor}:{normalized_outcome}:{requested_role}"
+                )
+                duplicate = connection.execute(
+                    "SELECT * FROM mission_events WHERE project_id=? "
+                    "AND idempotency_key=?",
+                    (project, idempotency_key),
+                ).fetchone()
+                if duplicate is not None:
+                    event = self._event_from_row(duplicate)
+                    if (
+                        str(event.get("task_id") or "") != task_id
+                        or str(event.get("execution_id") or "") != exact_execution_id
+                        or int(event.get("generation") or 0) != exact_generation
+                        or str(event.get("head_sha") or "") != supplied_head
+                    ):
+                        raise MissionJournalError(
+                            "idempotency_conflict",
+                            "yield key already identifies a different mission event",
+                        )
+                    persisted_payload = dict(event.get("payload") or {})
+                    return {
+                        "schema": "switchboard.mission_yield.v4",
+                        "task_id": task_id,
+                        "execution_id": exact_execution_id,
+                        "generation": exact_generation,
+                        "outcome": normalized_outcome,
+                        "observed_through": cursor,
+                        "latest_sequence": int(
+                            persisted_payload.get("latest_sequence_at_yield") or 0
+                        ),
+                        "cursor_current": bool(
+                            persisted_payload.get("cursor_current")
+                        ),
+                        "state": "ACTIVE",
+                        "pending_state": (
+                            "WAITING"
+                            if normalized_outcome == "waiting"
+                            and bool(persisted_payload.get("cursor_current"))
+                            else None
+                        ),
+                        "event_id": event["event_id"],
+                        "created": False,
+                        "execution_identity": identity,
+                    }
+                event = self._append_event_in(
+                    connection,
+                    task_id,
+                    project=project,
+                    event_type="agent_yielded",
+                    source_plane="coordination",
+                    idempotency_key=idempotency_key,
+                    occurred_at=timestamp,
+                    pr_number=None,
+                    head_sha=supplied_head or None,
+                    generation=exact_generation,
+                    execution_id=exact_execution_id,
+                    external_ref="",
+                    payload={
+                        "outcome": normalized_outcome,
+                        "requested_role": requested_role,
+                        "observed_through": cursor,
+                        "latest_sequence_at_yield": latest,
+                        "cursor_current": cursor_current,
+                    },
+                )
+                if event["created"]:
+                    handled = (
+                        int(event["sequence"])
+                        if cursor_current
+                        else int(item["handled_through"] or 0)
+                    )
+                    connection.execute(
+                        "UPDATE mission_items SET state='ACTIVE',requested_role=?,"
+                        "handled_through=?,version=version+1,updated_at=? "
+                        "WHERE project_id=? AND task_id=?",
+                        (requested_role, handled, timestamp, project, task_id),
+                    )
+                persisted_payload = dict(event.get("payload") or {})
+                return {
+                    "schema": "switchboard.mission_yield.v4",
+                    "task_id": task_id,
+                    "execution_id": exact_execution_id,
+                    "generation": exact_generation,
+                    "outcome": normalized_outcome,
+                    "observed_through": cursor,
+                    "latest_sequence": int(
+                        persisted_payload.get("latest_sequence_at_yield") or 0
+                    ),
+                    "cursor_current": bool(persisted_payload.get("cursor_current")),
+                    "state": "ACTIVE",
+                    "pending_state": (
+                        "WAITING"
+                        if normalized_outcome == "waiting"
+                        and bool(persisted_payload.get("cursor_current"))
+                        else None
+                    ),
+                    "event_id": event["event_id"],
+                    "created": bool(event["created"]),
+                    "execution_identity": identity,
+                }
+
+        return self._write_through(project, write)
+
     def create_mission(
         self,
         task_id: str,

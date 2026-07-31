@@ -1,13 +1,15 @@
-"""Passive commands for the dormant Mission Bot v4 persistence contract.
+"""Narrow commands for the staged Mission Bot journal protocol.
 
-This module is deliberately not imported by the application command package or
-any production runtime.  It contains no capacity, GitHub, Human, board-status,
+The journal remains passive except for ``yield_mission``: that command records
+one exact-execution handoff, then asks Capacity to expire that same renewable
+lease.  It never stops a process directly and has no GitHub, Human, task-status,
 or coordinator effects.
 """
 from __future__ import annotations
 
 from typing import Any, Mapping
 
+from switchboard.storage.repositories import runner as runner_repository
 from switchboard.storage.repositories.mission_journal import (
     MissionJournalError,
     MissionJournalRepository,
@@ -69,9 +71,56 @@ def transition_mission(
     )
 
 
+def yield_mission(
+    task_id: str,
+    *,
+    project: str,
+    execution_id: str,
+    generation: int,
+    observed_through: int,
+    outcome: str,
+    requested_role: str,
+    actor: str,
+    head_sha: str = "",
+    repository: MissionJournalRepository = default_mission_journal_repository,
+) -> dict[str, Any]:
+    result = repository.yield_execution(
+        task_id,
+        project=project,
+        execution_id=execution_id,
+        generation=generation,
+        observed_through=observed_through,
+        outcome=outcome,
+        requested_role=requested_role,
+        actor=actor,
+        head_sha=head_sha,
+    )
+    identity = dict(result.pop("execution_identity"))
+    # Capacity surrender is independently idempotent. Retry it even when the
+    # journal event already exists; otherwise a crash between the two writes
+    # could permanently strand a live execution behind a "successful" replay.
+    surrender = runner_repository.make_runner_lease_due(
+        identity["runner_session_id"],
+        reason=f"mission yielded: {outcome}",
+        authority="completion_owner",
+        actor=actor,
+        project=project,
+        expected_identity=identity,
+    )
+    if not surrender.get("updated"):
+        raise MissionJournalError(
+            "execution_surrender_failed",
+            str(surrender.get("error") or "exact execution surrender failed"),
+        )
+    result["surrender"] = surrender
+    result["surrender_requested"] = True
+    return result
+
+
 __all__ = [
     "MissionJournalError",
     "append_material_event",
     "create_mission",
     "transition_mission",
+    "yield_mission",
 ]
