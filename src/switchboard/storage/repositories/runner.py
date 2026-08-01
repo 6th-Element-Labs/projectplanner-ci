@@ -1545,7 +1545,8 @@ def _reconcile_terminal_bound_work_sessions_in(
             "r.claim_id AS runner_claim_id,r.agent_id AS runner_agent_id,"
             "r.status AS runner_status,r.metadata_json,"
             "tc.task_id AS claim_task_id,tc.agent_id AS claim_agent_id,"
-            "tc.status AS claim_status "
+            "tc.status AS claim_status,"
+            "tc.runner_session_id AS claim_runner_session_id "
             "FROM work_sessions ws "
             "JOIN runner_sessions r ON r.runner_session_id=ws.runner_session_id "
             "JOIN task_claims tc ON tc.id=ws.claim_id "
@@ -1567,7 +1568,8 @@ def _reconcile_terminal_bound_work_sessions_in(
         metadata = _json_obj(item.get("metadata_json") or "{}", {})
         surrender = metadata.get("lease_surrender") or {}
         exact_claim = str(item.get("runner_claim_id") or "") == claim_id \
-            or str(surrender.get("claim_id") or "") == claim_id
+            or str(surrender.get("claim_id") or "") == claim_id \
+            or str(item.get("claim_runner_session_id") or "") == runner_session_id
         exact_tuple = (
             work_session_id
             and claim_id

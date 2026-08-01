@@ -23,6 +23,7 @@ os.environ["PM_AUTH_MODE"] = "dev-open"
 
 import store  # noqa: E402
 from adapters import agent_host  # noqa: E402
+from db.connection import _conn  # noqa: E402
 
 
 P = "switchboard"
@@ -31,13 +32,14 @@ RUNNER_ID = "run_bug270_review"
 TASK_ID = "BUG-270"
 
 
-def surrendered_runner():
+def surrendered_runner(*, claim_id="", work_session_id=""):
     return {
         "runner_session_id": RUNNER_ID,
         "host_id": HOST_ID,
         "agent_id": "agent/codex/bug270",
         "runtime": "codex",
         "task_id": TASK_ID,
+        "claim_id": claim_id,
         "status": "running",
         "heartbeat_ttl_s": 180,
         "metadata": {
@@ -47,6 +49,7 @@ def surrendered_runner():
             "execution_generation": 1,
             "execution_role": "review_merge",
             "lease_epoch": 2,
+            "work_session_id": work_session_id,
             "lease_surrender": {
                 "schema": "switchboard.runner_lease_surrender.v1",
                 "authority": "terminal_task",
@@ -101,8 +104,37 @@ def fake_try(method, path, body=None):
 
 try:
     store.init_db(P)
+    task = store.create_task({
+        "workstream_id": "BUG", "title": "already-exited surrender proof",
+        "status": "Not Started", "ui_impact": "no",
+    }, actor="bug270-test", project=P)
+    TASK_ID = task["task_id"]
+    work_session = store.create_work_session({
+        "agent_id": "agent/codex/bug270", "task_id": TASK_ID,
+        "runtime": "codex", "repo_role": "canonical",
+        "branch": f"codex/{TASK_ID}-proof", "upstream": "origin/master",
+        "base_sha": "a" * 40, "head_sha": "a" * 40,
+        "storage_mode": "worktree", "worktree_path": str(TMP),
+        "status": "active", "dirty_status": "clean",
+        "policy_profile": "code_strict",
+        "hygiene": {"repo_preflight": {
+            "ok": True, "verdict": "pass", "findings": [],
+        }},
+    }, actor="bug270-test", project=P)["work_session"]
+    claim = store.claim_task(
+        TASK_ID, "agent/codex/bug270", principal_id="principal/bug270",
+        actor="bug270-test", project=P,
+        work_session_id=work_session["work_session_id"],
+        session_policy_profile="code_strict", require_work_session=True,
+    )
+    assert claim.get("claimed") is True, claim
     store.upsert_runner_session(
-        surrendered_runner(), actor="bug270-test", project=P)
+        surrendered_runner(
+            claim_id=claim["claim_id"],
+            work_session_id=work_session["work_session_id"],
+        ), actor="bug270-test", project=P)
+    with _conn(P) as c:
+        c.execute("UPDATE tasks SET status='Done' WHERE task_id=?", (TASK_ID,))
 
     pending = store.list_runner_sessions(
         host_id=HOST_ID,
@@ -132,8 +164,10 @@ try:
     ]
     assert len(terminal) == 1, posted
     assert terminal[0]["runner_session_id"] == RUNNER_ID
-    assert terminal[0]["status"] == "exited"
-    assert terminal[0]["metadata"]["terminalized_by"] == "host_supervisor"
+    assert terminal[0]["status"] == "stopped"
+    assert terminal[0]["metadata"]["terminalized_by"] == \
+        "terminal_lease_surrendered"
+    assert "failure_reason" not in terminal[0]["metadata"]
     assert persisted and persisted[0]["runner_session_id"] == RUNNER_ID
     assert deleted == [RUNNER_ID]
     assert outcomes == [{
@@ -146,7 +180,14 @@ try:
 
     central = store.list_runner_sessions(
         host_id=HOST_ID, include_stale=True, project=P)
-    assert central[0]["status"] == "exited", central
+    assert central[0]["status"] == "stopped", central
+    assert store.get_work_session(
+        work_session["work_session_id"], project=P,
+    )["status"] == "completed"
+    with _conn(P) as c:
+        assert c.execute(
+            "SELECT status FROM task_claims WHERE id=?", (claim["claim_id"],),
+        ).fetchone()[0] == "completed"
     assert store.list_runner_sessions(
         host_id=HOST_ID,
         include_stale=True,

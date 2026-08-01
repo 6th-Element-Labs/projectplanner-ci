@@ -15,7 +15,7 @@ def database() -> sqlite3.Connection:
     c.executescript("""
         CREATE TABLE task_claims (
             id TEXT PRIMARY KEY, task_id TEXT, agent_id TEXT, status TEXT,
-            abandon_reason TEXT
+            abandon_reason TEXT, runner_session_id TEXT
         );
         CREATE TABLE resource_leases (
             resource_type TEXT, task_id TEXT, agent_id TEXT, released_at REAL
@@ -61,8 +61,8 @@ def add_attempt(c: sqlite3.Connection, suffix: str, *, claim_status: str,
     runner_id = f"run-{suffix}"
     ws_runner_id = runner_id if exact else "run-someone-else"
     agent_id = f"agent/{suffix}"
-    c.execute("INSERT INTO task_claims VALUES (?,?,?,?,?)", (
-        claim_id, "BUG-263", agent_id, claim_status, None,
+    c.execute("INSERT INTO task_claims VALUES (?,?,?,?,?,?)", (
+        claim_id, "BUG-263", agent_id, claim_status, None, runner_id,
     ))
     c.execute(
         "INSERT INTO work_sessions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
@@ -96,25 +96,40 @@ add_attempt(c, "completed-expired", claim_status="completed",
             runner_status="expired", terminalized_by="runner_lease_expiry")
 add_attempt(c, "abandoned", claim_status="abandoned", runner_status="exited",
             terminalized_by="host_supervisor")
+add_attempt(c, "historical-binding", claim_status="abandoned",
+            runner_status="exited", terminalized_by="host_supervisor")
+c.execute("UPDATE runner_sessions SET claim_id=NULL,metadata_json=? "
+          "WHERE runner_session_id='run-historical-binding'", (
+              json.dumps({"terminalized_by": "host_supervisor"}),
+          ))
+add_attempt(c, "unbound", claim_status="abandoned", runner_status="exited",
+            terminalized_by="host_supervisor")
+c.execute("UPDATE task_claims SET runner_session_id=NULL WHERE id='claim-unbound'")
+c.execute("UPDATE runner_sessions SET claim_id=NULL,metadata_json=? "
+          "WHERE runner_session_id='run-unbound'", (
+              json.dumps({"terminalized_by": "host_supervisor"}),
+          ))
 add_attempt(c, "active", claim_status="active", runner_status="exited",
             terminalized_by="host_supervisor")
 add_attempt(c, "mismatch", claim_status="completed", runner_status="exited",
             terminalized_by="host_supervisor", exact=False)
 reconciled = runner._reconcile_terminal_bound_work_sessions_in(
     c, "BUG-263", "host/test", 100.0)
-assert len(reconciled) == 4
+assert len(reconciled) == 5
 statuses = dict(c.execute(
     "SELECT work_session_id,status FROM work_sessions").fetchall())
 assert statuses["ws-completed"] == "completed"
 assert statuses["ws-expired"] == "archived"
 assert statuses["ws-completed-expired"] == "archived"
 assert statuses["ws-abandoned"] == "expired"
+assert statuses["ws-historical-binding"] == "expired"
+assert statuses["ws-unbound"] == "active"
 assert statuses["ws-active"] == "active"
 assert statuses["ws-mismatch"] == "active"
 assert c.execute(
     "SELECT count(*) FROM activity "
     "WHERE kind='work_session.reconciled_by_terminal_runner'",
-).fetchone()[0] == 4
+).fetchone()[0] == 5
 assert runner._reconcile_terminal_bound_work_sessions_in(
     c, "BUG-263", "host/test", 101.0) == []
 

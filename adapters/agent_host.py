@@ -3235,19 +3235,36 @@ def renew_live_direct_runners(inventory):
         # only local truth about the process, so report it the moment it flips.
         if (session.get("alive") is False and task_id
                 and str(session.get("status") or "").lower() not in _TERMINAL_RUNNER_STATES):
-            reason = str(
-                metadata.get("failure_reason")
-                or "supervisor reported the process exited"
-            ).strip()
+            surrender_authority = str(
+                (metadata.get("lease_surrender") or {}).get("authority") or "")
+            terminal_surrender = surrender_authority in {
+                "terminal_task", "completion_owner",
+            }
+            reason = (
+                "terminal lease surrendered" if terminal_surrender else str(
+                    metadata.get("failure_reason")
+                    or "supervisor reported the process exited"
+                ).strip()
+            )
+            receipt_metadata = dict(metadata)
+            if terminal_surrender:
+                receipt_metadata.pop("failure_reason", None)
+                receipt_metadata.update({
+                    "terminalized_by": "terminal_lease_surrendered",
+                    "terminal_lease_surrendered_at": time.time(),
+                })
+            else:
+                receipt_metadata.update({
+                    "failure_reason": reason,
+                    "terminalized_by": "host_supervisor",
+                })
             receipt = {
                 "project": PROJECT,
                 "runner_session_id": session.get("runner_session_id"),
                 "host_id": host_id,
                 "task_id": task_id,
-                "status": "exited",
-                "metadata": {**metadata,
-                             "failure_reason": reason,
-                             "terminalized_by": "host_supervisor"},
+                "status": "stopped" if terminal_surrender else "exited",
+                "metadata": receipt_metadata,
             }
             _persist_pending_stop_receipt(receipt)
             terminal = _try("POST", P_HEARTBEAT_RUNNER, receipt)
@@ -3257,7 +3274,8 @@ def renew_live_direct_runners(inventory):
             # SIMPLIFY-3 / BUG-102: same tick — if a wake is bound, force
             # complete_wake(started=false) so claimed limbo cannot outlive the
             # local death. Already-terminal rows stay skipped (BUG-91).
-            if wake_id and terminal and not terminal.get("error"):
+            if (not terminal_surrender and wake_id
+                    and terminal and not terminal.get("error")):
                 completion = _try("POST", P_COMPLETE_WAKE, {
                     "project": PROJECT,
                     "wake_id": wake_id,
