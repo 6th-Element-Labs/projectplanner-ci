@@ -178,6 +178,29 @@ def compare_shadow_decisions(
     normalized_task = str(task_id or "").strip().upper()
     stamp = float(observed_at if observed_at is not None else time.time())
     v1 = reduce_mission(snapshot)
+    effective_mission = dict(mission) if mission is not None else None
+    merge_provenance = _map(snapshot.get("merge_provenance"))
+    canonical_merge_ref = str(merge_provenance.get("merged_sha") or "").strip()
+    terminal_projection_simulated = False
+    if (
+        effective_mission is not None
+        and canonical_merge_ref
+        and not (
+            str(effective_mission.get("state") or "").upper() == "DONE"
+            and effective_mission.get("terminal_kind") == "github_merge"
+            and str(effective_mission.get("terminal_ref") or "").strip()
+            == canonical_merge_ref
+        )
+    ):
+        # The live v4 tick projects already-persisted canonical provenance
+        # before deciding.  Shadow mode mirrors that state transition in memory
+        # only; it never writes the journal or impersonates Done authority.
+        effective_mission.update({
+            "state": "DONE",
+            "terminal_kind": "github_merge",
+            "terminal_ref": canonical_merge_ref,
+        })
+        terminal_projection_simulated = True
     validated_scope = _map(scope_verdict)
     if validated_scope.get("allowed") is not True:
         comparison_class = "blocked"
@@ -190,7 +213,7 @@ def compare_shadow_decisions(
             "action": "block_release",
             "reason": reason,
         }
-    elif mission is None:
+    elif effective_mission is None:
         comparison_class, reason = "blocked", "v4_mission_missing"
         context: dict[str, Any] = {}
         v4: dict[str, Any] = {
@@ -211,7 +234,7 @@ def compare_shadow_decisions(
             project=project,
             task_id=normalized_task,
             snapshot=snapshot,
-            mission=mission,
+            mission=effective_mission,
             scope_verdict=validated_scope,
         )
         v4 = decide_mission_transition(context)
@@ -224,7 +247,8 @@ def compare_shadow_decisions(
         "head_sha": str(snapshot.get("head_sha") or ""),
         "source_observed_at": _map(snapshot.get("source_observed_at")),
         "v4_context": context,
-        "mission_version": int(_map(mission).get("version") or 0),
+        "mission_version": int(_map(effective_mission).get("version") or 0),
+        "v4_terminal_projection_simulated": terminal_projection_simulated,
         "scope_authority": {
             key: _map(validated_scope.get("authority")).get(key)
             for key in ("scope_id", "generation", "fence_epoch", "lease_id")
@@ -271,6 +295,7 @@ def compare_shadow_decisions(
         "cutover_authorized": False,
         "effect_port_bound": False,
         "shadow_is_lifecycle_authority": False,
+        "v4_terminal_projection_simulated": terminal_projection_simulated,
         "permitted_write": "activity_audit_only",
     }
 

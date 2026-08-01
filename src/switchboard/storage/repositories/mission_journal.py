@@ -439,6 +439,149 @@ class MissionJournalRepository:
             "task_id": exact_task_id,
         }
 
+    def record_terminal_provenance_in(
+        self,
+        connection: sqlite3.Connection,
+        task_id: str,
+        *,
+        project: str,
+        terminal_kind: str,
+        terminal_ref: str,
+        actor: str,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Close an existing mission from already-persisted canonical truth.
+
+        The staged v4 runtime calls this only after canonical provenance is
+        committed.  It never creates a mission and it accepts only the exact
+        canonical merge already visible on that connection.
+        """
+        exact_task_id = str(task_id or "").strip().upper()
+        exact_kind = str(terminal_kind or "").strip()
+        exact_ref = str(terminal_ref or "").strip().lower()
+        exact_actor = str(actor or "").strip()
+        if (
+            not exact_task_id
+            or exact_kind != "github_merge"
+            or not exact_ref
+            or not exact_actor
+        ):
+            raise MissionJournalError(
+                "terminal_provenance_required",
+                "canonical terminal projection requires task, merge SHA, and actor",
+            )
+        mission = connection.execute(
+            "SELECT * FROM mission_items WHERE project_id=? AND task_id=?",
+            (project, exact_task_id),
+        ).fetchone()
+        if mission is None:
+            return {
+                "recorded": False,
+                "reason": "mission_not_found",
+                "task_id": exact_task_id,
+            }
+        task = connection.execute(
+            "SELECT status FROM tasks WHERE task_id=?", (exact_task_id,),
+        ).fetchone()
+        provenance = connection.execute(
+            "SELECT merged_sha,in_main_content FROM task_git_state WHERE task_id=?",
+            (exact_task_id,),
+        ).fetchone()
+        if (
+            task is None
+            or str(task["status"] or "") != "Done"
+            or provenance is None
+            or not bool(provenance["in_main_content"])
+            or str(provenance["merged_sha"] or "").strip().lower() != exact_ref
+        ):
+            raise MissionJournalError(
+                "terminal_provenance_unverified",
+                "mission terminal projection requires persisted canonical Done truth",
+            )
+        current_kind = str(mission["terminal_kind"] or "")
+        current_ref = str(mission["terminal_ref"] or "").strip().lower()
+        if str(mission["state"] or "") == "DONE" and (
+            current_kind != exact_kind or current_ref != exact_ref
+        ):
+            raise MissionJournalError(
+                "terminal_state_immutable",
+                "persisted terminal provenance cannot be rewritten",
+            )
+        timestamp = time.time() if now is None else now
+        event = self._append_event_in(
+            connection,
+            exact_task_id,
+            project=project,
+            event_type="terminal_provenance_persisted",
+            source_plane="coordination",
+            idempotency_key=(
+                f"terminal:{exact_task_id}:{exact_kind}:{exact_ref}"
+            ),
+            occurred_at=timestamp,
+            pr_number=None,
+            head_sha=exact_ref,
+            generation=None,
+            execution_id=None,
+            external_ref=exact_ref,
+            payload={
+                "terminal_kind": exact_kind,
+                "terminal_ref": exact_ref,
+            },
+        )
+        if str(mission["state"] or "") != "DONE":
+            updated = connection.execute(
+                "UPDATE mission_items SET state='DONE',handled_through=?,"
+                "version=version+1,human_request_id='',terminal_kind=?,terminal_ref=?,"
+                "updated_at=? WHERE project_id=? AND task_id=? AND version=? "
+                "AND state!='DONE'",
+                (
+                    int(event["sequence"]), exact_kind, exact_ref, timestamp,
+                    project, exact_task_id, int(mission["version"]),
+                ),
+            )
+            if updated.rowcount != 1:
+                raise MissionJournalError(
+                    "stale_row_version",
+                    "mission changed while terminal provenance was projected",
+                )
+        closed = self._item_in(connection, exact_task_id, project) or {}
+        return {
+            "recorded": True,
+            "event_created": bool(event.get("created")),
+            "event_id": event.get("event_id"),
+            "state": str(closed.get("state") or ""),
+            "terminal_kind": str(closed.get("terminal_kind") or ""),
+            "terminal_ref": str(closed.get("terminal_ref") or ""),
+            "task_id": exact_task_id,
+        }
+
+    def record_terminal_provenance(
+        self,
+        task_id: str,
+        *,
+        project: str,
+        terminal_kind: str,
+        terminal_ref: str,
+        actor: str,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Standalone v4 projection after canonical provenance is committed."""
+
+        def write() -> dict[str, Any]:
+            with self._connection(project) as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                return self.record_terminal_provenance_in(
+                    connection,
+                    task_id,
+                    project=project,
+                    terminal_kind=terminal_kind,
+                    terminal_ref=terminal_ref,
+                    actor=actor,
+                    now=now,
+                )
+
+        return self._write_through(project, write)
+
     def record_human_requested(
         self,
         task_id: str,

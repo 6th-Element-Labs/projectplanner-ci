@@ -101,6 +101,74 @@ def production_ports(
     )
 
 
+def project_terminal_provenance(
+    task_id: str,
+    *,
+    project: str,
+    actor: str,
+    journal: MissionJournalRepository = default_mission_journal_repository,
+    task_reader: Callable[..., Mapping[str, Any] | None] = tasks.get_task,
+) -> dict[str, Any]:
+    """Project already-persisted canonical Done truth into the v4 journal.
+
+    This staged v4 adapter is deliberately outside the v1 provenance path.  It
+    creates no mission and performs no lifecycle effect beyond closing the
+    existing passive v4 item from canonical truth.
+    """
+    task = task_reader(task_id, project=project)
+    if not task:
+        return {
+            "projected": False,
+            "release_blocked": True,
+            "reason": "task_not_found",
+        }
+    if str(task.get("status") or "") != "Done":
+        return {
+            "projected": False,
+            "release_blocked": False,
+            "reason": "task_not_terminal",
+        }
+    git_state = task.get("git_state")
+    git_state = git_state if isinstance(git_state, Mapping) else {}
+    merged_sha = str(git_state.get("merged_sha") or "").strip().lower()
+    if not merged_sha or not bool(git_state.get("in_main_content")):
+        return {
+            "projected": False,
+            "release_blocked": True,
+            "reason": "canonical_terminal_provenance_missing",
+        }
+    try:
+        receipt = journal.record_terminal_provenance(
+            task_id,
+            project=project,
+            terminal_kind="github_merge",
+            terminal_ref=merged_sha,
+            actor=actor,
+        )
+    except MissionJournalError as exc:
+        return {
+            "projected": False,
+            "release_blocked": True,
+            "reason": exc.code,
+            "message": str(exc),
+        }
+    if receipt.get("recorded") is not True:
+        return {
+            "projected": False,
+            "release_blocked": True,
+            "reason": str(receipt.get("reason") or "terminal_projection_failed"),
+            "receipt": dict(receipt),
+        }
+    return {
+        "projected": True,
+        "release_blocked": False,
+        "reason": "canonical_terminal_provenance_projected",
+        "terminal_kind": "github_merge",
+        "terminal_ref": merged_sha,
+        "receipt": dict(receipt),
+    }
+
+
 def run_scoped_mission_tick(
     task_id: str,
     *,
@@ -132,7 +200,28 @@ def run_scoped_mission_tick(
         task_id=task_id,
     ) or {}
     projection: dict[str, Any] | None = None
+    terminal_projection: dict[str, Any] | None = None
     if authority.get("allowed") is True:
+        task_reader = getattr(store_mod, "get_task", None)
+        if not callable(task_reader):
+            task_reader = tasks.get_task
+        terminal_projection = project_terminal_provenance(
+            task_id,
+            project=project,
+            actor=actor,
+            journal=journal,
+            task_reader=task_reader,
+        )
+        if terminal_projection.get("release_blocked") is True:
+            return {
+                "schema": "switchboard.mission_worker_tick.v4",
+                "task_id": task_id,
+                "action": "block_release",
+                "reason": str(terminal_projection.get("reason")),
+                "release_blocked": True,
+                "mutations": 0,
+                "terminal_projection": terminal_projection,
+            }
         before_projection = journal.get_item(task_id, project=project) or {}
         before_sequence = int(before_projection.get("latest_sequence") or 0)
         try:
@@ -167,6 +256,8 @@ def run_scoped_mission_tick(
     )
     if projection is not None:
         result["capacity_projection"] = projection
+    if terminal_projection is not None:
+        result["terminal_projection"] = terminal_projection
     return result
 
 
@@ -231,6 +322,7 @@ def assess_stuck_mission_invariant(
 
 __all__ = [
     "assess_stuck_mission_invariant",
+    "project_terminal_provenance",
     "production_ports",
     "run_scoped_mission_tick",
 ]

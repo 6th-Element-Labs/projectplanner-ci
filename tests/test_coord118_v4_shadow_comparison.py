@@ -263,16 +263,18 @@ class V4ShadowComparisonTest(unittest.TestCase):
         merged_snapshot = snapshot(
             merge_provenance={"merged_sha": "b" * 40},
         )
-        missing_terminal = compare_shadow_decisions(
+        projected_terminal = compare_shadow_decisions(
             project=PROJECT,
             task_id="QA-118",
             snapshot=merged_snapshot,
             mission=mission(),
         )
-        self.assertEqual("OBSERVE_MERGED", missing_terminal["v1"]["output"])
-        self.assertEqual("terminal_projection_missing",
-                         missing_terminal["comparison_reason"])
-        self.assertTrue(missing_terminal["release_blocked"])
+        self.assertEqual("OBSERVE_MERGED", projected_terminal["v1"]["output"])
+        self.assertEqual("terminal_provenance",
+                         projected_terminal["comparison_reason"])
+        self.assertEqual("match", projected_terminal["comparison_class"])
+        self.assertTrue(projected_terminal["v4_terminal_projection_simulated"])
+        self.assertFalse(projected_terminal["release_blocked"])
 
         terminal = compare_shadow_decisions(
             project=PROJECT,
@@ -284,6 +286,7 @@ class V4ShadowComparisonTest(unittest.TestCase):
             ),
         )
         self.assertEqual("match", terminal["comparison_class"])
+        self.assertFalse(terminal["v4_terminal_projection_simulated"])
 
     def test_missing_mission_and_broken_reads_fail_closed(self):
         missing = compare_shadow_decisions(
