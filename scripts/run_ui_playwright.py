@@ -16,6 +16,9 @@ from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TEST = "tests/browser/test_arch_ms126_service_boundary.py"
+TASK_TESTS = {
+    "BUG-260": "tests/browser/test_bug260_mission_summary_first_paint.py",
+}
 
 
 def sha256(value: bytes) -> str:
@@ -24,7 +27,7 @@ def sha256(value: bytes) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--test", default=DEFAULT_TEST)
+    parser.add_argument("--test")
     parser.add_argument("--task-id", default=os.environ.get("SWITCHBOARD_TASK_ID", "CI-UI"))
     parser.add_argument("--work-session-id", default=os.environ.get("SWITCHBOARD_WORK_SESSION_ID", ""))
     parser.add_argument("--branch", default=os.environ.get("SWITCHBOARD_BRANCH", ""))
@@ -32,6 +35,8 @@ def main() -> int:
     parser.add_argument("--base-url", default="hermetic://arch-ms126-service-boundary")
     parser.add_argument("--output", default=".artifacts/ui-playwright-receipt.json")
     args = parser.parse_args()
+
+    args.test = args.test or TASK_TESTS.get(args.task_id, DEFAULT_TEST)
 
     test_path = (ROOT / args.test).resolve()
     if not test_path.is_file() or ROOT not in test_path.parents:

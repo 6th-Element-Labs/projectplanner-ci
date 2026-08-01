@@ -113,6 +113,30 @@
         }
     },
 
+    async loadMissionSummary(deliverableId) {
+        const id = (deliverableId || '').trim();
+        if (!id) { this.missionSummary = null; return null; }
+        if (this._missionSummaryPromise && this._missionSummaryId === id) {
+            return this._missionSummaryPromise;
+        }
+        const request = (async () => {
+            const res = await fetch(`api/deliverables/${encodeURIComponent(id)}/mission_summary`, { cache: 'no-cache' });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
+            this.missionSummary = data;
+            return data;
+        })();
+        this._missionSummaryId = id;
+        this._missionSummaryPromise = request;
+        try { return await request; }
+        finally {
+            if (this._missionSummaryPromise === request) {
+                this._missionSummaryPromise = null;
+                this._missionSummaryId = null;
+            }
+        }
+    },
+
     async loadDependencyGraph(deliverableId) {
         const id = (deliverableId || '').trim();
         if (!id) { this.missionGraph = null; return null; }
@@ -422,6 +446,9 @@
         const el = document.getElementById('mission-page');
         const picker = document.getElementById('mission-deliverable-picker');
         if (!el) return;
+        // A detail panel belongs to the previously rendered deliverable.  A refresh
+        // (including picker changes) must return live polling to summary rendering.
+        this._missionDetailLoaded = false;
         // Warm the Mermaid bundle in parallel with the data fetch so the dependency
         // map isn't waiting on a cold ~1MB CDN download after the data is already in.
         this._ensureScript(this.MERMAID_SRC).catch(() => {});
@@ -453,16 +480,11 @@
             return;
         }
         try {
-            await Promise.all([
-                this.loadMissionStatus(this.selectedDeliverableId),
-                this.loadDependencyGraph(this.selectedDeliverableId),
-                this.loadAutopilotScopes(this.selectedDeliverableId),
-                this.loadBreakdownProposals(this.selectedDeliverableId),
-                this.loadKpisAndOutcomes(),
-            ]);
+            await this.loadMissionSummary(this.selectedDeliverableId);
             this._setMissionDeliverableInUrl(this.selectedDeliverableId);
             // UI-17: when ?proof=1 / mode=proof, load bind + provider state before render.
             if (typeof this._proofModeFromUrl === 'function' && this._proofModeFromUrl()) {
+                await this.loadMissionStatus(this.selectedDeliverableId);
                 const s = this.missionStatus || {};
                 const taskIds = [
                     ...((s.active_work || []).map((w) => w.task_id)),
@@ -474,7 +496,8 @@
             } else {
                 this._proofBind = null;
             }
-            this.renderMissionPage();
+            if (this._proofBind) this.renderMissionPage();
+            else this.renderMissionSummaryPage();
             if (this._proofBind && typeof this._initProofConsole === 'function') {
                 await this._initProofConsole(this.missionStatus);
             }
@@ -827,21 +850,11 @@
     // changed (task status, active work, blockers) — so it tracks agents in real
     // time without flickering the graph on every tick.
     _missionSignature() {
-        const s = this.missionStatus || {};
-        const g = this.missionGraph || {};
-        const nodeSig = (g.nodes || []).map((n) => `${n.id}:${n.state}`).sort();
+        const s = this.missionSummary || this.missionStatus || {};
         const active = (s.active_work || []).map((w) => `${w.task_id}:${w.status}:${(w.active_claims || []).length}`).sort();
         const blockers = (s.blockers || []).map((b) => `${b.kind || ''}:${b.task_id || ''}`).sort();
-        // Status only — autopilot heartbeats bump updated_at and must not force a remount.
-        const scopes = (this.autopilotScopes || []).map((scope) => `${scope.scope_id}:${scope.status}`).sort();
-        // UI-60: re-render when tooltip prose or who's-working changes, even if status didn't.
-        const narration = (s.linked_tasks || []).map((link) => {
-            const d = link.task_detail || {};
-            return `${d.task_id || link.task_id}:${d.narration || ''}:${d.narration_raw || ''}`;
-        }).sort();
-        const agents = (s.active_agents || []).map((a) =>
-            `${a.task_id}:${a.agent_id}:${a.runtime || ''}:${a.stale ? 1 : 0}`).sort();
-        return JSON.stringify([nodeSig, active, blockers, scopes, narration, agents, s.progress || {}, g.stats || {}, (s.deliverable || {}).status]);
+        const actions = (s.next_actions || []).map((a) => `${a.kind || a.action || ''}:${a.task_id || ''}`).sort();
+        return JSON.stringify([active, blockers, actions, s.progress || {}, (s.deliverable || {}).status]);
     },
 
     _missionLiveStamp(changed) {
@@ -863,7 +876,7 @@
         if (!id || this._missionLiveBusy) return;
         this._missionLiveBusy = true;
         try {
-            await Promise.all([this.loadMissionStatus(id), this.loadDependencyGraph(id), this.loadAutopilotScopes(id)]);
+            await this.loadMissionSummary(id);
         } catch (e) {
             this._missionLiveBusy = false;
             return;   // transient (agent mid-write, network blip) — try again next tick
@@ -871,7 +884,8 @@
         this._missionLiveBusy = false;
         const sig = this._missionSignature();
         const changed = sig !== this._missionSig;
-        if (changed) this.renderMissionPage();   // renderMissionPage refreshes _missionSig + stamp
+        if (changed && !this._missionDetailLoaded) this.renderMissionSummaryPage();
+        else if (changed) this._missionLiveStamp(true);
         else this._missionLiveStamp(false);
     },
 
@@ -927,6 +941,61 @@
             this.selectedDeliverableId = this.deliverables[0].id;
         }
         this._syncHeaderDeliverable();
+    },
+
+    renderMissionSummaryPage() {
+        const el = document.getElementById('mission-page');
+        const s = this.missionSummary;
+        if (!el || !s) return;
+        const d = s.deliverable || {};
+        const counts = s.counts || {};
+        const prog = s.progress || {};
+        const pctDone = Math.round((prog.done_with_proof_ratio || 0) * 100);
+        const cards = [
+            ['Done with proof', counts.done_with_proof || 0, 'circle-check', 'green'],
+            ['Active / claimed', counts.active_work || 0, 'bolt', 'blue'],
+            ['Blockers', counts.blockers || 0, 'alert-triangle', 'red'],
+            ['Progress', `${pctDone}%`, 'chart-donut', 'primary'],
+        ].map(([label, value, icon, color]) => `<div class="col-6 col-xl-3"><div class="card card-sm"><div class="card-body">
+            <div class="d-flex"><div class="subheader">${this.esc(label)}</div><div class="ms-auto text-${color}"><i class="ti ti-${icon}"></i></div></div>
+            <div class="h2 mb-0 mt-1">${this.esc(value)}</div></div></div></div>`).join('');
+        const active = (s.active_work || []).map((work) => `<li class="list-group-item d-flex align-items-center gap-2">
+            <a href="#" data-linked-task="${this.esc(work.task_id)}" data-linked-project="${this.esc(work.project_id)}">${this.esc(work.task_id)}</a>
+            <span class="text-secondary flex-fill">${this.esc(work.title || '')}</span>${this._missionBadge(work.status, this.STATUS_COLOR)}</li>`).join('');
+        const actions = (s.next_actions || []).slice(0, 8).map((action) => `<li class="list-group-item">
+            <div class="fw-medium">${this.esc(action.label || action.action || action.kind || 'Next action')}</div>
+            <div class="text-secondary small">${this.esc(action.reason || '')}</div></li>`).join('');
+        const blockers = (s.blockers || []).slice(0, 8).map((blocker) => `<li class="list-group-item">
+            <span class="text-red fw-medium">${this.esc(blocker.task_id || blocker.kind || 'Blocker')}</span>
+            <span class="text-secondary small ms-2">${this.esc(blocker.reason || blocker.message || '')}</span></li>`).join('');
+        el.innerHTML = `<div class="d-flex flex-wrap align-items-start gap-3 mb-4"><div class="flex-fill">
+            <div class="text-secondary small mb-1">${this.esc(s.project_id || window.PM_PROJECT || '')}</div>
+            <h2 class="mb-2">${this.esc(d.title || s.deliverable_id || 'Mission')}</h2>${this._missionBadge(d.status, this.DELIVERABLE_STATUS_COLOR)}</div>
+            <div class="text-end"><span class="badge bg-green-lt"><span class="status-dot status-dot-animated bg-green me-1"></span>Live summary</span><div id="mission-live-stamp" class="text-secondary small mt-1"></div></div></div>
+            <div class="row row-cards mb-4 mission-summary-metrics">${cards}</div>
+            <div class="row g-3 mb-4"><div class="col-lg-4"><div class="card h-100"><div class="card-header"><h3 class="card-title">Active work</h3></div><ul class="list-group list-group-flush">${active || '<li class="list-group-item text-secondary">No active work</li>'}</ul></div></div>
+            <div class="col-lg-4"><div class="card h-100"><div class="card-header"><h3 class="card-title">Blockers</h3></div><ul class="list-group list-group-flush">${blockers || '<li class="list-group-item text-secondary">No blockers</li>'}</ul></div></div>
+            <div class="col-lg-4"><div class="card h-100"><div class="card-header"><h3 class="card-title">Next actions</h3></div><ul class="list-group list-group-flush">${actions || '<li class="list-group-item text-secondary">No next actions</li>'}</ul></div></div></div>
+            <div class="btn-list"><button class="btn btn-primary" id="mission-open-work"><i class="ti ti-list-details me-1"></i>Open work details</button>
+            <button class="btn btn-outline-secondary" id="mission-open-map"><i class="ti ti-git-fork me-1"></i>Open dependency map</button></div>`;
+        const open = async (map) => {
+            el.insertAdjacentHTML('beforeend', '<div class="text-secondary small mt-3" id="mission-panel-loading"><span class="spinner-border spinner-border-sm me-2"></span>Loading panel…</div>');
+            try {
+                await Promise.all(map
+                    ? [this.loadMissionStatus(s.deliverable_id), this.loadDependencyGraph(s.deliverable_id), this.loadAutopilotScopes(s.deliverable_id)]
+                    : [this.loadMissionStatus(s.deliverable_id), this.loadAutopilotScopes(s.deliverable_id), this.loadBreakdownProposals(s.deliverable_id), this.loadKpisAndOutcomes()]);
+                this._missionDetailLoaded = true;
+                this.renderMissionPage();
+                if (map) document.querySelector('[data-mission-view="map"]')?.click();
+            } catch (e) {
+                const loading = document.getElementById('mission-panel-loading');
+                if (loading) loading.outerHTML = `<div class="alert alert-danger mt-3">Could not load panel: ${this.esc(e.message)}</div>`;
+            }
+        };
+        document.getElementById('mission-open-work')?.addEventListener('click', () => open(false));
+        document.getElementById('mission-open-map')?.addEventListener('click', () => open(true));
+        this._missionSig = this._missionSignature();
+        this._missionLiveStamp(true);
     },
 
     renderMissionPage() {

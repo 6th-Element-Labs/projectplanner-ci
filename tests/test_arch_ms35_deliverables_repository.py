@@ -144,6 +144,17 @@ try:
         project="switchboard", deliverable_id="arch-ms35-deliv")
     ok(isinstance(status, dict), "get_mission_status returns a dict")
 
+    real_mission_status = deliv_repo.get_mission_status
+    deliv_repo.get_mission_status = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("bounded mission_summary called get_mission_status"))
+    try:
+        summary = deliv_repo.get_mission_summary(
+            project="switchboard", deliverable_id="arch-ms35-deliv")
+        ok(summary.get("schema") == "switchboard.mission_summary.v1",
+           "mission_summary is built without invoking full mission status")
+    finally:
+        deliv_repo.get_mission_status = real_mission_status
+
     # PERF-style monkeypatch: store._create_deliverable_impl must be honored via facade
     calls = []
     real_impl = store._create_deliverable_impl
