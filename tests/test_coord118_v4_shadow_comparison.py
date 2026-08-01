@@ -8,14 +8,44 @@ import unittest
 from path_setup import ROOT as _ROOT  # noqa: F401
 from switchboard.application.mission_bot_v4 import shadow
 from switchboard.application.mission_bot_v4.shadow import (
-    compare_shadow_decisions,
-    run_shadow_batch,
-    run_shadow_comparison,
+    compare_shadow_decisions as _compare_shadow_decisions,
+    run_shadow_batch as _run_shadow_batch,
+    run_shadow_comparison as _run_shadow_comparison,
 )
 
 
 PROJECT = "switchboard"
 HEAD = "a" * 40
+AUTHORITY = {
+    "schema": "switchboard.autopilot_scope_authority.v1",
+    "scope_id": "scope-deliverable-118",
+    "holder_agent_id": "switchboard/coordinator-autopilot/test",
+    "lease_id": "lease-118",
+    "generation": 4,
+    "fence_epoch": 3,
+    "expires_at": 9999999999.0,
+}
+
+
+def allowed_scope(authority=AUTHORITY, **_kwargs):
+    return {"allowed": True, "authority": dict(authority)}
+
+
+def compare_shadow_decisions(**kwargs):
+    kwargs.setdefault("scope_verdict", allowed_scope())
+    return _compare_shadow_decisions(**kwargs)
+
+
+def run_shadow_comparison(*args, **kwargs):
+    kwargs.setdefault("scope_authority", AUTHORITY)
+    kwargs.setdefault("scope_validator", allowed_scope)
+    return _run_shadow_comparison(*args, **kwargs)
+
+
+def run_shadow_batch(*args, **kwargs):
+    kwargs.setdefault("scope_authority", AUTHORITY)
+    kwargs.setdefault("scope_validator", allowed_scope)
+    return _run_shadow_batch(*args, **kwargs)
 
 
 def snapshot(*, task_id="QA-118", runner=False, deps=True, scope="active", **updates):
@@ -102,6 +132,40 @@ class V4ShadowComparisonTest(unittest.TestCase):
         self.assertFalse(row["effect_port_bound"])
         self.assertFalse(row["cutover_authorized"])
         self.assertEqual("runner_sessions", row["runner_liveness_source"])
+        self.assertTrue(row["scope_authority_validated"])
+        self.assertEqual("scope-deliverable-118", row["scope_id"])
+
+    def test_exact_deliverable_scope_authority_is_required_not_inferred(self):
+        missing = _compare_shadow_decisions(
+            project=PROJECT,
+            task_id="QA-118",
+            snapshot=snapshot(autopilot_scope={}),
+            mission=mission(),
+        )
+        self.assertEqual("scope_authority_required", missing["comparison_reason"])
+        self.assertTrue(missing["release_blocked"])
+
+        seen = []
+
+        def validate(authority, **kwargs):
+            seen.append((dict(authority), dict(kwargs)))
+            return {"allowed": True, "authority": dict(authority)}
+
+        row = _run_shadow_comparison(
+            "QA-118",
+            project=PROJECT,
+            actor="test",
+            scope_project="switchboard",
+            scope_authority=AUTHORITY,
+            scope_validator=validate,
+            journal=Journal({"QA-118": mission()}),
+            hydrator=lambda *_args, **_kwargs: snapshot(autopilot_scope={}),
+            recorder=lambda *_args, **_kwargs: {"recorded": True},
+        )
+        self.assertEqual("match", row["comparison_class"])
+        self.assertEqual(1, len(seen))
+        self.assertEqual("QA-118", seen[0][1]["task_id"])
+        self.assertEqual(PROJECT, seen[0][1]["task_project"])
 
     def test_v1_provider_effect_maps_to_v4_review_page(self):
         row = compare_shadow_decisions(
@@ -148,8 +212,11 @@ class V4ShadowComparisonTest(unittest.TestCase):
             mission=mission(),
         )
         self.assertEqual("WAIT", stopped["v1"]["output"])
-        self.assertEqual("scope_inactive", stopped["v4"]["reason"])
-        self.assertEqual("match", stopped["comparison_class"])
+        self.assertEqual("start_task", stopped["v4"]["action"])
+        self.assertEqual("divergence", stopped["comparison_class"])
+        self.assertEqual(
+            "v4_pages_across_v1_safety_wait", stopped["comparison_reason"],
+        )
 
     def test_role_mismatch_and_missing_event_block_release(self):
         mismatch = compare_shadow_decisions(

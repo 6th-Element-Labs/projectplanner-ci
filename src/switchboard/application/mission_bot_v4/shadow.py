@@ -16,7 +16,7 @@ from typing import Any
 from switchboard.application.mission_bot.driver import hydrate_mission_snapshot
 from switchboard.domain.mission_bot import reduce_mission
 from switchboard.domain.mission_bot_v4 import decide_mission_transition
-from switchboard.storage.repositories import activity
+from switchboard.storage.repositories import activity, autopilot_scopes
 from switchboard.storage.repositories.mission_journal import (
     MissionJournalRepository,
     default_mission_journal_repository,
@@ -66,16 +66,13 @@ def _human_request(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     )
 
 
-def _scope_active(snapshot: Mapping[str, Any]) -> bool:
-    return str(_map(snapshot.get("autopilot_scope")).get("status") or "").lower() == "active"
-
-
 def _v4_context(
     *,
     project: str,
     task_id: str,
     snapshot: Mapping[str, Any],
     mission: Mapping[str, Any],
+    scope_verdict: Mapping[str, Any],
 ) -> dict[str, Any]:
     dependency_state = _map(
         snapshot.get("dependency_state")
@@ -89,7 +86,14 @@ def _v4_context(
     return {
         "project": project,
         "task_id": task_id,
-        "scope_active": _scope_active(snapshot),
+        # The acting v4 worker receives an exact W2 authority token.  Never
+        # infer that authority from the snapshot's latest task-scope row: a
+        # deliverable scope legitimately covers many tasks and is absent from
+        # that task-only projection.
+        "scope_active": scope_verdict.get("allowed") is True,
+        "scope_id": str(
+            _map(scope_verdict.get("authority")).get("scope_id") or ""
+        ),
         "terminal_provenance": terminal,
         "dependencies_satisfied": dependency_state.get("satisfied") is True,
         "mission_state": str(mission.get("state") or ""),
@@ -167,13 +171,26 @@ def compare_shadow_decisions(
     task_id: str,
     snapshot: Mapping[str, Any],
     mission: Mapping[str, Any] | None,
+    scope_verdict: Mapping[str, Any] | None = None,
     observed_at: float | None = None,
 ) -> dict[str, Any]:
     """Compare both proposals without executing or persisting either one."""
     normalized_task = str(task_id or "").strip().upper()
     stamp = float(observed_at if observed_at is not None else time.time())
     v1 = reduce_mission(snapshot)
-    if mission is None:
+    validated_scope = _map(scope_verdict)
+    if validated_scope.get("allowed") is not True:
+        comparison_class = "blocked"
+        reason = str(
+            validated_scope.get("error") or "scope_authority_required"
+        )
+        context = {}
+        v4 = {
+            "state": "UNAVAILABLE",
+            "action": "block_release",
+            "reason": reason,
+        }
+    elif mission is None:
         comparison_class, reason = "blocked", "v4_mission_missing"
         context: dict[str, Any] = {}
         v4: dict[str, Any] = {
@@ -195,6 +212,7 @@ def compare_shadow_decisions(
             task_id=normalized_task,
             snapshot=snapshot,
             mission=mission,
+            scope_verdict=validated_scope,
         )
         v4 = decide_mission_transition(context)
         comparison_class, reason = _comparison(v1, v4, context)
@@ -207,6 +225,10 @@ def compare_shadow_decisions(
         "source_observed_at": _map(snapshot.get("source_observed_at")),
         "v4_context": context,
         "mission_version": int(_map(mission).get("version") or 0),
+        "scope_authority": {
+            key: _map(validated_scope.get("authority")).get(key)
+            for key in ("scope_id", "generation", "fence_epoch", "lease_id")
+        },
     }
     fingerprint = hashlib.sha256(
         _canonical_json(input_identity).encode("utf-8")
@@ -222,6 +244,10 @@ def compare_shadow_decisions(
         "head_sha": input_identity["head_sha"],
         "source_observed_at": input_identity["source_observed_at"],
         "runner_liveness_source": "runner_sessions",
+        "scope_authority_validated": validated_scope.get("allowed") is True,
+        "scope_id": str(
+            _map(validated_scope.get("authority")).get("scope_id") or ""
+        ),
         "v1": {
             "authoritative": True,
             "output": v1.get("output"),
@@ -278,18 +304,30 @@ def run_shadow_comparison(
     *,
     project: str,
     actor: str,
+    scope_authority: Mapping[str, Any] | None,
+    scope_project: str = "",
     journal: MissionJournalRepository = default_mission_journal_repository,
     hydrator: Callable[..., Mapping[str, Any]] = hydrate_mission_snapshot,
     recorder: Callable[..., Mapping[str, Any]] = record_shadow_observation,
+    scope_validator: Callable[..., Mapping[str, Any]] = (
+        autopilot_scopes.validate_autopilot_scope_authority
+    ),
 ) -> dict[str, Any]:
     """Read both paths, compare once, and require an auditable receipt."""
     snapshot = hydrator(task_id, project=project, actor=actor)
     mission = journal.get_item(task_id, project=project)
+    scope_verdict = scope_validator(
+        dict(scope_authority or {}),
+        project=scope_project or project,
+        task_project=project,
+        task_id=str(task_id or "").strip().upper(),
+    ) or {}
     observation = compare_shadow_decisions(
         project=project,
         task_id=task_id,
         snapshot=snapshot,
         mission=mission,
+        scope_verdict=scope_verdict,
     )
     receipt = recorder(observation, project=project, actor=actor)
     if receipt.get("recorded") is not True:
@@ -302,9 +340,14 @@ def run_shadow_batch(
     *,
     project: str,
     actor: str,
+    scope_authority: Mapping[str, Any] | None,
+    scope_project: str = "",
     journal: MissionJournalRepository = default_mission_journal_repository,
     hydrator: Callable[..., Mapping[str, Any]] = hydrate_mission_snapshot,
     recorder: Callable[..., Mapping[str, Any]] = record_shadow_observation,
+    scope_validator: Callable[..., Mapping[str, Any]] = (
+        autopilot_scopes.validate_autopilot_scope_authority
+    ),
 ) -> dict[str, Any]:
     """Run one bounded comparison per supplied task and summarize truthfully."""
     rows = [
@@ -312,9 +355,12 @@ def run_shadow_batch(
             task_id,
             project=project,
             actor=actor,
+            scope_authority=scope_authority,
+            scope_project=scope_project,
             journal=journal,
             hydrator=hydrator,
             recorder=recorder,
+            scope_validator=scope_validator,
         )
         for task_id in dict.fromkeys(
             str(value or "").strip().upper() for value in task_ids
