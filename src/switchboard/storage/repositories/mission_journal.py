@@ -31,6 +31,7 @@ EVENT_TYPES = frozenset({
     "execution_ended",
     "runner_ended",
     "agent_yielded",
+    "human_requested",
     "human_answered",
     "observation_due",
     "terminal_provenance_persisted",
@@ -42,6 +43,7 @@ EVENT_SOURCE_PLANES = {
     "execution_ended": "capacity",
     "runner_ended": "capacity",
     "agent_yielded": "coordination",
+    "human_requested": "coordination",
     "human_answered": "coordination",
     "observation_due": "coordination",
     "terminal_provenance_persisted": "coordination",
@@ -69,6 +71,7 @@ EVENT_PAYLOAD_KEYS = {
         "outcome", "requested_role", "observed_through",
         "latest_sequence_at_yield", "cursor_current",
     }),
+    "human_requested": frozenset({"human_request_id", "reason_code"}),
     "human_answered": frozenset({"human_request_id", "answer_ref"}),
     "observation_due": frozenset({"wait_started_at", "due_at"}),
     "terminal_provenance_persisted": frozenset({
@@ -337,6 +340,129 @@ class MissionJournalRepository:
                 (project, task_id, cursor, page_size),
             ).fetchall()
         return [self._event_from_row(row) for row in rows]
+
+    def record_human_requested_in(
+        self,
+        connection: sqlite3.Connection,
+        task_id: str,
+        *,
+        project: str,
+        human_request_id: str,
+        reason_code: str,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Append the request fact and park its mission in one transaction.
+
+        The caller owns ``connection`` and its transaction.  This lets the
+        authenticated Human closeout store the authoritative attention request,
+        journal fact, and HUMAN pointer together without giving the mission
+        journal authority to create or interpret a Needs-you request.
+        """
+        exact_task_id = str(task_id or "").strip().upper()
+        exact_request_id = str(human_request_id or "").strip()
+        exact_reason = str(reason_code or "").strip()
+        if not exact_task_id or not exact_request_id or not exact_reason:
+            raise MissionJournalError(
+                "human_request_identity_required",
+                "task, attention request, and reason references are required",
+            )
+        item = connection.execute(
+            "SELECT * FROM mission_items WHERE project_id=? AND task_id=?",
+            (project, exact_task_id),
+        ).fetchone()
+        if item is None:
+            return {
+                "recorded": False,
+                "reason": "mission_not_found",
+                "task_id": exact_task_id,
+            }
+        if str(item["state"]) == "DONE":
+            return {
+                "recorded": False,
+                "reason": "mission_terminal",
+                "task_id": exact_task_id,
+            }
+        current_request_id = str(item["human_request_id"] or "").strip()
+        if (
+            str(item["state"]) == "HUMAN"
+            and current_request_id
+            and current_request_id != exact_request_id
+        ):
+            raise MissionJournalError(
+                "human_request_conflict",
+                "mission is already parked on a different Human request",
+            )
+        timestamp = time.time() if now is None else now
+        event = self._append_event_in(
+            connection,
+            exact_task_id,
+            project=project,
+            event_type="human_requested",
+            source_plane="coordination",
+            idempotency_key=f"human_requested:{exact_request_id}",
+            occurred_at=timestamp,
+            pr_number=None,
+            head_sha=None,
+            generation=None,
+            execution_id=None,
+            external_ref=exact_request_id,
+            payload={
+                "human_request_id": exact_request_id,
+                "reason_code": exact_reason,
+            },
+        )
+        if str(item["state"]) != "HUMAN" or current_request_id != exact_request_id:
+            updated = connection.execute(
+                "UPDATE mission_items SET state='HUMAN',human_request_id=?,"
+                "version=version+1,updated_at=? "
+                "WHERE project_id=? AND task_id=? AND version=? AND state!='DONE'",
+                (
+                    exact_request_id,
+                    timestamp,
+                    project,
+                    exact_task_id,
+                    int(item["version"]),
+                ),
+            )
+            if updated.rowcount != 1:
+                raise MissionJournalError(
+                    "stale_row_version",
+                    "mission changed while the Human request was being recorded",
+                )
+        mission = self._item_in(connection, exact_task_id, project) or {}
+        return {
+            "recorded": True,
+            "event_created": bool(event.get("created")),
+            "event_id": event.get("event_id"),
+            "state": str(mission.get("state") or ""),
+            "human_request_id": str(mission.get("human_request_id") or ""),
+            "task_id": exact_task_id,
+        }
+
+    def record_human_requested(
+        self,
+        task_id: str,
+        *,
+        project: str,
+        human_request_id: str,
+        reason_code: str,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Standalone transaction wrapper for request-side adapters and tests."""
+
+        def write() -> dict[str, Any]:
+            with self._connection(project) as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                return self.record_human_requested_in(
+                    connection,
+                    task_id,
+                    project=project,
+                    human_request_id=human_request_id,
+                    reason_code=reason_code,
+                    now=now,
+                )
+
+        return self._write_through(project, write)
 
     def yield_execution(
         self,
@@ -1016,6 +1142,17 @@ class MissionJournalRepository:
             ):
                 raise MissionJournalError(
                     "invalid_event_cursor", "cursor_current must be boolean",
+                )
+        if event_type == "human_requested":
+            request_id = detail.get("human_request_id")
+            if not (
+                nonempty_string(request_id)
+                and nonempty_string(detail.get("reason_code"))
+                and external_ref == request_id
+            ):
+                raise MissionJournalError(
+                    "human_request_reference_required",
+                    "human_requested requires one exact request and reason reference",
                 )
         if event_type == "human_answered" and not (
             nonempty_string(detail.get("human_request_id"))

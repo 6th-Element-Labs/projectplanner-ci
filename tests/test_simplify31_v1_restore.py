@@ -28,6 +28,7 @@ for staged_v4 in (
 for passive_contract in (
     "src/switchboard/application/commands/mission_journal.py",
     "src/switchboard/application/commands/capacity_mission_events.py",
+    "src/switchboard/application/commands/human_blocker.py",
     "src/switchboard/storage/repositories/mission_journal.py",
 ):
     assert (Path(ROOT) / passive_contract).is_file(), passive_contract
@@ -45,6 +46,9 @@ passive_repository = read(
 )
 capacity_projection = read(
     "src/switchboard/application/commands/capacity_mission_events.py"
+)
+human_request_projection = read(
+    "src/switchboard/application/commands/human_blocker.py"
 )
 github_projection = read(
     "src/switchboard/application/commands/github_mission_events.py"
@@ -95,10 +99,14 @@ assert "make_runner_lease_due" not in passive_repository
 assert passive_commands.count("make_runner_lease_due") == 1
 assert "expected_identity=identity" in passive_commands
 assert "run_v4_tick" not in passive_commands
+assert "mission_bot_v4" not in human_request_projection
+assert "run_scoped_mission_tick" not in human_request_projection
+assert "start_task(" not in human_request_projection
 
 staged_paths = {
     (Path(ROOT) / "src/switchboard/application/commands/mission_journal.py").resolve(),
     (Path(ROOT) / "src/switchboard/application/commands/capacity_mission_events.py").resolve(),
+    (Path(ROOT) / "src/switchboard/application/commands/human_blocker.py").resolve(),
     (Path(ROOT) / "src/switchboard/application/commands/github_mission_events.py").resolve(),
     (Path(ROOT) / "src/switchboard/application/queries/mission_context.py").resolve(),
     (Path(ROOT) / "src/switchboard/mcp/tools/mission.py").resolve(),

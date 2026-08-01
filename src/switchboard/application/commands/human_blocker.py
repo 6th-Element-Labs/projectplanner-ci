@@ -21,6 +21,9 @@ from switchboard.domain.completion.human_closeout import (
 from switchboard.domain.mission_bot.facts import AGENT_PROVENANCE_BINDINGS
 from switchboard.storage.repositories import attention as attention_repo
 from switchboard.storage.repositories import work_sessions as work_sessions_repo
+from switchboard.storage.repositories.mission_journal import (
+    default_mission_journal_repository,
+)
 
 HUMAN_BLOCKER_TOOL = "record_human_blocker"
 #: Canonical Mission Bot name for the same agent-authored sticky receipt.
@@ -346,12 +349,22 @@ def promote_human_blocker(
 
     def write():
         with attention_repo._conn(project) as c:
-            return attention_repo.create_attention_request_in(
+            attention = attention_repo.create_attention_request_in(
                 c, request_data, actor=actor, project=project,
             )
+            request = _map(attention.get("request"))
+            mission = default_mission_journal_repository.record_human_requested_in(
+                c,
+                task_id,
+                project=project,
+                human_request_id=_text(request.get("request_id")),
+                reason_code=reason,
+            )
+            return {**attention, "mission": mission}
 
     attention = attention_repo._write_through(project, write)
     request = _map(attention.get("request"))
+    mission = _map(attention.get("mission"))
     return {
         "schema": RESULT_SCHEMA,
         "recorded": True,
@@ -360,6 +373,7 @@ def promote_human_blocker(
         "work_session_id": work_session_id,
         "board_status": "Blocked",
         "reason": reason,
+        "mission": mission,
         "attention_request_id": request.get("request_id"),
         "attention": attention,
         "idempotent_replay": bool(attention.get("idempotent_replay")),
