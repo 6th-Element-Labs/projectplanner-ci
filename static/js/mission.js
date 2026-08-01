@@ -266,7 +266,12 @@
             const data = await res.json().catch(() => ({}));
             if (!res.ok || data.error) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
             await this.loadAutopilotScopes(deliverableId);
-            await this.refreshMissionPage();
+            // Autopilot is operated from the explicitly-opened work panel. Keep
+            // that context open after the state transition instead of bouncing
+            // the operator back to the summary-first landing view.
+            await this.loadMissionStatus(deliverableId);
+            this._missionDetailLoaded = true;
+            this.renderMissionPage();
         } catch (e) {
             if (flash) { flash.className = 'small text-danger'; flash.textContent = `Autopilot failed: ${e.message}`; }
             else window.alert(`Autopilot failed: ${e.message}`);

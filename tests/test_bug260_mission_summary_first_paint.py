@@ -1,9 +1,6 @@
 """BUG-260 regression: Deliverables first paint and polling stay compact."""
 
-from pathlib import Path
-
-
-ROOT = Path(__file__).resolve().parents[1]
+from path_setup import ROOT
 MISSION_JS = (ROOT / "static/js/mission.js").read_text()
 ROUTER = (ROOT / "src/switchboard/api/routers/deliverables.py").read_text()
 REPOSITORY = (ROOT / "src/switchboard/storage/repositories/deliverables.py").read_text()

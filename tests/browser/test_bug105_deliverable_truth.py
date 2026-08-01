@@ -148,6 +148,7 @@ try:
           };
         """)
         page.goto(base + f"/?project=maxwell&deliverable={deliverable_id}#tab-mission")
+        page.locator("#mission-open-work").click()
         ledger = page.locator('[data-mission-work-ledger="all-linked-tasks"]')
         ledger.wait_for(state="visible")
         assert page.locator("#mission-detail").get_attribute("open") is None

@@ -20,6 +20,7 @@
 ## Explicitly **not** day-one (stay on monolith)
 
 - `POST /api/deliverables` (create), archive, outcome
+- `GET /api/deliverables/{deliverable_id}/mission_summary` (monolith-only compact UI projection)
 - Milestone / task_link mutate
 - `POST …/coordinator_tick`, `POST …/mission_brief`, `PATCH …/narrative`
 - Breakdown create / approve / reject / defer / patch

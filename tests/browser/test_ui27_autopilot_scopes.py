@@ -95,6 +95,7 @@ try:
           };
         """)
         page.goto(base + "/?project=maxwell&deliverable=ui27-browser#tab-mission")
+        page.locator("#mission-open-map").click()
         page.wait_for_selector('[data-autopilot-action="start"][data-autopilot-scope="deliverable"]')
 
         page.locator('[data-autopilot-action="start"][data-autopilot-scope="deliverable"]').click()
@@ -127,7 +128,8 @@ try:
             # durable across navigation and avoids coupling the contract test to
             # Bootstrap's non-contractual fade timing.
             page.reload(wait_until="domcontentloaded")
-            page.locator('[data-mission-view="map"]').click()
+            page.locator("#mission-open-map").click()
+            page.wait_for_selector('[data-mission-view="map"].active')
             page.wait_for_selector(f'.mission-dag-node[data-linked-task="{task_id}"]')
         scopes = page.evaluate("""async () => (await (await fetch(
           'api/deliverables/ui27-browser/autopilot')).json()).scopes""")

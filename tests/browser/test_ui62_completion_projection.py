@@ -253,6 +253,7 @@ try:
 
         # Deliverable-scoped work ledger consumes the same projection.
         page.goto(base + "/?project=maxwell&deliverable=ui62-browser#tab-mission")
+        page.locator("#mission-open-work").click()
         page.wait_for_selector(f'[data-mission-task-row="{route_810_id}"]')
         assert "remediation" in page.locator(
             f'[data-mission-task-row="{route_810_id}"]').inner_text().lower()
