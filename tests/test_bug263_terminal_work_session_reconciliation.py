@@ -14,8 +14,8 @@ def database() -> sqlite3.Connection:
     c.row_factory = sqlite3.Row
     c.executescript("""
         CREATE TABLE task_claims (
-            id TEXT PRIMARY KEY, task_id TEXT, agent_id TEXT,
-            principal_id TEXT, status TEXT, abandon_reason TEXT
+            id TEXT PRIMARY KEY, task_id TEXT, agent_id TEXT, status TEXT,
+            abandon_reason TEXT
         );
         CREATE TABLE resource_leases (
             resource_type TEXT, task_id TEXT, agent_id TEXT, released_at REAL
@@ -56,27 +56,17 @@ def database() -> sqlite3.Connection:
 
 def add_attempt(c: sqlite3.Connection, suffix: str, *, claim_status: str,
                 runner_status: str, terminalized_by: str,
-                exact: bool = True, role: str = "remediation",
-                late_bound_direct: bool = False,
-                direct_principal_matches: bool = True) -> None:
+                exact: bool = True, role: str = "remediation") -> None:
     claim_id = f"claim-{suffix}"
     runner_id = f"run-{suffix}"
     ws_runner_id = runner_id if exact else "run-someone-else"
     agent_id = f"agent/{suffix}"
-    direct_principal = f"direct-session/{runner_id}"
-    claim_principal = (direct_principal if late_bound_direct
-                       else f"principal/{suffix}")
-    ws_principal = (
-        direct_principal
-        if direct_principal_matches
-        else "direct-session/run-someone-else"
-    ) if late_bound_direct else f"principal/{suffix}"
-    c.execute("INSERT INTO task_claims VALUES (?,?,?,?,?,?)", (
-        claim_id, "BUG-263", agent_id, claim_principal, claim_status, None,
+    c.execute("INSERT INTO task_claims VALUES (?,?,?,?,?)", (
+        claim_id, "BUG-263", agent_id, claim_status, None,
     ))
     c.execute(
         "INSERT INTO work_sessions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
-            f"ws-{suffix}", "BUG-263", claim_id, agent_id, ws_principal,
+            f"ws-{suffix}", "BUG-263", claim_id, agent_id, f"principal/{suffix}",
             ws_runner_id, "6th-Element-Labs/projectplanner", "codex/BUG-263",
             "a" * 40, f"/tmp/{suffix}", "", "active", 1, None, 1, "",
         ))
@@ -84,12 +74,10 @@ def add_attempt(c: sqlite3.Connection, suffix: str, *, claim_status: str,
         "execution_role": role,
         "terminalized_by": terminalized_by,
         "work_session_id": f"ws-{suffix}",
-        "lease_surrender": (
-            {} if late_bound_direct else {"claim_id": claim_id}),
+        "lease_surrender": {"claim_id": claim_id},
     }
     c.execute("INSERT INTO runner_sessions VALUES (?,?,?,?,?,?,?,?,?)", (
-        runner_id, "BUG-263", None if late_bound_direct else claim_id,
-        agent_id, runner_status, 1, 60,
+        runner_id, "BUG-263", claim_id, agent_id, runner_status, 1, 60,
         f"principal/{suffix}", json.dumps(metadata),
     ))
 
@@ -112,14 +100,9 @@ add_attempt(c, "active", claim_status="active", runner_status="exited",
             terminalized_by="host_supervisor")
 add_attempt(c, "mismatch", claim_status="completed", runner_status="exited",
             terminalized_by="host_supervisor", exact=False)
-add_attempt(c, "late-direct", claim_status="completed", runner_status="killed",
-            terminalized_by="", late_bound_direct=True)
-add_attempt(c, "late-direct-mismatch", claim_status="completed",
-            runner_status="killed", terminalized_by="",
-            late_bound_direct=True, direct_principal_matches=False)
 reconciled = runner._reconcile_terminal_bound_work_sessions_in(
     c, "BUG-263", "host/test", 100.0)
-assert len(reconciled) == 5
+assert len(reconciled) == 4
 statuses = dict(c.execute(
     "SELECT work_session_id,status FROM work_sessions").fetchall())
 assert statuses["ws-completed"] == "completed"
@@ -128,12 +111,10 @@ assert statuses["ws-completed-expired"] == "archived"
 assert statuses["ws-abandoned"] == "expired"
 assert statuses["ws-active"] == "active"
 assert statuses["ws-mismatch"] == "active"
-assert statuses["ws-late-direct"] == "completed"
-assert statuses["ws-late-direct-mismatch"] == "active"
 assert c.execute(
     "SELECT count(*) FROM activity "
     "WHERE kind='work_session.reconciled_by_terminal_runner'",
-).fetchone()[0] == 5
+).fetchone()[0] == 4
 assert runner._reconcile_terminal_bound_work_sessions_in(
     c, "BUG-263", "host/test", 101.0) == []
 

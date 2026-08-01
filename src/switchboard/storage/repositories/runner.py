@@ -1540,13 +1540,12 @@ def _reconcile_terminal_bound_work_sessions_in(
         rows = c.execute(
             "SELECT ws.work_session_id,ws.task_id AS ws_task_id,"
             "ws.claim_id AS ws_claim_id,ws.agent_id AS ws_agent_id,"
-            "ws.principal_id AS ws_principal_id,"
             "ws.runner_session_id AS ws_runner_session_id,"
             "r.runner_session_id,r.task_id AS runner_task_id,"
             "r.claim_id AS runner_claim_id,r.agent_id AS runner_agent_id,"
             "r.status AS runner_status,r.metadata_json,"
             "tc.task_id AS claim_task_id,tc.agent_id AS claim_agent_id,"
-            "tc.principal_id AS claim_principal_id,tc.status AS claim_status "
+            "tc.status AS claim_status "
             "FROM work_sessions ws "
             "JOIN runner_sessions r ON r.runner_session_id=ws.runner_session_id "
             "JOIN task_claims tc ON tc.id=ws.claim_id "
@@ -1567,19 +1566,8 @@ def _reconcile_terminal_bound_work_sessions_in(
         runner_session_id = str(item.get("runner_session_id") or "")
         metadata = _json_obj(item.get("metadata_json") or "{}", {})
         surrender = metadata.get("lease_surrender") or {}
-        direct_principal = f"direct-session/{runner_session_id}"
-        # Connect registers capacity before the worker can claim.  A fast
-        # review/merge generation can therefore finish without ever copying
-        # the later claim id back onto runner_sessions.  The server-minted
-        # direct-session principal is the exact reverse binding for that race;
-        # task/agent/runner/claim agreement below remains mandatory.
-        exact_direct_session_claim = (
-            str(item.get("ws_principal_id") or "") == direct_principal
-            and str(item.get("claim_principal_id") or "") == direct_principal
-        )
         exact_claim = str(item.get("runner_claim_id") or "") == claim_id \
-            or str(surrender.get("claim_id") or "") == claim_id \
-            or exact_direct_session_claim
+            or str(surrender.get("claim_id") or "") == claim_id
         exact_tuple = (
             work_session_id
             and claim_id
