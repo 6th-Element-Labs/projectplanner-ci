@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from switchboard.application.commands import task_execution
+from switchboard.application.commands import capacity_mission_events, task_execution
 from switchboard.application.mission_bot_v4.worker import (
     ScopedMissionWorkerPorts,
     tick_scoped_mission,
@@ -111,20 +111,62 @@ def run_scoped_mission_tick(
     journal: MissionJournalRepository = default_mission_journal_repository,
     store_mod: Any = None,
 ) -> dict[str, Any]:
-    """Run exactly one opt-in tick; no default or daemon wiring exists."""
-    return tick_scoped_mission(
+    """Project durable Capacity facts, then run one opt-in scoped tick.
+
+    No daemon or production cutover calls this function yet.  Projection is
+    allowed only after the exact W2 scope validates, and a broken Capacity read
+    returns a named red signal instead of making the pager look idle.
+    """
+    ports = production_ports(
+        actor=actor,
+        agent_id=agent_id,
+        scope_project=scope_project,
+        journal=journal,
+        store_mod=store_mod,
+    )
+    authority = ports.validate_scope(
+        dict(scope_authority),
+        project=project,
+        task_project=project,
+        task_id=task_id,
+    ) or {}
+    projection: dict[str, Any] | None = None
+    if authority.get("allowed") is True:
+        before_projection = journal.get_item(task_id, project=project) or {}
+        before_sequence = int(before_projection.get("latest_sequence") or 0)
+        try:
+            projection = capacity_mission_events.project_capacity_events(
+                project=project,
+                task_id=task_id,
+                repository=journal,
+                list_wakes=getattr(store_mod, "list_wake_intents", None),
+                list_runners=getattr(store_mod, "list_runner_sessions", None),
+            )
+        except capacity_mission_events.CapacityMissionProjectionError as exc:
+            after_projection = journal.get_item(task_id, project=project) or {}
+            projected_events = max(
+                0,
+                int(after_projection.get("latest_sequence") or 0) - before_sequence,
+            )
+            return {
+                "schema": "switchboard.mission_worker_tick.v4",
+                "task_id": task_id,
+                "action": "wait",
+                "reason": "capacity_projection_failed",
+                "mutations": projected_events,
+                "partial_projection": projected_events > 0,
+                **exc.as_dict(),
+            }
+    result = tick_scoped_mission(
         task_id,
         project=project,
         scope_authority=scope_authority,
         actor=actor,
-        ports=production_ports(
-            actor=actor,
-            agent_id=agent_id,
-            scope_project=scope_project,
-            journal=journal,
-            store_mod=store_mod,
-        ),
+        ports=ports,
     )
+    if projection is not None:
+        result["capacity_projection"] = projection
+    return result
 
 
 __all__ = ["production_ports", "run_scoped_mission_tick"]

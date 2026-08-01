@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from typing import Any, Callable, Iterator, Mapping
 
 from db.connection import _conn, _write_through
+from switchboard.domain.coordination.terminal import TERMINAL_WAKE_STATUSES
 from switchboard.domain.execution_liveness import TERMINAL_EXECUTION_STATES
 
 STATES = frozenset({"ACTIVE", "WAITING", "HUMAN", "DONE"})
@@ -27,6 +28,7 @@ EVENT_TYPES = frozenset({
     "mission_started",
     "task_changed",
     "github_changed",
+    "execution_ended",
     "runner_ended",
     "agent_yielded",
     "human_answered",
@@ -37,6 +39,7 @@ EVENT_SOURCE_PLANES = {
     "mission_started": "coordination",
     "task_changed": "coordination",
     "github_changed": "communication",
+    "execution_ended": "capacity",
     "runner_ended": "capacity",
     "agent_yielded": "coordination",
     "human_answered": "coordination",
@@ -55,6 +58,9 @@ EVENT_PAYLOAD_KEYS = {
         "object_id", "material_fingerprint", "status_context", "status_state",
         "target_url", "review_id", "review_state", "queue_entry_id",
         "queue_state", "merge_group_sha", "policy_ref",
+    }),
+    "execution_ended": frozenset({
+        "wake_id", "terminal_status", "reason_code", "receipt_ref",
     }),
     "runner_ended": frozenset({
         "runner_session_id", "terminal_status", "reason_code", "receipt_ref",
@@ -938,12 +944,36 @@ class MissionJournalRepository:
                 "github_identity_required",
                 "github_changed requires provider object or delivery identity",
             )
-        if event_type in {"runner_ended", "agent_yielded"}:
+        if event_type in {"execution_ended", "runner_ended", "agent_yielded"}:
             if not nonempty_string(execution_id) or not positive_int(generation):
                 raise MissionJournalError(
                     "exact_execution_identity_required",
                     f"{event_type} requires execution_id and positive generation",
                 )
+        if event_type == "execution_ended":
+            if head_sha:
+                raise MissionJournalError(
+                    "stale_execution_head_forbidden",
+                    "execution_ended must not carry the failed wake's source head",
+                )
+            if not nonempty_string(detail.get("wake_id")):
+                raise MissionJournalError(
+                    "wake_reference_required",
+                    "execution_ended requires a nonempty wake reference",
+                )
+            if detail.get("terminal_status") not in (
+                TERMINAL_WAKE_STATUSES - {"completed"}
+            ):
+                raise MissionJournalError(
+                    "invalid_wake_terminal_status",
+                    "execution_ended requires a failed or cancelled wake",
+                )
+            for field in ("reason_code", "receipt_ref"):
+                if not nonempty_string(detail.get(field)):
+                    raise MissionJournalError(
+                        "capacity_failure_reference_required",
+                        f"execution_ended requires a nonempty {field}",
+                    )
         if event_type == "runner_ended":
             if not nonempty_string(detail.get("runner_session_id")):
                 raise MissionJournalError(

@@ -27,6 +27,7 @@ for staged_v4 in (
 
 for passive_contract in (
     "src/switchboard/application/commands/mission_journal.py",
+    "src/switchboard/application/commands/capacity_mission_events.py",
     "src/switchboard/storage/repositories/mission_journal.py",
 ):
     assert (Path(ROOT) / passive_contract).is_file(), passive_contract
@@ -41,6 +42,9 @@ passive_commands = read(
 )
 passive_repository = read(
     "src/switchboard/storage/repositories/mission_journal.py"
+)
+capacity_projection = read(
+    "src/switchboard/application/commands/capacity_mission_events.py"
 )
 github_projection = read(
     "src/switchboard/application/commands/github_mission_events.py"
@@ -67,6 +71,7 @@ for forbidden_effect in (
 ):
     assert forbidden_effect not in passive_commands
     assert forbidden_effect not in passive_repository
+    assert forbidden_effect not in capacity_projection
     assert forbidden_effect not in github_projection
 
 for forbidden_projection_effect in (
@@ -93,6 +98,7 @@ assert "run_v4_tick" not in passive_commands
 
 staged_paths = {
     (Path(ROOT) / "src/switchboard/application/commands/mission_journal.py").resolve(),
+    (Path(ROOT) / "src/switchboard/application/commands/capacity_mission_events.py").resolve(),
     (Path(ROOT) / "src/switchboard/application/commands/github_mission_events.py").resolve(),
     (Path(ROOT) / "src/switchboard/application/queries/mission_context.py").resolve(),
     (Path(ROOT) / "src/switchboard/mcp/tools/mission.py").resolve(),
