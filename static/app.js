@@ -1948,14 +1948,7 @@ const TeepPlan = {
         // checking a task done) — only an explicit click should collapse one.
         const openIds = new Set(Array.from(el.querySelectorAll('.collapse.show')).map((c) => c.id));
         const hideDone = this.isHideDone();
-        const allTasks = this.filtered(true);
-        const availablePhases = this.PHASES.filter((phase) => allTasks.some((task) => task.phase === phase));
-        if (!this._planPhaseFilter || (this._planPhaseFilter !== 'All' && !availablePhases.includes(this._planPhaseFilter))) {
-            this._planPhaseFilter = 'All';
-        }
-        const tasks = this._planPhaseFilter === 'All'
-            ? allTasks
-            : allTasks.filter((task) => task.phase === this._planPhaseFilter);
+        const tasks = this.filtered(true);
         const mode = this.groupMode();                 // 'workstream' | 'assignee'
 
         const groups = {};
@@ -2066,11 +2059,8 @@ const TeepPlan = {
         }).join('');
 
         const hint = (hideDone && tDone) ? ` · hiding ${tDone} done` : '';
-        const phaseButtons = ['All', ...availablePhases].map((phase) =>
-            `<button class="tk-plan-chip${this._planPhaseFilter === phase ? ' active' : ''}" type="button" data-plan-phase="${this.esc(phase)}">${this.esc(phase)}</button>`).join('');
         const head = `<div class="tk-plan-epics-toolbar">
                 <div class="d-flex align-items-baseline gap-2"><h3 class="m-0">Epics</h3><span class="text-secondary small">${keys.length} ${mode === 'assignee' ? 'people' : 'active'} · ${tTotal} tasks · ${tDone} done${hint}</span></div>
-                <div class="tk-plan-phase-filters" aria-label="Filter epics by phase">${phaseButtons}</div>
             </div>`;
         el.innerHTML = keys.length
             ? (head + `<div class="card tk-plan-epics-card">${cards}</div>`)
@@ -2079,12 +2069,6 @@ const TeepPlan = {
         if (groupSwitch) groupSwitch.checked = mode === 'assignee';
         const hideSwitch = document.getElementById('plan-hide-done');
         if (hideSwitch) hideSwitch.checked = hideDone;
-        el.querySelectorAll('[data-plan-phase]').forEach((button) => {
-            button.addEventListener('click', () => {
-                this._planPhaseFilter = button.getAttribute('data-plan-phase') || 'All';
-                this.renderEpics();
-            });
-        });
     },
 
     taskRow(t) {

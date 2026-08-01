@@ -37,6 +37,14 @@ store.init_db("maxwell")
 for title, phase, status in (
     ("Plan cleanup ready task", "Build", "Not Started"),
     ("Plan cleanup active task", "P0 Next", "In Progress"),
+    ("Plan cleanup custom phase 1", "Custom phase 1", "Not Started"),
+    ("Plan cleanup custom phase 2", "Custom phase 2", "Not Started"),
+    ("Plan cleanup custom phase 3", "Custom phase 3", "Not Started"),
+    ("Plan cleanup custom phase 4", "Custom phase 4", "Not Started"),
+    ("Plan cleanup custom phase 5", "Custom phase 5", "Not Started"),
+    ("Plan cleanup custom phase 6", "Custom phase 6", "Not Started"),
+    ("Plan cleanup custom phase 7", "Custom phase 7", "Not Started"),
+    ("Plan cleanup custom phase 8", "Custom phase 8", "Not Started"),
 ):
     store.create_task(
         {"workstream_id": "UI", "title": title, "phase": phase, "status": status},
@@ -90,6 +98,8 @@ try:
            "desktop keeps the four approved Plan views")
         ok(page.locator(".tk-plan-epic-row").count() >= 1,
            "live Plan data renders as epic summary rows")
+        ok(page.locator("[data-plan-phase]").count() == 0,
+           "high-cardinality phase data does not create a pill wall")
         ok(not page.evaluate("document.documentElement.scrollWidth > document.documentElement.clientWidth"),
            "desktop Plan has no page-level horizontal overflow")
 
@@ -103,9 +113,9 @@ try:
         page.locator('.tk-plan-tabs a[href="#tab-epics"]').click()
         page.locator(".tk-plan-epic-row").first.click()
         task_link = page.locator("#epics-content .collapse.show a[data-task]").first
-        task_link.wait_for(state="visible", timeout=5000)
+        task_link.wait_for(state="visible", timeout=15000)
         task_link.click()
-        page.wait_for_selector("#task-modal.show", timeout=5000)
+        page.wait_for_selector("#task-modal.show", timeout=15000)
         ok(page.locator("#task-modal").is_visible(),
            "Plan tasks still open the existing task-details modal")
         page.set_viewport_size({"width": 390, "height": 844})

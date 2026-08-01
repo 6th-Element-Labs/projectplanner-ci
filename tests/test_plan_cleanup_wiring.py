@@ -37,8 +37,8 @@ for hook in ("epics-content", "board", "gantt", "milestones-table", "path-table"
 
 ok("tk-plan-epic-row" in APP and "tk-plan-progress" in APP,
    "live workstream data renders in the approved summary-row treatment")
-ok("data-plan-phase" in APP and "_planPhaseFilter" in APP,
-   "phase chips filter the live Plan data")
+ok("data-plan-phase" not in APP and "tk-plan-phase-filters" not in CSS,
+   "historical phase taxonomy does not create a second navigation row")
 ok("setPlanGroups(show)" in APP, "View options can expand and collapse the existing task groups")
 ok("plan-milestone-summary" in APP and "plan-path-summary" in APP,
    "Milestone and critical-path counts come from the live plan")
