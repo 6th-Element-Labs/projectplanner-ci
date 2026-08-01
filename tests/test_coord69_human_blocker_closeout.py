@@ -282,6 +282,12 @@ try:
             (json.dumps({
                 **(headless_session.get("env") or {}),
                 "assignment_exact_head_sha": "",
+                # Work Session metadata is repository evidence, not Capacity
+                # identity.  Deliberately make it stale to prove the fence
+                # reads the canonical runner generation instead.
+                "execution_id": "stale-work-session-execution",
+                "execution_generation": 99,
+                "lease_epoch": 99,
             }), headless_session["work_session_id"]),
         )
     headless_session = store.get_work_session(
@@ -290,7 +296,16 @@ try:
     captured_identity = {}
     original_get_runner = runner_repo.get_runner_session
     original_fence_generation = task_execution.fence_task_generation
-    runner_repo.get_runner_session = lambda *args, **kwargs: {"live": True}
+    runner_repo.get_runner_session = lambda *args, **kwargs: {
+        "live": True,
+        "execution": {
+            "execution_id": f"exec-{headless_task['task_id']}",
+            "generation": 1,
+            "fence_epoch": 1,
+            "role": "implementation",
+            "head_sha": None,
+        },
+    }
 
     def capture_headless_identity(task_id, identity, **kwargs):
         captured_identity.update(identity)
@@ -311,6 +326,11 @@ try:
        "headless implementation execution can be fenced")
     ok(captured_identity.get("head_sha") == "",
        "explicit empty execution head is preserved over Work Session head")
+    ok(captured_identity.get("execution_id")
+       == f"exec-{headless_task['task_id']}"
+       and captured_identity.get("generation") == 1
+       and captured_identity.get("fence_epoch") == 1,
+       "human fence uses runner_sessions identity, not stale Work Session env")
 
     original_make_due = runner_repo.make_runner_lease_due
     runner_repo.make_runner_lease_due = lambda *args, **kwargs: {

@@ -23,6 +23,10 @@ os.environ["PM_RUNNER_DIR"] = str(tmp / "runner-state")
 
 import store  # noqa: E402
 from adapters import agent_host  # noqa: E402
+from switchboard.application.commands import mission_journal  # noqa: E402
+from switchboard.storage.repositories.mission_journal import (  # noqa: E402
+    default_mission_journal_repository,
+)
 
 
 P = "switchboard"
@@ -59,6 +63,7 @@ def make_claim(title: str):
 
 store.init_db(P)
 task, work_session = make_claim("surrender exact runner generation")
+mission_journal.create_mission(task["task_id"], project=P)
 other_task = store.create_task({
     "workstream_id": "BUG", "title": "preserve another generation",
     "status": "Not Started", "ui_impact": "no",
@@ -301,6 +306,25 @@ assert ("kill", "run-bug154-bound") == host_calls[0][:2]
 assert not any(call[:2] == ("kill", "run-bug154-review") for call in host_calls)
 assert store.get_runner_session("run-bug154-bound", project=P)["status"] == "expired"
 assert store.get_task(task["task_id"], project=P)["status"] == "In Review"
+projection = default_mission_journal_repository.project_review_handoff(
+    task["task_id"], project=P, actor="bug154-v4-projector",
+    task=store.get_task(task["task_id"], project=P),
+)
+mission = default_mission_journal_repository.get_item(task["task_id"], project=P)
+events = default_mission_journal_repository.list_events(
+    task["task_id"], project=P, after_sequence=0, limit=20,
+)
+handoffs = [event for event in events if event["event_type"] == "task_changed"]
+assert projection["projected"] is True, projection
+assert mission["requested_role"] == "review_merge", mission
+assert mission["latest_sequence"] > mission["handled_through"], mission
+assert len(handoffs) == 1, handoffs
+assert handoffs[0]["source_plane"] == "coordination", handoffs[0]
+assert handoffs[0]["pr_number"] == 154, handoffs[0]
+assert handoffs[0]["head_sha"] == HEAD, handoffs[0]
+assert handoffs[0]["execution_id"] == "run-bug154-bound", handoffs[0]
+assert handoffs[0]["payload"]["command_ref"] == \
+    "complete_claim_terminal_ack", handoffs[0]
 assert store.get_runner_session("run-bug154-other", project=P)["status"] == "running"
 fleet_live_ids = {
     row["runner_session_id"] for row in store.list_runner_sessions(

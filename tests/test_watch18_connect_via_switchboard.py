@@ -152,7 +152,7 @@ child = command[command.index("--") + 1:]
 ok(mode == "connect", "WATCH-18 wake resolves to connect")
 ok(child[0] == "codex" and "exec" not in child,
    "interactive Codex CLI is preserved")
-ok(f"mcp_servers.taikun_plan.url={json.dumps('https://plan.example.test/mcp')}"
+ok(f"mcp_servers.taikun_plan.url={json.dumps('https://plan.example.test/mcp?project=switchboard')}"
    in child
    and 'mcp_servers.taikun_plan.bearer_token_env_var="SWITCHBOARD_CONNECT_SESSION_TOKEN"'
    in child

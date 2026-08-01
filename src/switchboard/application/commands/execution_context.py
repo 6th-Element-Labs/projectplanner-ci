@@ -276,6 +276,30 @@ def with_generation(context: Mapping[str, Any], generation: int) -> dict[str, An
     return result
 
 
+def with_checkout_sha(
+    context: Mapping[str, Any], checkout_sha: str,
+) -> dict[str, Any]:
+    """Bind one server-derived checkout target without changing authority.
+
+    ``base_sha`` remains the canonical default-branch provenance used to fence
+    the project execution policy.  ``checkout_sha`` is the per-execution Git
+    target: the base for implementation, or the persisted exact PR head for
+    review/remediation.  It is covered by the context digest but deliberately
+    excluded from ``authority_digest`` because it is not project authority.
+    """
+    exact_sha = str(checkout_sha or "").strip().lower()
+    if not _SHA.fullmatch(exact_sha):
+        raise ExecutionContextError(
+            "execution_checkout_sha_invalid",
+            "an exact 40-character checkout SHA is required",
+        )
+    result = dict(context)
+    result["checkout_sha"] = exact_sha
+    result.pop("digest", None)
+    result["digest"] = _digest(result)
+    return result
+
+
 def verify_digest(context: Mapping[str, Any]) -> None:
     """Reject a context whose fields no longer agree with its own digest.
 
@@ -359,6 +383,7 @@ def require_generation_binding(
         "credential_version": int(provider.get("credential_version") or 0),
         "repository": str(context.get("repository") or ""),
         "base_sha": str(context.get("base_sha") or ""),
+        "checkout_sha": str(context.get("checkout_sha") or ""),
     }
 
 

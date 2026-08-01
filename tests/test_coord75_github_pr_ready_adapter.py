@@ -27,7 +27,12 @@ class GitHubPrReadyAdapterTest(unittest.TestCase):
         return adapter, calls
 
     def test_already_ready_is_read_only(self):
-        adapter, calls = self.adapter([(200, {"draft": False, "node_id": "PR_x"})])
+        adapter, calls = self.adapter([(200, {
+            "draft": False,
+            "node_id": "PR_x",
+            "html_url": "https://github.com/6th-Element-Labs/projectplanner/pull/930",
+            "head": {"sha": "a" * 40, "ref": "codex/COORD-111"},
+        })])
         result = adapter(
             {"pr_number": 930},
             project="switchboard",
@@ -35,6 +40,8 @@ class GitHubPrReadyAdapterTest(unittest.TestCase):
         )
         self.assertEqual(result["status"], "already_ready")
         self.assertFalse(result["is_draft"])
+        self.assertEqual(result["head_sha"], "a" * 40)
+        self.assertEqual(result["head_ref"], "codex/COORD-111")
         self.assertEqual(len(calls), 1)
         self.assertIn("/6th-Element-Labs/projectplanner/pulls/930", calls[0][1])
 
@@ -42,7 +49,12 @@ class GitHubPrReadyAdapterTest(unittest.TestCase):
         adapter, calls = self.adapter([
             (200, {"draft": True, "node_id": "PR_node"}),
             (200, {"data": {"markPullRequestReadyForReview": {}}}),
-            (200, {"draft": False, "node_id": "PR_node"}),
+            (200, {
+                "draft": False,
+                "node_id": "PR_node",
+                "html_url": "https://github.com/6th-Element-Labs/projectplanner/pull/930",
+                "head": {"sha": "b" * 40, "ref": "codex/COORD-111"},
+            }),
         ])
         result = adapter(
             {"pr_url": "https://github.com/6th-Element-Labs/projectplanner/pull/930"},
@@ -51,6 +63,7 @@ class GitHubPrReadyAdapterTest(unittest.TestCase):
         )
         self.assertEqual(result["status"], "marked_ready")
         self.assertFalse(result["is_draft"])
+        self.assertEqual(result["head_sha"], "b" * 40)
         self.assertEqual([call[0] for call in calls], ["GET", "POST", "GET"])
         self.assertEqual(
             calls[1][3]["variables"]["pullRequestId"],

@@ -79,6 +79,7 @@ def create_router(*, resolve_project: ProjectResolver,
             )
             if direct_task or connect:
                 selector = dict(wake.get("selector") or {})
+                result = body.get("result")
                 require_direct_task_completion_authority(
                     principal,
                     {
@@ -92,6 +93,10 @@ def create_router(*, resolve_project: ProjectResolver,
                             wake.get("task_id") or selector.get("task_id") or ""),
                         "agent_id": str(
                             body.get("agent_id") or selector.get("agent_id") or ""),
+                        "started": (
+                            result.get("started")
+                            if isinstance(result, dict) else None
+                        ),
                     },
                     project,
                 )

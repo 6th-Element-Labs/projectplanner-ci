@@ -51,6 +51,12 @@ task = store.create_task({
         "pr_url": "https://github.com/example/projectplanner/pull/183",
     },
 }, actor="bug183-test", project=P)
+task["git_state"] = {
+    "head_sha": HEAD,
+    "branch": "codex/BUG-183-review-merge-claim",
+    "pr_number": 183,
+    "pr_url": "https://github.com/example/projectplanner/pull/183",
+}
 AGENT = f"agent/codex/{task['task_id'].lower()}"  # minted principal
 
 dispatched = connect_dispatch.enqueue_task(

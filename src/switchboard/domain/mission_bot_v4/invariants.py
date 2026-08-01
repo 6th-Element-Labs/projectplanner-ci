@@ -22,6 +22,13 @@ def active_mission_failure(
         return None
     if context.get("terminal_provenance") or context.get("runner_live"):
         return None
+    # A pending wake is Capacity request state, never C1 liveness.  It proves
+    # only that the event was already handed to start_task and Capacity still
+    # owes a terminal admission result.  Calling that interval a missing event
+    # is premature; Capacity will either register a runner or terminalize the
+    # attempt so the existing projector can append execution_ended.
+    if context.get("capacity_attempt_pending"):
+        return None
 
     handled_through = int(context.get("handled_through") or 0)
     latest_sequence = int(context.get("latest_sequence") or 0)
@@ -64,6 +71,7 @@ def active_mission_failure(
             "latest_sequence": latest_sequence,
             "runner_live": False,
             "runner_liveness_source": "runner_sessions",
+            "capacity_attempt_pending": False,
             "human_parked": False,
             "terminal_provenance": False,
         },

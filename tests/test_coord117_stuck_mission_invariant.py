@@ -8,6 +8,7 @@ from path_setup import ROOT as _ROOT  # noqa: F401
 from switchboard.application.mission_bot_v4 import (
     ScopedMissionWorkerPorts,
     assess_stuck_mission_invariant,
+    task_has_pending_capacity_attempt,
     tick_scoped_mission,
 )
 from switchboard.domain.mission_bot_v4 import (
@@ -29,6 +30,7 @@ def context(**updates):
         "task_id": TASK,
         "mission_state": "ACTIVE",
         "runner_live": False,
+        "capacity_attempt_pending": False,
         "requested_role": "implementation",
         "handled_through": 4,
         "latest_sequence": 4,
@@ -69,6 +71,7 @@ class StuckMissionInvariantTest(unittest.TestCase):
             "latest_sequence": 4,
             "runner_live": False,
             "runner_liveness_source": "runner_sessions",
+            "capacity_attempt_pending": False,
             "human_parked": False,
             "terminal_provenance": False,
         }, failure["evidence"])
@@ -102,6 +105,34 @@ class StuckMissionInvariantTest(unittest.TestCase):
             "start_task",
             decide_mission_transition(context(latest_sequence=5))["action"],
         )
+
+    def test_pending_capacity_attempt_waits_without_impersonating_liveness(self):
+        pending = context(capacity_attempt_pending=True)
+        self.assertIsNone(active_mission_failure(pending))
+        decision = decide_mission_transition(pending)
+        self.assertEqual("wait", decision["action"])
+        self.assertEqual("capacity_attempt_pending", decision["reason"])
+
+    def test_capacity_attempt_reader_excludes_expired_and_terminal_wakes(self):
+        def list_wakes(*_args, **_kwargs):
+            return [
+                {"status": "failed", "deadline": None},
+                {"status": "pending", "deadline": 99.0},
+                {"status": "claimed", "deadline": 101.0},
+            ]
+
+        self.assertTrue(task_has_pending_capacity_attempt(
+            TASK, project=PROJECT, list_wakes=list_wakes, now=100.0,
+        ))
+        self.assertFalse(task_has_pending_capacity_attempt(
+            TASK,
+            project=PROJECT,
+            list_wakes=lambda *_args, **_kwargs: [
+                {"status": "pending", "deadline": 99.0},
+                {"status": "failed", "deadline": None},
+            ],
+            now=100.0,
+        ))
 
     def test_worker_blocks_without_mutation_or_fallback_start(self):
         class Journal:
@@ -172,6 +203,7 @@ class StuckMissionInvariantTest(unittest.TestCase):
             project=PROJECT,
             journal=journal,
             has_live_execution=has_live,
+            has_pending_capacity_attempt=lambda *_args, **_kwargs: False,
         )
         self.assertFalse(gate["passed"])
         self.assertTrue(gate["release_blocked"])
@@ -183,6 +215,22 @@ class StuckMissionInvariantTest(unittest.TestCase):
             [(task_id, PROJECT) for task_id in sorted(journal.items)],
             observed,
         )
+
+    def test_release_scan_does_not_call_pending_wake_runner_liveness(self):
+        journal = FakeJournal({
+            TASK: {
+                "state": "ACTIVE", "requested_role": "implementation",
+                "handled_through": 1, "latest_sequence": 1,
+            },
+        })
+        gate = assess_stuck_mission_invariant(
+            project=PROJECT,
+            journal=journal,
+            has_live_execution=lambda *_args, **_kwargs: False,
+            has_pending_capacity_attempt=lambda *_args, **_kwargs: True,
+        )
+        self.assertTrue(gate["passed"])
+        self.assertEqual("runner_sessions", gate["runner_liveness_source"])
 
     def test_broken_capacity_read_fails_loudly(self):
         journal = FakeJournal({
@@ -200,6 +248,7 @@ class StuckMissionInvariantTest(unittest.TestCase):
                 project=PROJECT,
                 journal=journal,
                 has_live_execution=broken,
+                has_pending_capacity_attempt=lambda *_args, **_kwargs: False,
             )
 
 

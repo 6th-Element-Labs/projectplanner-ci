@@ -607,6 +607,187 @@ class MissionJournalRepository:
 
         return self._write_through(project, write)
 
+    def finalize_terminal_handoff(
+        self,
+        task_id: str,
+        *,
+        project: str,
+        execution_id: str,
+        generation: int,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Consume a terminal receipt without replaying a superseded role.
+
+        A valid agent yield or C3 completion handoff already contains the
+        coordination decision for what follows this execution.  Capacity's
+        later terminal receipt acknowledges that boundary; it must not append
+        a second generic ``runner_ended`` page that can reboot the prior head.
+        Only executions with no accepted handoff fall through to the abnormal
+        terminal-event projector.
+        """
+        exact_execution_id = str(execution_id or "").strip()
+        try:
+            exact_generation = int(generation)
+        except (TypeError, ValueError) as exc:
+            raise MissionJournalError(
+                "invalid_execution_identity",
+                "execution_id and positive generation are required",
+            ) from exc
+        if not exact_execution_id or exact_generation <= 0:
+            raise MissionJournalError(
+                "invalid_execution_identity",
+                "execution_id and positive generation are required",
+            )
+        timestamp = time.time() if now is None else now
+
+        def write() -> dict[str, Any]:
+            with self._connection(project) as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                item = connection.execute(
+                    "SELECT * FROM mission_items WHERE project_id=? AND task_id=?",
+                    (project, task_id),
+                ).fetchone()
+                if item is None:
+                    return {
+                        "accepted": False,
+                        "reason": "mission_not_found",
+                        "task_id": task_id,
+                    }
+
+                yield_row = connection.execute(
+                    "SELECT * FROM mission_events WHERE project_id=? AND task_id=? "
+                    "AND event_type='agent_yielded' AND execution_id=? "
+                    "AND generation=? ORDER BY sequence DESC LIMIT 1",
+                    (project, task_id, exact_execution_id, exact_generation),
+                ).fetchone()
+                if yield_row is not None:
+                    event = self._event_from_row(yield_row)
+                    payload = dict(event.get("payload") or {})
+                    outcome = str(payload.get("outcome") or "")
+                    requested_role = str(
+                        payload.get("requested_role")
+                        or item["requested_role"]
+                        or ""
+                    )
+                    observed_through = int(payload.get("observed_through") or 0)
+                    event_sequence = int(event["sequence"])
+                    latest = int(connection.execute(
+                        "SELECT COALESCE(MAX(sequence),0) FROM mission_events "
+                        "WHERE project_id=? AND task_id=?",
+                        (project, task_id),
+                    ).fetchone()[0])
+                    current_handled = int(item["handled_through"] or 0)
+                    if outcome == "waiting" and bool(payload.get("cursor_current")):
+                        handled = max(current_handled, event_sequence)
+                        state = "WAITING" if latest == event_sequence else "ACTIVE"
+                    else:
+                        # The yield itself is the next actionable role handoff.
+                        # Everything the agent explicitly observed is consumed;
+                        # the yield and any later event remain unhandled.
+                        handled = max(current_handled, observed_through)
+                        state = "ACTIVE"
+                    already_consumed = (
+                        outcome != "waiting" and current_handled >= event_sequence
+                    )
+                    changed = (
+                        not already_consumed
+                        and (
+                            str(item["state"] or "") != state
+                            or str(item["requested_role"] or "") != requested_role
+                            or current_handled != handled
+                        )
+                    )
+                    if changed:
+                        connection.execute(
+                            "UPDATE mission_items SET state=?,requested_role=?,"
+                            "handled_through=?,version=version+1,updated_at=? "
+                            "WHERE project_id=? AND task_id=? AND state!='DONE'",
+                            (
+                                state,
+                                requested_role,
+                                handled,
+                                timestamp,
+                                project,
+                                task_id,
+                            ),
+                        )
+                    return {
+                        "accepted": True,
+                        "reason": "agent_yield_handoff",
+                        "event_id": event.get("event_id"),
+                        "event_sequence": event_sequence,
+                        "state": state,
+                        "handled_through": handled,
+                        "requested_role": requested_role,
+                        "already_finalized": not changed,
+                    }
+
+                # C3 completion records the hard implementation/remediation to
+                # review boundary using the runner generation.  Its execution
+                # id is the physical runner id, while Capacity's lease receipt
+                # uses the execution lease id, so generation is the shared
+                # exact identity within this one-task invariant.
+                handoff_rows = connection.execute(
+                    "SELECT * FROM mission_events WHERE project_id=? AND task_id=? "
+                    "AND event_type='task_changed' AND generation=? "
+                    "ORDER BY sequence DESC",
+                    (project, task_id, exact_generation),
+                ).fetchall()
+                c3_event = None
+                for row in handoff_rows:
+                    candidate = self._event_from_row(row)
+                    if str((candidate.get("payload") or {}).get("command_ref") or "") \
+                            == "complete_claim_terminal_ack":
+                        c3_event = candidate
+                        break
+                if c3_event is not None:
+                    event_sequence = int(c3_event["sequence"])
+                    if int(item["handled_through"] or 0) >= event_sequence:
+                        return {
+                            "accepted": True,
+                            "reason": "c3_review_handoff",
+                            "event_id": c3_event.get("event_id"),
+                            "event_sequence": event_sequence,
+                            "state": str(item["state"] or ""),
+                            "handled_through": int(item["handled_through"] or 0),
+                            "requested_role": str(item["requested_role"] or ""),
+                            "already_finalized": True,
+                        }
+                    handled = max(
+                        int(item["handled_through"] or 0),
+                        event_sequence - 1,
+                    )
+                    changed = (
+                        str(item["state"] or "") != "ACTIVE"
+                        or str(item["requested_role"] or "") != "review_merge"
+                        or int(item["handled_through"] or 0) != handled
+                    )
+                    if changed:
+                        connection.execute(
+                            "UPDATE mission_items SET state='ACTIVE',"
+                            "requested_role='review_merge',handled_through=?,"
+                            "version=version+1,updated_at=? WHERE project_id=? "
+                            "AND task_id=? AND state!='DONE'",
+                            (handled, timestamp, project, task_id),
+                        )
+                    return {
+                        "accepted": True,
+                        "reason": "c3_review_handoff",
+                        "event_id": c3_event.get("event_id"),
+                        "event_sequence": event_sequence,
+                        "state": "ACTIVE",
+                        "handled_through": handled,
+                        "requested_role": "review_merge",
+                        "already_finalized": not changed,
+                    }
+                return {
+                    "accepted": False,
+                    "reason": "accepted_handoff_not_found",
+                    "task_id": task_id,
+                }
+
+        return self._write_through(project, write)
+
     def record_human_answered_in(
         self,
         connection: sqlite3.Connection,
@@ -836,10 +1017,53 @@ class MissionJournalRepository:
                         "yield does not match the authenticated current execution",
                     )
                 supplied_head = str(head_sha or "").strip()
-                if live_head and supplied_head != live_head:
+                exact_head_handoff = (
+                    normalized_outcome == "continue"
+                    and requested_role in {"review_merge", "remediation"}
+                )
+                if live_head and supplied_head != live_head and not exact_head_handoff:
                     raise MissionJournalError(
                         "stale_head", "yield head does not match assignment head",
                     )
+                handoff_pr_number: int | None = None
+                handoff_pr_url = ""
+                if exact_head_handoff:
+                    # An agent-observed SHA is not review authority.  Exact-head
+                    # continuations must be anchored to the canonical task/PR
+                    # projection already persisted by the GitHub ingestion path.
+                    # This prevents a fresh workspace's base SHA from becoming a
+                    # review fence merely because an LLM supplied it to the
+                    # journal.  Missing projection is an explicit wait condition;
+                    # it is never inferred from local git state or journal text.
+                    try:
+                        pr_authority = connection.execute(
+                            "SELECT pr_number,pr_url,head_sha FROM task_git_state "
+                            "WHERE task_id=?",
+                            (task_id,),
+                        ).fetchone()
+                    except sqlite3.OperationalError as exc:
+                        if "no such table" not in str(exc).lower():
+                            raise
+                        pr_authority = None
+                    authoritative_head = str(
+                        (pr_authority["head_sha"] if pr_authority else "") or ""
+                    ).strip()
+                    handoff_pr_number = int(
+                        (pr_authority["pr_number"] if pr_authority else 0) or 0
+                    ) or None
+                    handoff_pr_url = str(
+                        (pr_authority["pr_url"] if pr_authority else "") or ""
+                    ).strip()
+                    if not handoff_pr_number or not authoritative_head:
+                        raise MissionJournalError(
+                            "review_head_authority_required",
+                            "review handoff requires persisted PR number and exact head",
+                        )
+                    if not supplied_head or supplied_head != authoritative_head:
+                        raise MissionJournalError(
+                            "stale_head",
+                            "yield head does not match persisted PR head",
+                        )
                 lease = connection.execute(
                     "SELECT * FROM resource_leases WHERE id=? "
                     "AND resource_type='execution'",
@@ -890,6 +1114,8 @@ class MissionJournalRepository:
                         or str(event.get("execution_id") or "") != exact_execution_id
                         or int(event.get("generation") or 0) != exact_generation
                         or str(event.get("head_sha") or "") != supplied_head
+                        or int(event.get("pr_number") or 0)
+                        != int(handoff_pr_number or 0)
                     ):
                         raise MissionJournalError(
                             "idempotency_conflict",
@@ -928,11 +1154,11 @@ class MissionJournalRepository:
                     source_plane="coordination",
                     idempotency_key=idempotency_key,
                     occurred_at=timestamp,
-                    pr_number=None,
+                    pr_number=handoff_pr_number,
                     head_sha=supplied_head or None,
                     generation=exact_generation,
                     execution_id=exact_execution_id,
-                    external_ref="",
+                    external_ref=handoff_pr_url,
                     payload={
                         "outcome": normalized_outcome,
                         "requested_role": requested_role,
@@ -942,9 +1168,16 @@ class MissionJournalRepository:
                     },
                 )
                 if event["created"]:
+                    # A current ``continue`` yield is the material handoff the
+                    # next pager generation must consume.  Keep that event
+                    # unhandled so its authenticated requested role and exact
+                    # head become the next start fence after Capacity confirms
+                    # the reporting runner is terminal.  ``waiting`` consumes
+                    # its own receipt and remains parked until a later material
+                    # observation arrives.
                     handled = (
                         int(event["sequence"])
-                        if cursor_current
+                        if cursor_current and normalized_outcome == "waiting"
                         else int(item["handled_through"] or 0)
                     )
                     connection.execute(
@@ -975,6 +1208,143 @@ class MissionJournalRepository:
                     "event_id": event["event_id"],
                     "created": bool(event["created"]),
                     "execution_identity": identity,
+                }
+
+        return self._write_through(project, write)
+
+    def project_review_handoff(
+        self,
+        task_id: str,
+        *,
+        project: str,
+        actor: str,
+        task: Mapping[str, Any],
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Project an already-succeeded C3 receipt into the passive v4 inbox.
+
+        The shared/v1 completion owner remains untouched.  This projector reads
+        its durable ``review_handoff`` phase plus canonical task/PR state and
+        advances only an existing v4 mission.  Missing or conflicting evidence
+        blocks the v4 tick instead of inferring a role from board status.
+        """
+        exact_task_id = str(task_id or "").strip().upper()
+        exact_actor = str(actor or "").strip()
+        if not exact_task_id or not exact_actor:
+            raise MissionJournalError(
+                "review_handoff_identity_required", "task and actor are required",
+            )
+        timestamp = time.time() if now is None else now
+
+        def write() -> dict[str, Any]:
+            with self._connection(project) as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                item = connection.execute(
+                    "SELECT * FROM mission_items WHERE project_id=? AND task_id=?",
+                    (project, exact_task_id),
+                ).fetchone()
+                if item is None:
+                    return {"projected": False, "reason": "mission_not_found"}
+                if str(item["state"] or "") == "DONE":
+                    return {"projected": False, "reason": "mission_terminal"}
+
+                task_detail = dict(task or {})
+                if str(task_detail.get("task_id") or exact_task_id) != exact_task_id:
+                    return {
+                        "projected": False,
+                        "release_blocked": True,
+                        "reason": "canonical_task_identity_mismatch",
+                    }
+                status = str(task_detail.get("status") or "")
+                if status != "In Review":
+                    return {
+                        "projected": False,
+                        "release_blocked": False,
+                        "reason": "task_not_in_review",
+                    }
+                git_state = task_detail.get("git_state")
+                git_state = git_state if isinstance(git_state, Mapping) else {}
+                pr_number = int(git_state.get("pr_number") or 0)
+                pr_url = str(git_state.get("pr_url") or "").strip()
+                head_sha = str(git_state.get("head_sha") or "").strip()
+                if pr_number <= 0 or not pr_url or not head_sha:
+                    return {
+                        "projected": False,
+                        "release_blocked": True,
+                        "reason": "canonical_review_provenance_missing",
+                    }
+                phase = connection.execute(
+                    "SELECT * FROM task_execution_completion_phases WHERE task_id=? "
+                    "AND pr_number=? AND lower(head_sha)=lower(?) "
+                    "AND phase='review_handoff' AND outcome='succeeded' "
+                    "AND transitioned_at>=? ORDER BY runner_generation DESC LIMIT 1",
+                    (
+                        exact_task_id,
+                        pr_number,
+                        head_sha,
+                        float(item["created_at"] or 0),
+                    ),
+                ).fetchone()
+                if phase is None:
+                    return {
+                        "projected": False,
+                        "release_blocked": True,
+                        "reason": "c3_review_handoff_receipt_missing",
+                    }
+                transition_id = str(phase["transition_id"] or "").strip()
+                generation = int(phase["runner_generation"] or 0)
+                try:
+                    phase_evidence = json.loads(phase["evidence_json"] or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    phase_evidence = {}
+                execution_id = str(phase_evidence.get("execution_id") or "").strip()
+                if not transition_id or generation <= 0 or not execution_id:
+                    return {
+                        "projected": False,
+                        "release_blocked": True,
+                        "reason": "c3_review_handoff_identity_missing",
+                    }
+                event = self._append_event_in(
+                    connection,
+                    exact_task_id,
+                    project=project,
+                    event_type="task_changed",
+                    source_plane="coordination",
+                    idempotency_key=f"review_handoff:{transition_id}",
+                    occurred_at=float(phase["transitioned_at"] or timestamp),
+                    pr_number=pr_number,
+                    head_sha=head_sha,
+                    generation=generation,
+                    execution_id=execution_id,
+                    external_ref=pr_url,
+                    payload={
+                        "change_ref": transition_id,
+                        "changed_fields": ["status", "git_state"],
+                        "command_ref": "complete_claim_terminal_ack",
+                    },
+                )
+                if event["created"]:
+                    updated = connection.execute(
+                        "UPDATE mission_items SET state='ACTIVE',"
+                        "requested_role='review_merge',version=version+1,updated_at=? "
+                        "WHERE project_id=? AND task_id=? AND state!='DONE'",
+                        (timestamp, project, exact_task_id),
+                    )
+                    if updated.rowcount != 1:
+                        raise MissionJournalError(
+                            "review_handoff_projection_failed",
+                            "mission changed while the C3 receipt was projected",
+                        )
+                mission = self._item_in(connection, exact_task_id, project) or {}
+                return {
+                    "projected": True,
+                    "release_blocked": False,
+                    "reason": "c3_review_handoff_projected",
+                    "event_created": bool(event["created"]),
+                    "event_sequence": int(event["sequence"]),
+                    "requested_role": str(mission.get("requested_role") or ""),
+                    "pr_number": pr_number,
+                    "head_sha": head_sha,
                 }
 
         return self._write_through(project, write)
@@ -1020,6 +1390,96 @@ class MissionJournalRepository:
                 )
                 item = self._item_in(connection, task_id, project)
                 return {"mission": item or {}, "event": event}
+
+        return self._write_through(project, write)
+
+    def ensure_scope_start_event(
+        self,
+        task_id: str,
+        *,
+        project: str,
+        scope_id: str,
+        scope_generation: int,
+        scope_fence: int,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Publish one exact-scope re-arm when an ACTIVE inbox is caught up.
+
+        ``create_mission`` owns the first event.  A later operator Start may
+        create a new fenced scope after every earlier event was handled; without
+        another durable Coordination fact the pager is correctly stuck at an
+        empty cursor.  The scope id is the idempotency key, so retrying Start
+        cannot manufacture additional work.
+
+        Capacity liveness is deliberately not inferred here.  The application
+        command calls this only after ``runner_sessions`` says no execution is
+        live for the task.
+        """
+        exact_scope_id = str(scope_id or "").strip()
+        try:
+            exact_generation = int(scope_generation)
+            exact_fence = int(scope_fence)
+        except (TypeError, ValueError) as exc:
+            raise MissionJournalError(
+                "invalid_scope_identity",
+                "scope generation must be positive and fence must be nonnegative",
+            ) from exc
+        if not exact_scope_id:
+            raise MissionJournalError(
+                "invalid_start_reference", "scope_id must be a nonempty string",
+            )
+        if exact_generation <= 0 or exact_fence < 0:
+            raise MissionJournalError(
+                "invalid_scope_identity",
+                "scope generation must be positive and fence must be nonnegative",
+            )
+        timestamp = time.time() if now is None else now
+
+        def write() -> dict[str, Any]:
+            with self._connection(project) as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                item = self._item_in(connection, task_id, project)
+                if not item:
+                    raise MissionJournalError(
+                        "mission_not_found", "mission item does not exist",
+                    )
+                if str(item.get("state") or "") != "ACTIVE":
+                    return {
+                        "created": False,
+                        "needed": False,
+                        "reason": "mission_not_active",
+                    }
+                if int(item.get("latest_sequence") or 0) > int(
+                    item.get("handled_through") or 0
+                ):
+                    return {
+                        "created": False,
+                        "needed": False,
+                        "reason": "unhandled_event_exists",
+                    }
+                event = self._append_event_in(
+                    connection,
+                    task_id,
+                    project=project,
+                    event_type="mission_started",
+                    source_plane="coordination",
+                    idempotency_key=(
+                        f"mission_started:{task_id}:scope:{exact_scope_id}"
+                    ),
+                    occurred_at=timestamp,
+                    pr_number=None,
+                    head_sha=None,
+                    generation=None,
+                    execution_id=None,
+                    external_ref=exact_scope_id,
+                    payload={
+                        "scope_id": exact_scope_id,
+                        "scope_generation": exact_generation,
+                        "start_ref": exact_scope_id,
+                        **({"scope_fence": exact_fence} if exact_fence > 0 else {}),
+                    },
+                )
+                return {**event, "needed": True, "reason": "scope_started"}
 
         return self._write_through(project, write)
 

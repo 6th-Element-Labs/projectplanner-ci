@@ -15,6 +15,7 @@ runner session id: one execution attempt, one durable identity.
 """
 from __future__ import annotations
 
+import re
 import time
 from typing import Any, Callable, Mapping, Optional
 
@@ -50,6 +51,7 @@ IN_FLIGHT_WAKE_STATUSES = frozenset({"pending", "claimed"})
 
 DEFAULT_WATCH_SCOPES = ("watch", "input", "resize", "signal")
 DEFAULT_GRACE_SECONDS = 10
+_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 #: One HTTP status per error code so REST and MCP agree on severity, and one
 #: fail_fix_signal.v1 failure_class so a refusal is auditable rather than silent.
@@ -772,6 +774,26 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
     role = str(role or "").strip().lower()
     projection = _projection(task_id, project)
     task = projection.get("task") or {}
+    if role in {"review_merge", "remediation"}:
+        requested_head = str(source_sha or "").strip().lower()
+        persisted_pr_head = str(
+            (task.get("git_state") or {}).get("head_sha") or ""
+        ).strip().lower()
+        if (
+            not _SHA.fullmatch(requested_head)
+            or not _SHA.fullmatch(persisted_pr_head)
+            or requested_head != persisted_pr_head
+        ):
+            raise TaskExecutionError(
+                "start_refused",
+                "The exact review/remediation checkout must equal the persisted PR head.",
+                task_id=task_id,
+                project=project,
+                start_error="execution_checkout_head_mismatch",
+                requested_role=role,
+                requested_head_sha=requested_head or None,
+                persisted_pr_head_sha=persisted_pr_head or None,
+            )
     task_scope: dict[str, Any] = {}
     if (str(task.get("status") or "") == "Triage"
             and role == "implementation"

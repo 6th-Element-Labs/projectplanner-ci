@@ -55,6 +55,12 @@ def decide_mission_transition(context: Mapping[str, Any]) -> dict[str, Any]:
         }
     if context.get("runner_live"):
         return {"state": "WAITING", "action": "wait", "reason": "runner_live"}
+    if context.get("capacity_attempt_pending"):
+        return {
+            "state": "WAITING",
+            "action": "wait",
+            "reason": "capacity_attempt_pending",
+        }
 
     failure = active_mission_failure(context)
     if failure is not None:

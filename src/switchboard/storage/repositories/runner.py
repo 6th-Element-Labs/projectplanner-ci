@@ -258,10 +258,14 @@ def check_direct_task_completion_authority(
     """Authorize completion of one no-claim native-host wake.
 
     Direct task wakes use the selected host on a pending wake. Connect wakes use
-    the host that atomically claimed the assignment. Both require the already-
-    registered native runner; the request body is only a lookup tuple.
+    the host that atomically claimed the assignment. Successful launches require
+    the already-registered native runner. An exact ``started=false`` receipt may
+    close a claimed wake before registration only when no runner exists for that
+    wake; this is the fail-closed spawn/registration exception in ADR-0008 C2.
     """
-    supplied = {key: str((binding or {}).get(key) or "").strip() for key in (
+    binding = dict(binding or {})
+    pre_runner_failure = binding.get("started") is False
+    supplied = {key: str(binding.get(key) or "").strip() for key in (
         "wake_id", "host_id", "runner_session_id", "task_id", "agent_id",
     )}
     supplied["task_id"] = supplied["task_id"].upper()
@@ -275,7 +279,8 @@ def check_direct_task_completion_authority(
 
     with _conn(project) as c:
         wake = c.execute(
-            "SELECT status, claimed_by_host, task_id, selector_json, policy_json "
+            "SELECT status, claimed_by_host, task_id, selector_json, policy_json, "
+            "runner_session_id, agent_id, result_json "
             "FROM wake_intents WHERE wake_id=?",
             (supplied["wake_id"],),
         ).fetchone()
@@ -284,13 +289,26 @@ def check_direct_task_completion_authority(
             "principal_id FROM runner_sessions WHERE runner_session_id=?",
             (supplied["runner_session_id"],),
         ).fetchone()
+        wake_runner_rows = c.execute(
+            "SELECT runner_session_id, metadata_json FROM runner_sessions "
+            "WHERE metadata_json LIKE ?",
+            (f'%"{supplied["wake_id"]}"%',),
+        ).fetchall()
 
     reasons: List[str] = []
+    wake_status = str(wake["status"] or "") if wake else ""
     selector = _json_obj(wake["selector_json"], {}) if wake else {}
     policy = _json_obj(wake["policy_json"], {}) if wake else {}
     metadata = _json_obj(runner["metadata_json"], {}) if runner else {}
-    if not wake or str(wake["status"] or "") not in {
-            "pending", "claimed", "completed"}:
+    wake_runners = [
+        row for row in wake_runner_rows
+        if str(_json_obj(row["metadata_json"], {}).get("wake_id") or "")
+        == supplied["wake_id"]
+    ]
+    allowed_statuses = {"pending", "claimed", "completed"}
+    if pre_runner_failure and not runner:
+        allowed_statuses = {"pending", "claimed", "failed"}
+    if not wake or wake_status not in allowed_statuses:
         reasons.append("direct_wake_not_active")
     direct = bool(
         wake and policy.get("mode") == "direct_task"
@@ -317,8 +335,24 @@ def check_direct_task_completion_authority(
     for field, expected in expected_wake.items():
         if actual_wake[field] != expected:
             reasons.append(f"wake_{field}_mismatch")
+    completion_kind = "registered_runner"
     if not runner:
-        reasons.append("direct_runner_not_found")
+        if not pre_runner_failure:
+            reasons.append("direct_runner_not_found")
+        elif wake_runners:
+            # A caller cannot use a made-up runner id to report a pre-runner
+            # failure after this wake registered another physical execution.
+            reasons.append("direct_wake_runner_already_registered")
+        elif wake_status == "failed":
+            stored_result = _json_obj(wake["result_json"], {})
+            if (str(wake["runner_session_id"] or "")
+                    != supplied["runner_session_id"]
+                    or str(wake["agent_id"] or "") != supplied["agent_id"]
+                    or stored_result.get("started") is not False):
+                reasons.append("terminal_wake_receipt_mismatch")
+            completion_kind = "pre_runner_failure_replay"
+        else:
+            completion_kind = "pre_runner_failure"
     else:
         expected_runner = {
             "host_id": supplied["host_id"],
@@ -357,6 +391,7 @@ def check_direct_task_completion_authority(
     return {
         "allowed": True,
         "schema": "switchboard.direct_task_completion_authority.v1",
+        "completion_kind": completion_kind,
         **supplied,
     }
 

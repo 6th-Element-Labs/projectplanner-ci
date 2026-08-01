@@ -24,6 +24,10 @@ task = {
     "task_id": "ADAPTER-26",
     "_wsId": "ADAPTER",
     "updated_at": 1_784_842_717.0,
+    "git_state": {
+        "head_sha": "a" * 40,
+        "branch": "agent/switchboard/ADAPTER-26/existing-pr",
+    },
 }
 captured: list[dict] = []
 
@@ -68,7 +72,10 @@ with patch.object(connect_dispatch.coordination_repo, "request_wake", request_wa
         caller_agent_id="coordinator/b", generation_ref="decision-7:execution-2",
         **decision)
     connect_dispatch.enqueue_task(
-        task, project="switchboard", actor="coordinator/b",
+        {
+            **task,
+            "git_state": {**task["git_state"], "head_sha": "b" * 40},
+        }, project="switchboard", actor="coordinator/b",
         caller_agent_id="coordinator/b", generation_ref="decision-8",
         **{**decision, "source_sha": "b" * 40, "state_version": 8})
     connect_dispatch.enqueue_task(

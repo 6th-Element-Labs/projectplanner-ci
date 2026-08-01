@@ -125,12 +125,13 @@ class CapacityMissionEventsTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
-    def wakes(self, rows):
+    def wakes(self, rows, runner_rows=()):
         return capacity_mission_events.append_terminal_wake_events(
             project=PROJECT,
             task_id=TASK,
             repository=self.journal,
             list_wakes=lambda **_kwargs: list(rows),
+            list_runners=lambda **_kwargs: list(runner_rows),
         )
 
     def runners(self, rows):
@@ -169,12 +170,37 @@ class CapacityMissionEventsTest(unittest.TestCase):
     def test_cancelled_wake_projects_but_other_eras_and_runner_wakes_do_not(self):
         mission = self.journal.get_item(TASK, project=PROJECT)
         old = float(mission["created_at"]) - 1
-        receipt = self.wakes([
-            failed_wake("wake-old", requested_at=old),
-            failed_wake("wake-runner", runner_session_id="run-existing"),
-            failed_wake("wake-cancelled", status="cancelled", reason="operator_cancel"),
-        ])
+        receipt = self.wakes(
+            [
+                failed_wake("wake-old", requested_at=old),
+                failed_wake("wake-runner", runner_session_id="run-existing"),
+                failed_wake(
+                    "wake-cancelled", status="cancelled", reason="operator_cancel",
+                ),
+            ],
+            runner_rows=[{
+                "runner_session_id": "run-existing",
+                "task_id": TASK,
+            }],
+        )
         self.assertEqual(["wake-cancelled"], [row["wake_id"] for row in receipt["events"]])
+
+    def test_allocated_runner_id_is_not_registration_or_liveness(self):
+        receipt = self.wakes([
+            failed_wake(
+                "wake-allocated-only",
+                runner_session_id="run-allocated-but-never-registered",
+            ),
+        ])
+        self.assertEqual(
+            ["wake-allocated-only"],
+            [row["wake_id"] for row in receipt["events"]],
+        )
+        event = self.journal.list_events(
+            TASK, project=PROJECT, after_sequence=1, limit=10,
+        )[0]
+        self.assertEqual("execution_ended", event["event_type"])
+        self.assertEqual("capacity", event["source_plane"])
 
     def test_capacity_read_and_missing_identity_fail_loudly(self):
         with self.assertRaisesRegex(
@@ -241,6 +267,119 @@ class CapacityMissionEventsTest(unittest.TestCase):
             [event["payload"]["terminal_status"] for event in events],
         )
         self.assertTrue(all(event["source_plane"] == "capacity" for event in events))
+
+    def test_valid_continue_yield_consumes_observed_history_and_suppresses_exit_page(self):
+        self.journal.append_event(
+            TASK,
+            project=PROJECT,
+            event_type="agent_yielded",
+            source_plane="coordination",
+            idempotency_key="yield:review-to-remediation",
+            execution_id="execlease-review",
+            generation=2,
+            head_sha="current-head",
+            payload={
+                "outcome": "continue",
+                "requested_role": "remediation",
+                "observed_through": 1,
+                "latest_sequence_at_yield": 1,
+                "cursor_current": True,
+            },
+        )
+        receipt = self.runners([
+            terminal_runner(
+                "run-review",
+                status="stopped",
+                execution_id="execlease-review",
+                generation=2,
+            ),
+        ])
+        mission = self.journal.get_item(TASK, project=PROJECT)
+        version = int(mission["version"])
+        replay = self.runners([
+            terminal_runner(
+                "run-review",
+                status="stopped",
+                execution_id="execlease-review",
+                generation=2,
+            ),
+        ])
+        replay_mission = self.journal.get_item(TASK, project=PROJECT)
+        events = self.journal.list_events(
+            TASK, project=PROJECT, after_sequence=1, limit=10,
+        )
+        self.assertEqual([], receipt["events"])
+        self.assertEqual(1, len(receipt["finalized_handoffs"]))
+        self.assertEqual("agent_yield_handoff", receipt[
+            "finalized_handoffs"][0]["reason"])
+        self.assertEqual(["agent_yielded"], [row["event_type"] for row in events])
+        self.assertEqual("ACTIVE", mission["state"])
+        self.assertEqual("remediation", mission["requested_role"])
+        self.assertEqual(1, mission["handled_through"])
+        self.assertTrue(replay["finalized_handoffs"][0]["already_finalized"])
+        self.assertEqual(version, int(replay_mission["version"]))
+
+    def test_valid_wait_yield_parks_only_after_terminal_ack(self):
+        yielded = self.journal.append_event(
+            TASK,
+            project=PROJECT,
+            event_type="agent_yielded",
+            source_plane="coordination",
+            idempotency_key="yield:review-wait",
+            execution_id="execlease-wait",
+            generation=2,
+            head_sha="current-head",
+            payload={
+                "outcome": "waiting",
+                "requested_role": "review_merge",
+                "observed_through": 1,
+                "latest_sequence_at_yield": 1,
+                "cursor_current": True,
+            },
+        )
+        receipt = self.runners([
+            terminal_runner(
+                "run-wait",
+                status="stopped",
+                execution_id="execlease-wait",
+                generation=2,
+            ),
+        ])
+        mission = self.journal.get_item(TASK, project=PROJECT)
+        self.assertEqual([], receipt["events"])
+        self.assertEqual("WAITING", mission["state"])
+        self.assertEqual(int(yielded["sequence"]), mission["handled_through"])
+
+    def test_c3_handoff_suppresses_generic_runner_exit_and_leaves_review_actionable(self):
+        handoff = self.journal.append_event(
+            TASK,
+            project=PROJECT,
+            event_type="task_changed",
+            source_plane="coordination",
+            idempotency_key="c3:implementation-review",
+            generation=3,
+            execution_id="run-implementation",
+            head_sha="new-head",
+            payload={
+                "change_ref": "completion-r114",
+                "changed_fields": ["status", "git_state"],
+                "command_ref": "complete_claim_terminal_ack",
+            },
+        )
+        receipt = self.runners([
+            terminal_runner(
+                "run-implementation",
+                status="completed",
+                execution_id="execlease-implementation",
+                generation=3,
+            ),
+        ])
+        mission = self.journal.get_item(TASK, project=PROJECT)
+        self.assertEqual([], receipt["events"])
+        self.assertEqual("c3_review_handoff", receipt[
+            "finalized_handoffs"][0]["reason"])
+        self.assertEqual("review_merge", mission["requested_role"])
+        self.assertEqual(int(handoff["sequence"]) - 1, mission["handled_through"])
 
     def test_terminal_runner_missing_identity_fails_instead_of_disappearing(self):
         with self.assertRaises(capacity_mission_events.CapacityMissionProjectionError) as result:

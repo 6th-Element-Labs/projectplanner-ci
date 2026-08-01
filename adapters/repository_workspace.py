@@ -208,6 +208,7 @@ def _quarantine(path: Path, quarantine_root: Path, reason: str) -> Path | None:
 
 
 def _ensure_cache(cache_path: Path, remote: str, base_sha: str,
+                  checkout_sha: str,
                   quarantine_root: Path, *,
                   deadline: float | None = None) -> tuple[bool, Path | None]:
     created = False
@@ -249,6 +250,17 @@ def _ensure_cache(cache_path: Path, remote: str, base_sha: str,
             "base_sha_unreachable",
             "exact Execution Context base SHA is not present after fetch",
             base_sha=base_sha) from exc
+    if checkout_sha != base_sha:
+        try:
+            _run(["git", "--git-dir", str(cache_path), "cat-file", "-e",
+                  f"{checkout_sha}^{{commit}}"], deadline=deadline)
+        except WorkspaceMaterializationError as exc:
+            if exc.code == "workspace_materialize_timeout":
+                raise
+            raise WorkspaceMaterializationError(
+                "checkout_sha_unreachable",
+                "exact execution checkout SHA is not present after fetch",
+                checkout_sha=checkout_sha) from exc
     return created, quarantined
 
 
@@ -292,10 +304,17 @@ def _check_workspace(path: Path, receipt_path: Path,
     origin = _run(
         ["git", "remote", "get-url", "origin"], cwd=path,
         deadline=deadline).stdout.strip()
-    if head != expected["base_sha"]:
+    expected_head = str(expected.get("checkout_sha") or expected["base_sha"])
+    if head != expected_head:
+        code = (
+            "workspace_exact_head_mismatch"
+            if expected.get("checkout_sha")
+            else "workspace_head_mismatch"
+        )
         raise WorkspaceMaterializationError(
-            "workspace_head_mismatch", "workspace HEAD is not the exact base SHA",
-            base_sha=str(expected["base_sha"]))
+            code,
+            "workspace HEAD is not the exact execution checkout SHA",
+            checkout_sha=expected_head)
     if branch != expected["branch"]:
         raise WorkspaceMaterializationError(
             "workspace_branch_mismatch", "workspace is on the wrong branch",
@@ -663,6 +682,11 @@ def _resolved_identity(
     if not _SHA.fullmatch(base_sha):
         raise WorkspaceMaterializationError(
             "execution_context_base_invalid", "exact base SHA is required")
+    checkout_sha = str(context.get("checkout_sha") or base_sha).strip().lower()
+    if not _SHA.fullmatch(checkout_sha):
+        raise WorkspaceMaterializationError(
+            "execution_context_checkout_invalid",
+            "exact execution checkout SHA is required")
     isolation = str((context.get("workspace") or {}).get("isolation") or "")
     if isolation not in {"worktree", "clone"}:
         raise WorkspaceMaterializationError(
@@ -702,6 +726,7 @@ def _resolved_identity(
         "repository": repository,
         "remote": remote,
         "base_sha": base_sha,
+        "checkout_sha": checkout_sha,
         "branch": branch,
     }
     return {
@@ -714,6 +739,7 @@ def _resolved_identity(
         "receipt_path": receipt_path,
         "remote": remote,
         "base_sha": base_sha,
+        "checkout_sha": checkout_sha,
         "branch": branch,
         "expected": expected,
     }
@@ -740,19 +766,21 @@ def materialize(
     receipt_path = resolved["receipt_path"]
     remote = resolved["remote"]
     base_sha = resolved["base_sha"]
+    checkout_sha = resolved["checkout_sha"]
     branch = resolved["branch"]
     expected = resolved["expected"]
 
     lock_path = cache_root_path / ".locks" / f"{key}.lock"
     with _locked(lock_path, deadline=deadline):
         cache_created, cache_quarantined = _ensure_cache(
-            cache_path, remote, base_sha, quarantine_root, deadline=deadline)
+            cache_path, remote, base_sha, checkout_sha, quarantine_root,
+            deadline=deadline)
         if workspace_path.exists():
             if _workspace_valid(
                     workspace_path, receipt_path, expected, deadline=deadline):
                 receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
                 return MaterializedWorkspace(
-                    workspace_path, branch, base_sha, cache_path,
+                    workspace_path, branch, checkout_sha, cache_path,
                     receipt_path, receipt, reused=True,
                     workspace_root=resolved["workspace_root"])
             _quarantine(workspace_path, quarantine_root, "stale-workspace")
@@ -765,15 +793,15 @@ def materialize(
                 ["git", "remote", "set-url", "origin", remote],
                 cwd=workspace_path, deadline=deadline)
             _run(
-                ["git", "checkout", "-b", branch, base_sha],
+                ["git", "checkout", "-b", branch, checkout_sha],
                 cwd=workspace_path, deadline=deadline)
             head = _run(
                 ["git", "rev-parse", "HEAD"], cwd=workspace_path,
                 deadline=deadline).stdout.strip()
-            if head != base_sha:
+            if head != checkout_sha:
                 raise WorkspaceMaterializationError(
-                    "workspace_head_mismatch",
-                    "materialized workspace did not checkout exact base SHA")
+                    "workspace_exact_head_mismatch",
+                    "materialized workspace did not checkout exact execution SHA")
             receipt = {
                 "schema": RECEIPT_SCHEMA,
                 **expected,
@@ -817,7 +845,8 @@ def verify(
         resolved["workspace_path"], resolved["receipt_path"],
         resolved["expected"])
     return MaterializedWorkspace(
-        resolved["workspace_path"], resolved["branch"], resolved["base_sha"],
+        resolved["workspace_path"], resolved["branch"],
+        resolved["checkout_sha"],
         resolved["cache_path"], resolved["receipt_path"], receipt, reused=True,
         workspace_root=resolved["workspace_root"])
 
@@ -866,6 +895,7 @@ def safe_receipt(receipt: Mapping[str, Any]) -> dict[str, Any]:
         key: receipt.get(key) for key in (
             "schema", "project_id", "task_id", "execution_id", "generation",
             "authority_digest", "context_digest", "repository", "base_sha",
+            "checkout_sha",
             "branch", "workspace_path", "created_at", "revoked_at",
             "revoked_reason", "source", "isolation", "workspace_backend",
         ) if receipt.get(key) is not None

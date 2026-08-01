@@ -74,6 +74,10 @@ try:
             "task_id": "WATCH-17",
             "_wsId": "WATCH",
             "updated_at": 17.0,
+            "git_state": {
+                "head_sha": "a" * 40,
+                "branch": "agent/switchboard/WATCH-17/existing-pr",
+            },
             "exit_criteria": (
                 '{"findings":[{"id":"WATCH17-RED",'
                 '"repair_requirement":"Repair the exact red-review blocker."}]}'

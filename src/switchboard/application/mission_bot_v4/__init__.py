@@ -8,6 +8,7 @@ from .runtime import (
     assess_stuck_mission_invariant,
     production_ports,
     run_scoped_mission_tick,
+    task_has_pending_capacity_attempt,
 )
 from .shadow import (
     compare_shadow_decisions,
@@ -24,5 +25,6 @@ __all__ = [
     "run_shadow_batch",
     "run_shadow_comparison",
     "run_scoped_mission_tick",
+    "task_has_pending_capacity_attempt",
     "tick_scoped_mission",
 ]

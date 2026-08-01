@@ -386,6 +386,11 @@ def hydrate_completion_snapshot(
     normalized["observed_at"] = observed_at
     normalized["hydration_started_at"] = hydration_started_at
     normalized["autopilot_scope"] = task_scope
+    # Keep Capacity's outstanding admission fact in the same bounded snapshot
+    # as runner liveness.  Mission Bot v4 shadow must not turn the interval
+    # between a claimed wake and runner registration into a false
+    # ``missing_mission_event`` release blocker.
+    normalized["capacity_attempt_pending"] = bool(active_attempt)
     if github_pr_fetch_error:
         normalized["github_pr_fetch_error"] = github_pr_fetch_error
     current_run = completion_runs.get_active_completion_run(

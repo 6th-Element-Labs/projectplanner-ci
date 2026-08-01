@@ -141,6 +141,105 @@ try:
     completed_body = completed.json()
     ok(completed.status_code == 200 and completed_body.get("status") == "completed",
        "narrow enrolled host completes its exact claimed Connect wake over HTTP")
+
+    failed_task = store.create_task({
+        "workstream_id": "BUG",
+        "title": "BUG-128 Connect failure before runner registration",
+    }, actor="bug128-test", project=P)
+    failed_dispatch = connect_dispatch.enqueue_task(
+        failed_task, project=P, actor="bug128-test", runtime="codex")
+    failed_wake = next(
+        row for row in store.list_wake_intents(project=P)
+        if row.get("wake_id") == failed_dispatch.get("wake_id"))
+    failed_runner_id = "run_bug128_never_registered"
+    failed_claim = store.claim_wake(
+        HOST, failed_wake["wake_id"], runner_session_id=failed_runner_id,
+        principal_id=PRINCIPAL, actor=HOST, project=P)
+    failed_agent_id = str(
+        ((failed_claim.get("wake") or failed_wake).get("selector") or {})
+        .get("agent_id") or "")
+
+    false_success = client.post("/txp/v1/complete_wake", headers=headers, json={
+        "project": P, "wake_id": failed_wake["wake_id"],
+        "runner_session_id": failed_runner_id, "agent_id": failed_agent_id,
+        "result": {"started": True, "reason": "forged_start"},
+    })
+    ok(false_success.status_code == 403,
+       "a Connect host cannot report success before runner registration")
+
+    failure_result = {
+        "started": False,
+        "reason": "workspace_materialize_timeout",
+        "failure_class": "failed_gate",
+        "task_id": failed_task["task_id"],
+    }
+    failure_response = client.post("/txp/v1/complete_wake", headers=headers, json={
+        "project": P, "wake_id": failed_wake["wake_id"],
+        "runner_session_id": failed_runner_id, "agent_id": failed_agent_id,
+        "result": failure_result,
+    })
+    ok(failure_response.status_code == 200
+       and failure_response.json().get("status") == "failed",
+       "the exact claimed host records a failure before runner registration")
+
+    replay = client.post("/txp/v1/complete_wake", headers=headers, json={
+        "project": P, "wake_id": failed_wake["wake_id"],
+        "runner_session_id": failed_runner_id, "agent_id": failed_agent_id,
+        "result": failure_result,
+    })
+    ok(replay.status_code == 200
+       and replay.json().get("note") == "idempotent terminal readback",
+       "a lost pre-runner failure response replays idempotently")
+
+    conflict_task = store.create_task({
+        "workstream_id": "BUG",
+        "title": "BUG-128 reject false pre-runner failure after registration",
+    }, actor="bug128-test", project=P)
+    conflict_dispatch = connect_dispatch.enqueue_task(
+        conflict_task, project=P, actor="bug128-test", runtime="codex")
+    conflict_wake = next(
+        row for row in store.list_wake_intents(project=P)
+        if row.get("wake_id") == conflict_dispatch.get("wake_id"))
+    conflict_runner_id = "run_bug128_registered_conflict"
+    conflict_claim = store.claim_wake(
+        HOST, conflict_wake["wake_id"], runner_session_id=conflict_runner_id,
+        principal_id=PRINCIPAL, actor=HOST, project=P)
+    conflict_assignment = (
+        (conflict_claim.get("wake") or conflict_wake).get("policy") or {}
+    ).get("assignment") or {}
+    conflict_agent_id = str(
+        ((conflict_claim.get("wake") or conflict_wake).get("selector") or {})
+        .get("agent_id") or "")
+    store.upsert_runner_session({
+        "runner_session_id": conflict_runner_id,
+        "host_id": HOST,
+        "agent_id": conflict_agent_id,
+        "runtime": "codex",
+        "task_id": conflict_task["task_id"],
+        "claim_id": "",
+        "status": "running",
+        "cwd": str(ROOT),
+        "control": {"tier": "T3", "managed_process": True, "runner_kill": True},
+        "metadata": {
+            "wake_id": conflict_wake["wake_id"],
+            "wake_mode": "connect",
+            "connect_assignment": True,
+            "assignment_schema": "switchboard.connect.assignment.v1",
+            "assignment_id": conflict_assignment.get("assignment_id"),
+        },
+    }, principal_id=PRINCIPAL, actor=HOST, project=P)
+    conflicting_failure = client.post(
+        "/txp/v1/complete_wake", headers=headers, json={
+            "project": P, "wake_id": conflict_wake["wake_id"],
+            "runner_session_id": "run_bug128_made_up",
+            "agent_id": conflict_agent_id,
+            "result": {"started": False, "reason": "forged_pre_runner_failure"},
+        })
+    conflict_body = conflicting_failure.json()
+    reason_codes = ((conflict_body.get("detail") or {}).get("reason_codes") or [])
+    ok(conflicting_failure.status_code == 403
+       and "direct_wake_runner_already_registered" in reason_codes,
+       "a made-up runner id cannot hide an execution already registered for the wake")
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
 

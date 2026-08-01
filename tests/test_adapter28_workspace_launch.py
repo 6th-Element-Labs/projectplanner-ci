@@ -40,6 +40,7 @@ from repository_workspace import (  # noqa: E402
 from switchboard.application.commands.execution_context import (  # noqa: E402
     ExecutionContextError,
     require_generation_binding,
+    with_checkout_sha,
     with_generation,
 )
 from switchboard.connect.execution_assignment import (  # noqa: E402
@@ -125,13 +126,16 @@ def context(sha, *, task="ADAPTER-28", generation=1, project="switchboard",
 
 
 def connect_wake(ctx, *, execution_id="execlease-adapter28", generation=1,
-                 runtime="codex", credential_reference="provider-actionengine"):
+                 runtime="codex", credential_reference="provider-actionengine",
+                 role="implementation", head_sha="", pr_branch=""):
     lifecycle = {
         "schema": "switchboard.execution_lifecycle.v1",
-        "role": "implementation", "head_sha": "", "pr_number": 0, "pr_url": "",
+        "role": role, "head_sha": head_sha, "pr_number": 0, "pr_url": "",
         "ttl_seconds": 7200, "execution_id": execution_id,
         "generation": generation, "fence_epoch": 1,
     }
+    if role in {"review_merge", "remediation"}:
+        lifecycle["pr_branch"] = pr_branch
     assignment = {
         "schema": "switchboard.connect.assignment.v1",
         "assignment_id": "assignment-adapter28",
@@ -297,6 +301,66 @@ def test_connect_launches_from_the_verified_workspace(root):
     return wake, remote, sha, workspace
 
 
+def test_review_launches_at_exact_pr_head_not_canonical_base(root):
+    remote, base_sha = action_engine_remote(root)
+    writer = root / "review-writer"
+    git("clone", remote, str(writer))
+    git("config", "user.email", "adapter28@example.test", cwd=writer)
+    git("config", "user.name", "ADAPTER-28", cwd=writer)
+    branch = "agent/switchboard/ADAPTER-28/existing-pr"
+    git("checkout", "-b", branch, cwd=writer)
+    evidence = writer / "review-head.md"
+    evidence.write_text("exact review head\n", encoding="utf-8")
+    git("add", "review-head.md", cwd=writer)
+    git("commit", "-m", "create exact review head", cwd=writer)
+    review_sha = git("rev-parse", "HEAD", cwd=writer)
+    git("push", "origin", branch, cwd=writer)
+
+    exact_context = with_checkout_sha(context(base_sha), review_sha)
+    wake = connect_wake(
+        exact_context,
+        execution_id="execlease-adapter28-review",
+        role="review_merge",
+        head_sha=review_sha,
+        pr_branch=branch,
+    )
+    with Launcher(remote) as launcher:
+        rec = agent_host.launch(
+            wake, host_inventory(), runner_session_id="run_adapter28_review")
+
+    workspace = Path(rec["cwd"])
+    receipt = rec["metadata"]["workspace_receipt"]
+    ok(
+        git("rev-parse", "HEAD", cwd=workspace) == review_sha
+        and receipt["checkout_sha"] == review_sha
+        and receipt["base_sha"] == base_sha,
+        "fresh review workspace preserves canonical base and checks out exact PR head",
+    )
+    ok(
+        git("branch", "--show-current", cwd=workspace) == branch
+        and (workspace / "review-head.md").is_file(),
+        "review generation opens the persisted PR branch at its assigned head",
+    )
+    ok(bool(launcher.calls), "exact-head review reaches the supervisor")
+
+    mismatched = connect_wake(
+        with_checkout_sha(context(base_sha), base_sha),
+        execution_id="execlease-adapter28-wrong-review",
+        role="review_merge",
+        head_sha=review_sha,
+        pr_branch=branch,
+    )
+    with Launcher(remote) as refused_launcher:
+        refused = agent_host.launch(
+            mismatched, host_inventory(), runner_session_id="run_wrong_review")
+    ok(
+        refused.get("started") is False
+        and refused.get("reason") == "workspace_exact_head_mismatch",
+        "mismatched review checkout fails closed by name before spawn",
+    )
+    ok(refused_launcher.calls == [], "mismatched review starts no supervisor")
+
+
 def test_receipts_published_centrally_are_safe(root):
     remote, sha = action_engine_remote(root)
     with Launcher(remote):
@@ -365,8 +429,8 @@ def test_rewound_repointed_and_revoked_workspaces_refuse(root):
     # writing config into the workspace under test.
     git("-c", "user.email=adapter28@example.test", "-c", "user.name=ADAPTER-28",
         "commit", "--allow-empty", "-m", "drift", cwd=workspace.path)
-    refuses("workspace_head_mismatch", lambda: verify(**kwargs),
-            "a workspace moved off the exact base SHA refuses")
+    refuses("workspace_exact_head_mismatch", lambda: verify(**kwargs),
+            "a workspace moved off the assigned checkout SHA refuses")
     git("reset", "--hard", sha, cwd=workspace.path)
 
     git("checkout", "-b", "someone-elses-branch", cwd=workspace.path)
@@ -654,6 +718,7 @@ def test_launch_has_no_repo_root_fallback_for_connect():
 with tempfile.TemporaryDirectory(prefix="adapter28-") as temporary:
     base = Path(temporary)
     test_connect_launches_from_the_verified_workspace(base / "launch")
+    test_review_launches_at_exact_pr_head_not_canonical_base(base / "review-head")
     test_receipts_published_centrally_are_safe(base / "receipts")
     test_missing_workspace_refuses_before_any_process(base / "missing")
     test_rewound_repointed_and_revoked_workspaces_refuse(base / "drift")

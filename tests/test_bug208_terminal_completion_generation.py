@@ -68,6 +68,20 @@ try:
         project=P,
     )
     task_id = task["task_id"]
+    with store._conn(P) as connection:
+        connection.execute(
+            "INSERT INTO task_git_state("
+            "task_id,branch,head_sha,pr_number,pr_url,updated_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (
+                task_id,
+                f"agent/switchboard/{task_id}/existing-pr",
+                HEAD,
+                208,
+                "https://github.com/example/projectplanner/pull/208",
+                1.0,
+            ),
+        )
 
     first = start(task_id, 1800.0)
     assert first["started"] is True, first

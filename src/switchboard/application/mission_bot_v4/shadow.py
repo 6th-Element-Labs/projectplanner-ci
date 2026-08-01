@@ -102,6 +102,13 @@ def _v4_context(
         # liveness observation instead of racing two Capacity reads.
         "runner_live": bool(_map(snapshot.get("runner")).get("live")),
         "runner_liveness_source": "runner_sessions",
+        # This is Capacity request state, not C1 liveness.  It comes from the
+        # same task-session hydration as ``runner_live`` and only prevents the
+        # stuck-mission invariant from firing while Capacity owes a terminal
+        # admission result.
+        "capacity_attempt_pending": bool(
+            snapshot.get("capacity_attempt_pending")
+        ),
         "requested_role": str(mission.get("requested_role") or ""),
         "handled_through": int(mission.get("handled_through") or 0),
         "latest_sequence": int(mission.get("latest_sequence") or 0),
@@ -135,6 +142,15 @@ def _comparison(
 
     expected_role = _V1_PAGE_ROLES.get(output)
     if expected_role:
+        if (
+            action == "wait"
+            and str(v4.get("reason") or "") == "capacity_attempt_pending"
+            and v4_role == expected_role
+        ):
+            # V1 would re-enter idempotent start_task while v4 deliberately
+            # waits on the already-persisted Capacity request.  Both preserve
+            # one execution; the v4 proposal is the narrower pager behavior.
+            return "pager_equivalent", "v4_waits_existing_capacity_attempt"
         if action != "start_task":
             return "divergence", "v4_failed_to_page"
         if v4_role != expected_role:

@@ -223,8 +223,10 @@ def _bound_work_session_head_in(
         return ""
     if str(session["task_id"] or "").strip().upper() != task_id:
         return ""
-    if str(session["status"] or "").strip().lower() != "blocked":
-        return ""
+    # Capacity may terminalize the execution and expire/archive its Work
+    # Session after the Human request is atomically staged.  That lifecycle
+    # cleanup does not invalidate the immutable request-to-session binding or
+    # its historical exact head.
     return str(session["head_sha"] or session["base_sha"] or "").strip()
 
 
@@ -244,7 +246,11 @@ def _work_session_human_request_binding_in(
         or str(context.get("schema") or "") != COMPLETION_CLOSEOUT_SCHEMA
         or str(context.get("task_id") or "").strip().upper() != task_id
         or str(context.get("work_session_id") or "").strip() != work_session_id
-        or str(context.get("source_tool") or "") != "record_human_blocker"
+        # agent_requires_human is the canonical authenticated edge.  Retain
+        # the legacy alias only so already-persisted requests remain answerable.
+        or str(context.get("source_tool") or "") not in {
+            "agent_requires_human", "record_human_blocker",
+        }
         or str(context.get("completion_run_id") or "").strip()
         or int(context.get("state_version") or 0) != 0
     ):
@@ -258,10 +264,12 @@ def _work_session_human_request_binding_in(
         if "no such table" not in str(exc).lower():
             raise
         return False
+    # Work Session status is not Human-answer authority.  The mission item's
+    # exact human_request_id is checked separately in the same transaction;
+    # this structural bind must survive Capacity's terminal receipt cleanup.
     return bool(
         session
         and str(session["task_id"] or "").strip().upper() == task_id
-        and str(session["status"] or "").strip().lower() == "blocked"
     )
 
 

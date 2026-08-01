@@ -42,8 +42,8 @@ def policy():
         "readiness": {"passed": True},
         "runtimes": {"allowed": ["codex"], "default": "codex"},
         "placement": {
-            "host_classes": ["persistent", "ephemeral"],
-            "trust_zones": ["trusted"],
+            "host_classes": ["personal", "ephemeral"],
+            "trust_zones": ["personal", "cloud_ephemeral"],
             "burst": {"enabled": True, "max_concurrent_ephemeral": 2},
         },
         "providers": {"selectors": [{
@@ -74,7 +74,7 @@ def host():
             "drain_state": "accepting",
             "projects": ["atlas"],
             "repositories": ["example/atlas"],
-            "trust_zones": ["trusted"],
+            "trust_zones": ["personal"],
         }},
     }
 

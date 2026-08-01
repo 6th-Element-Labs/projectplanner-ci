@@ -63,6 +63,7 @@ def snapshot(*, task_id="QA-118", runner=False, deps=True, scope="active", **upd
         "dependency_state": {"satisfied": deps},
         "autopilot_scope": {"status": scope},
         "runner": {"live": runner},
+        "capacity_attempt_pending": False,
         "github_pr": {"number": 118, "state": "OPEN", "draft": False,
                       "head": {"sha": HEAD}},
         "pr_number": 118,
@@ -217,6 +218,23 @@ class V4ShadowComparisonTest(unittest.TestCase):
         self.assertEqual(
             "v4_pages_across_v1_safety_wait", stopped["comparison_reason"],
         )
+
+    def test_claimed_capacity_attempt_is_pager_equivalent_not_missing_event(self):
+        row = compare_shadow_decisions(
+            project=PROJECT,
+            task_id="QA-118",
+            snapshot=snapshot(capacity_attempt_pending=True),
+            mission=mission(handled=1, latest=1),
+        )
+        self.assertEqual("START_REVIEW", row["v1"]["output"])
+        self.assertEqual("wait", row["v4"]["action"])
+        self.assertEqual("capacity_attempt_pending", row["v4"]["reason"])
+        self.assertEqual("pager_equivalent", row["comparison_class"])
+        self.assertEqual(
+            "v4_waits_existing_capacity_attempt",
+            row["comparison_reason"],
+        )
+        self.assertFalse(row["release_blocked"])
 
     def test_role_mismatch_and_missing_event_block_release(self):
         mismatch = compare_shadow_decisions(

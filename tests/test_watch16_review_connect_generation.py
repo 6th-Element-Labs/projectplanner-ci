@@ -37,23 +37,33 @@ try:
             kwargs["task_id"], runtime=kwargs.get("runtime") or "codex"))
     connect_dispatch.coordination_repo.request_wake = request_wake
     task_execution.runner_repo.task_live_executions = lambda *_args, **_kwargs: []
-    task_execution._projection = lambda *_args, **_kwargs: {
-        "task": {"task_id": "WATCH-16", "_wsId": "WATCH", "updated_at": 12.0},
-    }
+    def projection(head, updated_at):
+        return {
+            "task": {
+                "task_id": "WATCH-16", "_wsId": "WATCH",
+                "updated_at": updated_at,
+                "git_state": {
+                    "head_sha": head,
+                    "branch": "agent/switchboard/WATCH-16/existing-pr",
+                },
+            },
+        }
+
+    task_execution._projection = lambda *_args, **_kwargs: projection("a" * 40, 12.0)
     first = task_execution.start_task(
         "WATCH-16", project="switchboard", actor="review-steward",
         role="review_merge", source_sha="a" * 40,
         instruction="Review the PR and merge through the queue if green.")
     # Unrelated task activity must not alter the request payload for this head.
-    task_execution._projection = lambda *_args, **_kwargs: {
-        "task": {"task_id": "WATCH-16", "_wsId": "WATCH", "updated_at": 99.0},
-    }
+    task_execution._projection = lambda *_args, **_kwargs: projection("a" * 40, 99.0)
     task_execution.start_task(
         "WATCH-16", project="switchboard", actor="review-steward",
         role="review_merge", source_sha="a" * 40)
+    task_execution._projection = lambda *_args, **_kwargs: projection("b" * 40, 100.0)
     task_execution.start_task(
         "WATCH-16", project="switchboard", actor="review-steward",
         role="review_merge", source_sha="b" * 40)
+    task_execution._projection = lambda *_args, **_kwargs: projection("c" * 40, 101.0)
     retried = task_execution.retry_task(
         "WATCH-16", project="switchboard", actor="review-steward",
         role="review_merge", source_sha="c" * 40,

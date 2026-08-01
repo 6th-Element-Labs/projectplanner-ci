@@ -31,6 +31,7 @@ class ServerCompleteClaimPrReady(unittest.TestCase):
                 "status": "marked_ready",
                 "pr_number": 930,
                 "is_draft": False,
+                "head_sha": "a" * 40,
                 "message": "GitHub confirmed ready",
             }
 
@@ -61,6 +62,44 @@ class ServerCompleteClaimPrReady(unittest.TestCase):
             saved = json.loads(saved)
         self.assertEqual(saved["pr_ready"]["status"], "marked_ready")
         self.assertFalse(saved["pr_ready"]["is_draft"])
+
+    def test_refuses_agent_invented_head_before_persistence(self):
+        result = complete_claim.execute(
+            command({
+                "pr_number": 930,
+                "pr_url": "https://github.com/6th-Element-Labs/projectplanner/pull/930",
+                "head_sha": "a" * 40,
+            }),
+            actor="agent/codex/coord-111",
+            complete=lambda *_args, **_kwargs: self.fail("must not persist"),
+            ensure_ready=lambda *_args, **_kwargs: {
+                "schema": "switchboard.pr_ready.v1",
+                "status": "already_ready",
+                "pr_number": 930,
+                "is_draft": False,
+                "head_sha": "b" * 40,
+            },
+        )
+
+        self.assertFalse(result.get("completed"))
+        self.assertEqual(result.get("error_code"), "completion_pr_head_mismatch")
+        self.assertEqual(result.get("submitted_head_sha"), "a" * 40)
+        self.assertEqual(result.get("live_head_sha"), "b" * 40)
+
+    def test_refuses_ready_pr_without_authoritative_head(self):
+        result = complete_claim.execute(
+            command({"pr_number": 930, "head_sha": "a" * 40}),
+            actor="agent/codex/coord-111",
+            complete=lambda *_args, **_kwargs: self.fail("must not persist"),
+            ensure_ready=lambda *_args, **_kwargs: {
+                "schema": "switchboard.pr_ready.v1",
+                "status": "already_ready",
+                "pr_number": 930,
+                "is_draft": False,
+            },
+        )
+
+        self.assertEqual(result.get("error_code"), "completion_pr_head_unproven")
 
     def test_refuses_still_draft_without_persisting(self):
         def gateway(evidence, *, project, actor):

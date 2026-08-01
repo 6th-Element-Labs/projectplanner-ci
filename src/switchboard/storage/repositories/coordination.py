@@ -912,10 +912,14 @@ def _acquire_execution_lease_in(
             "UPDATE resource_leases SET released_at=?,lease_state='expired',"
             "fence_epoch=COALESCE(fence_epoch,0)+1 WHERE id=?",
             (now, lease["id"]))
+    # C1/W4 generations identify the task's physical execution sequence, not
+    # a per-role retry count.  A new review or remediation role must therefore
+    # advance beyond every earlier role so exact-head publication ordering can
+    # never mistake its completion for a stale same-generation receipt.
     generation_row = c.execute(
         "SELECT COALESCE(MAX(execution_generation),0)+1 AS next_generation "
         "FROM resource_leases WHERE resource_type='execution' "
-        "AND task_id=? AND execution_role=?", (task_id, role)).fetchone()
+        "AND task_id=?", (task_id,)).fetchone()
     generation = int(generation_row["next_generation"])
     lease_id = "execlease-" + uuid.uuid4().hex[:20]
     reserved_wake_id = "wake-" + uuid.uuid4().hex[:16]

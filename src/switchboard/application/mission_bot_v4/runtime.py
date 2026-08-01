@@ -8,6 +8,7 @@ can be exercised without giving it global production authority.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+import time
 from typing import Any
 
 from switchboard.application.commands import capacity_mission_events, task_execution
@@ -16,11 +17,32 @@ from switchboard.application.mission_bot_v4.worker import (
     tick_scoped_mission,
 )
 from switchboard.domain.mission_bot_v4 import active_mission_failure
-from switchboard.storage.repositories import autopilot_scopes, runner, tasks
+from switchboard.storage.repositories import autopilot_scopes, coordination, runner, tasks
 from switchboard.storage.repositories.mission_journal import (
+    MissionJournalError,
     MissionJournalRepository,
     default_mission_journal_repository,
 )
+
+
+def task_has_pending_capacity_attempt(
+    task_id: str,
+    *,
+    project: str,
+    list_wakes: Callable[..., list[Mapping[str, Any]]] = coordination.list_wake_intents,
+    now: float | None = None,
+) -> bool:
+    """Read an outstanding Capacity request without treating it as liveness."""
+    observed_at = time.time() if now is None else float(now)
+    rows = list_wakes(project=project, task_id=task_id)
+    for wake in rows:
+        if str(wake.get("status") or "").strip().lower() not in {"pending", "claimed"}:
+            continue
+        deadline = wake.get("deadline")
+        if deadline is not None and float(deadline) <= observed_at:
+            continue
+        return True
+    return False
 
 
 def production_ports(
@@ -43,6 +65,7 @@ def production_ports(
     )
     task_reader = resolve("get_task", tasks.get_task)
     liveness_reader = resolve("task_has_live_execution", runner.task_has_live_execution)
+    wake_reader = resolve("list_wake_intents", coordination.list_wake_intents)
 
     def validate(
         authority: Mapping[str, Any], **kwargs: Any,
@@ -60,6 +83,11 @@ def production_ports(
     def has_live(task_id: str, *, project: str) -> bool:
         # ADR-0008 C1: this port is bound only to runner_sessions truth.
         return bool(liveness_reader(task_id, project=project))
+
+    def has_pending(task_id: str, *, project: str) -> bool:
+        return task_has_pending_capacity_attempt(
+            task_id, project=project, list_wakes=wake_reader,
+        )
 
     def start(task_id: str, **kwargs: Any) -> Mapping[str, Any]:
         authority = dict(kwargs.pop("scope_authority"))
@@ -97,6 +125,7 @@ def production_ports(
         get_task=get_task,
         has_live_execution=has_live,
         start_task=start,
+        has_pending_capacity_attempt=has_pending,
         journal=journal,
     )
 
@@ -200,6 +229,7 @@ def run_scoped_mission_tick(
         task_id=task_id,
     ) or {}
     projection: dict[str, Any] | None = None
+    review_handoff_projection: dict[str, Any] | None = None
     terminal_projection: dict[str, Any] | None = None
     if authority.get("allowed") is True:
         task_reader = getattr(store_mod, "get_task", None)
@@ -221,6 +251,33 @@ def run_scoped_mission_tick(
                 "release_blocked": True,
                 "mutations": 0,
                 "terminal_projection": terminal_projection,
+            }
+        try:
+            review_handoff_projection = journal.project_review_handoff(
+                task_id,
+                project=project,
+                actor=actor,
+                task=task_reader(task_id, project=project) or {},
+            )
+        except MissionJournalError as exc:
+            return {
+                "schema": "switchboard.mission_worker_tick.v4",
+                "task_id": task_id,
+                "action": "block_release",
+                "reason": exc.code,
+                "release_blocked": True,
+                "mutations": 0,
+                "message": str(exc),
+            }
+        if review_handoff_projection.get("release_blocked") is True:
+            return {
+                "schema": "switchboard.mission_worker_tick.v4",
+                "task_id": task_id,
+                "action": "block_release",
+                "reason": str(review_handoff_projection.get("reason")),
+                "release_blocked": True,
+                "mutations": 0,
+                "review_handoff_projection": review_handoff_projection,
             }
         before_projection = journal.get_item(task_id, project=project) or {}
         before_sequence = int(before_projection.get("latest_sequence") or 0)
@@ -256,6 +313,8 @@ def run_scoped_mission_tick(
     )
     if projection is not None:
         result["capacity_projection"] = projection
+    if review_handoff_projection is not None:
+        result["review_handoff_projection"] = review_handoff_projection
     if terminal_projection is not None:
         result["terminal_projection"] = terminal_projection
     return result
@@ -266,6 +325,7 @@ def assess_stuck_mission_invariant(
     project: str,
     journal: MissionJournalRepository = default_mission_journal_repository,
     has_live_execution: Callable[..., bool] = runner.task_has_live_execution,
+    has_pending_capacity_attempt: Callable[..., bool] = task_has_pending_capacity_attempt,
 ) -> dict[str, Any]:
     """Read every staged mission and fail release readiness on blind waits.
 
@@ -302,6 +362,9 @@ def assess_stuck_mission_invariant(
                 and bool(item.get("terminal_ref"))
             ),
             "runner_live": bool(has_live_execution(task_id, project=project)),
+            "capacity_attempt_pending": bool(
+                has_pending_capacity_attempt(task_id, project=project)
+            ),
             "handled_through": item.get("handled_through"),
             "latest_sequence": item.get("latest_sequence"),
         })
@@ -325,4 +388,5 @@ __all__ = [
     "project_terminal_provenance",
     "production_ports",
     "run_scoped_mission_tick",
+    "task_has_pending_capacity_attempt",
 ]

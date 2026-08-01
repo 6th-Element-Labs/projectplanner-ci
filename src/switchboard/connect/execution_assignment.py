@@ -118,6 +118,24 @@ def build_execution_assignment(
     # omitted (not defaulted) when absent so contracts minted before the
     # profile existed rebuild byte-identically on the claim path.
     profile = str(lifecycle.get("session_policy_profile") or "").strip().lower()
+    typed_tools = {
+        "executed_test_run": "record_executed_test_run",
+        "agent_requires_human": "agent_requires_human",
+        "stale_assignment": "report_stale_assignment",
+    }
+    # A v4 mission is already inside the durable pager contract.  Returning a
+    # stale observation through the legacy completion-run factory would create
+    # a second lifecycle owner and can race the reporting runner.  Its exact
+    # handoff is the journal-backed yield command instead: Coordination records
+    # the new cursor/role and Capacity independently acknowledges surrender.
+    if str(lifecycle.get("mission_key") or "").strip().startswith("v4:"):
+        typed_tools = {
+            "executed_test_run": "record_executed_test_run",
+            "agent_requires_human": "agent_requires_human",
+            "mission_context": "get_mission_context",
+            "mission_yield": "yield_mission",
+        }
+
     contract: dict[str, Any] = {
         "schema": SCHEMA,
         "task_id": str(task_id or "").strip().upper(),
@@ -135,11 +153,7 @@ def build_execution_assignment(
         # hard-compares claim_expectations to the exact shape derived by
         # claim_expectations_for. Typed tool names live here so agents see
         # them without breaking that bind.
-        "typed_tools": {
-            "executed_test_run": "record_executed_test_run",
-            "agent_requires_human": "agent_requires_human",
-            "stale_assignment": "report_stale_assignment",
-        },
+        "typed_tools": typed_tools,
     }
     if profile:
         contract["session_policy_profile"] = profile

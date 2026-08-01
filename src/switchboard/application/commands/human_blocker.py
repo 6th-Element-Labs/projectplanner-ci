@@ -137,7 +137,13 @@ def build_work_session_human_closeout_request(
         "minimum_human_action": min_action,
         "authority": "attention_request",
         "mirrors_only": ["pr_comment", "cli_closeout", "agent_message"],
-        "source_tool": HUMAN_BLOCKER_TOOL,
+        # Preserve the authenticated edge that created the request.  The
+        # legacy record_human_blocker alias may call the same command, but an
+        # agent_requires_human receipt must remain visibly distinguishable.
+        "source_tool": (
+            _text(blocker.get("source_tool"))
+            or AGENT_REQUIRES_HUMAN_TOOL
+        ),
         "work_session_id": work_session_id,
     }
     digest = hashlib.sha256(json.dumps({
@@ -167,7 +173,7 @@ def build_work_session_human_closeout_request(
 
 
 def _set_task_blocked(task_id: str, *, project: str, actor: str,
-                      reason: str) -> None:
+                      reason: str, source_tool: str) -> None:
     from db.connection import _conn
 
     now = time.time()
@@ -184,7 +190,9 @@ def _set_task_blocked(task_id: str, *, project: str, actor: str,
                  "route": "human",
                  "reason": reason,
                  "board_status": "Blocked",
-                 "source_tool": HUMAN_BLOCKER_TOOL,
+                 "source_tool": (
+                     _text(source_tool) or AGENT_REQUIRES_HUMAN_TOOL
+                 ),
              }, sort_keys=True), now),
         )
 
@@ -198,47 +206,38 @@ def _fence_session_runner(session: Mapping[str, Any], *, project: str,
     if not runner_id:
         return None
     from switchboard.storage.repositories import runner as runner_repo
-    if runner_repo.get_runner_session(runner_id, project=project) is None:
+    runner = runner_repo.get_runner_session(runner_id, project=project)
+    if runner is None:
         # No physical execution exists to contradict the sticky board state.
         return {
             "fenced": True,
             "already_stopped": True,
             "runner_session_id": runner_id,
         }
-    env = _map(session.get("env"))
-    # The repository commit belongs to the Work Session; the execution head
-    # belongs to the server-owned execution lease.  Implementation assignments
-    # may intentionally be headless, so preserve an explicitly present empty
-    # execution head instead of replacing it with the Work Session head.
-    if "execution_head_sha" in env:
-        execution_head_sha = _text(env.get("execution_head_sha")).lower()
-    elif "assignment_exact_head_sha" in env:
-        execution_head_sha = _text(env.get("assignment_exact_head_sha")).lower()
-    else:
-        execution_head_sha = _text(session.get("head_sha")).lower()
+    # ADR-0008 C1: runner_sessions owns execution identity.  A Work Session is
+    # repository evidence and may omit or mis-shape its env metadata; it must
+    # never force this coordination command onto a weaker "operator" fence.
+    # Read the exact server-owned generation from the bound runner instead.
+    execution = _map(runner.get("execution"))
     identity = {
         "runner_session_id": runner_id,
-        "execution_id": _text(
-            env.get("execution_id") or session.get("execution_id")),
-        "generation": int(
-            session.get("execution_generation")
-            or env.get("execution_generation") or 0),
-        "fence_epoch": int(session.get("lease_epoch") or env.get("lease_epoch") or 0),
-        "role": _text(
-            session.get("execution_role") or env.get("execution_role")
-            or "implementation").lower(),
-        "head_sha": execution_head_sha,
+        "execution_id": _text(execution.get("execution_id")),
+        "generation": int(execution.get("generation") or 0),
+        "fence_epoch": int(execution.get("fence_epoch") or 0),
+        "role": _text(execution.get("role")).lower(),
+        # Headless implementation admission is explicit and valid.  Keep the
+        # required identity field present as an empty string.
+        "head_sha": _text(execution.get("head_sha")).lower(),
     }
     try:
         from switchboard.application.commands import task_execution
-        if identity["execution_id"] and identity["generation"] > 0:
-            return task_execution.fence_task_generation(
-                session.get("task_id"),
-                identity,
-                project=project,
-                actor=actor,
-                reason=reason,
-            )
+        return task_execution.fence_task_generation(
+            session.get("task_id"),
+            identity,
+            project=project,
+            actor=actor,
+            reason=reason,
+        )
     except Exception as exc:  # noqa: BLE001 - rendered as a typed refusal below
         return {
             "fenced": False,
@@ -247,22 +246,6 @@ def _fence_session_runner(session: Mapping[str, Any], *, project: str,
             "detail": str(exc)[:300],
             **_map(getattr(exc, "details", {})),
         }
-    try:
-        result = runner_repo.make_runner_lease_due(
-            runner_id,
-            reason=reason,
-            authority="operator",
-            actor=actor,
-            project=project,
-        )
-        return {
-            **result,
-            "fenced": bool(result.get("updated")),
-        }
-    except Exception as exc:  # noqa: BLE001
-        return {"fenced": False, "error": type(exc).__name__, "detail": str(exc)[:300]}
-
-
 def promote_human_blocker(
     *,
     task_id: str,
@@ -338,7 +321,13 @@ def promote_human_blocker(
         }
     session = updated.get("work_session") or session
 
-    _set_task_blocked(task_id, project=project, actor=actor, reason=reason)
+    _set_task_blocked(
+        task_id,
+        project=project,
+        actor=actor,
+        reason=reason,
+        source_tool=_text(blocker.get("source_tool")),
+    )
     request_data = build_work_session_human_closeout_request(
         task_id=task_id,
         work_session_id=work_session_id,
@@ -378,7 +367,10 @@ def promote_human_blocker(
         "attention": attention,
         "idempotent_replay": bool(attention.get("idempotent_replay")),
         "fence": fence,
-        "source_tool": HUMAN_BLOCKER_TOOL,
+        "source_tool": (
+            _text(blocker.get("source_tool"))
+            or AGENT_REQUIRES_HUMAN_TOOL
+        ),
         "work_session": session,
         "message": (
             f"Sticky Blocked(route=human) recorded for {task_id}; "

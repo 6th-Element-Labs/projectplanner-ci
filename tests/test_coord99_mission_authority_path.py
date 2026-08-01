@@ -65,6 +65,20 @@ task = store.create_task({
         "pr_url": "https://github.com/example/projectplanner/pull/99",
     },
 }, actor="coord99-test", project=P)
+with store._conn(P) as connection:
+    connection.execute(
+        "INSERT INTO task_git_state("
+        "task_id,branch,head_sha,pr_number,pr_url,updated_at) "
+        "VALUES (?,?,?,?,?,?)",
+        (
+            task["task_id"],
+            f"codex/{task['task_id']}-canary",
+            HEAD,
+            99,
+            "https://github.com/example/projectplanner/pull/99",
+            1.0,
+        ),
+    )
 
 finding = {
     "code": "required_exact_head_ci_failed",

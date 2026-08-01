@@ -224,11 +224,25 @@ ok(all(identity.get(field) is not None for field in (
        "execution_id", "generation", "role", "fence_epoch", "expires_at")),
    "Fleet execution identity exposes generation, role, fence, and expiry")
 original_control = task_execution._control
+original_projection = task_execution._projection
 task_execution._control = lambda *_args, **_kwargs: {"request_id": "control-review"}
-review_transition = task_execution.start_task(
-    tid, agent_id=agent, role="review_merge",
-    source_sha="a" * 40, project=P)
-task_execution._control = original_control
+task_execution._projection = lambda task_id, project: {
+    **original_projection(task_id, project),
+    "task": {
+        **(original_projection(task_id, project).get("task") or {}),
+        "git_state": {
+            "head_sha": "a" * 40,
+            "branch": "agent/switchboard/SIMPLIFY-18/existing-pr",
+        },
+    },
+}
+try:
+    review_transition = task_execution.start_task(
+        tid, agent_id=agent, role="review_merge",
+        source_sha="a" * 40, project=P)
+finally:
+    task_execution._control = original_control
+    task_execution._projection = original_projection
 ok(review_transition.get("action") == "transitioning"
    and review_transition.get("superseded_execution_id") == "run-s18-live",
    "exact-head review handoff supersedes the implementation generation first")

@@ -48,6 +48,12 @@ def assigned_claim(status: str, role: str, suffix: str):
             "pr_url": "https://github.com/example/projectplanner/pull/202",
         },
     }, actor="bug202-test", project=P)
+    task["git_state"] = {
+        "head_sha": HEAD,
+        "branch": f"codex/{task['task_id']}-{suffix.lower()}",
+        "pr_number": 202,
+        "pr_url": "https://github.com/example/projectplanner/pull/202",
+    }
     agent = f"agent/codex/{task['task_id'].lower()}"
     runner = f"run-bug202-{suffix.lower()}"
     host = f"host/bug202-{suffix.lower()}"

@@ -1,0 +1,16 @@
+{
+	auto_https off
+	admin off
+}
+
+http://127.0.0.1:8110 {
+	handle /mcp* {
+		reverse_proxy 127.0.0.1:8111 {
+			header_up Host 127.0.0.1:8111
+		}
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:8112
+	}
+}

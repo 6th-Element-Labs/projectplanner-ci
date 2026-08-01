@@ -77,7 +77,9 @@ token, overrides = codex_local_worker._work_session_mcp_bootstrap(
 ok(token == "wst-child-only"
    and captured[0][1] == "/ixp/v1/work_sessions/worksession-ui46/mcp_token",
    "exact bound Work Session issues the child-only bearer")
-ok(any("mcp_servers.taikun_plan.url" in item for item in overrides)
+ok(any(
+       'mcp_servers.taikun_plan.url="https://plan.taikunai.com/mcp?project=switchboard"'
+       == item for item in overrides)
    and any("bearer_token_env_var" in item for item in overrides)
    and any("required=true" in item for item in overrides)
    and not any("enabled_tools" in item for item in overrides),

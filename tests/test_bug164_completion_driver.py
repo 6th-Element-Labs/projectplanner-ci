@@ -158,7 +158,12 @@ class CompletionDriver(unittest.TestCase):
             ) as merge_gate,
             patch(
                 "switchboard.application.queries.task_session.execute_for",
-                return_value={},
+                return_value={
+                    "active_attempt": {
+                        "wake_id": "wake-claimed-810",
+                        "status": "claimed",
+                    },
+                },
             ),
             patch(
                 "switchboard.storage.repositories.autopilot_scopes."
@@ -173,6 +178,7 @@ class CompletionDriver(unittest.TestCase):
         self.assertEqual(snapshot["head_sha"], HEAD_810)
         self.assertEqual(snapshot["task_id"], "COORD-41")
         self.assertEqual(snapshot["status_contexts"]["ci"]["state"], "success")
+        self.assertTrue(snapshot["capacity_attempt_pending"])
         self.assertGreater(len(set(snapshot["source_observed_at"].values())), 1)
         self.assertNotEqual(
             set(snapshot["source_observed_at"].values()),

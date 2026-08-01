@@ -16,6 +16,8 @@ def _scope(**kwargs):
         "scope_id": "autopilot-bug269",
         "scope_type": kwargs.get("scope_type"),
         "status": "active",
+        "generation": 1,
+        "fence_epoch": 0,
     }
 
 
@@ -38,6 +40,7 @@ def test_task_journal_is_bootstrapped_before_scope_visibility():
         autopilot_scopes.start_autopilot_scope,
         tasks.get_task,
         mission_journal.create_mission,
+        mission_journal.ensure_scope_start_event,
     )
     try:
         autopilot_scopes.validate_autopilot_target = lambda **_kwargs: None
@@ -47,6 +50,10 @@ def test_task_journal_is_bootstrapped_before_scope_visibility():
         mission_journal.create_mission = lambda task_id, **kwargs: (
             calls.append(("mission", kwargs["project"], task_id,
                           kwargs["requested_role"])) or {"mission": {}}
+        )
+        mission_journal.ensure_scope_start_event = lambda task_id, **kwargs: (
+            calls.append(("rearm", kwargs["project"], task_id,
+                          kwargs["scope_id"])) or {"created": False}
         )
         autopilot_scopes.start_autopilot_scope = lambda **kwargs: (
             calls.append(("scope", kwargs["project"], kwargs["task_id"]))
@@ -61,6 +68,7 @@ def test_task_journal_is_bootstrapped_before_scope_visibility():
         assert calls == [
             ("mission", PROJECT, "QA-117", "implementation"),
             ("scope", PROJECT, "qa-117"),
+            ("rearm", PROJECT, "QA-117", "autopilot-bug269"),
         ]
     finally:
         (
@@ -68,6 +76,7 @@ def test_task_journal_is_bootstrapped_before_scope_visibility():
             autopilot_scopes.start_autopilot_scope,
             tasks.get_task,
             mission_journal.create_mission,
+            mission_journal.ensure_scope_start_event,
         ) = originals
 
 
@@ -77,6 +86,7 @@ def test_deliverable_bootstraps_nonterminal_tasks_and_skips_proven_done():
         deliverables.get_mission_status,
         autopilot_scopes.start_autopilot_scope,
         mission_journal.create_mission,
+        mission_journal.ensure_scope_start_event,
     )
     try:
         deliverables.get_mission_status = lambda **_kwargs: {
@@ -109,6 +119,10 @@ def test_deliverable_bootstraps_nonterminal_tasks_and_skips_proven_done():
             calls.append(("mission", task_id, kwargs["requested_role"]))
             or {"mission": {}}
         )
+        mission_journal.ensure_scope_start_event = lambda task_id, **kwargs: (
+            calls.append(("rearm", task_id, kwargs["scope_id"]))
+            or {"created": False}
+        )
         autopilot_scopes.start_autopilot_scope = lambda **kwargs: (
             calls.append(("scope", kwargs["deliverable_id"])) or _scope(**kwargs)
         )
@@ -121,12 +135,15 @@ def test_deliverable_bootstraps_nonterminal_tasks_and_skips_proven_done():
             ("mission", "QA-118", "implementation"),
             ("mission", "QA-119", "review_merge"),
             ("scope", "shadow-deliverable"),
+            ("rearm", "QA-118", "autopilot-bug269"),
+            ("rearm", "QA-119", "autopilot-bug269"),
         ]
     finally:
         (
             deliverables.get_mission_status,
             autopilot_scopes.start_autopilot_scope,
             mission_journal.create_mission,
+            mission_journal.ensure_scope_start_event,
         ) = originals
 
 

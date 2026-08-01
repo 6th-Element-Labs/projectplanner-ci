@@ -68,6 +68,24 @@ def append_material_event(
     )
 
 
+def ensure_scope_start_event(
+    task_id: str,
+    *,
+    project: str,
+    scope_id: str,
+    scope_generation: int,
+    scope_fence: int,
+    repository: MissionJournalRepository = default_mission_journal_repository,
+) -> dict[str, Any]:
+    return repository.ensure_scope_start_event(
+        task_id,
+        project=project,
+        scope_id=scope_id,
+        scope_generation=scope_generation,
+        scope_fence=scope_fence,
+    )
+
+
 def transition_mission(
     task_id: str,
     *,
@@ -138,6 +156,7 @@ __all__ = [
     "MissionJournalError",
     "append_material_event",
     "create_mission",
+    "ensure_scope_start_event",
     "initial_requested_role",
     "transition_mission",
     "yield_mission",

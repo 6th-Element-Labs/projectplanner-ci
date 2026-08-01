@@ -2,6 +2,7 @@
 """COORD-115: the real Human closeout parks a staged v4 mission atomically."""
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import tempfile
@@ -92,6 +93,11 @@ class HumanRequestParkingTest(unittest.TestCase):
             task_id, session_id, reason="provider_acceptance_capacity_missing",
         )
         self.assertTrue(first["recorded"])
+        self.assertEqual("agent_requires_human", first["source_tool"])
+        self.assertEqual(
+            "agent_requires_human",
+            first["attention"]["request"]["context"]["source_tool"],
+        )
         request_id = str(first["attention_request_id"])
         self.assertEqual({
             "recorded": True,
@@ -109,6 +115,17 @@ class HumanRequestParkingTest(unittest.TestCase):
         self.assertEqual("coordination", requested[0]["source_plane"])
         self.assertEqual(request_id, requested[0]["external_ref"])
         self.assertEqual(request_id, requested[0]["payload"]["human_request_id"])
+        with _conn(PROJECT) as connection:
+            activity = connection.execute(
+                "SELECT payload FROM activity WHERE task_id=? "
+                "AND kind='task.human_blocker' ORDER BY id DESC LIMIT 1",
+                (task_id,),
+            ).fetchone()
+        self.assertIsNotNone(activity)
+        self.assertEqual(
+            "agent_requires_human",
+            json.loads(activity["payload"])["source_tool"],
+        )
 
         starts: list[dict] = []
         ports = ScopedMissionWorkerPorts(

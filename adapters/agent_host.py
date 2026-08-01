@@ -1468,7 +1468,7 @@ def _ensure_codex_workspace_trusted(workspace_path: str) -> None:
 def _connect_mcp_endpoint():
     """Public MCP URL the host already uses for Switchboard Communicate."""
     base = str(os.environ.get("PM_BASE") or "https://plan.taikunai.com").rstrip("/")
-    return f"{base}/mcp"
+    return f"{base}/mcp?{urllib.parse.urlencode({'project': PROJECT})}"
 
 
 def _connect_codex_mcp_argv():
@@ -1525,11 +1525,48 @@ def connect_workspace_request(wake, inventory):
         or lifecycle.get("role")
         or "implementation"
     ).strip().lower()
+    exact_head_role = desired_role in {"review_merge", "remediation"}
     existing_pr_branch = (
         str(lifecycle.get("pr_branch") or "").strip()
-        if desired_role in {"review_merge", "remediation"}
+        if exact_head_role
         else ""
     )
+    if exact_head_role and not existing_pr_branch:
+        raise WorkspaceMaterializationError(
+            "workspace_pr_branch_missing",
+            "review/remediation workspace requires the persisted PR branch",
+            role=desired_role,
+        )
+    if context:
+        base_sha = str(context.get("base_sha") or "").strip().lower()
+        checkout_sha = str(context.get("checkout_sha") or "").strip().lower()
+        expected_checkout = base_sha
+        if exact_head_role:
+            lifecycle_head = str(lifecycle.get("head_sha") or "").strip().lower()
+            assignment_head = str(
+                execution_assignment.get("exact_head_sha") or ""
+            ).strip().lower()
+            expected_checkout = assignment_head
+            if not (
+                re.fullmatch(r"[0-9a-f]{40}", checkout_sha)
+                and checkout_sha == lifecycle_head == assignment_head
+            ):
+                raise WorkspaceMaterializationError(
+                    "workspace_exact_head_mismatch",
+                    "checkout SHA, lifecycle head, and assignment head must agree",
+                    role=desired_role,
+                    checkout_sha=checkout_sha or None,
+                    lifecycle_head_sha=lifecycle_head or None,
+                    assignment_head_sha=assignment_head or None,
+                )
+        if checkout_sha and checkout_sha != expected_checkout:
+            raise WorkspaceMaterializationError(
+                "workspace_exact_head_mismatch",
+                "execution checkout SHA disagrees with the assigned target",
+                role=desired_role,
+                checkout_sha=checkout_sha,
+                expected_checkout_sha=expected_checkout,
+            )
     common = {
         "task_id": task_id,
         "execution_id": execution_id,
@@ -2124,6 +2161,7 @@ def register_runner_session(rec, wake, inventory):
             "execution_repository": execution_context.get("repository"),
             "execution_default_branch": execution_context.get("default_branch"),
             "execution_base_sha": execution_context.get("base_sha"),
+            "execution_checkout_sha": execution_context.get("checkout_sha"),
         } if connect_assignment else {
             "role": assignment.get("role") or lifecycle.get("role") or "implementation",
             "lifecycle_role": assignment.get("role") or lifecycle.get("role") or "implementation",

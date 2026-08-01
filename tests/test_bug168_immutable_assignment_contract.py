@@ -24,7 +24,7 @@ from execution_policy_fixture import (  # noqa: E402
 )
 from switchboard.application.commands import connect_dispatch  # noqa: E402
 from switchboard.application.commands.execution_context import (  # noqa: E402
-    with_generation,
+    with_checkout_sha,
 )
 from switchboard.connect import (  # noqa: E402
     Ack, HostRuntimeConfig, LaunchRefused, LeaseState, build_launch_spec,
@@ -77,24 +77,6 @@ try:
         "task_id": task["task_id"],
         "runtime": "codex",
     }
-    policy["execution_context"] = with_generation({
-        "schema": "switchboard.execution_context.v1",
-        "project_id": P,
-        "task_id": task["task_id"],
-        "repository": "6th-Element-Labs/projectplanner",
-        "base_sha": HEAD,
-        "workspace": {"isolation": "worktree"},
-        "runtime": {"registry_name": "codex"},
-        "provider": {
-            "provider": "openai-codex",
-            "connection_reference": "provider-test",
-            "credential_version": 1,
-            "lifecycle_state": "active",
-            "revocation_state": "",
-        },
-        "authority_digest": "sha256:bug168",
-    }, policy["lifecycle"]["generation"])
-
     assert contract["task_id"] == task["task_id"]
     assert contract["assignment_id"] == assignment["assignment_id"]
     assert contract["execution_id"] == policy["lifecycle"]["execution_id"]
@@ -103,6 +85,8 @@ try:
     assert contract["exact_head_sha"] == HEAD
     assert contract["exact_pr"]["number"] == 831
     assert policy["lifecycle"]["pr_branch"] == PR_BRANCH
+    assert policy["execution_context"]["base_sha"] == "a" * 40
+    assert policy["execution_context"]["checkout_sha"] == HEAD
     assert contract["launch_pointer"] == {
         "trigger": "changes_requested",
         "evidence_url": task["git_state"]["pr_url"],
@@ -190,6 +174,10 @@ try:
                     "role": "implementation",
                 },
             },
+            "execution_context": with_checkout_sha(
+                policy["execution_context"],
+                policy["execution_context"]["base_sha"],
+            ),
         },
     }
     implementation_branch = agent_host.connect_workspace_request(

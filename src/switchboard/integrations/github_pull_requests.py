@@ -71,6 +71,9 @@ def _result(
     status: str,
     repository: str = "",
     is_draft: bool | None = None,
+    head_sha: str = "",
+    head_ref: str = "",
+    pr_url: str = "",
     message: str = "",
     error_code: str = "",
     failure_class: str = "",
@@ -81,6 +84,9 @@ def _result(
         "repository": repository or None,
         "status": status,
         "is_draft": is_draft,
+        "head_sha": head_sha or None,
+        "head_ref": head_ref or None,
+        "pr_url": pr_url or None,
         "message": message,
         **({"error_code": error_code} if error_code else {}),
         **({"failure_class": failure_class} if failure_class else {}),
@@ -157,11 +163,15 @@ class GitHubPullRequestReadyAdapter:
                 message="GitHub did not return the completion PR.",
             )
         if pull_request.get("draft") is False:
+            head = dict(pull_request.get("head") or {})
             return _result(
                 number,
                 repository=repository,
                 status="already_ready",
                 is_draft=False,
+                head_sha=str(head.get("sha") or ""),
+                head_ref=str(head.get("ref") or ""),
+                pr_url=str(pull_request.get("html_url") or ""),
                 message="GitHub reports the PR ready for review.",
             )
         if pull_request.get("draft") is not True:
@@ -221,11 +231,15 @@ mutation MarkPullRequestReady($pullRequestId: ID!) {
                 failure_class="failed_gate",
                 message="GitHub did not confirm the PR as ready after the mutation.",
             )
+        head = dict(reread.get("head") or {})
         return _result(
             number,
             repository=repository,
             status="marked_ready",
             is_draft=False,
+            head_sha=str(head.get("sha") or ""),
+            head_ref=str(head.get("ref") or ""),
+            pr_url=str(reread.get("html_url") or ""),
             message="GitHub confirmed the PR ready after mutation.",
         )
 

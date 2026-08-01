@@ -99,6 +99,27 @@ class ScopedCompletionCoordinator(CoordinatorDaemon):
             project=task_project,
         )
 
+    def _completion_tick(
+        self,
+        task_id: str,
+        *,
+        task_project: str,
+        scope_project: str,
+        authority: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Run the v1 completion owner used by the production coordinator."""
+        from switchboard.application.completion_driver import run_completion_tick
+
+        return run_completion_tick(
+            task_id,
+            project=task_project,
+            actor=self.config.actor,
+            agent_id=self.agent_id,
+            store_mod=self.store,
+            scope_authority=authority,
+            scope_project=scope_project,
+        )
+
 
     def _run_standalone_task_scope(self, project: str, scope: Dict[str, Any],
                                    authority: Dict[str, Any]) -> Dict[str, Any]:
@@ -123,16 +144,12 @@ class ScopedCompletionCoordinator(CoordinatorDaemon):
             return {"status": "observed", "scope_id": scope.get("scope_id"),
                     "task_id": task_id, "task_status": detail.get("status")}
 
-        from switchboard.application.completion_driver import run_completion_tick
         try:
-            tick = run_completion_tick(
+            tick = self._completion_tick(
                 task_id,
-                project=task_project,
-                actor=self.config.actor,
-                agent_id=self.agent_id,
-                store_mod=self.store,
-                scope_authority=authority,
+                task_project=task_project,
                 scope_project=project,
+                authority=authority,
             )
             completion_wake = self._complete_attention_wake(
                 task_id=task_id,
@@ -218,16 +235,12 @@ class ScopedCompletionCoordinator(CoordinatorDaemon):
             if task_project != project:
                 self._register_or_heartbeat(task_project)
             if self.config.act:
-                from switchboard.application.completion_driver import run_completion_tick
                 try:
-                    tick = run_completion_tick(
+                    tick = self._completion_tick(
                         task_id,
-                        project=task_project,
-                        actor=self.config.actor,
-                        agent_id=self.agent_id,
-                        store_mod=self.store,
-                        scope_authority=authority,
+                        task_project=task_project,
                         scope_project=project,
+                        authority=authority,
                     )
                     completion_wake = self._complete_attention_wake(
                         task_id=task_id,

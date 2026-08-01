@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
+import time
 
 
 TMP = tempfile.mkdtemp(prefix="coord20-auto-remediation-")
@@ -228,6 +229,68 @@ try:
        "merge-gate save accounting is conservative and replay-idempotent")
     ok(len(write_through_calls) == writes_before_save + 1,
        "save state+audit persistence uses one single-writer transaction")
+
+    # The exact review generation records its verdict before C3 surrender.
+    # That expected active review claim is not a competing writer or a Human
+    # exception; the persisted automatic finding remains ordinary remediation.
+    active_review_task = reviewable_task(
+        "active review claim remediation fixture", "7" * 40)
+    now = time.time()
+    with store._conn(PROJECT) as c:
+        c.execute(
+            "INSERT INTO task_claims("
+            "id,task_id,agent_id,principal_id,status,claimed_at,expires_at,"
+            "runner_session_id,execution_generation,execution_role,lease_epoch"
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "claim-active-review", active_review_task, REVIEWER,
+                "direct-session/run-active-review", "active", now, now + 600,
+                "run-active-review", 2, "review_merge", 1,
+            ),
+        )
+    active_review = commands.execute_mapping(
+        verdict(
+            active_review_task,
+            "7" * 40,
+            [finding("COORD20-ACTIVE-REVIEW")],
+        ),
+        actor=REVIEWER,
+        principal_id=REVIEWER_PRINCIPAL,
+        project=PROJECT,
+    )
+    active_round = active_review.get("auto_remediation") or {}
+    ok(active_round.get("status") == "queued"
+       and active_round.get("human_intervention_required") is False
+       and not active_round.get("human_escalation"),
+       "the current review claim queues remediation without false Human escalation")
+
+    conflicting_task = reviewable_task(
+        "conflicting implementation claim fixture", "8" * 40)
+    with store._conn(PROJECT) as c:
+        c.execute(
+            "INSERT INTO task_claims("
+            "id,task_id,agent_id,principal_id,status,claimed_at,expires_at,"
+            "runner_session_id,execution_generation,execution_role,lease_epoch"
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "claim-conflicting-implementation", conflicting_task, WORKER,
+                "direct-session/run-conflict", "active", now, now + 600,
+                "run-conflict", 2, "implementation", 1,
+            ),
+        )
+    conflict = commands.execute_mapping(
+        verdict(
+            conflicting_task,
+            "8" * 40,
+            [finding("COORD20-CONFLICT")],
+        ),
+        actor=REVIEWER,
+        principal_id=REVIEWER_PRINCIPAL,
+        project=PROJECT,
+    ).get("auto_remediation") or {}
+    ok(conflict.get("status") == "escalated"
+       and conflict.get("human_intervention_required") is True,
+       "a genuinely conflicting non-review claim still fails closed")
 
     # Escalate-class findings never become silent automatic acceptance criteria.
     escalation_task = reviewable_task("judgment finding fixture", "3" * 40)

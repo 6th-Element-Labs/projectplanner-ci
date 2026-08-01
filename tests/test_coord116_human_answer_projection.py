@@ -216,6 +216,27 @@ class HumanAnswerProjectionTest(unittest.TestCase):
             ) if event["event_type"] == "human_answered"
         ])
 
+    def test_terminal_receipt_cleanup_does_not_invalidate_human_answer(self):
+        task_id, session_id, parked = self.park(
+            "terminalized Human session retains answer authority",
+        )
+        updated = store.update_work_session(
+            session_id,
+            {"status": "expired"},
+            actor="host/test",
+            project=PROJECT,
+        )
+        self.assertEqual("expired", updated["work_session"]["status"])
+
+        decided = self.decide(parked, "supply_credential")
+
+        self.assertEqual("resolved", decided["request"]["status"])
+        self.assertEqual("ACTIVE", decided["mission"]["state"])
+        self.assertEqual(
+            "",
+            journal.get_item(task_id, project=PROJECT)["human_request_id"],
+        )
+
     def test_nonmission_no_head_decision_uses_request_version_without_v4_effect(self):
         task_id, _session_id, parked = self.park(
             "v1 non-code Human decision has no PR head",

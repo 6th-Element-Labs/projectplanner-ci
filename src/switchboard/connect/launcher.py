@@ -80,6 +80,71 @@ def assignment_note(ack: Ack, completion_contract: dict | None = None) -> str:
     )
     if completion_contract:
         pointer = dict(completion_contract.get("launch_pointer") or {})
+        typed_tools = dict(completion_contract.get("typed_tools") or {})
+        if typed_tools.get("mission_yield") == "yield_mission":
+            stale_handoff = ""
+            if (
+                str(completion_contract.get("desired_role") or "")
+                == "implementation"
+                and not int(
+                    (completion_contract.get("exact_pr") or {}).get("number") or 0
+                )
+            ):
+                stale_handoff += (
+                    "This is an implementation assignment with no persisted PR. "
+                    "If no live PR exists for the task, that is the expected build "
+                    "state: claim the task, implement it, test it, publish the PR, "
+                    "and use complete_claim for the existing ADR-0008 C3 "
+                    "surrender/host-ack handoff. Do not yield merely because the "
+                    "new task has no PR, and never self-declare Done. "
+                )
+            stale_handoff += (
+                "The mechanical yield below is permitted only when the live "
+                "positive PR identity or head differs from the persisted "
+                "assignment fence, or that positive identity is missing. When "
+                "desired_role is review_merge or remediation and the live PR "
+                "number and head exactly match exact_pr and exact_head_sha, do "
+                "not yield before doing the assigned role: claim it, inspect the "
+                "current evidence, and perform review/merge or remediation. "
+                "If a live PR exists and its head differs from exact_head_sha, "
+                "perform no "
+                "repository write. Resolve the positive PR number and its live "
+                "head from persisted Switchboard/GitHub evidence; never use the "
+                "fresh workspace or base-branch HEAD as the PR head. Read "
+                "get_mission_context, then call "
+                "yield_mission for this exact execution_id and generation with "
+                "observed_through set to its latest_sequence, outcome=continue, "
+                "requested_role=review_merge, and head_sha set to the live head; "
+                "do not call report_stale_assignment or agent_requires_human for "
+                "that mechanical refresh. If positive PR identity or its exact "
+                "head is not persisted, yield outcome=waiting with "
+                "requested_role=review_merge and head_sha=exact_head_sha when "
+                "the assignment has one (otherwise empty), instead of inventing "
+                "either value."
+            )
+            if str(completion_contract.get("desired_role") or "") == "review_merge":
+                stale_handoff += (
+                    " When this review records changes_requested with automatic "
+                    "findings, the role boundary is yield_mission itself: first "
+                    "read the latest mission cursor, then call yield_mission with "
+                    "outcome=continue, requested_role=remediation, and the current "
+                    "persisted PR head. Do not call abandon_claim or complete_claim "
+                    "before that yield; either can terminalize this execution before "
+                    "the journal receives the remediation handoff. After a successful "
+                    "GitHub merge, call reconcile_task_merge for this exact task and "
+                    "verify canonical Done before exiting. Do not call yield_mission "
+                    "after merge: outcome=continue would append another review event "
+                    "and page a redundant reviewer. Reconciliation only observes "
+                    "canonical merge provenance; it does not let the agent declare "
+                    "Done."
+                )
+        else:
+            stale_handoff = (
+                "If the live PR head differs from exact_head_sha, perform no "
+                "repository write and call report_stale_assignment with "
+                "expected_head, live_head, PR, and an evidence URL; do not call "
+                "agent_requires_human for that mechanical refresh."
+            )
         identity = {
             key: completion_contract.get(key)
             for key in (
@@ -114,11 +179,9 @@ def assignment_note(ack: Ack, completion_contract: dict | None = None) -> str:
             + (f" ({pointer.get('trigger')})" if pointer.get("trigger") else "")
             + " and evidence URL as pointers only. Fail closed if identity/scope "
               "disagrees with the persisted execution lease. Claim and start "
-              "exactly desired_role. If the live PR head differs from "
-              "exact_head_sha, perform no repository write and call "
-              "report_stale_assignment with expected_head, live_head, PR, and an "
-              "evidence URL; do not call agent_requires_human for that mechanical "
-              "refresh. Do not wait for post-start runner injection."
+              "exactly desired_role. "
+            + stale_handoff
+            + " Do not wait for post-start runner injection."
         )
     return note
 

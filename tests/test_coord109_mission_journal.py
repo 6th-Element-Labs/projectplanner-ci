@@ -38,6 +38,11 @@ class MissionJournalTest(unittest.TestCase):
                 for name, sql in DDL_MIGRATIONS:
                     if name in MISSION_MIGRATIONS:
                         connection.execute(sql)
+                connection.execute(
+                    "CREATE TABLE task_git_state("
+                    "task_id TEXT PRIMARY KEY, pr_number INTEGER, pr_url TEXT, "
+                    "head_sha TEXT)"
+                )
                 connection.commit()
             finally:
                 connection.close()
@@ -191,6 +196,57 @@ class MissionJournalTest(unittest.TestCase):
             requested_role="review_merge", actor="codex/T-1", head_sha="abc",
         )
         self.assertFalse(replay["created"])
+
+        with self.assertRaises(MissionJournalError) as raised:
+            self.repository.yield_execution(
+                "T-1", project="alpha", execution_id="exec-1", generation=2,
+                observed_through=3, outcome="continue",
+                requested_role="remediation", actor="codex/T-1", head_sha="abc",
+            )
+        self.assertEqual("review_head_authority_required", raised.exception.code)
+        with self.repository._connection("alpha") as connection:
+            connection.execute(
+                "INSERT INTO task_git_state(task_id,pr_number,pr_url,head_sha) "
+                "VALUES (?,?,?,?)",
+                ("T-1", 30, "https://github.test/pull/30", "def"),
+            )
+
+        before_continue = self.repository.get_item("T-1", project="alpha")
+        advanced = self.repository.update_item(
+            "T-1",
+            project="alpha",
+            state="ACTIVE",
+            requested_role="review_merge",
+            expected_version=int(before_continue["version"]),
+            handled_through=int(before_continue["latest_sequence"]),
+        )
+        continued = self.repository.yield_execution(
+            "T-1", project="alpha", execution_id="exec-1", generation=2,
+            observed_through=int(advanced["handled_through"]), outcome="continue",
+            requested_role="remediation", actor="codex/T-1", head_sha="def",
+        )
+        after_continue = self.repository.get_item("T-1", project="alpha")
+        self.assertTrue(continued["cursor_current"])
+        self.assertEqual(
+            int(advanced["handled_through"]),
+            int(after_continue["handled_through"]),
+        )
+        self.assertTrue(continued["event_id"].startswith("missionevent-"))
+        self.assertEqual(
+            int(after_continue["handled_through"]) + 1,
+            int(after_continue["latest_sequence"]),
+        )
+        handoff = self.repository.list_events(
+            "T-1",
+            project="alpha",
+            after_sequence=int(after_continue["handled_through"]),
+            limit=1,
+        )[0]
+        self.assertEqual("agent_yielded", handoff["event_type"])
+        self.assertEqual("def", handoff["head_sha"])
+        self.assertEqual(30, handoff["pr_number"])
+        self.assertEqual("https://github.test/pull/30", handoff["external_ref"])
+        self.assertEqual("remediation", handoff["payload"]["requested_role"])
         with self.assertRaises(MissionJournalError) as raised:
             self.repository.yield_execution(
                 "T-1", project="alpha", execution_id="exec-old", generation=1,

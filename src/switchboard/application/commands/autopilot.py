@@ -222,6 +222,35 @@ def control_autopilot(deliverable_id: Any, *, project: str = DEFAULT_PROJECT,
                     journal_error_code=str(getattr(exc, "code", "") or ""),
                 ) from exc
         result = scopes_repo.start_autopilot_scope(**common, runtime=runtime)
+        if isinstance(result, dict) and result.get("error"):
+            _raise_store_error(result)
+        # A stopped scope does not terminate Capacity work, and a new Start is
+        # not itself permission to guess that work is absent.  Consult the sole
+        # C1 liveness authority, then publish the exact new scope as a durable
+        # Coordination event only when the pager cursor is otherwise empty.
+        from switchboard.storage.repositories import runner as runner_repo
+        try:
+            for mission_project, mission_task_id, _detail in missions:
+                if runner_repo.task_has_live_execution(
+                    mission_task_id, project=mission_project,
+                ):
+                    continue
+                mission_journal.ensure_scope_start_event(
+                    mission_task_id,
+                    project=mission_project,
+                    scope_id=str(result.get("scope_id") or ""),
+                    scope_generation=int(result.get("generation") or 0),
+                    scope_fence=int(result.get("fence_epoch") or 0),
+                )
+        except Exception as exc:
+            # Never leave a newly exposed scope silently spinning with no
+            # consumable journal fact.  Scope stop does not kill a runner.
+            scopes_repo.control_autopilot_scope(**common, action="stop")
+            raise AutopilotError(
+                "mission_bootstrap_failed",
+                "Mission journal re-arm failed; the Autopilot scope was stopped.",
+                cause=f"{type(exc).__name__}: {exc}",
+            ) from exc
     else:
         result = scopes_repo.control_autopilot_scope(**common, action=verb)
     if isinstance(result, dict) and result.get("error"):

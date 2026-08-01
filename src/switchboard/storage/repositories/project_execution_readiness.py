@@ -234,7 +234,12 @@ def get_project_execution_readiness(
         if eligible and host_class == "ephemeral":
             eligible_ephemeral.append(str(host.get("host_id") or ""))
 
-    persistent_required = "persistent" in allowed_classes
+    # Execution policy names the operator-facing placement classes (personal
+    # and shared), while Agent Host inventory reports the physical lifecycle
+    # class (persistent or ephemeral).  Treat either durable policy class as a
+    # requirement for persistent capacity; ``persistent`` is intentionally not
+    # a valid project-policy value.
+    persistent_required = bool({"personal", "shared"} & allowed_classes)
     persistent_blockers = []
     if persistent_required and not eligible_persistent:
         persistent_blockers.append(_blocker(

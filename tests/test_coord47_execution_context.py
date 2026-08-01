@@ -115,6 +115,19 @@ def test_generation_changes_context_digest_not_authority_digest():
     assert generation_one["authority_digest"] == generation_two["authority_digest"]
 
 
+def test_checkout_sha_is_generation_data_not_canonical_base_authority():
+    base_sha = "b" * 40
+    review_sha = "e" * 40
+    context = resolve(
+        "switchboard", "6th-Element-Labs/projectplanner", "master", base_sha)
+    review = execution_context.with_checkout_sha(context, review_sha)
+    assert review["base_sha"] == base_sha
+    assert review["checkout_sha"] == review_sha
+    assert review["digest"] != context["digest"]
+    assert review["authority_digest"] == context["authority_digest"]
+    execution_context.verify_digest(review)
+
+
 def test_atlas_and_switchboard_authority_cannot_leak():
     atlas = resolve("atlas", "6th-Element-Labs/ActionEngine", "main", "c" * 40)
     switchboard = resolve(

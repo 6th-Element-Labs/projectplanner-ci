@@ -24,6 +24,10 @@ ReadMapping = Callable[..., Mapping[str, Any] | None]
 StartTask = Callable[..., Mapping[str, Any]]
 
 
+def _no_pending_capacity_attempt(*_args: Any, **_kwargs: Any) -> bool:
+    return False
+
+
 @dataclass(frozen=True)
 class ScopedMissionWorkerPorts:
     """Explicit ports keep the pager independent of adapters and providers."""
@@ -32,6 +36,7 @@ class ScopedMissionWorkerPorts:
     get_task: ReadMapping
     has_live_execution: Callable[..., bool]
     start_task: StartTask
+    has_pending_capacity_attempt: Callable[..., bool] = _no_pending_capacity_attempt
     journal: MissionJournalRepository = default_mission_journal_repository
 
 
@@ -98,6 +103,9 @@ def tick_scoped_mission(
         "task_id": task_id,
         "mission_state": item.get("state"),
         "runner_live": ports.has_live_execution(task_id, project=project),
+        "capacity_attempt_pending": ports.has_pending_capacity_attempt(
+            task_id, project=project,
+        ),
         "requested_role": item.get("requested_role"),
         "handled_through": item.get("handled_through"),
         "latest_sequence": item.get("latest_sequence"),
@@ -147,7 +155,7 @@ def tick_scoped_mission(
 
     role = str(item["requested_role"])
     mission_key = (
-        f"{scope_authority.get('generation')}:{task_id}:{event_pointer}:{role}"
+        f"v4:{scope_authority.get('generation')}:{task_id}:{event_pointer}:{role}"
     )
     pointer = {
         "schema": "switchboard.mission_launch_pointer.v4",

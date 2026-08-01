@@ -204,7 +204,8 @@ def _work_session_mcp_bootstrap(
     parsed = urllib.parse.urlsplit(base)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise RuntimeError("native Codex Switchboard MCP endpoint is invalid")
-    endpoint = base + "/mcp"
+    project = str(os.environ.get("PM_PROJECT") or "switchboard").strip()
+    endpoint = base + "/mcp?" + urllib.parse.urlencode({"project": project})
     overrides = [
         f'mcp_servers.taikun_plan.url={json.dumps(endpoint)}',
         'mcp_servers.taikun_plan.bearer_token_env_var="SWITCHBOARD_WORK_SESSION_TOKEN"',

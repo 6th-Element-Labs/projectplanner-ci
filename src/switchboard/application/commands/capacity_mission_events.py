@@ -205,6 +205,7 @@ def append_terminal_wake_events(
     task_id: str,
     repository: MissionJournalRepository = default_mission_journal_repository,
     list_wakes: CapacityLister | None = None,
+    list_runners: CapacityLister | None = None,
 ) -> dict[str, Any]:
     """Append one ``execution_ended`` fact per terminal pre-runner wake."""
     item = repository.get_item(task_id, project=project)
@@ -224,6 +225,31 @@ def append_terminal_wake_events(
             "include_archived": True,
         },
     )
+    registered_runner_ids: set[str] = set()
+    allocated_runner_ids = {
+        str(wake.get("runner_session_id") or "").strip()
+        for wake in rows
+        if str(wake.get("runner_session_id") or "").strip()
+    }
+    if allocated_runner_ids:
+        runner_lister = list_runners or _default_runner_lister
+        runner_rows = _read_capacity_rows(
+            runner_lister,
+            operation="list_runner_sessions",
+            identity_field="runner_session_id",
+            kwargs={
+                "task_id": task_id, "include_stale": True, "project": project,
+            },
+        )
+        for runner in runner_rows:
+            row_task = str(runner.get("task_id") or "").strip()
+            if row_task and row_task != task_id:
+                raise CapacityMissionProjectionError(
+                    "capacity_task_mismatch",
+                    f"runner {runner['runner_session_id']} belongs to {row_task}, "
+                    f"not {task_id}",
+                )
+            registered_runner_ids.add(str(runner["runner_session_id"]))
 
     events: list[dict[str, Any]] = []
     for wake in rows:
@@ -236,7 +262,11 @@ def append_terminal_wake_events(
         status = str(wake.get("status") or "").strip().lower()
         if status not in TERMINAL_WAKE_STATUSES:
             continue
-        if wake.get("runner_session_id"):
+        # Agent Host allocates a runner id before workspace materialization and
+        # registration. The string stored on a terminal wake is correlation,
+        # not physical execution presence. ADR-0008 C1 permits only an actual
+        # runner_sessions row to prove that a runner existed.
+        if str(wake.get("runner_session_id") or "") in registered_runner_ids:
             continue
         wake_id = str(wake["wake_id"])
         requested_at = _timestamp(
@@ -315,6 +345,7 @@ def append_terminal_runner_events(
     )
 
     events: list[dict[str, Any]] = []
+    finalized_handoffs: list[dict[str, Any]] = []
     for session in rows:
         row_task = str(session.get("task_id") or "").strip()
         if row_task and row_task != task_id:
@@ -332,6 +363,26 @@ def append_terminal_runner_events(
         if started_at < mission_created_at:
             continue
         execution_id, generation = _runner_execution_identity(session)
+        handoff = repository.finalize_terminal_handoff(
+            task_id,
+            project=project,
+            execution_id=execution_id,
+            generation=generation,
+            now=(
+                float(session["updated_at"])
+                if isinstance(session.get("updated_at"), (int, float))
+                and float(session["updated_at"]) > 0
+                else None
+            ),
+        )
+        if handoff.get("accepted") is True:
+            finalized_handoffs.append({
+                "runner_session_id": runner_id,
+                "execution_id": execution_id,
+                "generation": generation,
+                **dict(handoff),
+            })
+            continue
         metadata = session.get("metadata")
         metadata = metadata if isinstance(metadata, Mapping) else {}
         execution = session.get("execution")
@@ -380,7 +431,11 @@ def append_terminal_runner_events(
             "runner_session_id": runner_id,
             "created": bool(event.get("created")),
         })
-    return {"action": "terminal_runner_events_projected", "events": events}
+    return {
+        "action": "terminal_runner_events_projected",
+        "events": events,
+        "finalized_handoffs": finalized_handoffs,
+    }
 
 
 def project_capacity_events(
@@ -400,6 +455,7 @@ def project_capacity_events(
             task_id=task_id,
             repository=repository,
             list_wakes=list_wakes,
+            list_runners=list_runners,
         ),
         "runner_projection": append_terminal_runner_events(
             project=project,

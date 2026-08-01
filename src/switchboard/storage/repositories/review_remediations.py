@@ -820,14 +820,28 @@ class ReviewRemediationRepository:
             ).fetchone()
             original_exit = first["original_exit_criteria"] if first else task["exit_criteria"]
             active_claim = c.execute(
-                "SELECT id FROM task_claims WHERE task_id=? AND status='active' "
+                "SELECT id, execution_role, runner_session_id FROM task_claims "
+                "WHERE task_id=? AND status='active' "
                 "AND expires_at>? LIMIT 1", (task_id, now),
             ).fetchone()
+            # A review verdict is necessarily recorded while its exact
+            # review_merge claim still owns the execution.  That expected C3
+            # ordering is not a competing lifecycle owner and must not be
+            # mislabeled as a Human escalation.  Every other active claim
+            # remains a fail-closed conflict.
+            expected_review_claim = bool(
+                active_claim
+                and str(active_claim["execution_role"] or "").strip().lower()
+                == "review_merge"
+            )
+            active_claim_conflict = bool(active_claim and not expected_review_claim)
             terminal = str(task["status"] or "") in {"Done", "Cancelled", "Canceled"}
             exhausted = round_no > max_rounds
             adversarial = _needs_adversarial_review(auto)
-            human_required = bool(escalations or exhausted or active_claim or terminal)
-            queueable = bool(auto) and not exhausted and not active_claim and not terminal
+            human_required = bool(
+                escalations or exhausted or active_claim_conflict or terminal
+            )
+            queueable = bool(auto) and not exhausted and not active_claim_conflict and not terminal
             status = "queued" if queueable else "escalated"
             remediation_id = "reviewremediation-" + uuid.uuid4().hex[:16]
             save_counted = int(
@@ -864,7 +878,7 @@ class ReviewRemediationRepository:
             action = "queue_review_remediation" if queueable else "escalate_review_remediation"
             reason = (
                 "round_budget_exhausted" if exhausted else
-                "active_claim_conflict" if active_claim else
+                "active_claim_conflict" if active_claim_conflict else
                 "terminal_task_conflict" if terminal else
                 "escalate_findings_require_human" if escalations and not auto else
                 "no_auto_findings" if not auto else
@@ -878,6 +892,7 @@ class ReviewRemediationRepository:
                     "auto_findings": auto, "escalation_findings": escalations,
                     "round": round_no, "max_rounds": max_rounds,
                     "active_claim_id": active_claim["id"] if active_claim else None,
+                    "expected_review_claim": expected_review_claim,
                 },
                 policy_rule=("coord.review.remediation.queue" if queueable
                              else "coord.review.remediation.escalate"),

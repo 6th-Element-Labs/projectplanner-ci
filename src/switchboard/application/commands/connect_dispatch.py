@@ -358,6 +358,31 @@ def enqueue_task(
             "role": lifecycle["role"],
             "task_id": task_id,
         }
+    checkout_sha = str(context.get("base_sha") or "").strip().lower()
+    if lifecycle["role"] in {"review_merge", "remediation"}:
+        assigned_head = str(lifecycle.get("head_sha") or "").strip().lower()
+        persisted_pr_head = str(
+            (task.get("git_state") or {}).get("head_sha") or ""
+        ).strip().lower()
+        if not persisted_pr_head or assigned_head != persisted_pr_head:
+            return {
+                "dispatched": False,
+                "error": "execution_checkout_head_mismatch",
+                "role": lifecycle["role"],
+                "task_id": task_id,
+                "assigned_head_sha": assigned_head or None,
+                "persisted_pr_head_sha": persisted_pr_head or None,
+            }
+        checkout_sha = assigned_head
+    try:
+        context = execution_context.with_checkout_sha(context, checkout_sha)
+    except execution_context.ExecutionContextError as exc:
+        return {
+            "dispatched": False,
+            **exc.as_dict(),
+            "role": lifecycle["role"],
+            "task_id": task_id,
+        }
     policy = {
         "mode": CONNECT_WAKE_MODE,
         **_hybrid_policy(context, task, runtime_name),
