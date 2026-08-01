@@ -1728,7 +1728,8 @@ def terminal_ack_claim_completion_in(c: sqlite3.Connection, runner_session_id: s
         return None
     if (not narrow_host
             or str(metadata.get("terminalized_by") or "") not in {
-                "runner_lease_expiry", "host_supervisor"}
+                "runner_lease_expiry", "host_supervisor",
+                "terminal_lease_surrendered"}
             or str(handoff.get("host_id") or "") != str(runner["host_id"] or "")
             or str(handoff.get("host_principal_id") or "") != principal_id
             or int(handoff.get("generation") or 0)

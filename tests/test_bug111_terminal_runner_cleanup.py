@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BUG-111 / BUG-175 / BUG-258: terminal tasks make runner leases due for the sole stop clock.
+"""BUG-111 / BUG-175 / BUG-258 / BUG-261: terminal leases use the sole stop clock.
 
 SIMPLIFY-17 retired process-kill-from-task-status. Terminal tasks must still
 reclaim capacity by making the renewable runner lease due (force-stale + fence)
@@ -215,6 +215,47 @@ try:
        and not (receipt.get("metadata") or {}).get("failure_reason"),
        "terminal-task stop receipt is not classified as a heartbeat failure")
 
+    # BUG-261: yield_mission uses completion_owner rather than terminal_task.
+    # It is still an explicit lease surrender, even though make_runner_lease_due
+    # backdates the heartbeat and the host therefore observes stale=True.
+    yielded_metadata = dict(receipt.get("metadata") or {})
+    yielded_metadata["lease_surrender"] = {
+        "authority": "completion_owner", "reason": "mission yielded: waiting",
+    }
+
+    def fake_drain_yielded(_host_id, recover_stale_local=True):
+        return [{
+            "runner_session_id": runner_id, "host_id": host_id,
+            "task_id": task_id, "agent_id": f"codex/{task_id}",
+            "alive": True, "stale": True, "status": "running",
+            "pid": 111, "runtime": "codex", "metadata": yielded_metadata,
+        }]
+
+    yielded_calls = []
+    agent_host._drain_runners = fake_drain_yielded
+    agent_host.supervisor_action = fake_supervisor
+    agent_host._drop_host_bridge = lambda rid: None
+    agent_host._try = lambda method, path, body=None: (
+        yielded_calls.append((method, path, dict(body or {})))
+        or {"runner_session_id": (body or {}).get("runner_session_id"),
+            "status": (body or {}).get("status") or "ok"})
+    try:
+        yielded = agent_host.expire_runner_leases({"host_id": host_id}, now=10_001)
+    finally:
+        agent_host._drain_runners = original_drain
+        agent_host.supervisor_action = original_supervisor
+        agent_host._drop_host_bridge = original_drop
+        agent_host._try = original_try
+    yielded_receipt = next(call[2] for call in yielded_calls
+                            if call[0] == "POST"
+                            and call[1] == agent_host.P_HEARTBEAT_RUNNER)
+    ok(yielded[0].get("reason") == "terminal_lease_surrendered"
+       and yielded_receipt.get("status") == "stopped"
+       and yielded_receipt.get("metadata", {}).get("terminalized_by")
+       == "terminal_lease_surrendered"
+       and not yielded_receipt.get("metadata", {}).get("failure_reason"),
+       "yielded review stop is an explicit surrender, not heartbeat expiry")
+
     # Compatibility: host still refuses legacy kill directives.
     refuse_calls = []
     agent_host.supervisor_action = lambda action, selected_runner, options=None: (
@@ -235,9 +276,9 @@ try:
        and outcomes[0].get("error") == "lease expiry is the only kill authority",
        "legacy terminal-task kill directives stay refused")
 
-    store.upsert_runner_session(receipt,
+    store.upsert_runner_session(yielded_receipt,
                                 principal_id=principal_id, actor=host_id, project=P)
-    store.upsert_runner_session(receipt,
+    store.upsert_runner_session(yielded_receipt,
                                 principal_id=principal_id, actor=host_id, project=P)
     closed_after_receipt = store.get_work_session(work_session["work_session_id"], project=P)
     with _conn(P) as c:

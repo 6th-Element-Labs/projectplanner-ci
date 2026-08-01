@@ -2978,12 +2978,14 @@ def expire_runner_leases(inventory, *, now=None):
             continue
         runner_id = str(session.get("runner_session_id") or "")
         task_id = str(session.get("task_id") or "")
-        terminal_task_surrender = (
-            str((metadata.get("lease_surrender") or {}).get("authority") or "")
-            == "terminal_task")
+        surrender_authority = str(
+            (metadata.get("lease_surrender") or {}).get("authority") or "")
+        terminal_surrender = surrender_authority in {
+            "terminal_task", "completion_owner",
+        }
         reason = (
-            "terminal_lease_surrendered" if terminal_task_surrender
-            else ("runner_lease_surrendered" if surrendered and not session.get("stale")
+            "terminal_lease_surrendered" if terminal_surrender
+            else ("runner_lease_surrendered" if surrendered
                   else "runner_lease_expired"))
         outcome = {"runner_session_id": runner_id, "task_id": task_id,
                    "reason": reason}

@@ -295,7 +295,7 @@ finally:
 
 assert enforced == [{
     "runner_session_id": "run-bug154-bound", "task_id": task["task_id"],
-    "reason": "runner_lease_expired", "expired": True,
+    "reason": "runner_lease_surrendered", "expired": True,
 }]
 assert ("kill", "run-bug154-bound") == host_calls[0][:2]
 assert not any(call[:2] == ("kill", "run-bug154-review") for call in host_calls)
