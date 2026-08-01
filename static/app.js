@@ -1422,6 +1422,8 @@ const TeepPlan = {
         const undeployed = Number(deploymentPayload.undeployed_count || 0);
         if (!runners.length && !prs.length && !deployments.length
                 && !this._dockPrUnavailable && !this._dockDeploymentUnavailable) {
+            const mobileBadge = document.getElementById('mobile-fleet-badge');
+            if (mobileBadge) mobileBadge.classList.remove('show');
             host.innerHTML = ''; return;
         }
         const FD = window.SwitchboardFleetDock;
@@ -1447,6 +1449,46 @@ const TeepPlan = {
         const nBroken = runnerKeys.filter(
             (k) => ['failed', 'lost_host', 'ended_unknown'].includes(k)).length;
         const nAttn = nAsking + nBroken + blockedPrs.length;
+        // The phone already has a permanent Fleet destination. Do not place a
+        // second floating console over that navigation. Passive state belongs on
+        // the Fleet icon; genuinely active work gets one compact, tappable status
+        // bar immediately above the nav (the familiar mini-player pattern).
+        if (window.matchMedia && window.matchMedia('(max-width: 991.98px)').matches) {
+            const badge = document.getElementById('mobile-fleet-badge');
+            const badgeCount = nAttn || running;
+            if (badge) {
+                badge.textContent = String(Math.min(badgeCount, 99));
+                badge.classList.toggle('show', badgeCount > 0);
+                badge.classList.toggle('bg-danger', nAttn > 0);
+                badge.classList.toggle('bg-primary', nAttn === 0);
+                badge.setAttribute('aria-label', nAttn
+                    ? `${nAttn} Fleet items need attention`
+                    : `${running} Fleet runners working`);
+            }
+            if (!running && !nAttn) {
+                host.innerHTML = '';
+                return;
+            }
+            const tone = nAttn ? (nAsking ? 'orange' : 'red') : 'primary';
+            const lead = nAttn ? this._dockAttnLabel(nAttn) : `${running} working`;
+            const detail = nAttn
+                ? [nAsking ? `${nAsking} waiting` : '', nBroken ? `${nBroken} failed` : '',
+                    blockedPrs.length ? `${blockedPrs.length} PR blocked` : ''].filter(Boolean).join(' · ')
+                : 'Autopilot is running';
+            host.innerHTML = `<button id="fleet-mobile-activity" type="button" class="btn text-start d-flex align-items-center gap-2 px-3 py-2" aria-label="Open Fleet: ${this.esc(lead)}">
+                <span class="avatar avatar-sm bg-${tone}-lt text-${tone}"><i class="ti ti-server-bolt"></i></span>
+                <span class="flex-fill min-w-0"><span class="d-block fw-semibold">${this.esc(lead)}</span><span class="d-block text-secondary small text-truncate">${this.esc(detail)}</span></span>
+                <i class="ti ti-chevron-right text-secondary"></i>
+            </button>`;
+            document.getElementById('fleet-mobile-activity').addEventListener('click', () => {
+                if (window.TAIKUN_showTab) window.TAIKUN_showTab('#tab-fleet');
+                else {
+                    const fleet = document.getElementById('toptab-fleet');
+                    if (fleet) fleet.click();
+                }
+            });
+            return;
+        }
         const collapsed = this._dockCollapsed == null ? (nAttn === 0) : this._dockCollapsed;
         const anchor = 'position:fixed;right:1rem;bottom:1rem;z-index:1031;';
         const rerender = () => this._renderFleetDock(runners, prs, deploymentPayload);

@@ -1,4 +1,4 @@
-"""UI-72: approved desktop/mobile dock surfaces and thin server actions."""
+"""UI-72/UI-77: complete desktop dock and navigation-native mobile status."""
 from __future__ import annotations
 
 import subprocess
@@ -21,9 +21,10 @@ def main() -> None:
     for text in ("Merge queue", "data-pr-merge", "data-pr-regate",
                  "Autodeploy failing", "Not yet deployed"):
         assert text in app, text
-    assert "@media (max-width: 640px)" in css
-    assert "width: 100vw !important" in css
+    assert "@media (max-width: 991.98px)" in css
+    assert "#fleet-dock > .card, #fleet-dock-pill { display: none !important; }" in css
     assert "min-height: 44px" in css
+    assert "fleet-mobile-activity" in app and "mobile-fleet-badge" in app
     assert "_dockMobileAnswer" in app and "dock-answer-sheet" in app
     assert "/api/pull-requests/{pr_number}/merge" in board
     assert "/api/pull-requests/{pr_number}/regate" in board

@@ -31,6 +31,17 @@
         ]);
     }
 
+    function updateMobileStatus(status, alertCount) {
+        const badge = document.getElementById('mobile-system-health-badge');
+        const icon = document.getElementById('mobile-system-health-icon');
+        if (!badge || !icon) return;
+        const visible = status !== 'healthy';
+        const tone = status === 'critical' ? 'danger' : (status === 'warning' ? 'warning' : 'info');
+        badge.textContent = status === 'critical' ? 'Critical' : (alertCount ? String(alertCount) : status);
+        badge.className = `badge bg-${tone}-lt ms-auto${visible ? '' : ' d-none'}`;
+        icon.className = `ti ti-activity-heartbeat me-2${visible ? ` text-${tone}` : ''}`;
+    }
+
     function render(body) {
         const host = document.getElementById('saturation-dock');
         if (!host) return;
@@ -38,6 +49,26 @@
         const color = severityColor(status);
         const alerts = body.alerts || [];
         const quiet = status === 'healthy' && alerts.length === 0;
+        updateMobileStatus(status, Number(body.alert_count || alerts.length || 0));
+
+        // Mobile navigation owns the lower safe area. Warnings remain passive in
+        // More -> System health; only a critical system condition interrupts the
+        // page, and it does so at the top where it cannot cover navigation.
+        if (window.matchMedia && window.matchMedia('(max-width: 991.98px)').matches) {
+            if (status !== 'critical') {
+                host.innerHTML = '';
+                return;
+            }
+            const message = alerts.length ? alerts[0].message : 'This box is under critical pressure.';
+            host.innerHTML = `<button id="saturation-critical-banner" type="button" class="alert alert-danger tk-pressure-banner text-start w-100" role="alert">
+                <span class="d-flex align-items-center gap-2"><i class="ti ti-alert-triangle"></i><span class="flex-fill"><strong>System pressure is critical.</strong> ${esc(message)}</span><i class="ti ti-chevron-right"></i></span>
+            </button>`;
+            document.getElementById('saturation-critical-banner').addEventListener('click', () => {
+                window.location.hash = '#tab-settings/capacity';
+                if (window.TAIKUN_showTab) window.TAIKUN_showTab('#tab-settings');
+            });
+            return;
+        }
 
         if (quiet) {
             host.innerHTML = '';

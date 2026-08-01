@@ -108,6 +108,17 @@
       if (settings) settings.click();
     }
 
+    var mobileHealth = e.target.closest('#mobile-system-health');
+    if (mobileHealth) {
+      e.preventDefault();
+      window.location.hash = '#tab-settings/capacity';
+      if (window.TAIKUN_showTab) window.TAIKUN_showTab('#tab-settings');
+      else {
+        var healthSettings = document.getElementById('menu-settings');
+        if (healthSettings) healthSettings.click();
+      }
+    }
+
     var mobileProject = e.target.closest('#mobile-new-project');
     if (mobileProject) {
       e.preventDefault();

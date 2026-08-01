@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""The expanded dock top bar must be thumb-sized on a phone, and unchanged on desktop.
-
-Measured before this change at 390px: the header was 56px tall but the refresh and
-minimize controls inside it were 19x22px. The mobile pass had given the tab row
-44px targets and missed the header entirely.
-"""
+"""Fleet uses mobile navigation state instead of a second floating console."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -63,7 +58,9 @@ with sync_playwright() as runtime:
 
     def open_dock(width):
         page = browser.new_page(viewport={"width": width, "height": 844})
-        page.set_content('<body style="margin:0"><div id="fleet-dock"></div></body>')
+        page.set_content('<body style="margin:0"><div id="fleet-dock"></div>'
+                         '<nav class="tk-mobile-nav"><a data-tk-mobile-tab="#toptab-fleet">'
+                         '<span id="mobile-fleet-badge"></span></a></nav></body>')
         for rel in STYLES:
             page.add_style_tag(path=str(ROOT / rel))
         for rel in SCRIPTS:
@@ -74,35 +71,14 @@ with sync_playwright() as runtime:
 
     # ── phone ──────────────────────────────────────────────────────────────
     m = open_dock(390)
-    minimize = box(m, "#fleet-dock-min")
-    refresh = box(m, "#fleet-dock-refresh")
-    ok(minimize and minimize.get("w") >= MIN_TARGET and minimize.get("h") >= MIN_TARGET,
-       f"minimize must be at least {MIN_TARGET}x{MIN_TARGET} on a phone, got {minimize}")
-    ok(refresh and refresh.get("w") >= MIN_TARGET and refresh.get("h") >= MIN_TARGET,
-       f"refresh must be at least {MIN_TARGET}x{MIN_TARGET} on a phone, got {refresh}")
-    # Minimize takes the reachable corner; refresh stays right.
-    ok(minimize["x"] < refresh["x"],
-       f"minimize sits left of refresh on a phone: {minimize['x']} vs {refresh['x']}")
-    ok(minimize["x"] < 390 / 2, f"minimize is on the left half, got x={minimize['x']}")
-    # The sheet gets the gesture a phone sheet is expected to have.
-    grab = box(m, "#fleet-dock-grab")
-    ok(grab and not grab.get("hidden") and grab["w"] > 20,
-       f"the grabber is visible on a phone, got {grab}")
-    # Only one minimize control renders.
-    ok(box(m, ".dock-min-desktop") == {"hidden": True},
-       "the desktop-position minimize must not also render on a phone")
-    # Title stacks above the status line rather than sharing one row.
-    stacked = m.evaluate(
-        """()=>{const t=document.querySelector('#fleet-dock .dock-hd-title');
-            const a=t.querySelector('.fw-medium').getBoundingClientRect();
-            const b=t.querySelector('.dock-hd-status').getBoundingClientRect();
-            return b.top >= a.bottom - 2;}""")
-    ok(stacked, "the status line sits below the title on a phone, not beside it")
-    # The control actually collapses the dock.
-    m.click("#fleet-dock-min")
-    m.wait_for_timeout(150)
-    ok(m.evaluate("()=>!!document.getElementById('fleet-dock-pill')"),
-       "tapping minimize collapses the dock to its pill")
+    ok(m.locator("#fleet-dock > .card").count() == 0,
+       "the desktop Fleet console must not float over mobile navigation")
+    ok(m.locator("#fleet-mobile-activity").count() == 1,
+       "active work gets one compact mobile activity bar")
+    ok(m.locator("#mobile-fleet-badge").inner_text() == "1",
+       "passive Fleet state appears on the mobile destination")
+    ok("show" in (m.locator("#mobile-fleet-badge").get_attribute("class") or ""),
+       "the Fleet destination badge is visible while work is active")
     m.close()
 
     # ── desktop: the compact bar is untouched ──────────────────────────────
@@ -129,8 +105,8 @@ with sync_playwright() as runtime:
 
 # The header must not hard-code a single minimize position any more.
 app = (ROOT / "static/app.js").read_text()
-ok("fleet-dock-min-desktop" in app and "dock-min-mobile" in app,
-   "both minimize positions must exist so each breakpoint shows one")
+ok("fleet-mobile-activity" in app and "mobile-fleet-badge" in app,
+   "mobile Fleet state is rendered into the nav hierarchy")
 css = (ROOT / "static/taikun-ui.css").read_text()
 ok("display: contents" in css,
    "desktop keeps its original single-row layout by dissolving the mobile wrappers")

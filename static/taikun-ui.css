@@ -261,49 +261,14 @@ body.tk-density-control .h1{ font-variant-numeric:tabular-nums; }
    title, working count and attention badge out exactly as it did before the
    mobile bar existed — including the badge's ms-auto push to the right edge. */
 .dock-hd-title, .dock-hd-status { display: contents; }
-@media (max-width: 640px) {
-  #fleet-dock > .card {
-    border: 0 !important;
-    border-radius: 0 !important;
-    bottom: 0 !important;
-    left: 0 !important;
-    max-height: none !important;
-    right: 0 !important;
-    top: 0 !important;
-    width: 100vw !important;
-    z-index: 1060 !important;
-  }
-  #fleet-dock .card-header { min-height: 60px; }
-  /* 44x44 targets: the icons stay 20px, only the tappable box grows. */
-  #fleet-dock .dock-hit {
-    align-items: center; border-radius: 12px; display: inline-flex; flex: none;
-    font-size: 20px; height: 44px; justify-content: center; width: 44px;
-  }
-  /* Minimize lives on the left — the reachable corner for a right thumb; the
-     desktop-position twin hides so the control never renders twice. */
-  #fleet-dock .dock-min-mobile { display: inline-flex; }
-  #fleet-dock .dock-min-desktop, #fleet-dock .dock-hd-icon { display: none; }
-  /* Title over status, instead of five items sharing one 56px line. */
-  #fleet-dock .dock-hd-title {
-    align-items: flex-start; display: flex; flex: 1 1 auto; flex-direction: column;
-    gap: 0; min-width: 0;
-  }
-  #fleet-dock .dock-hd-title > .fw-medium { font-size: 17px; letter-spacing: -.01em; }
-  #fleet-dock .dock-hd-status { align-items: center; display: flex; font-size: 12.5px; gap: .4rem; }
-  /* Attention leads the status line on a phone — it is the reason you opened it.
-     The desktop right-edge push must not survive into the stacked layout. */
-  #fleet-dock .dock-hd-status .ms-auto { margin-left: 0 !important; order: -1; }
-  /* The sheet dismiss gesture every phone sheet has. */
-  #fleet-dock .dock-grab {
-    background: var(--tblr-border-color); border-radius: 999px; display: block;
-    height: 5px; margin: 8px auto 0; width: 38px;
-  }
-  #fleet-dock .dock-tab { flex: 1; justify-content: center; min-height: 44px; }
-  /* On a phone the actions keep a 44px thumb height but still size to their
-     label — a full-width button per action turned every card into a wall. */
+@media (max-width: 991.98px) {
+  /* Responsive Fleet state is rendered into the bottom destination and the
+     activity bar. If the viewport changes before the next poll, never let a
+     stale desktop dock flash over the mobile navigation. */
+  #fleet-dock > .card, #fleet-dock-pill { display: none !important; }
+  /* Keep every action safe when a Fleet card is rendered in isolation (for
+     example inside a task detail or a component harness). */
   #fleet-dock .dock-pr-action,
   #fleet-dock .dock-runner-action,
-  #fleet-dock .dock-host-action { flex: 0 0 auto; min-height: 44px; width: auto; }
-  #fleet-dock .p-2.border.rounded { width: 100%; }
-  body:has(#fleet-dock > .card) { overflow: hidden; }
+  #fleet-dock .dock-host-action { min-height: 44px; }
 }

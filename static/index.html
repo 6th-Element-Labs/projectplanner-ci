@@ -144,15 +144,19 @@
         font-weight:700;letter-spacing:.09em;text-transform:uppercase}
       .tk-nav-section:first-child{padding-top:.45rem}
       .tk-nav-utilities{border-top:1px solid var(--tblr-border-color);padding-top:.65rem}
+      :root{--tk-header-h:3rem;--tk-mobile-nav-h:4.25rem}
       .tk-mobile-nav{display:none}
+      .tk-brand-mobile{display:none}
+      .tk-toolbar-actions{min-width:0}
+      .tk-toolbar-icon{width:2rem;height:2rem;display:inline-flex;align-items:center;justify-content:center;padding:0}
       @media (min-width:992px){
         .navbar-vertical{inset-block-start:var(--tk-header-h) !important}
       }
       @media (max-width:991.98px){
-        body{padding-bottom:4.25rem}
-        .navbar-vertical{border-right:0;border-bottom:1px solid var(--tblr-border-color)}
-        .navbar-vertical .navbar-toggler{margin:.45rem .75rem}
-        #sidebar-menu{max-height:calc(100vh - 8rem);overflow:auto}
+        :root{--tk-mobile-nav-h:4.25rem;--tk-header-h:3.5rem}
+        body{padding-bottom:calc(var(--tk-mobile-nav-h) + env(safe-area-inset-bottom))}
+        .navbar-vertical{display:none!important}
+        .page-wrapper{margin-inline-start:0!important;width:100%!important}
         .tk-mobile-nav{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));position:fixed;
           inset:auto 0 0;z-index:1040;min-height:4rem;padding:.25rem max(.25rem,env(safe-area-inset-right))
           calc(.25rem + env(safe-area-inset-bottom)) max(.25rem,env(safe-area-inset-left));
@@ -165,9 +169,33 @@
         .tk-mobile-nav .nav-link i,.tk-mobile-nav .tk-mobile-more i{font-size:1.2rem}
         .tk-mobile-nav .nav-link.active{color:var(--tblr-primary)}
         .tk-mobile-nav .dropdown-menu{margin-bottom:.5rem;min-width:13rem}
+        .tk-mobile-nav .nav-link{position:relative}
+        .tk-mobile-status-badge{position:absolute;top:.15rem;left:calc(50% + .35rem);min-width:.95rem;height:.95rem;
+          padding:0 .2rem;border:2px solid var(--tblr-bg-surface);border-radius:999px;font-size:.58rem;
+          line-height:.7rem;display:none;align-items:center;justify-content:center}
+        .tk-mobile-status-badge.show{display:inline-flex}
+        .tk-brand-full{display:none}
+        .tk-brand-mobile{display:inline}
+        .tk-toolbar>.container-fluid{gap:.35rem;padding-inline:.75rem}
+        .tk-toolbar .navbar-brand{margin:0!important;padding:0!important;min-width:0}
+        .tk-toolbar .navbar-brand a{gap:.45rem!important}
+        .tk-toolbar .navbar-brand svg{width:25px!important;height:25px!important}
+        .tk-toolbar-actions{gap:.3rem!important}
+        .tk-toolbar-filter,.tk-toolbar-export{display:none}
+        #btn-new-task{width:2rem;height:2rem;padding:0;display:inline-flex;align-items:center;justify-content:center}
+        #btn-new-task .tk-action-label{display:none}
+        #btn-new-task i{margin:0!important;font-size:1.1rem}
+        #btn-ack-inbox{width:2rem;height:2rem;padding:0}
+        #user-menu .avatar{width:2rem;height:2rem}
+        #fleet-mobile-activity{position:fixed;left:.75rem;right:.75rem;
+          bottom:calc(var(--tk-mobile-nav-h) + env(safe-area-inset-bottom) + .65rem);z-index:1039;
+          width:calc(100% - 1.5rem);min-height:3rem;border-radius:.8rem;background:var(--tblr-bg-surface);
+          border:1px solid var(--tblr-border-color);box-shadow:0 8px 28px rgba(16,24,40,.16)}
+        body:has(#tab-fleet.active) #fleet-mobile-activity{display:none}
+        .tk-pressure-banner{position:fixed;top:var(--tk-header-h);left:0;right:0;z-index:1034;
+          border-radius:0;border-width:0 0 1px;margin:0;padding:.55rem .85rem;box-shadow:0 8px 20px -16px rgba(16,24,40,.5)}
       }
       /* Full-width top header (combo layout): spans the whole page; sidebar + content sit below it. */
-      :root{--tk-header-h:3rem}
       .tk-toolbar{background:var(--tblr-bg-surface);border-bottom:1px solid var(--tblr-border-color);min-height:var(--tk-header-h);position:sticky;top:0;z-index:1035}
       /* UI-24/UI-47: bound PTY terminal — a sidecar by default (ambient trigger:
          a Mission graph node, the Proof Console), reparented in place inside the
@@ -195,17 +223,18 @@
                     <h1 class="navbar-brand navbar-brand-autodark pe-0 pe-md-3 me-md-3 mb-0">
                     <a href="/" class="d-flex align-items-center text-decoration-none" aria-label="Taikun Switchboard — home" style="gap:10px">
                         <svg viewBox="168.5 168.5 302.7 302.7" fill="currentColor" aria-hidden="true" style="height:28px;width:28px;flex:0 0 auto;color:var(--tblr-primary)"><defs><clipPath clipPathUnits="userSpaceOnUse" id="tkc-tb"><path clip-rule="evenodd" d="m 3451.39,2273.83 -99.65,-34.31 z m -2102.78,156.88 v -262.12 l 157.02,-54.07 60.08,-145.06 -72.78,-149.26 327.27,-327.27 149.26,72.78 145.06,-60.09 54.09,-157.01 h 462.77 l 54.09,157.01 145.07,60.09 149.25,-72.78 327.27,327.27 -72.77,149.26 60.07,145.06 157.03,54.07 v 105.24 l -99.65,-34.32 -131.63,-45.33 c -31.53,-76.23 -62.94,-152.52 -94.7,-228.65 l 61.04,-125.02 -226.95,-226.96 -125.05,60.98 c -76.15,-31.75 -152.42,-63.22 -228.69,-94.71 l -45.28,-131.56 h -320.96 l -45.29,131.56 c -76.26,31.49 -152.53,62.96 -228.69,94.71 l -125.05,-60.98 -226.94,226.96 3.42,7.01 57.61,118.01 c -31.75,76.13 -63.16,152.42 -94.7,228.65 l -131.63,45.34 v 129.76 h 214.85 v -135.37 h 99.65 v 311.52 h -99.65 v -114.72 h -214.85 z m 2102.78,-61.43 v 262.13 l -157.03,54.07 -60.07,145.06 72.77,149.26 -327.27,327.27 -149.25,-72.78 -145.07,60.09 -54.09,157.01 h -462.77 l -54.09,-157.01 -145.06,-60.09 -149.26,72.78 -327.27,-327.27 72.78,-149.26 -60.08,-145.06 -157.02,-54.07 v -105.25 l 99.64,34.32 131.63,45.34 c 31.54,76.23 62.95,152.51 94.7,228.65 l -61.03,125.02 226.94,226.96 125.05,-60.99 c 76.16,31.76 152.43,63.23 228.69,94.72 l 45.29,131.56 h 320.96 l 45.28,-131.56 c 76.27,-31.49 152.54,-62.96 228.69,-94.72 l 125.05,60.99 226.95,-226.96 -61.04,-125.02 c 31.76,-76.14 63.17,-152.42 94.7,-228.65 l 131.63,-45.34 v -129.77 h -202.9 v 119.88 h -99.65 v -320.82 h 99.65 v 139.51 h 202.9 z m -633.21,464.28 V 1946.8 h 99.65 v 886.76 z m -231.02,-61.97 v -469.52 h 99.65 v 469.52 z m -231.02,264.9 V 1763.5 h 99.66 V 3036.49 Z M 2125.13,2478.3 v -467.46 h 99.65 v 467.46 z m -231.01,351.13 v -879.52 h 99.65 v 879.52 z"/></clipPath></defs><path d="m 3451.39,2273.83 -99.65,-34.31 z m -2102.78,156.88 v -262.12 l 157.02,-54.07 60.08,-145.06 -72.78,-149.26 327.27,-327.27 149.26,72.78 145.06,-60.09 54.09,-157.01 h 462.77 l 54.09,157.01 145.07,60.09 149.25,-72.78 327.27,327.27 -72.77,149.26 60.07,145.06 157.03,54.07 v 105.24 l -99.65,-34.32 -131.63,-45.33 c -31.53,-76.23 -62.94,-152.52 -94.7,-228.65 l 61.04,-125.02 -226.95,-226.96 -125.05,60.98 c -76.15,-31.75 -152.42,-63.22 -228.69,-94.71 l -45.28,-131.56 h -320.96 l -45.29,131.56 c -76.26,31.49 -152.53,62.96 -228.69,94.71 l -125.05,-60.98 -226.94,226.96 3.42,7.01 57.61,118.01 c -31.75,76.13 -63.16,152.42 -94.7,228.65 l -131.63,45.34 v 129.76 h 214.85 v -135.37 h 99.65 v 311.52 h -99.65 v -114.72 h -214.85 z m 2102.78,-61.43 v 262.13 l -157.03,54.07 -60.07,145.06 72.77,149.26 -327.27,327.27 -149.25,-72.78 -145.07,60.09 -54.09,157.01 h -462.77 l -54.09,-157.01 -145.06,-60.09 -149.26,72.78 -327.27,-327.27 72.78,-149.26 -60.08,-145.06 -157.02,-54.07 v -105.25 l 99.64,34.32 131.63,45.34 c 31.54,76.23 62.95,152.51 94.7,228.65 l -61.03,125.02 226.94,226.96 125.05,-60.99 c 76.16,31.76 152.43,63.23 228.69,94.72 l 45.29,131.56 h 320.96 l 45.28,-131.56 c 76.27,-31.49 152.54,-62.96 228.69,-94.72 l 125.05,60.99 226.95,-226.96 -61.04,-125.02 c 31.76,-76.14 63.17,-152.42 94.7,-228.65 l 131.63,-45.34 v -129.77 h -202.9 v 119.88 h -99.65 v -320.82 h 99.65 v 139.51 h 202.9 z m -633.21,464.28 V 1946.8 h 99.65 v 886.76 z m -231.02,-61.97 v -469.52 h 99.65 v 469.52 z m -231.02,264.9 V 1763.5 h 99.66 V 3036.49 Z M 2125.13,2478.3 v -467.46 h 99.65 v 467.46 z m -231.01,351.13 v -879.52 h 99.65 v 879.52 h -99.65" transform="matrix(0.13333333,0,0,-0.13333333,0,640)" clip-path="url(#tkc-tb)"/></svg>
-                        <span style="font-size:18px;font-weight:500;letter-spacing:.14em;color:var(--tblr-body-color);line-height:1;white-space:nowrap">TAIKUN<span style="font-weight:400;color:var(--tblr-primary);margin-left:.4em">SWITCHBOARD</span></span>
+                        <span class="tk-brand-full" style="font-size:18px;font-weight:500;letter-spacing:.14em;color:var(--tblr-body-color);line-height:1;white-space:nowrap">TAIKUN<span style="font-weight:400;color:var(--tblr-primary);margin-left:.4em">SWITCHBOARD</span></span>
+                        <span class="tk-brand-mobile" style="font-size:14px;font-weight:650;letter-spacing:.08em;color:var(--tblr-body-color);line-height:1;white-space:nowrap">SWITCHBOARD</span>
                     </a>
                     </h1>
-                    <div id="toolbar-context" class="d-none align-items-center gap-1 text-secondary text-truncate" style="min-width:0"></div>
+                    <div id="toolbar-context" class="d-none d-xl-flex align-items-center gap-1 text-secondary text-truncate small" style="min-width:0"></div>
                     <!-- Tools — pushed to the far right (demo: search + actions on the right). -->
-                    <div class="ms-auto d-flex align-items-center gap-2 flex-shrink-0">
+                    <div class="ms-auto d-flex align-items-center gap-2 flex-shrink-0 tk-toolbar-actions">
                         <div class="input-icon d-none d-sm-block" style="width:210px">
                             <span class="input-icon-addon"><i class="ti ti-search"></i></span>
                             <input id="f-search" type="text" class="form-control form-control-sm" placeholder="Search tasks…  ⌘K" autocomplete="off" readonly/>
                         </div>
-                        <div class="dropdown">
+                        <div class="dropdown tk-toolbar-filter">
                             <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="ti ti-filter me-1"></i>Filters<span id="filter-count" class="badge bg-primary ms-1 d-none"></span></button>
                             <div class="dropdown-menu dropdown-menu-end p-3" style="min-width:300px">
                                 <div class="mb-2"><select id="f-ws" class="form-select form-select-sm"></select></div>
@@ -216,9 +245,9 @@
                                 <label class="form-check form-switch m-0"><input id="f-hidedone" class="form-check-input" type="checkbox" checked/><span class="form-check-label">Hide done</span></label>
                             </div>
                         </div>
-                        <button id="btn-ack-inbox" class="btn btn-sm btn-outline-secondary position-relative" type="button" title="Needs you" aria-label="Open Needs-you queue"><i class="ti ti-bell"></i><span id="ack-inbox-count" class="badge bg-red position-absolute top-0 start-100 translate-middle" style="display:none;font-size:10px"></span></button>
-                        <button id="btn-new-task" class="btn btn-sm btn-primary"><i class="ti ti-plus me-1"></i>New task</button>
-                        <div class="dropdown">
+                        <button id="btn-ack-inbox" class="btn btn-sm btn-outline-secondary position-relative tk-toolbar-icon" type="button" title="Needs you" aria-label="Open Needs-you queue"><i class="ti ti-bell"></i><span id="ack-inbox-count" class="badge bg-red position-absolute top-0 start-100 translate-middle" style="display:none;font-size:10px"></span></button>
+                        <button id="btn-new-task" class="btn btn-sm btn-primary" aria-label="New task"><i class="ti ti-plus me-1"></i><span class="tk-action-label">New task</span></button>
+                        <div class="dropdown tk-toolbar-export">
                             <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" title="Export"><i class="ti ti-download"></i></button>
                             <ul class="dropdown-menu dropdown-menu-end">
                                 <li><a class="dropdown-item" id="dl-xlsx" href="api/export.xlsx"><i class="ti ti-file-spreadsheet me-2"></i>Excel</a></li>
@@ -315,7 +344,7 @@
             <a class="nav-link active" data-tk-mobile-tab="#toptab-overview" href="#tab-exec"><i class="ti ti-layout-dashboard"></i><span>Overview</span></a>
             <a class="nav-link" data-tk-mobile-tab="#toptab-plan" href="#tab-plan-hub"><i class="ti ti-layout-kanban"></i><span>Plan</span></a>
             <a class="nav-link" data-tk-mobile-tab="#toptab-mission" href="#tab-mission"><i class="ti ti-target-arrow"></i><span>Deliverables</span></a>
-            <a class="nav-link" data-tk-mobile-tab="#toptab-fleet" href="#tab-fleet"><i class="ti ti-server-bolt"></i><span>Fleet</span></a>
+            <a class="nav-link" data-tk-mobile-tab="#toptab-fleet" href="#tab-fleet"><i class="ti ti-server-bolt"></i><span>Fleet</span><span id="mobile-fleet-badge" class="tk-mobile-status-badge bg-primary text-white"></span></a>
             <div class="dropup d-flex justify-content-center">
                 <button class="tk-mobile-more dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="ti ti-dots"></i><span>More</span></button>
                 <div class="dropdown-menu dropdown-menu-end">
@@ -323,6 +352,7 @@
                     <a class="dropdown-item" data-tk-mobile-tab="#toptab-inbox" href="#tab-inbox-hub"><i class="ti ti-inbox me-2"></i>Inbox</a>
                     <a class="dropdown-item" data-tk-mobile-tab="#toptab-ask" href="#tab-ask"><i class="ti ti-sparkles me-2"></i>Ask</a>
                     <div class="dropdown-divider"></div>
+                    <a class="dropdown-item d-flex align-items-center" id="mobile-system-health" href="#tab-settings/capacity"><i id="mobile-system-health-icon" class="ti ti-activity-heartbeat me-2"></i><span>System health</span><span id="mobile-system-health-badge" class="badge bg-secondary-lt ms-auto d-none">Healthy</span></a>
                     <a class="dropdown-item" id="mobile-menu-settings" href="#tab-settings"><i class="ti ti-settings me-2"></i>Project settings</a>
                     <button class="dropdown-item" id="mobile-new-project" type="button"><i class="ti ti-folder-plus me-2"></i>New project</button>
                 </div>
@@ -982,9 +1012,9 @@
     <script src="js/scope.js?v=1"></script>
     <script src="js/attention.js?v=3"></script>
     <script src="js/fleet-dock.js?v=5"></script>
-    <script src="app.js?v=80"></script>
-    <script src="taikun-ui.js?v=10"></script>
-    <script src="saturation-panel.js?v=1"></script>
+    <script src="app.js?v=81"></script>
+    <script src="taikun-ui.js?v=11"></script>
+    <script src="saturation-panel.js?v=2"></script>
     <script src="narration-ops-panel.js?v=3"></script>
     <script>
       // Tab routing, nesting-aware. The nav is now 2 levels: 5 top tabs (.nav-tabs),
