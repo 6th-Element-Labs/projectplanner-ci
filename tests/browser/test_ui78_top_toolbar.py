@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""UI-79 supersedes UI-78 with the approved V2 global navigation."""
+"""UI-80 extends the V2 global navigation with the deliverable selector."""
 from __future__ import annotations
 
 import os
@@ -99,7 +99,7 @@ try:
             "() => typeof TeepPlan !== 'undefined' && TeepPlan.selectedDeliverableId === 'ui78-toolbar'"
         )
 
-        expected = ["project-switcher", "f-search", "btn-ack-inbox", "btn-new-task", "user-menu"]
+        expected = ["project-switcher", "header-deliverable-switcher", "f-search", "btn-ack-inbox", "btn-new-task", "user-menu"]
         boxes = [page.locator(f"#{element_id}").bounding_box() for element_id in expected]
         assert all(boxes), boxes
         assert all(boxes[index]["x"] < boxes[index + 1]["x"] for index in range(len(boxes) - 1)), boxes
@@ -109,10 +109,23 @@ try:
         assert 56 <= toolbar_height <= 62, toolbar_height
         assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
         assert page.locator("#btn-new-task").inner_text().strip() == "New"
+        assert page.locator("#header-deliverable-switcher").input_value() == "ui78-toolbar"
+        assert page.locator(".tk-mission-breadcrumb").inner_text().strip() == "maxwell / Deliverables"
+        assert page.locator(".tk-mission-title").inner_text().strip() == "Approved toolbar"
+        metric_labels = [text.strip().lower() for text in page.locator(".tk-mission-metric-label span").all_inner_texts()]
+        assert metric_labels == ["verified progress", "active", "ready", "blocked"], metric_labels
+        assert page.locator("#mission-view-overview .tk-mission-work").count() == 1
+        assert page.locator("#mission-view-overview").get_by_text("In plain English").count() == 0
+        assert page.locator("#tab-mission > .card.mt-3").count() == 0
+        assert page.get_by_role("button", name="More deliverable actions").inner_text().strip() == "•••"
         assert page.locator("#btn-autopilot").count() == 0
         assert page.locator("#toolbar-context").count() == 0
         assert page.locator(".tk-toolbar .tk-toolbar-filter").count() == 0
         assert page.locator(".tk-toolbar .tk-toolbar-export").count() == 0
+        screenshot_dir = os.environ.get("UI80_SCREENSHOT_DIR")
+        if screenshot_dir:
+            Path(screenshot_dir).mkdir(parents=True, exist_ok=True)
+            page.screenshot(path=str(Path(screenshot_dir) / "ui80-actual-desktop.png"), full_page=True)
 
         with page.expect_response(
             lambda response: response.request.method == "POST"
@@ -136,10 +149,24 @@ try:
         assert tablet_overflow["scrollWidth"] <= tablet_overflow["innerWidth"], tablet_overflow
         assert page.locator("#project-switcher").evaluate("el => getComputedStyle(el).display") != "none"
         assert page.locator("#f-search").evaluate("el => getComputedStyle(el).display") != "none"
+        brand_box = page.locator(".tk-toolbar .navbar-brand").bounding_box()
+        lockup_box = page.locator(".tk-toolbar .navbar-brand > a").bounding_box()
+        project_box = page.locator(".tk-toolbar-project").bounding_box()
+        assert brand_box and lockup_box and project_box
+        assert lockup_box["x"] >= brand_box["x"] - 1
+        # Font rasterization varies slightly between macOS and the Linux CI
+        # runner. The invariant is that the complete lockup never overlaps the
+        # project selector; the CSS grid owns the visual breathing room.
+        assert lockup_box["x"] + lockup_box["width"] <= project_box["x"], (
+            lockup_box, project_box
+        )
+        if screenshot_dir:
+            page.screenshot(path=str(Path(screenshot_dir) / "ui80-actual-tablet.png"), full_page=True)
 
         page.set_viewport_size({"width": 390, "height": 844})
         page.wait_for_timeout(350)
         assert not page.locator("#project-switcher").is_visible()
+        assert not page.locator("#header-deliverable-switcher").is_visible()
         assert not page.locator("#f-search").is_visible()
         assert page.locator("#btn-new-task").evaluate("el => getComputedStyle(el).display") == "none"
         assert page.locator(".navbar-vertical").evaluate("el => getComputedStyle(el).display") == "none"
@@ -154,11 +181,15 @@ try:
           }).filter(x => x.left < -1 || x.right > window.innerWidth + 1).slice(0, 12)
         })""")
         assert mobile_overflow["scrollWidth"] <= mobile_overflow["innerWidth"], mobile_overflow
+        pressure = page.locator("#saturation-dock-pill")
+        assert not pressure.is_visible()
+        if screenshot_dir:
+            page.screenshot(path=str(Path(screenshot_dir) / "ui80-actual-mobile.png"), full_page=True)
         assert not console_errors, console_errors
         assert not failed_requests, failed_requests
         browser.close()
-    print("PASS UI-79 V2 global navigation and page-level Autopilot action")
-    print("PASS UI-79 side/mobile navigation regression boundary")
+    print("PASS UI-80 dual-selector V2 navigation and page-level Autopilot action")
+    print("PASS UI-80 side/mobile navigation regression boundary")
 finally:
     if server.poll() is None:
         server.terminate()

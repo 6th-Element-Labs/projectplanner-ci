@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Fleet uses mobile navigation state instead of a second floating console."""
+"""Mobile Fleet preserves its compact card and full-screen sheet interaction."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import sys
 
@@ -28,7 +29,7 @@ SETUP = """()=>{
             environment:{uptime_seconds:180,last_output_at:now-10},
             available_actions:['kill']}];
   const ctx=Object.create(TeepPlan);
-  ctx._dockCollapsed=false; ctx._dockAttention={}; ctx.tasks=[];
+  ctx._dockCollapsed=true; ctx._dockAttention={}; ctx.tasks=[];
   ctx._loadFleetDock=()=>{};
   const render=()=>TeepPlan._renderFleetDock.call(
       ctx,R,[],{production:{last_deploy_ok:true},deployments:[]});
@@ -72,17 +73,52 @@ with sync_playwright() as runtime:
     # ── phone ──────────────────────────────────────────────────────────────
     m = open_dock(390)
     ok(m.locator("#fleet-dock > .card").count() == 0,
-       "the desktop Fleet console must not float over mobile navigation")
-    ok(m.locator("#fleet-mobile-activity").count() == 1,
-       "active work gets one compact mobile activity bar")
+       "mobile Fleet starts in its compact activity state")
+    ok(m.locator("#fleet-dock-pill").count() == 1,
+       "mobile uses the same compact Fleet status pill as desktop")
+    compact = box(m, "#fleet-dock-pill")
+    ok(compact and compact["h"] <= 44 and compact["w"] < 390,
+       f"collapsed mobile Fleet stays a compact one-line pill, got {compact}")
+    ok("All clear" in m.locator("#fleet-dock-pill").inner_text()
+       and "1 working" in m.locator("#fleet-dock-pill").inner_text(),
+       "collapsed mobile Fleet uses the current dock status vocabulary")
     ok(m.locator("#mobile-fleet-badge").inner_text() == "1",
        "passive Fleet state appears on the mobile destination")
     ok("show" in (m.locator("#mobile-fleet-badge").get_attribute("class") or ""),
        "the Fleet destination badge is visible while work is active")
+    m.click("#fleet-dock-pill")
+    m.wait_for_timeout(100)
+    sheet = m.locator("#fleet-dock > .card").bounding_box()
+    ok(sheet and round(sheet["x"]) == 0 and round(sheet["y"]) == 0,
+       f"expanded Fleet sheet starts at the viewport origin, got {sheet}")
+    ok(sheet and round(sheet["width"]) == 390 and round(sheet["height"]) == 844,
+       f"expanded Fleet sheet fills the 390x844 viewport, got {sheet}")
+    ok(m.locator("#fleet-dock-grab").is_visible(),
+       "the expanded phone sheet exposes its drag/collapse handle")
+    mobile_min = box(m, "#fleet-dock-min")
+    ok(mobile_min and mobile_min["w"] >= MIN_TARGET and mobile_min["h"] >= MIN_TARGET,
+       f"mobile collapse control meets the 44px target, got {mobile_min}")
+    refresh = box(m, "#fleet-dock-refresh")
+    ok(refresh and refresh["w"] >= MIN_TARGET and refresh["h"] >= MIN_TARGET,
+       f"mobile refresh control meets the 44px target, got {refresh}")
+    ok(m.get_by_text("Watch", exact=True).count() >= 1,
+       "the real mobile Fleet sheet keeps the runner Watch action")
+    screenshot_dir = os.environ.get("UI80_SCREENSHOT_DIR")
+    if screenshot_dir:
+        Path(screenshot_dir).mkdir(parents=True, exist_ok=True)
+        m.screenshot(path=str(Path(screenshot_dir) / "mobile-fleet-expanded.png"))
+    m.click("#fleet-dock-min")
+    m.wait_for_timeout(100)
+    ok(m.locator("#fleet-dock-pill").count() == 1,
+       "collapsing the full sheet restores the compact Fleet pill")
+    ok(m.locator("#mobile-fleet-badge").inner_text() == "1",
+       "Fleet state remains on the destination badge through expand/collapse")
     m.close()
 
     # ── desktop: the compact bar is untouched ──────────────────────────────
     d = open_dock(1280)
+    d.click("#fleet-dock-pill")
+    d.wait_for_timeout(100)
     ok(box(d, "#fleet-dock-grab") == {"hidden": True},
        "the grabber is phone-only and must not appear on desktop")
     ok(box(d, ".dock-min-mobile") == {"hidden": True},
@@ -105,11 +141,15 @@ with sync_playwright() as runtime:
 
 # The header must not hard-code a single minimize position any more.
 app = (ROOT / "static/app.js").read_text()
-ok("fleet-mobile-activity" in app and "mobile-fleet-badge" in app,
-   "mobile Fleet state is rendered into the nav hierarchy")
+ok("fleet-mobile-activity" not in app and "mobile-fleet-badge" in app,
+   "mobile reuses the current Fleet pill instead of a larger second component")
+ok("this._dockCollapsed = false;" in app,
+   "the compact mobile activity card expands the real Fleet dock")
 css = (ROOT / "static/taikun-ui.css").read_text()
 ok("display: contents" in css,
    "desktop keeps its original single-row layout by dissolving the mobile wrappers")
+ok("body:has(#fleet-dock > .card) { overflow: hidden; }" in css,
+   "the expanded mobile Fleet sheet owns the viewport without background scroll")
 
 if failures:
     for line in failures:

@@ -147,22 +147,69 @@
       :root{--tk-header-h:3.75rem;--tk-mobile-nav-h:4.25rem}
       .tk-mobile-nav{display:none}
       .tk-brand-mobile{display:none}
-      .tk-toolbar-grid{display:grid!important;grid-template-columns:218px minmax(170px,210px) minmax(240px,1fr) auto;gap:.75rem;width:100%}
+      /* Global navigation uses stable, content-sized zones. The selectors do not
+         grow with the viewport and search is capped, so context never crowds the
+         brand or turns the header into a row of competing full-width fields. */
+      .tk-toolbar-grid{display:grid!important;grid-template-columns:285px 210px minmax(260px,340px) minmax(190px,280px) auto;gap:.65rem;width:100%;justify-content:start}
       .tk-toolbar .navbar-brand{min-width:0;padding:0!important;margin:0!important}
-      .tk-toolbar .tk-brand-full{font-size:.75rem!important;letter-spacing:.09em!important}
-      .tk-toolbar .navbar-brand svg{width:1.75rem!important;height:1.75rem!important;padding:.28rem;
-        border-radius:.45rem;background:var(--tblr-primary);color:#fff!important;flex:0 0 auto}
-      .tk-toolbar-project{min-width:0}
-      .tk-toolbar-project .form-select{height:2.25rem;border-radius:.5rem;font-size:.75rem;min-width:0}
-      .tk-toolbar-search{width:100%;min-width:0}
-      .tk-toolbar-search .form-control{height:2.25rem;border-radius:.5rem;background:var(--tblr-bg-surface-secondary)}
+      /* Restore the original Taikun Switchboard lockup: unboxed mark, full
+         wordmark, and the pre-navigation-cleanup proportions. */
+      .tk-toolbar .tk-brand-full{display:inline!important;font-size:18px!important;font-weight:500!important;letter-spacing:.14em!important}
+      .tk-toolbar .navbar-brand svg{width:28px!important;height:28px!important;padding:0;
+        border-radius:0;background:transparent;color:var(--tblr-primary)!important;flex:0 0 auto}
+      .tk-toolbar-project,.tk-toolbar-deliverable{min-width:0}
+      .tk-toolbar-project .form-select,.tk-toolbar-deliverable .form-select{
+        height:2.25rem;min-width:0;border:1px solid var(--tblr-border-color);border-radius:.5rem;
+        background-color:var(--tblr-bg-surface);color:var(--tblr-body-color);
+        font-size:.75rem;font-weight:400;box-shadow:none;
+        transition:border-color .15s ease,box-shadow .15s ease}
+      .tk-toolbar-project .form-select:hover,.tk-toolbar-deliverable .form-select:hover{
+        border-color:var(--tblr-secondary)}
+      .tk-toolbar-project .form-select:focus,.tk-toolbar-deliverable .form-select:focus{
+        border-color:color-mix(in srgb,var(--tblr-primary) 55%,var(--tblr-border-color));
+        background-color:var(--tblr-bg-surface);box-shadow:0 0 0 .2rem color-mix(in srgb,var(--tblr-primary) 12%,transparent)}
+      .tk-toolbar-search{width:100%;max-width:280px;min-width:0}
+      .tk-toolbar-search .form-control{height:2.25rem;border:1px solid var(--tblr-border-color);border-radius:.5rem;
+        background:var(--tblr-bg-surface-secondary);box-shadow:none;font-size:.75rem}
+      .tk-toolbar-search .form-control:hover{border-color:var(--tblr-border-color)}
+      .tk-toolbar-search .input-icon-addon{color:var(--tblr-secondary)}
+      .tk-toolbar-search kbd{border:0;background:transparent;color:var(--tblr-secondary);font-weight:500;box-shadow:none}
       .tk-toolbar-tools{display:flex;align-items:center;gap:.45rem;white-space:nowrap}
-      .tk-toolbar-icon{width:2.125rem;height:2.125rem;display:inline-flex;align-items:center;justify-content:center;padding:0;border-radius:.5rem}
-      .tk-toolbar-new{height:2.125rem;border-radius:.5rem;padding-inline:.75rem}
+      .tk-toolbar-icon{width:2.125rem;height:2.125rem;display:inline-flex;align-items:center;justify-content:center;
+        padding:0;border-radius:.5rem;background:transparent}
+      .tk-toolbar-new{height:2.125rem;border-radius:.5rem;padding-inline:.8rem;font-weight:600;box-shadow:0 1px 2px rgba(16,24,40,.08)}
       #user-menu-avatar{width:2.125rem;height:2.125rem;font-size:.72rem;font-weight:600}
       .tk-retired-toolbar-controls{display:none!important}
+      .tk-mission-shell{padding-top:1.25rem}
+      .tk-mission-breadcrumb{color:var(--tblr-secondary);font-size:.75rem;margin-bottom:.55rem}
+      .tk-mission-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:1.5rem;margin-bottom:1.25rem}
+      .tk-mission-title{font-size:1.55rem;line-height:1.2;letter-spacing:-.025em;margin:0 0 .55rem;font-weight:600}
+      .tk-mission-meta{display:flex;align-items:center;flex-wrap:wrap;gap:.55rem;color:var(--tblr-secondary);font-size:.78rem}
+      .tk-mission-live{display:inline-flex;align-items:center;gap:.3rem;color:var(--tblr-success)}
+      .tk-mission-header-actions{display:flex;align-items:flex-start;justify-content:flex-end;gap:.5rem;flex:0 0 auto}
+      .tk-mission-header-actions .dropdown-toggle::after{display:none}
+      .tk-mission-metrics{display:grid;grid-template-columns:minmax(230px,1.25fr) repeat(3,minmax(120px,1fr));gap:.75rem;margin-bottom:1.15rem}
+      .tk-mission-metric{border:1px solid var(--tblr-border-color);border-radius:.75rem;background:var(--tblr-bg-surface);padding:1rem 1.1rem;min-width:0}
+      .tk-mission-metric-label{display:flex;align-items:center;justify-content:space-between;gap:.5rem;color:var(--tblr-secondary);font-size:.7rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+      .tk-mission-metric-value{font-size:1.45rem;font-weight:600;line-height:1.2;margin-top:.45rem}
+      .tk-mission-progress{height:.3rem;border-radius:999px;background:var(--tblr-bg-surface-secondary);overflow:hidden;margin-top:.7rem}
+      .tk-mission-progress>span{display:block;height:100%;border-radius:inherit;background:var(--tblr-primary)}
+      .tk-mission-tabs{margin-bottom:1rem!important}
+      .tk-mission-work.card{border-radius:.8rem;box-shadow:none}
+      .tk-mission-work .card-header{min-height:auto;padding:.9rem 1rem}
+      .tk-mission-work .card-title{font-size:1rem}
+      .tk-mission-work-count{margin-left:auto;color:var(--tblr-secondary);font-size:.75rem;white-space:nowrap}
+      /* One governed status stack prevents independent system pills from claiming
+         the same fixed coordinates. Fleet stays in its own right-hand dock. */
+      .tk-left-status-stack{position:fixed;left:16rem;bottom:1rem;z-index:1038;display:flex;
+        flex-direction:column-reverse;align-items:flex-start;gap:.5rem;max-width:min(360px,calc(100vw - 2rem))}
+      body.tk-sidebar-collapsed .tk-left-status-stack{left:5.25rem}
+      .tk-left-status-stack:empty{display:none}
+      .tk-left-status-stack>div:empty{display:none}
+      .tk-pressure-dock{position:static;max-width:100%}
       @media (min-width:992px) and (max-width:1199.98px){
-        .tk-toolbar-grid{grid-template-columns:195px minmax(150px,180px) minmax(180px,1fr) auto;gap:.5rem}
+        .tk-toolbar-grid{grid-template-columns:285px minmax(135px,165px) minmax(220px,1fr) auto;gap:.45rem}
+        .tk-toolbar-search{display:none!important}
       }
       @media (min-width:992px){
         .navbar-vertical{inset-block-start:var(--tk-header-h) !important}
@@ -189,23 +236,34 @@
           padding:0 .2rem;border:2px solid var(--tblr-bg-surface);border-radius:999px;font-size:.58rem;
           line-height:.7rem;display:none;align-items:center;justify-content:center}
         .tk-mobile-status-badge.show{display:inline-flex}
-        .tk-brand-full{display:none}
-        .tk-brand-mobile{display:inline}
+        .tk-brand-full{display:inline!important}
+        .tk-brand-mobile{display:none!important}
         .tk-toolbar-grid{display:flex!important;gap:.35rem;padding-inline:.75rem}
         .tk-toolbar .navbar-brand{margin:0!important;padding:0!important;min-width:0}
         .tk-toolbar .navbar-brand a{gap:.45rem!important}
-        .tk-toolbar-project,.tk-toolbar-search{display:none!important}
+        .tk-toolbar-project,.tk-toolbar-deliverable,.tk-toolbar-search{display:none!important}
         .tk-toolbar-tools{margin-left:auto;gap:.35rem}
         #btn-new-task{display:none!important}
         #btn-ack-inbox{width:2rem;height:2rem;padding:0}
         #user-menu .avatar{width:2rem;height:2rem}
-        #fleet-mobile-activity{position:fixed;left:.75rem;right:.75rem;
-          bottom:calc(var(--tk-mobile-nav-h) + env(safe-area-inset-bottom) + .65rem);z-index:1039;
-          width:calc(100% - 1.5rem);min-height:3rem;border-radius:.8rem;background:var(--tblr-bg-surface);
-          border:1px solid var(--tblr-border-color);box-shadow:0 8px 28px rgba(16,24,40,.16)}
-        body:has(#tab-fleet.active) #fleet-mobile-activity{display:none}
+        /* The collapsed Fleet control is the same compact status pill on every
+           viewport; mobile only changes its safe position above navigation. */
+        #fleet-dock-pill{right:.75rem!important;bottom:calc(var(--tk-mobile-nav-h) + env(safe-area-inset-bottom) + .65rem)!important;
+          max-width:calc(100% - 1.5rem);overflow:hidden}
+        .tk-left-status-stack{left:.75rem;right:.75rem;bottom:calc(var(--tk-mobile-nav-h) + env(safe-area-inset-bottom) + .65rem);
+          max-width:none;z-index:1039}
         .tk-pressure-banner{position:fixed;top:var(--tk-header-h);left:0;right:0;z-index:1034;
           border-radius:0;border-width:0 0 1px;margin:0;padding:.55rem .85rem;box-shadow:0 8px 20px -16px rgba(16,24,40,.5)}
+        .tk-pressure-dock{display:none!important}
+        .tk-mission-shell{padding-top:1rem}
+        .tk-mission-heading{display:block;margin-bottom:1rem}
+        .tk-mission-title{font-size:1.25rem}
+        .tk-mission-header-actions{justify-content:flex-start;margin-top:.85rem;flex-wrap:wrap}
+        .tk-mission-metrics{grid-template-columns:1fr 1fr;gap:.6rem}
+        .tk-mission-metric{padding:.8rem}
+      }
+      @media (max-width:379.98px){
+        .tk-toolbar .tk-brand-full{font-size:15px!important;letter-spacing:.11em!important}
       }
       /* Full-width top header (combo layout): spans the whole page; sidebar + content sit below it. */
       .tk-toolbar{background:var(--tblr-bg-surface);border-bottom:1px solid var(--tblr-border-color);height:var(--tk-header-h);min-height:var(--tk-header-h);position:sticky;top:0;z-index:1035}
@@ -242,6 +300,9 @@
                     </h1>
                     <div class="tk-toolbar-project">
                         <select id="project-switcher" class="form-select form-select-sm" aria-label="Switch project"></select>
+                    </div>
+                    <div class="tk-toolbar-deliverable" id="header-deliverable-wrap" style="display:none">
+                        <select id="header-deliverable-switcher" class="form-select form-select-sm" aria-label="Switch deliverable"></select>
                     </div>
                     <div class="input-icon tk-toolbar-search">
                         <span class="input-icon-addon"><i class="ti ti-search"></i></span>
@@ -617,18 +678,17 @@
 
                         <!-- DELIVERABLE board (strategic map + mission cockpit) -->
                         <div class="tab-pane" id="tab-mission" role="tabpanel">
-                            <div class="card mt-3">
-                                <div class="card-header d-flex flex-wrap align-items-center gap-2">
-                                    <label for="mission-deliverable-picker" class="mb-0 text-secondary text-nowrap"><i class="ti ti-target-arrow me-1"></i>Deliverable</label>
-                                    <select id="mission-deliverable-picker" class="form-select form-select-sm" style="min-width:13rem;max-width:26rem;flex:1 1 13rem" aria-label="Select deliverable"></select>
-                                    <label class="form-check form-check-inline mb-0 text-secondary text-nowrap" title="Include archived deliverables in the picker"><input id="mission-show-archived" class="form-check-input" type="checkbox"><span class="form-check-label small">Show archived</span></label>
-                                    <button id="mission-archive" class="btn btn-sm btn-outline-secondary ms-auto" type="button"><i class="ti ti-archive me-1"></i>Archive</button>
-                                    <button id="mission-refresh" class="btn btn-sm btn-outline-secondary" type="button"><i class="ti ti-refresh me-1"></i>Refresh</button>
-                                    <button id="mission-generate-brief" class="btn btn-sm btn-primary" type="button"><i class="ti ti-sparkles me-1"></i>Generate brief</button>
+                            <div class="tk-mission-shell">
+                                <!-- UI-80: behavior anchors retained for existing wiring and command-palette
+                                     compatibility. Their visible controls live in the compact page overflow. -->
+                                <div class="d-none" aria-hidden="true">
+                                    <select id="mission-deliverable-picker" tabindex="-1" aria-label="Select deliverable"></select>
+                                    <input id="mission-show-archived" type="checkbox" tabindex="-1">
+                                    <button id="mission-archive" type="button">Archive</button>
+                                    <button id="mission-refresh" type="button">Refresh</button>
+                                    <button id="mission-generate-brief" type="button">Generate brief</button>
                                 </div>
-                                <div class="card-body" id="mission-page">
-                                    <div class="text-secondary small">Loading mission…</div>
-                                </div>
+                                <div id="mission-page"><div class="text-secondary small">Loading mission…</div></div>
                             </div>
                         </div>
 
@@ -1002,7 +1062,7 @@
     <script src="js/state.js?v=2"></script>
     <script src="js/board.js?v=2"></script>
     <script src="js/plan-chat.js?v=1"></script>
-    <script src="js/mission.js?v=9"></script>
+    <script src="js/mission.js?v=10"></script>
     <script src="js/runner-session.js?v=12"></script>
     <script src="js/proof-console.js?v=1"></script>
     <script src="js/project-admin.js?v=1"></script>
@@ -1012,8 +1072,7 @@
     <script src="js/fleet-dock.js?v=5"></script>
     <script src="app.js?v=83"></script>
     <script src="taikun-ui.js?v=11"></script>
-    <script src="saturation-panel.js?v=2"></script>
-    <script src="narration-ops-panel.js?v=3"></script>
+    <script src="saturation-panel.js?v=3"></script>
     <script>
       // Tab routing, nesting-aware. The nav is now 2 levels: 5 top tabs (.nav-tabs),
       // and — inside the Plan / Inbox hubs — a segmented sub-nav (.tk-subnav). Both are
@@ -1387,8 +1446,9 @@
       })();
     </script>
     <div id="fleet-dock"></div>
-    <div id="saturation-dock"></div>
-    <div id="narration-ops-dock"></div>
+    <div class="tk-left-status-stack" aria-label="System status">
+        <div id="saturation-dock"></div>
+    </div>
     <!-- UI-24/UI-47: bound PTY terminal panel — see static/js/runner-session.js. Starts
          parked here (sidecar-shaped, hidden); openRunnerSessionPanel() moves it
          either in place (still here, shown as a right-docked sidecar) or into the

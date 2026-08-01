@@ -22,9 +22,10 @@ def main() -> None:
                  "Autodeploy failing", "Not yet deployed"):
         assert text in app, text
     assert "@media (max-width: 991.98px)" in css
-    assert "#fleet-dock > .card, #fleet-dock-pill { display: none !important; }" in css
+    assert "#fleet-dock > .card {" in css
+    assert "#fleet-dock-pill { display: none !important; }" not in css
     assert "min-height: 44px" in css
-    assert "fleet-mobile-activity" in app and "mobile-fleet-badge" in app
+    assert "fleet-mobile-activity" not in app and "mobile-fleet-badge" in app
     assert "_dockMobileAnswer" in app and "dock-answer-sheet" in app
     assert "/api/pull-requests/{pr_number}/merge" in board
     assert "/api/pull-requests/{pr_number}/regate" in board

@@ -45,7 +45,9 @@
 
         const q = body.queue || {};
         const color = 'warning';
-        const anchor = 'position:fixed;left:16px;bottom:64px;z-index:1040;';
+        // Position is owned by .tk-left-status-stack so Narration and Box
+        // Pressure can never render into the same fixed coordinates.
+        const anchor = '';
         const summary = flags.join(', ');
 
         if (collapsed) {

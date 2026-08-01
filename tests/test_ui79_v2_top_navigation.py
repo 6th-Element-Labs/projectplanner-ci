@@ -1,4 +1,4 @@
-"""UI-79: pin the approved V2 global navigation information architecture."""
+"""UI-80: pin the approved dual-selector V2 navigation information architecture."""
 
 from path_setup import ROOT
 
@@ -12,6 +12,7 @@ def test_v2_global_toolbar_has_only_global_controls_in_order():
     controls = [
         'aria-label="Taikun Switchboard — home"',
         'id="project-switcher"',
+        'id="header-deliverable-switcher"',
         'id="f-search"',
         'id="btn-ack-inbox"',
         'id="btn-new-task"',
@@ -33,6 +34,7 @@ def test_project_and_autopilot_keep_their_approved_owners():
 
     sidebar = html.split('<aside class="navbar navbar-vertical', 1)[1].split("</aside>", 1)[0]
     assert 'id="project-switcher"' not in sidebar
+    assert 'id="header-deliverable-switcher"' not in sidebar
     assert 'data-autopilot-action="start" data-autopilot-scope="deliverable"' in mission
 
     # UI-79 changes the global top bar, not the five-destination mobile navigation.

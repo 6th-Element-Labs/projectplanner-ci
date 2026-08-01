@@ -76,8 +76,8 @@
         }
 
         if (collapsed) {
-            host.innerHTML = `<button id="saturation-dock-pill" class="btn btn-sm btn-${color} shadow-sm"
-                style="position:fixed;bottom:16px;left:16px;z-index:1040;border-radius:999px;">
+            host.innerHTML = `<button id="saturation-dock-pill" class="btn btn-sm btn-${color} shadow-sm tk-pressure-dock"
+                style="border-radius:999px;">
                 <i class="ti ti-activity-heartbeat me-1"></i>Box pressure
             </button>`;
             const pill = document.getElementById('saturation-dock-pill');
@@ -88,7 +88,7 @@
         const rows = alerts.map((a) => `<li class="mb-1"><span class="badge bg-${severityColor(a.severity)}-lt me-1">${esc(a.severity)}</span>${esc(a.message)}</li>`).join('')
             || '<li class="text-secondary">No active alerts</li>';
 
-        host.innerHTML = `<div class="card shadow-sm" style="position:fixed;bottom:16px;left:16px;z-index:1040;max-width:360px;">
+        host.innerHTML = `<div class="card shadow-sm tk-pressure-dock" style="max-width:360px;">
             <div class="card-header py-2 d-flex align-items-center justify-content-between">
                 <div class="fw-semibold"><i class="ti ti-activity-heartbeat me-1"></i>Box saturation</div>
                 <div>

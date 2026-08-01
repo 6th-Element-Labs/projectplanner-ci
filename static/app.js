@@ -755,8 +755,21 @@ const TeepPlan = {
         // Callers used to pass a scope ctx; scoping is gone — every surface shows the
         // same project-wide fleet (operator decision 2026-07-22: one source of truth).
         this._wireFleetDockModalGuard();
+        this._wireFleetDockResponsive();
         this._startFleetLive();
         this._loadFleetDock(true);
+    },
+    // Browsers can cross the desktop/mobile breakpoint without reloading (device
+    // rotation, split view, responsive testing). Re-render at that boundary so
+    // the desktop pill becomes the collapsed mobile activity card. Expanding
+    // that card preserves the established full-screen Fleet sheet interaction.
+    _wireFleetDockResponsive() {
+        if (this._fleetDockResponsiveWired || !window.matchMedia) return;
+        this._fleetDockResponsiveWired = true;
+        const query = window.matchMedia('(max-width: 991.98px)');
+        const sync = () => this._loadFleetDock(true);
+        if (query.addEventListener) query.addEventListener('change', sync);
+        else if (query.addListener) query.addListener(sync);
     },
     // The dock is position:fixed bottom-right. When a Bootstrap modal is open its
     // primary actions (e.g. Resume review) land in the same corner — hide the dock
@@ -1449,11 +1462,13 @@ const TeepPlan = {
         const nBroken = runnerKeys.filter(
             (k) => ['failed', 'lost_host', 'ended_unknown'].includes(k)).length;
         const nAttn = nAsking + nBroken + blockedPrs.length;
-        // The phone already has a permanent Fleet destination. Do not place a
-        // second floating console over that navigation. Passive state belongs on
-        // the Fleet icon; genuinely active work gets one compact, tappable status
-        // bar immediately above the nav (the familiar mini-player pattern).
-        if (window.matchMedia && window.matchMedia('(max-width: 991.98px)').matches) {
+        const rerender = () => this._renderFleetDock(runners, prs, deploymentPayload);
+        const mobile = window.matchMedia && window.matchMedia('(max-width: 991.98px)').matches;
+        // Mobile keeps the same collapsed status pill as desktop, positioned
+        // above the destination bar. Expanding it turns the existing dock into
+        // the full-screen Fleet sheet via CSS; there is no second mobile-only
+        // summary component with a different size or vocabulary.
+        if (mobile) {
             const badge = document.getElementById('mobile-fleet-badge');
             const badgeCount = nAttn || running;
             if (badge) {
@@ -1469,29 +1484,9 @@ const TeepPlan = {
                 host.innerHTML = '';
                 return;
             }
-            const tone = nAttn ? (nAsking ? 'orange' : 'red') : 'primary';
-            const lead = nAttn ? this._dockAttnLabel(nAttn) : `${running} working`;
-            const detail = nAttn
-                ? [nAsking ? `${nAsking} waiting` : '', nBroken ? `${nBroken} failed` : '',
-                    blockedPrs.length ? `${blockedPrs.length} PR blocked` : ''].filter(Boolean).join(' · ')
-                : 'Autopilot is running';
-            host.innerHTML = `<button id="fleet-mobile-activity" type="button" class="btn text-start d-flex align-items-center gap-2 px-3 py-2" aria-label="Open Fleet: ${this.esc(lead)}">
-                <span class="avatar avatar-sm bg-${tone}-lt text-${tone}"><i class="ti ti-server-bolt"></i></span>
-                <span class="flex-fill min-w-0"><span class="d-block fw-semibold">${this.esc(lead)}</span><span class="d-block text-secondary small text-truncate">${this.esc(detail)}</span></span>
-                <i class="ti ti-chevron-right text-secondary"></i>
-            </button>`;
-            document.getElementById('fleet-mobile-activity').addEventListener('click', () => {
-                if (window.TAIKUN_showTab) window.TAIKUN_showTab('#tab-fleet');
-                else {
-                    const fleet = document.getElementById('toptab-fleet');
-                    if (fleet) fleet.click();
-                }
-            });
-            return;
         }
         const collapsed = this._dockCollapsed == null ? (nAttn === 0) : this._dockCollapsed;
         const anchor = 'position:fixed;right:1rem;bottom:1rem;z-index:1031;';
-        const rerender = () => this._renderFleetDock(runners, prs, deploymentPayload);
         if (collapsed) {
             // The pill used to lead with a single category ("2 broken") while the
             // open dock counted every attention item ("4 blocked") — same dock,

@@ -177,10 +177,12 @@ try:
         assert done_row.is_visible()
         assert "Merged code" in done_row.inner_text()
         assert done_row.locator('[data-autopilot-scope="task"]').count() == 0
-        page_text = page.locator("#mission-page").inner_text()
-        assert "1 of 4 linked tasks complete" in page_text
-        assert "0 of 4 linked tasks complete" not in page_text
-        assert "Stored narrative is updating; counts above are live." in page_text
+        # UI-80 keeps generated narrative available without inserting another
+        # visual layer between progress and the primary Work ledger.
+        detail_text = page.locator("#mission-detail").text_content()
+        assert "1 of 4 linked tasks complete" in detail_text
+        assert "0 of 4 linked tasks complete" not in detail_text
+        assert "Stored narrative is updating; counts above are live." in detail_text
 
         # The same work ledger becomes stacked task cards on a phone without
         # changing its task-detail or runner-control contracts.

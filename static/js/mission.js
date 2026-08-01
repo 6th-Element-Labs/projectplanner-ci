@@ -185,7 +185,6 @@
             return `<div class="d-flex flex-column align-items-end gap-1">
                 <button class="btn btn-primary" type="button" data-autopilot-action="start" data-autopilot-scope="deliverable">
                     <i class="ti ti-player-play me-1"></i>Autopilot</button>
-                <span class="text-secondary small">Starts every ready task and keeps advancing.</span>
                 <span id="mission-autopilot-flash" class="small"></span></div>`;
         }
         return `<div class="d-flex flex-column align-items-end gap-1">
@@ -937,28 +936,51 @@
         const board = s.board || {};
         const prog = s.progress || {};
         const pctDone = Math.round((prog.done_with_proof_ratio || 0) * 100);
+        const linkedCount = Number(prog.linked_task_count || (s.linked_tasks || []).length || 0);
+        const readyCount = (s.linked_tasks || []).filter((link) => {
+            const task = link.task_detail || link.task || {};
+            const status = String(task.status || '').toLowerCase();
+            return status === 'ready' || status === 'not started';
+        }).length;
         const proofOn = typeof this._proofModeFromUrl === 'function' && this._proofModeFromUrl();
-        const header = `<div class="d-flex flex-wrap align-items-start gap-3 mb-4"><div class="flex-fill">
-            <div class="text-secondary small mb-1">${this.esc(s.project_id || window.PM_PROJECT || '')}${s.board_id ? ' · ' + this.esc(s.board_id) : ''}</div>
-            <h2 class="mb-2">${this.esc(d.title || s.deliverable_id || 'Mission')}</h2>
-            <div class="btn-list">${this._missionBadge(d.status, this.DELIVERABLE_STATUS_COLOR)} ${this._missionConfidence(board.confidence)}</div>
+        const archived = String(d.status || '').toLowerCase() === 'archived';
+        const showArchived = !!(document.getElementById('mission-show-archived') || {}).checked;
+        const projectLabel = this.esc(s.project_id || window.PM_PROJECT || '');
+        const header = `<div class="tk-mission-breadcrumb">${projectLabel} / Deliverables</div>
+        <div class="tk-mission-heading"><div class="flex-fill">
+            <h1 class="tk-mission-title">${this.esc(d.title || s.deliverable_id || 'Mission')}</h1>
+            <div class="tk-mission-meta">
+                ${this._missionBadge(d.status, this.DELIVERABLE_STATUS_COLOR)}
+                <span class="tk-mission-live" title="Live — auto-refreshes as agents update tasks"><span class="status-dot status-dot-animated bg-green"></span>Live</span>
+                <span aria-hidden="true">·</span><span id="mission-live-stamp">updated just now</span>
+            </div>
         </div>
-        <div class="text-end"><div class="mb-2">${this._missionAutopilotControlsHtml()}</div><div class="mb-2"></div>
-            <span class="badge bg-green-lt" title="Live — auto-refreshes as agents update tasks"><span class="status-dot status-dot-animated bg-green me-1"></span>Live</span>
-            <div id="mission-live-stamp" class="text-secondary small mt-1"></div>
+        <div class="tk-mission-header-actions">
+            ${this._missionAutopilotControlsHtml()}
+            <div class="dropdown">
+                <button class="btn btn-outline-secondary fw-semibold" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="More deliverable actions">•••</button>
+                <div class="dropdown-menu dropdown-menu-end">
+                    <button class="dropdown-item" type="button" data-mission-header-action="refresh"><i class="ti ti-refresh me-2"></i>Refresh</button>
+                    <button class="dropdown-item" type="button" data-mission-header-action="brief"><i class="ti ti-sparkles me-2"></i>Generate brief</button>
+                    <label class="dropdown-item d-flex align-items-center gap-2 mb-0"><input class="form-check-input m-0" type="checkbox" data-mission-show-archived${showArchived ? ' checked' : ''}>Show archived</label>
+                    <div class="dropdown-divider"></div>
+                    <button class="dropdown-item${archived ? '' : ' text-danger'}" type="button" data-mission-header-action="archive"><i class="ti ti-${archived ? 'archive-off' : 'archive'} me-2"></i>${archived ? 'Restore deliverable' : 'Archive deliverable'}</button>
+                </div>
+            </div>
         </div></div>
-        <div id="mission-session-health-strip" class="d-flex flex-wrap align-items-center gap-2 mb-4"></div>`;
+        <div id="mission-session-health-strip" class="d-flex flex-wrap align-items-center gap-2 mb-3"></div>`;
         const proofHtml = (proofOn && typeof this.proofConsoleHtml === 'function')
             ? this.proofConsoleHtml(s, this._proofBind || {})
             : '';
-        const kpi = `<div class="row row-cards mb-4 mission-summary-metrics">${[
-            ['Done with proof', prog.done_with_proof_count || 0, 'ti-circle-check', 'green'],
-            ['Active / claimed', (s.active_work || []).length, 'ti-bolt', 'blue'],
-            ['Blockers', (s.blockers || []).length, 'ti-alert-triangle', 'red'],
-            ['Progress', `${pctDone}%`, 'ti-chart-donut', 'primary'],
-        ].map(([label, value, icon, color]) => `<div class="col-6 col-xl-3"><div class="card card-sm"><div class="card-body">
-            <div class="d-flex"><div class="subheader">${this.esc(label)}</div><div class="ms-auto text-${color}"><i class="ti ${icon}"></i></div></div>
-            <div class="h2 mb-0 mt-1">${this.esc(value)}</div></div></div></div>`).join('')}</div>`;
+        const metric = (label, value, icon, color, extra) => `<div class="tk-mission-metric">
+            <div class="tk-mission-metric-label"><span>${this.esc(label)}</span><i class="ti ti-${icon} text-${color}"></i></div>
+            <div class="tk-mission-metric-value">${this.esc(value)}</div>${extra || ''}</div>`;
+        const kpi = `<div class="tk-mission-metrics mission-summary-metrics">
+            ${metric('Verified progress', `${prog.done_with_proof_count || 0} of ${linkedCount}`, 'circle-check', 'green', `<div class="tk-mission-progress" role="progressbar" aria-label="Verified progress" aria-valuenow="${pctDone}" aria-valuemin="0" aria-valuemax="100"><span style="width:${Math.max(0, Math.min(100, pctDone))}%"></span></div>`)}
+            ${metric('Active', (s.active_work || []).length, 'bolt', 'blue')}
+            ${metric('Ready', readyCount, 'player-play', 'azure')}
+            ${metric('Blocked', (s.blockers || []).length, 'alert-triangle', 'red')}
+        </div>`;
         const narrative = this._missionBriefHtml(s);
         const endState = `<div class="row g-3 mb-4"><div class="col-md-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">End state</h3></div><div class="card-body"><p class="mb-0" style="white-space:pre-wrap">${this.esc(d.end_state || '—')}</p></div></div></div>
             <div class="col-md-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Why it matters</h3></div><div class="card-body"><p class="mb-0" style="white-space:pre-wrap">${this.esc(d.why_it_matters || '—')}</p></div></div></div></div>`;
@@ -999,7 +1021,7 @@
                 <td data-label="Controls" class="text-end"><div class="mission-task-controls">${action}</div></td>
             </tr>`;
         }).join('') || '<tr><td colspan="6" class="text-secondary">No linked tasks</td></tr>';
-        const workLedger = `<div class="card mb-4" data-mission-work-ledger="all-linked-tasks"><div class="card-header"><div><h3 class="card-title">Work</h3><div class="text-secondary small">Open a task for details. Start ready work, or Watch / Kill a live runner.</div></div></div><div class="table-responsive"><table class="table table-vcenter card-table mission-work-table"><thead><tr><th>Task</th><th>Title</th><th>Status</th><th>Verification</th><th>Owner</th><th class="text-end">Controls</th></tr></thead><tbody>${ledgerRows}</tbody></table></div></div>`;
+        const workLedger = `<div class="card mb-4 tk-mission-work" data-mission-work-ledger="all-linked-tasks"><div class="card-header"><div><h3 class="card-title">Work</h3><div class="text-secondary small">Start, Watch, or Kill from the deliverable. Open a task for details.</div></div><span class="tk-mission-work-count">${linkedCount} ${linkedCount === 1 ? 'task' : 'tasks'}</span></div><div class="table-responsive"><table class="table table-vcenter card-table mission-work-table"><thead><tr><th>Task</th><th>Title</th><th>Status</th><th>Verification</th><th>Owner</th><th class="text-end">Controls</th></tr></thead><tbody>${ledgerRows}</tbody></table></div></div>`;
         // Blockers box removed — it dumped raw kinds like "dependency_unsatisfied". The
         // dependency map already outlines blockers with a thick dark border.
         const blockerHtml = '';
@@ -1033,15 +1055,15 @@
         const verificationButton = `<button type="button" class="btn btn-sm ${proofOn ? 'btn-primary' : 'btn-outline-secondary'}" id="mission-proof-toggle"><i class="ti ti-shield-check me-1"></i>${proofOn ? 'Hide detailed verification' : 'Open detailed verification'}</button>`;
         const verification = `<div class="card mb-4"><div class="card-header"><div><h3 class="card-title">Completion verification</h3><div class="text-secondary small">Finalized task proof and operator diagnostics.</div></div><div class="card-actions">${verificationButton}</div></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Task</th><th>Title</th><th>Provenance</th><th>PR</th></tr></thead><tbody>${doneRows}</tbody></table></div></div>${proofHtml}`;
         const tab = (id, label, icon) => `<button class="nav-link${selectedView === id ? ' active' : ''}" type="button" data-bs-toggle="tab" data-bs-target="#mission-view-${id}" data-mission-view="${id}" aria-selected="${selectedView === id ? 'true' : 'false'}"><i class="ti ti-${icon} me-1"></i>${label}</button>`;
-        const essentials = header + `<div class="nav nav-tabs mb-4" role="tablist">${tab('overview', 'Overview', 'list-details')}${tab('map', 'Work map', 'git-fork')}${tab('verification', 'Verification', 'shield-check')}</div>
+        const essentials = header + kpi + `<div class="nav nav-tabs tk-mission-tabs" role="tablist">${tab('overview', 'Overview', 'list-details')}${tab('map', 'Work map', 'git-fork')}${tab('verification', 'Verification', 'shield-check')}</div>
             <div class="tab-content">
-                <div class="tab-pane${selectedView === 'overview' ? ' active show' : ''}" id="mission-view-overview">${kpi}${this._missionCeoHeaderHtml(s)}${blockerHtml}${workLedger}${this._missionBreakdownHtml()}</div>
+                <div class="tab-pane${selectedView === 'overview' ? ' active show' : ''}" id="mission-view-overview">${blockerHtml}${workLedger}</div>
                 <div class="tab-pane${selectedView === 'map' ? ' active show' : ''}" id="mission-view-map">${this._missionDependencyGraphHtml()}</div>
                 <div class="tab-pane${selectedView === 'verification' ? ' active show' : ''}" id="mission-view-verification">${verification}</div>
             </div>`;
         // The rest (KPIs, brief, milestones, work tables, agents, linked tasks, policy) folds
         // into a disclosure so it's there when you want it, not a wall of ~15 cards up front.
-        const detail = this._missionEconomicsHtml(s.economics) + this._missionKpiOutcomesHtml() + narrative + endState + milestoneMap +
+        const detail = this._missionCeoHeaderHtml(s) + this._missionEconomicsHtml(s.economics) + this._missionKpiOutcomesHtml() + narrative + endState + milestoneMap +
             `<div class="row g-3 mb-4"><div class="col-lg-6"><div class="card h-100"><div class="card-header"><div><h3 class="card-title">Active nonterminal work</h3><div class="text-secondary small">This is the active subset; the primary work ledger above retains every linked task.</div></div></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Task</th><th>Title</th><th>Status</th><th>Session</th><th>Assignee</th><th>Claims</th></tr></thead><tbody>${activeRows}</tbody></table></div></div></div>
             <div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Done with proof</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Task</th><th>Title</th><th>Provenance</th><th>PR</th></tr></thead><tbody>${doneRows}</tbody></table></div></div></div></div>` +
             agents +
@@ -1077,6 +1099,23 @@
             });
             proofBtn._bound = true;
         }
+        el.querySelectorAll('[data-mission-header-action]').forEach((button) => {
+            button.addEventListener('click', () => {
+                const target = {
+                    refresh: 'mission-refresh',
+                    brief: 'mission-generate-brief',
+                    archive: 'mission-archive',
+                }[button.dataset.missionHeaderAction];
+                if (target) document.getElementById(target)?.click();
+            });
+        });
+        const archivedToggle = el.querySelector('[data-mission-show-archived]');
+        if (archivedToggle) archivedToggle.addEventListener('change', () => {
+            const source = document.getElementById('mission-show-archived');
+            if (!source) return;
+            source.checked = archivedToggle.checked;
+            source.dispatchEvent(new Event('change', { bubbles: true }));
+        });
     },
 
     async openLinkedTask(taskId, projectId) {

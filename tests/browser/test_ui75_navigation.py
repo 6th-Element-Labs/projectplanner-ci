@@ -38,8 +38,10 @@ with sync_playwright() as runtime:
     assert page.locator(".tk-mobile-nav").evaluate("el => getComputedStyle(el).display") == "grid"
     assert page.locator(".tk-mobile-nav > .nav-link").count() == 4
     assert page.locator(".navbar-vertical").evaluate("el => getComputedStyle(el).display") == "none"
-    assert page.locator(".tk-brand-full").evaluate("el => getComputedStyle(el).display") == "none"
-    assert page.locator(".tk-brand-mobile").evaluate("el => getComputedStyle(el).display") != "none"
+    # UI-80 restores the original full Taikun Switchboard wordmark on mobile;
+    # the reduced text-only replacement stays retired.
+    assert page.locator(".tk-brand-full").evaluate("el => getComputedStyle(el).display") != "none"
+    assert page.locator(".tk-brand-mobile").evaluate("el => getComputedStyle(el).display") == "none"
     assert not page.locator(".tk-toolbar #project-switcher").is_visible()
     assert not page.locator(".tk-toolbar #f-search").is_visible()
     assert page.locator(".tk-toolbar").evaluate(
@@ -56,9 +58,9 @@ with sync_playwright() as runtime:
 
     page.evaluate("""() => {
       const host = document.getElementById('fleet-dock');
-      host.innerHTML = '<button id="fleet-mobile-activity">Autopilot · 2 working</button>';
+      host.innerHTML = '<button id="fleet-dock-pill" style="position:fixed">All clear · 2 working</button>';
     }""")
-    activity = page.locator("#fleet-mobile-activity").bounding_box()
+    activity = page.locator("#fleet-dock-pill").bounding_box()
     mobile_nav = page.locator(".tk-mobile-nav").bounding_box()
     assert activity["y"] + activity["height"] <= mobile_nav["y"] - 8
 
