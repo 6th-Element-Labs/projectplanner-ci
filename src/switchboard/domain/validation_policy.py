@@ -55,20 +55,85 @@ def _load_json(path: Path, fallback: dict[str, Any]) -> dict[str, Any]:
     return value if isinstance(value, dict) else dict(fallback)
 
 
-def project_validation_policy(project: str) -> dict[str, Any]:
-    """Return the effective policy; non-Switchboard projects keep local commands."""
-    default = {
+def _load_policy_file(path: Path) -> dict[str, Any] | None:
+    """Read a policy file, or None when it is absent or unreadable.
+
+    Distinct from ``_load_json``: resolution needs to tell "this project declared
+    no policy" apart from "this project declared an empty one".
+    """
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _project_slug(project: str) -> str:
+    """Filename-safe project id. Project ids reach this as a path component."""
+    return re.sub(r"[^a-z0-9_-]", "", str(project or "").strip().lower())
+
+
+def _switchboard_policy(project: str) -> dict[str, Any]:
+    """Switchboard's own policy, used when ``deploy/validation-policy.json`` is
+    unreadable. Missing configuration must not disarm the gate for the one
+    project that does own the Playwright runner."""
+    return {
         "schema": VALIDATION_POLICY_SCHEMA,
         "project": project,
-        "classification_required": project == "switchboard",
+        "classification_required": True,
         "allowed_ui_impact": ["yes", "no"],
+        "ui_validation_enforced": True,
         "required_status_context": UI_CONTEXT,
         "runner": {
             "command": "python3 scripts/run_ui_playwright.py",
             "browser": "chromium", "headless": True, "allow_skip": False,
         },
     }
-    policy = _load_json(_POLICY_PATH, default) if project == "switchboard" else default
+
+
+def _neutral_policy(project: str) -> dict[str, Any]:
+    """Policy for a project that has declared none.
+
+    It claims no status context and no runner command. Handing such a project
+    Switchboard's own values asked a TypeScript repo with no Python for
+    ``python3 scripts/run_ui_playwright.py`` and a status context its CI never
+    publishes -- evidence that is impossible rather than merely absent
+    (BUG-274). ``unconfigured`` keeps that fallback named instead of letting an
+    absent policy read as a deliberate one.
+    """
+    return {
+        "schema": VALIDATION_POLICY_SCHEMA,
+        "project": project,
+        "unconfigured": True,
+        "classification_required": False,
+        "allowed_ui_impact": ["yes", "no"],
+        "ui_validation_enforced": False,
+        "required_status_context": "",
+        "runner": {"command": "", "browser": "", "headless": True, "allow_skip": False},
+    }
+
+
+def project_validation_policy(project: str) -> dict[str, Any]:
+    """Resolve the effective validation policy for one project.
+
+    Order: ``deploy/validation-policy.<project>.json``, then the shared
+    ``deploy/validation-policy.json`` when it declares this project, then a
+    neutral policy that demands nothing. Switchboard falls back to its own
+    hardcoded policy rather than the neutral one, so an unreadable file fails
+    closed for the project that owns the runner.
+    """
+    slug = _project_slug(project)
+    policy: dict[str, Any] | None = None
+    if slug:
+        policy = _load_policy_file(_ROOT / "deploy" / f"validation-policy.{slug}.json")
+    if policy is None:
+        shared = _load_policy_file(_POLICY_PATH)
+        if shared is not None and _project_slug(shared.get("project")) == slug:
+            policy = shared
+    if policy is None:
+        policy = _switchboard_policy(project) if slug == "switchboard" else _neutral_policy(project)
+    policy = dict(policy)
+    policy.setdefault("schema", VALIDATION_POLICY_SCHEMA)
     policy["project"] = project
     return policy
 
@@ -116,8 +181,20 @@ def ui_validation_enforced(project: str) -> bool:
     """
     declared = project_validation_policy(project).get("ui_validation_enforced")
     if declared is None:
-        return project == "switchboard"
+        return _project_slug(project) == "switchboard"
     return bool(declared)
+
+
+def ui_required_status_context(project: str) -> str:
+    """The status context this project's UI gate demands, or "" when it has none.
+
+    A project that does not enforce UI validation must not have another
+    project's required context appended to its PR: its CI will never publish
+    one, so the merge gate would block on a check that cannot arrive.
+    """
+    if not ui_validation_enforced(project):
+        return ""
+    return str(project_validation_policy(project).get("required_status_context") or "")
 
 
 def _normalized_files(changed_files: Iterable[Any] | None) -> list[str]:
@@ -168,7 +245,7 @@ def validation_requirement(ui_impact: str, reasons: Iterable[str] = (),
         "tier": "hermetic",
         "post_deploy_tier": "live_edge" if live_edge else None,
         "allow_skip": False,
-        "required_status_context": UI_CONTEXT,
+        "required_status_context": ui_required_status_context(project),
         "reasons": sorted(set(str(item) for item in reasons)),
     }
 
@@ -202,6 +279,17 @@ def classify_task(payload: Mapping[str, Any], *, project: str,
         # unfalsifiable and the author has no way to be believed.
         impact = "no"
         source = "explicit"
+        reasons.append("prose_signal_ignored_without_file_evidence")
+    elif (inferred["ui"] and not explicit and inferred["changed_files"]
+          and not _has_file_evidence(reasons)):
+        # Same rule where no declaration exists. A known diff that renders
+        # nothing beats prose: simplemark FOUNDATION-1 was called UI-impacting
+        # for the words "browser" and "ui" while its diff held no .html/.css/
+        # .tsx file at all, and no diff content could have said otherwise
+        # (BUG-275). Only a *known* file set overrules the signal -- with no
+        # diff yet, at scoping time, prose still fails closed.
+        impact = "no"
+        source = "inferred"
         reasons.append("prose_signal_ignored_without_file_evidence")
     elif inferred["ui"]:
         impact = "yes"
@@ -273,6 +361,15 @@ def ui_playwright_evidence_gate(task: Mapping[str, Any], evidence: Mapping[str, 
         return {**classification, "required": True}
     if classification.get("ui_impact") != "yes":
         return {"ok": True, "required": False, "classification": classification}
+    requirement = classification.get("ui_validation") or {}
+    if not requirement.get("required"):
+        # The policy that decides whether UI validation applies said it does
+        # not. Demanding the receipt anyway contradicted the classification
+        # published in the same payload, and named no authority for the
+        # override (BUG-273).
+        return {"ok": True, "required": False,
+                "reason": requirement.get("reason") or "ui_validation_not_required",
+                "classification": classification}
     waiver = evidence.get("ui_validation_waiver") or {}
     if waiver:
         required = ("approved_by", "approved_at", "reason", "alternative_evidence",

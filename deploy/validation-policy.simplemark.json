@@ -1,0 +1,20 @@
+{
+  "schema": "switchboard.validation_policy.v1",
+  "project": "simplemark",
+  "classification_required": false,
+  "allowed_ui_impact": ["yes", "no"],
+  "ui_validation_enforced": false,
+  "required_status_context": "simplemark-ci/full-suite",
+  "runner": {
+    "command": "bash scripts/simplemark_ci.sh",
+    "browser": "",
+    "headless": true,
+    "allow_skip": false
+  },
+  "notes": [
+    "SimpleMark is a TypeScript/Vite repo. It has no Python and no",
+    "scripts/run_ui_playwright.py, so ui_validation_enforced stays false:",
+    "Switchboard must not demand a receipt this repo cannot produce (BUG-274).",
+    "required_status_context and runner.command describe SimpleMark's own gate."
+  ]
+}

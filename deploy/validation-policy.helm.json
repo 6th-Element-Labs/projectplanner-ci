@@ -1,0 +1,19 @@
+{
+  "schema": "switchboard.validation_policy.v1",
+  "project": "helm",
+  "classification_required": false,
+  "allowed_ui_impact": ["yes", "no"],
+  "ui_validation_enforced": false,
+  "required_status_context": "helm-ci/full-suite",
+  "runner": {
+    "command": "",
+    "browser": "",
+    "headless": true,
+    "allow_skip": false
+  },
+  "notes": [
+    "Helm's merge gate is helm-ci/full-suite, not Switchboard CI / VM gate.",
+    "Helm does not own scripts/run_ui_playwright.py, so ui_validation_enforced",
+    "stays false and Switchboard demands no Playwright receipt from it (BUG-274)."
+  ]
+}

@@ -19,9 +19,9 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 from constants import DEFAULT_PROJECT, GITHUB_PR_URL_RE, MERGE_GATE_SCHEMA
 from switchboard.domain.provenance.semantic import semantic_completion_gate
 from switchboard.domain.validation_policy import (
-    UI_CONTEXT,
     classify_task,
     ui_playwright_evidence_gate,
+    ui_required_status_context,
 )
 
 
@@ -1018,10 +1018,14 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
         task, project=project, existing=task,
         changed_files=declared_changed_files)
     required_contexts = _merge_gate_required_contexts(topology, merged_payload)
+    # Only the project that enforces UI validation gets its UI context added,
+    # and it gets its own. Appending Switchboard's context unconditionally
+    # blocked other projects on a check their CI never publishes (BUG-273).
+    ui_context = ui_required_status_context(project)
     if (task_validation.get("ok")
             and task_validation.get("ui_impact") == "yes"
-            and UI_CONTEXT not in required_contexts):
-        required_contexts.append(UI_CONTEXT)
+            and ui_context and ui_context not in required_contexts):
+        required_contexts.append(ui_context)
     if not task_validation.get("ok"):
         findings.append(_merge_gate_finding(
             task_validation.get("error") or "ui_validation_policy_failed",
