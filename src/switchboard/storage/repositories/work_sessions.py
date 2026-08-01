@@ -169,8 +169,13 @@ def _task_session_health_in(c: sqlite3.Connection, task: Dict[str, Any],
         ]
     else:
         # A task cannot legitimately have several simultaneous unclaimed Work
-        # Sessions. Keep at most the newest orphan as a bounded cleanup signal.
-        current_sessions = nonterminal[:1]
+        # Sessions. Keep the newest session as a bounded cleanup signal only
+        # when that newest attempt is itself nonterminal.  Selecting the newest
+        # *remaining* nonterminal row would resurrect an older failed attempt
+        # after a newer generation completed successfully.
+        current_sessions = (
+            sessions[:1] if sessions and sessions[0] in nonterminal else []
+        )
     active_sessions = [
         s for s in current_sessions
         if s.get("status") == "active" and (
