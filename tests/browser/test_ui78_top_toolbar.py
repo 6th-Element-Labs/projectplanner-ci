@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""UI-78: the approved top toolbar, with side/mobile navigation preserved."""
+"""UI-79 supersedes UI-78 with the approved V2 global navigation."""
 from __future__ import annotations
 
 import os
@@ -99,27 +99,26 @@ try:
             "() => typeof TeepPlan !== 'undefined' && TeepPlan.selectedDeliverableId === 'ui78-toolbar'"
         )
 
-        expected = ["f-search", "btn-ack-inbox", "btn-new-task", "btn-autopilot", "user-menu"]
+        expected = ["project-switcher", "f-search", "btn-ack-inbox", "btn-new-task", "user-menu"]
         boxes = [page.locator(f"#{element_id}").bounding_box() for element_id in expected]
         assert all(boxes), boxes
         assert all(boxes[index]["x"] < boxes[index + 1]["x"] for index in range(len(boxes) - 1)), boxes
         toolbar_height = page.locator(".tk-toolbar").evaluate(
             "el => Math.round(el.getBoundingClientRect().height)"
         )
-        assert toolbar_height <= 50, toolbar_height
+        assert 56 <= toolbar_height <= 62, toolbar_height
         assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
-        assert page.locator("#btn-autopilot").inner_text().strip() == "Autopilot"
-
-        page.locator("#toptab-plan").click()
-        page.wait_for_function("() => document.querySelector('#toolbar-context').textContent.includes('Plan')")
-        context = " ".join(page.locator("#toolbar-context").inner_text().split())
-        assert "Project Maxwell" in context and "·" in context and "Plan" in context, context
+        assert page.locator("#btn-new-task").inner_text().strip() == "New"
+        assert page.locator("#btn-autopilot").count() == 0
+        assert page.locator("#toolbar-context").count() == 0
+        assert page.locator(".tk-toolbar .tk-toolbar-filter").count() == 0
+        assert page.locator(".tk-toolbar .tk-toolbar-export").count() == 0
 
         with page.expect_response(
             lambda response: response.request.method == "POST"
             and "/api/deliverables/ui78-toolbar/autopilot" in response.url
         ) as response_info:
-            page.locator("#btn-autopilot").click()
+            page.locator('[data-autopilot-action="start"][data-autopilot-scope="deliverable"]').click()
         assert response_info.value.ok, response_info.value.status
         scopes = page.evaluate("""async () => (await (await fetch(
           'api/deliverables/ui78-toolbar/autopilot')).json()).scopes""")
@@ -135,11 +134,14 @@ try:
           }).filter(x => x.left < -1 || x.right > window.innerWidth + 1).slice(0, 12)
         })""")
         assert tablet_overflow["scrollWidth"] <= tablet_overflow["innerWidth"], tablet_overflow
-        assert page.locator("#btn-autopilot").evaluate("el => getComputedStyle(el).display") != "none"
+        assert page.locator("#project-switcher").evaluate("el => getComputedStyle(el).display") != "none"
+        assert page.locator("#f-search").evaluate("el => getComputedStyle(el).display") != "none"
 
         page.set_viewport_size({"width": 390, "height": 844})
         page.wait_for_timeout(350)
-        assert page.locator("#btn-autopilot").evaluate("el => getComputedStyle(el).display") == "none"
+        assert not page.locator("#project-switcher").is_visible()
+        assert not page.locator("#f-search").is_visible()
+        assert page.locator("#btn-new-task").evaluate("el => getComputedStyle(el).display") == "none"
         assert page.locator(".navbar-vertical").evaluate("el => getComputedStyle(el).display") == "none"
         assert page.locator(".tk-mobile-nav").evaluate("el => getComputedStyle(el).display") == "grid"
         assert page.locator(".tk-mobile-nav > .nav-link").count() == 4
@@ -155,8 +157,8 @@ try:
         assert not console_errors, console_errors
         assert not failed_requests, failed_requests
         browser.close()
-    print("PASS UI-78 approved top toolbar and existing Autopilot action")
-    print("PASS UI-78 side/mobile navigation regression boundary")
+    print("PASS UI-79 V2 global navigation and page-level Autopilot action")
+    print("PASS UI-79 side/mobile navigation regression boundary")
 finally:
     if server.poll() is None:
         server.terminate()

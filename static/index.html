@@ -144,21 +144,25 @@
         font-weight:700;letter-spacing:.09em;text-transform:uppercase}
       .tk-nav-section:first-child{padding-top:.45rem}
       .tk-nav-utilities{border-top:1px solid var(--tblr-border-color);padding-top:.65rem}
-      :root{--tk-header-h:3rem;--tk-mobile-nav-h:4.25rem}
+      :root{--tk-header-h:3.75rem;--tk-mobile-nav-h:4.25rem}
       .tk-mobile-nav{display:none}
       .tk-brand-mobile{display:none}
-      .tk-toolbar-actions{min-width:0}
-      .tk-toolbar-icon{width:2rem;height:2rem;display:inline-flex;align-items:center;justify-content:center;padding:0}
-      .tk-toolbar-context{max-width:min(24vw,22rem)}
-      .tk-toolbar-search{width:210px}
-      .tk-toolbar .btn{white-space:nowrap}
-      .tk-toolbar .dropdown-toggle.tk-toolbar-menu-toggle::after{display:none}
+      .tk-toolbar-grid{display:grid!important;grid-template-columns:218px minmax(170px,210px) minmax(240px,1fr) auto;gap:.75rem;width:100%}
+      .tk-toolbar .navbar-brand{min-width:0;padding:0!important;margin:0!important}
+      .tk-toolbar .tk-brand-full{font-size:.75rem!important;letter-spacing:.09em!important}
+      .tk-toolbar .navbar-brand svg{width:1.75rem!important;height:1.75rem!important;padding:.28rem;
+        border-radius:.45rem;background:var(--tblr-primary);color:#fff!important;flex:0 0 auto}
+      .tk-toolbar-project{min-width:0}
+      .tk-toolbar-project .form-select{height:2.25rem;border-radius:.5rem;font-size:.75rem;min-width:0}
+      .tk-toolbar-search{width:100%;min-width:0}
+      .tk-toolbar-search .form-control{height:2.25rem;border-radius:.5rem;background:var(--tblr-bg-surface-secondary)}
+      .tk-toolbar-tools{display:flex;align-items:center;gap:.45rem;white-space:nowrap}
+      .tk-toolbar-icon{width:2.125rem;height:2.125rem;display:inline-flex;align-items:center;justify-content:center;padding:0;border-radius:.5rem}
+      .tk-toolbar-new{height:2.125rem;border-radius:.5rem;padding-inline:.75rem}
+      #user-menu-avatar{width:2.125rem;height:2.125rem;font-size:.72rem;font-weight:600}
+      .tk-retired-toolbar-controls{display:none!important}
       @media (min-width:992px) and (max-width:1199.98px){
-        .tk-toolbar>.container-fluid{gap:.35rem}
-        .tk-toolbar .navbar-brand{padding-right:.5rem!important;margin-right:.5rem!important}
-        .tk-toolbar .tk-brand-full{font-size:15px!important;letter-spacing:.1em!important}
-        .tk-toolbar-search{width:150px}
-        .tk-toolbar-actions{gap:.35rem!important}
+        .tk-toolbar-grid{grid-template-columns:195px minmax(150px,180px) minmax(180px,1fr) auto;gap:.5rem}
       }
       @media (min-width:992px){
         .navbar-vertical{inset-block-start:var(--tk-header-h) !important}
@@ -187,15 +191,12 @@
         .tk-mobile-status-badge.show{display:inline-flex}
         .tk-brand-full{display:none}
         .tk-brand-mobile{display:inline}
-        .tk-toolbar>.container-fluid{gap:.35rem;padding-inline:.75rem}
+        .tk-toolbar-grid{display:flex!important;gap:.35rem;padding-inline:.75rem}
         .tk-toolbar .navbar-brand{margin:0!important;padding:0!important;min-width:0}
         .tk-toolbar .navbar-brand a{gap:.45rem!important}
-        .tk-toolbar .navbar-brand svg{width:25px!important;height:25px!important}
-        .tk-toolbar-actions{gap:.3rem!important}
-        .tk-toolbar-filter,.tk-toolbar-export{display:none}
-        #btn-new-task{width:2rem;height:2rem;padding:0;display:inline-flex;align-items:center;justify-content:center}
-        #btn-new-task .tk-action-label{display:none}
-        #btn-new-task i{margin:0!important;font-size:1.1rem}
+        .tk-toolbar-project,.tk-toolbar-search{display:none!important}
+        .tk-toolbar-tools{margin-left:auto;gap:.35rem}
+        #btn-new-task{display:none!important}
         #btn-ack-inbox{width:2rem;height:2rem;padding:0}
         #user-menu .avatar{width:2rem;height:2rem}
         #fleet-mobile-activity{position:fixed;left:.75rem;right:.75rem;
@@ -227,10 +228,10 @@
 </head>
 <body class="layout-fluid">
     <div class="page">
-            <!-- Approved production toolbar: brand · live context · search · filters ·
-                 Needs-you · New task · export · Autopilot · account. -->
+            <!-- UI-79: approved V2 global toolbar. Page-level actions (including
+                 Filters, Export, and Deliverable Autopilot) do not belong here. -->
             <header class="navbar navbar-expand-md d-print-none tk-toolbar py-1">
-                <div class="container-fluid d-flex align-items-center">
+                <div class="container-fluid align-items-center tk-toolbar-grid">
                     <!-- Brand — EXACT ActionEngine/Atlas lockup (demo.taikunai.com, per the ActionEngine repo navbar.js): flush-left h1.navbar-brand, no toggle before it. -->
                     <h1 class="navbar-brand navbar-brand-autodark pe-0 pe-md-3 me-md-3 mb-0">
                     <a href="/" class="d-flex align-items-center text-decoration-none" aria-label="Taikun Switchboard — home" style="gap:10px">
@@ -239,39 +240,17 @@
                         <span class="tk-brand-mobile" style="font-size:14px;font-weight:650;letter-spacing:.08em;color:var(--tblr-body-color);line-height:1;white-space:nowrap">SWITCHBOARD</span>
                     </a>
                     </h1>
-                    <div id="toolbar-context" class="tk-toolbar-context d-none d-xl-flex align-items-center text-secondary text-truncate small" style="min-width:0"></div>
-                    <!-- The wireframed production actions, kept on one quiet line. -->
-                    <div class="ms-auto d-flex align-items-center gap-2 flex-shrink-0 tk-toolbar-actions">
-                        <div class="input-icon d-none d-sm-block tk-toolbar-search">
-                            <span class="input-icon-addon"><i class="ti ti-search"></i></span>
-                            <input id="f-search" type="text" class="form-control form-control-sm" placeholder="Search…  ⌘K" autocomplete="off" readonly/>
-                        </div>
-                        <div class="dropdown tk-toolbar-filter">
-                            <button class="btn btn-sm btn-outline-secondary tk-toolbar-menu-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="ti ti-filter me-1"></i>Filters<span id="filter-count" class="ms-1 font-monospace small d-none"></span></button>
-                            <div class="dropdown-menu dropdown-menu-end p-3" style="min-width:300px">
-                                <div class="mb-2"><select id="f-ws" class="form-select form-select-sm"></select></div>
-                                <div class="mb-2"><select id="f-owner" class="form-select form-select-sm"></select></div>
-                                <div class="mb-2"><select id="f-assignee" class="form-select form-select-sm"></select></div>
-                                <div class="mb-2"><select id="f-risk" class="form-select form-select-sm"></select></div>
-                                <label class="form-check form-switch"><input id="f-blocking" class="form-check-input" type="checkbox"/><span class="form-check-label">Blocking only</span></label>
-                                <label class="form-check form-switch m-0"><input id="f-hidedone" class="form-check-input" type="checkbox" checked/><span class="form-check-label">Hide done</span></label>
-                            </div>
-                        </div>
-                        <button id="btn-ack-inbox" class="btn btn-sm btn-ghost-secondary position-relative tk-toolbar-icon" type="button" title="Needs you" aria-label="Open Needs-you queue"><i class="ti ti-bell"></i><span id="ack-inbox-count" class="badge bg-red position-absolute top-0 start-100 translate-middle" style="display:none;font-size:10px"></span></button>
-                        <button id="btn-new-task" class="btn btn-sm btn-primary" aria-label="New task"><i class="ti ti-plus me-1"></i><span class="tk-action-label">New task</span></button>
-                        <div class="dropdown tk-toolbar-export">
-                            <button class="btn btn-sm btn-outline-secondary tk-toolbar-icon tk-toolbar-menu-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" title="Export" aria-label="Export"><i class="ti ti-download"></i></button>
-                            <ul class="dropdown-menu dropdown-menu-end">
-                                <li><a class="dropdown-item" id="dl-xlsx" href="api/export.xlsx"><i class="ti ti-file-spreadsheet me-2"></i>Excel</a></li>
-                                <li><a class="dropdown-item" id="dl-xml" href="api/export.xml"><i class="ti ti-brand-windows me-2"></i>MS Project</a></li>
-                                <li><hr class="dropdown-divider"></li>
-                                <li><h6 class="dropdown-header" id="data-status">Loading…</h6></li>
-                                <li><h6 class="dropdown-header text-secondary fw-normal" id="plan-generated"></h6></li>
-                            </ul>
-                        </div>
-                        <button id="btn-autopilot" class="btn btn-sm btn-primary d-none d-lg-inline-flex align-items-center" type="button" title="Start Autopilot for the selected deliverable">
-                            <i class="ti ti-bolt me-1"></i>Autopilot
-                        </button>
+                    <div class="tk-toolbar-project">
+                        <select id="project-switcher" class="form-select form-select-sm" aria-label="Switch project"></select>
+                    </div>
+                    <div class="input-icon tk-toolbar-search">
+                        <span class="input-icon-addon"><i class="ti ti-search"></i></span>
+                        <input id="f-search" type="text" class="form-control form-control-sm" placeholder="Search this project…" autocomplete="off" readonly/>
+                        <span class="input-icon-addon"><kbd>⌘K</kbd></span>
+                    </div>
+                    <div class="tk-toolbar-tools">
+                        <button id="btn-ack-inbox" class="btn btn-sm btn-outline-secondary position-relative tk-toolbar-icon" type="button" title="Needs you" aria-label="Open Needs-you queue"><i class="ti ti-alert-circle"></i><span id="ack-inbox-count" class="badge bg-red position-absolute top-0 start-100 translate-middle" style="display:none;font-size:10px"></span></button>
+                        <button id="btn-new-task" class="btn btn-sm btn-primary tk-toolbar-new" aria-label="New task"><i class="ti ti-plus me-1"></i><span class="tk-action-label">New</span></button>
                         <!-- UI-23: top-right user menu — the demo.taikunai.com / ActionEngine
                              navbar.js:752-816 component, and now the canonical way into Settings.
                              Always rendered: the old rail copy only appeared once a taikun_session
@@ -280,13 +259,10 @@
                              for it. -->
                         <div class="nav-item dropdown" id="user-menu">
                             <a href="#dropdown-user" class="nav-link d-flex lh-1 text-reset p-0" data-bs-toggle="dropdown" aria-label="Open user menu">
-                                <span class="avatar avatar-sm bg-primary-lt"><i class="ti ti-user"></i></span>
-                                <div class="d-none d-xl-block ps-2">
-                                    <div id="user-menu-email" class="small fw-bold text-truncate" style="max-width:14rem">Account</div>
-                                    <div class="small text-muted">Settings</div>
-                                </div>
+                                <span class="avatar avatar-sm bg-primary-lt" id="user-menu-avatar"><i class="ti ti-user"></i></span>
                             </a>
                             <div class="dropdown-menu dropdown-menu-end dropdown-menu-arrow">
+                                <div class="dropdown-header text-truncate" id="user-menu-email" style="max-width:16rem">Account</div>
                                 <a href="#tab-settings" class="dropdown-item" id="menu-settings"><i class="ti ti-settings me-2"></i>Settings</a>
                                 <a href="#tab-settings/profile" class="dropdown-item" id="menu-account"><i class="ti ti-key me-2"></i>Account &amp; password</a>
                                 <a href="/coordination" class="dropdown-item" id="menu-coordination"><i class="ti ti-messages me-2"></i>Agent coordination</a>
@@ -298,6 +274,16 @@
                 </div>
             </header>
 
+            <!-- Keep the existing filter/export state and command-palette targets without
+                 putting page-specific controls back into the global navigation. -->
+            <div class="tk-retired-toolbar-controls" aria-hidden="true">
+                <span id="filter-count" class="d-none"></span>
+                <select id="f-ws"></select><select id="f-owner"></select><select id="f-assignee"></select><select id="f-risk"></select>
+                <input id="f-blocking" type="checkbox"/><input id="f-hidedone" type="checkbox" checked/>
+                <a id="dl-xlsx" href="api/export.xlsx">Excel</a><a id="dl-xml" href="api/export.xml">MS Project</a>
+                <span id="data-status">Loading…</span><span id="plan-generated"></span>
+            </div>
+
         <!-- Left nav rail — Tabler navbar-vertical. Expandable/hidable via taikun-ui.js
              ([data-tk-sidebar-toggle], persists 'taikun.sidebar.collapsed', default collapsed). -->
         <aside class="navbar navbar-vertical navbar-expand-lg">
@@ -307,9 +293,6 @@
                 </button>
                 <!-- Brand lives in the top header. No collapse button — the rail expands on hover (desktop). -->
                 <div class="collapse navbar-collapse" id="sidebar-menu">
-                    <div class="px-2 pt-2 pb-1 tk-rail-full">
-                        <select id="project-switcher" class="form-select form-select-sm" aria-label="Switch project"></select>
-                    </div>
                     <ul class="navbar-nav pt-lg-1" id="main-nav" role="tablist" aria-label="Primary navigation">
                         <li class="tk-nav-section" role="presentation">Shape</li>
                         <li class="nav-item"><a class="nav-link active" id="toptab-overview" data-bs-toggle="tab" href="#tab-exec" role="tab"><span class="nav-link-icon"><i class="ti ti-layout-dashboard"></i></span><span class="nav-link-title">Overview</span></a></li>
@@ -1027,7 +1010,7 @@
     <script src="js/scope.js?v=1"></script>
     <script src="js/attention.js?v=3"></script>
     <script src="js/fleet-dock.js?v=5"></script>
-    <script src="app.js?v=82"></script>
+    <script src="app.js?v=83"></script>
     <script src="taikun-ui.js?v=11"></script>
     <script src="saturation-panel.js?v=2"></script>
     <script src="narration-ops-panel.js?v=3"></script>
@@ -1387,6 +1370,18 @@
               // placeholder when there is no global session (bearer/dev-open).
               var email = document.getElementById('user-menu-email');
               if (email && data.user.email) email.textContent = data.user.email;
+              var avatar = document.getElementById('user-menu-avatar');
+              if (avatar) {
+                var named = String(data.user.name || '').trim();
+                var source = named || String(data.user.email || '').split('@')[0];
+                var parts = source.split(/[^A-Za-z0-9]+/).filter(Boolean);
+                var initials = parts.slice(0, 2)
+                  .map(function (part) { return part.charAt(0).toUpperCase(); }).join('');
+                if (!named && parts.length === 1 && parts[0].length > 1) {
+                  initials = parts[0].charAt(0).toUpperCase() + parts[0].slice(-1).toUpperCase();
+                }
+                if (initials) avatar.textContent = initials;
+              }
             }).catch(function () {});
         }
       })();

@@ -5131,29 +5131,6 @@ const TeepPlan = {
         });
         const nb = document.getElementById('btn-new-task');
         if (nb) nb.addEventListener('click', () => this.openCreate());
-        const autopilotBtn = document.getElementById('btn-autopilot');
-        if (autopilotBtn) autopilotBtn.addEventListener('click', async () => {
-            // This is the global presentation of the existing Deliverable Autopilot
-            // start action. It deliberately shares selectedDeliverableId and
-            // controlAutopilot with the Deliverables page instead of creating a
-            // second dispatch path.
-            autopilotBtn.disabled = true;
-            try {
-                if (!this.selectedDeliverableId) {
-                    await this.loadDeliverables();
-                    if (!this.selectedDeliverableId && (this.deliverables || []).length) {
-                        this.selectedDeliverableId = this.deliverables[0].id;
-                    }
-                }
-                if (!this.selectedDeliverableId) {
-                    window.alert('Create or select a deliverable before starting Autopilot.');
-                    return;
-                }
-                await this.controlAutopilot('start', 'deliverable');
-            } finally {
-                autopilotBtn.disabled = false;
-            }
-        });
         const npBtn = document.getElementById('btn-new-project');
         if (npBtn) npBtn.addEventListener('click', () => this.openNewProject());
         const npCreate = document.getElementById('np-create');

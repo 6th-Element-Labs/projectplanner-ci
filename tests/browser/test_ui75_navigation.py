@@ -30,7 +30,9 @@ with sync_playwright() as runtime:
     assert page.locator(".tk-mobile-nav").evaluate("el => getComputedStyle(el).display") == "none"
     assert page.locator(".navbar-vertical").evaluate("el => getComputedStyle(el).display") != "none"
     assert page.locator(".tk-brand-full").evaluate("el => getComputedStyle(el).display") != "none"
-    assert page.locator("#toolbar-context").evaluate("el => getComputedStyle(el).display") != "none"
+    assert page.locator(".tk-toolbar #project-switcher").evaluate("el => getComputedStyle(el).display") != "none"
+    assert page.locator(".tk-toolbar #f-search").evaluate("el => getComputedStyle(el).display") != "none"
+    assert page.locator("#btn-autopilot").count() == 0
 
     page.set_viewport_size({"width": 390, "height": 844})
     assert page.locator(".tk-mobile-nav").evaluate("el => getComputedStyle(el).display") == "grid"
@@ -38,8 +40,8 @@ with sync_playwright() as runtime:
     assert page.locator(".navbar-vertical").evaluate("el => getComputedStyle(el).display") == "none"
     assert page.locator(".tk-brand-full").evaluate("el => getComputedStyle(el).display") == "none"
     assert page.locator(".tk-brand-mobile").evaluate("el => getComputedStyle(el).display") != "none"
-    assert page.locator(".tk-toolbar-filter").evaluate("el => getComputedStyle(el).display") == "none"
-    assert page.locator(".tk-toolbar-export").evaluate("el => getComputedStyle(el).display") == "none"
+    assert not page.locator(".tk-toolbar #project-switcher").is_visible()
+    assert not page.locator(".tk-toolbar #f-search").is_visible()
     assert page.locator(".tk-toolbar").evaluate(
         "el => Math.round(el.getBoundingClientRect().height) <= 56"
     )
@@ -47,7 +49,7 @@ with sync_playwright() as runtime:
     assert page.locator("#mobile-fleet-badge").count() == 1
 
     # Header actions remain one compact row instead of wrapping under the brand.
-    tops = page.locator(".tk-toolbar .navbar-brand, #btn-ack-inbox, #btn-new-task, #user-menu").evaluate_all(
+    tops = page.locator(".tk-toolbar .navbar-brand, #btn-ack-inbox, #user-menu").evaluate_all(
         "els => els.map(el => Math.round(el.getBoundingClientRect().top))"
     )
     assert max(tops) - min(tops) <= 8
