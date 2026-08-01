@@ -1776,7 +1776,8 @@ def _complete_terminal_task_runner_cleanup_in(
     surrender = metadata.get("lease_surrender") or {}
     if (str(metadata.get("terminalized_by") or "")
             != "terminal_lease_surrendered"
-            or str(surrender.get("authority") or "") != "terminal_task"):
+            or str(surrender.get("authority") or "") not in {
+                "terminal_task", "completion_owner"}):
         return None
     task_id = str(record.get("task_id") or "").strip()
     agent_id = str(record.get("agent_id") or "").strip()

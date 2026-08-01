@@ -60,7 +60,9 @@ try:
         "agent_id": "codex/ADAPTER-36",
         "wake_mode": "connect",
         "alive": True,
-        "stale": False,
+        # Backdating can make an explicitly surrendered lease look stale, but
+        # ordinary surrender must remain distinct from true lease expiry.
+        "stale": True,
         "status": "running",
         "metadata": {
             "native_host_execution": True,
