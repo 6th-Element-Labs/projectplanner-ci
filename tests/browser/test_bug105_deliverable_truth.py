@@ -148,7 +148,6 @@ try:
           };
         """)
         page.goto(base + f"/?project=maxwell&deliverable={deliverable_id}#tab-mission")
-        page.locator("#mission-open-work").click()
         ledger = page.locator('[data-mission-work-ledger="all-linked-tasks"]')
         ledger.wait_for(state="visible")
         assert page.locator("#mission-detail").get_attribute("open") is None
@@ -169,6 +168,7 @@ try:
         page.locator("#runner-pty-panel").wait_for(state="visible")
         assert task_ids[1] in page.locator("#runner-pty-title").inner_text()
         page.locator("#runner-pty-close").click()
+        page.wait_for_function("() => document.getElementById('runner-pty-panel').hidden")
         inactive_row = ledger.locator(f'tr[data-mission-task-row="{task_ids[0]}"]')
         assert inactive_row.get_attribute("data-mission-task-active") is None
         assert inactive_row.get_by_role("button", name="Watch").count() == 0
@@ -188,6 +188,23 @@ try:
         assert active_row.evaluate("el => getComputedStyle(el).display") == "block"
         assert active_row.get_by_role("button", name="Watch").is_visible()
         assert active_row.get_by_role("button", name="Kill").is_visible()
+        mobile_page = browser.new_page(viewport={"width": 390, "height": 844})
+        mobile_page.add_init_script("""
+          window.mermaid = {
+            initialize: () => {},
+            render: async () => ({svg: '<svg data-test-mermaid="1"></svg>'})
+          };
+        """)
+        mobile_page.goto(base + f"/?project=maxwell&deliverable={deliverable_id}#tab-mission")
+        mobile_page.locator('[data-mission-work-ledger="all-linked-tasks"]').wait_for(state="visible")
+        assert mobile_page.locator(".tk-mobile-nav").evaluate(
+            "el => getComputedStyle(el).display") == "grid"
+        assert mobile_page.evaluate(
+            "() => document.documentElement.scrollWidth <= window.innerWidth")
+        mission_box = mobile_page.locator("#mission-page").bounding_box()
+        assert mission_box and mission_box["x"] >= 0
+        assert mission_box["x"] + mission_box["width"] <= 390
+        mobile_page.close()
         inactive_row.locator('[data-linked-task]').first.click()
         page.locator("#task-modal.show").wait_for(state="visible")
         assert not console_errors, console_errors

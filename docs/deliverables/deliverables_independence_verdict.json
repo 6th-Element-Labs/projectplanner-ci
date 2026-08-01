@@ -154,16 +154,6 @@
     },
     {
       "method": "GET",
-      "path": "/api/deliverables/{deliverable_id}/mission_summary",
-      "calls": [
-        "store.get_mission_summary"
-      ],
-      "ownership": "monolith",
-      "boundary_ref": "deliverables.deliverable_mission_summary",
-      "transaction": "bounded project-scoped reads return the compact summary projection; excluded from the locked ADR-0014 day-one service surface"
-    },
-    {
-      "method": "GET",
       "path": "/api/deliverables/{deliverable_id}/autopilot",
       "calls": [
         "autopilot_command.execute_mapping_result"

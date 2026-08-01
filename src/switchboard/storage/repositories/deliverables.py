@@ -2471,144 +2471,6 @@ def get_mission_status(project: str = DEFAULT_PROJECT, deliverable_id: str = "",
             board_id=board_id, mission_id=mission_id))
 
 
-def get_mission_summary(project: str = DEFAULT_PROJECT, deliverable_id: str = "",
-                        board_id: str = "", mission_id: str = "") -> Dict[str, Any]:
-    """Return the bounded, poll-safe projection used for first cockpit paint.
-
-    This deliberately does not call ``get_mission_status``: first paint and polling
-    must not pay for linked-task evidence, narration, economics, proposals, agents,
-    or other detail-panel projections.  The cache contains disposable derived data.
-    """
-    scope = _resolve_mission_deliverable(
-        project, deliverable_id=deliverable_id, board_id=board_id,
-        mission_id=mission_id, include_task_snapshots=False,
-    )
-    if scope.get("error"):
-        return scope
-    deliverable = scope["deliverable"]
-    stamp = _store_facade()._mission_cache_stamp(project, deliverable)
-    ident = f"{project}\x00{deliverable.get('id')}"
-    return _store_facade().ttl_read_cache(
-        "mission_summary", ident, stamp,
-        lambda: _build_mission_summary(project, scope),
-    )
-
-
-def _build_mission_summary(project: str, scope: Dict[str, Any]) -> Dict[str, Any]:
-    """Build only the task state needed by the compact cockpit cards."""
-    deliverable = scope["deliverable"]
-    links = _batch_mission_summary_links(deliverable.get("task_links") or [])
-    active_work: List[Dict[str, Any]] = []
-    done_with_proof = 0
-    for link in links:
-        detail = link.get("task_detail") or {}
-        if detail.get("error"):
-            continue
-        status = detail.get("status")
-        claims = detail.get("active_claims") or []
-        if status == "Done" and (detail.get("provenance") or {}).get("terminal"):
-            done_with_proof += 1
-        elif status in ("In Progress", "In Review") or claims:
-            active_work.append({
-                "project_id": link.get("project_id"),
-                "task_id": detail.get("task_id"),
-                "title": detail.get("title"),
-                "status": status,
-                "assignee": detail.get("assignee"),
-                "active_claims": claims,
-                "milestone_id": link.get("milestone_id"),
-                "role": link.get("role"),
-            })
-    blockers = _mission_blockers(deliverable, links)
-    next_actions = _mission_next_actions(deliverable, links, None)
-    status_counts: Dict[str, int] = {}
-    for link in links:
-        status = str((link.get("task_detail") or {}).get("status") or "Unknown")
-        status_counts[status] = status_counts.get(status, 0) + 1
-    total = len(links)
-    progress = {
-        "linked_task_count": total,
-        "done_with_proof_count": done_with_proof,
-        "in_review_count": status_counts.get("In Review", 0),
-        "blocked_count": status_counts.get("Blocked", 0),
-        "status_counts": dict(sorted(status_counts.items())),
-        "done_with_proof_ratio": done_with_proof / total if total else 0.0,
-    }
-    return {
-        "schema": "switchboard.mission_summary.v1",
-        "project_id": project,
-        "board_id": scope.get("board_id") or deliverable.get("board_id"),
-        "mission_id": scope.get("board_id") or deliverable.get("board_id"),
-        "deliverable_id": deliverable.get("id"),
-        "deliverable": {
-            "id": deliverable.get("id"),
-            "title": deliverable.get("title"),
-            "status": deliverable.get("status"),
-        },
-        "progress": progress,
-        "counts": {
-            "blockers": len(blockers),
-            "active_work": len(active_work),
-            "next_actions": len(next_actions),
-            "done_with_proof": done_with_proof,
-        },
-        "blockers": blockers,
-        "active_work": active_work,
-        "next_actions": next_actions,
-    }
-
-
-def _batch_mission_summary_links(links: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Enrich links with bounded task state; never build full mission evidence."""
-    by_project: Dict[str, List[str]] = {}
-    for link in links:
-        proj = str(link.get("project_id") or "").strip()
-        task_id = str(link.get("task_id") or "").strip()
-        if proj and task_id:
-            by_project.setdefault(proj, []).append(task_id)
-    details: Dict[tuple, Dict[str, Any]] = {}
-    for proj, task_ids in by_project.items():
-        if not _store_facade().has_project(proj):
-            continue
-        unique = list(dict.fromkeys(task_ids))
-        placeholders = ",".join("?" for _ in unique)
-        with _store_facade()._conn(proj) as c:
-            rows = c.execute(
-                f"SELECT * FROM tasks WHERE task_id IN ({placeholders})", unique,
-            ).fetchall()
-            for row in rows:
-                task = _task_row(row)
-                task_id = task["task_id"]
-                git_state = _store_facade()._load_git_state(c, task_id)
-                claims = _store_facade()._active_task_claims_in(c, task_id)
-                details[(proj, task_id)] = {
-                    "task_id": task_id,
-                    "title": task.get("title"),
-                    "status": task.get("status"),
-                    "assignee": task.get("assignee"),
-                    "is_blocking": task.get("is_blocking"),
-                    "dependency_state": _store_facade()._dependency_state_in(c, task),
-                    "provenance": _store_facade()._provenance_summary(git_state),
-                    "active_claims": claims,
-                    "session_health": _store_facade()._task_session_health_in(
-                        c, task, project=proj, active_claims=claims,
-                        git_state=git_state,
-                    ),
-                    "execution_coverage": {"covered": bool(claims)},
-                    "agent_state": task.get("agent_state") or {},
-                }
-    enriched: List[Dict[str, Any]] = []
-    for link in links:
-        item = dict(link)
-        key = (str(link.get("project_id") or "").strip(),
-               str(link.get("task_id") or "").strip())
-        item["task_detail"] = details.get(key) or {
-            "error": "unknown task", "project_id": key[0], "task_id": key[1],
-        }
-        enriched.append(item)
-    return enriched
-
-
 def _live_execution_for(sessions: List[Dict[str, Any]],
                         *, now: float) -> Dict[str, Any]:
     """The live execution among already-loaded rows.
@@ -3467,9 +3329,6 @@ class StoreDeliverablesRepository:
     def get_mission_status(self, *args, **kwargs):
         return get_mission_status(*args, **kwargs)
 
-    def get_mission_summary(self, *args, **kwargs):
-        return get_mission_summary(*args, **kwargs)
-
     def get_project_board(self, *args, **kwargs):
         return get_project_board(*args, **kwargs)
 
@@ -3553,7 +3412,6 @@ __all__ = [
     "submit_deliverable_outcome",
     "approve_deliverable_breakdown",
     "get_mission_status",
-    "get_mission_summary",
     "get_deliverable_dependency_graph",
     "generate_mission_brief",
     "set_deliverable_narration",

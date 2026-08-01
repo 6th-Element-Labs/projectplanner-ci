@@ -206,17 +206,6 @@ def create_router(*, resolve_project: ProjectResolver,
             raise HTTPException(code, result["error"])
         return etag_json(request, result, max_age=5)  # CONSOL-8: TTL+ETag poll parity
 
-    @router.get("/api/deliverables/{deliverable_id}/mission_summary")
-    def deliverable_mission_summary(request: Request, deliverable_id: str,
-                                    project: str = Query(...)):
-        """Compact first-paint and polling projection for the Deliverables page."""
-        project = resolve_project(project)
-        result = store.get_mission_summary(project=project, deliverable_id=deliverable_id)
-        if result.get("error"):
-            code = 404 if "unknown" in result["error"] else 400
-            raise HTTPException(code, result["error"])
-        return etag_json(request, result, max_age=5)
-
     @router.get("/api/deliverables/{deliverable_id}/dependency_graph")
     def deliverable_dependency_graph(request: Request, deliverable_id: str, project: str = Query(...)):
         # def (not async): threadpool the graph build so it can't block the event loop.

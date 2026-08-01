@@ -44,12 +44,16 @@ class MissionLiveScrollStableTest(unittest.TestCase):
         self.assertIn("offsetHeight", body)
         self.assertIn("minHeight", body)
 
-    def test_mission_signature_uses_compact_summary_without_heartbeat_timestamp(self):
-        """Summary polling must not reintroduce heavy Autopilot heartbeat state."""
+    def test_mission_signature_ignores_autopilot_heartbeat_timestamp(self):
+        """Autopilot heartbeats bump updated_at and were forcing a remount every tick."""
         body = MISSION.split("    _missionSignature()")[1].split("    _missionLiveStamp")[0]
-        self.assertIn("missionSummary", body)
-        self.assertNotIn("autopilotScopes", body)
-        self.assertNotIn("updated_at", body)
+        self.assertIn("autopilotScopes", body)
+        scopes_line = next(
+            (ln for ln in body.splitlines() if "autopilotScopes" in ln and "scope_id" in ln),
+            "",
+        )
+        self.assertIn("scope.status", scopes_line)
+        self.assertNotIn("scope.updated_at", scopes_line)
 
 
 if __name__ == "__main__":

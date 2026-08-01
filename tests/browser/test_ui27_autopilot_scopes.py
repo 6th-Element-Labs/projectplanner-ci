@@ -95,7 +95,6 @@ try:
           };
         """)
         page.goto(base + "/?project=maxwell&deliverable=ui27-browser#tab-mission")
-        page.locator("#mission-open-work").click()
         page.wait_for_selector('[data-autopilot-action="start"][data-autopilot-scope="deliverable"]')
 
         page.locator('[data-autopilot-action="start"][data-autopilot-scope="deliverable"]').click()
@@ -114,13 +113,15 @@ try:
         # Start two individual tasks. AUTO-2 is dependency-blocked but must stay
         # durably armed rather than failing or silently disappearing.
         for task_id in ("AUTO-1", "AUTO-2"):
+            page.locator('[data-mission-view="map"]').click()
+            page.locator(f'.mission-dag-node[data-linked-task="{task_id}"]').click()
+            page.wait_for_selector("#dl-node-modal.show")
             with page.expect_response(
                 lambda response: response.request.method == "POST"
                 and f"/tasks/{task_id}/autopilot" in response.url
             ) as response_info:
                 page.locator(
-                    f'[data-autopilot-action="start"][data-autopilot-scope="task"]'
-                    f'[data-autopilot-task="{task_id}"]'
+                    '#dl-node-autopilot [data-autopilot-action="start"]'
                 ).click()
             response = response_info.value
             assert response.ok and response.json().get("task_id") == task_id
@@ -128,8 +129,8 @@ try:
             # durable across navigation and avoids coupling the contract test to
             # Bootstrap's non-contractual fade timing.
             page.reload(wait_until="domcontentloaded")
-            page.locator("#mission-open-work").click()
-            page.wait_for_selector(f'[data-mission-task-row="{task_id}"]')
+            page.locator('[data-mission-view="map"]').click()
+            page.wait_for_selector(f'.mission-dag-node[data-linked-task="{task_id}"]')
         scopes = page.evaluate("""async () => (await (await fetch(
           'api/deliverables/ui27-browser/autopilot')).json()).scopes""")
         assert {row["task_id"] for row in scopes} == {"AUTO-1", "AUTO-2"}, scopes

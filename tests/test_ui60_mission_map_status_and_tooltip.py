@@ -104,12 +104,11 @@ class MissionTooltipNarrationEnrichTest(unittest.TestCase):
 
 
 class MissionLiveSignatureSourceTest(unittest.TestCase):
-    def test_mission_js_signature_uses_compact_summary_fields(self):
+    def test_mission_js_signature_includes_narration_and_agents(self):
         src = (ROOT / "static" / "js" / "mission.js").read_text(encoding="utf-8")
         body = src.split("_missionSignature()")[1].split("_missionLiveStamp")[0]
-        for field in ("missionSummary", "active_work", "blockers", "next_actions", "progress"):
-            self.assertIn(field, body)
-        self.assertNotIn("active_agents", body)
+        self.assertIn("narration", body)
+        self.assertIn("active_agents", body)
         self.assertNotIn(
             "['start_failed', 'Start failed / Retry'",
             src,
