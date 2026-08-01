@@ -34,6 +34,116 @@ body{ -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; let
   box-shadow:0 1px 2px rgba(16,24,40,.05), 0 1px 3px rgba(16,24,40,.08);
   transition:box-shadow .16s ease, transform .16s ease;
 }
+
+/* Plan cleanup — four quiet views, one responsive planning surface. */
+.tk-plan-page-head{
+  display:flex; align-items:flex-end; justify-content:space-between; gap:1rem;
+  margin-bottom:1.15rem;
+}
+.tk-plan-breadcrumb{ margin-bottom:.25rem; color:var(--tblr-secondary); font-size:.8125rem; }
+.tk-plan-options{ width:17rem; }
+.tk-plan-tabs{
+  display:flex; flex-wrap:nowrap; gap:1.5rem; margin-bottom:1rem; overflow-x:auto;
+  scrollbar-width:none; -webkit-overflow-scrolling:touch;
+}
+.tk-plan-tabs::-webkit-scrollbar{ display:none; }
+.tk-plan-tabs .nav-link{
+  min-height:2.75rem; padding:.55rem .1rem; border:0; border-bottom:2px solid transparent;
+  border-radius:0; color:var(--tblr-secondary); white-space:nowrap;
+}
+.tk-plan-tabs .nav-link:hover{ color:var(--tblr-body-color); background:transparent; }
+.tk-plan-tabs .nav-link.active{
+  color:var(--tblr-primary); background:transparent; border-bottom-color:var(--tblr-primary);
+}
+.tk-plan-view-head{
+  min-height:2.5rem; display:flex; align-items:center; justify-content:space-between;
+  gap:.75rem; margin-bottom:.7rem;
+}
+.tk-plan-epics-toolbar{
+  display:flex; align-items:center; justify-content:space-between; gap:.75rem;
+  margin-bottom:.7rem;
+}
+.tk-plan-phase-filters{ display:flex; align-items:center; flex-wrap:wrap; gap:.35rem; }
+.tk-plan-chip{
+  min-height:1.9rem; padding:.15rem .65rem; border:1px solid var(--tblr-border-color);
+  border-radius:999px; background:var(--tblr-bg-surface); color:var(--tblr-secondary);
+  font-size:.75rem;
+}
+.tk-plan-chip:hover{ color:var(--tblr-body-color); border-color:color-mix(in srgb,var(--tblr-primary) 35%,var(--tblr-border-color)); }
+.tk-plan-chip.active{
+  color:var(--tblr-primary); border-color:var(--tblr-primary);
+  background:rgba(var(--tblr-primary-rgb),.07);
+}
+.tk-plan-epics-card{ overflow:hidden; }
+.tk-plan-epic{ border-bottom:1px solid var(--tblr-border-color); }
+.tk-plan-epic:last-child{ border-bottom:0; }
+.tk-plan-epic-row{
+  width:100%; display:grid; grid-template-columns:minmax(15rem,1.35fr) minmax(10rem,1fr) auto auto 1.1rem;
+  align-items:center; gap:1rem; padding:1rem; border:0; background:transparent;
+  color:var(--tblr-body-color); text-align:left;
+}
+.tk-plan-epic-row:hover{ background:var(--tblr-bg-surface-secondary,#f6f7f9); }
+.tk-plan-epic-code{ color:var(--tblr-primary); font-size:.75rem; font-weight:600; letter-spacing:.02em; }
+.tk-plan-epic-name{ margin-top:.15rem; font-weight:600; }
+.tk-plan-epic-description{ margin-top:.15rem; color:var(--tblr-secondary); font-size:.8125rem; }
+.tk-plan-progress-meta{ display:flex; align-items:center; justify-content:space-between; gap:.75rem; color:var(--tblr-secondary); font-size:.75rem; }
+.tk-plan-progress{ height:.35rem; margin-top:.45rem; overflow:hidden; border-radius:999px; background:var(--tblr-bg-surface-secondary,#f1f3f5); }
+.tk-plan-progress > span{ display:block; height:100%; border-radius:inherit; background:var(--tblr-primary); }
+.tk-plan-epic-owner{ display:flex; min-width:2rem; justify-content:center; }
+.tk-plan-epic-owner .avatar{ width:1.9rem; height:1.9rem; font-size:.7rem; }
+.tk-plan-epic-row .epic-chev{ transition:transform .15s ease; }
+.tk-plan-epic-row[aria-expanded="true"] .epic-chev{ transform:rotate(180deg); }
+.tk-plan-epic-body{ padding:.1rem 1rem 1rem; background:var(--tblr-bg-surface-secondary,#f6f7f9); }
+.tk-plan-epic-body .card{ box-shadow:none; border-radius:.65rem; }
+.tk-plan-epic-body .list-group-item{ background:var(--tblr-bg-surface); }
+.tk-plan-timeline-card{ overflow:hidden; }
+.tk-plan-critical{
+  overflow:hidden; border:1px solid var(--tblr-border-color); border-radius:.8rem;
+  background:var(--tblr-bg-surface); box-shadow:0 1px 2px rgba(16,24,40,.05);
+}
+.tk-plan-critical summary{
+  min-height:3.25rem; display:flex; align-items:center; padding:0 1rem; cursor:pointer;
+  font-weight:600; list-style:none;
+}
+.tk-plan-critical summary::-webkit-details-marker{ display:none; }
+.tk-plan-critical summary .ti-chevron-down{ transition:transform .15s ease; }
+.tk-plan-critical[open] summary .ti-chevron-down{ transform:rotate(180deg); }
+.tk-plan-critical[open] summary{ border-bottom:1px solid var(--tblr-border-color); }
+
+@media (max-width:767.98px){
+  .tk-plan-page-head{ align-items:flex-start; margin-bottom:.85rem; }
+  .tk-plan-page-head > .dropdown > .btn{ width:2.5rem; padding:0; font-size:0; }
+  .tk-plan-page-head > .dropdown > .btn .ti{ margin:0!important; font-size:1.1rem; }
+  .tk-plan-tabs{ display:grid; grid-template-columns:repeat(4,1fr); gap:0; }
+  .tk-plan-tabs .nav-item{ min-width:0; }
+  .tk-plan-tabs .nav-link{ width:100%; justify-content:center; padding:.55rem .15rem; font-size:.75rem; }
+  .tk-plan-tabs .nav-link .ti{ display:none; }
+  .tk-plan-epics-toolbar{ align-items:flex-start; flex-direction:column; }
+  .tk-plan-phase-filters{ width:100%; flex-wrap:nowrap; overflow-x:auto; padding-bottom:.2rem; scrollbar-width:none; }
+  .tk-plan-phase-filters::-webkit-scrollbar{ display:none; }
+  .tk-plan-chip{ flex:0 0 auto; }
+  .tk-plan-epic-row{ grid-template-columns:minmax(0,1fr) auto; gap:.65rem; padding:.9rem; }
+  .tk-plan-epic-row > :nth-child(2){ grid-column:1 / -1; }
+  .tk-plan-epic-row > :nth-child(3){ grid-column:1; }
+  .tk-plan-epic-row > :nth-child(4){ display:none; }
+  .tk-plan-epic-row > :nth-child(5){ grid-column:2; grid-row:1; }
+  .tk-plan-epic-description{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tk-plan-epic-body{ padding:.1rem .65rem .65rem; }
+  #tab-plan-hub #board{ display:block; overflow:visible; padding-bottom:0; }
+  #tab-plan-hub #board > .tk-board-col{ width:100%; min-width:0; margin-bottom:1.25rem; }
+  .tk-plan-view-head{ align-items:flex-start; flex-wrap:wrap; }
+  #milestones-table .table-responsive{ overflow:visible; }
+  #milestones-table table,
+  #milestones-table tbody,
+  #milestones-table tr,
+  #milestones-table td{ display:block; width:100%; }
+  #milestones-table thead{ display:none; }
+  #milestones-table tr{ padding:.9rem 1rem; border-bottom:1px solid var(--tblr-border-color); }
+  #milestones-table tr:last-child{ border-bottom:0; }
+  #milestones-table td{ padding:.15rem 0; border:0; }
+  #milestones-table td:nth-child(2){ margin:.3rem 0; }
+  #milestones-table td:nth-child(3){ color:var(--tblr-secondary); font-size:.8125rem; }
+}
 .card-sm{ border-radius:.8rem; }
 /* only clickable task cards/rows lift */
 a[data-bs-toggle="modal"] .card,

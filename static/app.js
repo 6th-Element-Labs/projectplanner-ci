@@ -1933,6 +1933,14 @@ const TeepPlan = {
         try { localStorage.setItem(this.groupModeKey(), m === 'assignee' ? 'assignee' : 'workstream'); } catch (e) {}
         this.renderEpics();
     },
+    setPlanGroups(show) {
+        const el = document.getElementById('epics-content');
+        if (!el) return;
+        el.querySelectorAll('.collapse').forEach((panel) => {
+            const inst = window.bootstrap.Collapse.getOrCreateInstance(panel, { toggle: false });
+            show ? inst.show() : inst.hide();
+        });
+    },
     renderEpics() {
         const el = document.getElementById('epics-content');
         if (!el) return;
@@ -1940,7 +1948,14 @@ const TeepPlan = {
         // checking a task done) — only an explicit click should collapse one.
         const openIds = new Set(Array.from(el.querySelectorAll('.collapse.show')).map((c) => c.id));
         const hideDone = this.isHideDone();
-        const tasks = this.filtered(true);
+        const allTasks = this.filtered(true);
+        const availablePhases = this.PHASES.filter((phase) => allTasks.some((task) => task.phase === phase));
+        if (!this._planPhaseFilter || (this._planPhaseFilter !== 'All' && !availablePhases.includes(this._planPhaseFilter))) {
+            this._planPhaseFilter = 'All';
+        }
+        const tasks = this._planPhaseFilter === 'All'
+            ? allTasks
+            : allTasks.filter((task) => task.phase === this._planPhaseFilter);
         const mode = this.groupMode();                 // 'workstream' | 'assignee'
 
         const groups = {};
@@ -1969,18 +1984,28 @@ const TeepPlan = {
             const isU = key === 'Unassigned';
             const open = openIds.has(cid);
 
-            let dotColor, titleHtml, rightHtml;
+            const incomplete = list.filter((task) => task.status !== 'Done');
+            const currentPhase = this.PHASES.find((phase) => incomplete.some((task) => task.phase === phase))
+                || [...this.PHASES].reverse().find((phase) => list.some((task) => task.phase === phase))
+                || 'Build';
+            const phaseColor = this.PHASE_COLOR[currentPhase] || 'secondary';
+            const pct = total ? Math.round((done / total) * 100) : 0;
+            let titleHtml, ownerHtml;
             if (mode === 'assignee') {
-                dotColor = isU ? 'secondary' : 'azure';
-                titleHtml = `<span class="h3 m-0">${this.esc(key)}</span>`;
-                rightHtml = '';
+                const workstreamCount = new Set(list.map((task) => task._wsId)).size;
+                titleHtml = `<div><div class="tk-plan-epic-code">ASSIGNEE</div>
+                    <div class="tk-plan-epic-name">${this.esc(key)}</div>
+                    <div class="tk-plan-epic-description">${workstreamCount} workstream${workstreamCount === 1 ? '' : 's'} · ${visN} visible task${visN === 1 ? '' : 's'}</div></div>`;
+                ownerHtml = isU ? '<span class="avatar">—</span>' : `<span class="avatar" title="${this.esc(key)}">${this.esc(this.initials(key))}</span>`;
             } else {
-                dotColor = this.WS_COLOR[key] || 'secondary';
-                titleHtml = `<span class="h3 m-0">${this.esc(key)}</span>
-                    <span class="text-secondary ms-2 d-none d-md-inline">${this.esc((this.wsMeta[key] || {}).name || key)}</span>`;
+                const name = (this.wsMeta[key] || {}).name || key;
+                titleHtml = `<div><div class="tk-plan-epic-code">${this.esc(key)}</div>
+                    <div class="tk-plan-epic-name">${this.esc(name)}</div>
+                    <div class="tk-plan-epic-description">${this.esc(`${total} task${total === 1 ? '' : 's'} across the plan`)}</div></div>`;
                 const ppl = [...new Set(list.flatMap((t) => this._peopleOf(t)).filter((p) => p !== 'Unassigned'))];
-                rightHtml = `<div class="avatar-list avatar-list-stacked d-none d-sm-flex">${ppl.slice(0, 6).map((p) =>
-                    `<span class="avatar avatar-xs" title="${this.esc(p)}">${this.esc(this.initials(p))}</span>`).join('')}</div>`;
+                ownerHtml = ppl.length
+                    ? `<div class="avatar-list avatar-list-stacked">${ppl.slice(0, 3).map((p) => `<span class="avatar" title="${this.esc(p)}">${this.esc(this.initials(p))}</span>`).join('')}</div>`
+                    : '<span class="avatar">—</span>';
             }
 
             let body;
@@ -2023,47 +2048,43 @@ const TeepPlan = {
 
             const emptyNote = (!body && hideDone) ? `<div class="text-secondary small px-1 py-2"><i class="ti ti-check me-1"></i>All ${total} task${total !== 1 ? 's' : ''} complete.</div>` : '';
             return `
-                <div class="card mb-2">
-                    <div class="card-header epic-head d-flex align-items-center" role="button" data-bs-toggle="collapse" data-bs-target="#${cid}" aria-expanded="${open ? 'true' : 'false'}" aria-controls="${cid}">
-                        <span class="status-dot bg-${dotColor} me-2"></span>
+                <div class="tk-plan-epic">
+                    <button class="tk-plan-epic-row" type="button" data-bs-toggle="collapse" data-bs-target="#${cid}" aria-expanded="${open ? 'true' : 'false'}" aria-controls="${cid}">
                         ${titleHtml}
-                        <span class="badge bg-secondary-lt ms-2">${visN} task${visN !== 1 ? 's' : ''}</span>
-                        ${(total - done) === 0 ? '<span class="badge bg-green-lt ms-1">done</span>' : ''}
-                        <div class="ms-auto d-flex align-items-center gap-3">
-                            ${rightHtml}
-                            <span class="text-secondary small">${done}/${total}</span>
-                            <i class="ti ti-chevron-down epic-chev text-secondary"></i>
+                        <div>
+                            <div class="tk-plan-progress-meta"><span>Progress</span><strong>${done} of ${total}</strong></div>
+                            <div class="tk-plan-progress"><span style="width:${pct}%"></span></div>
                         </div>
-                    </div>
+                        <span class="badge bg-${(total - done) === 0 ? 'green' : phaseColor}-lt">${(total - done) === 0 ? 'Done' : this.esc(currentPhase)}</span>
+                        <span class="tk-plan-epic-owner">${ownerHtml}</span>
+                        <i class="ti ti-chevron-down epic-chev text-secondary"></i>
+                    </button>
                     <div class="collapse${open ? ' show' : ''}" id="${cid}">
-                        <div class="card-body py-2">${nextHtml}${body}${emptyNote}</div>
+                        <div class="tk-plan-epic-body">${nextHtml}${body}${emptyNote}</div>
                     </div>
                 </div>`;
         }).join('');
 
         const hint = (hideDone && tDone) ? ` · hiding ${tDone} done` : '';
-        const head = `<div class="d-flex flex-wrap align-items-center mb-3 gap-2">
-                <span class="text-secondary">${keys.length} ${mode === 'assignee' ? 'people' : 'workstreams'} · ${tTotal} tasks · ${tDone} done${hint}</span>
-                <label class="form-check form-switch m-0 ms-2">
-                    <input id="gmode-switch" class="form-check-input" type="checkbox"${mode === 'assignee' ? ' checked' : ''}/>
-                    <span class="form-check-label">Group by assignee</span>
-                </label>
-                <div class="ms-auto btn-list">
-                    <button class="btn btn-sm" id="epic-expand"><i class="ti ti-chevrons-down me-1"></i>Expand all</button>
-                    <button class="btn btn-sm" id="epic-collapse"><i class="ti ti-chevrons-up me-1"></i>Collapse all</button>
-                </div>
+        const phaseButtons = ['All', ...availablePhases].map((phase) =>
+            `<button class="tk-plan-chip${this._planPhaseFilter === phase ? ' active' : ''}" type="button" data-plan-phase="${this.esc(phase)}">${this.esc(phase)}</button>`).join('');
+        const head = `<div class="tk-plan-epics-toolbar">
+                <div class="d-flex align-items-baseline gap-2"><h3 class="m-0">Epics</h3><span class="text-secondary small">${keys.length} ${mode === 'assignee' ? 'people' : 'active'} · ${tTotal} tasks · ${tDone} done${hint}</span></div>
+                <div class="tk-plan-phase-filters" aria-label="Filter epics by phase">${phaseButtons}</div>
             </div>`;
         el.innerHTML = keys.length
-            ? (head + cards)
-            : `<div class="card"><div class="empty"><p class="empty-title">No tasks match the filters</p></div></div>`;
-        const gs = document.getElementById('gmode-switch');
-        if (gs) gs.onchange = () => this.setGroupMode(gs.checked ? 'assignee' : 'workstream');
-        const setAll = (show) => el.querySelectorAll('.collapse').forEach((c) => {
-            const inst = window.bootstrap.Collapse.getOrCreateInstance(c, { toggle: false });
-            show ? inst.show() : inst.hide();
+            ? (head + `<div class="card tk-plan-epics-card">${cards}</div>`)
+            : (head + `<div class="card"><div class="empty"><p class="empty-title">No tasks match the filters</p></div></div>`);
+        const groupSwitch = document.getElementById('plan-group-assignee');
+        if (groupSwitch) groupSwitch.checked = mode === 'assignee';
+        const hideSwitch = document.getElementById('plan-hide-done');
+        if (hideSwitch) hideSwitch.checked = hideDone;
+        el.querySelectorAll('[data-plan-phase]').forEach((button) => {
+            button.addEventListener('click', () => {
+                this._planPhaseFilter = button.getAttribute('data-plan-phase') || 'All';
+                this.renderEpics();
+            });
         });
-        const eb = document.getElementById('epic-expand'); if (eb) eb.onclick = () => setAll(true);
-        const cb = document.getElementById('epic-collapse'); if (cb) cb.onclick = () => setAll(false);
     },
 
     taskRow(t) {
@@ -2514,8 +2535,15 @@ const TeepPlan = {
     // does not fire on hub reveal. Defaults to Board.
     async _renderPlanActive() {
         const hub = document.getElementById('tab-plan-hub');
+        const projectLabel = document.getElementById('plan-project-label');
+        const projectSwitcher = document.getElementById('project-switcher');
+        if (projectLabel) {
+            projectLabel.textContent = projectSwitcher?.selectedOptions?.[0]?.textContent?.trim()
+                || window.PM_PROJECT || 'Project';
+        }
         const active = hub && hub.querySelector('.tk-subnav .nav-link.active');
-        const href = active ? active.getAttribute('href') : '#tab-epics';
+        const planActive = hub && hub.querySelector('.tk-plan-tabs .nav-link.active');
+        const href = planActive ? planActive.getAttribute('href') : (active ? active.getAttribute('href') : '#tab-epics');
         if (href === '#tab-board') { this.renderBoard(); return; }
         if (href === '#tab-plan') { this.renderTables(); return; }
         if (href === '#tab-gantt') {
@@ -2554,6 +2582,8 @@ const TeepPlan = {
     renderGantt() {
         const el = document.getElementById('gantt');
         if (!el || !window.ApexCharts) return;
+        const summary = document.getElementById('plan-timeline-summary');
+        if (summary) summary.textContent = this.ganttMode === 'workstream' ? 'By workstream' : 'By task';
         const tasks = this.filtered();
         let data, height;
         if (this.ganttMode === 'workstream') {
@@ -4769,14 +4799,20 @@ const TeepPlan = {
 
     renderTables() {
         // Milestones
+        const milestones = this.plan.milestones || [];
+        const criticalPath = this.plan.critical_path || [];
+        const milestoneSummary = document.getElementById('plan-milestone-summary');
+        const pathSummary = document.getElementById('plan-path-summary');
+        if (milestoneSummary) milestoneSummary.textContent = `${milestones.length} gate${milestones.length === 1 ? '' : 's'}`;
+        if (pathSummary) pathSummary.textContent = `${criticalPath.length} task${criticalPath.length === 1 ? '' : 's'}`;
         document.getElementById('milestones-table').innerHTML = this.table(
             ['Milestone', 'Target', 'Gate criteria'],
-            (this.plan.milestones || []).map((m) => [this.esc(m.name), this.badge(m.target_week, 'azure'), this.esc(m.gate_criteria)])
+            milestones.map((m) => [`<strong>${this.esc(m.name)}</strong>`, this.badge(m.target_week, 'azure'), this.esc(m.gate_criteria)])
         );
         // Critical path
         document.getElementById('path-table').innerHTML = this.table(
             ['#', 'Task', 'Workstream', 'Why on the critical path'],
-            (this.plan.critical_path || []).map((c, i) => [
+            criticalPath.map((c, i) => [
                 String(i + 1),
                 `<code>${this.esc(c.task_id)}</code>`,
                 this.badge(c.workstream, this.WS_COLOR[c.workstream] || 'secondary'),
@@ -5120,6 +5156,18 @@ const TeepPlan = {
         }
         const epicsTab = document.querySelector('a[href="#tab-epics"]');
         if (epicsTab) epicsTab.addEventListener('shown.bs.tab', () => this.renderEpics());
+        const planGroup = document.getElementById('plan-group-assignee');
+        if (planGroup) planGroup.addEventListener('change', () => this.setGroupMode(planGroup.checked ? 'assignee' : 'workstream'));
+        const planHideDone = document.getElementById('plan-hide-done');
+        if (planHideDone) planHideDone.addEventListener('change', () => {
+            const globalHideDone = document.getElementById('f-hidedone');
+            if (!globalHideDone) return;
+            globalHideDone.checked = planHideDone.checked;
+            globalHideDone.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        document.querySelectorAll('[data-plan-groups]').forEach((button) => {
+            button.addEventListener('click', () => this.setPlanGroups(button.getAttribute('data-plan-groups') === 'expand'));
+        });
         ['xlsx', 'xml'].forEach((kind) => {
             const btn = document.getElementById('dl-' + kind);
             if (btn) btn.addEventListener('click', (e) => { e.preventDefault(); window.location.href = this.exportUrl(kind); });

@@ -132,6 +132,9 @@
         const tasks = this.filtered();
         const board = document.getElementById('board');
         if (!board) return;
+        const summary = document.getElementById('plan-board-summary');
+        const openCount = tasks.filter((task) => task.status !== 'Done').length;
+        if (summary) summary.textContent = `${openCount} open task${openCount === 1 ? '' : 's'}`;
         const mode = this._boardGrouping();
         const cols = this._boardColumns(mode);
         const colorMap = mode === 'phase' ? this.PHASE_COLOR : this.STATUS_COLOR;
