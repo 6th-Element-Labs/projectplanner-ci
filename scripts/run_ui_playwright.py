@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TEST = "tests/browser/test_arch_ms126_service_boundary.py"
 TASK_TESTS = {
     "BUG-260": "tests/browser/test_bug260_mission_summary_first_paint.py",
+    "BUG-264": "tests/browser/test_bug264_mission_304.py",
 }
 
 

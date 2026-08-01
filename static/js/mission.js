@@ -97,6 +97,7 @@
         const request = (async () => {
             // CONSOL-8: no-cache (not no-store) — ETag lets unchanged ticks return 304.
             const res = await fetch(`api/deliverables/${encodeURIComponent(id)}/mission_status`, { cache: 'no-cache' });
+            if (res.status === 304) return this.missionStatus;
             const data = await res.json();
             if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
             this.missionStatus = data;
@@ -121,6 +122,7 @@
         }
         const request = (async () => {
             const res = await fetch(`api/deliverables/${encodeURIComponent(id)}/mission_summary`, { cache: 'no-cache' });
+            if (res.status === 304) return this.missionSummary;
             const data = await res.json();
             if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
             this.missionSummary = data;
@@ -145,6 +147,7 @@
         }
         const request = (async () => {
             const res = await fetch(`api/deliverables/${encodeURIComponent(id)}/dependency_graph`, { cache: 'no-cache' });
+            if (res.status === 304) return this.missionGraph;
             const data = await res.json();
             if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
             this.missionGraph = data;
