@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from path_setup import ROOT  # noqa: F401
 
-from switchboard.application.commands import autopilot, task_execution
+from switchboard.application.commands import autopilot, mission_journal, task_execution
 from switchboard.storage.repositories import autopilot_scopes, tasks
 
 
@@ -12,8 +12,14 @@ def test_autopilot_start_creates_scope_without_pre_scope_dispatch():
     calls = []
     original_validate = autopilot_scopes.validate_autopilot_target
     original_start = autopilot_scopes.start_autopilot_scope
+    original_get_task = tasks.get_task
+    original_create_mission = mission_journal.create_mission
     try:
         autopilot_scopes.validate_autopilot_target = lambda **_kw: None
+        tasks.get_task = lambda *_args, **_kwargs: {"task_id": "BUG-144"}
+        mission_journal.create_mission = lambda *_args, **_kwargs: (
+            calls.append("mission") or {"mission": {}}
+        )
 
         def start_scope(**_kw):
             calls.append("scope")
@@ -25,11 +31,13 @@ def test_autopilot_start_creates_scope_without_pre_scope_dispatch():
         result = autopilot.control_autopilot(
             "deliverable-bug144", project="switchboard", action="start",
             scope_type="task", task_project="switchboard", task_id="BUG-144")
-        assert calls == ["scope"]
+        assert calls == ["mission", "scope"]
         assert "task_start" not in result
     finally:
         autopilot_scopes.validate_autopilot_target = original_validate
         autopilot_scopes.start_autopilot_scope = original_start
+        tasks.get_task = original_get_task
+        mission_journal.create_mission = original_create_mission
 
 
 def test_invalid_target_leaves_no_active_scope():
@@ -56,8 +64,14 @@ def test_start_arms_scope_and_leaves_dependency_wait_to_mission_bot():
     created = []
     original_validate = autopilot_scopes.validate_autopilot_target
     original_start = autopilot_scopes.start_autopilot_scope
+    original_get_task = tasks.get_task
+    original_create_mission = mission_journal.create_mission
     try:
         autopilot_scopes.validate_autopilot_target = lambda **_kw: None
+        tasks.get_task = lambda *_args, **_kwargs: {"task_id": "AUTO-2"}
+        mission_journal.create_mission = lambda *_args, **_kwargs: {
+            "mission": {}
+        }
 
         def start_scope(**kwargs):
             created.append(kwargs)
@@ -75,6 +89,8 @@ def test_start_arms_scope_and_leaves_dependency_wait_to_mission_bot():
     finally:
         autopilot_scopes.validate_autopilot_target = original_validate
         autopilot_scopes.start_autopilot_scope = original_start
+        tasks.get_task = original_get_task
+        mission_journal.create_mission = original_create_mission
 
 
 def test_unsupported_runtime_is_refused_before_task_start_or_scope_creation():

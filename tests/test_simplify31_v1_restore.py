@@ -122,6 +122,10 @@ staged_paths = {
     (Path(ROOT) / "src/switchboard/storage/migrations/runner.py").resolve(),
     (Path(ROOT) / "webhook_inbox.py").resolve(),
 }
+autopilot_projection = (
+    Path(ROOT) / "src/switchboard/application/commands/autopilot.py"
+).resolve()
+staged_paths.add(autopilot_projection)
 staged_paths.update(
     path.resolve()
     for root in (
@@ -142,6 +146,20 @@ for path in production_files:
     assert re.search(r"\bmission_journal\b", source) is None, path
     assert re.search(r"\bmission_items\b", source) is None, path
     assert re.search(r"\bmission_events\b", source) is None, path
+
+autopilot_source = read("src/switchboard/application/commands/autopilot.py")
+assert "mission_journal.create_mission(" in autopilot_source
+assert autopilot_source.index("mission_journal.create_mission(") < autopilot_source.index(
+    "scopes_repo.start_autopilot_scope("
+)
+for forbidden_autopilot_effect in (
+    "mission_bot_v4",
+    "run_scoped_mission_tick",
+    "tick_scoped_mission",
+    "task_execution.start_task",
+    "runner_sessions",
+):
+    assert forbidden_autopilot_effect not in autopilot_source
 
 runtime = read("src/switchboard/application/mission_bot_v4/runtime.py")
 worker = read("src/switchboard/application/mission_bot_v4/worker.py")

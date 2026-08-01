@@ -35,6 +35,7 @@ ERROR_STATUS: dict[str, int] = {
     "task_not_linked": 409,
     "structural_blocker": 409,
     "no_active_scope": 409,
+    "mission_bootstrap_failed": 503,
 }
 ERROR_FAILURE_CLASS: dict[str, str] = {
     "invalid_input": "invalid_input",
@@ -42,6 +43,7 @@ ERROR_FAILURE_CLASS: dict[str, str] = {
     "task_not_linked": "invalid_input",
     "structural_blocker": "failed_gate",
     "no_active_scope": "missing_data",
+    "mission_bootstrap_failed": "missing_data",
 }
 
 #: Map the store's bare-string failures to a typed code. Order matters: the
@@ -164,13 +166,61 @@ def control_autopilot(deliverable_id: Any, *, project: str = DEFAULT_PROJECT,
         "scope_type": kind,
         "task_project": task_project, "task_id": task_id, "actor": actor,
     }
+    missions: list[tuple[str, str, dict[str, Any]]] = []
     if verb == "start" and common["scope_type"] == "task":
         invalid = scopes_repo.validate_autopilot_target(
             project=project, deliverable_id=deliverable_id, scope_type="task",
             task_project=task_project, task_id=task_id, runtime=runtime)
         if invalid:
             _raise_store_error(invalid)
+        from switchboard.storage.repositories import tasks as tasks_repo
+        exact_project = task_project or project
+        exact_task_id = str(task_id or "").strip().upper()
+        detail = tasks_repo.get_task(exact_task_id, project=exact_project) or {}
+        missions.append((exact_project, exact_task_id, detail))
+    elif verb == "start":
+        from switchboard.storage.repositories import deliverables
+        status = deliverables.get_mission_status(
+            project=project, deliverable_id=deliverable_id,
+        )
+        if status.get("error"):
+            _raise_store_error(status)
+        for linked in status.get("linked_tasks") or []:
+            linked_task_id = str(linked.get("task_id") or "").strip().upper()
+            linked_project = str(
+                linked.get("project_id") or linked.get("task_project") or project
+            ).strip()
+            detail = linked.get("task_detail")
+            detail = detail if isinstance(detail, dict) else {}
+            provenance = detail.get("provenance")
+            provenance = provenance if isinstance(provenance, dict) else {}
+            if linked_task_id and not (
+                detail.get("status") == "Done"
+                and provenance.get("terminal") is True
+            ):
+                missions.append((linked_project, linked_task_id, detail))
     if verb == "start":
+        # Coordination owns both facts.  Persist every inert pager inbox before
+        # publishing a scope that a coordinator can acquire.  If any bootstrap
+        # fails, no scope is created; already-created journal rows remain
+        # harmless append-only evidence and are idempotent on retry.
+        from switchboard.application.commands import mission_journal
+        for mission_project, mission_task_id, detail in missions:
+            try:
+                mission_journal.create_mission(
+                    mission_task_id,
+                    project=mission_project,
+                    requested_role=mission_journal.initial_requested_role(detail),
+                )
+            except Exception as exc:  # one typed fail-closed command boundary
+                raise AutopilotError(
+                    "mission_bootstrap_failed",
+                    "Mission journal bootstrap failed; no Autopilot scope was created.",
+                    mission_project=mission_project,
+                    mission_task_id=mission_task_id,
+                    cause=f"{type(exc).__name__}: {exc}",
+                    journal_error_code=str(getattr(exc, "code", "") or ""),
+                ) from exc
         result = scopes_repo.start_autopilot_scope(**common, runtime=runtime)
     else:
         result = scopes_repo.control_autopilot_scope(**common, action=verb)

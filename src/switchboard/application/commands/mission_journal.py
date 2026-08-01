@@ -17,6 +17,23 @@ from switchboard.storage.repositories.mission_journal import (
 )
 
 
+def initial_requested_role(task: Mapping[str, Any] | None) -> str:
+    """Choose the mechanical first pager role from persisted PR identity.
+
+    This does not diagnose checks, reviews, mergeability, task status, or
+    runtime liveness.  A persisted PR must be reread by ``review_merge``;
+    otherwise the first material event belongs to ``implementation``.
+    """
+    detail = dict(task or {})
+    git_state = detail.get("git_state")
+    git_state = git_state if isinstance(git_state, Mapping) else {}
+    return (
+        "review_merge"
+        if git_state.get("pr_number") or git_state.get("pr_url")
+        else "implementation"
+    )
+
+
 def create_mission(
     task_id: str,
     *,
@@ -121,6 +138,7 @@ __all__ = [
     "MissionJournalError",
     "append_material_event",
     "create_mission",
+    "initial_requested_role",
     "transition_mission",
     "yield_mission",
 ]
