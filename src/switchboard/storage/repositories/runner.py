@@ -32,6 +32,11 @@ RUNNER_TERMINAL_STATUSES = execution_liveness.TERMINAL_EXECUTION_STATES
 RUNNER_FAILURE_TERMINAL_STATUSES = frozenset(
     RUNNER_TERMINAL_STATUSES - {"completed"}
 )
+RUNNER_TERMINAL_ACK_SOURCES = frozenset({
+    "host_supervisor",
+    "runner_lease_expiry",
+    "terminal_lease_surrendered",
+})
 RUNNER_BIND_ERROR = "runner_bind_incomplete"
 RUNNER_INJECT_ERROR = "wrong_session"
 DIRECT_SESSION_TOKEN_TTL_S = 4 * 60 * 60
@@ -1506,6 +1511,121 @@ def _clear_active_runner_pointer_in(c: sqlite3.Connection, task_id: str,
     return True
 
 
+def _terminalizes_fenced_generation(metadata: Dict[str, Any]) -> bool:
+    """Return whether an authenticated host payload may acknowledge a fence.
+
+    ``terminal_lease_surrendered`` is the explicit C3 stop receipt emitted for
+    completion-owner and terminal-task surrender. Treating it as an ordinary
+    heartbeat would reject the exact receipt as a late renewal.
+    """
+    return str(metadata.get("terminalized_by") or "") in \
+        RUNNER_TERMINAL_ACK_SOURCES
+
+
+def _reconcile_terminal_bound_work_sessions_in(
+        c: sqlite3.Connection, task_id: str, actor: str,
+        now: float) -> List[Dict[str, Any]]:
+    """Close residual Work Sessions from exact, already-terminal authority.
+
+    This is bookkeeping, not completion authority. It never changes a claim,
+    task, or runner. A row is eligible only when its exact runner is terminal,
+    its exact claim is already terminal, and the task/agent/claim bindings all
+    agree. Lease expiry archives the attempt; it never manufactures success.
+    """
+    task_id = str(task_id or "").strip()
+    if not task_id:
+        return []
+    terminal_marks = ",".join("?" for _ in RUNNER_TERMINAL_STATUSES)
+    try:
+        rows = c.execute(
+            "SELECT ws.work_session_id,ws.task_id AS ws_task_id,"
+            "ws.claim_id AS ws_claim_id,ws.agent_id AS ws_agent_id,"
+            "ws.runner_session_id AS ws_runner_session_id,"
+            "r.runner_session_id,r.task_id AS runner_task_id,"
+            "r.claim_id AS runner_claim_id,r.agent_id AS runner_agent_id,"
+            "r.status AS runner_status,r.metadata_json,"
+            "tc.task_id AS claim_task_id,tc.agent_id AS claim_agent_id,"
+            "tc.status AS claim_status "
+            "FROM work_sessions ws "
+            "JOIN runner_sessions r ON r.runner_session_id=ws.runner_session_id "
+            "JOIN task_claims tc ON tc.id=ws.claim_id "
+            "WHERE ws.task_id=? AND ws.status IN ('active','proposed','blocked') "
+            f"AND lower(r.status) IN ({terminal_marks}) "
+            "ORDER BY ws.created_at,ws.work_session_id",
+            (task_id, *sorted(RUNNER_TERMINAL_STATUSES)),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        # Small compatibility fixtures may intentionally omit the canonical
+        # binding columns. Production schemas always carry the exact tuple.
+        return []
+    reconciled: List[Dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        work_session_id = str(item.get("work_session_id") or "")
+        claim_id = str(item.get("ws_claim_id") or "")
+        runner_session_id = str(item.get("runner_session_id") or "")
+        metadata = _json_obj(item.get("metadata_json") or "{}", {})
+        surrender = metadata.get("lease_surrender") or {}
+        exact_claim = str(item.get("runner_claim_id") or "") == claim_id \
+            or str(surrender.get("claim_id") or "") == claim_id
+        exact_tuple = (
+            work_session_id
+            and claim_id
+            and runner_session_id
+            and str(item.get("ws_runner_session_id") or "") == runner_session_id
+            and str(item.get("ws_task_id") or "") == task_id
+            and str(item.get("runner_task_id") or "") == task_id
+            and str(item.get("claim_task_id") or "") == task_id
+            and exact_claim
+            and (not str(item.get("ws_agent_id") or "")
+                 or str(item.get("ws_agent_id") or "")
+                 == str(item.get("runner_agent_id") or ""))
+            and (not str(item.get("claim_agent_id") or "")
+                 or str(item.get("claim_agent_id") or "")
+                 == str(item.get("runner_agent_id") or ""))
+        )
+        claim_status = str(item.get("claim_status") or "").lower()
+        if not exact_tuple or claim_status not in {"completed", "abandoned"}:
+            continue
+        if metadata.get("terminalized_by") == "runner_lease_expiry":
+            next_status = "archived"
+            reason_code = "orphan_claim_after_runner_lease_expiry"
+        elif claim_status == "completed":
+            next_status = "completed"
+            reason_code = "terminal_claim_completed"
+        else:
+            next_status = "expired"
+            reason_code = "terminal_claim_abandoned"
+        changed = c.execute(
+            "UPDATE work_sessions SET status=?,"
+            "completed_at=COALESCE(completed_at,?),updated_at=?,updated_by=? "
+            "WHERE work_session_id=? AND task_id=? AND claim_id=? "
+            "AND runner_session_id=? "
+            "AND status IN ('active','proposed','blocked')",
+            (next_status, now, now, actor, work_session_id, task_id,
+             claim_id, runner_session_id),
+        )
+        if not changed.rowcount:
+            continue
+        receipt = {
+            "work_session_id": work_session_id,
+            "runner_session_id": runner_session_id,
+            "claim_id": claim_id,
+            "claim_status": claim_status,
+            "runner_status": str(item.get("runner_status") or ""),
+            "work_session_status": next_status,
+            "reason_code": reason_code,
+        }
+        c.execute(
+            "INSERT INTO activity(task_id,actor,kind,payload,created_at) "
+            "VALUES (?,?,?,?,?)",
+            (task_id, actor, "work_session.reconciled_by_terminal_runner",
+             json.dumps(receipt, sort_keys=True), now),
+        )
+        reconciled.append(receipt)
+    return reconciled
+
+
 def _release_terminal_runner_ownership_in(
         c: sqlite3.Connection, record: Dict[str, Any], metadata: Dict[str, Any],
         runner_session_id: str, actor: str, now: float) -> Optional[Dict[str, Any]]:
@@ -1598,8 +1718,6 @@ def _release_terminal_runner_ownership_in(
     # cleanup handshake.  The exception is a task already exposed as In Review:
     # at that point a terminal implementation must never retain ownership and
     # block the next exact-head remediation generation.
-    if (review_handoff_recovery and execution_role != "implementation"):
-        return None
     if (not review_handoff_recovery
             and (status not in RUNNER_FAILURE_TERMINAL_STATUSES
                  or metadata.get("execution_connection_id"))):
@@ -1609,6 +1727,22 @@ def _release_terminal_runner_ownership_in(
         "SELECT * FROM work_sessions WHERE work_session_id=?",
         (work_session_id,),
     ).fetchone() if work_session_id else None
+    if work_session:
+        work_session_fields = set(work_session.keys())
+        exact_fields = {
+            "task_id": task_id,
+            "claim_id": claim_id,
+            "agent_id": agent_id,
+            "runner_session_id": runner_session_id,
+        }
+        if any(
+                field in work_session_fields
+                and str(work_session[field] or "") != expected
+                for field, expected in exact_fields.items()):
+            return None
+    if (review_handoff_recovery and execution_role != "implementation"
+            and not work_session):
+        return None
     if lease_expired and not work_session:
         # Older host payloads omitted work_session_id. Resolve the generation's
         # session from strongest to weakest identity, accepting the weak
@@ -1679,7 +1813,7 @@ def _release_terminal_runner_ownership_in(
         "project": metadata.get("project") or None,
         "task_id": task_id,
         "deliverable_id": (task["deliverable"] if task else None),
-        "role": metadata.get("role") or metadata.get("lifecycle_role") or "implementation",
+        "role": execution_role,
         "previous_runner_session_id": runner_session_id,
         "previous_claim_id": claim_id,
         "previous_work_session_id": work_session_id or None,
@@ -1702,7 +1836,9 @@ def _release_terminal_runner_ownership_in(
     task_state["switchboard/recovery_handoff"] = handoff
 
     reason = f"terminal_runner:{runner_session_id}:{status}"
-    claim_status = "completed" if review_handoff_recovery else "abandoned"
+    implementation_review_handoff = (
+        review_handoff_recovery and execution_role == "implementation")
+    claim_status = "completed" if implementation_review_handoff else "abandoned"
     c.execute(
         "UPDATE task_claims SET status=?, abandon_reason=? "
         "WHERE id=? AND status='active'",
@@ -1722,7 +1858,7 @@ def _release_terminal_runner_ownership_in(
             "WHERE task_id=?",
             (next_status, json.dumps(task_state, sort_keys=True), agent_id, now, task_id),
         )
-    if review_handoff_recovery and work_session_id:
+    if implementation_review_handoff and work_session_id:
         c.execute(
             "UPDATE work_sessions SET status='completed' "
             "WHERE work_session_id=? AND status IN ('active','proposed','blocked')",
@@ -1747,11 +1883,29 @@ def _release_terminal_runner_ownership_in(
                      "reason_code": "orphan_claim_after_runner_lease_expiry",
                  }, sort_keys=True), now),
             )
+    elif work_session_id:
+        changed = c.execute(
+            "UPDATE work_sessions SET status='expired' "
+            "WHERE work_session_id=? AND status IN ('active','proposed','blocked')",
+            (work_session_id,),
+        )
+        if changed.rowcount:
+            c.execute(
+                "INSERT INTO activity(task_id,actor,kind,payload,created_at) "
+                "VALUES (?,?,?,?,?)",
+                (task_id, actor, "work_session.expired_by_terminal_runner",
+                 json.dumps({
+                     "runner_session_id": runner_session_id,
+                     "work_session_id": work_session_id,
+                     "runner_status": status,
+                     "execution_role": execution_role,
+                 }, sort_keys=True), now),
+            )
     c.execute(
         "INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
         (task_id, actor, (
             "task.claim.completed_by_terminal_review_recovery"
-            if review_handoff_recovery
+            if implementation_review_handoff
             else "task.claim.released_by_terminal_runner"),
          json.dumps({"claim_id": claim_id, "runner_session_id": runner_session_id,
                      "runner_status": status, "recovery_handoff": handoff,
@@ -2257,9 +2411,8 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
     lease_surrender = previous_metadata.get("lease_surrender") or {}
     incoming_metadata = record.get("metadata") \
         if isinstance(record.get("metadata"), dict) else {}
-    terminalizing_fenced_generation = (
-        incoming_metadata.get("terminalized_by") in {
-            "runner_lease_expiry", "host_supervisor", "terminal_lease_surrendered"})
+    terminalizing_fenced_generation = _terminalizes_fenced_generation(
+        incoming_metadata)
     # SIMPLIFY-18 / ADR-0008 C2-C3: runner_sessions is the authoritative
     # heartbeat boundary. Once a managed generation has a server-owned fence,
     # every nonterminal renewal must present that exact epoch. Checking only a
@@ -2476,6 +2629,12 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
     if not completion_resume and not terminal_task_cleanup:
         _release_terminal_runner_ownership_in(
             c, record, metadata, runner_session_id, actor, now)
+    # BUG-263: a terminal generation may have already closed its claim while a
+    # lost/old receipt left the exact Work Session active. Reconcile only
+    # terminal claim+runner+session tuples; never infer completion from task
+    # status or close the current live generation.
+    _reconcile_terminal_bound_work_sessions_in(
+        c, str(record.get("task_id") or ""), actor, now)
     if runner_status in RUNNER_TERMINAL_STATUSES:
         c.execute(
             "UPDATE resource_leases SET released_at=COALESCE(released_at,?),"

@@ -135,17 +135,25 @@ assert review_personal_db.execute(
     "SELECT count(*) FROM task_claims WHERE status='active'").fetchone()[0] == 1
 
 # A terminal review/merge generation must not be mistaken for the stale
-# implementation generation and complete its claim through this fallback.
+# implementation generation or marked completed. It must still release its
+# own exact claim and Work Session so another W4 generation can start.
 review_role, review_role_metadata = terminal_record()
 review_role["status"] = "killed"
 review_role_metadata["execution_connection_id"] = "exec-review"
 review_role_metadata["role"] = "review_merge"
 review_role_db = database("In Review")
-assert runner._release_terminal_runner_ownership_in(
+review_role_db.execute(
+    "UPDATE work_sessions SET status='active' WHERE work_session_id='ws-1'")
+review_release = runner._release_terminal_runner_ownership_in(
     review_role_db, review_role, review_role_metadata,
-    "run-dead", "test", 100.0) is None
+    "run-dead", "test", 100.0)
+assert review_release and review_release["role"] == "review_merge"
 assert review_role_db.execute(
-    "SELECT status FROM task_claims").fetchone()[0] == "active"
+    "SELECT status FROM task_claims").fetchone()[0] == "abandoned"
+assert review_role_db.execute(
+    "SELECT status FROM work_sessions").fetchone()[0] == "expired"
+assert review_role_db.execute(
+    "SELECT status FROM tasks").fetchone()[0] == "In Review"
 
 session = {
     "runner_session_id": "run-live", "task_id": "COORD-42", "claim_id": "claim-2",
