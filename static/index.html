@@ -149,6 +149,17 @@
       .tk-brand-mobile{display:none}
       .tk-toolbar-actions{min-width:0}
       .tk-toolbar-icon{width:2rem;height:2rem;display:inline-flex;align-items:center;justify-content:center;padding:0}
+      .tk-toolbar-context{max-width:min(24vw,22rem)}
+      .tk-toolbar-search{width:210px}
+      .tk-toolbar .btn{white-space:nowrap}
+      .tk-toolbar .dropdown-toggle.tk-toolbar-menu-toggle::after{display:none}
+      @media (min-width:992px) and (max-width:1199.98px){
+        .tk-toolbar>.container-fluid{gap:.35rem}
+        .tk-toolbar .navbar-brand{padding-right:.5rem!important;margin-right:.5rem!important}
+        .tk-toolbar .tk-brand-full{font-size:15px!important;letter-spacing:.1em!important}
+        .tk-toolbar-search{width:150px}
+        .tk-toolbar-actions{gap:.35rem!important}
+      }
       @media (min-width:992px){
         .navbar-vertical{inset-block-start:var(--tk-header-h) !important}
       }
@@ -196,7 +207,7 @@
           border-radius:0;border-width:0 0 1px;margin:0;padding:.55rem .85rem;box-shadow:0 8px 20px -16px rgba(16,24,40,.5)}
       }
       /* Full-width top header (combo layout): spans the whole page; sidebar + content sit below it. */
-      .tk-toolbar{background:var(--tblr-bg-surface);border-bottom:1px solid var(--tblr-border-color);min-height:var(--tk-header-h);position:sticky;top:0;z-index:1035}
+      .tk-toolbar{background:var(--tblr-bg-surface);border-bottom:1px solid var(--tblr-border-color);height:var(--tk-header-h);min-height:var(--tk-header-h);position:sticky;top:0;z-index:1035}
       /* UI-24/UI-47: bound PTY terminal — a sidecar by default (ambient trigger:
          a Mission graph node, the Proof Console), reparented in place inside the
          task-detail modal when opened from full task context. Same
@@ -216,7 +227,8 @@
 </head>
 <body class="layout-fluid">
     <div class="page">
-            <!-- One thin content toolbar: sidebar toggle · context · search · filters · new · export. -->
+            <!-- Approved production toolbar: brand · live context · search · filters ·
+                 Needs-you · New task · export · Autopilot · account. -->
             <header class="navbar navbar-expand-md d-print-none tk-toolbar py-1">
                 <div class="container-fluid d-flex align-items-center">
                     <!-- Brand — EXACT ActionEngine/Atlas lockup (demo.taikunai.com, per the ActionEngine repo navbar.js): flush-left h1.navbar-brand, no toggle before it. -->
@@ -227,15 +239,15 @@
                         <span class="tk-brand-mobile" style="font-size:14px;font-weight:650;letter-spacing:.08em;color:var(--tblr-body-color);line-height:1;white-space:nowrap">SWITCHBOARD</span>
                     </a>
                     </h1>
-                    <div id="toolbar-context" class="d-none d-xl-flex align-items-center gap-1 text-secondary text-truncate small" style="min-width:0"></div>
-                    <!-- Tools — pushed to the far right (demo: search + actions on the right). -->
+                    <div id="toolbar-context" class="tk-toolbar-context d-none d-xl-flex align-items-center text-secondary text-truncate small" style="min-width:0"></div>
+                    <!-- The wireframed production actions, kept on one quiet line. -->
                     <div class="ms-auto d-flex align-items-center gap-2 flex-shrink-0 tk-toolbar-actions">
-                        <div class="input-icon d-none d-sm-block" style="width:210px">
+                        <div class="input-icon d-none d-sm-block tk-toolbar-search">
                             <span class="input-icon-addon"><i class="ti ti-search"></i></span>
-                            <input id="f-search" type="text" class="form-control form-control-sm" placeholder="Search tasks…  ⌘K" autocomplete="off" readonly/>
+                            <input id="f-search" type="text" class="form-control form-control-sm" placeholder="Search…  ⌘K" autocomplete="off" readonly/>
                         </div>
                         <div class="dropdown tk-toolbar-filter">
-                            <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="ti ti-filter me-1"></i>Filters<span id="filter-count" class="badge bg-primary ms-1 d-none"></span></button>
+                            <button class="btn btn-sm btn-outline-secondary tk-toolbar-menu-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="ti ti-filter me-1"></i>Filters<span id="filter-count" class="ms-1 font-monospace small d-none"></span></button>
                             <div class="dropdown-menu dropdown-menu-end p-3" style="min-width:300px">
                                 <div class="mb-2"><select id="f-ws" class="form-select form-select-sm"></select></div>
                                 <div class="mb-2"><select id="f-owner" class="form-select form-select-sm"></select></div>
@@ -245,10 +257,10 @@
                                 <label class="form-check form-switch m-0"><input id="f-hidedone" class="form-check-input" type="checkbox" checked/><span class="form-check-label">Hide done</span></label>
                             </div>
                         </div>
-                        <button id="btn-ack-inbox" class="btn btn-sm btn-outline-secondary position-relative tk-toolbar-icon" type="button" title="Needs you" aria-label="Open Needs-you queue"><i class="ti ti-bell"></i><span id="ack-inbox-count" class="badge bg-red position-absolute top-0 start-100 translate-middle" style="display:none;font-size:10px"></span></button>
+                        <button id="btn-ack-inbox" class="btn btn-sm btn-ghost-secondary position-relative tk-toolbar-icon" type="button" title="Needs you" aria-label="Open Needs-you queue"><i class="ti ti-bell"></i><span id="ack-inbox-count" class="badge bg-red position-absolute top-0 start-100 translate-middle" style="display:none;font-size:10px"></span></button>
                         <button id="btn-new-task" class="btn btn-sm btn-primary" aria-label="New task"><i class="ti ti-plus me-1"></i><span class="tk-action-label">New task</span></button>
                         <div class="dropdown tk-toolbar-export">
-                            <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" title="Export"><i class="ti ti-download"></i></button>
+                            <button class="btn btn-sm btn-outline-secondary tk-toolbar-icon tk-toolbar-menu-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" title="Export" aria-label="Export"><i class="ti ti-download"></i></button>
                             <ul class="dropdown-menu dropdown-menu-end">
                                 <li><a class="dropdown-item" id="dl-xlsx" href="api/export.xlsx"><i class="ti ti-file-spreadsheet me-2"></i>Excel</a></li>
                                 <li><a class="dropdown-item" id="dl-xml" href="api/export.xml"><i class="ti ti-brand-windows me-2"></i>MS Project</a></li>
@@ -257,6 +269,9 @@
                                 <li><h6 class="dropdown-header text-secondary fw-normal" id="plan-generated"></h6></li>
                             </ul>
                         </div>
+                        <button id="btn-autopilot" class="btn btn-sm btn-primary d-none d-lg-inline-flex align-items-center" type="button" title="Start Autopilot for the selected deliverable">
+                            <i class="ti ti-bolt me-1"></i>Autopilot
+                        </button>
                         <!-- UI-23: top-right user menu — the demo.taikunai.com / ActionEngine
                              navbar.js:752-816 component, and now the canonical way into Settings.
                              Always rendered: the old rail copy only appeared once a taikun_session
@@ -1012,7 +1027,7 @@
     <script src="js/scope.js?v=1"></script>
     <script src="js/attention.js?v=3"></script>
     <script src="js/fleet-dock.js?v=5"></script>
-    <script src="app.js?v=81"></script>
+    <script src="app.js?v=82"></script>
     <script src="taikun-ui.js?v=11"></script>
     <script src="saturation-panel.js?v=2"></script>
     <script src="narration-ops-panel.js?v=3"></script>
@@ -1102,7 +1117,7 @@
             if (dp && dp.value && dp.selectedIndex >= 0) parts.push(dp.options[dp.selectedIndex].textContent.trim());
           }
           ctx.innerHTML = parts.map(function (p, i) {
-            return (i ? '<i class="ti ti-chevron-right text-secondary" style="font-size:.8rem"></i>' : '') +
+            return (i ? '<span class="mx-2 text-secondary" aria-hidden="true">·</span>' : '') +
               '<span class="' + (i === parts.length - 1 ? 'text-body' : 'text-secondary') + '">' + esc(p) + '</span>';
           }).join('');
         }
