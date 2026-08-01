@@ -11,6 +11,10 @@ from typing import Any, Callable, Mapping, Optional, Sequence
 from constants import DEFAULT_PROJECT
 from db.connection import _conn, _write_through
 from switchboard.domain.attention import assert_attention_transition
+from switchboard.storage.repositories.mission_journal import (
+    MissionJournalError,
+    default_mission_journal_repository,
+)
 
 ATTENTION_REQUEST_SCHEMA = "switchboard.attention_request.v1"
 ATTENTION_DECISION_SCHEMA = "switchboard.attention_decision.v1"
@@ -159,6 +163,108 @@ def _selected_choice(
     return selected_id, ""
 
 
+def _optional_pr_ref(value: Any) -> str:
+    """Normalize the explicit no-PR sentinel without inventing a PR."""
+    normalized = str(value or "").strip()
+    return "" if normalized == "0" else normalized
+
+
+def _mission_human_request_binding_state_in(
+    c: sqlite3.Connection,
+    request: sqlite3.Row,
+    *,
+    project: str,
+) -> str:
+    """Return missing, exact, or mismatch for the mission Human pointer."""
+    task_id = str(request["task_id"] or "").strip().upper()
+    request_id = str(request["request_id"] or "").strip()
+    if not task_id or not request_id:
+        return "missing"
+    exact_project = project or str(request["project_id"] or "").strip()
+    try:
+        item = c.execute(
+            "SELECT state,human_request_id FROM mission_items "
+            "WHERE project_id=? AND task_id=?",
+            (exact_project, task_id),
+        ).fetchone()
+    except sqlite3.OperationalError as exc:
+        if "no such table" not in str(exc).lower():
+            raise
+        return "missing"
+    if not item:
+        return "missing"
+    return "exact" if (
+        item
+        and str(item["state"] or "") == "HUMAN"
+        and str(item["human_request_id"] or "").strip() == request_id
+    ) else "mismatch"
+
+
+def _bound_work_session_head_in(
+    c: sqlite3.Connection,
+    request: sqlite3.Row,
+) -> str:
+    """Read the exact blocked Work Session head for a pre-PR Human request."""
+    work_session_id = str(request["work_session_id"] or "").strip()
+    task_id = str(request["task_id"] or "").strip().upper()
+    if not work_session_id or not task_id:
+        return ""
+    try:
+        session = c.execute(
+            "SELECT task_id,status,head_sha,base_sha FROM work_sessions "
+            "WHERE work_session_id=?",
+            (work_session_id,),
+        ).fetchone()
+    except sqlite3.OperationalError as exc:
+        if "no such table" not in str(exc).lower():
+            raise
+        return ""
+    if not session:
+        return ""
+    if str(session["task_id"] or "").strip().upper() != task_id:
+        return ""
+    if str(session["status"] or "").strip().lower() != "blocked":
+        return ""
+    return str(session["head_sha"] or session["base_sha"] or "").strip()
+
+
+def _work_session_human_request_binding_in(
+    c: sqlite3.Connection,
+    request: sqlite3.Row,
+    context: Mapping[str, Any],
+) -> bool:
+    """Recognize only the server-created pre-/post-PR Human closeout."""
+    task_id = str(request["task_id"] or "").strip().upper()
+    work_session_id = str(request["work_session_id"] or "").strip()
+    if not task_id or not work_session_id:
+        return False
+    if (
+        str(request["provider"] or "") != COMPLETION_PROVIDER
+        or str(request["schema_version"] or "") != COMPLETION_CLOSEOUT_SCHEMA
+        or str(context.get("schema") or "") != COMPLETION_CLOSEOUT_SCHEMA
+        or str(context.get("task_id") or "").strip().upper() != task_id
+        or str(context.get("work_session_id") or "").strip() != work_session_id
+        or str(context.get("source_tool") or "") != "record_human_blocker"
+        or str(context.get("completion_run_id") or "").strip()
+        or int(context.get("state_version") or 0) != 0
+    ):
+        return False
+    try:
+        session = c.execute(
+            "SELECT task_id,status FROM work_sessions WHERE work_session_id=?",
+            (work_session_id,),
+        ).fetchone()
+    except sqlite3.OperationalError as exc:
+        if "no such table" not in str(exc).lower():
+            raise
+        return False
+    return bool(
+        session
+        and str(session["task_id"] or "").strip().upper() == task_id
+        and str(session["status"] or "").strip().lower() == "blocked"
+    )
+
+
 def _event_in(c: sqlite3.Connection, *, request_id: str, event_type: str,
               from_status: Optional[str], to_status: str, request_version: int,
               actor: str, payload: Any, created_at: float) -> None:
@@ -173,6 +279,118 @@ def _event_in(c: sqlite3.Connection, *, request_id: str, event_type: str,
         (request_id, sequence, event_type, from_status, to_status, request_version,
          actor, _canonical_json(payload or {}), created_at),
     )
+
+
+def _apply_mission_human_decision_in(
+    c: sqlite3.Connection,
+    request: sqlite3.Row,
+    *,
+    decision_id: str,
+    selected_effect: str,
+    actor: str,
+    project: str,
+    now: float,
+) -> dict[str, Any]:
+    """Project one authenticated decision into its exact staged mission."""
+    task_id = str(request["task_id"] or "").strip().upper()
+    request_id = str(request["request_id"] or "").strip()
+    if selected_effect not in {"resume_assessment", "remain_blocked"}:
+        raise AttentionStoreError(
+            "mission_attention_choice_invalid",
+            "a mission Human decision must resume assessment or remain blocked",
+            details={"effect": selected_effect},
+        )
+    if selected_effect == "resume_assessment":
+        try:
+            mission = default_mission_journal_repository.record_human_answered_in(
+                c,
+                task_id,
+                project=project or str(request["project_id"] or "").strip(),
+                human_request_id=request_id,
+                answer_ref=decision_id,
+                now=now,
+            )
+        except MissionJournalError as exc:
+            raise AttentionStoreError(
+                "attention_mission_projection_failed",
+                "the Human decision could not be projected into its staged mission",
+                details={"mission_error": exc.code},
+            ) from exc
+    else:
+        item = c.execute(
+            "SELECT state,human_request_id FROM mission_items "
+            "WHERE project_id=? AND task_id=?",
+            (project or str(request["project_id"] or "").strip(), task_id),
+        ).fetchone()
+        if not (
+            item
+            and str(item["state"] or "") == "HUMAN"
+            and str(item["human_request_id"] or "").strip() == request_id
+        ):
+            raise AttentionStoreError(
+                "attention_mission_projection_failed",
+                "the mission is no longer parked on this Human request",
+                details={"mission_error": "human_answer_request_mismatch"},
+            )
+        mission = {
+            "recorded": False,
+            "reason": "human_hold_recorded",
+            "state": "HUMAN",
+            "human_request_id": request_id,
+            "task_id": task_id,
+        }
+
+    current = c.execute(
+        "SELECT * FROM attention_requests WHERE request_id=?", (request_id,),
+    ).fetchone()
+    receipt = {
+        "schema": "switchboard.mission_human_decision_receipt.v1",
+        "effect": selected_effect,
+        "request_id": request_id,
+        "decision_id": decision_id,
+        "task_id": task_id,
+        "mission_event_id": mission.get("event_id"),
+        "mission_state": mission.get("state"),
+        "verified": True,
+    }
+    if current and str(current["status"] or "") == "decision_recorded":
+        delivering = transition_attention_request_in(
+            c,
+            request_id,
+            expected_version=int(current["version"]),
+            target_status="delivering",
+            actor=actor,
+            reason="mission_human_decision_projected",
+            delivery_claimed_by="switchboard/mission-journal",
+            project=project,
+            now=now,
+            allow_completion_owner=True,
+        )
+        transition_attention_request_in(
+            c,
+            request_id,
+            expected_version=int(delivering["version"]),
+            target_status="resolved",
+            actor=actor,
+            reason=(
+                "mission_human_answer_applied"
+                if selected_effect == "resume_assessment"
+                else "mission_human_hold_applied"
+            ),
+            delivery_receipt=receipt,
+            project=project,
+            now=now,
+            allow_completion_owner=True,
+        )
+    elif not current or str(current["status"] or "") != "resolved":
+        raise AttentionStoreError(
+            "stale_attention_decision",
+            "mission Human decision is not in a deliverable attention state",
+            details={
+                "current_status": str(current["status"] or "") if current else "missing",
+            },
+        )
+    return mission
 
 
 def create_attention_request_in(
@@ -284,6 +502,21 @@ def record_attention_decision_in(
         raise AttentionStoreError("attention_request_not_found", "request does not exist")
     choices = _decode(request["choices_json"], [])
     selected = payload.get("choice")
+    context = _decode(request["context_json"], {})
+    work_session_human_binding = _work_session_human_request_binding_in(
+        c, request, context,
+    )
+    mission_binding_state = (
+        _mission_human_request_binding_state_in(c, request, project=project)
+        if work_session_human_binding
+        else "missing"
+    )
+    mission_human_binding = mission_binding_state == "exact"
+    if mission_human_binding and not str(actor_principal_id or "").strip():
+        raise AttentionStoreError(
+            "attention_principal_unbound",
+            "an authenticated principal is required to answer a mission Human request",
+        )
     decision_frozen = {
         "request_id": request_id,
         "expected_version": payload["expected_version"],
@@ -308,10 +541,33 @@ def record_attention_decision_in(
             "decision": _decision_from_row(existing),
             "request": _request_from_row(request),
         }
+        if mission_human_binding:
+            _selected_id, selected_effect = _selected_choice(
+                choices, _decode(existing["choice_json"], None),
+            )
+            replay["mission"] = _apply_mission_human_decision_in(
+                c,
+                request,
+                decision_id=str(existing["decision_id"]),
+                selected_effect=selected_effect,
+                actor=actor,
+                project=project,
+                now=float(now if now is not None else time.time()),
+            )
+            refreshed = c.execute(
+                "SELECT * FROM attention_requests WHERE request_id=?", (request_id,),
+            ).fetchone()
+            if refreshed:
+                replay["request"] = _request_from_row(refreshed)
         wake = _completion_wake_for_request_in(c, request_id)
         if wake:
             replay["completion_wake"] = wake
         return replay
+    if work_session_human_binding and mission_binding_state == "mismatch":
+        raise AttentionStoreError(
+            "attention_mission_binding_stale",
+            "the staged mission is not parked on this Human request",
+        )
     now_value = float(now if now is not None else time.time())
     if request["expires_at"] is not None and request["expires_at"] <= now_value:
         if request["status"] == "pending":
@@ -327,9 +583,8 @@ def record_attention_decision_in(
             details={"current_status": "expired",
                      "current_version": request["version"] + 1},
         )
-    context = _decode(request["context_json"], {})
     frozen_head = str(context.get("head_sha") or "").strip()
-    frozen_pr_number = str(context.get("pr_number") or "").strip()
+    frozen_pr_number = _optional_pr_ref(context.get("pr_number"))
     if request["task_id"] and frozen_head:
         try:
             current = c.execute(
@@ -339,11 +594,27 @@ def record_attention_decision_in(
         except sqlite3.OperationalError:
             current = None
         current_head = str(current["head_sha"] or "").strip() if current else ""
+        current_pr_number = (
+            _optional_pr_ref(current["pr_number"]) if current else ""
+        )
+        binding_source = "task_git_state"
+        if not current_head and work_session_human_binding:
+            current_head = _bound_work_session_head_in(c, request)
+            current_pr_number = ""
+            binding_source = "work_session"
+            if not current_head:
+                # BUG-252: a non-code task has no PR/head authority. Its exact
+                # attention request version is the declared decision fence.
+                current_head = frozen_head
+                binding_source = "attention_request_version"
         if not current_head:
             raise AttentionStoreError(
                 "attention_head_unverifiable",
                 "current task head is unavailable; decision remains pending",
-                details={"frozen_head_sha": frozen_head})
+                details={
+                    "frozen_head_sha": frozen_head,
+                    "binding_source": binding_source,
+                })
         if current_head != frozen_head:
             if request["status"] == "pending":
                 transition_attention_request_in(
@@ -358,7 +629,6 @@ def record_attention_decision_in(
                 details={"frozen_head_sha": frozen_head,
                          "current_head_sha": current_head},
             )
-        current_pr_number = str(current["pr_number"] or "").strip()
         if frozen_pr_number and current_pr_number != frozen_pr_number:
             if request["status"] == "pending":
                 transition_attention_request_in(
@@ -380,6 +650,7 @@ def record_attention_decision_in(
         request["status"] == "pending"
         and str(request["provider"] or "") == COMPLETION_PROVIDER
         and str(request["schema_version"] or "") == COMPLETION_CLOSEOUT_SCHEMA
+        and not work_session_human_binding
     ):
         task_id = str(request["task_id"] or "").strip().upper()
         context_task = str(context.get("task_id") or "").strip().upper()
@@ -455,6 +726,15 @@ def record_attention_decision_in(
             "decision must select one of the frozen request choices",
             details={"allowed_choice_ids": sorted(allowed_ids)},
         )
+    selected_id, selected_effect = _selected_choice(choices, selected)
+    if mission_human_binding and selected_effect not in {
+        "resume_assessment", "remain_blocked",
+    }:
+        raise AttentionStoreError(
+            "mission_attention_choice_invalid",
+            "a mission Human decision must resume assessment or remain blocked",
+            details={"choice_id": selected_id, "effect": selected_effect},
+        )
     if request["status"] != "pending" or request["version"] != payload["expected_version"]:
         raise AttentionStoreError(
             "stale_attention_decision",
@@ -485,11 +765,22 @@ def record_attention_decision_in(
               request_version=next_version, actor=actor,
               payload={"decision_id": decision_id}, created_at=now_value)
 
-    if (
+    mission: dict[str, Any] | None = None
+    if mission_human_binding:
+        mission = _apply_mission_human_decision_in(
+            c,
+            request,
+            decision_id=decision_id,
+            selected_effect=selected_effect,
+            actor=actor,
+            project=project,
+            now=now_value,
+        )
+    elif (
         str(request["provider"] or "") == COMPLETION_PROVIDER
         and str(request["schema_version"] or "") == COMPLETION_CLOSEOUT_SCHEMA
+        and not work_session_human_binding
     ):
-        selected_id, selected_effect = _selected_choice(choices, selected)
         task_id = str(completion_binding.get("task_id") or "").strip().upper()
         run_id = str(completion_binding.get("run_id") or "").strip()
         state_version = int(completion_binding.get("state_version") or 0)
@@ -557,6 +848,8 @@ def record_attention_decision_in(
         "decision": _decision_from_row(decision),
         "request": _request_from_row(request),
     }
+    if mission is not None:
+        result["mission"] = mission
     wake = _completion_wake_for_request_in(c, request_id)
     if wake:
         result["completion_wake"] = wake

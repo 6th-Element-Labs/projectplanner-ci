@@ -29,6 +29,7 @@ for passive_contract in (
     "src/switchboard/application/commands/mission_journal.py",
     "src/switchboard/application/commands/capacity_mission_events.py",
     "src/switchboard/application/commands/human_blocker.py",
+    "src/switchboard/storage/repositories/attention.py",
     "src/switchboard/storage/repositories/mission_journal.py",
 ):
     assert (Path(ROOT) / passive_contract).is_file(), passive_contract
@@ -49,6 +50,9 @@ capacity_projection = read(
 )
 human_request_projection = read(
     "src/switchboard/application/commands/human_blocker.py"
+)
+human_answer_projection = read(
+    "src/switchboard/storage/repositories/attention.py"
 )
 github_projection = read(
     "src/switchboard/application/commands/github_mission_events.py"
@@ -102,6 +106,9 @@ assert "run_v4_tick" not in passive_commands
 assert "mission_bot_v4" not in human_request_projection
 assert "run_scoped_mission_tick" not in human_request_projection
 assert "start_task(" not in human_request_projection
+assert "run_v4_tick" not in human_answer_projection
+assert "run_scoped_mission_tick" not in human_answer_projection
+assert "start_task(" not in human_answer_projection
 
 staged_paths = {
     (Path(ROOT) / "src/switchboard/application/commands/mission_journal.py").resolve(),
@@ -110,6 +117,7 @@ staged_paths = {
     (Path(ROOT) / "src/switchboard/application/commands/github_mission_events.py").resolve(),
     (Path(ROOT) / "src/switchboard/application/queries/mission_context.py").resolve(),
     (Path(ROOT) / "src/switchboard/mcp/tools/mission.py").resolve(),
+    (Path(ROOT) / "src/switchboard/storage/repositories/attention.py").resolve(),
     (Path(ROOT) / "src/switchboard/storage/repositories/mission_journal.py").resolve(),
     (Path(ROOT) / "src/switchboard/storage/migrations/runner.py").resolve(),
     (Path(ROOT) / "webhook_inbox.py").resolve(),

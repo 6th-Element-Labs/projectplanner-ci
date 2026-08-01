@@ -464,6 +464,139 @@ class MissionJournalRepository:
 
         return self._write_through(project, write)
 
+    def record_human_answered_in(
+        self,
+        connection: sqlite3.Connection,
+        task_id: str,
+        *,
+        project: str,
+        human_request_id: str,
+        answer_ref: str,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Append one exact answer fact and unpark its mission atomically.
+
+        The attention decision is the authority for ``answer_ref``.  The
+        mission journal accepts it only while the item is parked on that exact
+        request; it never infers an answer from board status or delivery.
+        """
+        exact_task_id = str(task_id or "").strip().upper()
+        exact_request_id = str(human_request_id or "").strip()
+        exact_answer_ref = str(answer_ref or "").strip()
+        if not exact_task_id or not exact_request_id or not exact_answer_ref:
+            raise MissionJournalError(
+                "human_answer_identity_required",
+                "task, Human request, and answer references are required",
+            )
+        item = connection.execute(
+            "SELECT * FROM mission_items WHERE project_id=? AND task_id=?",
+            (project, exact_task_id),
+        ).fetchone()
+        if item is None:
+            return {
+                "recorded": False,
+                "reason": "mission_not_found",
+                "task_id": exact_task_id,
+            }
+
+        idempotency_key = f"human_answered:{exact_request_id}"
+        existing = connection.execute(
+            "SELECT * FROM mission_events WHERE project_id=? AND idempotency_key=?",
+            (project, idempotency_key),
+        ).fetchone()
+        timestamp = time.time() if now is None else now
+        if existing is not None:
+            event = self._append_event_in(
+                connection,
+                exact_task_id,
+                project=project,
+                event_type="human_answered",
+                source_plane="coordination",
+                idempotency_key=idempotency_key,
+                occurred_at=float(existing["occurred_at"]),
+                pr_number=None,
+                head_sha=None,
+                generation=None,
+                execution_id=None,
+                external_ref=exact_answer_ref,
+                payload={
+                    "human_request_id": exact_request_id,
+                    "answer_ref": exact_answer_ref,
+                },
+            )
+            mission = self._item_in(connection, exact_task_id, project) or {}
+            return {
+                "recorded": True,
+                "event_created": bool(event.get("created")),
+                "event_id": event.get("event_id"),
+                "state": str(mission.get("state") or ""),
+                "human_request_id": str(mission.get("human_request_id") or ""),
+                "answer_pointer": int(event.get("sequence") or 0),
+                "task_id": exact_task_id,
+            }
+
+        state = str(item["state"] or "")
+        current_request_id = str(item["human_request_id"] or "").strip()
+        if state == "DONE":
+            raise MissionJournalError(
+                "terminal_state_immutable",
+                "a terminal mission cannot accept a Human answer",
+            )
+        if state != "HUMAN" or current_request_id != exact_request_id:
+            raise MissionJournalError(
+                "human_answer_request_mismatch",
+                "mission is not parked on the answered Human request",
+            )
+
+        event = self._append_event_in(
+            connection,
+            exact_task_id,
+            project=project,
+            event_type="human_answered",
+            source_plane="coordination",
+            idempotency_key=idempotency_key,
+            occurred_at=timestamp,
+            pr_number=None,
+            head_sha=None,
+            generation=None,
+            execution_id=None,
+            external_ref=exact_answer_ref,
+            payload={
+                "human_request_id": exact_request_id,
+                "answer_ref": exact_answer_ref,
+            },
+        )
+        answer_pointer = int(event["sequence"])
+        updated = connection.execute(
+            "UPDATE mission_items SET state='ACTIVE',human_request_id='',"
+            "handled_through=?,version=version+1,updated_at=? "
+            "WHERE project_id=? AND task_id=? AND version=? "
+            "AND state='HUMAN' AND human_request_id=?",
+            (
+                answer_pointer - 1,
+                timestamp,
+                project,
+                exact_task_id,
+                int(item["version"]),
+                exact_request_id,
+            ),
+        )
+        if updated.rowcount != 1:
+            raise MissionJournalError(
+                "stale_row_version",
+                "mission changed while the Human answer was being recorded",
+            )
+        mission = self._item_in(connection, exact_task_id, project) or {}
+        return {
+            "recorded": True,
+            "event_created": bool(event.get("created")),
+            "event_id": event.get("event_id"),
+            "state": str(mission.get("state") or ""),
+            "human_request_id": str(mission.get("human_request_id") or ""),
+            "answer_pointer": answer_pointer,
+            "task_id": exact_task_id,
+        }
+
     def yield_execution(
         self,
         task_id: str,
@@ -1154,14 +1287,17 @@ class MissionJournalRepository:
                     "human_request_reference_required",
                     "human_requested requires one exact request and reason reference",
                 )
-        if event_type == "human_answered" and not (
-            nonempty_string(detail.get("human_request_id"))
-            and nonempty_string(detail.get("answer_ref"))
-        ):
-            raise MissionJournalError(
-                "human_answer_reference_required",
-                "human_answered requires request and answer references",
-            )
+        if event_type == "human_answered":
+            answer_ref = detail.get("answer_ref")
+            if not (
+                nonempty_string(detail.get("human_request_id"))
+                and nonempty_string(answer_ref)
+                and external_ref == answer_ref
+            ):
+                raise MissionJournalError(
+                    "human_answer_reference_required",
+                    "human_answered requires exact request and answer references",
+                )
         if event_type == "observation_due":
             waited = detail.get("wait_started_at")
             due_at = detail.get("due_at")

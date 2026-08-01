@@ -404,6 +404,8 @@ def _raise_attention_error(exc: AttentionStoreError) -> None:
         "stale_attention_pr": 409,
         "stale_attention_completion_run": 409,
         "attention_head_unverifiable": 409,
+        "attention_mission_binding_stale": 409,
+        "attention_mission_projection_failed": 409,
     }.get(exc.code, 400)
     raise HTTPException(status, exc.as_dict()) from exc
 
