@@ -186,7 +186,9 @@ class HumanAnswerProjectionTest(unittest.TestCase):
         self.assertEqual("start_task", first["action"])
         self.assertEqual(3, first["event_pointer"])
         self.assertEqual("human_answered", json.loads(starts[0]["instruction"])["event_type"])
-        self.assertEqual("no_unhandled_event", replay_tick["reason"])
+        self.assertEqual("block_release", replay_tick["action"])
+        self.assertEqual("missing_mission_event", replay_tick["reason"])
+        self.assertTrue(replay_tick["release_blocked"])
         self.assertEqual(1, len(starts))
 
         replay = self.decide(parked, "supply_credential")

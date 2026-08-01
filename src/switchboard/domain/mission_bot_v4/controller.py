@@ -9,6 +9,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from .invariants import active_mission_failure
+
 
 _AGENT_BINDINGS = frozenset({"registered_agent", "direct_session"})
 _ROLES = frozenset({"implementation", "review_merge", "remediation"})
@@ -53,6 +55,16 @@ def decide_mission_transition(context: Mapping[str, Any]) -> dict[str, Any]:
         }
     if context.get("runner_live"):
         return {"state": "WAITING", "action": "wait", "reason": "runner_live"}
+
+    failure = active_mission_failure(context)
+    if failure is not None:
+        return {
+            "state": "ACTIVE",
+            "action": "block_release",
+            "reason": str(failure["reason"]),
+            "release_blocked": True,
+            "failure": failure,
+        }
 
     handled_through = int(context.get("handled_through") or 0)
     latest_sequence = int(context.get("latest_sequence") or 0)

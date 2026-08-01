@@ -7,7 +7,7 @@ can be exercised without giving it global production authority.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from switchboard.application.commands import capacity_mission_events, task_execution
@@ -15,6 +15,7 @@ from switchboard.application.mission_bot_v4.worker import (
     ScopedMissionWorkerPorts,
     tick_scoped_mission,
 )
+from switchboard.domain.mission_bot_v4 import active_mission_failure
 from switchboard.storage.repositories import autopilot_scopes, runner, tasks
 from switchboard.storage.repositories.mission_journal import (
     MissionJournalRepository,
@@ -169,4 +170,67 @@ def run_scoped_mission_tick(
     return result
 
 
-__all__ = ["production_ports", "run_scoped_mission_tick"]
+def assess_stuck_mission_invariant(
+    *,
+    project: str,
+    journal: MissionJournalRepository = default_mission_journal_repository,
+    has_live_execution: Callable[..., bool] = runner.task_has_live_execution,
+) -> dict[str, Any]:
+    """Read every staged mission and fail release readiness on blind waits.
+
+    The scan is read-only and deliberately narrow: a green result proves only
+    this invariant.  It never authorizes cutover and never treats wakes,
+    claims, Work Sessions, or agent presence as Capacity liveness.
+    """
+    blockers: list[dict[str, Any]] = []
+    task_ids = journal.active_task_ids(project=project)
+    for task_id in task_ids:
+        item = journal.get_item(task_id, project=project)
+        if item is None:
+            blockers.append({
+                "schema": "switchboard.mission_stuck_invariant.v1",
+                "invariant": "active_requires_runner_human_or_unhandled_event",
+                "release_blocked": True,
+                "reason": "mission_disappeared_during_read",
+                "failure_class": "missing_data",
+                "severity": "critical",
+                "message": "Mission disappeared during the release-readiness scan.",
+                "expected_signal": "The same mission row is readable for the bounded scan.",
+                "missing_producer": False,
+                "evidence": {"project": project, "task_id": task_id},
+            })
+            continue
+        failure = active_mission_failure({
+            "project": project,
+            "task_id": task_id,
+            "mission_state": item.get("state"),
+            "requested_role": item.get("requested_role"),
+            "terminal_provenance": (
+                item.get("state") == "DONE"
+                and bool(item.get("terminal_kind"))
+                and bool(item.get("terminal_ref"))
+            ),
+            "runner_live": bool(has_live_execution(task_id, project=project)),
+            "handled_through": item.get("handled_through"),
+            "latest_sequence": item.get("latest_sequence"),
+        })
+        if failure is not None:
+            blockers.append(failure)
+    return {
+        "schema": "switchboard.mission_stuck_release_gate.v1",
+        "project": project,
+        "checked_task_count": len(task_ids),
+        "passed": not blockers,
+        "release_blocked": bool(blockers),
+        "cutover_authorized": False,
+        "blocker_count": len(blockers),
+        "blockers": blockers,
+        "runner_liveness_source": "runner_sessions",
+    }
+
+
+__all__ = [
+    "assess_stuck_mission_invariant",
+    "production_ports",
+    "run_scoped_mission_tick",
+]

@@ -94,12 +94,25 @@ def tick_scoped_mission(
             and bool(item.get("terminal_ref"))
         ),
         "dependencies_satisfied": dependency_state.get("satisfied") is True,
+        "project": project,
+        "task_id": task_id,
         "mission_state": item.get("state"),
         "runner_live": ports.has_live_execution(task_id, project=project),
         "requested_role": item.get("requested_role"),
         "handled_through": item.get("handled_through"),
         "latest_sequence": item.get("latest_sequence"),
     })
+    if decision["action"] == "block_release":
+        return {
+            "schema": "switchboard.mission_worker_tick.v4",
+            "task_id": task_id,
+            "project": project,
+            "action": "block_release",
+            "reason": str(decision["reason"]),
+            "release_blocked": True,
+            "mutations": 0,
+            "failure": dict(decision["failure"]),
+        }
     if decision["action"] != "start_task":
         return _wait(str(decision["reason"]), task_id=task_id)
 

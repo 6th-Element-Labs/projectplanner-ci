@@ -347,8 +347,9 @@ class CapacityMissionEventsTest(unittest.TestCase):
         ]["wake_projection"]["action"])
         self.assertEqual(1, len(starts))
         self.assertEqual("current-task-head", starts[0]["source_sha"])
-        self.assertEqual("wait", replay["action"])
-        self.assertEqual("no_unhandled_event", replay["reason"])
+        self.assertEqual("block_release", replay["action"])
+        self.assertEqual("missing_mission_event", replay["reason"])
+        self.assertTrue(replay["release_blocked"])
 
     def test_scoped_runtime_names_projection_failure_and_does_not_start(self):
         starts: list[dict] = []
