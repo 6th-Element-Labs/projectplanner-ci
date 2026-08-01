@@ -26,7 +26,7 @@
     <link href="taikun-tabler.css?v=23" rel="stylesheet"/>
     <!-- taikun-ui: brand + polish layer over Tabler (white canvas, soft cards, refined tabs/modal).
          Loaded after taikun-tabler.css?v=23 so it wins. -->
-    <link href="taikun-ui.css?v=31" rel="stylesheet"/>
+    <link href="taikun-ui.css?v=32" rel="stylesheet"/>
     <link href="taikun-scope.css?v=1" rel="stylesheet"/>
     <style>
       .epic-head{cursor:pointer}
@@ -596,39 +596,66 @@
                             </div>
                         </div>
 
-                        <!-- INBOX — everything awaiting a human decision: proposed changes,
-                             open decisions and risks, together instead of three separate tabs. -->
-                        <div class="tab-pane" id="tab-inbox-hub" role="tabpanel">
-                            <ul class="nav nav-pills tk-subnav mt-3 mb-1" role="tablist">
+                        <!-- INBOX — one quiet operator surface over the existing attention,
+                             ingest, decisions, and risks owners. -->
+                        <div class="tab-pane tk-inbox-page" id="tab-inbox-hub" role="tabpanel">
+                            <div class="tk-inbox-page-head mt-3">
+                                <div>
+                                    <div class="tk-inbox-breadcrumb"><span id="inbox-project-label">Project</span> / Inbox</div>
+                                    <h2 class="page-title mb-1">Inbox</h2>
+                                    <div class="text-secondary">Everything waiting for human review or acknowledgement.</div>
+                                </div>
+                                <div class="dropdown">
+                                    <button id="inbox-view-options" class="btn btn-outline-secondary" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                                        <i class="ti ti-adjustments me-1"></i><span>View options</span>
+                                    </button>
+                                    <div class="dropdown-menu dropdown-menu-end tk-inbox-options">
+                                        <button id="inbox-refresh" class="dropdown-item" type="button"><i class="ti ti-refresh me-2"></i>Refresh Inbox</button>
+                                        <button id="inbox-sim" class="dropdown-item" type="button"><i class="ti ti-mail-forward me-2"></i>Simulate inbound email</button>
+                                        <div class="dropdown-divider"></div>
+                                        <button id="needs-delete-all" class="dropdown-item text-danger" type="button" hidden><i class="ti ti-trash me-2"></i>Delete provider alerts…</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <ul class="nav nav-tabs tk-inbox-tabs" role="tablist" aria-label="Inbox views">
                                 <!-- UI-29: Needs you — the universal attention queue, first and default -->
-                                <li class="nav-item" role="presentation"><a class="nav-link active" data-bs-toggle="tab" href="#tab-needs" role="tab"><i class="ti ti-hand-stop me-1"></i>Needs you <span id="needs-count" class="tk-mono ms-1 text-secondary"></span></a></li>
-                                <li class="nav-item" role="presentation"><a class="nav-link" data-bs-toggle="tab" href="#tab-inbox" role="tab"><i class="ti ti-checklist me-1"></i>Action Queue</a></li>
+                                <li class="nav-item" role="presentation"><a class="nav-link active" data-bs-toggle="tab" href="#tab-needs" role="tab"><i class="ti ti-bell me-1"></i>Needs you <span id="needs-count" class="tk-inbox-tab-count"></span></a></li>
+                                <li class="nav-item" role="presentation"><a class="nav-link" data-bs-toggle="tab" href="#tab-inbox" role="tab"><i class="ti ti-checklist me-1"></i><span class="tk-inbox-desktop-label">Action Queue</span><span class="tk-inbox-mobile-label">Queue</span></a></li>
                                 <li class="nav-item" role="presentation"><a class="nav-link" data-bs-toggle="tab" href="#tab-decisions" role="tab"><i class="ti ti-help-circle me-1"></i>Decisions</a></li>
                                 <li class="nav-item" role="presentation"><a class="nav-link" data-bs-toggle="tab" href="#tab-risks" role="tab"><i class="ti ti-alert-triangle me-1"></i>Risks</a></li>
                             </ul>
                             <div class="tab-content">
                                 <!-- UI-29: Needs you — GET /api/attention; decides route to the owning stores -->
                                 <div class="tab-pane active show" id="tab-needs" role="tabpanel">
-                                    <div class="d-flex align-items-center flex-wrap gap-2 mt-3 mb-2">
-                                        <div class="text-secondary small">One queue, every source that needs a human — unacked agent messages and pending inbound, ranked. Answer here; the source resumes.</div>
-                                        <div class="ms-auto btn-list" id="needs-filters"></div>
+                                    <div class="tk-inbox-filterbar">
+                                        <div class="input-icon tk-inbox-search">
+                                            <span class="input-icon-addon"><i class="ti ti-search"></i></span>
+                                            <input id="needs-search" class="form-control" type="search" placeholder="Search alerts…" autocomplete="off" aria-label="Search alerts"/>
+                                        </div>
+                                        <select id="needs-source" class="form-select" aria-label="Attention source"></select>
+                                        <select id="needs-state-filter" class="form-select" aria-label="Attention state">
+                                            <option value="open">Open</option>
+                                            <option value="resuming">Resuming</option>
+                                            <option value="stopped">Stopped</option>
+                                            <option value="all">All states</option>
+                                        </select>
                                     </div>
-                                    <div class="row g-3">
-                                        <div class="col-lg-4" id="needs-list"></div>
-                                        <div class="col-lg-8"><div class="card"><div class="card-body" id="needs-detail"></div></div></div>
+                                    <div class="tk-inbox-master" id="needs-master">
+                                        <section class="card tk-inbox-list-pane">
+                                            <div class="tk-inbox-list-head"><h3 class="m-0">Needs you</h3><span id="needs-list-count" class="text-secondary small"></span></div>
+                                            <div id="needs-list"></div>
+                                        </section>
+                                        <section class="tk-inbox-detail-pane">
+                                            <button id="needs-back" class="btn btn-sm btn-outline-secondary tk-inbox-back" type="button"><i class="ti ti-chevron-left me-1"></i>Back to Inbox</button>
+                                            <div class="card"><div class="card-body tk-inbox-detail" id="needs-detail"></div></div>
+                                        </section>
                                     </div>
                                 </div>
                                 <!-- Action Queue (Live Inbox: email-triaged updates awaiting review) -->
                                 <div class="tab-pane" id="tab-inbox" role="tabpanel">
-                                    <div class="d-flex align-items-center flex-wrap gap-2 mt-3 mb-3">
-                                        <div>
-                                            <h3 class="m-0"><i class="ti ti-checklist me-2"></i>Action Queue</h3>
-                                            <div class="text-secondary small">Every proposed change — from uploads, pasted notes and email — lands here to review, edit, confirm or dismiss in bulk.</div>
-                                        </div>
-                                        <div class="ms-auto btn-list">
-                                            <button id="inbox-sim" class="btn btn-sm"><i class="ti ti-mail-forward me-1"></i>Simulate email</button>
-                                            <button id="inbox-refresh" class="btn btn-sm"><i class="ti ti-refresh me-1"></i>Refresh</button>
-                                        </div>
+                                    <div class="tk-inbox-view-head">
+                                        <div><div class="d-flex align-items-baseline gap-2"><h3 class="m-0">Action Queue</h3><span id="inbox-queue-summary" class="text-secondary small"></span></div>
+                                        <div class="text-secondary small mt-1">Review proposed changes before anything reaches the plan.</div></div>
                                     </div>
                                     <div id="inbox-sim-box" class="collapse mb-3">
                                         <div class="card"><div class="card-body">
@@ -642,13 +669,17 @@
                                 </div>
                                 <!-- Decisions -->
                                 <div class="tab-pane" id="tab-decisions" role="tabpanel">
-                                    <div class="card mt-2"><div class="card-header"><h3 class="card-title">Open decisions — close in the kickoff working session</h3></div>
+                                    <div class="tk-inbox-view-head"><div><div class="d-flex align-items-baseline gap-2"><h3 class="m-0">Decisions</h3></div>
+                                        <div class="text-secondary small mt-1">Project-level choices that need an owner and an explicit answer.</div></div></div>
+                                    <div class="card tk-inbox-table-card"><div class="card-header"><h3 class="card-title">Open decisions — close in the kickoff working session</h3></div>
                                         <div id="decisions-table"></div>
                                     </div>
                                 </div>
                                 <!-- Risks -->
                                 <div class="tab-pane" id="tab-risks" role="tabpanel">
-                                    <div class="card mt-2"><div class="card-header"><h3 class="card-title">Consolidated risk register</h3></div>
+                                    <div class="tk-inbox-view-head"><div><div class="d-flex align-items-baseline gap-2"><h3 class="m-0">Risks</h3></div>
+                                        <div class="text-secondary small mt-1">Threats to delivery, consolidated without creating another authority.</div></div></div>
+                                    <div class="card tk-inbox-table-card"><div class="card-header"><h3 class="card-title">Consolidated risk register</h3></div>
                                         <div id="risks-table"></div>
                                     </div>
                                 </div>
@@ -1092,21 +1123,21 @@
     <script src="js/project-admin.js?v=1"></script>
     <script src="js/settings.js?v=2"></script>
     <script src="js/scope.js?v=1"></script>
-    <script src="js/attention.js?v=3"></script>
+    <script src="js/attention.js?v=4"></script>
     <script src="js/fleet-dock.js?v=5"></script>
-    <script src="app.js?v=84"></script>
+    <script src="app.js?v=85"></script>
     <script src="taikun-ui.js?v=11"></script>
     <script src="saturation-panel.js?v=3"></script>
     <script>
       // Tab routing, nesting-aware. The nav is now 2 levels: 5 top tabs (.nav-tabs),
-      // and — inside the Plan / Inbox hubs — focused sub-navs (.tk-plan-tabs / .tk-subnav). Both are
+      // and — inside the Plan / Inbox hubs — focused sub-navs (.tk-plan-tabs / .tk-inbox-tabs). Both are
       // real Bootstrap .nav groups, so they drive themselves. This only handles the
       // OTHER links: in-content "open the board" / "review in the Action Queue" anchors,
       // which sit outside any .nav and so need routing — and now must also open the
       // parent hub before showing the nested sub-pane.
       (function () {
         function ctrlFor(href) {
-          // Top tabs live in #main-nav (.navbar-nav), nested panes in .nav / .tk-subnav (BUG-A6).
+          // Top tabs live in #main-nav (.navbar-nav), nested panes in .nav (BUG-A6).
           return document.querySelector('#main-nav [data-bs-toggle="tab"][href="' + href + '"]')
               || document.querySelector('.nav [data-bs-toggle="tab"][href="' + href + '"]');
         }
@@ -1310,7 +1341,7 @@
           document.querySelectorAll('#main-nav [data-bs-toggle="tab"]').forEach(function (a) {
             cmds.push({ group: 'Jump to', icon: iconOf(a), label: txt(a), run: function () { jump(a.getAttribute('href')); } });
           });
-          document.querySelectorAll('.tk-plan-tabs [data-bs-toggle="tab"], .tk-subnav [data-bs-toggle="tab"]').forEach(function (a) {
+          document.querySelectorAll('.tk-plan-tabs [data-bs-toggle="tab"], .tk-inbox-tabs [data-bs-toggle="tab"]').forEach(function (a) {
             var hub = a.closest('.tab-pane'); var pfx = hub && hub.id === 'tab-plan-hub' ? 'Plan → ' : (hub && hub.id === 'tab-inbox-hub' ? 'Inbox → ' : '');
             cmds.push({ group: 'Jump to', icon: iconOf(a), label: pfx + txt(a), run: function () { jump(a.getAttribute('href')); } });
           });

@@ -130,6 +130,123 @@ body{ -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; let
   #milestones-table td:nth-child(2){ margin:.3rem 0; }
   #milestones-table td:nth-child(3){ color:var(--tblr-secondary); font-size:.8125rem; }
 }
+
+/* Inbox cleanup — four focused views over the existing attention owners. */
+.tk-inbox-page-head{
+  display:flex; align-items:flex-end; justify-content:space-between; gap:1rem;
+  margin-bottom:1.15rem;
+}
+.tk-inbox-breadcrumb{ margin-bottom:.25rem; color:var(--tblr-secondary); font-size:.8125rem; }
+.tk-inbox-options{ width:15rem; }
+.tk-inbox-tabs{
+  display:flex; flex-wrap:nowrap; gap:1.5rem; margin-bottom:1rem; overflow-x:auto;
+  scrollbar-width:none; -webkit-overflow-scrolling:touch;
+}
+.tk-inbox-tabs::-webkit-scrollbar{ display:none; }
+.tk-inbox-tabs .nav-link{
+  min-height:2.75rem; padding:.55rem .1rem; border:0; border-bottom:2px solid transparent;
+  border-radius:0; color:var(--tblr-secondary); white-space:nowrap;
+}
+.tk-inbox-tabs .nav-link::after{ display:none; }
+.tk-inbox-tabs .nav-link:hover{ color:var(--tblr-body-color); background:transparent; }
+.tk-inbox-tabs .nav-link.active{
+  color:var(--tblr-primary); background:transparent; border-bottom-color:var(--tblr-primary);
+}
+.tk-inbox-tab-count{
+  min-width:1.25rem; height:1.25rem; display:inline-flex; align-items:center; justify-content:center;
+  margin-left:.15rem; padding:0 .3rem; border-radius:999px; background:var(--tblr-primary-lt);
+  color:var(--tblr-primary); font-size:.6875rem;
+}
+.tk-inbox-tab-count:empty{ display:none; }
+.tk-inbox-mobile-label{ display:none; }
+.tk-inbox-view-head{
+  min-height:2.5rem; display:flex; align-items:flex-end; justify-content:space-between;
+  gap:.75rem; margin-bottom:.75rem;
+}
+.tk-inbox-filterbar{
+  display:grid; grid-template-columns:minmax(14rem,1fr) minmax(10rem,auto) minmax(9rem,auto) auto;
+  gap:.5rem; margin-bottom:.75rem;
+}
+.tk-inbox-master{
+  display:grid; grid-template-columns:minmax(18rem,22rem) minmax(0,1fr); gap:.85rem;
+  align-items:start;
+}
+.tk-inbox-list-pane{ overflow:hidden; }
+.tk-inbox-list-head{
+  min-height:3.1rem; display:flex; align-items:center; justify-content:space-between;
+  padding:.7rem .9rem; border-bottom:1px solid var(--tblr-border-color);
+}
+.tk-inbox-alert{
+  width:100%; display:block; padding:.8rem .9rem; border:0;
+  border-bottom:1px solid var(--tblr-border-color); background:var(--tblr-bg-surface);
+  color:var(--tblr-body-color); text-align:left;
+}
+.tk-inbox-alert:last-child{ border-bottom:0; }
+.tk-inbox-alert:hover{ background:var(--tblr-bg-surface-secondary,#f6f7f9); }
+.tk-inbox-alert.is-selected{
+  background:rgba(var(--tblr-primary-rgb),.07); box-shadow:inset 3px 0 var(--tblr-primary);
+}
+.tk-inbox-alert-top{ display:flex; align-items:center; gap:.4rem; }
+.tk-inbox-alert-id{ color:var(--tblr-primary); font-weight:600; }
+.tk-inbox-alert-title{ margin-top:.4rem; font-weight:600; line-height:1.35; }
+.tk-inbox-alert-meta{ margin-top:.25rem; color:var(--tblr-secondary); font-size:.75rem; }
+.tk-inbox-detail-pane{ min-width:0; }
+.tk-inbox-detail > .d-flex:first-child{ margin:-1rem -1rem .9rem!important; padding:1rem; border-bottom:1px solid var(--tblr-border-color); }
+.tk-inbox-detail > .mb-3[style]{ font-size:1.05rem; line-height:1.4; }
+.tk-inbox-detail .tk-eyebrow{ color:var(--tblr-secondary); font-size:.7rem; letter-spacing:.04em; text-transform:uppercase; }
+.tk-inbox-detail .card-sm{ box-shadow:none; border-radius:.65rem; }
+.tk-inbox-detail [data-choice]{ min-height:3.75rem; white-space:normal; }
+.tk-inbox-back{ display:none; margin-bottom:.65rem; }
+.tk-inbox-queue-summary{ display:flex; align-items:center; flex-wrap:wrap; gap:.5rem; margin-bottom:.75rem; }
+.tk-inbox-queue-card{ overflow:hidden; }
+.tk-inbox-queue-card .table-responsive{ margin-bottom:0; }
+.tk-inbox-queue-table{ margin-bottom:0; }
+.tk-inbox-table-card{ overflow:hidden; }
+
+@media (max-width:767.98px){
+  .tk-inbox-page-head{ align-items:flex-start; margin-bottom:.85rem; }
+  .tk-inbox-page-head > .dropdown > .btn{ width:2.5rem; padding:0; }
+  .tk-inbox-page-head > .dropdown > .btn span{ display:none; }
+  .tk-inbox-page-head > .dropdown > .btn .ti{ margin:0!important; font-size:1.1rem; }
+  .tk-inbox-tabs{ display:grid; grid-template-columns:repeat(4,1fr); gap:0; }
+  .tk-inbox-tabs .nav-item{ min-width:0; }
+  .tk-inbox-tabs .nav-link{ width:100%; justify-content:center; padding:.55rem .1rem; font-size:.7rem; }
+  .tk-inbox-tabs .nav-link .ti{ display:none; }
+  .tk-inbox-desktop-label{ display:none; }
+  .tk-inbox-mobile-label{ display:inline; }
+  .tk-inbox-filterbar{ grid-template-columns:1fr 1fr; }
+  .tk-inbox-filterbar .tk-inbox-search{ grid-column:1 / -1; }
+  .tk-inbox-queue-hide{ grid-column:1 / -1; }
+  .tk-inbox-master{ display:block; }
+  .tk-inbox-detail-pane{ display:none; }
+  .tk-inbox-master.show-detail .tk-inbox-list-pane{ display:none; }
+  .tk-inbox-master.show-detail .tk-inbox-detail-pane{ display:block; }
+  .tk-inbox-back{ display:inline-flex; }
+  .tk-inbox-detail .btn-list{ align-items:stretch; flex-direction:column; }
+  .tk-inbox-detail .btn-list > .btn{ width:100%; }
+  .tk-inbox-detail #needs-reply + .btn{ width:100%; }
+  .tk-inbox-view-head{ align-items:flex-start; }
+  .tk-inbox-queue-summary{ align-items:stretch; flex-direction:column; }
+  .tk-inbox-queue-summary .btn{ width:100%; }
+  .tk-inbox-queue-card{ border:0; overflow:visible; background:transparent; box-shadow:none; }
+  .tk-inbox-queue-card .table-responsive{ overflow:visible; }
+  .tk-inbox-queue-table,
+  .tk-inbox-queue-table tbody,
+  .tk-inbox-queue-table tr,
+  .tk-inbox-queue-table td{ display:block; width:100%; }
+  .tk-inbox-queue-table thead{ display:none; }
+  .tk-inbox-queue-table tr{
+    position:relative; margin-bottom:.65rem; padding:.8rem 4.5rem .8rem .9rem;
+    border:1px solid var(--tblr-border-color); border-radius:.8rem;
+    background:var(--tblr-bg-surface); box-shadow:0 1px 2px rgba(16,24,40,.05);
+  }
+  .tk-inbox-queue-table td{ padding:.15rem 0!important; border:0; }
+  .tk-inbox-queue-table td:first-child,
+  .tk-inbox-queue-table td:nth-child(3),
+  .tk-inbox-queue-table td:nth-child(5){ display:none; }
+  .tk-inbox-queue-table td:last-child{ position:absolute; top:.75rem; right:.75rem; width:auto; }
+  .tk-inbox-table-card .table-responsive{ overflow-x:auto; }
+}
 .card-sm{ border-radius:.8rem; }
 /* only clickable task cards/rows lift */
 a[data-bs-toggle="modal"] .card,

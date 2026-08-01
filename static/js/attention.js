@@ -12,6 +12,8 @@
     let items = [];
     let sel = new URLSearchParams(window.location.search).get('attention');
     let filter = 'all';
+    let stateFilter = 'open';
+    let searchText = '';
     let tracked = null;
     let delivering = false;
     // The status line under the detail pane. renderDetail() rebuilds #needs-flash as an
@@ -25,6 +27,7 @@
         agent: ['#c0392b', 'ti-robot', 'Agent'],
         inbox: ['#4299e1', 'ti-mail', 'Inbound'],
         provider: ['#ae3ec9', 'ti-plug', 'Provider'],
+        runner: ['#206bc4', 'ti-server-bolt', 'Runner'],
         mission: ['#f76707', 'ti-target-arrow', 'Mission'],
         decision: ['#f59f00', 'ti-help-circle', 'Decision'],
     };
@@ -107,58 +110,110 @@
         }
         if (!renderQueue && !document.querySelector('#tab-needs.active')) return;
         if (sel && !items.some((i) => i.attention_id === sel)) sel = null;
-        if (!sel && items.length) sel = items[0].attention_id;
+        if (!sel && items.length) {
+            const visible = items.filter(match);
+            sel = visible.length ? visible[0].attention_id : null;
+        }
         render();
     }
 
-    function match(i) { return filter === 'all' || i.source === filter; }
+    function stateKey(i) {
+        const status = String((i.payload || {}).status || 'pending').toLowerCase();
+        if (status === 'decision_recorded' || status === 'delivering' || status === 'resolved') return 'resuming';
+        if (['failed', 'expired', 'cancelled', 'orphaned'].includes(status)) return 'stopped';
+        return 'open';
+    }
+
+    function match(i) {
+        const sourceMatches = filter === 'all' || i.source === filter;
+        // Keep the item being acted on visible while it advances from Open to
+        // Resuming; otherwise its receipt/status would disappear mid-decision.
+        const stateMatches = stateFilter === 'all' || stateKey(i) === stateFilter || i.attention_id === sel;
+        const payload = i.payload || {};
+        const haystack = [
+            i.attention_id, i.task_id, i.title, i.summary, i.from, i.source,
+            payload.reason_code, payload.deliverable_id, payload.pr_number,
+        ].filter(Boolean).join(' ').toLowerCase();
+        return sourceMatches && stateMatches && (!searchText || haystack.includes(searchText));
+    }
+
+    async function deleteAll() {
+        const button = el('needs-delete-all');
+        const count = items.filter((i) => i.source === 'provider').length;
+        if (!count || !window.confirm(
+            `Permanently delete all ${count} provider alert${count === 1 ? '' : 's'} `
+            + `from ${proj()}? This cannot be undone.`
+        )) return;
+        button.disabled = true;
+        try {
+            const res = await fetch(
+                `api/attention/requests?project=${encodeURIComponent(proj())}`,
+                { method: 'DELETE' },
+            );
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(apiError(data, res.status));
+            sel = null;
+            lastFlash = null;
+            await load();
+        } catch (e) {
+            button.disabled = false;
+            window.alert('Delete all alerts failed: ' + e.message);
+        }
+    }
 
     function render() {
         const list = el('needs-list'); const detail = el('needs-detail');
-        const fw = el('needs-filters'); const cnt = el('needs-count');
+        const cnt = el('needs-count'); const listCount = el('needs-list-count');
+        const sourceSelect = el('needs-source'); const stateSelect = el('needs-state-filter');
+        const search = el('needs-search'); const deleteAllButton = el('needs-delete-all');
         if (!list || !detail) return;
         if (cnt) cnt.textContent = String(items.length);
 
         const counts = { all: items.length };
         Object.keys(SRC).forEach((k) => { counts[k] = items.filter((i) => i.source === k).length; });
-        fw.innerHTML = [['all', 'ti-inbox', 'All']].concat(Object.keys(SRC).map((k) => [k, SRC[k][1], SRC[k][2]]))
-            .map((c) => `<button type="button" class="btn btn-sm ${filter === c[0] ? 'btn-primary' : 'btn-outline-secondary'}" data-nf="${c[0]}">
-                <i class="ti ${c[1]} me-1"></i>${c[2]} <span class="tk-mono ms-1">${counts[c[0]] || 0}</span></button>`).join('')
-            + (counts.provider ? `<button type="button" class="btn btn-sm btn-outline-danger" id="needs-delete-all">
-                <i class="ti ti-trash me-1"></i>Delete all alerts</button>` : '');
-        fw.querySelectorAll('[data-nf]').forEach((b) => b.addEventListener('click', () => {
-            filter = b.dataset.nf;
-            const vis = items.filter(match);
-            sel = vis.length ? vis[0].attention_id : null;
-            render();
-        }));
-        const deleteAll = el('needs-delete-all');
-        if (deleteAll) deleteAll.addEventListener('click', async () => {
-            const count = counts.provider;
-            if (!window.confirm(
-                `Permanently delete all ${count} provider alert${count === 1 ? '' : 's'} `
-                + `from ${proj()}? This cannot be undone.`
-            )) return;
-            deleteAll.disabled = true;
-            try {
-                const res = await fetch(
-                    `api/attention/requests?project=${encodeURIComponent(proj())}`,
-                    { method: 'DELETE' },
-                );
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok) throw new Error(apiError(data, res.status));
+        if (sourceSelect) {
+            sourceSelect.innerHTML = [['all', 'All sources']].concat(
+                Object.keys(SRC).filter((k) => counts[k]).map((k) => [k, SRC[k][2]])
+            ).map(([key, label]) => `<option value="${key}"${filter === key ? ' selected' : ''}>${esc(label)} · ${counts[key] || 0}</option>`).join('');
+            sourceSelect.onchange = () => {
+                filter = sourceSelect.value;
+                const visible = items.filter(match);
+                sel = visible.length ? visible[0].attention_id : null;
+                render();
+            };
+        }
+        if (stateSelect) {
+            stateSelect.value = stateFilter;
+            stateSelect.onchange = () => {
+                stateFilter = stateSelect.value;
                 sel = null;
-                lastFlash = null;
-                await load();
-            } catch (e) {
-                deleteAll.disabled = false;
-                window.alert('Delete all alerts failed: ' + e.message);
-            }
-        });
+                const visible = items.filter(match);
+                sel = visible.length ? visible[0].attention_id : null;
+                render();
+            };
+        }
+        if (search) {
+            search.value = searchText;
+            search.oninput = () => {
+                searchText = search.value.trim().toLowerCase();
+                const visible = items.filter(match);
+                sel = visible.length ? visible[0].attention_id : null;
+                render();
+                const next = el('needs-search');
+                if (next) { next.focus(); next.setSelectionRange(next.value.length, next.value.length); }
+            };
+        }
+        if (deleteAllButton) {
+            deleteAllButton.hidden = !counts.provider;
+            deleteAllButton.disabled = false;
+        }
 
         const shown = items.filter(match);
+        if (listCount) listCount.textContent = `${shown.length} ${stateFilter === 'all' ? 'shown' : stateFilter}`;
+        if (sel && !shown.some((i) => i.attention_id === sel)) sel = shown.length ? shown[0].attention_id : null;
         if (!shown.length) {
-            list.innerHTML = '';
+            list.innerHTML = `<div class="empty py-5"><div class="empty-icon"><i class="ti ti-checks text-green"></i></div>
+                <p class="empty-title">No matching alerts</p><p class="empty-subtitle text-secondary">Adjust the filters or search to see another state.</p></div>`;
             detail.innerHTML = `<div class="empty py-5"><div class="empty-icon"><i class="ti ti-checks text-green"></i></div>
                 <p class="empty-title">No one is waiting on you</p>
                 <p class="empty-subtitle text-secondary">Agent questions and inbound proposals land here the moment they need a human.</p></div>`;
@@ -169,29 +224,30 @@
             const p = i.payload || {};
             const completion = i.kind === 'completion_human';
             const status = STATE[p.status] || STATE.pending;
-            return `<div class="card mb-2 ${i.attention_id === sel ? 'border-primary' : ''}" data-nid="${esc(i.attention_id)}" style="cursor:pointer">
-                <div class="card-body p-2">
-                    <div class="d-flex align-items-center gap-2 mb-1">
+            return `<button class="tk-inbox-alert ${i.attention_id === sel ? 'is-selected' : ''}" type="button" data-nid="${esc(i.attention_id)}">
+                    <div class="tk-inbox-alert-top">
                         <span class="sdot" style="background:${sc[0]}"></span>
-                        ${i.task_id ? `<span class="tk-mono small text-secondary">${esc(i.task_id)}</span>` : ''}
+                        ${i.task_id ? `<span class="tk-inbox-alert-id">${esc(i.task_id)}</span>` : `<span class="tk-inbox-alert-id">${esc(i.attention_id)}</span>`}
                         ${completion ? '<span class="badge bg-blue-lt">Human handoff</span>' : ''}
                         <span class="badge ${status[0]}">${status[1]}</span>
                         <span class="ms-auto text-secondary small">${age(i.age_s)} ago</span>
                     </div>
-                    <div style="font-weight:500;line-height:1.4">${esc(i.title)}</div>
-                    <div class="text-secondary small mt-1">${sc[2]}${i.from ? ' · ' + esc(i.from) : ''}
+                    <div class="tk-inbox-alert-title">${esc(i.title)}</div>
+                    <div class="tk-inbox-alert-meta">${sc[2]}${i.from ? ' · ' + esc(i.from) : ''}
                         ${p.deliverable_id ? ` · ${esc(p.deliverable_id)}` : ''}
                         ${p.pr_number ? ` · PR #${esc(p.pr_number)}` : ''}
                         ${p.head_sha ? ` · ${esc(String(p.head_sha).slice(0, 8))}` : ''}
                         ${i.delivery_impact ? ` · ${esc(i.delivery_impact)}` : ''}</div>
                     ${p.reason_code ? `<div class="small mt-1">${esc(p.reason_code)}</div>` : ''}
-                </div></div>`;
+                </button>`;
         }).join('');
         // Drop the remembered status line when switching items — it belongs to the request
         // that produced it, and restoring it onto a different one would be a false signal.
         list.querySelectorAll('[data-nid]').forEach((c) => c.addEventListener('click', () => {
             if (sel !== c.dataset.nid) lastFlash = null;
             sel = c.dataset.nid;
+            const master = el('needs-master');
+            if (master) master.classList.add('show-detail');
             render();
         }));
 
@@ -519,14 +575,26 @@
 
     // lazy init + refresh whenever the sub-tab shows (matches the app's idiom)
     const tab = document.querySelector('a[href="#tab-needs"]');
-    if (tab) tab.addEventListener('shown.bs.tab', () => { syncNarrowLayout(); load(); });
+    if (tab) tab.addEventListener('shown.bs.tab', () => {
+        const master = el('needs-master');
+        if (master && window.matchMedia('(max-width: 767.98px)').matches) master.classList.remove('show-detail');
+        syncNarrowLayout();
+        load();
+    });
+    const back = el('needs-back');
+    if (back) back.addEventListener('click', () => {
+        const master = el('needs-master');
+        if (master) master.classList.remove('show-detail');
+    });
+    const deleteAllButton = el('needs-delete-all');
+    if (deleteAllButton) deleteAllButton.addEventListener('click', deleteAll);
     // and when the Inbox hub itself opens with Needs-you already active
     const hub = document.getElementById('toptab-inbox');
     if (hub) hub.addEventListener('shown.bs.tab', () => {
         syncNarrowLayout();
-        const active = document.querySelector('#tab-inbox-hub .tk-subnav .nav-link.active');
+        const active = document.querySelector('#tab-inbox-hub .tk-inbox-tabs .nav-link.active');
         if (active && active.getAttribute('href') === '#tab-needs') load();
     });
     window.addEventListener('resize', syncNarrowLayout);
-    window.PMAttention = { load };
+    window.PMAttention = { load, deleteAll };
 })();

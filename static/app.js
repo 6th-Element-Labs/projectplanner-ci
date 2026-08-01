@@ -4298,6 +4298,12 @@ const TeepPlan = {
 
     // ---- Action Queue (universal review queue — every triage source lands here) -----
     async initInbox() {
+        const projectLabel = document.getElementById('inbox-project-label');
+        const projectSwitcher = document.getElementById('project-switcher');
+        if (projectLabel) {
+            projectLabel.textContent = projectSwitcher?.selectedOptions?.[0]?.textContent?.trim()
+                || window.PM_PROJECT || 'Project';
+        }
         try {
             const data = await (await fetch('api/inbox')).json();
             this.inboxItems = data.items || [];
@@ -4363,8 +4369,7 @@ const TeepPlan = {
         return { items, props, evidence, news, actions: props + news, safe: props + news - evidence };
     },
 
-    // Universal Operator Queue — KPI strip + filter bar + queue table + preview modal,
-    // matching the canonical concept-queue.html on demo.taikunai.com.
+    // Universal Operator Queue — compact filtering + queue table + preview modal.
     renderInbox(items) {
         const el = document.getElementById('inbox-content');
         if (!el) return;
@@ -4377,33 +4382,25 @@ const TeepPlan = {
         const src = this.queueSource || 'all';
         const hideDone = this.queueHideConfirmed !== false;   // default: hide the audit log
 
-        // ---- KPI strip (mirrors the live console KPIs) ----
-        const kpi = `<div class="row row-cards mb-3">
-            ${this._kpiCard('Awaiting review', c.items, 'red', 'items in the queue')}
-            ${this._kpiCard('Pending actions', c.actions, 'orange', 'changes + new tasks')}
-            ${this._kpiCard('Needs evidence', c.evidence, 'red', 'status → Done, held by default', c.evidence > 0)}
-            ${this._kpiCard('Confirmed', confirmedCount, 'green', 'applied from the queue')}
-        </div>`;
-
         // ---- universal filter bar ----
         const typeOpts = this.QUEUE_FILTERS.map((q) =>
             `<option value="${q.key}"${q.key === f ? ' selected' : ''}>${q.key === 'all' ? 'Type · any' : q.label}</option>`).join('');
         const srcOpts = ['all', 'call', 'email', 'upload', 'note'].map((s) =>
             `<option value="${s}"${s === src ? ' selected' : ''}>${s === 'all' ? 'Source · any' : s[0].toUpperCase() + s.slice(1)}</option>`).join('');
-        const filterBar = `<div class="card mb-3"><div class="card-body py-2"><div class="row g-2 align-items-center">
-            <div class="col-12 col-md"><div class="input-icon">
+        const filterBar = `<div class="tk-inbox-filterbar">
+            <div class="input-icon tk-inbox-search">
                 <span class="input-icon-addon"><i class="ti ti-search"></i></span>
                 <input id="q-search" type="text" class="form-control" placeholder="Search subject, task id, or text…" autocomplete="off"/>
-            </div></div>
-            <div class="col-6 col-md-auto"><select id="q-type" class="form-select">${typeOpts}</select></div>
-            <div class="col-6 col-md-auto"><select id="q-source" class="form-select">${srcOpts}</select></div>
-            <div class="col-auto"><label class="form-check form-switch m-0">
+            </div>
+            <select id="q-type" class="form-select">${typeOpts}</select>
+            <select id="q-source" class="form-select">${srcOpts}</select>
+            <label class="form-check form-switch m-0 tk-inbox-queue-hide">
                 <input id="q-hide" class="form-check-input" type="checkbox"${hideDone ? ' checked' : ''}/>
-                <span class="form-check-label">Hide confirmed</span></label></div>
-        </div></div></div>`;
+                <span class="form-check-label">Hide confirmed</span></label>
+        </div>`;
 
         // ---- bulk action bar ----
-        const bulk = c.actions ? `<div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+        const bulk = c.actions ? `<div class="tk-inbox-queue-summary">
             <button class="btn btn-primary" data-confirm-safe><i class="ti ti-checks me-1"></i>Confirm all safe
                 <span class="badge bg-white text-primary ms-1">${c.safe}</span></button>
             <button class="btn btn-outline-primary" data-confirm-all>Confirm everything (${c.actions})</button>
@@ -4424,8 +4421,8 @@ const TeepPlan = {
 
         const rows = visible.map((it) => this._queueRow(it)).join('')
             || `<tr><td colspan="6" class="text-secondary text-center py-4">${c.actions ? 'No items match the filters.' : 'Queue is clear — upload a call, paste notes, or forward an email and proposals land here.'}</td></tr>`;
-        const tableCard = `<div class="card"><div class="table-responsive">
-            <table class="table table-vcenter card-table table-hover">
+        const tableCard = `<div class="card tk-inbox-queue-card"><div class="table-responsive">
+            <table class="table table-vcenter card-table table-hover tk-inbox-queue-table">
                 <thead><tr><th class="w-1"></th><th>Item</th><th>Source</th><th>Proposed changes</th><th>Age</th><th class="w-1"></th></tr></thead>
                 <tbody>${rows}</tbody>
             </table></div></div>`;
@@ -4438,7 +4435,9 @@ const TeepPlan = {
             ? `<div class="alert alert-success py-2 px-3 small mb-3"><i class="ti ti-checks me-1"></i>${this.esc(this._queueFlash)}</div>` : '';
         this._queueFlash = null;
 
-        el.innerHTML = flash + kpi + filterBar + bulk + tableCard + audit;
+        const summary = document.getElementById('inbox-queue-summary');
+        if (summary) summary.textContent = `${c.items} awaiting review · ${c.actions} pending action${c.actions === 1 ? '' : 's'} · ${confirmedCount} confirmed`;
+        el.innerHTML = flash + filterBar + bulk + tableCard + audit;
 
         const sb = el.querySelector('[data-confirm-safe]'); if (sb) sb.addEventListener('click', () => this.confirmAll(true));
         const ab = el.querySelector('[data-confirm-all]'); if (ab) ab.addEventListener('click', () => this.confirmAll(false));
@@ -5284,9 +5283,18 @@ const TeepPlan = {
         const inboxTab = document.querySelector('a[href="#tab-inbox"]');
         if (inboxTab) inboxTab.addEventListener('shown.bs.tab', () => this.initInbox());
         const inboxRefresh = document.getElementById('inbox-refresh');
-        if (inboxRefresh) inboxRefresh.addEventListener('click', () => this.initInbox());
+        if (inboxRefresh) inboxRefresh.addEventListener('click', () => {
+            this.initInbox();
+            if (window.PMAttention) window.PMAttention.load();
+            this.renderTables();
+        });
         const inboxSim = document.getElementById('inbox-sim');
-        if (inboxSim) inboxSim.addEventListener('click', () => { const box = document.getElementById('inbox-sim-box'); if (window.bootstrap) window.bootstrap.Collapse.getOrCreateInstance(box).toggle(); });
+        if (inboxSim) inboxSim.addEventListener('click', () => {
+            const actionQueue = document.querySelector('.tk-inbox-tabs a[href="#tab-inbox"]');
+            if (actionQueue && window.bootstrap) window.bootstrap.Tab.getOrCreateInstance(actionQueue).show();
+            const box = document.getElementById('inbox-sim-box');
+            if (box && window.bootstrap) window.bootstrap.Collapse.getOrCreateInstance(box).toggle();
+        });
         const inboxSimGo = document.getElementById('inbox-sim-go');
         if (inboxSimGo) inboxSimGo.addEventListener('click', () => this.simulateInbox());
         // Bootstrap fires shown.bs.tab on the TOP tab trigger (in .nav-tabs), not the

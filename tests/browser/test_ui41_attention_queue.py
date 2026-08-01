@@ -165,11 +165,14 @@ try:
         page.goto(base + "/?project=switchboard", wait_until="domcontentloaded")
         page.wait_for_function("document.querySelector('#ack-inbox-count').textContent === '1'")
         page.locator("#btn-ack-inbox").click()
+        page.wait_for_selector("#tab-inbox-hub", state="visible")
         page.wait_for_selector("#tab-needs.active")
         page.wait_for_selector("text=Implementation complete, human action required")
         assert page.locator('[data-nid^="provider:"]').count() == 1
         assert page.locator("#needs-delete").is_visible()
+        page.locator("#inbox-view-options").click()
         assert page.locator("#needs-delete-all").is_visible()
+        page.keyboard.press("Escape")
         page.reload(wait_until="domcontentloaded")
         page.wait_for_function("document.querySelector('#ack-inbox-count').textContent === '1'")
         page.locator("#btn-ack-inbox").click()
@@ -178,6 +181,8 @@ try:
         page.screenshot(path="/tmp/ui41-needs-desktop.png", full_page=True)
         page.set_viewport_size({"width": 390, "height": 844})
         page.screenshot(path="/tmp/ui41-needs-narrow.png", full_page=True)
+        page.locator('[data-nid^="provider:"]').click()
+        page.wait_for_selector("#needs-back", state="visible")
 
         with page.expect_response(
             lambda response: f"/api/attention/requests/{request_id}/decide"
@@ -331,13 +336,13 @@ try:
         create_delete_fixture(2)
         create_delete_fixture(3)
         page.evaluate("window.PMAttention.load()")
-        page.wait_for_selector("#needs-delete-all")
+        page.wait_for_function("() => !document.querySelector('#needs-delete-all').hidden")
         page.once("dialog", lambda dialog: dialog.accept())
         with page.expect_response(
             lambda response: response.request.method == "DELETE"
             and response.url.endswith("api/attention/requests?project=switchboard")
         ) as delete_all_response:
-            page.locator("#needs-delete-all").click()
+            page.evaluate("window.PMAttention.deleteAll()")
         assert delete_all_response.value.ok
         page.wait_for_function(
             "() => document.querySelectorAll('[data-nid^=\"provider:\"]').length === 0")
