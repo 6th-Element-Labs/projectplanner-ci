@@ -140,8 +140,31 @@
          the full-width header; content lives beside it (the rail never overlays content). */
       .navbar-vertical .nav-link-icon{font-size:1.15rem;margin-inline-end:.6rem;color:var(--tblr-body-color)}
       .navbar-vertical .nav-link{border-radius:.5rem}
+      .tk-nav-section{padding:.95rem .75rem .3rem;color:var(--tblr-secondary);font-size:.66rem;
+        font-weight:700;letter-spacing:.09em;text-transform:uppercase}
+      .tk-nav-section:first-child{padding-top:.45rem}
+      .tk-nav-utilities{border-top:1px solid var(--tblr-border-color);padding-top:.65rem}
+      .tk-mobile-nav{display:none}
       @media (min-width:992px){
         .navbar-vertical{inset-block-start:var(--tk-header-h) !important}
+      }
+      @media (max-width:991.98px){
+        body{padding-bottom:4.25rem}
+        .navbar-vertical{border-right:0;border-bottom:1px solid var(--tblr-border-color)}
+        .navbar-vertical .navbar-toggler{margin:.45rem .75rem}
+        #sidebar-menu{max-height:calc(100vh - 8rem);overflow:auto}
+        .tk-mobile-nav{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));position:fixed;
+          inset:auto 0 0;z-index:1040;min-height:4rem;padding:.25rem max(.25rem,env(safe-area-inset-right))
+          calc(.25rem + env(safe-area-inset-bottom)) max(.25rem,env(safe-area-inset-left));
+          background:color-mix(in srgb,var(--tblr-bg-surface) 96%,transparent);
+          border-top:1px solid var(--tblr-border-color);box-shadow:0 -8px 24px -18px rgba(16,24,40,.45);
+          backdrop-filter:blur(12px)}
+        .tk-mobile-nav .nav-link,.tk-mobile-nav .tk-mobile-more{display:flex;min-width:0;flex-direction:column;
+          align-items:center;justify-content:center;gap:.1rem;padding:.25rem;border:0;background:transparent;
+          color:var(--tblr-secondary);font-size:.66rem;font-weight:600;text-decoration:none}
+        .tk-mobile-nav .nav-link i,.tk-mobile-nav .tk-mobile-more i{font-size:1.2rem}
+        .tk-mobile-nav .nav-link.active{color:var(--tblr-primary)}
+        .tk-mobile-nav .dropdown-menu{margin-bottom:.5rem;min-width:13rem}
       }
       /* Full-width top header (combo layout): spans the whole page; sidebar + content sit below it. */
       :root{--tk-header-h:3rem}
@@ -243,15 +266,18 @@
                     <div class="px-2 pt-2 pb-1 tk-rail-full">
                         <select id="project-switcher" class="form-select form-select-sm" aria-label="Switch project"></select>
                     </div>
-                    <ul class="navbar-nav pt-lg-1" id="main-nav" role="tablist">
+                    <ul class="navbar-nav pt-lg-1" id="main-nav" role="tablist" aria-label="Primary navigation">
+                        <li class="tk-nav-section" role="presentation">Shape</li>
                         <li class="nav-item"><a class="nav-link active" id="toptab-overview" data-bs-toggle="tab" href="#tab-exec" role="tab"><span class="nav-link-icon"><i class="ti ti-layout-dashboard"></i></span><span class="nav-link-title">Overview</span></a></li>
                         <!-- UI-28: Scope sits above Plan — scope the work, then plan it. Advisory slice. -->
                         <li class="nav-item"><a class="nav-link" id="toptab-scope" data-bs-toggle="tab" href="#tab-scope" role="tab"><span class="nav-link-icon"><i class="ti ti-file-text"></i></span><span class="nav-link-title">Scope</span></a></li>
                         <li class="nav-item"><a class="nav-link" id="toptab-plan" data-bs-toggle="tab" href="#tab-plan-hub" role="tab"><span class="nav-link-icon"><i class="ti ti-layout-kanban"></i></span><span class="nav-link-title">Plan</span></a></li>
-                        <li class="nav-item"><a class="nav-link" id="toptab-mission" data-bs-toggle="tab" href="#tab-mission" role="tab"><span class="nav-link-icon"><i class="ti ti-target-arrow"></i></span><span class="nav-link-title">Deliverable</span></a></li>
-                        <li class="nav-item"><a class="nav-link" id="toptab-fleet" data-bs-toggle="tab" href="#tab-fleet" role="tab"><span class="nav-link-icon"><i class="ti ti-server-bolt"></i></span><span class="nav-link-title">Autopilot</span></a></li>
-                        <li class="nav-item"><a class="nav-link" id="toptab-ask" data-bs-toggle="tab" href="#tab-ask" role="tab"><span class="nav-link-icon"><i class="ti ti-sparkles"></i></span><span class="nav-link-title">Ask</span></a></li>
+                        <li class="tk-nav-section" role="presentation">Deliver</li>
+                        <li class="nav-item"><a class="nav-link" id="toptab-mission" data-bs-toggle="tab" href="#tab-mission" role="tab"><span class="nav-link-icon"><i class="ti ti-target-arrow"></i></span><span class="nav-link-title">Deliverables</span></a></li>
+                        <li class="nav-item"><a class="nav-link" id="toptab-fleet" data-bs-toggle="tab" href="#tab-fleet" role="tab"><span class="nav-link-icon"><i class="ti ti-server-bolt"></i></span><span class="nav-link-title">Fleet</span></a></li>
+                        <li class="tk-nav-section" role="presentation">Collaborate</li>
                         <li class="nav-item"><a class="nav-link" id="toptab-inbox" data-bs-toggle="tab" href="#tab-inbox-hub" role="tab"><span class="nav-link-icon"><i class="ti ti-inbox"></i></span><span class="nav-link-title">Inbox</span></a></li>
+                        <li class="nav-item"><a class="nav-link" id="toptab-ask" data-bs-toggle="tab" href="#tab-ask" role="tab"><span class="nav-link-icon"><i class="ti ti-sparkles"></i></span><span class="nav-link-title">Ask</span></a></li>
                         <!-- UI-23: Settings is reached from the top-right user menu (demo parity),
                              so this rail entry is hidden — but it must still EXIST. Bootstrap's Tab
                              plugin only works on a toggle inside .nav/[role=tablist], and ctrlFor(),
@@ -262,7 +288,8 @@
                              mechanism instead of a Settings-shaped special case. -->
                         <li class="nav-item d-none" id="nav-settings" aria-hidden="true"><a class="nav-link" id="toptab-settings" data-bs-toggle="tab" href="#tab-settings" role="tab" tabindex="-1"><span class="nav-link-icon"><i class="ti ti-settings"></i></span><span class="nav-link-title">Settings</span></a></li>
                     </ul>
-                    <div class="mt-auto px-2 pb-2 tk-rail-full">
+                    <div class="mt-auto px-2 pb-2 tk-rail-full tk-nav-utilities">
+                        <div class="tk-nav-section px-1 pt-0">Utilities</div>
                         <button id="btn-new-project" class="btn btn-sm btn-outline-secondary w-100 mb-2" type="button"><i class="ti ti-folder-plus me-1"></i>New project</button>
                         <!-- UI-20 (2/6): the "API keys" rail button was retired — Switchboard
                              access tokens now live inline in Settings → Access tokens.
@@ -281,6 +308,26 @@
                 </div>
             </div>
         </aside>
+
+        <!-- The five highest-frequency destinations stay one tap away on phones.
+             More exposes the rest without inventing duplicate page controllers. -->
+        <nav class="tk-mobile-nav" aria-label="Mobile navigation">
+            <a class="nav-link active" data-tk-mobile-tab="#toptab-overview" href="#tab-exec"><i class="ti ti-layout-dashboard"></i><span>Overview</span></a>
+            <a class="nav-link" data-tk-mobile-tab="#toptab-plan" href="#tab-plan-hub"><i class="ti ti-layout-kanban"></i><span>Plan</span></a>
+            <a class="nav-link" data-tk-mobile-tab="#toptab-mission" href="#tab-mission"><i class="ti ti-target-arrow"></i><span>Deliverables</span></a>
+            <a class="nav-link" data-tk-mobile-tab="#toptab-fleet" href="#tab-fleet"><i class="ti ti-server-bolt"></i><span>Fleet</span></a>
+            <div class="dropup d-flex justify-content-center">
+                <button class="tk-mobile-more dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="ti ti-dots"></i><span>More</span></button>
+                <div class="dropdown-menu dropdown-menu-end">
+                    <a class="dropdown-item" data-tk-mobile-tab="#toptab-scope" href="#tab-scope"><i class="ti ti-file-text me-2"></i>Scope</a>
+                    <a class="dropdown-item" data-tk-mobile-tab="#toptab-inbox" href="#tab-inbox-hub"><i class="ti ti-inbox me-2"></i>Inbox</a>
+                    <a class="dropdown-item" data-tk-mobile-tab="#toptab-ask" href="#tab-ask"><i class="ti ti-sparkles me-2"></i>Ask</a>
+                    <div class="dropdown-divider"></div>
+                    <a class="dropdown-item" id="mobile-menu-settings" href="#tab-settings"><i class="ti ti-settings me-2"></i>Project settings</a>
+                    <button class="dropdown-item" id="mobile-new-project" type="button"><i class="ti ti-folder-plus me-2"></i>New project</button>
+                </div>
+            </div>
+        </nav>
 
         <div class="page-wrapper">
 
@@ -927,7 +974,7 @@
     <script src="js/state.js?v=2"></script>
     <script src="js/board.js?v=2"></script>
     <script src="js/plan-chat.js?v=1"></script>
-    <script src="js/mission.js?v=7"></script>
+    <script src="js/mission.js?v=8"></script>
     <script src="js/runner-session.js?v=12"></script>
     <script src="js/proof-console.js?v=1"></script>
     <script src="js/project-admin.js?v=1"></script>
@@ -936,7 +983,7 @@
     <script src="js/attention.js?v=3"></script>
     <script src="js/fleet-dock.js?v=5"></script>
     <script src="app.js?v=80"></script>
-    <script src="taikun-ui.js?v=9"></script>
+    <script src="taikun-ui.js?v=10"></script>
     <script src="saturation-panel.js?v=1"></script>
     <script src="narration-ops-panel.js?v=3"></script>
     <script>

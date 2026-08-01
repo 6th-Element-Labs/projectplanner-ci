@@ -91,6 +91,36 @@
   document.addEventListener('click', function (e) {
     var t = e.target.closest('[data-tk-sidebar-toggle]');
     if (t) { e.preventDefault(); toggle(); }
+
+    // Mobile navigation delegates to the canonical desktop tab controllers so
+    // routing, rendering, breadcrumbs, and deep links keep one source of truth.
+    var mobileTab = e.target.closest('[data-tk-mobile-tab]');
+    if (mobileTab) {
+      e.preventDefault();
+      var controller = document.querySelector(mobileTab.getAttribute('data-tk-mobile-tab'));
+      if (controller) controller.click();
+    }
+
+    var mobileSettings = e.target.closest('#mobile-menu-settings');
+    if (mobileSettings) {
+      e.preventDefault();
+      var settings = document.getElementById('menu-settings');
+      if (settings) settings.click();
+    }
+
+    var mobileProject = e.target.closest('#mobile-new-project');
+    if (mobileProject) {
+      e.preventDefault();
+      var newProject = document.getElementById('btn-new-project');
+      if (newProject) newProject.click();
+    }
+  });
+
+  document.addEventListener('shown.bs.tab', function (e) {
+    var target = e.target && e.target.id ? '#' + e.target.id : '';
+    document.querySelectorAll('[data-tk-mobile-tab]').forEach(function (link) {
+      link.classList.toggle('active', link.getAttribute('data-tk-mobile-tab') === target);
+    });
   });
 
   // Re-apply the desktop margin when the viewport crosses the breakpoint.

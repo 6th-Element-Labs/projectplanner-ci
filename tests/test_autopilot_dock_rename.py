@@ -1,4 +1,4 @@
-"""UI-68: visible Fleet labels become Autopilot without changing identifiers."""
+"""UI-68/UI-75: Fleet navigation keeps Autopilot dock labels and identifiers."""
 
 from path_setup import ROOT
 
@@ -17,11 +17,11 @@ def main() -> None:
     assert "_loadFleetDock" in app
     assert "/ixp/v1/" in app
 
-    assert '<span class="nav-link-title">Autopilot</span>' in html
+    assert '<span class="nav-link-title">Fleet</span>' in html
     assert 'me-2"></i>Autopilot</h2>' in html
     assert '<span class="fw-medium">Autopilot</span>' in app
     assert "'All clear'" in app
-    print("PASS: Autopilot rename preserves Fleet internals")
+    print("PASS: Fleet navigation preserves Autopilot dock labels and internals")
 
 
 if __name__ == "__main__":
