@@ -2729,11 +2729,30 @@ def list_runner_sessions(host_id: str = "", runtime: str = "", task_id: str = ""
         sessions = [
             session for session in sessions
             if (
-                isinstance((session.get("metadata") or {}).get("completion_handoff"), dict)
-                and (session.get("metadata") or {}).get("completion_handoff")
-                and not (
-                    (session.get("metadata") or {}).get("completion_handoff") or {}
-                ).get("acknowledged_at")
+                not execution_liveness.is_terminal(session.get("status"))
+                and (
+                    (
+                        isinstance(
+                            (session.get("metadata") or {}).get("completion_handoff"),
+                            dict,
+                        )
+                        and (session.get("metadata") or {}).get("completion_handoff")
+                        and not (
+                            (session.get("metadata") or {}).get("completion_handoff")
+                            or {}
+                        ).get("acknowledged_at")
+                    )
+                    # BUG-270: terminal-task cleanup fences the runner before
+                    # the Host acknowledges process death.  Review/merge
+                    # runners can legitimately have no completion_handoff, so
+                    # the Host's bounded pending query must also return an
+                    # unacknowledged server-owned lease surrender.  Once the
+                    # exact terminal receipt lands, status is terminal and the
+                    # row drops out idempotently.
+                    or bool(
+                        (session.get("metadata") or {}).get("lease_surrender")
+                    )
+                )
             )
         ]
     if not include_stale:

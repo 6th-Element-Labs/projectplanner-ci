@@ -2801,9 +2801,10 @@ def _drain_runners(host_id, recover_stale_local=True):
             if isinstance(rows, list):
                 sessions.extend(rows)
         # A completed CLI can disappear from the supervisor inventory before
-        # the next Host tick. Fetch only server rows with an unacknowledged
-        # completion handoff so Capacity can still publish the exact terminal
-        # receipt. This is deliberately not a scan of every stale runner.
+        # the next Host tick. Fetch only centrally nonterminal rows still owed
+        # a host receipt: an unacknowledged completion handoff or a server-owned
+        # lease surrender. This is deliberately not a scan of every stale
+        # runner.
         pending = _try("GET", _drain_query(
             P_LIST_RUNNERS, host_id=host_id, include_stale="true",
             pending_completion="true")) or {}
