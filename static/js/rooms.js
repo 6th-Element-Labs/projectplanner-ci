@@ -41,7 +41,7 @@
             try {
                 // Rooms only renders a bounded recent feed. Ask Coord for the same
                 // bounded working set so large project histories do not delay first paint.
-                const response = await fetch('api/coordination?project=' + encodeURIComponent(project()) + '&limit=100', {
+                const response = await fetch('api/coordination?project=' + encodeURIComponent(project()) + '&limit=25', {
                     credentials: 'same-origin', cache: 'no-cache',
                 });
                 const data = await response.json().catch(() => ({}));
