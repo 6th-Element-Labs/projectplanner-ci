@@ -93,7 +93,11 @@ def assignment_note(ack: Ack, completion_contract: dict | None = None) -> str:
                 stale_handoff += (
                     "This is an implementation assignment with no persisted PR. "
                     "If no live PR exists for the task, that is the expected build "
-                    "state: claim the task, implement it, test it, publish the PR, "
+                    "state. For a fresh task branch with no upstream, publish the "
+                    "untouched branch and record that upstream on the existing Work "
+                    "Session before preflight and claim; this bootstrap publication "
+                    "is not implementation work. Then claim the task, implement it, "
+                    "test it, publish the PR, "
                     "and use complete_claim for the existing ADR-0008 C3 "
                     "surrender/host-ack handoff. Do not yield merely because the "
                     "new task has no PR, and never self-declare Done. "

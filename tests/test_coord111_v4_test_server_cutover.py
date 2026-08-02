@@ -298,6 +298,8 @@ def test_v4_assignment_uses_the_journal_yield_not_the_legacy_factory():
     assert "never use the fresh workspace or base-branch HEAD" in note
     assert "yield outcome=waiting" in note
     assert "If no live PR exists for the task" in note
+    assert "publish the untouched branch" in note
+    assert "before preflight and claim" in note
     assert "use complete_claim for the existing ADR-0008 C3" in note
     assert "Do not yield merely because the new task has no PR" in note
 
