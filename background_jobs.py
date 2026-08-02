@@ -117,13 +117,6 @@ JOB_CATALOG: Dict[str, JobSpec] = {
             "abandoned, and human-resolved episodes indefinitely as demonstrations."
         ),
     ),
-    "promote_completion_scars": JobSpec(
-        job_name="promote_completion_scars",
-        title="Promote completion scars into conformance scenarios",
-        dbos_eligible=True,
-        task_anchors=("COORD-80",),
-        description="Scan retained bad decision episodes and write PR-ready gold scenarios.",
-    ),
 }
 
 
@@ -364,7 +357,6 @@ def _step_handler(job_name: str) -> Callable[[str, Mapping[str, Any]], Dict[str,
         "drain_webhook_inbox": _step_drain_webhook_inbox,
         "reconcile_open_pr_merges": _step_reconcile_open_pr_merges,
         "compact_decision_snapshots": _step_compact_decision_snapshots,
-        "promote_completion_scars": _step_promote_completion_scars,
     }
     handler = handlers.get(job_name)
     if not handler:
@@ -428,35 +420,6 @@ def _step_compact_decision_snapshots(
             else decision_records.DEFAULT_SNAPSHOT_TTL_DAYS
         ),
     )
-
-
-def _step_promote_completion_scars(
-        project_id: str, params: Mapping[str, Any]) -> Dict[str, Any]:
-    from pathlib import Path
-    from switchboard.application.scar_promotion import open_pull_request, promote
-    from switchboard.storage.repositories import decision_records
-
-    store.init_db(project_id)
-    output_dir = str(params.get("output_dir") or "").strip()
-    if not output_dir:
-        raise ValueError("output_dir required (path to tests/conformance/scenarios/gold)")
-    window_hours = float(params.get("window_hours") or 24.0)
-    episodes = decision_records.list_decision_episodes(
-        project=project_id,
-        since=time.time() - max(window_hours, 0.0) * 3600.0,
-        limit=int(params.get("limit") or 1000),
-    )
-    result = promote(
-        episodes,
-        Path(output_dir),
-        repeat_threshold=int(params.get("repeat_threshold") or 8),
-    )
-    if params.get("open_pr") is True:
-        repo_root = str(params.get("repo_root") or "").strip()
-        if not repo_root:
-            raise ValueError("repo_root required when open_pr=true")
-        result["pull_request_result"] = open_pull_request(Path(repo_root), result)
-    return result
 
 
 def _step_audit_export(project_id: str, params: Mapping[str, Any]) -> Dict[str, Any]:

@@ -14,7 +14,6 @@ from path_setup import ROOT  # noqa: F401
 
 import app_impl
 from switchboard.api.routers.attention import create_router
-from switchboard.domain.completion.executor import mark_human_resume_receipt
 from switchboard.storage.migrations.attention import upgrade_attention_schema
 from switchboard.storage.repositories import attention as attention_repo
 from switchboard.storage.repositories import autopilot_scopes
@@ -285,18 +284,9 @@ class CompletionAttentionWakeContract(unittest.TestCase):
         self.assertTrue(replay.json()["idempotent_replay"])
         self.assertEqual(len(self.wake_calls), call_count)
 
-        with self.assertRaises(attention_repo.AttentionStoreError) as forged:
-            mark_human_resume_receipt(
-                request["request_id"],
-                expected_version=3,
-                host_id="any-host",
-                actor="forger",
-                receipt={"schema": "fake", "claimed": True},
-                project=PROJECT,
-            )
-        self.assertEqual(
-            forged.exception.code, "attention_completion_owner_required")
-
+        # SIMPLIFY-30: the v1 executor's mark_human_resume_receipt side door
+        # is deleted outright — only an exact fenced completion-owner tick can
+        # resolve a wake, and no API exists to forge a resume receipt.
         tick = {
             "schema": "switchboard.completion_tick.v1",
             "task_id": TASK,
@@ -921,7 +911,7 @@ class CompletionAttentionWakeContract(unittest.TestCase):
 
 
 class ScopedOwnerWiringContract(unittest.TestCase):
-    def test_daemon_drain_rearms_the_exact_task_scope(self):
+    def test_v4_daemon_does_not_drain_retired_completion_wakes(self):
         class Store:
             def __init__(self):
                 self.started = []
@@ -957,21 +947,21 @@ class ScopedOwnerWiringContract(unittest.TestCase):
                 }
 
         store = Store()
-        owner = ScopedCompletionCoordinator(
+        from switchboard.application.mission_bot_v4.coordinator import (
+            V4ScopedCompletionCoordinator,
+        )
+
+        owner = V4ScopedCompletionCoordinator(
             DaemonConfig(projects=(PROJECT,), act=True),
             store_mod=store,
             agent_id="codex/BUG-172",
         )
         drained = owner._drain_completion_wakes(PROJECT)
-        self.assertEqual(drained["accepted"], 1)
-        self.assertEqual(store.started[0]["task_id"], TASK)
-        self.assertEqual(
-            store.started[0]["deliverable_id"], "completion-control")
-        self.assertEqual(store.acquired[0][0], "scope-1")
-        self.assertEqual(
-            store.acquired[0][1]["holder_agent_id"], "codex/BUG-172")
+        self.assertEqual(drained["accepted"], 0)
+        self.assertEqual(store.started, [])
+        self.assertEqual(store.acquired, [])
 
-    def test_standalone_owner_records_the_exact_tick_receipt(self):
+    def test_v4_tick_does_not_finalize_retired_completion_wake(self):
         tick = {"schema": "switchboard.completion_tick.v1", "task_id": TASK}
         authority = {
             "schema": "switchboard.autopilot_scope_authority.v1",
@@ -1005,16 +995,17 @@ class ScopedOwnerWiringContract(unittest.TestCase):
                 return {"scope_id": scope_id}
 
         store = Store()
-        owner = ScopedCompletionCoordinator(
+        from switchboard.application.mission_bot_v4.coordinator import (
+            V4ScopedCompletionCoordinator,
+        )
+
+        owner = V4ScopedCompletionCoordinator(
             DaemonConfig(projects=(PROJECT,), act=True),
             store_mod=store,
             agent_id="codex/BUG-172",
         )
-        from switchboard.application import completion_driver
-
-        with patch.object(
-            completion_driver,
-            "run_completion_tick",
+        with patch(
+            "switchboard.application.mission_bot_v4.run_scoped_mission_tick",
             return_value=tick,
         ):
             result = owner._run_standalone_task_scope(
@@ -1028,11 +1019,8 @@ class ScopedOwnerWiringContract(unittest.TestCase):
                 authority,
             )
 
-        self.assertEqual(result["completion_wake"]["status"], "resolved")
-        self.assertEqual(store.completed[0][0], TASK)
-        self.assertIs(store.completed[0][1]["tick"], tick)
-        self.assertEqual(
-            store.completed[0][1]["scope_authority"], authority)
+        self.assertEqual(result["receipts"], [tick])
+        self.assertEqual(store.completed, [])
 
 
 if __name__ == "__main__":

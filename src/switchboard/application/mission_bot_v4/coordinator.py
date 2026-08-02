@@ -40,10 +40,9 @@ class V4ScopedCompletionCoordinator(ScopedCompletionCoordinator):
     ) -> Dict[str, Any]:
         """Project canonical Done into v4 before closing its W2 scope.
 
-        The shared scope owner legitimately treats canonical task provenance as
-        sufficient to close a v1 scope.  V4 additionally owns an append-only
-        mission journal, so its scope must remain active until the existing
-        fenced v4 tick confirms that same provenance in the journal.
+        Canonical task provenance is sufficient to close Task Execution. V4
+        additionally owns an append-only mission journal, so its scope remains
+        active until the fenced v4 tick confirms the same provenance there.
         """
         receipts = []
         for task_project, task_id in tasks:

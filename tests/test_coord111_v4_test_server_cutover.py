@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""COORD-111: isolated v4 writer without changing the production v1 graph."""
+"""COORD-111: one scoped v4 writer with no production v1 graph."""
 from __future__ import annotations
 
 from unittest.mock import patch
@@ -39,15 +39,10 @@ def test_v4_test_owner_calls_only_the_scoped_v4_runtime():
         agent_id="codex/COORD-111-test",
     )
     expected = {"schema": "switchboard.mission_bot_v4.tick.v1", "action": "wait"}
-    with (
-        patch(
-            "switchboard.application.mission_bot_v4.run_scoped_mission_tick",
-            return_value=expected,
-        ) as v4,
-        patch(
-            "switchboard.application.completion_driver.run_completion_tick"
-        ) as v1,
-    ):
+    with patch(
+        "switchboard.application.mission_bot_v4.run_scoped_mission_tick",
+        return_value=expected,
+    ) as v4:
         actual = owner._completion_tick(
             "QA-119",
             task_project="switchboard",
@@ -58,38 +53,12 @@ def test_v4_test_owner_calls_only_the_scoped_v4_runtime():
     assert actual is expected
     assert v4.call_count == 1
     assert v4.call_args.kwargs["scope_authority"] == authority
-    assert v1.call_count == 0
 
 
-def test_production_owner_still_calls_only_v1():
-    from scoped_completion_coordinator import ScopedCompletionCoordinator
-
-    authority = {"scope_id": "scope-v1"}
-    owner = ScopedCompletionCoordinator(
-        DaemonConfig(projects=("switchboard",), act=True),
-        store_mod=object(),
-        agent_id="codex/v1",
-    )
-    expected = {"schema": "switchboard.completion_tick.v1"}
-    with (
-        patch(
-            "switchboard.application.completion_driver.run_completion_tick",
-            return_value=expected,
-        ) as v1,
-        patch(
-            "switchboard.application.mission_bot_v4.run_scoped_mission_tick"
-        ) as v4,
-    ):
-        actual = owner._completion_tick(
-            "QA-118",
-            task_project="switchboard",
-            scope_project="switchboard",
-            authority=authority,
-        )
-
-    assert actual is expected
-    assert v1.call_count == 1
-    assert v4.call_count == 0
+def test_production_entrypoint_constructs_only_v4_owner():
+    source = (_ROOT / "coordinator_daemon.py").read_text(encoding="utf-8")
+    assert "V4ScopedCompletionCoordinator(" in source
+    assert "daemon = ScopedCompletionCoordinator(" not in source
 
 
 class TerminalScopeStore:
@@ -352,9 +321,9 @@ def test_v4_assignment_uses_the_journal_yield_not_the_legacy_factory():
 if __name__ == "__main__":
     test_v4_isolated_edge_accepts_forwarded_hosts_on_loopback_only()
     test_v4_test_owner_calls_only_the_scoped_v4_runtime()
-    test_production_owner_still_calls_only_v1()
+    test_production_entrypoint_constructs_only_v4_owner()
     test_v4_projects_terminal_provenance_before_completing_task_scope()
     test_v4_keeps_scope_active_when_terminal_projection_is_not_confirmed()
     test_v4_projects_terminal_provenance_before_completing_deliverable_scope()
     test_v4_assignment_uses_the_journal_yield_not_the_legacy_factory()
-    print("COORD-111 isolated v4 writer: 7 passed")
+    print("COORD-111 v4-only writer: 7 passed")

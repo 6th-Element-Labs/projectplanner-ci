@@ -21,6 +21,9 @@ from path_setup import ROOT  # noqa: F401
 import mission_coordinator  # noqa: E402
 from coordinator_daemon import CoordinatorDaemon, DaemonConfig  # noqa: E402
 from scoped_completion_coordinator import ScopedCompletionCoordinator  # noqa: E402
+from switchboard.application.mission_bot_v4.coordinator import (  # noqa: E402
+    V4ScopedCompletionCoordinator,
+)
 
 passed = failed = 0
 
@@ -129,15 +132,15 @@ except AssertionError:
 ok(raised, "the base daemon _drive_scope is the janitor path (reads a mission, drives nothing)")
 
 scoped_store = _Store()
-scoped = ScopedCompletionCoordinator(
+scoped = V4ScopedCompletionCoordinator(
     DaemonConfig(act=True), store_mod=scoped_store,
     agent_id="switchboard/scoped-owner/test")
 ok(scoped._drive_scope.__func__ is ScopedCompletionCoordinator._drive_scope,
-   "the scoped coordinator overrides _drive_scope to drive")
+   "the v4 scoped coordinator inherits the sole scoped drive path")
 # A standalone task scope drives through the one Mission Bot tick without ever
 # touching the legacy deliverable coordinator.
 with patch(
-    "switchboard.application.completion_driver.run_completion_tick",
+    "switchboard.application.mission_bot_v4.run_scoped_mission_tick",
     return_value={
         "schema": "switchboard.completion_tick.v1",
         "task_id": "PROTO-X",
@@ -170,8 +173,8 @@ ok(persisted.get("schema") == "switchboard.autopilot_scope_result_summary.v1"
 # --- 3. construction: ACT decides the class --------------------------------
 entry_src = (ROOT / "coordinator_daemon.py").read_text(encoding="utf-8")
 ok("if config.act:" in entry_src
-   and "ScopedCompletionCoordinator(" in entry_src,
-   "the entrypoint constructs ScopedCompletionCoordinator when ACT=1")
+   and "V4ScopedCompletionCoordinator(" in entry_src,
+   "the entrypoint constructs only V4ScopedCompletionCoordinator when ACT=1")
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

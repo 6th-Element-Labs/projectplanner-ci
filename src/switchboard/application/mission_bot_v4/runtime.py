@@ -144,9 +144,9 @@ def project_terminal_provenance(
 ) -> dict[str, Any]:
     """Project already-persisted canonical Done truth into the v4 journal.
 
-    This staged v4 adapter is deliberately outside the v1 provenance path.  It
-    creates no mission and performs no lifecycle effect beyond closing the
-    existing passive v4 item from canonical truth.
+    Canonical Task Execution provenance remains the Done authority. This
+    projector creates no mission and performs no lifecycle effect beyond
+    closing the existing v4 item from that already-persisted truth.
     """
     task = task_reader(task_id, project=project)
     if not task:

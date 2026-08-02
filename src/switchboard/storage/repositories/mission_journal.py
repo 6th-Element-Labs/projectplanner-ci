@@ -1221,11 +1221,11 @@ class MissionJournalRepository:
         task: Mapping[str, Any],
         now: float | None = None,
     ) -> dict[str, Any]:
-        """Project an already-succeeded C3 receipt into the passive v4 inbox.
+        """Project an already-succeeded C3 receipt into the v4 inbox.
 
-        The shared/v1 completion owner remains untouched.  This projector reads
-        its durable ``review_handoff`` phase plus canonical task/PR state and
-        advances only an existing v4 mission.  Missing or conflicting evidence
+        Task Execution remains the completion owner. This projector reads its
+        durable ``review_handoff`` phase plus canonical task/PR state and
+        advances only an existing v4 mission. Missing or conflicting evidence
         blocks the v4 tick instead of inferring a role from board status.
         """
         exact_task_id = str(task_id or "").strip().upper()

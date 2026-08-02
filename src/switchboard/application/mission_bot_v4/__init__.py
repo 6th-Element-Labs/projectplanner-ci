@@ -1,7 +1,7 @@
-"""Explicit, scope-fenced Mission Bot v4 application surface.
+"""The explicit, scope-fenced Mission Bot v4 application surface.
 
-Nothing imports this package from the production v1 loop.  A caller must opt
-in and provide one live coordination-scope authority tuple.
+The production scoped coordinator is the sole writer and must provide one live
+coordination-scope authority tuple for every work-driving tick.
 """
 
 from .runtime import (
@@ -10,20 +10,12 @@ from .runtime import (
     run_scoped_mission_tick,
     task_has_pending_capacity_attempt,
 )
-from .shadow import (
-    compare_shadow_decisions,
-    run_shadow_batch,
-    run_shadow_comparison,
-)
 from .worker import ScopedMissionWorkerPorts, tick_scoped_mission
 
 __all__ = [
     "ScopedMissionWorkerPorts",
     "assess_stuck_mission_invariant",
-    "compare_shadow_decisions",
     "production_ports",
-    "run_shadow_batch",
-    "run_shadow_comparison",
     "run_scoped_mission_tick",
     "task_has_pending_capacity_attempt",
     "tick_scoped_mission",

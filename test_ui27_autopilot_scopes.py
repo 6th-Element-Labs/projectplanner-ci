@@ -17,9 +17,12 @@ os.environ["PM_DYNAMIC_PROJECTS_DIR"] = _TMP
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import coordinator_daemon  # noqa: E402
-import scoped_completion_coordinator  # noqa: E402
 import store  # noqa: E402
+from switchboard.application.commands import autopilot as autopilot_commands  # noqa: E402
 from switchboard.application.commands import task_execution  # noqa: E402
+from switchboard.application.mission_bot_v4.coordinator import (  # noqa: E402
+    V4ScopedCompletionCoordinator,
+)
 
 
 passed = failed = 0
@@ -30,6 +33,31 @@ def ok(condition, message):
     print(("  PASS  " if condition else "  FAIL  ") + message)
     passed += 1 if condition else 0
     failed += 0 if condition else 1
+
+
+def start_scope(**kwargs):
+    """Use the same command boundary as REST/MCP so v4 is bootstrapped."""
+    deliverable_id = kwargs.pop("deliverable_id", "")
+    try:
+        return autopilot_commands.control_autopilot(
+            deliverable_id,
+            action="start",
+            **kwargs,
+        )["scope"]
+    except autopilot_commands.AutopilotError as exc:
+        return exc.as_dict()
+
+
+def control_scope(*, action, **kwargs):
+    deliverable_id = kwargs.pop("deliverable_id", "")
+    try:
+        return autopilot_commands.control_autopilot(
+            deliverable_id,
+            action=action,
+            **kwargs,
+        )["scope"]
+    except autopilot_commands.AutopilotError as exc:
+        return exc.as_dict()
 
 
 try:
@@ -68,51 +96,51 @@ try:
             data={"role": "contributes", "blocks_deliverable": True},
             actor="test", project="qa-ui27")
 
-    task_scope = store.start_autopilot_scope(
+    task_scope = start_scope(
         project="qa-ui27", deliverable_id="ui27-deliverable",
         scope_type="task", task_project="qa-ui27", task_id="AUTO-2",
         actor="test")
     ok(task_scope.get("status") == "active" and task_scope.get("task_id") == "AUTO-2",
        "a dependency-blocked task can be armed durably")
-    invalid_runtime = store.start_autopilot_scope(
+    invalid_runtime = start_scope(
         project="qa-ui27", deliverable_id="ui27-deliverable",
         scope_type="task", task_project="qa-ui27", task_id="AUTO-1",
         runtime="not-a-runtime", actor="test")
     ok(invalid_runtime.get("error") == "unsupported autopilot runtime",
        "incompatible runtime intent fails before a scope or wake is queued")
-    repeat = store.start_autopilot_scope(
+    repeat = start_scope(
         project="qa-ui27", deliverable_id="ui27-deliverable",
         scope_type="task", task_project="qa-ui27", task_id="AUTO-2",
         actor="test")
     ok(repeat.get("scope_id") == task_scope.get("scope_id") and repeat.get("already_started"),
        "repeated task Start is idempotent")
-    paused = store.control_autopilot_scope(
+    paused = control_scope(
         project="qa-ui27", deliverable_id="ui27-deliverable",
         scope_type="task", task_project="qa-ui27", task_id="AUTO-2",
         action="pause", actor="test")
-    resumed = store.control_autopilot_scope(
+    resumed = control_scope(
         project="qa-ui27", deliverable_id="ui27-deliverable",
         scope_type="task", task_project="qa-ui27", task_id="AUTO-2",
         action="resume", actor="test")
     ok(paused.get("status") == "paused" and resumed.get("status") == "active",
        "task scope pause/resume is durable")
-    stopped = store.control_autopilot_scope(
+    stopped = control_scope(
         project="qa-ui27", deliverable_id="ui27-deliverable",
         scope_type="task", task_project="qa-ui27", task_id="AUTO-2",
         action="stop", actor="test")
     ok(stopped.get("status") == "stopped", "task scope can be stopped independently")
-    task_scope = store.start_autopilot_scope(
+    task_scope = start_scope(
         project="qa-ui27", deliverable_id="ui27-deliverable",
         scope_type="task", task_project="qa-ui27", task_id="AUTO-2",
         actor="test")
 
-    deliverable_scope = store.start_autopilot_scope(
+    deliverable_scope = start_scope(
         project="qa-ui27", deliverable_id="ui27-deliverable",
         scope_type="deliverable", actor="test")
     historical = store.get_autopilot_scope(task_scope["scope_id"], project="qa-ui27")
     ok(deliverable_scope.get("status") == "active" and historical.get("status") == "superseded",
        "deliverable Start supersedes narrower task scopes")
-    covered = store.start_autopilot_scope(
+    covered = start_scope(
         project="qa-ui27", deliverable_id="ui27-deliverable",
         scope_type="task", task_project="qa-ui27", task_id="AUTO-3",
         actor="test")
@@ -120,7 +148,7 @@ try:
        and covered.get("covered") is True,
        "task Start inside a live deliverable run does not create overlap")
 
-    daemon = scoped_completion_coordinator.ScopedCompletionCoordinator(
+    daemon = V4ScopedCompletionCoordinator(
         coordinator_daemon.DaemonConfig(
             profile_id="autopilot-default", projects=("qa-ui27",), act=True,
             max_tasks_per_scope_tick=8),
@@ -138,10 +166,10 @@ try:
 
     mission = store.get_mission_status(
         project="qa-ui27", deliverable_id="ui27-deliverable")
-    store.control_autopilot_scope(
+    control_scope(
         project="qa-ui27", deliverable_id="ui27-deliverable",
         scope_type="deliverable", action="stop", actor="test")
-    blocked_scope = store.start_autopilot_scope(
+    blocked_scope = start_scope(
         project="qa-ui27", deliverable_id="ui27-deliverable",
         scope_type="task", task_project="qa-ui27", task_id="AUTO-2",
         actor="test")

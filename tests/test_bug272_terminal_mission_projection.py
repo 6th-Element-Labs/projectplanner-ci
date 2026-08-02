@@ -133,7 +133,7 @@ try:
         if row.get("event_type") == "terminal_provenance_persisted"
     ]
     ok(result.get("status") == "Done", "canonical provenance remains Done authority")
-    ok(before.get("state") == "ACTIVE", "v1 provenance path remains uncoupled from v4")
+    ok(before.get("state") == "ACTIVE", "canonical provenance remains uncoupled until projection")
     ok(
         tick.get("action") == "wait" and tick.get("reason") == "terminal_provenance",
         "opt-in v4 tick observes terminal provenance and never pages a runner",

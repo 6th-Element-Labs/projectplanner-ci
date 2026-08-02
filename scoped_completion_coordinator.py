@@ -46,59 +46,6 @@ class ScopedCompletionCoordinator(CoordinatorDaemon):
             project=project,
         )
 
-    def _drain_completion_wakes(self, project: str) -> Dict[str, Any]:
-        """Retry durable human-decision wakes before selecting active scopes."""
-        drain = getattr(self.store, "drain_completion_wakes", None)
-        start_scope = getattr(self.store, "start_autopilot_scope", None)
-        if not callable(drain) or not callable(start_scope) or not self.config.act:
-            return super()._drain_completion_wakes(project)
-
-        def wake(payload: Dict[str, Any]) -> Dict[str, Any]:
-            scope = start_scope(
-                project=project,
-                scope_type="task",
-                deliverable_id=str(payload.get("deliverable_id") or "").strip(),
-                task_project=project,
-                task_id=str(payload.get("task_id") or "").strip().upper(),
-                runtime="codex",
-                actor=self.config.actor,
-            )
-            if scope.get("error") or not scope.get("scope_id"):
-                return scope
-            return self.store.acquire_autopilot_scope_lease(
-                scope["scope_id"],
-                holder_agent_id=self.agent_id,
-                project=project,
-                ttl_seconds=self.config.lease_ttl_seconds,
-                now=float(self.clock()),
-            )
-
-        return drain(
-            wake_completion_owner=wake,
-            actor=self.config.actor,
-            project=project,
-        )
-
-    def _complete_attention_wake(
-        self,
-        *,
-        task_id: str,
-        task_project: str,
-        scope: Dict[str, Any],
-        authority: Dict[str, Any],
-        tick: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        complete = getattr(self.store, "complete_completion_wake_for_tick", None)
-        if not callable(complete):
-            return {"status": "not_supported", "task_id": task_id}
-        return complete(
-            task_id,
-            tick=tick,
-            scope_authority=authority,
-            actor=self.config.actor,
-            project=task_project,
-        )
-
     def _completion_tick(
         self,
         task_id: str,
@@ -107,17 +54,14 @@ class ScopedCompletionCoordinator(CoordinatorDaemon):
         scope_project: str,
         authority: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Run the v1 completion owner used by the production coordinator."""
-        from switchboard.application.completion_driver import run_completion_tick
+        """Require an explicit lifecycle engine implementation.
 
-        return run_completion_tick(
-            task_id,
-            project=task_project,
-            actor=self.config.actor,
-            agent_id=self.agent_id,
-            store_mod=self.store,
-            scope_authority=authority,
-            scope_project=scope_project,
+        The production entrypoint constructs ``V4ScopedCompletionCoordinator``.
+        Keeping this base class engine-free prevents a retired controller from
+        remaining as a hidden fallback or second writer.
+        """
+        raise RuntimeError(
+            "scoped completion coordinator requires an explicit lifecycle engine"
         )
 
 
@@ -151,13 +95,6 @@ class ScopedCompletionCoordinator(CoordinatorDaemon):
                 scope_project=project,
                 authority=authority,
             )
-            completion_wake = self._complete_attention_wake(
-                task_id=task_id,
-                task_project=task_project,
-                scope=scope,
-                authority=authority,
-                tick=tick,
-            )
             result = {
                 "status": "completion_tick",
                 "scope_id": scope.get("scope_id"),
@@ -166,7 +103,6 @@ class ScopedCompletionCoordinator(CoordinatorDaemon):
                 "generation": authority.get("generation"),
                 "fence_epoch": authority.get("fence_epoch"),
                 "receipts": [tick],
-                "completion_wake": completion_wake,
             }
         except Exception as exc:  # noqa: BLE001 - durable run preserves intent
             result = {
@@ -242,19 +178,11 @@ class ScopedCompletionCoordinator(CoordinatorDaemon):
                         scope_project=project,
                         authority=authority,
                     )
-                    completion_wake = self._complete_attention_wake(
-                        task_id=task_id,
-                        task_project=task_project,
-                        scope=scope,
-                        authority=authority,
-                        tick=tick,
-                    )
                     receipts.append({
                         "task_id": task_id,
                         "task_project": task_project,
                         "status": "completion_tick",
                         "completion": tick,
-                        "completion_wake": completion_wake,
                     })
                 except Exception as exc:  # noqa: BLE001 - expose failed tick
                     receipts.append({

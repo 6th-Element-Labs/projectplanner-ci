@@ -84,8 +84,10 @@ ok(not str(mine[0].get("deliverable_id") or ""),
 # called, so a regression that reintroduces the deliverable lookup fails here.
 # The coordinator must not classify or dispatch a role itself; it hands the
 # exact fenced task to the one Mission Bot completion tick.
-import scoped_completion_coordinator as scc  # noqa: E402
 from coordinator_daemon import DaemonConfig  # noqa: E402
+from switchboard.application.mission_bot_v4.coordinator import (  # noqa: E402
+    V4ScopedCompletionCoordinator,
+)
 
 
 class _MissionWouldFail:
@@ -127,31 +129,28 @@ in_review = {
     "dependency_state": {"ready": True}, "active_claims": [],
 }
 store_stub = _MissionWouldFail(in_review)
-coordinator = scc.ScopedCompletionCoordinator(
+coordinator = V4ScopedCompletionCoordinator(
     DaemonConfig(act=True), store_mod=store_stub,
     agent_id="switchboard/scoped-owner/test")
 
-import switchboard.application.completion_driver as completion_driver  # noqa: E402
-
 ticks = []
-_real_tick = completion_driver.run_completion_tick
-completion_driver.run_completion_tick = lambda t, **kw: ticks.append(
-    {"task_id": t, **kw}
-) or {
-    "action": "start_task",
-    "command": {
-        "output": "START_REVIEW",
-        "task_id": t,
-        "role": "review_merge",
-        "head_sha": "d" * 40,
+from unittest.mock import patch  # noqa: E402
+
+with patch(
+    "switchboard.application.mission_bot_v4.run_scoped_mission_tick",
+    side_effect=lambda t, **kw: ticks.append({"task_id": t, **kw}) or {
+        "action": "start_task",
+        "command": {
+            "output": "START_REVIEW",
+            "task_id": t,
+            "role": "review_merge",
+            "head_sha": "d" * 40,
+        },
     },
-}
-try:
+):
     outcome = coordinator.run_scope(
         P, {"scope_id": scope_id, "scope_type": "task",
             "task_project": P, "task_id": tid, "deliverable_id": ""})
-finally:
-    completion_driver.run_completion_tick = _real_tick
 
 ok(outcome.get("status") == "completion_tick",
    f"a standalone task scope dispatches (got {outcome.get('status')})")

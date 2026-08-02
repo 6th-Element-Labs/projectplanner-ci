@@ -64,7 +64,9 @@ assert '"execution_lease_v2", "runner_lease_enforcement"' in connect
 
 assert "janitor" in daemon.lower()
 assert "self.store.run_mission_coordinator_tick" not in scoped
-assert "run_completion_tick" in scoped
+assert "run_completion_tick" not in scoped
+assert "requires an explicit lifecycle engine" in scoped
+assert "V4ScopedCompletionCoordinator(" in daemon
 
 baseline = json.loads(read("perf/simplify10_execution_authority_baseline.json"))
 for scope in (

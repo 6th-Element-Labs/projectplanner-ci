@@ -937,8 +937,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     if config.act:
         # ACT=1: this process owns and drives operator-armed scopes. ACT=0 stays
         # the janitor above. One switch, matching docs/COORDINATOR-AUTOPILOT.md.
-        from scoped_completion_coordinator import ScopedCompletionCoordinator
-        daemon = ScopedCompletionCoordinator(
+        from switchboard.application.mission_bot_v4.coordinator import (
+            V4ScopedCompletionCoordinator,
+        )
+        daemon = V4ScopedCompletionCoordinator(
             config, store_mod=store,
             agent_id=f"{config.actor}/{uuid.uuid4().hex[:12]}")
     else:

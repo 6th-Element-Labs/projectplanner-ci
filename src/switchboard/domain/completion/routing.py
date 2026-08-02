@@ -1,8 +1,7 @@
 """Route-aware Autopilot candidate selection.
 
-The completion state machine owns what happens next; board status is a coarse
-projection of it (see ``docs/AUTOPILOT-COMPLETION-STATE-MACHINE.md``).  Two
-completion routes both project onto board ``Blocked``:
+Task Execution owns role handoffs; board status is only a coarse projection of
+that durable lifecycle. Two routes can both project onto board ``Blocked``:
 
 ``remediation``
     an automatic failed gate whose repair the machine drives itself;

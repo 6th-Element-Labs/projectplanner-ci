@@ -15,7 +15,6 @@ from switchboard.connect.contract import (
     LeaseState,
     ResourceLimits,
 )
-from switchboard.domain.mission_bot.reducer import reduce_mission
 
 
 EXPECTED = "a" * 40
@@ -199,62 +198,8 @@ for started in start.call_args_list:
     assert kwargs["source_sha"] == LIVE
     assert kwargs["findings"][0]["outcome"] == "stale_assignment"
 
-# Exercise the real Mission Bot reducer across the lifecycle instead of
-# teaching the callback mock that a second invocation will somehow happen.
-# G remains capacity authority until it is terminal. The durable typed receipt
-# then outranks pending CI exactly once. As soon as G+1 exists hydration no
-# longer projects the receipt, so both live and terminal replays are waits.
-pending_ci = {
-    "task_id": "BUG-217",
-    "board_status": "In Review",
-    "pr_number": 1041,
-    "head_sha": LIVE,
-    "github_pr": {"number": 1041, "state": "open", "draft": False},
-    "dependency_state": {"satisfied": True},
-    "required_status_contexts": ["Switchboard CI / VM gate"],
-    "status_contexts": {
-        "Switchboard CI / VM gate": {"state": "pending"},
-    },
-    "stale_assignment": {
-        **results[0],
-        "replacement": {},
-        "completion_run": {},
-        "pending": True,
-    },
-}
-g_live = reduce_mission({
-    **pending_ci,
-    "runner": {
-        "live": True,
-        "execution_id": "exec-217",
-        "generation": 3,
-        "role": "remediation",
-    },
-})
-g_terminal = reduce_mission({**pending_ci, "runner": {"live": False}})
-g1_live = reduce_mission({
-    **pending_ci,
-    "stale_assignment": {},
-    "runner": {
-        "live": True,
-        "execution_id": "exec-218",
-        "generation": 4,
-        "role": "remediation",
-    },
-})
-g1_terminal_replay = reduce_mission({
-    **pending_ci,
-    "stale_assignment": {},
-    "runner": {"live": False},
-})
-assert g_live["output"] == "WAIT"
-assert g_live["reason_code"] == "live_runner_in_progress"
-assert g_terminal["output"] == "START_REMEDIATION"
-assert g_terminal["reason_code"] == "stale_assignment"
-assert g_terminal["role"] == "remediation"
-assert g1_live["output"] == "WAIT"
-assert g1_live["reason_code"] == "live_runner_in_progress"
-assert g1_terminal_replay["output"] == "WAIT"
-assert g1_terminal_replay["reason_code"] == "required_exact_head_ci_pending"
+# (retired with SIMPLIFY-30) The v1 reducer lifecycle replay that followed is
+# deleted with the reducer itself; the durable stale-assignment receipt and the
+# single remediation replacement above are the live contract.
 
 print("BUG-217 stale-assignment retry contract: PASS")

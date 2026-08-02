@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BUG-269: shadow inboxes exist before v1 Autopilot scopes are visible."""
+"""BUG-269: v4 mission inboxes exist before Autopilot scopes are visible."""
 from __future__ import annotations
 
 from path_setup import ROOT as _ROOT  # noqa: F401
@@ -128,13 +128,13 @@ def test_deliverable_bootstraps_nonterminal_tasks_and_skips_proven_done():
         )
 
         autopilot.control_autopilot(
-            "shadow-deliverable", project=PROJECT, action="start",
+            "v4-deliverable", project=PROJECT, action="start",
             scope_type="deliverable", runtime="codex",
         )
         assert calls == [
             ("mission", "QA-118", "implementation"),
             ("mission", "QA-119", "review_merge"),
-            ("scope", "shadow-deliverable"),
+            ("scope", "v4-deliverable"),
             ("rearm", "QA-118", "autopilot-bug269"),
             ("rearm", "QA-119", "autopilot-bug269"),
         ]
@@ -199,4 +199,4 @@ if __name__ == "__main__":
     test_task_journal_is_bootstrapped_before_scope_visibility()
     test_deliverable_bootstraps_nonterminal_tasks_and_skips_proven_done()
     test_bootstrap_failure_never_publishes_scope()
-    print("BUG-269 shadow mission bootstrap: PASS")
+    print("BUG-269 v4 mission bootstrap: PASS")

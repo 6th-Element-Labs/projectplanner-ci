@@ -18,12 +18,20 @@ from switchboard.domain.completion.human_closeout import (
     PROVIDER,
     _human_action,
 )
-from switchboard.domain.mission_bot.facts import AGENT_PROVENANCE_BINDINGS
 from switchboard.storage.repositories import attention as attention_repo
 from switchboard.storage.repositories import work_sessions as work_sessions_repo
 from switchboard.storage.repositories.mission_journal import (
     default_mission_journal_repository,
 )
+
+#: Principal bindings that may author an agent-side human-blocker receipt.
+#: Relocated from the retired Mission Bot v1 ``domain.mission_bot.facts``
+#: (SIMPLIFY-30); the provenance rule outlived the reducer that first named it.
+AGENT_PROVENANCE_BINDINGS = frozenset({
+    "registered_agent",
+    "inferred_registered_agent",
+    "direct_session",
+})
 
 HUMAN_BLOCKER_TOOL = "record_human_blocker"
 #: Canonical Mission Bot name for the same agent-authored sticky receipt.
