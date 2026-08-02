@@ -126,17 +126,30 @@
                 if (message.to_agent) room.participants.add(message.to_agent);
                 room.lastAt = Math.max(room.lastAt, timestampOf(message));
             });
-            decisions.forEach((decision) => {
-                const room = roomFor(decision.task_id || '');
+            // Decisions enrich a real collaboration room; they do not create hundreds of
+            // historical pseudo-rooms on their own. Resolved choices remain in Inbox and
+            // the coordination record, while Rooms surfaces only choices needing action.
+            decisions.filter((decision) => ['open', 'pending', 'proposed', 'needs_input']
+                .includes(String(decision.status || '').toLowerCase())).forEach((decision) => {
+                const key = String(decision.task_id || '__project__');
+                const room = rooms.get(key);
+                if (!room) return;
                 room.decisions.push(decision);
                 if (decision.author) room.participants.add(decision.author);
                 if (decision.coordinator_agent_id) room.participants.add(decision.coordinator_agent_id);
                 room.lastAt = Math.max(room.lastAt, timestampOf(decision));
             });
             if (!rooms.size) roomFor('');
+            const recentCutoff = Date.now() / 1000 - (14 * 86400);
+            const visibleRooms = Array.from(rooms.values())
+                .filter((room) => room.agents.length || room.lastAt >= recentCutoff)
+                .sort((a, b) => b.lastAt - a.lastAt || a.key.localeCompare(b.key))
+                .slice(0, 25);
+            if (!visibleRooms.length) visibleRooms.push(roomFor(''));
+            visibleRooms.forEach((room) => { room.messages = room.messages.slice(-50); });
             return {
                 agents,
-                rooms: Array.from(rooms.values()).sort((a, b) => b.lastAt - a.lastAt || a.key.localeCompare(b.key)),
+                rooms: visibleRooms,
             };
         },
 
@@ -293,9 +306,11 @@
         },
 
         _renderRoomRecipients(room) {
+            // Sending is a live operation, so offer only current presence identities.
+            // Historical participants remain visible in the record but are not presented
+            // as reachable recipients.
             const activeAgents = room.agents.map((agent) => agent.agent_id).filter(Boolean);
-            const recentAgents = Array.from(room.participants).filter((agent) => !/^web$|^human$/i.test(agent));
-            const recipients = Array.from(new Set(activeAgents.concat(recentAgents)));
+            const recipients = Array.from(new Set(activeAgents));
             const select = document.getElementById('room-recipient');
             const send = document.getElementById('room-send');
             const message = document.getElementById('room-message');
