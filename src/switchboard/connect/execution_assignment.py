@@ -36,6 +36,7 @@ CONTRACT_FIELDS: tuple[str, ...] = (
     "desired_role",
     "exact_head_sha",
     "exact_pr",
+    "workspace_assignment",
     "claim_expectations",
     "typed_tools",
     "session_policy_profile",
@@ -86,6 +87,7 @@ def build_execution_assignment(
     task_id: str,
     assignment: Mapping[str, Any],
     lifecycle: Mapping[str, Any],
+    execution_context: Mapping[str, Any] | None = None,
     prior_attempts: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Derive the tiny immutable identity/scope contract for one boot.
@@ -136,6 +138,7 @@ def build_execution_assignment(
             "mission_yield": "yield_mission",
         }
 
+    context = dict(execution_context or {})
     contract: dict[str, Any] = {
         "schema": SCHEMA,
         "task_id": str(task_id or "").strip().upper(),
@@ -147,6 +150,14 @@ def build_execution_assignment(
         "exact_pr": {
             "number": int(lifecycle.get("pr_number") or 0),
             "url": str(lifecycle.get("pr_url") or ""),
+        },
+        "workspace_assignment": {
+            "repository": str(context.get("repository") or ""),
+            "base_sha": str(context.get("base_sha") or ""),
+            "checkout_sha": str(context.get("checkout_sha") or ""),
+            "checkout_requirements": dict(
+                context.get("checkout_requirements") or {}),
+            "context_digest": str(context.get("digest") or ""),
         },
         "claim_expectations": claim_expectations_for(profile, role),
         # Sibling of claim_expectations (not nested): the Connect claim bind

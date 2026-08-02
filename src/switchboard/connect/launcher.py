@@ -156,6 +156,7 @@ def assignment_note(ack: Ack, completion_contract: dict | None = None) -> str:
                 "desired_role",
                 "exact_head_sha",
                 "exact_pr",
+                "workspace_assignment",
                 "claim_expectations",
                 "typed_tools",
                 "launch_pointer",
@@ -165,8 +166,9 @@ def assignment_note(ack: Ack, completion_contract: dict | None = None) -> str:
             "\nImmutable execution assignment: "
             + json.dumps(identity, sort_keys=True, separators=(",", ":"))
             + " The identity/scope fields (task_id, assignment_id, execution_id, "
-              "generation, desired_role, exact_head_sha, exact_pr, and "
-              "claim_expectations) are server-owned lifecycle authority. "
+              "generation, desired_role, exact_head_sha, exact_pr, "
+              "workspace_assignment, and claim_expectations) are server-owned "
+              "lifecycle authority. "
               "launch_pointer is a non-authoritative starting pointer, not current "
               "diagnosis or lifecycle truth.\n"
               "Before changing code: (1) read the current Switchboard task and "

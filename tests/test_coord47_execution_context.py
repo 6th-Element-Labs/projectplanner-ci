@@ -128,6 +128,25 @@ def test_checkout_sha_is_generation_data_not_canonical_base_authority():
     execution_context.verify_digest(review)
 
 
+def test_implementation_checkout_carries_tip_and_dependency_requirements():
+    base_sha = "b" * 40
+    dependency_sha = "c" * 40
+    context = resolve(
+        "switchboard", "6th-Element-Labs/projectplanner", "master", base_sha)
+    implementation = execution_context.with_checkout_sha(
+        context,
+        base_sha,
+        require_default_branch_tip=True,
+        required_ancestor_shas=[dependency_sha, dependency_sha],
+    )
+    assert implementation["checkout_sha"] == base_sha
+    assert implementation["checkout_requirements"] == {
+        "default_branch_tip": True,
+        "ancestor_shas": [dependency_sha],
+    }
+    execution_context.verify_digest(implementation)
+
+
 def test_atlas_and_switchboard_authority_cannot_leak():
     atlas = resolve("atlas", "6th-Element-Labs/ActionEngine", "main", "c" * 40)
     switchboard = resolve(

@@ -1833,6 +1833,7 @@ def launch_command(wake, inventory, runner_session_id="", workspace_path=""):
                 task_id=str(wake.get("task_id") or ""),
                 assignment=assignment_data,
                 lifecycle=lifecycle,
+                execution_context=connect_policy.get("execution_context") or {},
             )
             require_exact_execution_assignment(execution_assignment, expected)
         except ExecutionAssignmentError as exc:

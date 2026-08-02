@@ -246,13 +246,14 @@ for row in captured:
             "fence_epoch": 1,
         },
     }
+    host_policy["execution_context"] = with_generation(
+        host_policy["execution_context"], 1)
     host_policy["execution_assignment"] = build_execution_assignment(
         task_id="DISPATCH-12",
         assignment=host_policy["assignment"],
         lifecycle=host_policy["lifecycle"],
+        execution_context=host_policy["execution_context"],
     )
-    host_policy["execution_context"] = with_generation(
-        host_policy["execution_context"], 1)
     wake = {
         "wake_id": "wake-host-test", "task_id": "DISPATCH-12",
         "selector": row["selector"], "policy": host_policy,
