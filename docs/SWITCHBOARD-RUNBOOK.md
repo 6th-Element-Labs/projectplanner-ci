@@ -72,6 +72,31 @@ limit," do not treat that as a product failure by itself. Check Switchboard:
 If those answers are visible, Switchboard is doing its job: the runtime blinked, but the
 coordination state survived.
 
+## 1.2 Triage a Mission Bot v4 mission that appears stuck
+
+Start with the mission cursor, not a service restart. Call
+`get_mission_context(project, task_id)` and compare `mission.handled_through` with
+`mission.latest_sequence`, then inspect the task's durable `wake_intents`.
+
+- `latest_sequence > handled_through` means a material event is waiting for the scoped
+  reducer. The three normal recovery edges are a GitHub/CI observation, a terminal runner
+  receipt, and the capacity projector's `execution_ended` event.
+- If a wake is terminal-failed, has no `runner_session_id`, and has no matching
+  `execution_ended` event, inspect the capacity projector. This is the BUG-248 failure
+  signature: the pre-runner failure has not been copied into the mission event inbox.
+- Restarting Autopilot does not repair that signature. The reducer starts work only when
+  `latest_sequence > handled_through`; it never inspects `event_type`, so
+  `handled_through == latest_sequence` remains a legitimate wait until a new durable event
+  is appended.
+- A lost GitHub or required-context delivery is covered by the five-minute
+  `observation_due` backstop. Let that backstop append the wake event and measure recovery
+  latency; do not substitute a manual start, retry, queue nudge, merge, table edit, or
+  service restart.
+
+For a canary, retain the ordered mission events, executions and generations, terminal
+receipts, PR and merge-group SHAs, required-context URLs, queue receipts, canonical merged
+SHA, and observed recovery latency.
+
 ## 2. Run the substrate (Plan VM) — already deployed
 ```bash
 ssh plan-vm; cd /opt/projectplanner
