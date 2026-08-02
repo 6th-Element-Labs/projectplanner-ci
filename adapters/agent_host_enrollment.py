@@ -27,7 +27,7 @@ import sys
 import tarfile
 import tempfile
 import time
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -605,9 +605,17 @@ def _default_paths(target_platform: str) -> dict[str, Path]:
 def render_service(target_platform: str, *, python: str, entrypoint: Path,
                    identity_path: Path, config_path: Path,
                    service_path: Path, log_root: Path,
-                   writable_roots: Iterable[Path] = ()) -> None:
+                   writable_roots: Iterable[Path] = (),
+                   environment: Mapping[str, str] | None = None) -> None:
     service_path.parent.mkdir(parents=True, exist_ok=True)
     log_root.mkdir(parents=True, exist_ok=True)
+    service_environment = {
+        str(key): str(value) for key, value in (environment or {}).items()
+    }
+    for key, value in service_environment.items():
+        if (not re.fullmatch(r"[A-Z][A-Z0-9_]*", key) or not value
+                or any(marker in value for marker in ("\x00", "\r", "\n"))):
+            raise EnrollmentError("service environment contains an invalid selector")
     arguments = [python, str(entrypoint), "service-run", "--identity", str(identity_path),
                  "--config", str(config_path)]
     if target_platform == "darwin":
@@ -620,7 +628,10 @@ def render_service(target_platform: str, *, python: str, entrypoint: Path,
             # session hand-rolled a urllib call against the GitHub API to open
             # its PR while another honestly blocked on "gh is not installed".
             # The service environment must make the finishing step boring.
-            "EnvironmentVariables": {"PATH": SERVICE_PATH_DARWIN},
+            "EnvironmentVariables": {
+                "PATH": SERVICE_PATH_DARWIN,
+                **service_environment,
+            },
             "RunAtLoad": True,
             "KeepAlive": {"SuccessfulExit": False},
             "ThrottleInterval": 5,
@@ -640,10 +651,15 @@ def render_service(target_platform: str, *, python: str, entrypoint: Path,
             str(log_root),
             *(str(Path(root)) for root in writable_roots),
         })
+        environment_lines = "".join(
+            f"Environment={_systemd_quote(f'{key}={value}')}\n"
+            for key, value in sorted(service_environment.items())
+        )
         content = (
             "[Unit]\nDescription=Switchboard personal Agent Host\nAfter=network-online.target\n"
             "Wants=network-online.target\n\n[Service]\nType=simple\n"
-            f"ExecStart={quoted}\nRestart=always\nRestartSec=5\nNoNewPrivileges=yes\n"
+            f"ExecStart={quoted}\n{environment_lines}"
+            "Restart=always\nRestartSec=5\nNoNewPrivileges=yes\n"
             "PrivateTmp=yes\nProtectSystem=strict\nProtectHome=read-only\n"
             f"ReadWritePaths={' '.join(_systemd_quote(root) for root in roots)}\n\n"
             "[Install]\nWantedBy=default.target\n"
@@ -658,6 +674,25 @@ def render_service(target_platform: str, *, python: str, entrypoint: Path,
 
 def _systemd_quote(value: str) -> str:
     return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _host_service_environment(
+    config: Mapping[str, Any], *, public_key_path: Path | None = None,
+) -> dict[str, str]:
+    """Derive updater/runtime selectors from the durable install config."""
+    configured_key = str(config.get("release_public_key_path") or "").strip()
+    key_path = Path(public_key_path).expanduser().resolve() if public_key_path else (
+        Path(configured_key).expanduser().resolve() if configured_key else None
+    )
+    codex_executable = str(config.get("codex_executable") or "").strip()
+    if key_path is None:
+        raise EnrollmentError("installed configuration lacks the release public key path")
+    if not codex_executable:
+        raise EnrollmentError("installed configuration lacks the Connect Codex executable")
+    return {
+        "PM_AGENT_HOST_PUBLIC_KEY_PATH": str(key_path),
+        "PM_CONNECT_CODEX_EXECUTABLE": codex_executable,
+    }
 
 
 def control_service(target_platform: str, action: str, service_path: Path,
@@ -1228,6 +1263,7 @@ def _finalize_install(
             service_path=service_path,
             log_root=log_root,
             writable_roots=(state_root, workspace_root, codex_home, source_repo_root),
+            environment=_host_service_environment(config),
         )
         state["finalization_step"] = "service_rendered"
         _atomic_json(state_path, state, 0o600)
@@ -1566,6 +1602,7 @@ def _install_host_unlocked(*, bundle_dir: Path, public_key_path: Path, bootstrap
         "provider_allowlist": sorted(set(enrollment.get("provider_allowlist") or [])),
         "local_auth_account_proof": local_auth["account_fingerprint"],
         "codex_executable": local_auth["codex_executable"],
+        "release_public_key_path": str(public_key_path.expanduser().resolve()),
         "platform": target_platform,
         "service_path": str(service_path),
         "repo_root": str(prefix / "current"),
@@ -1665,6 +1702,7 @@ def update_host(*, bundle_dir: Path, public_key_path: Path, state_path: Path,
         source_repo_root or config.get("source_repo_root") or "")
     work_source_root = _provision_host_source_mirror(source_repo, state_path.parent)
     config["work_source_root"] = str(work_source_root)
+    config["release_public_key_path"] = str(public_key_path.expanduser().resolve())
     current = prefix / "current"
     previous = current.resolve() if current.exists() else None
     release = _install_release(bundle_dir, manifest, prefix)
@@ -1678,12 +1716,19 @@ def update_host(*, bundle_dir: Path, public_key_path: Path, state_path: Path,
         previous_source = str(config_value.get("source_repo_root") or "").strip()
         if previous_source:
             roots.append(_validated_source_repo_root(previous_source))
+        configured_public_key = str(
+            config_value.get("release_public_key_path") or "").strip()
         render_service(
             state["platform"], python=sys.executable,
             entrypoint=prefix / "current" / manifest["entrypoint"],
             identity_path=Path(state["identity_path"]), config_path=config_path,
             service_path=Path(state["service_path"]),
-            log_root=Path(config_value["log_root"]), writable_roots=roots)
+            log_root=Path(config_value["log_root"]), writable_roots=roots,
+            # Older installs did not persist this trust-anchor path. The signed
+            # update invocation supplies it, including while rolling back.
+            environment=_host_service_environment(
+                config_value,
+                public_key_path=None if configured_public_key else public_key_path))
 
     try:
         config["agent_host_version"] = manifest["version"]

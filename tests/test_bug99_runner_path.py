@@ -37,6 +37,10 @@ with tempfile.TemporaryDirectory(prefix="bug99-") as tmp_raw:
         config_path=tmp / "config.json",
         service_path=service_path,
         log_root=tmp / "logs",
+        environment={
+            "PM_AGENT_HOST_PUBLIC_KEY_PATH": str(tmp / "release-public.pem"),
+            "PM_CONNECT_CODEX_EXECUTABLE": "/Applications/Codex.app/codex",
+        },
     )
     payload = plistlib.loads(service_path.read_bytes())
     env = payload.get("EnvironmentVariables") or {}
@@ -48,12 +52,17 @@ with tempfile.TemporaryDirectory(prefix="bug99-") as tmp_raw:
        "Homebrew (intel) / local installs are on the service PATH")
     ok(path.split(":")[-4:] == ["/usr/bin", "/bin", "/usr/sbin", "/sbin"],
        "system directories remain, after the local tool directories")
+    ok(env.get("PM_AGENT_HOST_PUBLIC_KEY_PATH") == str(tmp / "release-public.pem")
+       and env.get("PM_CONNECT_CODEX_EXECUTABLE") == "/Applications/Codex.app/codex",
+       "release verification and Connect runtime selectors survive service rendering")
     ok(payload.get("ProgramArguments", [None])[0] == "/usr/bin/python3"
        and payload.get("KeepAlive") == {"SuccessfulExit": False},
        "the rest of the service definition is unchanged")
 
     template = (Path(ROOT) / "deploy" / "agent-host" / "launchd.plist.in").read_text()
-    ok("EnvironmentVariables" in template and "/opt/homebrew/bin" in template,
+    ok("EnvironmentVariables" in template and "/opt/homebrew/bin" in template
+       and "PM_AGENT_HOST_PUBLIC_KEY_PATH" in template
+       and "PM_CONNECT_CODEX_EXECUTABLE" in template,
        "the reference template matches what the installer actually renders")
 
 print(f"\nBUG-99 runner PATH: {passed} passed, {failed} failed")

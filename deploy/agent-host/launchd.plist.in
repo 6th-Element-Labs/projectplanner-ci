@@ -11,7 +11,11 @@
     <string>--config</string><string>@CONFIG@</string>
   </array>
   <key>EnvironmentVariables</key>
-  <dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+  <dict>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>PM_AGENT_HOST_PUBLIC_KEY_PATH</key><string>@PUBLIC_KEY@</string>
+    <key>PM_CONNECT_CODEX_EXECUTABLE</key><string>@CODEX_EXECUTABLE@</string>
+  </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>ThrottleInterval</key><integer>5</integer>

@@ -10,6 +10,7 @@ import io
 import json
 import os
 from pathlib import Path
+import plistlib
 import re
 import shutil
 import stat
@@ -1121,6 +1122,8 @@ try:
     mac_state_path = mac_paths["state_root"] / "state.json"
     mac_identity = json.loads(mac_identity_path.read_text())
     mac_config = json.loads(mac_config_path.read_text())
+    mac_service_environment = plistlib.loads(
+        mac_paths["service_path"].read_bytes())["EnvironmentVariables"]
     mac_codex_home = Path(mac_config["codex_home"])
     initial_mac_token = mac_identity["host_token"]
     ok(mac_install["installed"] and stat.S_IMODE(mac_identity_path.stat().st_mode) == 0o600,
@@ -1136,6 +1139,7 @@ try:
        and mac_config["service_path"] == str(mac_paths["service_path"])
        and mac_config["repo_root"] == str(mac_paths["prefix"] / "current")
        and mac_config["source_repo_root"] == str(ROOT.resolve())
+       and mac_config["release_public_key_path"] == str(public_path.resolve())
        and Path(mac_config["work_source_root"]).parent
        == (mac_paths["state_root"] / "source").resolve()
        and Path(mac_config["work_source_root"]) != ROOT.resolve()
@@ -1146,6 +1150,10 @@ try:
        and stat.S_IMODE(mac_codex_home.stat().st_mode) == 0o700
        and stat.S_IMODE((mac_codex_home / "auth.json").stat().st_mode) == 0o600,
        "installed policy comes only from the server-issued enrollment record")
+    ok(mac_service_environment["PM_AGENT_HOST_PUBLIC_KEY_PATH"]
+       == str(public_path.resolve())
+       and mac_service_environment["PM_CONNECT_CODEX_EXECUTABLE"] == str(TEST_CODEX),
+       "macOS install renders updater and Connect selectors from durable config")
     ok(codex_calls[:2] == [[str(TEST_CODEX), "--version"],
                            [str(TEST_CODEX), "login", "status"]]
        and mac_config["codex_executable"] == str(TEST_CODEX),
@@ -1906,10 +1914,18 @@ try:
        and store.get_principal_by_token(PROJECT, rotated_token) is not None,
        "rotated bearer invalidates the previous token immediately")
 
+    # 0.4.20 and earlier relied on selectors patched directly into launchd;
+    # their config did not yet carry the release trust-anchor path. Exercise
+    # that exact upgrade shape so the first fixed release migrates it durably.
+    pre_selector_config = json.loads(mac_config_path.read_text())
+    pre_selector_config.pop("release_public_key_path", None)
+    enrollment._atomic_json(mac_config_path, pre_selector_config, 0o600)
     manifest_021 = enrollment.create_signed_bundle(ROOT, bundle_021, "0.2.1", private_path)
     updated = enrollment.update_host(
         bundle_dir=bundle_021, public_key_path=public_path, state_path=mac_state_path,
         service_runner=fake_service)
+    updated_service_environment = plistlib.loads(
+        mac_paths["service_path"].read_bytes())["EnvironmentVariables"]
     retry_prefix = TMP / "signed-release-retry"
     retry_release = enrollment._install_release(bundle_021, manifest_021, retry_prefix)
     retry_entrypoint = retry_release / manifest_021["entrypoint"]
@@ -1922,10 +1938,15 @@ try:
     ok(updated == {"updated": True, "version": "0.2.1"}
        and (mac_paths["prefix"] / "current").resolve().name == "0.2.1"
        and json.loads(mac_config_path.read_text())["agent_host_version"] == "0.2.1"
+       and updated_service_environment["PM_AGENT_HOST_PUBLIC_KEY_PATH"]
+       == str(public_path.resolve())
+       and updated_service_environment["PM_CONNECT_CODEX_EXECUTABLE"] == str(TEST_CODEX)
        and corrupted_retry_denied,
-       "signed update advances current/config and refuses mismatched pre-existing release bytes")
+       "signed update preserves service selectors and refuses mismatched release bytes")
     bundle_022 = TMP / "bundle-0.2.2"
     enrollment.create_signed_bundle(ROOT, bundle_022, "0.2.2", private_path)
+    alternate_public_path = TMP / "alternate-bundle-signing-public.pem"
+    alternate_public_path.write_bytes(public_path.read_bytes())
     failed_restart_calls = []
 
     def fail_new_then_restart_rollback(command, **kwargs):
@@ -1942,7 +1963,7 @@ try:
 
     try:
         enrollment.update_host(
-            bundle_dir=bundle_022, public_key_path=public_path,
+            bundle_dir=bundle_022, public_key_path=alternate_public_path,
             state_path=mac_state_path,
             service_runner=fail_new_then_restart_rollback)
         rollback_visible = False
@@ -1952,10 +1973,14 @@ try:
         call for call in failed_restart_calls
         if call[1] == "bootstrap"
     ]
+    rollback_service_environment = plistlib.loads(
+        mac_paths["service_path"].read_bytes())["EnvironmentVariables"]
     ok(rollback_visible and len(rollback_restarts) == 2
        and (mac_paths["prefix"] / "current").resolve().name == "0.2.1"
-       and json.loads(mac_config_path.read_text())["agent_host_version"] == "0.2.1",
-       "failed update restores and restarts the previous signed release")
+       and json.loads(mac_config_path.read_text())["agent_host_version"] == "0.2.1"
+       and rollback_service_environment["PM_AGENT_HOST_PUBLIC_KEY_PATH"]
+       == str(public_path.resolve()),
+       "failed update restores the previous release and its trust-anchor selector")
     try:
         enrollment.install_host(
             bundle_dir=bundle_020, public_key_path=public_path,
