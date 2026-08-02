@@ -371,7 +371,11 @@ def _step_plan_agent(project_id: str, params: Mapping[str, Any]) -> Dict[str, An
     if not question:
         raise ValueError("question required")
     history = params.get("history") if isinstance(params.get("history"), list) else []
-    result = agent.run(None, question, history=history, project=project_id)
+    session = str(params.get("session") or "plan")
+    if session == "scope":
+        result = agent.run_project_chat(question, history=history, project=project_id)
+    else:
+        result = agent.run(None, question, history=history, project=project_id)
     answer = result.get("answer") or ""
     payload = {
         "run_id": params.get("run_id"),
@@ -380,7 +384,6 @@ def _step_plan_agent(project_id: str, params: Mapping[str, Any]) -> Dict[str, An
         "sources": result.get("sources") or [],
     }
     if params.get("record_chat"):
-        session = str(params.get("session") or "plan")
         prior = store.recent_chat(session, 100, project=project_id)
         already_recorded = any(
             item.get("role") == "assistant"

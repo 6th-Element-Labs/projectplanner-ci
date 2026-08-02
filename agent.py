@@ -19,6 +19,8 @@ import store
 BASE = os.environ.get("PM_LLM_BASE_URL", "http://127.0.0.1:8095/v1")
 KEY = os.environ.get("PM_LLM_KEY") or os.environ.get("LLM_GATEWAY_MASTER_KEY", "")
 CHAT_MODEL = os.environ.get("PM_LLM_CHAT_MODEL", "taikun-chat")
+SCOPE_CHAT_MODEL = os.environ.get("PM_LLM_SCOPE_MODEL", "taikun-scope")
+SCOPE_REASONING_EFFORT = os.environ.get("PM_LLM_SCOPE_REASONING_EFFORT", "high")
 # Tool-loop budgets. Interactive chat stays snappy at 6; inbound triage (a call transcript,
 # forwarded thread, or document touching many tasks) needs more grounding+propose turns, so it
 # gets a larger budget. Both are env-overridable for tuning without a redeploy.
@@ -198,6 +200,13 @@ def tools_for_project(project="maxwell"):
     }})
     return tools
 
+
+def project_chat_tools(project="maxwell"):
+    """Read-only project tools for ordinary conversation in Scope."""
+    allowed = {"get_project_contract", "doc_search", "search_tasks", "get_task", "plan_signals"}
+    return [tool for tool in tools_for_project(project)
+            if tool["function"]["name"] in allowed]
+
 # Editable fields the agent may propose (mirrors store.EDITABLE minus internal ones).
 _PROPOSABLE = ["title", "description", "status", "assignee", "owner_org", "owner_person_or_role",
                "phase", "effort_days", "start_date", "finish_date", "risk_level", "is_blocking",
@@ -266,11 +275,14 @@ def _system(task, project="maxwell"):
     )
 
 
-def _chat(messages, tool_choice="auto", meta=None, tools=None):
+def _chat(messages, tool_choice="auto", meta=None, tools=None,
+          model=None, reasoning_effort=None):
     # No temperature: gpt-5.x only supports the default (1). Add back only for models that allow it.
     # tool_choice="none" forces a tool-free turn (used to flush a final summary when out of steps).
-    body = {"model": CHAT_MODEL, "messages": messages, "tools": tools or TOOLS,
+    body = {"model": model or CHAT_MODEL, "messages": messages, "tools": tools or TOOLS,
             "tool_choice": tool_choice}
+    if reasoning_effort:
+        body["reasoning_effort"] = reasoning_effort
     if meta:
         # UI-12: attribute this gateway call's spend (source=agent, + task/project when scoped).
         body["metadata"] = meta
@@ -366,7 +378,8 @@ def _search_tasks(args, project="maxwell"):
     return out[:60]
 
 
-def run(task, message, history=None, system=None, max_iters=None, project="maxwell"):
+def run(task, message, history=None, system=None, max_iters=None, project="maxwell",
+        tools=None, model=None, reasoning_effort=None):
     """task=None runs the PLAN-WIDE agent; a task dict runs the per-task agent; pass
     `system` to override the prompt (used by triage). `max_iters` overrides the tool-loop
     budget — triage passes a larger one since inbound calls/threads need more grounding turns.
@@ -374,7 +387,7 @@ def run(task, message, history=None, system=None, max_iters=None, project="maxwe
     'helm', or 'switchboard')."""
     if system is None:
         system = _system(task, project) if task else _system_global(project)
-    project_tools = tools_for_project(project)
+    project_tools = tools or tools_for_project(project)
     iters = max_iters or MAX_ITERS
     msgs = [{"role": "system", "content": system}]
     for h in (history or []):
@@ -395,12 +408,15 @@ def run(task, message, history=None, system=None, max_iters=None, project="maxwe
         # (e.g. a call transcript touching many tasks) burns the whole budget grounding and
         # returns "(reached step limit)" with zero proposals.
         if i == iters - 1:
+            can_propose = any(tool["function"]["name"].startswith("propose_")
+                              for tool in project_tools)
+            closing = ("Make any remaining requested proposals, then write your final summary."
+                       if can_propose else
+                       "Do not call another tool. Answer the user directly and concisely.")
             msgs.append({"role": "system", "content":
-                         "You are on your LAST step. Do NOT call read-only tools (doc_search/"
-                         "search_tasks/get_task/plan_signals) again. Make any remaining propose_* "
-                         "(and set_recipients/dispatch_to_dev) calls the message clearly implies, "
-                         "then write your final summary."})
-        m = _chat(msgs, meta=chat_meta, tools=project_tools)
+                         "You are on your LAST step. " + closing})
+        m = _chat(msgs, meta=chat_meta, tools=project_tools,
+                  model=model, reasoning_effort=reasoning_effort)
         last = m
         tcs = m.get("tool_calls")
         if not tcs:
@@ -505,7 +521,8 @@ def run(task, message, history=None, system=None, max_iters=None, project="maxwe
     answer = ""
     try:
         answer = (_chat(msgs, tool_choice="none", meta=chat_meta,
-                        tools=project_tools).get("content") or "").strip()
+                        tools=project_tools, model=model,
+                        reasoning_effort=reasoning_effort).get("content") or "").strip()
     except Exception:
         pass
     if not answer:
@@ -517,6 +534,28 @@ def run(task, message, history=None, system=None, max_iters=None, project="maxwe
                      if proposals else
                      "No changes were staged yet — re-send or ask a focused follow-up so I can finish."))
     return _result(answer, proposals, new_tasks, sources, recipients, dispatch_targets)
+
+
+def run_project_chat(message, history=None, project="maxwell"):
+    """Normal project conversation: reason, read project context when useful, and reply.
+
+    This deliberately excludes proposal and dispatch tools. Scope chat is a conversation,
+    not a hidden workflow or an automatic mutation path.
+    """
+    project_item = next((item for item in store.projects() if item["id"] == project), {})
+    label = project_item.get("label") or project
+    purpose = (project_item.get("purpose") or store.project_access(project).get("purpose")
+               or "its project outcomes")
+    system = (
+        f"You are the project agent for {label}. Work with the user as a thoughtful project "
+        f"partner. The project's purpose is: {purpose}. Answer naturally and directly. Use the "
+        "available read-only project tools whenever live board state, project documents, scope, "
+        "decisions, constraints, or history would improve the answer. Never claim that you changed "
+        "the project, Scope, or tasks. Keep responses concise unless the user asks for detail."
+    )
+    return run(None, message, history=history, system=system, project=project,
+               tools=project_chat_tools(project), model=SCOPE_CHAT_MODEL,
+               reasoning_effort=SCOPE_REASONING_EFFORT)
 
 
 def _result(answer, proposals, new_tasks, sources, recipients=None, dispatch_targets=None):
