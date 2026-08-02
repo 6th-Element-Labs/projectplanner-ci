@@ -39,7 +39,9 @@
                 list.innerHTML = '<div class="text-secondary small p-3"><span class="spinner-border spinner-border-sm me-2"></span>Loading rooms…</div>';
             }
             try {
-                const response = await fetch('api/coordination?project=' + encodeURIComponent(project()), {
+                // Rooms only renders a bounded recent feed. Ask Coord for the same
+                // bounded working set so large project histories do not delay first paint.
+                const response = await fetch('api/coordination?project=' + encodeURIComponent(project()) + '&limit=100', {
                     credentials: 'same-origin', cache: 'no-cache',
                 });
                 const data = await response.json().catch(() => ({}));
@@ -55,7 +57,7 @@
                             this._roomsLoaded = false;
                             this.initRooms(true);
                         }
-                    }, 15000);
+                    }, 60000);
                 }
             } catch (error) {
                 if (list) list.innerHTML = '<div class="text-danger small p-3"><i class="ti ti-alert-circle me-1"></i>' + this.esc(error.message || 'Could not load rooms.') + '</div>';
