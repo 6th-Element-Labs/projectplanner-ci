@@ -1,11 +1,4 @@
-/* ============================================================================
-   taikun-scope.css — UI-28 slice 1: the Scope page (advisory) + house tokens.
-   Additive only: nothing here restyles an existing surface. The shared tokens
-   at the top are the house status language from the restyle wireframes
-   (docs/ui/switchboard-live-restyle.html); promote them into taikun-ui.css
-   when the page-by-page restyle lands.
-   Type sits on Tabler's own ladder: 1.5 / 1.25 / 1 / .875 / .75 / .625rem.
-   ============================================================================ */
+/* UI-82 — conversation-first Scope with a Watch-style artifact drawer. */
 
 /* ── shared house tokens: dots + words instead of badge pills ── */
 .sdot{ display:inline-block; width:.55rem; height:.55rem; border-radius:50%; flex:0 0 auto; vertical-align:middle; }
@@ -15,42 +8,69 @@
 .tk-eyebrow{ font-size:.75rem; font-weight:500; text-transform:uppercase; letter-spacing:.04em; line-height:1rem; color:var(--tblr-secondary); }
 .tk-mono{ font-family:var(--tblr-font-monospace,ui-monospace,SFMono-Regular,Menlo,monospace); font-variant-numeric:tabular-nums; }
 
-/* ── the kickoff ladder rail ── */
-.scope-rail .rail-step{ display:flex; align-items:center; gap:.65rem; width:100%; text-align:left; border:0; background:transparent;
-  padding:.5rem .65rem; border-radius:.5rem; cursor:pointer; color:var(--tblr-body-color); }
-.scope-rail .rail-step:hover{ background:var(--tblr-bg-surface-secondary,#f6f7f9); }
-.scope-rail .rail-step.active{ background:var(--tblr-bg-surface-secondary,#f6f7f9); box-shadow:inset 2.5px 0 0 var(--tblr-primary); }
-.scope-rail .rn{ width:1.5rem; height:1.5rem; border-radius:50%; display:grid; place-items:center; font-size:.75rem; font-weight:600;
-  border:1.5px solid var(--tblr-border-color); background:var(--tblr-bg-surface,#fff); flex:0 0 auto; }
-.scope-rail .rail-step.done .rn{ background:rgba(47,179,68,.12); border-color:transparent; color:#2fb344; }
-.scope-rail .rail-step.now .rn{ background:var(--tblr-primary); border-color:var(--tblr-primary); color:#fff; }
-.scope-rail .rail-step.stale .rn{ background:rgba(247,103,7,.12); border-color:transparent; color:#f76707; }
-.scope-rail .rail-step.blocked .rn{ color:var(--tblr-secondary); }
-.scope-rail .rt{ font-size:.875rem; font-weight:600; }
-.scope-rail .rm{ margin-left:auto; font-size:.75rem; color:var(--tblr-secondary); white-space:nowrap; }
-
-/* ── section switcher (Vision · PRD · Architecture · Rules) ── */
-.scope-switch{ display:flex; gap:.25rem; flex-wrap:wrap; }
-.scope-switch button{ display:inline-flex; align-items:center; gap:.45rem; border:1px solid transparent; background:transparent;
-  padding:.35rem .7rem; border-radius:.5rem; font-size:.875rem; font-weight:500; color:var(--tblr-secondary); cursor:pointer; }
-.scope-switch button:hover{ background:var(--tblr-bg-surface-secondary,#f6f7f9); }
-.scope-switch button.on{ background:var(--tblr-bg-surface,#fff); border-color:var(--tblr-border-color); color:var(--tblr-body-color);
-  box-shadow:0 1px 2px rgba(16,24,40,.05); }
-.scope-switch .st{ width:1.1rem; height:1.1rem; border-radius:50%; display:grid; place-items:center; font-size:.625rem; font-weight:600;
-  border:1px solid var(--tblr-border-color); background:var(--tblr-bg-surface,#fff); }
-.scope-switch button.done .st{ background:rgba(47,179,68,.12); border-color:transparent; color:#2fb344; }
-.scope-switch button.now .st{ background:var(--tblr-primary); border-color:var(--tblr-primary); color:#fff; }
-.scope-switch button.stale .st{ background:rgba(247,103,7,.12); border-color:transparent; color:#f76707; }
-
-.scope-sec{ display:none; } .scope-sec.on{ display:block; }
-.scope-foot{ display:flex; align-items:center; gap:.6rem; border-top:1px solid var(--tblr-border-color); padding-top:.75rem; margin-top:1rem;
-  font-size:.875rem; color:var(--tblr-body-color); }
-.scope-foot.done{ color:#2fb344; } .scope-foot.blocked{ color:var(--tblr-secondary); }
-
-/* ── verdict strip ── */
-.scope-verdict{ border:1px solid rgba(247,103,7,.35); background:rgba(247,103,7,.05); border-radius:.6rem; padding:.8rem 1rem;
-  display:flex; align-items:flex-start; gap:.7rem; }
-.scope-verdict.ok{ border-color:rgba(47,179,68,.35); background:rgba(47,179,68,.05); }
+.tk-scope-page{ --scope-drawer-width:min(480px,44vw); }
+.tk-scope-head{ display:flex;align-items:flex-start;justify-content:space-between;gap:1.5rem; }
+.tk-scope-breadcrumb{ color:var(--tblr-secondary);font-size:.875rem;margin-bottom:.35rem; }
+.tk-scope-conversation{ min-height:calc(100vh - 13rem);overflow:hidden; }
+.tk-scope-chat-head{ display:flex;justify-content:space-between;align-items:center;min-height:4.25rem; }
+.tk-scope-chat-log{ min-height:22rem;max-height:calc(100vh - 25rem);overflow-y:auto;padding:1.25rem clamp(1rem,5vw,5rem); }
+.tk-scope-empty{ max-width:42rem;margin:5vh auto;text-align:center; }
+.tk-scope-empty-icon{ display:grid;place-items:center;width:3rem;height:3rem;border-radius:50%;margin:0 auto 1rem;background:var(--tblr-primary-lt);color:var(--tblr-primary);font-size:1.35rem; }
+.tk-scope-empty h3{ margin:0 0 .5rem;font-size:1.25rem; }
+.tk-scope-empty p{ color:var(--tblr-secondary); }
+.tk-scope-prompts{ display:flex;justify-content:center;gap:.5rem;flex-wrap:wrap;margin-top:1.25rem; }
+.tk-scope-prompts button{ border:1px solid var(--tblr-border-color);background:var(--tblr-bg-surface);border-radius:999px;padding:.45rem .8rem;color:var(--tblr-body-color);font-size:.8rem; }
+.tk-scope-prompts button:hover{ border-color:var(--tblr-primary);color:var(--tblr-primary); }
+.tk-scope-composer{ background:var(--tblr-bg-surface); }
+.tk-scope-composer textarea{ resize:none;min-height:3.25rem; }
+.tk-scope-artifact-trigger{ display:flex;width:100%;align-items:center;gap:.65rem;border:0;border-bottom:1px solid var(--tblr-border-color);background:transparent;color:var(--tblr-body-color);padding:0 0 .7rem;margin:0 0 .75rem;text-align:left; }
+.tk-scope-artifact-trigger .text-secondary{ margin-left:auto; }
+.tk-scope-bubble{ display:flex;margin:.75rem 0; }
+.tk-scope-bubble.user{ justify-content:flex-end; }
+.tk-scope-bubble>div{ max-width:min(44rem,86%);padding:.7rem .85rem;border-radius:.75rem;background:var(--tblr-bg-surface-secondary);line-height:1.5; }
+.tk-scope-bubble.user>div{ background:var(--tblr-primary);color:#fff;border-bottom-right-radius:.2rem; }
+.tk-scope-bubble.assistant>div{ border:1px solid var(--tblr-border-color);background:var(--tblr-bg-surface);border-bottom-left-radius:.2rem; }
+.tk-scope-bubble.error>div{ background:var(--tblr-danger-lt);color:var(--tblr-danger); }
+.tk-scope-source{ margin-top:.5rem;color:var(--tblr-secondary);font-size:.7rem; }
+.tk-scope-thinking{ display:inline-flex;gap:.3rem;align-items:center;color:var(--tblr-secondary);font-size:.8rem; }
+.tk-scope-thinking i{ animation:scope-spin 1s linear infinite; }
+@keyframes scope-spin{ to{ transform:rotate(360deg); } }
+.tk-scope-scrim{ position:fixed;inset:0;z-index:1060;background:rgba(20,22,28,.3);opacity:0;pointer-events:none;transition:opacity .2s; }
+.tk-scope-scrim.show{ opacity:1;pointer-events:auto; }
+.tk-scope-drawer{ position:fixed;top:0;right:0;bottom:0;z-index:1070;width:var(--scope-drawer-width);display:flex;flex-direction:column;background:var(--tblr-bg-surface);border-left:1px solid var(--tblr-border-color);box-shadow:-24px 0 70px -24px rgba(16,24,40,.4);transform:translateX(103%);transition:transform .2s,width .2s; }
+.tk-scope-drawer.show{ transform:none; }
+.tk-scope-drawer.expanded{ width:min(760px,70vw); }
+.tk-scope-drawer-head,.tk-scope-drawer-foot{ padding:1rem 1.15rem;border-bottom:1px solid var(--tblr-border-color);display:flex;align-items:center;justify-content:space-between;gap:1rem; }
+.tk-scope-drawer-foot{ border-top:1px solid var(--tblr-border-color);border-bottom:0; }
+.tk-scope-drawer-status{ display:flex;align-items:flex-start;gap:.6rem;padding:.8rem 1.15rem;background:var(--tblr-bg-surface-secondary); }
+.tk-scope-drawer-status .sdot{ margin-top:.3rem;background:#f76707; }
+.tk-scope-drawer-status.ok .sdot{ background:#2fb344; }
+.tk-scope-sections{ display:flex;gap:.25rem;overflow-x:auto;padding:.65rem 1rem;border-bottom:1px solid var(--tblr-border-color); }
+.tk-scope-sections button{ flex:0 0 auto;border:0;background:transparent;color:var(--tblr-secondary);padding:.4rem .55rem;border-radius:.35rem;font-size:.75rem; }
+.tk-scope-sections button.on{ background:var(--tblr-primary-lt);color:var(--tblr-primary);font-weight:600; }
+.tk-scope-artifact-body{ flex:1;overflow:auto;padding:1.25rem 1.15rem; }
+.tk-scope-artifact-body h4{ font-size:1rem;margin:1.4rem 0 .45rem; }
+.tk-scope-artifact-body h4:first-child{ margin-top:0; }
+.tk-scope-artifact-body p,.tk-scope-artifact-body li{ color:var(--tblr-secondary);line-height:1.55; }
+.tk-scope-approval{ display:flex;align-items:center;gap:.65rem;margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--tblr-border-color); }
+.tk-scope-approval .btn{ margin-left:auto; }
+@media (min-width: 992px){
+  .tk-scope-page.drawer-open .tk-scope-head,.tk-scope-page.drawer-open .tk-scope-conversation{ margin-right:calc(var(--scope-drawer-width) - 1rem);transition:margin .2s; }
+  .tk-scope-page.drawer-expanded .tk-scope-head,.tk-scope-page.drawer-expanded .tk-scope-conversation{ margin-right:min(745px,69vw); }
+}
+@media (max-width: 767.98px){
+  .tk-scope-head{ display:block; }
+  .tk-scope-head>.btn{ margin-top:1rem; }
+  .tk-scope-conversation{ min-height:calc(100vh - 13rem);margin-bottom:1rem; }
+  .tk-scope-chat-head{ padding:.8rem 1rem; }
+  .tk-scope-chat-log{ min-height:18rem;max-height:calc(100vh - 28rem);padding:1rem; }
+  .tk-scope-empty{ margin:2rem auto; }
+  .tk-scope-prompts{ justify-content:flex-start; }
+  .tk-scope-drawer{ top:auto;left:0;width:100%;height:min(68vh,620px);border-left:0;border-top:1px solid var(--tblr-border-color);border-radius:1rem 1rem 0 0;transform:translateY(103%); }
+  .tk-scope-drawer.show{ transform:none; }
+  .tk-scope-drawer.expanded{ width:100%;height:calc(100vh - env(safe-area-inset-top));border-radius:0; }
+  .tk-scope-drawer-foot{ padding-bottom:calc(1rem + env(safe-area-inset-bottom)); }
+}
 /* UI-74 · Deliverables page density and responsive task controls. */
 .mission-work-item{ transition:background-color .12s ease; }
 .mission-work-item:hover{ background:var(--tblr-bg-surface-secondary); }

@@ -1,182 +1,243 @@
-/* UI-28/UI-30: the Scope page — the gated kickoff ladder, server-recorded.
- * ============================================================================
- * Vision → PRD → Architecture → Operating rules → Scope breakdown. Approving
- * one unlocks the next; revising an upstream artifact marks dependents stale;
- * the completeness projection derives from all five.
- *
- * UI-30: state lives in the kickoff record (GET /api/kickoff; approve/revise
- * POSTs) — durable, attributed, shared across the team. Kickoff approvals are
- * advisory planning history and never gate claims or merges.
- * Self-contained: wires only inside #tab-scope, no app.js changes.
- */
+/* UI-82: discussion-first Scope. Conversation and kickoff approvals remain
+ * separate control surfaces: chat may propose; only explicit buttons mutate
+ * the server-backed advisory kickoff record. */
 (function () {
     'use strict';
 
-    const LADDER = [
-        { id: 'vision', name: 'Vision / POV' },
-        { id: 'prd', name: 'PRD' },
-        { id: 'arch', name: 'Architecture' },
-        { id: 'rules', name: 'Operating rules' },
-        { id: 'scope', name: 'Scope breakdown' },
+    const SESSION = 'scope';
+    const SECTIONS = [
+        { id: 'vision', label: 'Outcome', title: 'Outcome and point of view',
+          kicker: 'User · why now · non-goals · measurable proof',
+          body: 'State the change this project must create, who experiences it, why it matters now, and what is deliberately outside the boundary.' },
+        { id: 'prd', label: 'Requirements', title: 'Requirements and proof',
+          kicker: 'Journeys · acceptance · open decisions',
+          body: 'Make each important journey explicit and each requirement testable. Carry unanswered questions as named decisions instead of silently guessing.' },
+        { id: 'arch', label: 'Architecture', title: 'Architecture and constraints',
+          kicker: 'Reuse map · trust boundaries · data · integrations',
+          body: 'Name what already exists, what can be extended, and what is genuinely new. Record technical constraints and trust boundaries that delivery agents must respect.' },
+        { id: 'rules', label: 'Guidelines', title: 'Technical guidelines and working agreement',
+          kicker: 'Ownership · validation · definition of done',
+          body: 'Capture the operating rules every contributor inherits: ownership boundaries, validation expectations, prohibited shortcuts, and how completion is proven.' },
+        { id: 'scope', label: 'Breakdown', title: 'Scope breakdown',
+          kicker: 'Deliverables · dependencies · milestones · exclusions',
+          body: 'Translate the agreement into a bounded delivery graph. The graph remains in Plan; this approval records that its boundaries match the agreed scope.' },
     ];
-    const SHORT = { vision: 'Vision', prd: 'PRD', arch: 'Architecture', rules: 'Operating rules', scope: 'Scope breakdown' };
 
-    let state = null;          // last GET /api/kickoff payload
-    let curSec = 'vision';
+    let kickoff = null;
+    let section = 'vision';
+    let runId = null;
 
     function el(id) { return document.getElementById(id); }
-    function proj() { return window.PM_PROJECT || 'maxwell'; }
-    function gate(id) { return (state && state.gates || []).find((g) => g.gate === id) || { s: 'wait', version: 0 }; }
-    function esc(s) {
-        return String(s == null ? '' : s).replace(/[&<>"]/g, (c) => (
-            { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    function project() { return (window.PM_PROJECT || '').trim() || 'maxwell'; }
+    function qs(extra) {
+        const params = new URLSearchParams(extra || {});
+        params.set('project', project());
+        return params.toString();
     }
-    function flash(msg, cls) {
-        const f = el('scope-flash');
-        if (!f) return;
-        f.className = 'alert py-2 px-3 ' + (cls || 'alert-info');
-        f.textContent = msg;
-        f.classList.remove('d-none');
-        clearTimeout(flash._t);
-        flash._t = setTimeout(() => f.classList.add('d-none'), 4000);
+    function esc(value) {
+        return String(value == null ? '' : value).replace(/[&<>"']/g, (char) => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+        }[char]));
+    }
+    function rich(value) {
+        return esc(value).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+            .replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\n/g, '<br>');
+    }
+    function gate(id) {
+        return ((kickoff && kickoff.gates) || []).find((item) => item.gate === id)
+            || { gate: id, s: 'wait', version: 0 };
+    }
+    function flash(message, kind) {
+        const node = el('scope-flash');
+        if (!node) return;
+        node.className = 'alert py-2 px-3 mt-3 alert-' + (kind || 'info');
+        node.textContent = message;
+        clearTimeout(flash.timer);
+        flash.timer = setTimeout(() => node.classList.add('d-none'), 4500);
+    }
+    function version() {
+        return Math.max(0, ...((kickoff && kickoff.gates) || []).map((item) => Number(item.version) || 0));
+    }
+    function openCount() {
+        return ((kickoff && kickoff.gates) || SECTIONS).filter((item) => item.s !== 'ok').length;
     }
 
-    async function load() {
+    async function loadKickoff() {
         try {
-            const res = await fetch(`api/kickoff?project=${encodeURIComponent(proj())}`, { cache: 'no-store' });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
-            state = data;
-        } catch (e) {
-            flash('Could not load the kickoff record: ' + e.message, 'alert-danger');
-            state = { gates: LADDER.map((a, i) => ({ gate: a.id, order: i, s: i ? 'wait' : 'now', version: 0 })), frontier: 'vision', build_authorized: false };
+            const response = await fetch('api/kickoff?' + qs(), { cache: 'no-store' });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(data.detail || ('HTTP ' + response.status));
+            kickoff = data;
+        } catch (error) {
+            kickoff = { gates: SECTIONS.map((item, index) => ({ gate: item.id, s: index ? 'wait' : 'now', version: 0 })), frontier: 'vision', build_authorized: false };
+            flash('Could not load the kickoff record: ' + error.message, 'danger');
         }
-        render();
+        renderArtifact();
     }
 
-    async function post(action, gid) {
+    async function mutateGate(action, id) {
         try {
-            const res = await fetch(`api/kickoff/${encodeURIComponent(gid)}/${action}?project=${encodeURIComponent(proj())}`, {
+            const response = await fetch('api/kickoff/' + encodeURIComponent(id) + '/' + action + '?' + qs(), {
                 method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
             });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
-            state = data;
-            render();
-            if (action === 'approve') {
-                flash('Approved: ' + SHORT[gid] + ' — recorded on the project.'
-                    + (state.build_authorized ? ' All 5 gates green.' : ''), 'alert-success');
-            } else {
-                flash(SHORT[gid] + ' revised — downstream approvals are stale until re-approved.', 'alert-warning');
-            }
-        } catch (e) {
-            flash(action + ' failed: ' + e.message, 'alert-danger');
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(data.detail || ('HTTP ' + response.status));
+            kickoff = data;
+            renderArtifact();
+            flash((action === 'approve' ? 'Approved ' : 'Reopened ') + SECTIONS.find((item) => item.id === id).label + ' on the project.', action === 'approve' ? 'success' : 'warning');
+        } catch (error) {
+            flash('Kickoff update failed: ' + error.message, 'danger');
         }
     }
 
-    function fmtWhen(ts) {
-        if (!ts) return '';
-        try { return new Date(ts * 1000).toLocaleDateString(); } catch (e) { return ''; }
+    function stateMark(item) {
+        const data = gate(item.id);
+        if (data.s === 'ok') return '<span class="text-success scope-sec-state"><i class="ti ti-check"></i></span>';
+        if (data.s === 'stale') return '<span class="text-warning scope-sec-state"><i class="ti ti-alert-triangle"></i></span>';
+        if (kickoff && kickoff.frontier === item.id) return '<span class="text-primary scope-sec-state"><i class="ti ti-circle-dot"></i></span>';
+        return '<span class="text-secondary scope-sec-state"><i class="ti ti-lock"></i></span>';
     }
 
-    function render() {
-        if (!state) return;
-        const fr = state.frontier;
-        el('scope-rail').innerHTML = LADDER.map((a, i) => {
-            const g = gate(a.id);
-            let cls, node, meta;
-            if (g.s === 'ok') { cls = 'done'; node = '<i class="ti ti-check"></i>'; meta = 'Approved v' + g.version + (g.approved_by ? ' · ' + esc(g.approved_by) : ''); }
-            else if (a.id === fr && g.s !== 'stale') { cls = 'now'; node = String(i + 1); meta = 'Ready to approve'; }
-            else if (g.s === 'stale') { cls = 'stale'; node = '<i class="ti ti-alert-triangle"></i>'; meta = 'Stale — re-approve'; }
-            else { cls = 'blocked'; node = '<i class="ti ti-lock" style="font-size:.625rem"></i>'; meta = 'Locked'; }
-            return `<button type="button" class="rail-step ${cls}${a.id === curSec ? ' active' : ''}" data-gate="${a.id}">
-                <span class="rn">${node}</span><span class="rt">${SHORT[a.id]}</span><span class="rm">${meta}</span></button>`;
-        }).join('');
-        el('scope-rail').querySelectorAll('[data-gate]').forEach((b) =>
-            b.addEventListener('click', () => showSection(b.dataset.gate)));
-
-        ['vision', 'prd', 'arch', 'rules'].forEach((id) => {
-            const b = document.querySelector('#scope-switch button[data-sec="' + id + '"]');
-            if (!b) return;
-            const g = gate(id); const i = LADDER.findIndex((a) => a.id === id); const stEl = b.querySelector('.st');
-            b.classList.remove('done', 'now', 'stale');
-            if (g.s === 'ok') { b.classList.add('done'); stEl.innerHTML = '<i class="ti ti-check"></i>'; }
-            else if (id === fr && g.s !== 'stale') { b.classList.add('now'); stEl.textContent = String(i + 1); }
-            else if (g.s === 'stale') { b.classList.add('stale'); stEl.textContent = '!'; }
-            else stEl.innerHTML = '<i class="ti ti-lock" style="font-size:.5rem"></i>';
-        });
-
-        ['vision', 'prd', 'arch', 'rules'].forEach((id) => {
-            const f = document.querySelector('.scope-foot[data-foot="' + id + '"]');
-            if (!f) return;
-            const g = gate(id); const i = LADDER.findIndex((a) => a.id === id);
-            f.className = 'scope-foot';
-            if (g.s === 'ok') {
-                f.classList.add('done');
-                f.innerHTML = `<i class="ti ti-circle-check"></i><span>Approved v${g.version}${g.approved_by ? ' · ' + esc(g.approved_by) : ''}${g.approved_at ? ' · ' + fmtWhen(g.approved_at) : ''}</span>
-                    <a href="#" class="ms-2" data-revise="${id}">revise</a>`;
-            } else if (id === fr && g.s !== 'stale') {
-                f.innerHTML = `<span class="text-secondary flex-fill">Reviewed it? Approve to unlock the next artifact.</span>
-                    <button type="button" class="btn btn-sm btn-primary" data-approve="${id}">Approve</button>`;
-            } else if (g.s === 'stale') {
-                f.innerHTML = `<span class="text-secondary flex-fill">Superseded upstream — re-approve to restore the chain.</span>
-                    <button type="button" class="btn btn-sm btn-primary" data-approve="${id}">Re-approve</button>`;
-            } else {
-                f.classList.add('blocked');
-                f.innerHTML = `<i class="ti ti-lock"></i><span>Unlocks after ${LADDER[i - 1].name} is approved.</span>`;
-            }
-        });
-        document.querySelectorAll('.scope-foot [data-approve]').forEach((b) =>
-            b.addEventListener('click', () => post('approve', b.dataset.approve)));
-        document.querySelectorAll('.scope-foot [data-revise]').forEach((b) =>
-            b.addEventListener('click', (e) => { e.preventDefault(); post('revise', b.dataset.revise); }));
-
-        // verdict + the fifth gate
-        const authed = !!state.build_authorized;
-        const remaining = (state.gates || []).filter((g) => g.s !== 'ok').length;
-        const v = el('scope-verdict'); const vi = el('scope-verdict-icon');
-        const vt = el('scope-verdict-title'); const vs = el('scope-verdict-sub');
-        v.className = 'scope-verdict' + (authed ? ' ok' : '');
-        if (authed) {
-            vi.className = 'ti ti-lock-open'; vi.style.color = '#2fb344';
-            vt.textContent = 'Kickoff record: complete (advisory)';
-            vs.innerHTML = 'All 5 gates green, on the record. Kickoff approvals are advisory and do not gate Autopilot.';
+    function renderArtifact() {
+        if (!kickoff) return;
+        const ver = version();
+        const open = openCount();
+        el('scope-project-label').textContent = project();
+        el('scope-artifact-version').textContent = 'Scope v' + ver;
+        el('scope-drawer-title').textContent = 'Scope v' + ver;
+        el('scope-artifact-open-count').textContent = open ? open + ' open' : 'ready for delivery';
+        el('scope-verdict').classList.toggle('ok', !!kickoff.build_authorized);
+        el('scope-verdict-title').textContent = kickoff.build_authorized ? 'Approved kickoff record' : 'Shaping in progress';
+        el('scope-verdict-sub').textContent = kickoff.build_authorized
+            ? 'All five sections are approved. Revisions remain explicit and attributed.'
+            : open + ' section' + (open === 1 ? '' : 's') + ' open · next: ' + (SECTIONS.find((item) => item.id === kickoff.frontier) || {}).label;
+        el('scope-switch').innerHTML = SECTIONS.map((item) => '<button type="button" class="' + (item.id === section ? 'on' : '') + '" data-scope-section="' + item.id + '">' + esc(item.label) + stateMark(item) + '</button>').join('');
+        el('scope-switch').querySelectorAll('[data-scope-section]').forEach((button) => button.addEventListener('click', () => {
+            section = button.dataset.scopeSection;
+            renderArtifact();
+        }));
+        const item = SECTIONS.find((candidate) => candidate.id === section);
+        const current = gate(section);
+        let approval;
+        if (current.s === 'ok') {
+            approval = '<div class="tk-scope-approval"><span class="text-success"><i class="ti ti-circle-check me-1"></i>Approved v' + current.version + (current.approved_by ? ' by ' + esc(current.approved_by) : '') + '</span><button class="btn btn-sm btn-outline-secondary" type="button" data-scope-revise="' + section + '">Revise</button></div>';
+        } else if (kickoff.frontier === section || current.s === 'stale') {
+            approval = '<div class="tk-scope-approval"><span class="text-secondary">Review the discussion and sources before recording approval.</span><button class="btn btn-sm btn-primary" type="button" data-scope-approve="' + section + '">' + (current.s === 'stale' ? 'Re-approve' : 'Approve section') + '</button></div>';
         } else {
-            vi.className = 'ti ti-notes'; vi.style.color = '#f76707';
-            vt.textContent = 'Kickoff record: incomplete (advisory)';
-            vs.innerHTML = remaining + ' gate' + (remaining > 1 ? 's' : '') + ' open — next: <strong>'
-                + (fr ? SHORT[fr] : '') + '</strong>. Recorded on the project; claims and merges remain available.';
+            approval = '<div class="tk-scope-approval text-secondary"><i class="ti ti-lock"></i><span>Complete the preceding section first.</span></div>';
         }
-        const sg = el('scope-gate-row');
-        if (sg) {
-            const g = gate('scope');
-            if (g.s === 'ok') sg.innerHTML = '<span class="stx"><span class="sdot" style="background:#2fb344"></span>Scope breakdown approved v' + g.version + '.</span>';
-            else if (fr === 'scope') sg.innerHTML = '<span class="stx"><span class="sdot" style="background:#f76707"></span>Scope breakdown is next — review the task graph in Plan, then</span> <button type="button" class="btn btn-sm btn-primary ms-2" data-approve-scope>Approve breakdown</button>';
-            else if (g.s === 'stale') sg.innerHTML = '<span class="stx"><span class="sdot" style="background:#f76707"></span>Scope breakdown is stale — re-approve after the upstream revision.</span> <button type="button" class="btn btn-sm btn-primary ms-2" data-approve-scope>Re-approve</button>';
-            else sg.innerHTML = '<span class="stx"><span class="sdot" style="background:#8b95a5"></span>Scope breakdown — the fifth gate; locked until the four artifacts are approved.</span>';
-            const ab = sg.querySelector('[data-approve-scope]');
-            if (ab) ab.addEventListener('click', () => post('approve', 'scope'));
+        el('scope-artifact-body').innerHTML = '<div class="tk-eyebrow mb-2">' + esc(item.kicker) + '</div><h4>' + esc(item.title) + '</h4><p>' + esc(item.body) + '</p><h4>Source of truth</h4><p>This project’s accepted documents, recorded decisions, and live board are authoritative. Conversation may propose wording; approval changes only this advisory kickoff record.</p>' + approval;
+        const approve = el('scope-artifact-body').querySelector('[data-scope-approve]');
+        const revise = el('scope-artifact-body').querySelector('[data-scope-revise]');
+        if (approve) approve.addEventListener('click', () => mutateGate('approve', approve.dataset.scopeApprove));
+        if (revise) revise.addEventListener('click', () => mutateGate('revise', revise.dataset.scopeRevise));
+    }
+
+    function bubble(role, content, sources) {
+        const src = (sources || []).length ? '<div class="tk-scope-source"><i class="ti ti-books me-1"></i>' + sources.map(esc).join(' · ') + '</div>' : '';
+        return '<div class="tk-scope-bubble ' + role + '"><div>' + (role === 'user' ? esc(content) : rich(content)) + src + '</div></div>';
+    }
+    function renderMessages(messages) {
+        const log = el('scope-chat-log');
+        if (!messages.length) return;
+        const empty = el('scope-chat-empty');
+        if (empty) empty.remove();
+        log.innerHTML = messages.map((message) => bubble(message.role === 'user' ? 'user' : (message.payload && message.payload.error ? 'error' : 'assistant'), message.content || '', (message.payload && message.payload.sources) || [])).join('');
+        log.scrollTop = log.scrollHeight;
+    }
+    async function loadChat() {
+        try {
+            const response = await fetch('api/chat/history?' + qs({ session: SESSION }), { cache: 'no-store' });
+            const data = await response.json().catch(() => ({}));
+            if (response.ok) renderMessages(data.messages || []);
+        } catch (_) { /* The empty state remains useful offline. */ }
+    }
+    function thinking(show) {
+        const old = el('scope-thinking');
+        if (old) old.remove();
+        if (!show) return;
+        el('scope-chat-log').insertAdjacentHTML('beforeend', '<div id="scope-thinking" class="tk-scope-bubble assistant"><div class="tk-scope-thinking"><i class="ti ti-loader-2"></i>Taikun is shaping from project context…</div></div>');
+    }
+    async function pollRun(id) {
+        runId = id;
+        for (let attempt = 0; attempt < 600 && runId === id; attempt++) {
+            const response = await fetch('api/chat/runs/' + encodeURIComponent(id) + '?' + qs({ session: SESSION }));
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(data.detail || ('HTTP ' + response.status));
+            if (data.status === 'completed') {
+                thinking(false);
+                el('scope-chat-log').insertAdjacentHTML('beforeend', bubble('assistant', data.answer || 'Scope response completed.', data.sources || []));
+                el('scope-chat-log').scrollTop = el('scope-chat-log').scrollHeight;
+                runId = null;
+                return;
+            }
+            if (data.status === 'failed' || data.status === 'cancelled') throw new Error(data.error || 'Scope discussion failed.');
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+    }
+    async function send(messageOverride) {
+        const input = el('scope-chat-input');
+        const message = String(messageOverride || input.value || '').trim();
+        if (!message || runId) return;
+        if (!messageOverride) input.value = '';
+        const empty = el('scope-chat-empty');
+        if (empty) empty.remove();
+        el('scope-chat-log').insertAdjacentHTML('beforeend', bubble('user', message));
+        thinking(true);
+        try {
+            const response = await fetch('api/chat?' + qs(), {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: message, session: SESSION }),
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : ('HTTP ' + response.status));
+            if (data.run_id) await pollRun(data.run_id);
+        } catch (error) {
+            thinking(false);
+            el('scope-chat-log').insertAdjacentHTML('beforeend', bubble('error', error.message));
+            runId = null;
         }
     }
 
-    function showSection(id) {
-        if (id === 'scope') { flash('The scope breakdown is the task graph — review it in Plan; approve it from the gate line below the rail.'); return; }
-        curSec = id;
-        document.querySelectorAll('.scope-sec').forEach((s) => s.classList.toggle('on', s.id === 'scope-sec-' + id));
-        document.querySelectorAll('#scope-switch button').forEach((b) => b.classList.toggle('on', b.dataset.sec === id));
-        document.querySelectorAll('#scope-rail .rail-step').forEach((r) => r.classList.toggle('active', r.dataset.gate === id));
+    function setDrawer(open, expanded) {
+        const page = el('tab-scope');
+        const drawer = el('scope-artifact-drawer');
+        const scrim = el('scope-artifact-scrim');
+        drawer.classList.toggle('show', open);
+        drawer.classList.toggle('expanded', !!expanded);
+        drawer.setAttribute('aria-hidden', String(!open));
+        scrim.classList.toggle('show', open);
+        page.classList.toggle('drawer-open', open);
+        page.classList.toggle('drawer-expanded', open && !!expanded);
     }
-
     function init() {
-        if (init._wired) { load(); return; }
-        init._wired = true;
-        document.querySelectorAll('#scope-switch button').forEach((b) =>
-            b.addEventListener('click', () => showSection(b.dataset.sec)));
-        const refresh = el('scope-refresh');
-        if (refresh) refresh.addEventListener('click', (e) => { e.preventDefault(); load(); });
-        load(); showSection(curSec);
+        if (!init.wired) {
+            init.wired = true;
+            el('scope-artifact-open').addEventListener('click', () => setDrawer(true, false));
+            el('scope-review').addEventListener('click', () => setDrawer(true, true));
+            el('scope-drawer-close').addEventListener('click', () => setDrawer(false, false));
+            el('scope-artifact-scrim').addEventListener('click', () => setDrawer(false, false));
+            el('scope-drawer-expand').addEventListener('click', () => {
+                const expanded = !el('scope-artifact-drawer').classList.contains('expanded');
+                setDrawer(true, expanded);
+            });
+            el('scope-refresh').addEventListener('click', (event) => { event.preventDefault(); loadKickoff(); });
+            el('scope-chat-send').addEventListener('click', () => send());
+            el('scope-chat-input').addEventListener('keydown', (event) => {
+                if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); send(); }
+            });
+            el('scope-chat-clear').addEventListener('click', async () => {
+                await fetch('api/chat?' + qs({ session: SESSION }), { method: 'DELETE' });
+                el('scope-chat-log').innerHTML = '<div class="tk-scope-empty" id="scope-chat-empty"><h3>Start a new Scope discussion</h3><p>Describe the outcome or paste the next piece of context below.</p></div>';
+            });
+            document.querySelectorAll('[data-scope-prompt]').forEach((button) => button.addEventListener('click', () => send(button.dataset.scopePrompt)));
+            document.addEventListener('keydown', (event) => { if (event.key === 'Escape') setDrawer(false, false); });
+        }
+        loadKickoff();
+        loadChat();
     }
 
-    const tab = document.getElementById('toptab-scope');
+    const tab = el('toptab-scope');
     if (tab) tab.addEventListener('shown.bs.tab', init);
+    if (location.hash === '#tab-scope') setTimeout(init, 0);
 })();

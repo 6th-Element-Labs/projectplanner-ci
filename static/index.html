@@ -27,7 +27,7 @@
     <!-- taikun-ui: brand + polish layer over Tabler (white canvas, soft cards, refined tabs/modal).
          Loaded after taikun-tabler.css?v=23 so it wins. -->
     <link href="taikun-ui.css?v=32" rel="stylesheet"/>
-    <link href="taikun-scope.css?v=1" rel="stylesheet"/>
+    <link href="taikun-scope.css?v=2" rel="stylesheet"/>
     <link href="rooms.css?v=1" rel="stylesheet"/>
     <style>
       .epic-head{cursor:pointer}
@@ -454,71 +454,75 @@
                         <!-- PLAN — one dataset, four views. Board / List / Timeline / Milestones
                              switch via the segmented sub-nav instead of four separate top tabs. -->
 
-                        <!-- UI-28 slice 1: SCOPE — the gated kickoff ladder, ADVISORY (see js/scope.js).
-                             Sits above Plan in the nav: scope the work, then plan it. -->
-                        <div class="tab-pane" id="tab-scope" role="tabpanel">
-                            <div class="d-flex align-items-center flex-wrap gap-2 mt-3 mb-3">
+                        <!-- UI-82: during shaping, discussion is the workspace and the
+                             durable kickoff artifact is a Watch-style drawer. Chat has no
+                             execution authority; every approval remains an explicit action. -->
+                        <div class="tab-pane tk-scope-page" id="tab-scope" role="tabpanel">
+                            <div class="tk-scope-head mt-3">
                                 <div>
-                                    <h2 class="page-title m-0"><i class="ti ti-file-text me-2"></i>Scope</h2>
-                                    <div class="text-secondary small">Vision → PRD → Architecture → Operating rules → Scope breakdown. Approving one unlocks the next.</div>
+                                    <div class="tk-scope-breadcrumb"><span id="scope-project-label">Project</span> / Scope</div>
+                                    <h2 class="page-title mb-1">Shape the scope</h2>
+                                    <div class="text-secondary">Discuss the outcome, constraints, and proof. The agreed artifact stays in view.</div>
                                 </div>
-                                <div class="ms-auto text-secondary small"><i class="ti ti-flask me-1"></i>Approvals are recorded on the project (shared, attributed) as advisory planning history. They do not block Autopilot claims or merges. <a href="#" id="scope-refresh" class="ms-1">refresh</a></div>
+                                <button class="btn btn-outline-secondary" id="scope-review" type="button"><i class="ti ti-file-check me-1"></i>Review scope</button>
                             </div>
-                            <div id="scope-flash" class="alert alert-info py-2 px-3 d-none" role="status"></div>
-                            <div class="row row-cards">
-                                <div class="col-lg-8">
-                                    <div class="card">
-                                        <div class="card-header py-2">
-                                            <div class="scope-switch" id="scope-switch">
-                                                <button type="button" data-sec="vision"><span class="st">1</span>Vision</button>
-                                                <button type="button" data-sec="prd"><span class="st">2</span>PRD</button>
-                                                <button type="button" data-sec="arch"><span class="st">3</span>Architecture</button>
-                                                <button type="button" data-sec="rules"><span class="st">4</span>Operating rules</button>
-                                            </div>
-                                        </div>
-                                        <div class="card-body">
-                                            <div class="scope-sec on" id="scope-sec-vision">
-                                                <div class="tk-eyebrow mb-2">Thesis · user · why-now · non-goals · success metrics</div>
-                                                <p class="mb-2">Write the one-page point of view this project exists to prove: who it serves, why now, what success measurably looks like — and what this board will <em>not</em> do.</p>
-                                                <p class="text-secondary mb-0">Draft it here or paste from the discovery call; Ask Taikun can assemble a first cut from the intake corpus.</p>
-                                                <div class="scope-foot" data-foot="vision"></div>
-                                            </div>
-                                            <div class="scope-sec" id="scope-sec-prd">
-                                                <div class="tk-eyebrow mb-2">In / out of scope · journeys · requirements · open questions</div>
-                                                <p class="mb-2">The PRD closes the silent unknowns: every journey named, every requirement testable, every open question either answered or explicitly carried as a decision.</p>
-                                                <p class="text-secondary mb-0">Open questions belong in Inbox → Decisions with an owner and a needed-by date.</p>
-                                                <div class="scope-foot" data-foot="prd"></div>
-                                            </div>
-                                            <div class="scope-sec" id="scope-sec-arch">
-                                                <div class="tk-eyebrow mb-2">Components · data model · trust boundaries · SHIPPED / THIN / NEW</div>
-                                                <p class="mb-2">One page an agent can execute against. The reuse map is the point: name what is <strong>SHIPPED</strong> (reuse as-is), <strong>THIN</strong> (extend), and <strong>NEW</strong> — and challenge every NEW.</p>
-                                                <p class="text-secondary mb-0">"Don't invent engines" starts here, verified against the live repo.</p>
-                                                <div class="scope-foot" data-foot="arch"></div>
-                                            </div>
-                                            <div class="scope-sec" id="scope-sec-rules">
-                                                <div class="tk-eyebrow mb-2">Branching · definition of done · file/lane ownership · test &amp; CI policy</div>
-                                                <p class="mb-2">The working agreement every session inherits: lease boundaries per lane, done-means-merged with green CI, and the standing prohibitions.</p>
-                                                <p class="text-secondary mb-0">Injected into agent context via <code>get_working_agreement</code> as guidance, without blocking execution.</p>
-                                                <div class="scope-foot" data-foot="rules"></div>
-                                            </div>
+                            <div id="scope-flash" class="alert alert-info py-2 px-3 d-none mt-3" role="status"></div>
+                            <div class="card tk-scope-conversation mt-3">
+                                <div class="card-header tk-scope-chat-head">
+                                    <div>
+                                        <h3 class="card-title mb-1"><i class="ti ti-messages me-2"></i>Scope discussion</h3>
+                                        <div class="text-secondary small">Project conversation · available to clients here and agents through the project interfaces</div>
+                                    </div>
+                                    <button class="btn btn-sm btn-ghost-secondary" id="scope-chat-clear" type="button" title="Clear this Scope conversation"><i class="ti ti-trash"></i></button>
+                                </div>
+                                <div class="card-body tk-scope-chat-log" id="scope-chat-log" aria-live="polite">
+                                    <div class="tk-scope-empty" id="scope-chat-empty">
+                                        <span class="tk-scope-empty-icon"><i class="ti ti-sparkles"></i></span>
+                                        <h3>What are we trying to make true?</h3>
+                                        <p>Describe the outcome in plain English. Taikun will use this project's sources and call out assumptions, constraints, and unresolved decisions.</p>
+                                        <div class="tk-scope-prompts">
+                                            <button type="button" data-scope-prompt="Help me define the outcome, users, non-goals, and measurable proof for this project.">Define the outcome</button>
+                                            <button type="button" data-scope-prompt="Review the current project sources and identify architecture constraints, reusable systems, and decisions still needed.">Find constraints</button>
+                                            <button type="button" data-scope-prompt="Turn our current discussion into a proposed scope breakdown, without applying or approving any changes.">Propose a breakdown</button>
                                         </div>
                                     </div>
                                 </div>
-                                <div class="col-lg-4">
-                                    <div class="card mb-3">
-                                        <div class="card-header py-2"><h3 class="card-title"><i class="ti ti-ladder me-2"></i>Kickoff readiness</h3></div>
-                                        <div class="card-body py-2 scope-rail" id="scope-rail"></div>
-                                        <div class="card-footer py-2 small" id="scope-gate-row"></div>
+                                <div class="card-footer tk-scope-composer">
+                                    <button id="scope-artifact-open" class="tk-scope-artifact-trigger" type="button">
+                                        <span><i class="ti ti-file-text me-1"></i><strong id="scope-artifact-version">Scope v0</strong></span>
+                                        <span class="text-secondary" id="scope-artifact-open-count">5 open</span><i class="ti ti-chevron-up"></i>
+                                    </button>
+                                    <div class="input-group">
+                                        <textarea id="scope-chat-input" class="form-control" rows="2" placeholder="Describe an outcome, paste notes, or answer a scoping question…" aria-label="Scope message"></textarea>
+                                        <button id="scope-chat-send" class="btn btn-primary" type="button" aria-label="Send Scope message"><i class="ti ti-arrow-up"></i><span class="ms-1 d-none d-sm-inline">Send</span></button>
                                     </div>
-                                    <div class="scope-verdict" id="scope-verdict">
-                                        <i id="scope-verdict-icon" class="ti ti-notes" style="font-size:1.25rem;color:#f76707"></i>
-                                        <div>
-                                            <div class="fw-bold" id="scope-verdict-title">Kickoff record: incomplete (advisory)</div>
-                                            <div class="text-secondary small" id="scope-verdict-sub">Loading…</div>
-                                        </div>
-                                    </div>
+                                    <div class="text-secondary small mt-2"><i class="ti ti-shield-check me-1"></i>Discussion proposes. Only explicit approval updates the kickoff record.</div>
                                 </div>
                             </div>
+
+                            <div id="scope-artifact-scrim" class="tk-scope-scrim" aria-hidden="true"></div>
+                            <aside id="scope-artifact-drawer" class="tk-scope-drawer" aria-label="Scope artifact" aria-hidden="true">
+                                <div class="tk-scope-drawer-head">
+                                    <div>
+                                        <div class="tk-eyebrow">Authoritative kickoff artifact</div>
+                                        <h3 class="m-0" id="scope-drawer-title">Scope v0</h3>
+                                    </div>
+                                    <div class="btn-list flex-nowrap">
+                                        <button id="scope-drawer-expand" class="btn btn-sm btn-ghost-secondary" type="button" title="Expand Scope"><i class="ti ti-arrows-maximize"></i></button>
+                                        <button id="scope-drawer-close" class="btn btn-sm btn-ghost-secondary" type="button" title="Close Scope"><i class="ti ti-x"></i></button>
+                                    </div>
+                                </div>
+                                <div class="tk-scope-drawer-status" id="scope-verdict">
+                                    <span class="sdot" id="scope-verdict-dot"></span>
+                                    <div><strong id="scope-verdict-title">Loading kickoff record…</strong><div class="text-secondary small" id="scope-verdict-sub"></div></div>
+                                </div>
+                                <nav class="tk-scope-sections" id="scope-switch" aria-label="Scope sections"></nav>
+                                <div class="tk-scope-artifact-body" id="scope-artifact-body"></div>
+                                <div class="tk-scope-drawer-foot">
+                                    <div class="text-secondary small"><i class="ti ti-info-circle me-1"></i>Advisory planning history; it never starts work or authorizes a merge.</div>
+                                    <a href="#" id="scope-refresh" class="small">Refresh record</a>
+                                </div>
+                            </aside>
                         </div>
 
                         <div class="tab-pane tk-plan-page" id="tab-plan-hub" role="tabpanel">
@@ -1181,7 +1185,7 @@
     <script src="js/proof-console.js?v=1"></script>
     <script src="js/project-admin.js?v=1"></script>
     <script src="js/settings.js?v=2"></script>
-    <script src="js/scope.js?v=1"></script>
+    <script src="js/scope.js?v=2"></script>
     <script src="js/attention.js?v=4"></script>
     <script src="js/fleet-dock.js?v=5"></script>
     <script src="app.js?v=85"></script>
