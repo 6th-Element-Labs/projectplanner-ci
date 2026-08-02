@@ -18,7 +18,8 @@ def main() -> None:
     assert "/ixp/v1/" in app
 
     assert '<span class="nav-link-title">Fleet</span>' in html
-    assert 'me-2"></i>Autopilot</h2>' in html
+    assert '<h2 class="page-title mb-1">Fleet</h2>' in html
+    assert 'Hosts, runners, and installed adapter releases.' in html
     assert '<span class="fw-medium">Autopilot</span>' in app
     assert "'All clear'" in app
     print("PASS: Fleet navigation preserves Autopilot dock labels and internals")

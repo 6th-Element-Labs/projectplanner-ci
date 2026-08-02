@@ -16,6 +16,7 @@ So liveness and readiness are two different lights here:
 ``update_available``  compatible contract, but a newer release is promoted
 ``blocked``           contract disagrees, or the bundle is not the promoted one
 ``updating``          the host is drain-and-replacing itself right now
+``update_failed``     the promoted digest failed to install on this host
 ``offline``           heartbeat expired
 
 Only ``blocked`` withholds work, and it is a refusal with a reason
@@ -40,6 +41,7 @@ READY = "ready"
 UPDATE_AVAILABLE = "update_available"
 BLOCKED = "blocked"
 UPDATING = "updating"
+UPDATE_FAILED = "update_failed"
 OFFLINE = "offline"
 
 #: States in which this host must not be given new work.
@@ -91,6 +93,7 @@ def evaluate(host: Mapping[str, Any],
     installed_digest = _text(host.get("bundle_digest"))
     host_contract = _text(host.get("contract_fingerprint"))
     update_state = _text(host.get("update_state"))
+    update_error = _text(host.get("update_error"))
 
     out: dict[str, Any] = {
         "schema": SCHEMA,
@@ -173,6 +176,16 @@ def evaluate(host: Mapping[str, Any],
                            "to build a matching contract."
                            + ("" if enforcing else
                               " Observe mode: work is not being withheld yet.")))
+        return out
+
+    # The Host records one failed digest and deliberately refuses to retry it
+    # forever. Keep that failure first-class in the projection: collapsing it
+    # back to "update available" hides why the automatic path stopped. This is
+    # intentionally after the contract gate: an incompatible Host remains
+    # blocked even when its repair also failed.
+    if update_error and req_digest and installed_digest != req_digest:
+        out.update(state=UPDATE_FAILED, reason="host_update_failed",
+                   actionable=True, detail=update_error)
         return out
 
     # Same contract, different bytes: the hand-patched-tree case. Not a launch

@@ -114,6 +114,13 @@ try:
     behind = hr.evaluate(host(agent_host_version="0.4.15",
                               bundle_digest="sha256:bbbb"), REQUIRED)
     ok(behind["state"] == hr.UPDATE_AVAILABLE, "a behind-but-compatible host warns")
+    failed_update = hr.evaluate(
+        host(agent_host_version="0.4.15", bundle_digest="sha256:failed",
+             update_error="download URL must stay on trusted origin"), REQUIRED)
+    ok(failed_update["state"] == hr.UPDATE_FAILED,
+       "a failed install stays distinct from an available update")
+    ok("trusted origin" in failed_update["detail"],
+       "the exact Host failure remains visible to the operator")
 
     # ── liveness is a separate axis ────────────────────────────────────────
     ok(hr.evaluate(host(stale=True), REQUIRED)["state"] == hr.OFFLINE,

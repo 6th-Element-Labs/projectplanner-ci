@@ -2197,9 +2197,22 @@ const TeepPlan = {
             this._fleetWired = true;
             const refresh = document.getElementById('fleet-refresh');
             if (refresh) refresh.addEventListener('click', () => this._loadFleet());
+            document.querySelectorAll('[data-fleet-filter]').forEach((button) =>
+                button.addEventListener('click', () => {
+                    document.querySelectorAll('[data-fleet-filter]').forEach((item) => item.classList.remove('active'));
+                    button.classList.add('active');
+                    this._fleetFilter = button.getAttribute('data-fleet-filter') || 'all';
+                    this._renderFleetHosts();
+                }));
+            const download = document.getElementById('fleet-download-host');
+            if (download) download.addEventListener('click', () => this._downloadHostRelease());
+            const copy = document.getElementById('fleet-copy-install');
+            if (copy) copy.addEventListener('click', () => this._copyHostInstall());
             const send = document.getElementById('wake-send');
             if (send) send.addEventListener('click', () => this._submitWake());
         }
+        const projectLabel = document.getElementById('fleet-project-label');
+        if (projectLabel) projectLabel.textContent = this.project || window.PM_PROJECT || 'Project';
         this._loadFleet();
         // The Fleet tab's own Live runners table is always project-wide. Reset the dock to
         // match — otherwise it keeps whatever scope a prior Mission/deliverable view left it
@@ -2222,12 +2235,19 @@ const TeepPlan = {
     },
     async _loadFleetHosts() {
         const body = document.getElementById('fleet-hosts-body');
-        const count = document.getElementById('fleet-hosts-count');
         if (!body) return;
-        let hosts;
+        let hosts = []; let release = {};
         try {
-            const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&include_stale=false`;
-            hosts = (await (await fetch(`/ixp/v1/agent_hosts?${q}`)).json()).hosts || [];
+            const project = encodeURIComponent(window.PM_PROJECT || 'maxwell');
+            const responses = await Promise.all([
+                fetch(`/ixp/v1/agent_hosts?project=${project}&include_stale=true`, { cache: 'no-store' }),
+                fetch(`/ixp/v1/host_releases/promoted?project=${project}`, { cache: 'no-store' }),
+            ]);
+            for (const response of responses) {
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            }
+            hosts = (await responses[0].json()).hosts || [];
+            release = (await responses[1].json()) || {};
             if (this.isAdmin) {
                 await Promise.all(hosts.map(async (host) => {
                     try {
@@ -2237,19 +2257,77 @@ const TeepPlan = {
                     } catch (e) { /* unenrolled legacy hosts have no editable policy */ }
                 }));
             }
-        } catch (e) { body.innerHTML = `<div class="text-danger small">Runner capacity unavailable: ${this.esc(e.message)}</div>`; return; }
-        const live = hosts.filter((h) => !h.stale);
-        if (count) { count.className = live.length ? 'badge bg-green-lt ms-2' : 'badge bg-secondary-lt ms-2'; count.textContent = `${live.length} live`; }
-        if (!hosts.length) { body.innerHTML = `<div class="text-secondary small">No runner capacity is registered for this project.</div>`; return; }
-        body.innerHTML = `<div class="table-responsive"><table class="table table-sm mb-0 align-middle">
-            <thead><tr><th>Host</th><th>Heartbeat</th><th>Release</th><th>Capacity</th><th>Runtimes</th><th class="text-end">Actions</th></tr></thead>
-            <tbody>${hosts.map((h) => this._hostRow(h)).join('')}</tbody></table></div>`;
+        } catch (e) {
+            body.innerHTML = `<div class="p-4 text-danger small">Fleet unavailable: ${this.esc(e.message)}</div>`;
+            const system = document.getElementById('fleet-system-status');
+            if (system) system.innerHTML = '<span class="status-dot bg-red"></span>Systems unavailable';
+            return;
+        }
+        this._fleetHosts = hosts;
+        this._fleetRelease = release;
+        this._renderFleetHosts();
+    },
+    _renderFleetHosts() {
+        const body = document.getElementById('fleet-hosts-body');
+        if (!body) return;
+        const hosts = this._fleetHosts || [];
+        const release = this._fleetRelease || {};
+        const live = hosts.filter((host) => !host.stale);
+        const classified = hosts.map((host) => ({ host, ready: this._hostReadiness(host) }));
+        const attention = classified.filter(({ ready }) => ['update_available', 'update_failed', 'blocked', 'offline'].includes(ready.state));
+        const current = classified.filter(({ ready }) => ready.state === 'ready');
+        const filter = this._fleetFilter || (attention.length ? 'attention' : 'all');
+        this._fleetFilter = filter;
+        document.querySelectorAll('[data-fleet-filter]').forEach((button) =>
+            button.classList.toggle('active', button.getAttribute('data-fleet-filter') === filter));
+        const shown = filter === 'attention' ? attention : (filter === 'current' ? current : classified);
+        const setCount = (id, value) => { const node = document.getElementById(id); if (node) node.textContent = value ? String(value) : ''; };
+        setCount('fleet-attention-count', attention.length);
+        setCount('fleet-current-count', current.length);
+        setCount('fleet-all-count', hosts.length);
+        const count = document.getElementById('fleet-hosts-count');
+        if (count) count.textContent = `${live.length} online · checked just now`;
+        const system = document.getElementById('fleet-system-status');
+        if (system) system.innerHTML = `<span class="status-dot bg-${live.length ? 'green' : 'secondary'}"></span>${live.length ? 'Systems online' : 'No hosts online'}`;
+        const meta = document.getElementById('fleet-release-meta');
+        if (meta) meta.innerHTML = release.version
+            ? `<span>Version ${this.esc(release.version)}</span><span><i class="ti ti-rosette-discount-check me-1"></i>Signed &amp; verified</span><span>Promoted release</span>`
+            : '<span>No promoted release.</span>';
+        const download = document.getElementById('fleet-download-host');
+        if (download) download.disabled = !(release.download_url && release.archive_present);
+        const banner = document.getElementById('fleet-update-banner');
+        const failed = attention.find(({ ready }) => ready.state === 'update_failed');
+        const behind = attention.find(({ ready }) => ready.state === 'update_available');
+        if (banner && (failed || behind)) {
+            const item = failed || behind;
+            const hostName = item.host.hostname || item.host.host_id || 'A Host';
+            banner.hidden = false;
+            banner.classList.toggle('is-failed', !!failed);
+            banner.innerHTML = `<div class="tk-fleet-banner-icon"><i class="ti ti-${failed ? 'alert-triangle' : 'arrow-up'}"></i></div>
+                <div><strong>${failed ? 'Host update needs attention' : `Host Adapter ${this.esc(release.version || '')} is available`}</strong>
+                <div class="text-secondary">${this.esc(hostName)} ${failed ? `could not update: ${this.esc(item.ready.detail)}` : `is on ${this.esc(item.ready.installedVersion || 'an older release')}. The signed release is ready to install.`}</div></div>
+                <div class="btn-list ms-auto"><button class="btn btn-outline-secondary" data-fleet-download type="button">Download</button>
+                <button class="btn btn-primary" data-host-update="${this.esc(item.host.host_id || '')}" type="button">${failed ? 'Retry update' : 'Update host'}</button></div>`;
+        } else if (banner) { banner.hidden = true; banner.innerHTML = ''; banner.classList.remove('is-failed'); }
+        if (!hosts.length) {
+            body.innerHTML = '<div class="p-4 text-secondary small">No Hosts are enrolled for this project.</div>';
+        } else if (!shown.length) {
+            body.innerHTML = `<div class="p-4 text-secondary small">No ${filter === 'attention' ? 'Hosts need attention' : 'Hosts match this view'}.</div>`;
+        } else {
+            body.innerHTML = shown.map(({ host }) => this._hostCard(host)).join('');
+        }
         body.querySelectorAll('[data-wake-runtimes]').forEach((b) =>
             b.addEventListener('click', () => this._openWakeModal(b.getAttribute('data-wake-runtimes'))));
         body.querySelectorAll('[data-host-policy]').forEach((b) =>
             b.addEventListener('click', () => this._configureHostPolicy(b.getAttribute('data-host-policy'))));
         body.querySelectorAll('[data-host-update]').forEach((b) =>
             b.addEventListener('click', () => this._updateHost(b.getAttribute('data-host-update'))));
+        body.querySelectorAll('[data-fleet-download]').forEach((b) =>
+            b.addEventListener('click', () => this._downloadHostRelease()));
+        document.querySelectorAll('#fleet-update-banner [data-host-update]').forEach((b) =>
+            b.addEventListener('click', () => this._updateHost(b.getAttribute('data-host-update'))));
+        document.querySelectorAll('#fleet-update-banner [data-fleet-download]').forEach((b) =>
+            b.addEventListener('click', () => this._downloadHostRelease()));
     },
     // Liveness and readiness are two different lights. A host can heartbeat
     // perfectly while running a bundle whose execution-assignment contract this
@@ -2257,14 +2335,16 @@ const TeepPlan = {
     // lost three missions to a host showing green. This renders the second one.
     _hostReadiness(h) {
         const r = h.readiness || {};
-        const state = String(r.state || (h.stale ? 'offline' : 'ready'));
+        let state = String(r.state || (h.stale ? 'offline' : 'ready'));
         const map = {
-            ready: { dot: 'green', label: 'ready' },
-            update_available: { dot: 'yellow', label: 'update available' },
-            blocked: { dot: 'red', label: 'incompatible' },
-            updating: { dot: 'blue', label: 'updating' },
-            offline: { dot: 'secondary', label: 'offline' },
+            ready: { dot: 'green', label: 'Up to date', icon: 'circle-check' },
+            update_available: { dot: 'yellow', label: 'Update available', icon: 'arrow-up' },
+            update_failed: { dot: 'red', label: 'Update failed', icon: 'alert-triangle' },
+            blocked: { dot: 'red', label: 'Blocked / incompatible', icon: 'shield-x' },
+            updating: { dot: 'blue', label: 'Updating', icon: 'loader-2' },
+            offline: { dot: 'secondary', label: 'Offline', icon: 'cloud-off' },
         };
+        if (h.update_error && state !== 'offline' && state !== 'ready') state = 'update_failed';
         const chosen = { ...(map[state] || map.ready) };
         // Red but not enforcing is a real distinction: the host is running the
         // wrong bundle AND is still being given work. Saying only "incompatible"
@@ -2273,76 +2353,119 @@ const TeepPlan = {
         const versions = r.required_version && r.required_version !== r.installed_version
             ? `${this.esc(r.installed_version || '?')} → ${this.esc(r.required_version)}`
             : this.esc(r.installed_version || '');
-        return { state, ...chosen, versions, detail: String(r.detail || ''),
-                 actionable: !!r.actionable };
+        return { state, ...chosen, versions,
+                 installedVersion: String(r.installed_version || h.agent_host_version || ''),
+                 requiredVersion: String(r.required_version || (this._fleetRelease || {}).version || ''),
+                 installedDigest: String(r.installed_digest || h.bundle_digest || ''),
+                 requiredDigest: String(r.required_digest || (this._fleetRelease || {}).bundle_digest || ''),
+                 contractMatches: r.contract_matches !== false,
+                 detail: String(h.update_error || r.detail || ''), actionable: !!r.actionable || state === 'update_failed' };
     },
+    // Compatibility renderer retained for focused readiness-light tests and
+    // older embedded consumers. The Fleet page itself uses _hostCard below.
     _hostRow(h) {
         const cap = h.capacity || {}; const lim = h.limits || {};
         const active = cap.active_sessions != null ? cap.active_sessions : 0;
         const max = lim.max_sessions != null ? lim.max_sessions
             : (h.available_sessions != null ? active + h.available_sessions : '—');
-        const color = h.stale ? 'yellow' : 'green';
+        const ready = this._hostReadiness(h);
+        const labels = { ready: 'ready', update_available: 'update available',
+            update_failed: 'update failed', blocked: 'incompatible', updating: 'updating', offline: 'offline' };
+        let label = labels[ready.state] || ready.label;
+        if (ready.state === 'blocked' && (h.readiness || {}).enforcing === false) label += ' · observing';
+        const update = ready.actionable
+            ? `<button class="btn btn-sm ${ready.state === 'blocked' ? 'btn-danger' : 'btn-outline-warning'} dock-host-action" data-host-update="${this.esc(h.host_id || '')}">Update host</button>` : '';
+        return `<tr><td>${this.esc(h.host_id || '')}</td><td>
+            <span class="status-dot status-dot-animated bg-${ready.dot}" title="${this.esc(ready.detail)}"></span>
+            <span>${this.esc(label)}</span>${ready.versions ? `<div>${ready.versions}</div>` : ''}</td>
+            <td>${this.esc(String(active))} / ${this.esc(String(max))}</td><td>${update}</td></tr>`;
+    },
+    _hostCard(h) {
+        const cap = h.capacity || {}; const lim = h.limits || {};
+        const active = cap.active_sessions != null ? cap.active_sessions : 0;
+        const max = lim.max_sessions != null ? lim.max_sessions
+            : (h.available_sessions != null ? active + h.available_sessions : '—');
         const ready = this._hostReadiness(h);
         const rnames = (h.runtimes || []).map((r) => (typeof r === 'string' ? r : (r && (r.runtime || r.name)) || '')).filter(Boolean);
-        const runtimes = rnames.map((r) => `<span class="badge bg-secondary-lt me-1">${this.esc(r)}</span>`).join('') || '<span class="text-secondary">—</span>';
+        const runtimes = rnames.join(', ') || 'No runtime reported';
         const policy = (h.enrollment || {}).execution_policy || {};
         const laneText = policy.lane_mode === 'all_project_lanes'
             ? 'all project lanes' : ((policy.lanes || []).join(', ') || 'not authorized');
-        const policyText = policy.max_sessions
-            ? `<div class="text-secondary small">Authorized: ${this.esc(laneText)} · ${this.esc(String(policy.max_sessions))} parallel</div>` : '';
+        const policyText = policy.max_sessions ? `${this.esc(laneText)} · ${this.esc(String(policy.max_sessions))} parallel` : 'Enrollment policy unavailable';
         const configure = this.isAdmin && h.enrollment && !h.enrollment.error
             ? `<button class="btn btn-sm btn-outline-primary" data-host-policy="${this.esc(h.host_id || '')}">Concurrency</button>` : '';
         // Only offered when there is actually something to install. A button
         // that cannot help is worse than no button: it reads as "I tried".
-        const update = ready.actionable
-            ? `<button class="btn btn-sm ${ready.state === 'blocked' ? 'btn-danger' : 'btn-outline-warning'} dock-host-action" data-host-update="${this.esc(h.host_id || '')}">Update host</button>` : '';
-        const readinessCell = `<div class="d-flex align-items-center gap-1">
-                <span class="status-dot status-dot-animated bg-${ready.dot}" title="${this.esc(ready.detail)}"></span>
-                <span class="small">${this.esc(ready.label)}</span>
-            </div>${ready.versions ? `<div class="text-secondary small font-monospace">${ready.versions}</div>` : ''}`;
-        return `<tr>
-            <td><div class="font-monospace small">${this.esc(h.host_id || '')}</div><div class="text-secondary small">${this.esc(h.hostname || '')}</div>${policyText}</td>
-            <td><span class="badge bg-${color}-lt">${h.stale ? 'stale' : 'live'}</span> <span class="text-secondary small">${this.esc(this._fleetAge(h.heartbeat_at))}</span></td>
-            <td>${readinessCell}</td>
-            <td class="font-monospace small">${this.esc(String(active))} / ${this.esc(String(max))}</td>
-            <td>${runtimes}</td>
-            <td class="text-end"><div class="btn-list justify-content-end">${update}${configure}<button class="btn btn-sm dock-host-action" data-wake-runtimes="${this.esc(rnames.join(','))}">Launch…</button></div></td>
-        </tr>`;
+        const update = ready.actionable && !h.stale && ready.state !== 'updating'
+            ? `<button class="btn btn-primary" data-host-update="${this.esc(h.host_id || '')}">${ready.state === 'update_failed' ? 'Retry update' : 'Update'}</button>` : '';
+        const digestMatch = ready.installedDigest && ready.requiredDigest && ready.installedDigest === ready.requiredDigest;
+        return `<article class="tk-fleet-host-card" data-host-state="${this.esc(ready.state)}">
+            <div class="tk-fleet-host-main">
+                <div class="tk-fleet-host-icon"><i class="ti ti-device-desktop"></i></div>
+                <div class="tk-fleet-host-title"><h4>${this.esc(h.hostname || h.host_id || 'Host')}</h4>
+                    <div class="text-secondary small font-monospace">${this.esc(h.host_id || '')}</div></div>
+                <div class="tk-fleet-host-heartbeat"><span class="status-dot bg-${h.stale ? 'secondary' : 'green'}"></span>${h.stale ? 'Offline' : 'Online'} · ${this.esc(this._fleetAge(h.heartbeat_at))}</div>
+            </div>
+            <div class="tk-fleet-host-details">
+                <div><span class="tk-fleet-status is-${this.esc(ready.state)}"><i class="ti ti-${ready.icon}${ready.state === 'updating' ? ' tk-spin' : ''}"></i>${this.esc(ready.label)}</span>
+                    <div class="text-secondary small mt-2">${this.esc(ready.detail || (ready.state === 'ready' ? 'Digest and contract match the promoted release.' : ''))}</div></div>
+                <dl class="tk-fleet-release-grid">
+                    <div><dt>Installed</dt><dd>${this.esc(ready.installedVersion || 'Unknown')}</dd></div>
+                    <div><dt>Promoted</dt><dd>${this.esc(ready.requiredVersion || 'None')}</dd></div>
+                    <div><dt>Integrity</dt><dd>${digestMatch ? 'Digest matched' : (ready.installedDigest ? 'Digest differs' : 'Digest unreported')}</dd></div>
+                    <div><dt>Contract</dt><dd>${ready.contractMatches ? 'Matched' : 'Incompatible'}</dd></div>
+                    <div><dt>Capacity</dt><dd>${this.esc(String(active))} / ${this.esc(String(max))} running</dd></div>
+                    <div><dt>Runtime</dt><dd>${this.esc(runtimes)}</dd></div>
+                </dl>
+            </div>
+            <div class="tk-fleet-host-actions"><div class="btn-list">${update}
+                <button class="btn btn-outline-secondary" data-fleet-download type="button">Download</button>
+                <button class="btn btn-outline-secondary" data-wake-runtimes="${this.esc(rnames.join(','))}" type="button">Launch…</button>${configure}</div>
+                <span class="text-secondary small">${policyText}</span></div>
+        </article>`;
     },
-    // The manual path. The host normally updates itself on its next heartbeat;
-    // this exists for when it cannot — no download URL on the promoted release,
-    // an unenrolled host, or a bundle that already failed to install. In those
-    // cases the light is red and the operator needs the real instruction, not a
-    // button that quietly does nothing.
     async _updateHost(hostId) {
         const host = String(hostId || '').trim();
         if (!host) return;
-        let release = {};
+        if (!window.confirm(`Update ${host} to the promoted signed Host Adapter release?\n\nCapacity will stop new placements, let live runners finish, verify the package, and restart the Host.`)) return;
         try {
-            const res = await fetch(`/ixp/v1/host_releases/promoted?project=${encodeURIComponent(this.project || '')}`);
-            release = (await res.json()) || {};
-        } catch (e) { release = {}; }
+            const project = encodeURIComponent(this.project || window.PM_PROJECT || 'maxwell');
+            const res = await fetch(`/ixp/v1/agent_hosts/update?project=${project}&host_id=${encodeURIComponent(host)}`, { method: 'POST' });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
+            window.alert(`Update requested for ${host}.\n\nThe Host will report Updating on its next heartbeat. Live runners are allowed to finish.`);
+            window.setTimeout(() => this._loadFleetHosts(), 1200);
+        } catch (e) {
+            window.alert(`Host update could not be requested: ${e.message}\n\nUse Download for the same signed package and install it manually.`);
+        }
+    },
+    _downloadHostRelease() {
+        const release = this._fleetRelease || {};
         const url = String(release.download_url || '').trim();
-        const version = String(release.version || '').trim();
-        // Only offer the link when the bytes are actually stored. A row whose
-        // archive is missing would hand the operator a 404 and look like the
-        // feature is broken rather than unpublished.
-        if (url && release.archive_present) { window.open(url, '_blank', 'noopener'); return; }
-        if (!version) {
-            window.alert(
-                'No Agent Host release has been published yet, so hosts have '
-                + 'nothing to sync to.\n\nPublish one with:\n'
-                + '  python3 adapters/agent_host_enrollment.py publish-release \\\n'
-                + '    --source-root . --signing-key <key.pem> --project '
-                + `${this.project || 'switchboard'}`);
+        if (!url || !release.archive_present) {
+            window.alert('The promoted signed Host Adapter package is not available to download.');
             return;
         }
-        window.alert(
-            `Release ${version} is promoted but its bundle is not stored on the `
-            + `server, so ${host} cannot download it.\n\nRe-publish it with:\n`
-            + '  python3 adapters/agent_host_enrollment.py publish-release \\\n'
-            + '    --source-root . --signing-key <key.pem> --project '
-            + `${this.project || 'switchboard'}`);
+        window.open(url, '_blank', 'noopener');
+    },
+    async _copyHostInstall() {
+        const release = this._fleetRelease || {};
+        const url = String(release.download_url || '').trim();
+        if (!url || !release.archive_present) {
+            window.alert('The promoted signed Host Adapter package is not available.');
+            return;
+        }
+        const absolute = new URL(url, window.location.origin).href;
+        const command = `curl -fL '${absolute}' -o switchboard-host.tar.gz`;
+        try {
+            await navigator.clipboard.writeText(command);
+            const button = document.getElementById('fleet-copy-install');
+            if (button) {
+                const old = button.innerHTML;
+                button.innerHTML = '<i class="ti ti-check me-1"></i>Copied';
+                window.setTimeout(() => { button.innerHTML = old; }, 1800);
+            }
+        } catch (e) { window.prompt('Copy install command:', command); }
     },
     async _configureHostPolicy(hostId) {
         const host = String(hostId || '').trim();

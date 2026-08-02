@@ -240,6 +240,29 @@ try:
     ok(host_releases.archive_path(now_promoted["release_id"]).is_file(),
        "and its archive is on disk, ready to serve")
 
+    # The app-style Update action is a Capacity request, not a lifecycle write.
+    update_host_id = "host/e2e-update-mac"
+    store.register_host({
+        "host_id": update_host_id,
+        "runtimes": [{"runtime": "codex"}],
+        "limits": {"max_sessions": 2},
+        "capacity": {"active_sessions": 0},
+        "heartbeat_ttl_s": 60,
+    }, principal_id="principal/e2e-update", actor=update_host_id, project=PROJECT)
+    requested = client.post(
+        f"/ixp/v1/agent_hosts/update?project={PROJECT}&host_id={update_host_id}")
+    ok(requested.status_code == 200 and requested.json().get("accepted") is True,
+       f"Update Host records a Capacity-owned install request: {requested.status_code} {requested.text[:120]}")
+    status = store.host_status(update_host_id, project=PROJECT)
+    ok(str(status.get("update_request_id") or "").startswith("hostupdate-"),
+       f"the request nonce is projected on the Host, not a task lifecycle: {status}")
+    heartbeat = store.heartbeat_host(
+        update_host_id, active_sessions=0, capacity={"active_sessions": 0},
+        principal_id="principal/e2e-update", actor=update_host_id, project=PROJECT)
+    ok((heartbeat.get("required_host_release") or {}).get("update_request_id")
+       == requested.json().get("request_id"),
+       "the exact request reaches Capacity on the next Host heartbeat")
+
     # The digest must still equal what a host computes — via the CLI path too.
     cli_fetch = client.get(now_promoted["download_url"])
     ok(cli_fetch.status_code == 200, "the CLI-published bundle downloads")
@@ -263,28 +286,32 @@ try:
         clicked = page.evaluate("""async (project) => {
             const ctx = Object.create(TeepPlan);
             ctx.isAdmin = true; ctx.project = project;
+            ctx._fleetRelease = {
+                version: '9.9.10', archive_present: true,
+                download_url: '/ixp/v1/host_releases/' + %s + '/bundle?project=' + project,
+            };
             const opened = [];
             const alerts = [];
             window.open = (u) => { opened.push(u); return null; };
             window.alert = (m) => alerts.push(m);
             document.body.innerHTML =
-                '<table><tbody>' + ctx._hostRow({
+                ctx._hostCard({
                     host_id: 'host/mac-1', hostname: 'mac', stale: false,
                     heartbeat_at: 0, capacity: {}, limits: {},
                     runtimes: [{runtime: 'codex'}],
                     readiness: {state: 'blocked', installed_version: '0.4.15',
                                 required_version: '9.9.10', actionable: true,
                                 detail: 'incompatible'},
-                }) + '</tbody></table>';
+                });
             const button = document.querySelector('[data-host-update]');
             if (!button) return {error: 'no update button rendered'};
-            await ctx._updateHost(button.getAttribute('data-host-update'));
+            ctx._downloadHostRelease();
             return {opened, alerts};
-        }""", PROJECT)
+        }""" % repr(now_promoted["release_id"]), PROJECT)
         ok(not clicked.get("error"), f"the update button renders: {clicked.get('error')}")
         opened = clicked.get("opened") or []
         ok(len(opened) == 1,
-           f"clicking it opens exactly one download: {opened}")
+           f"the Host card download opens exactly one signed package: {opened}")
         ok(not (clicked.get("alerts") or []),
            f"and does not fall back to an instruction dialog: {clicked.get('alerts')}")
 

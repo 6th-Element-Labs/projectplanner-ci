@@ -6,6 +6,7 @@ boundaries. Domain persistence stays behind application commands / store.
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Callable
 
 from fastapi import APIRouter, Body, File, HTTPException, Query, Request, UploadFile
@@ -38,6 +39,17 @@ ProjectResolver = Callable[[str], str]
 PrincipalResolver = Callable[..., dict]
 BodyProjectResolver = Callable[[dict], str]
 ControlPlaneHttp = Callable[[Any], Any]
+
+
+def _public_base_url(request: Request) -> str:
+    """Trusted external base used in Host release download instructions."""
+    explicit = (os.environ.get("PM_PUBLIC_BASE_URL") or "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = (request.headers.get("x-forwarded-host")
+            or request.headers.get("host") or request.url.netloc)
+    return f"{scheme}://{host}".rstrip("/")
 
 
 def create_router(*, resolve_project: ProjectResolver,
@@ -280,6 +292,22 @@ def create_router(*, resolve_project: ProjectResolver,
         control_plane_http(hosts)
         return {"hosts": hosts}
 
+    @router.post("/ixp/v1/agent_hosts/update")
+    async def ixp_request_agent_host_update(request: Request,
+                                            project: str = Query(...),
+                                            host_id: str = Query(...)):
+        """Ask Capacity to install/retry the explicitly promoted signed release."""
+        resolved = resolve_project(project)
+        resolve_principal(request, resolved, ("admin", "write:system"),
+                          dev_actor="host-update-request")
+        result = store.request_host_update(
+            host_id, project=resolved,
+            actor=str(getattr(request.state, "actor", "") or "operator"))
+        if result.get("error"):
+            code = 404 if result["error"] == "host_not_registered" else 409
+            raise HTTPException(code, result["error"])
+        return result
+
     @router.post("/ixp/v1/host_releases")
     async def ixp_publish_host_release(request: Request, project: str = Query(...),
                                        promote: bool = Query(True),
@@ -307,7 +335,8 @@ def create_router(*, resolve_project: ProjectResolver,
         try:
             return publish_host_release.execute(
                 archive=data, project=resolved, promote=promote, notes=notes,
-                actor=str(getattr(request.state, "actor", "") or "operator"))
+                actor=str(getattr(request.state, "actor", "") or "operator"),
+                base_url=_public_base_url(request))
         except publish_host_release.PublishError as exc:
             raise HTTPException(400, str(exc))
 

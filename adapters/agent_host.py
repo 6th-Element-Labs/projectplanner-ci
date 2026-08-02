@@ -1109,6 +1109,8 @@ def apply_required_host_release(inventory, response, capacity):
         return None
 
     _UPDATE_STATE.setdefault("started_at", plan.get("started_at") or time.time())
+    if plan.get("update_request_id"):
+        _UPDATE_STATE["update_request_id"] = str(plan.get("update_request_id"))
     plan = host_self_update.advance(
         plan=plan, active_sessions=int(capacity.get("active_sessions") or 0))
     _UPDATE_STATE["phase"] = plan["phase"]
@@ -1126,8 +1128,11 @@ def apply_required_host_release(inventory, response, capacity):
         # Record the digest that failed so the next heartbeat does not retry the
         # same bad bundle forever. The operator sees the reason on the host card.
         print(f"[agent_host] self-update failed: {exc}", flush=True)
+        failed_request_id = str(
+            plan.get("update_request_id") or _UPDATE_STATE.get("update_request_id") or "")
         _UPDATE_STATE.clear()
         _UPDATE_STATE["failed_digest"] = str(plan.get("target_digest") or "")
+        _UPDATE_STATE["failed_request_id"] = failed_request_id
         _UPDATE_STATE["failed_error"] = str(exc)
     return plan
 

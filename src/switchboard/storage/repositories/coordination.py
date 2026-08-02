@@ -4069,7 +4069,10 @@ def heartbeat_host(host_id: str, active_sessions: Optional[int] = None,
     # The heartbeat response is where a host learns it is behind. Returning the
     # promoted release here is what makes the update automatic: the host does
     # not have to poll a second endpoint or wait for an operator to notice.
-    result["required_host_release"] = dict(required_release or {})
+    required_for_host = dict(required_release or {})
+    if row and row["update_request_id"]:
+        required_for_host["update_request_id"] = str(row["update_request_id"])
+    result["required_host_release"] = required_for_host
     if identity.get("required"):
         result["authoritative_execution_policy"] = dict(
             identity.get("execution_policy") or {})
@@ -4218,6 +4221,45 @@ def list_agent_hosts(runtime: str = "", lane: str = "", capability: str = "",
     return out
 
 
+def request_host_update(host_id: str, actor: str = "operator",
+                        project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Ask Capacity to retry/install the currently promoted Host release.
+
+    Promotion remains the only release target. This writes only a request nonce
+    on the Capacity-owned Host row so a Host may retry the same digest after a
+    previous failure; it cannot move task, mission, review, or Done state.
+    """
+    host_id = str(host_id or "").strip()
+    if not host_id:
+        return {"error": "host_id_required"}
+    now = time.time()
+    request_id = "hostupdate-" + uuid.uuid4().hex
+    with _control_plane_conn(project) as c:
+        row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
+        if not row:
+            return {"error": "host_not_registered", "host_id": host_id}
+        from switchboard.storage.repositories import host_releases
+        release = host_releases.get_promoted_release_in(c)
+        if not release or not release.get("archive_present"):
+            return {"error": "promoted_host_release_unavailable", "host_id": host_id}
+        host = _host_row(row, now=now, required_release=release)
+        if host.get("stale"):
+            return {"error": "host_offline", "host_id": host_id}
+        if (host.get("readiness") or {}).get("state") == host_readiness.READY:
+            return {"error": "host_already_current", "host_id": host_id}
+        c.execute("UPDATE agent_hosts SET update_request_id=? WHERE host_id=?",
+                  (request_id, host_id))
+        c.execute(
+            "INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+            (None, actor, "agent_host.update_requested",
+             json.dumps({"host_id": host_id, "request_id": request_id,
+                         "release_id": release.get("release_id"),
+                         "version": release.get("version")}, sort_keys=True), now))
+    return {"schema": "switchboard.host_update_request.v1", "accepted": True,
+            "host_id": host_id, "request_id": request_id,
+            "release_id": release.get("release_id"), "version": release.get("version")}
+
+
 def host_status(host_id: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     started_at = time.time()
     now = time.time()
@@ -4345,6 +4387,7 @@ __all__ = [
     "register_host",
     "heartbeat_host",
     "list_agent_hosts",
+    "request_host_update",
     "host_status",
     "set_agent_state",
     "get_agent_state",

@@ -467,6 +467,80 @@ body.tk-density-control .h1{ font-variant-numeric:tabular-nums; }
 #fleet-dock .dock-runner-action,
 #fleet-dock .dock-host-action { flex: 0 0 auto; width: auto; }
 #fleet-dock .dock-destructive-action { margin-left: auto; }
+
+/* UI-83 — Fleet is a calm status surface, not another dense operator table. */
+.tk-fleet-page { --fleet-border: #dfe3ea; --fleet-soft: #f7f8fa; max-width: 1440px; margin: 0 auto; }
+.tk-fleet-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 1.5rem; margin-bottom: 1.5rem; }
+.tk-fleet-breadcrumb { color: var(--tblr-secondary); font-size: .875rem; margin-bottom: .35rem; }
+.tk-fleet-head-actions { align-items: center; display: flex; gap: .75rem; }
+.tk-fleet-system-status { align-items: center; color: var(--tblr-secondary); display: inline-flex; gap: .5rem; white-space: nowrap; }
+.tk-fleet-filters { align-items: center; background: #fff; border: 1px solid var(--fleet-border); border-radius: .75rem; display: flex; gap: .25rem; margin-bottom: 1.25rem; padding: .35rem; width: fit-content; }
+.tk-fleet-filter { background: transparent; border: 0; border-radius: .5rem; color: var(--tblr-secondary); font-size: .875rem; font-weight: 500; padding: .55rem .85rem; }
+.tk-fleet-filter:hover { background: var(--fleet-soft); color: var(--tblr-body-color); }
+.tk-fleet-filter.active { background: var(--tblr-primary-lt); color: var(--tblr-primary); }
+.tk-fleet-filter span:not(:empty) { background: rgba(98,105,118,.12); border-radius: 99px; font-size: .7rem; margin-left: .3rem; padding: .1rem .35rem; }
+.tk-fleet-update-banner { align-items: center; background: #fff9e8; border: 1px solid #f2c55c; border-radius: .85rem; display: flex; gap: 1rem; margin-bottom: 1.25rem; padding: 1.1rem 1.25rem; }
+.tk-fleet-update-banner.is-failed { background: #fff5f5; border-color: #ef9a9a; }
+.tk-fleet-banner-icon { align-items: center; background: #fff0bd; border-radius: 999px; color: #a76700; display: flex; flex: 0 0 42px; font-size: 1.35rem; height: 42px; justify-content: center; }
+.tk-fleet-update-banner.is-failed .tk-fleet-banner-icon { background: #ffe1e1; color: var(--tblr-danger); }
+.tk-fleet-hosts-card { border-color: var(--fleet-border); margin-bottom: 1.25rem; overflow: hidden; }
+.tk-fleet-section-head { align-items: center; display: flex; justify-content: space-between; min-height: 70px; }
+.tk-fleet-host-list { display: grid; }
+.tk-fleet-host-card { padding: 1.4rem 1.5rem; }
+.tk-fleet-host-card + .tk-fleet-host-card { border-top: 1px solid var(--fleet-border); }
+.tk-fleet-host-main { align-items: center; display: grid; gap: .9rem; grid-template-columns: auto minmax(0,1fr) auto; }
+.tk-fleet-host-icon { align-items: center; background: var(--fleet-soft); border: 1px solid var(--fleet-border); border-radius: .75rem; color: var(--tblr-primary); display: flex; font-size: 1.4rem; height: 48px; justify-content: center; width: 48px; }
+.tk-fleet-host-title h4 { font-size: 1rem; margin: 0 0 .15rem; }
+.tk-fleet-host-heartbeat { align-items: center; color: var(--tblr-secondary); display: flex; font-size: .8rem; gap: .45rem; white-space: nowrap; }
+.tk-fleet-host-details { align-items: start; display: grid; gap: 2rem; grid-template-columns: minmax(220px,.7fr) minmax(420px,1.3fr); margin: 1.25rem 0; }
+.tk-fleet-status { align-items: center; border-radius: 99px; display: inline-flex; font-size: .78rem; font-weight: 600; gap: .4rem; padding: .38rem .65rem; }
+.tk-fleet-status.is-ready { background: var(--tblr-green-lt); color: var(--tblr-green); }
+.tk-fleet-status.is-update_available { background: #fff7df; color: #a76700; }
+.tk-fleet-status.is-updating { background: var(--tblr-blue-lt); color: var(--tblr-blue); }
+.tk-fleet-status.is-update_failed,.tk-fleet-status.is-blocked { background: var(--tblr-red-lt); color: var(--tblr-red); }
+.tk-fleet-status.is-offline { background: var(--tblr-secondary-lt); color: var(--tblr-secondary); }
+.tk-spin { animation: tk-spin 1.1s linear infinite; }
+@keyframes tk-spin { to { transform: rotate(360deg); } }
+.tk-fleet-release-grid { display: grid; gap: .65rem 1.25rem; grid-template-columns: repeat(3,minmax(0,1fr)); margin: 0; }
+.tk-fleet-release-grid div { min-width: 0; }
+.tk-fleet-release-grid dt { color: var(--tblr-secondary); font-size: .68rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.tk-fleet-release-grid dd { font-size: .85rem; margin: .15rem 0 0; overflow-wrap: anywhere; }
+.tk-fleet-host-actions { align-items: center; display: flex; justify-content: space-between; gap: 1rem; }
+.tk-fleet-operations { display: grid; gap: 1.25rem; margin-bottom: 1.25rem; }
+.tk-fleet-operations > .card { border-color: var(--fleet-border); margin: 0; overflow: hidden; }
+.tk-fleet-download-card { border-color: var(--fleet-border); margin-bottom: 5rem; }
+.tk-fleet-download-card .card-body { align-items: flex-start; display: flex; gap: 1rem; padding: 1.5rem; }
+.tk-fleet-download-icon { align-items: center; background: var(--tblr-primary-lt); border-radius: .75rem; color: var(--tblr-primary); display: flex; flex: 0 0 48px; font-size: 1.45rem; height: 48px; justify-content: center; }
+.tk-fleet-download-copy { min-width: 0; }
+.tk-fleet-release-meta { color: var(--tblr-secondary); display: flex; flex-wrap: wrap; font-size: .78rem; gap: 1rem; margin-top: 1rem; }
+
+@media (max-width: 767.98px) {
+  .tk-fleet-page { padding-bottom: 6.25rem; }
+  .tk-fleet-head { align-items: flex-start; margin-bottom: 1.1rem; }
+  .tk-fleet-head-actions { margin-left: auto; }
+  .tk-fleet-head-actions .btn { height: 44px; padding: 0; width: 44px; }
+  .tk-fleet-head-actions .btn .me-1 { margin: 0 !important; }
+  .tk-fleet-head-actions .btn { font-size: 0; }
+  .tk-fleet-head-actions .btn i { font-size: 1.1rem; }
+  .tk-fleet-system-status { display: none; }
+  .tk-fleet-filters { display: grid; grid-template-columns: repeat(3,1fr); overflow: hidden; width: 100%; }
+  .tk-fleet-filter { min-width: 0; padding: .55rem .3rem; }
+  .tk-fleet-update-banner { align-items: flex-start; flex-wrap: wrap; padding: 1rem; }
+  .tk-fleet-update-banner .btn-list { margin-left: 58px !important; width: calc(100% - 58px); }
+  .tk-fleet-update-banner .btn-list .btn { flex: 1; }
+  .tk-fleet-section-head { align-items: flex-start; flex-direction: column; gap: .25rem; }
+  .tk-fleet-host-card { padding: 1.15rem; }
+  .tk-fleet-host-main { grid-template-columns: auto minmax(0,1fr); }
+  .tk-fleet-host-heartbeat { grid-column: 2; }
+  .tk-fleet-host-details { gap: 1rem; grid-template-columns: 1fr; margin: 1rem 0; }
+  .tk-fleet-release-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .tk-fleet-host-actions { align-items: stretch; flex-direction: column; }
+  .tk-fleet-host-actions .btn-list { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); width: 100%; }
+  .tk-fleet-host-actions .btn { min-height: 44px; }
+  .tk-fleet-download-card .card-body { padding: 1.15rem; }
+  .tk-fleet-download-card .btn-list { display: grid; grid-template-columns: 1fr; }
+  .tk-fleet-download-card .btn { min-height: 44px; width: 100%; }
+}
 /* Header chrome: on desktop the bar keeps its compact single line — the grabber
    and the left-hand minimize are phone-only, where the dock is a full sheet. */
 .dock-grab, .dock-min-mobile { display: none; }

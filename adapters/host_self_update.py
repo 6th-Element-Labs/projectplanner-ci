@@ -37,6 +37,7 @@ import tarfile
 import tempfile
 import time
 import urllib.request
+import urllib.parse
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Optional
 
@@ -99,6 +100,7 @@ def decide(*, required: Optional[Mapping[str, Any]],
     target_digest = _text(required.get("bundle_digest"))
     target_version = _text(required.get("version"))
     download_url = _text(required.get("download_url"))
+    request_id = _text(required.get("update_request_id"))
 
     # Matching the promoted digest is the only definition of current. Version
     # equality is not enough: the whole point of the digest is that a
@@ -119,9 +121,11 @@ def decide(*, required: Optional[Mapping[str, Any]],
                        f"{installed_version or 'the installed release'}."))
         return UpdatePlan(act=True, phase=phase, target_digest=target_digest,
                           target_version=target_version,
-                          download_url=download_url, reason="in_progress")
+                          download_url=download_url, update_request_id=request_id,
+                          reason="in_progress")
 
-    if target_digest and target_digest == _text(state.get("failed_digest")):
+    if (target_digest and target_digest == _text(state.get("failed_digest"))
+            and request_id == _text(state.get("failed_request_id"))):
         return UpdatePlan(act=False, reason=SKIP_PREVIOUSLY_FAILED, phase=IDLE,
                           error=_text(state.get("failed_error")))
 
@@ -136,6 +140,7 @@ def decide(*, required: Optional[Mapping[str, Any]],
 
     return UpdatePlan(act=True, phase=DRAINING, target_digest=target_digest,
                       target_version=target_version, download_url=download_url,
+                      update_request_id=request_id,
                       reason="release_promoted", started_at=now)
 
 
@@ -159,15 +164,47 @@ def _download(url: str, target: "Path") -> None:
     code the host executes, and the signature check that follows only proves the
     bundle was signed — not that the transport chose which signed bundle.
     """
-    if not url.lower().startswith("https://"):
-        raise UpdateError(f"refusing to fetch a host bundle over {url.split(':', 1)[0]}")
-    with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT_S) as response:
+    trusted_base = (os.environ.get("PM_SWITCHBOARD_PUBLIC_BASE")
+                    or os.environ.get("PM_BASE") or "").strip()
+    resolved = resolve_download_url(url, trusted_base)
+    with urllib.request.urlopen(resolved, timeout=DOWNLOAD_TIMEOUT_S) as response:
         with open(target, "wb") as handle:
             while True:
                 chunk = response.read(1 << 20)
                 if not chunk:
                     break
                 handle.write(chunk)
+
+
+def resolve_download_url(url: str, trusted_base: str) -> str:
+    """Resolve one release URL and keep it on the trusted HTTPS origin.
+
+    Older published releases carried a relative API path. The Host rejected it
+    because only absolute HTTPS was accepted, leaving automatic update red while
+    the same signed package worked manually. Resolution belongs at this trust
+    boundary: relative is accepted only against the enrolled Switchboard base;
+    cross-origin, downgraded, credentialed, and fragment URLs fail loudly.
+    """
+    raw = _text(url)
+    base = _text(trusted_base).rstrip("/")
+    if not raw:
+        raise UpdateError("host release download URL is empty")
+    if not base:
+        raise UpdateError("trusted Switchboard base URL is unset")
+    base_parts = urllib.parse.urlsplit(base)
+    if base_parts.scheme.lower() != "https" or not base_parts.netloc:
+        raise UpdateError("trusted Switchboard base URL must be absolute HTTPS")
+    resolved = urllib.parse.urljoin(base + "/", raw)
+    parts = urllib.parse.urlsplit(resolved)
+    if parts.scheme.lower() != "https" or not parts.netloc:
+        raise UpdateError("Host release download URL must resolve to absolute HTTPS")
+    if parts.username or parts.password:
+        raise UpdateError("Host release download URL must not contain credentials")
+    if parts.fragment:
+        raise UpdateError("Host release download URL must not contain a fragment")
+    if (parts.hostname, parts.port or 443) != (base_parts.hostname, base_parts.port or 443):
+        raise UpdateError("Host release download URL must stay on the trusted Switchboard origin")
+    return urllib.parse.urlunsplit(parts)
 
 
 def install(plan: UpdatePlan, *,

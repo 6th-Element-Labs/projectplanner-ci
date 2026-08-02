@@ -117,6 +117,7 @@ try:
 
     # ── it must not retry a bad bundle forever ─────────────────────────────
     burned = plan(state={"failed_digest": "sha256:new",
+                         "failed_request_id": "",
                          "failed_error": "signature verification failed"})
     ok(burned.act is False and burned["reason"] == up.SKIP_PREVIOUSLY_FAILED,
        "a release that already failed is not retried")
@@ -124,6 +125,32 @@ try:
        f"the failure reason survives for the operator: {burned['error']}")
     ok(plan(state={"failed_digest": "sha256:other"}).act is True,
        "a different promoted release clears the block")
+    retried = plan(
+        required={**REQUIRED, "update_request_id": "hostupdate-new"},
+        state={"failed_digest": "sha256:new", "failed_request_id": "",
+               "failed_error": "relative URL refused"})
+    ok(retried.act is True and retried["update_request_id"] == "hostupdate-new",
+       "an explicit Capacity request retries the same signed digest")
+
+    # ── the download URL stays on the enrolled Switchboard origin ─────────
+    resolved = up.resolve_download_url(
+        "/ixp/v1/host_releases/hostrel-1/bundle?project=switchboard",
+        "https://plan.example")
+    ok(resolved == "https://plan.example/ixp/v1/host_releases/hostrel-1/bundle?project=switchboard",
+       "a relative release URL resolves against the trusted Switchboard base")
+    ok(up.resolve_download_url("https://plan.example/releases/host.tgz",
+                               "https://plan.example")
+       == "https://plan.example/releases/host.tgz",
+       "an absolute same-origin HTTPS URL remains valid")
+    for unsafe, label in [
+        ("http://plan.example/host.tgz", "plain HTTP"),
+        ("https://evil.example/host.tgz", "cross-origin HTTPS"),
+    ]:
+        try:
+            up.resolve_download_url(unsafe, "https://plan.example")
+            ok(False, f"{label} was accepted")
+        except up.UpdateError:
+            ok(True, f"{label} is refused explicitly")
 
     # ── it must terminate ──────────────────────────────────────────────────
     mid = plan(state={"phase": up.DRAINING, "started_at": 1000.0}, now=1060.0)

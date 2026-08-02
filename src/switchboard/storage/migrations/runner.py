@@ -48,6 +48,11 @@ from switchboard.storage.migrations.decisions import DECISION_RECORDS_SQL
 # or reuse one. Each tuple is (name, table, column, ddl); every entry adds one column and
 # mirrors, in order, the additive ALTER statements this module replaced.
 ADDITIVE_COLUMN_MIGRATIONS: List[Tuple[str, str, str, str]] = [
+    # Explicit app-style Host update request. The promoted release remains the
+    # target; this nonce only lets Capacity retry the same signed digest after a
+    # prior install failure. It owns no task or Mission lifecycle state.
+    ("0135_agent_hosts_update_request_id", "agent_hosts", "update_request_id",
+     "ALTER TABLE agent_hosts ADD COLUMN update_request_id TEXT NOT NULL DEFAULT ''"),
     # Staged rollout for host-release enforcement. Defaults to 0 — OBSERVE —
     # because the first promotion on any fleet meets hosts that predate
     # attestation, report no contract fingerprint, and are therefore judged

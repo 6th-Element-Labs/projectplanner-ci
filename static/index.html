@@ -26,7 +26,7 @@
     <link href="taikun-tabler.css?v=23" rel="stylesheet"/>
     <!-- taikun-ui: brand + polish layer over Tabler (white canvas, soft cards, refined tabs/modal).
          Loaded after taikun-tabler.css?v=23 so it wins. -->
-    <link href="taikun-ui.css?v=32" rel="stylesheet"/>
+    <link href="taikun-ui.css?v=33" rel="stylesheet"/>
     <link href="taikun-scope.css?v=2" rel="stylesheet"/>
     <link href="rooms.css?v=1" rel="stylesheet"/>
     <style>
@@ -845,37 +845,70 @@
                             </div>
                         </div>
 
-                        <!-- UI-8 FLEET: live runners, runner capacity, and launch queue -->
-                        <div class="tab-pane" id="tab-fleet" role="tabpanel">
-                            <div class="d-flex align-items-center flex-wrap gap-2 mt-3 mb-3">
-                                <h2 class="page-title m-0"><i class="ti ti-server-bolt me-2"></i>Autopilot</h2>
-                                <span class="text-secondary small">Running sessions, places that can launch them, and requests waiting to launch.</span>
-                                <button id="fleet-refresh" class="btn btn-sm btn-outline-secondary ms-auto" type="button"><i class="ti ti-refresh me-1"></i>Refresh</button>
-                            </div>
-                            <div class="card mb-3">
-                                <div class="card-header">
-                                    <button type="button" class="btn btn-ghost-secondary d-flex align-items-center w-100 p-0 border-0 text-start epic-head" data-bs-toggle="collapse" data-bs-target="#fleet-runners-body" aria-expanded="true" aria-controls="fleet-runners-body">
-                                        <span class="card-title"><i class="ti ti-player-play me-2"></i>Live runners</span><span id="fleet-runners-count" class="badge bg-secondary-lt ms-2">…</span><i class="ti ti-chevron-down epic-chev text-secondary ms-auto"></i>
-                                    </button>
+                        <!-- UI-83 FLEET: one read-only projection over Capacity and the
+                             explicitly promoted signed Host Adapter release. -->
+                        <div class="tab-pane tk-fleet-page" id="tab-fleet" role="tabpanel">
+                            <header class="tk-fleet-head mt-3">
+                                <div>
+                                    <div class="tk-fleet-breadcrumb"><span id="fleet-project-label">Project</span> / Fleet</div>
+                                    <h2 class="page-title mb-1">Fleet</h2>
+                                    <div class="text-secondary">Hosts, runners, and installed adapter releases.</div>
                                 </div>
-                                <div id="fleet-runners-body" class="card-body collapse show"><div class="text-secondary small">Loading runners…</div></div>
-                            </div>
-                            <div class="card mb-3">
-                                <div class="card-header">
-                                    <button type="button" class="btn btn-ghost-secondary d-flex align-items-center w-100 p-0 border-0 text-start epic-head" data-bs-toggle="collapse" data-bs-target="#fleet-hosts-body" aria-expanded="true" aria-controls="fleet-hosts-body">
-                                        <span class="card-title"><i class="ti ti-server me-2"></i>Runner capacity</span><span id="fleet-hosts-count" class="badge bg-secondary-lt ms-2">…</span><i class="ti ti-chevron-down epic-chev text-secondary ms-auto"></i>
-                                    </button>
+                                <div class="tk-fleet-head-actions">
+                                    <span id="fleet-system-status" class="tk-fleet-system-status"><span class="status-dot bg-secondary"></span>Checking systems…</span>
+                                    <button id="fleet-refresh" class="btn btn-outline-secondary" type="button"><i class="ti ti-refresh me-1"></i>Refresh</button>
                                 </div>
-                                <div id="fleet-hosts-body" class="card-body collapse show"><div class="text-secondary small">Loading runner capacity…</div></div>
+                            </header>
+
+                            <div class="tk-fleet-filters" role="group" aria-label="Filter enrolled hosts">
+                                <button class="tk-fleet-filter active" data-fleet-filter="attention" type="button">Needs attention <span id="fleet-attention-count"></span></button>
+                                <button class="tk-fleet-filter" data-fleet-filter="current" type="button">Up to date <span id="fleet-current-count"></span></button>
+                                <button class="tk-fleet-filter" data-fleet-filter="all" type="button">All hosts <span id="fleet-all-count"></span></button>
                             </div>
-                            <div class="card mb-3">
-                                <div class="card-header">
-                                    <button type="button" class="btn btn-ghost-secondary d-flex align-items-center w-100 p-0 border-0 text-start epic-head" data-bs-toggle="collapse" data-bs-target="#fleet-wakes-body" aria-expanded="true" aria-controls="fleet-wakes-body">
-                                        <span class="card-title"><i class="ti ti-bell-z me-2"></i>Launch queue</span><span id="fleet-wakes-count" class="badge bg-secondary-lt ms-2">…</span><i class="ti ti-chevron-down epic-chev text-secondary ms-auto"></i>
-                                    </button>
+
+                            <section id="fleet-update-banner" class="tk-fleet-update-banner" hidden aria-live="polite"></section>
+
+                            <section class="card tk-fleet-hosts-card">
+                                <div class="card-header tk-fleet-section-head">
+                                    <div><h3 class="card-title">Enrolled hosts</h3><div class="text-secondary small">The machines Capacity can place work on.</div></div>
+                                    <span id="fleet-hosts-count" class="text-secondary small">Loading…</span>
                                 </div>
-                                <div id="fleet-wakes-body" class="card-body collapse show"><div class="text-secondary small">Loading launch queue…</div></div>
+                                <div id="fleet-hosts-body" class="tk-fleet-host-list"><div class="p-4 text-secondary small">Loading hosts…</div></div>
+                            </section>
+
+                            <div class="tk-fleet-operations">
+                                <section class="card">
+                                    <div class="card-header">
+                                        <button type="button" class="btn btn-ghost-secondary d-flex align-items-center w-100 p-0 border-0 text-start epic-head" data-bs-toggle="collapse" data-bs-target="#fleet-runners-body" aria-expanded="true" aria-controls="fleet-runners-body">
+                                            <span class="card-title"><i class="ti ti-player-play me-2"></i>Live runners</span><span id="fleet-runners-count" class="badge bg-secondary-lt ms-2">…</span><i class="ti ti-chevron-down epic-chev text-secondary ms-auto"></i>
+                                        </button>
+                                    </div>
+                                    <div id="fleet-runners-body" class="card-body collapse show"><div class="text-secondary small">Loading runners…</div></div>
+                                </section>
+                                <section class="card">
+                                    <div class="card-header">
+                                        <button type="button" class="btn btn-ghost-secondary d-flex align-items-center w-100 p-0 border-0 text-start epic-head" data-bs-toggle="collapse" data-bs-target="#fleet-wakes-body" aria-expanded="true" aria-controls="fleet-wakes-body">
+                                            <span class="card-title"><i class="ti ti-bell-z me-2"></i>Launch queue</span><span id="fleet-wakes-count" class="badge bg-secondary-lt ms-2">…</span><i class="ti ti-chevron-down epic-chev text-secondary ms-auto"></i>
+                                        </button>
+                                    </div>
+                                    <div id="fleet-wakes-body" class="card-body collapse show"><div class="text-secondary small">Loading launch queue…</div></div>
+                                </section>
                             </div>
+
+                            <section class="card tk-fleet-download-card">
+                                <div class="card-body">
+                                    <div class="tk-fleet-download-icon"><i class="ti ti-device-desktop-down"></i></div>
+                                    <div class="tk-fleet-download-copy">
+                                        <h3 class="mb-1">Download Host Adapter</h3>
+                                        <p class="text-secondary mb-3">The current promoted, signed package stays available here—even when a Host is offline.</p>
+                                        <div class="btn-list">
+                                            <button id="fleet-download-host" class="btn btn-primary" type="button"><i class="ti ti-download me-1"></i>Download for macOS</button>
+                                            <button id="fleet-copy-install" class="btn btn-outline-secondary" type="button"><i class="ti ti-copy me-1"></i>Copy install command</button>
+                                        </div>
+                                        <div id="fleet-release-meta" class="tk-fleet-release-meta">No promoted release loaded.</div>
+                                    </div>
+                                </div>
+                            </section>
                         </div>
                     </div>
 
@@ -1188,7 +1221,7 @@
     <script src="js/scope.js?v=2"></script>
     <script src="js/attention.js?v=4"></script>
     <script src="js/fleet-dock.js?v=5"></script>
-    <script src="app.js?v=85"></script>
+    <script src="app.js?v=86"></script>
     <script src="taikun-ui.js?v=11"></script>
     <script src="saturation-panel.js?v=3"></script>
     <script>
