@@ -167,6 +167,56 @@ class CapacityMissionEventsTest(unittest.TestCase):
             event["payload"],
         )
 
+    def test_terminal_wake_replay_accepts_existing_exact_physical_identity(self):
+        existing = self.journal.append_event(
+            TASK,
+            project=PROJECT,
+            event_type="execution_ended",
+            source_plane="capacity",
+            idempotency_key="execution_ended:wake-receipt-first",
+            execution_id="execlease-failed",
+            generation=2,
+            external_ref="legacy-wake-receipt",
+            payload={
+                "wake_id": "wake-receipt-first",
+                "terminal_status": "failed",
+                "reason_code": "stale_execution_context",
+                "receipt_ref": "legacy-wake-receipt",
+            },
+        )
+        receipt = self.wakes([failed_wake("wake-receipt-first")])
+        self.assertEqual([{
+            "event_id": existing["event_id"],
+            "sequence": existing["sequence"],
+            "wake_id": "wake-receipt-first",
+            "created": False,
+        }], receipt["events"])
+        self.assertEqual(1, len(self.journal.list_events(
+            TASK, project=PROJECT, after_sequence=1, limit=10,
+        )))
+
+    def test_terminal_wake_replay_rejects_conflicting_execution_identity(self):
+        self.journal.append_event(
+            TASK,
+            project=PROJECT,
+            event_type="execution_ended",
+            source_plane="capacity",
+            idempotency_key="execution_ended:wake-conflict",
+            execution_id="execlease-other",
+            generation=9,
+            payload={
+                "wake_id": "wake-conflict",
+                "terminal_status": "failed",
+                "reason_code": "stale_execution_context",
+                "receipt_ref": "wake:wake-conflict",
+            },
+        )
+        with self.assertRaises(
+            capacity_mission_events.CapacityMissionProjectionError,
+        ) as result:
+            self.wakes([failed_wake("wake-conflict")])
+        self.assertEqual("capacity_event_identity_conflict", result.exception.code)
+
     def test_cancelled_wake_projects_but_other_eras_and_runner_wakes_do_not(self):
         mission = self.journal.get_item(TASK, project=PROJECT)
         old = float(mission["created_at"]) - 1

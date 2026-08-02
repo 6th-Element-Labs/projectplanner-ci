@@ -172,6 +172,48 @@ def _existing_runner_event(
     return event
 
 
+def _existing_wake_event(
+    repository: MissionJournalRepository,
+    *,
+    project: str,
+    task_id: str,
+    wake_id: str,
+    execution_id: str,
+    generation: int,
+) -> dict[str, Any] | None:
+    """Recognize an already-durable projection of this exact physical wake."""
+    event = repository.get_event_by_idempotency_key(
+        f"execution_ended:{wake_id}", project=project,
+    )
+    if event is None:
+        return None
+    payload = event.get("payload")
+    payload = payload if isinstance(payload, Mapping) else {}
+    expected = {
+        "task_id": task_id,
+        "event_type": "execution_ended",
+        "source_plane": "capacity",
+        "execution_id": execution_id,
+        "generation": generation,
+        "wake_id": wake_id,
+    }
+    persisted = {
+        "task_id": str(event.get("task_id") or ""),
+        "event_type": str(event.get("event_type") or ""),
+        "source_plane": str(event.get("source_plane") or ""),
+        "execution_id": str(event.get("execution_id") or ""),
+        "generation": event.get("generation"),
+        "wake_id": str(payload.get("wake_id") or ""),
+    }
+    if persisted != expected:
+        raise CapacityMissionProjectionError(
+            "capacity_event_identity_conflict",
+            f"wake {wake_id} is already bound to a different mission event",
+            details={"expected": expected, "persisted": persisted},
+        )
+    return event
+
+
 def _identity_from_surfaces(
     surfaces: list[tuple[str, Any]], *, identity: str,
 ) -> tuple[str, int]:
@@ -340,6 +382,22 @@ def append_terminal_wake_events(
                 details={"wake_id": wake_id, "status": status},
             )
         receipt_ref = f"wake:{wake_id}"
+        existing = _existing_wake_event(
+            repository,
+            project=project,
+            task_id=task_id,
+            wake_id=wake_id,
+            execution_id=execution_id,
+            generation=generation,
+        )
+        if existing is not None:
+            events.append({
+                "event_id": existing.get("event_id"),
+                "sequence": existing.get("sequence"),
+                "wake_id": wake_id,
+                "created": False,
+            })
+            continue
         occurred_at = wake.get("completed_at")
         event = repository.append_event(
             task_id,
