@@ -249,6 +249,23 @@ class MissionJournalRepository:
         with self._connection(project) as connection:
             return self._item_in(connection, task_id, project)
 
+    def get_event_by_idempotency_key(
+        self, idempotency_key: str, *, project: str,
+    ) -> dict[str, Any] | None:
+        """Return the immutable event already bound to one project-local key."""
+        exact_key = str(idempotency_key or "").strip()
+        if not exact_key:
+            raise MissionJournalError(
+                "idempotency_key_required", "idempotency key is required",
+            )
+        with self._connection(project) as connection:
+            row = connection.execute(
+                "SELECT * FROM mission_events "
+                "WHERE project_id=? AND idempotency_key=?",
+                (project, exact_key),
+            ).fetchone()
+        return self._event_from_row(row) if row is not None else None
+
     def task_ids_for_head(self, head_sha: str, *, project: str) -> list[str]:
         """Return tasks whose canonical git projection names this exact head."""
         normalized = str(head_sha or "").strip()

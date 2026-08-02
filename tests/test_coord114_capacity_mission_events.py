@@ -268,6 +268,57 @@ class CapacityMissionEventsTest(unittest.TestCase):
         )
         self.assertTrue(all(event["source_plane"] == "capacity" for event in events))
 
+    def test_terminal_runner_replay_accepts_existing_exact_physical_identity(self):
+        existing = self.journal.append_event(
+            TASK,
+            project=PROJECT,
+            event_type="runner_ended",
+            source_plane="capacity",
+            idempotency_key="runner_ended:run-receipt-first",
+            execution_id="execlease-runner",
+            generation=3,
+            external_ref="terminal_receipt:receipt-1",
+            payload={
+                "runner_session_id": "run-receipt-first",
+                "terminal_status": "stopped",
+                "receipt_ref": "terminal_receipt:receipt-1",
+            },
+        )
+        receipt = self.runners([
+            terminal_runner("run-receipt-first", status="killed"),
+        ])
+        self.assertEqual([], receipt["finalized_handoffs"])
+        self.assertEqual([{
+            "event_id": existing["event_id"],
+            "sequence": existing["sequence"],
+            "runner_session_id": "run-receipt-first",
+            "created": False,
+        }], receipt["events"])
+        self.assertEqual(1, len(self.journal.list_events(
+            TASK, project=PROJECT, after_sequence=1, limit=10,
+        )))
+
+    def test_terminal_runner_replay_rejects_conflicting_execution_identity(self):
+        self.journal.append_event(
+            TASK,
+            project=PROJECT,
+            event_type="runner_ended",
+            source_plane="capacity",
+            idempotency_key="runner_ended:run-conflict",
+            execution_id="execlease-other",
+            generation=9,
+            head_sha="other-head",
+            payload={
+                "runner_session_id": "run-conflict",
+                "terminal_status": "killed",
+            },
+        )
+        with self.assertRaises(
+            capacity_mission_events.CapacityMissionProjectionError,
+        ) as result:
+            self.runners([terminal_runner("run-conflict")])
+        self.assertEqual("capacity_event_identity_conflict", result.exception.code)
+
     def test_valid_continue_yield_consumes_observed_history_and_suppresses_exit_page(self):
         self.journal.append_event(
             TASK,

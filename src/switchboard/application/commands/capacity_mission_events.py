@@ -123,6 +123,55 @@ def _timestamp(value: Any, *, field: str, identity: str) -> float:
     return timestamp
 
 
+def _existing_runner_event(
+    repository: MissionJournalRepository,
+    *,
+    project: str,
+    task_id: str,
+    runner_id: str,
+    execution_id: str,
+    generation: int,
+    head_sha: str,
+) -> dict[str, Any] | None:
+    """Recognize an already-durable projection of this exact physical runner."""
+    event = repository.get_event_by_idempotency_key(
+        f"runner_ended:{runner_id}", project=project,
+    )
+    if event is None:
+        return None
+    payload = event.get("payload")
+    payload = payload if isinstance(payload, Mapping) else {}
+    expected = {
+        "task_id": task_id,
+        "event_type": "runner_ended",
+        "source_plane": "capacity",
+        "execution_id": execution_id,
+        "generation": generation,
+        "runner_session_id": runner_id,
+    }
+    persisted = {
+        "task_id": str(event.get("task_id") or ""),
+        "event_type": str(event.get("event_type") or ""),
+        "source_plane": str(event.get("source_plane") or ""),
+        "execution_id": str(event.get("execution_id") or ""),
+        "generation": event.get("generation"),
+        "runner_session_id": str(payload.get("runner_session_id") or ""),
+    }
+    persisted_head = str(event.get("head_sha") or "").strip()
+    if persisted != expected or (
+        persisted_head and head_sha and persisted_head != head_sha
+    ):
+        raise CapacityMissionProjectionError(
+            "capacity_event_identity_conflict",
+            f"runner {runner_id} is already bound to a different mission event",
+            details={
+                "expected": {**expected, "head_sha": head_sha or None},
+                "persisted": {**persisted, "head_sha": persisted_head or None},
+            },
+        )
+    return event
+
+
 def _identity_from_surfaces(
     surfaces: list[tuple[str, Any]], *, identity: str,
 ) -> tuple[str, int]:
@@ -400,6 +449,23 @@ def append_terminal_runner_events(
             or ""
         ).strip()
         receipt_ref = f"runner_session:{runner_id}"
+        existing = _existing_runner_event(
+            repository,
+            project=project,
+            task_id=task_id,
+            runner_id=runner_id,
+            execution_id=execution_id,
+            generation=generation,
+            head_sha=head_sha,
+        )
+        if existing is not None:
+            events.append({
+                "event_id": existing.get("event_id"),
+                "sequence": existing.get("sequence"),
+                "runner_session_id": runner_id,
+                "created": False,
+            })
+            continue
         payload = {
             "runner_session_id": runner_id,
             "terminal_status": status,
