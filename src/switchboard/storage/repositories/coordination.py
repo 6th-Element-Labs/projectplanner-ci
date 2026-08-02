@@ -3716,6 +3716,8 @@ def _host_row(row: sqlite3.Row, now: Optional[float] = None,
         "relay_auth": relay_auth,
         "fault": (dict(relay_auth.get("fault"))
                   if isinstance(relay_auth.get("fault"), dict) else None),
+        "release_management": str(
+            capacity.get("release_management") or "signed_bundle"),
     })
     # Readiness is computed, never stored: it is a function of this row and the
     # promoted release, and caching it would let a stale verdict outlive the
@@ -4238,13 +4240,17 @@ def request_host_update(host_id: str, actor: str = "operator",
         row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
         if not row:
             return {"error": "host_not_registered", "host_id": host_id}
+        host = _host_row(row, now=now)
+        if host.get("stale"):
+            return {"error": "host_offline", "host_id": host_id}
+        if host.get("release_management") != "signed_bundle":
+            return {"error": "host_update_not_supported", "host_id": host_id,
+                    "detail": "This Host is managed by the Switchboard deployment, not the signed Host Adapter updater."}
         from switchboard.storage.repositories import host_releases
         release = host_releases.get_promoted_release_in(c)
         if not release or not release.get("archive_present"):
             return {"error": "promoted_host_release_unavailable", "host_id": host_id}
         host = _host_row(row, now=now, required_release=release)
-        if host.get("stale"):
-            return {"error": "host_offline", "host_id": host_id}
         if (host.get("readiness") or {}).get("state") == host_readiness.READY:
             return {"error": "host_already_current", "host_id": host_id}
         c.execute("UPDATE agent_hosts SET update_request_id=? WHERE host_id=?",

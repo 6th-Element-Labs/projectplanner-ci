@@ -94,6 +94,12 @@ def evaluate(host: Mapping[str, Any],
     host_contract = _text(host.get("contract_fingerprint"))
     update_state = _text(host.get("update_state"))
     update_error = _text(host.get("update_error"))
+    capacity = host.get("capacity") or {}
+    release_management = _text(
+        host.get("release_management")
+        or (capacity.get("release_management") if isinstance(capacity, Mapping) else "")
+    ) or "signed_bundle"
+    self_updates = release_management == "signed_bundle"
 
     out: dict[str, Any] = {
         "schema": SCHEMA,
@@ -108,6 +114,7 @@ def evaluate(host: Mapping[str, Any],
         "actionable": False,     # is there an install/update the operator can run
         "withholds_work": False,
         "enforcing": False,      # is a blocked verdict actually withholding work
+        "release_management": release_management,
     }
 
     if not live:
@@ -155,11 +162,13 @@ def evaluate(host: Mapping[str, Any],
     # it is the only condition that makes work actually impossible.
     if req_contract and host_contract and host_contract != req_contract:
         out.update(state=BLOCKED, reason=BLOCKED_REASON, contract_matches=False,
-                   actionable=True, withholds_work=enforcing,
+                   actionable=self_updates, withholds_work=enforcing,
                    enforcing=enforcing,
                    detail=(f"Bundled execution-assignment contract {host_contract} "
                            f"cannot satisfy the server's {req_contract}. "
                            f"Every launch would be refused at admission."
+                           + (" Update this Host through the Switchboard deployment."
+                              if not self_updates else "")
                            + ("" if enforcing else
                               " Observe mode: work is not being withheld yet.")))
         return out
@@ -169,13 +178,25 @@ def evaluate(host: Mapping[str, Any],
     # 0.4.15 host was in.
     if req_contract and not host_contract:
         out.update(state=BLOCKED, reason=BLOCKED_REASON, contract_matches=False,
-                   actionable=True, withholds_work=enforcing,
+                   actionable=self_updates, withholds_work=enforcing,
                    enforcing=enforcing,
                    detail=("Host does not report a contract fingerprint, so its "
                            "bundle predates attestation and cannot be trusted "
                            "to build a matching contract."
+                           + (" Update this Host through the Switchboard deployment."
+                              if not self_updates else "")
                            + ("" if enforcing else
                               " Observe mode: work is not being withheld yet.")))
+        return out
+
+    # Source-deployed service Hosts are kept current by the VM deployment, not
+    # by the downloadable desktop package. Their source tree will naturally
+    # have a different digest (and a legacy human version label) from the
+    # promoted signed bundle. Once the wire contract agrees, that difference is
+    # not an adapter update and must not produce a button that can never work.
+    if not self_updates:
+        out.update(required_version="", required_digest="", actionable=False,
+                   detail="Managed by the Switchboard deployment; Host Adapter releases do not apply.")
         return out
 
     # The Host records one failed digest and deliberately refuses to retry it

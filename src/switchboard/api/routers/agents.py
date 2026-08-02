@@ -305,7 +305,7 @@ def create_router(*, resolve_project: ProjectResolver,
             actor=str(getattr(request.state, "actor", "") or "operator"))
         if result.get("error"):
             code = 404 if result["error"] == "host_not_registered" else 409
-            raise HTTPException(code, result["error"])
+            raise HTTPException(code, result.get("detail") or result["error"])
         return result
 
     @router.post("/ixp/v1/host_releases")

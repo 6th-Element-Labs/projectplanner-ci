@@ -110,6 +110,8 @@ RUNTIME_PROVIDERS = {
     "cursor": "cursor",
 }
 AGENT_HOST_VERSION = os.environ.get("PM_AGENT_HOST_VERSION", "0.2.0")
+RELEASE_MANAGEMENT_SIGNED_BUNDLE = "signed_bundle"
+RELEASE_MANAGEMENT_DEPLOYMENT = "deployment_managed"
 # Advertised when this build can serve browser Watch/Chat (supervisor PTY +
 # outbound relay). Placement keys off this instead of sniffing version strings.
 RUNNER_WATCH_CAPABILITY = "runner_watch"
@@ -902,6 +904,11 @@ def default_inventory():
     placement = placement_inventory(repo, runtime, policy)
     local_auth = _redacted_local_auth(runtime)
     runtime_profile = effective_runtime_profile([runtime], runner_watch=runner_watch_proven)
+    release_management = (
+        RELEASE_MANAGEMENT_SIGNED_BUNDLE
+        if str(os.environ.get("PM_AGENT_HOST_STATE_PATH") or "").strip()
+        else RELEASE_MANAGEMENT_DEPLOYMENT
+    )
     owner = {
         "user_id": os.environ.get("PM_HOST_OWNER_USER_ID") or None,
         "tenant_allowlist": placement.get("tenant_ids") or [],
@@ -934,6 +941,10 @@ def default_inventory():
             "owner": owner,
             "local_auth": local_auth,
             "runtime_profile": runtime_profile,
+            # A signed, enrolled desktop Host can replace its own bundle. The
+            # source-deployed VM Host is updated by the deployment service and
+            # must never be offered the desktop package as though it could.
+            "release_management": release_management,
         },
         "heartbeat_ttl_s": host_heartbeat_ttl_s(
             os.environ.get("PM_HOST_HEARTBEAT_TTL_S")),
@@ -967,6 +978,8 @@ def heartbeat_capacity(inventory):
             entry.get("runtime") for entry in inventory.get("runtimes") or []
             if isinstance(entry, dict)
         ]),
+        "release_management": (inventory.get("capacity") or {}).get(
+            "release_management", RELEASE_MANAGEMENT_DEPLOYMENT),
         # What this bundle can actually DO, as opposed to the fact that it is
         # alive. A heartbeat proved liveness and nothing proved compatibility,
         # which is how a green 0.4.15 host ate three Wave A missions on

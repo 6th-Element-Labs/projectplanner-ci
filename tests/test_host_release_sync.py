@@ -122,6 +122,18 @@ try:
     ok("trusted origin" in failed_update["detail"],
        "the exact Host failure remains visible to the operator")
 
+    managed = hr.evaluate(
+        host(agent_host_version="0.2.0", bundle_digest="sha256:source-tree",
+             release_management="deployment_managed"), REQUIRED)
+    ok(managed["state"] == hr.READY,
+       "a deployment-managed Host is not compared to the desktop bundle")
+    ok(managed["actionable"] is False,
+       "a deployment-managed Host is never offered an impossible self-update")
+    ok(managed["required_version"] == "" and managed["required_digest"] == "",
+       "desktop release metadata does not masquerade as its deployment target")
+    ok("deployment" in managed["detail"].lower(),
+       "the operator is told who manages the Host")
+
     # ── liveness is a separate axis ────────────────────────────────────────
     ok(hr.evaluate(host(stale=True), REQUIRED)["state"] == hr.OFFLINE,
        "an expired heartbeat is offline, not blocked")
@@ -167,6 +179,22 @@ try:
     ok(len([r for r in rel.list_releases(project=P) if r["promoted"]]) == 1,
        "exactly one release is ever promoted")
     ok(a["release_id"] != b["release_id"], "releases are identified by version+digest")
+
+    managed_registration = coordination.register_host({
+        "host_id": "host/managed-vm", "hostname": "managed-vm",
+        "agent_host_version": "0.2.0", "heartbeat_ttl_s": 60,
+        "runtimes": [{"runtime": "claude-code"}], "limits": {"max_sessions": 1},
+        "capacity": {"active_sessions": 0,
+                     "release_management": "deployment_managed",
+                     "host_attestation": {"contract_fingerprint": SERVER_FP,
+                                          "bundle_digest": "sha256:source"}},
+    }, project=P)
+    ok(not managed_registration.get("error"), "a deployment-managed Host registers")
+    refused = coordination.request_host_update("host/managed-vm", project=P)
+    ok(refused.get("error") == "host_update_not_supported",
+       "Capacity refuses a desktop-package update for a deployment-managed Host")
+    ok("deployment" in refused.get("detail", "").lower(),
+       "the refusal names the correct update owner")
 
     try:
         rel.record_release({"version": "0.4.17"}, project=P)

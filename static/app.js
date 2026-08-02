@@ -2358,6 +2358,7 @@ const TeepPlan = {
                  requiredVersion: String(r.required_version || (this._fleetRelease || {}).version || ''),
                  installedDigest: String(r.installed_digest || h.bundle_digest || ''),
                  requiredDigest: String(r.required_digest || (this._fleetRelease || {}).bundle_digest || ''),
+                 releaseManagement: String(r.release_management || h.release_management || 'signed_bundle'),
                  contractMatches: r.contract_matches !== false,
                  detail: String(h.update_error || r.detail || ''), actionable: !!r.actionable || state === 'update_failed' };
     },
@@ -2396,9 +2397,12 @@ const TeepPlan = {
             ? `<button class="btn btn-sm btn-outline-primary" data-host-policy="${this.esc(h.host_id || '')}">Concurrency</button>` : '';
         // Only offered when there is actually something to install. A button
         // that cannot help is worse than no button: it reads as "I tried".
-        const update = ready.actionable && !h.stale && ready.state !== 'updating'
+        const update = ready.actionable && ready.releaseManagement === 'signed_bundle' && !h.stale && ready.state !== 'updating'
             ? `<button class="btn btn-primary" data-host-update="${this.esc(h.host_id || '')}">${ready.state === 'update_failed' ? 'Retry update' : 'Update'}</button>` : '';
+        const download = ready.releaseManagement === 'signed_bundle'
+            ? '<button class="btn btn-outline-secondary" data-fleet-download type="button">Download</button>' : '';
         const digestMatch = ready.installedDigest && ready.requiredDigest && ready.installedDigest === ready.requiredDigest;
+        const deploymentManaged = ready.releaseManagement === 'deployment_managed';
         return `<article class="tk-fleet-host-card" data-host-state="${this.esc(ready.state)}">
             <div class="tk-fleet-host-main">
                 <div class="tk-fleet-host-icon"><i class="ti ti-device-desktop"></i></div>
@@ -2410,16 +2414,16 @@ const TeepPlan = {
                 <div><span class="tk-fleet-status is-${this.esc(ready.state)}"><i class="ti ti-${ready.icon}${ready.state === 'updating' ? ' tk-spin' : ''}"></i>${this.esc(ready.label)}</span>
                     <div class="text-secondary small mt-2">${this.esc(ready.detail || (ready.state === 'ready' ? 'Digest and contract match the promoted release.' : ''))}</div></div>
                 <dl class="tk-fleet-release-grid">
-                    <div><dt>Installed</dt><dd>${this.esc(ready.installedVersion || 'Unknown')}</dd></div>
-                    <div><dt>Promoted</dt><dd>${this.esc(ready.requiredVersion || 'None')}</dd></div>
-                    <div><dt>Integrity</dt><dd>${digestMatch ? 'Digest matched' : (ready.installedDigest ? 'Digest differs' : 'Digest unreported')}</dd></div>
+                    <div><dt>Installed</dt><dd>${deploymentManaged ? 'Managed deployment' : this.esc(ready.installedVersion || 'Unknown')}</dd></div>
+                    <div><dt>Promoted</dt><dd>${deploymentManaged ? 'Not applicable' : this.esc(ready.requiredVersion || 'None')}</dd></div>
+                    <div><dt>Integrity</dt><dd>${deploymentManaged ? 'Source deployed' : (digestMatch ? 'Digest matched' : (ready.installedDigest ? 'Digest differs' : 'Digest unreported'))}</dd></div>
                     <div><dt>Contract</dt><dd>${ready.contractMatches ? 'Matched' : 'Incompatible'}</dd></div>
                     <div><dt>Capacity</dt><dd>${this.esc(String(active))} / ${this.esc(String(max))} running</dd></div>
                     <div><dt>Runtime</dt><dd>${this.esc(runtimes)}</dd></div>
                 </dl>
             </div>
             <div class="tk-fleet-host-actions"><div class="btn-list">${update}
-                <button class="btn btn-outline-secondary" data-fleet-download type="button">Download</button>
+                ${download}
                 <button class="btn btn-outline-secondary" data-wake-runtimes="${this.esc(rnames.join(','))}" type="button">Launch…</button>${configure}</div>
                 <span class="text-secondary small">${policyText}</span></div>
         </article>`;
