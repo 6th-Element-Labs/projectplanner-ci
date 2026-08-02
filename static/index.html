@@ -28,6 +28,7 @@
          Loaded after taikun-tabler.css?v=23 so it wins. -->
     <link href="taikun-ui.css?v=32" rel="stylesheet"/>
     <link href="taikun-scope.css?v=1" rel="stylesheet"/>
+    <link href="rooms.css?v=1" rel="stylesheet"/>
     <style>
       .epic-head{cursor:pointer}
       .epic-head .epic-chev{transition:transform .15s ease}
@@ -365,6 +366,7 @@
                         <li class="nav-item"><a class="nav-link" id="toptab-fleet" data-bs-toggle="tab" href="#tab-fleet" role="tab"><span class="nav-link-icon"><i class="ti ti-server-bolt"></i></span><span class="nav-link-title">Fleet</span></a></li>
                         <li class="tk-nav-section" role="presentation">Collaborate</li>
                         <li class="nav-item"><a class="nav-link" id="toptab-inbox" data-bs-toggle="tab" href="#tab-inbox-hub" role="tab"><span class="nav-link-icon"><i class="ti ti-inbox"></i></span><span class="nav-link-title">Inbox</span></a></li>
+                        <li class="nav-item"><a class="nav-link" id="toptab-rooms" data-bs-toggle="tab" href="#tab-rooms" role="tab"><span class="nav-link-icon"><i class="ti ti-messages"></i></span><span class="nav-link-title">Rooms</span><span id="rooms-nav-count" class="badge bg-primary-lt ms-auto d-none"></span></a></li>
                         <li class="nav-item"><a class="nav-link" id="toptab-ask" data-bs-toggle="tab" href="#tab-ask" role="tab"><span class="nav-link-icon"><i class="ti ti-sparkles"></i></span><span class="nav-link-title">Ask</span></a></li>
                         <!-- UI-23: Settings is reached from the top-right user menu (demo parity),
                              so this rail entry is hidden — but it must still EXIST. Bootstrap's Tab
@@ -409,6 +411,7 @@
                 <div class="dropdown-menu dropdown-menu-end">
                     <a class="dropdown-item" data-tk-mobile-tab="#toptab-scope" href="#tab-scope"><i class="ti ti-file-text me-2"></i>Scope</a>
                     <a class="dropdown-item" data-tk-mobile-tab="#toptab-inbox" href="#tab-inbox-hub"><i class="ti ti-inbox me-2"></i>Inbox</a>
+                    <a class="dropdown-item" data-tk-mobile-tab="#toptab-rooms" href="#tab-rooms"><i class="ti ti-messages me-2"></i>Rooms <span id="mobile-rooms-count" class="badge bg-primary-lt ms-auto d-none"></span></a>
                     <a class="dropdown-item" data-tk-mobile-tab="#toptab-ask" href="#tab-ask"><i class="ti ti-sparkles me-2"></i>Ask</a>
                     <div class="dropdown-divider"></div>
                     <a class="dropdown-item d-flex align-items-center" id="mobile-system-health" href="#tab-settings/capacity"><i id="mobile-system-health-icon" class="ti ti-activity-heartbeat me-2"></i><span>System health</span><span id="mobile-system-health-badge" class="badge bg-secondary-lt ms-auto d-none">Healthy</span></a>
@@ -683,6 +686,61 @@
                                         <div id="risks-table"></div>
                                     </div>
                                 </div>
+                            </div>
+                        </div>
+
+                        <!-- ROOMS — task-centered collaboration over the existing coordination
+                             record. A room is a view, not a new lifecycle owner: task state stays
+                             on the board, messages stay on the communication plane, and decisions
+                             stay in Inbox. -->
+                        <div class="tab-pane tk-rooms-page" id="tab-rooms" role="tabpanel">
+                            <div class="tk-rooms-page-head mt-3">
+                                <div>
+                                    <div class="tk-rooms-breadcrumb"><span id="rooms-project-label">Project</span> / Rooms</div>
+                                    <h2 class="page-title mb-1">Rooms</h2>
+                                    <div class="text-secondary">Shared work, with the people and agents around it.</div>
+                                </div>
+                                <div class="tk-rooms-presence"><span class="status-dot bg-secondary" id="rooms-presence-dot"></span><span id="rooms-presence-count">Loading…</span></div>
+                            </div>
+                            <div class="tk-rooms-workspace" id="rooms-workspace">
+                                <section class="card tk-rooms-list-pane" aria-label="Rooms">
+                                    <div class="tk-rooms-list-head">
+                                        <div><h3 class="m-0">Rooms</h3><span id="rooms-list-summary" class="text-secondary small"></span></div>
+                                        <div class="d-flex gap-1">
+                                            <button id="rooms-refresh" class="btn btn-sm btn-ghost-secondary" type="button" title="Refresh rooms" aria-label="Refresh rooms"><i class="ti ti-refresh"></i></button>
+                                            <button id="rooms-new" class="btn btn-sm btn-ghost-secondary" type="button" title="Create a task and its room" aria-label="Create a task and its room"><i class="ti ti-plus"></i></button>
+                                        </div>
+                                    </div>
+                                    <div id="rooms-list" class="tk-rooms-list"><div class="text-secondary small p-3"><span class="spinner-border spinner-border-sm me-2"></span>Loading rooms…</div></div>
+                                </section>
+                                <section class="card tk-room-view" id="room-view" aria-live="polite">
+                                    <div class="tk-room-empty" id="room-empty"><i class="ti ti-messages"></i><p class="mb-0">Choose a room to open its shared work.</p></div>
+                                    <div id="room-content" hidden>
+                                        <header class="tk-room-head">
+                                            <button id="rooms-back" class="btn btn-sm btn-outline-secondary tk-rooms-back" type="button" aria-label="Back to rooms"><i class="ti ti-chevron-left"></i></button>
+                                            <div class="tk-room-heading">
+                                                <h3 class="tk-room-title m-0" id="room-title"></h3>
+                                                <div class="tk-room-topic" id="room-topic"></div>
+                                                <div class="tk-room-members" id="room-members"></div>
+                                            </div>
+                                            <button id="room-details-toggle" class="btn btn-sm btn-outline-secondary" type="button" aria-expanded="false"><i class="ti ti-info-circle me-1"></i><span>Details</span></button>
+                                        </header>
+                                        <div class="tk-room-details" id="room-details" hidden></div>
+                                        <div class="tk-room-scroll">
+                                            <article class="tk-room-artifact" id="room-artifact"></article>
+                                            <div class="tk-room-feed" id="room-feed"></div>
+                                        </div>
+                                        <form class="tk-room-composer" id="room-composer">
+                                            <div class="tk-room-compose-target">
+                                                <label for="room-recipient">Message</label>
+                                                <select id="room-recipient" class="form-select form-select-sm" aria-label="Message recipient"></select>
+                                            </div>
+                                            <textarea id="room-message" class="form-control" rows="1" placeholder="Message an agent in this room" aria-label="Message an agent in this room"></textarea>
+                                            <button id="room-send" class="btn btn-primary" type="submit" aria-label="Send message"><i class="ti ti-send"></i><span>Send</span></button>
+                                            <div class="tk-room-compose-note" id="room-compose-note">Messages use Switchboard’s existing directed delivery and acknowledgement path.</div>
+                                        </form>
+                                    </div>
+                                </section>
                             </div>
                         </div>
 
@@ -1117,6 +1175,7 @@
     <script src="js/state.js?v=2"></script>
     <script src="js/board.js?v=3"></script>
     <script src="js/plan-chat.js?v=1"></script>
+    <script src="js/rooms.js?v=1"></script>
     <script src="js/mission.js?v=10"></script>
     <script src="js/runner-session.js?v=12"></script>
     <script src="js/proof-console.js?v=1"></script>

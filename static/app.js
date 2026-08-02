@@ -2182,6 +2182,7 @@ const TeepPlan = {
         const href = active ? active.getAttribute('href') : '#tab-exec';
         if (href === '#tab-plan-hub') this._renderPlanActive();
         else if (href === '#tab-inbox-hub') { this.initInbox(); this.renderTables(); }
+        else if (href === '#tab-rooms') this.initRooms();
         else if (href === '#tab-ask') this.initAsk();
         else if (href === '#tab-settings') this.renderSettings();
         else if (href === '#tab-fleet') this.renderFleet();
@@ -3844,6 +3845,9 @@ const TeepPlan = {
     },
 
     // ---- Ask Taikun (plan-wide agent) -----------------------------------
+    // Rooms is an additive collaboration surface. Keep the core board bootable in
+    // lightweight/static harnesses that intentionally load only older feature modules.
+    ...(window.SwitchboardRooms?.methods || {}),
     ...window.SwitchboardPlanChat.methods,
 
     renderAskProposal(p) {
@@ -5250,6 +5254,8 @@ const TeepPlan = {
         if (fleetTop) fleetTop.addEventListener('shown.bs.tab', () => this.renderFleet());
         const inboxTopTab = document.getElementById('toptab-inbox');
         if (inboxTopTab) inboxTopTab.addEventListener('shown.bs.tab', () => { this.initInbox(); this.renderTables(); });
+        const roomsTopTab = document.getElementById('toptab-rooms');
+        if (roomsTopTab) roomsTopTab.addEventListener('shown.bs.tab', () => this.initRooms());
         // UI-9: admin Settings tab + its delegated action buttons.
         const settingsTop = document.getElementById('toptab-settings');
         if (settingsTop) settingsTop.addEventListener('shown.bs.tab', () => this.renderSettings());
