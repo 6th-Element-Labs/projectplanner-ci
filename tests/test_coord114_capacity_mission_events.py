@@ -538,6 +538,104 @@ class CapacityMissionEventsTest(unittest.TestCase):
         self.assertIn("database is locked", result["message"])
         self.assertEqual([], starts)
 
+    def test_scoped_runtime_appends_due_observation_only_after_authorization(self):
+        item = self.journal.get_item(TASK, project=PROJECT)
+        wait_started_at = time.time()
+        self.journal.update_item(
+            TASK,
+            project=PROJECT,
+            state="WAITING",
+            requested_role="implementation",
+            expected_version=int(item["version"]),
+            handled_through=int(item["latest_sequence"]),
+            now=wait_started_at,
+        )
+
+        class Store:
+            allowed = False
+
+            @classmethod
+            def validate_autopilot_scope_authority(cls, _authority, **_kwargs):
+                return {"allowed": cls.allowed, "reason_codes": ["denied"]}
+
+            @staticmethod
+            def get_task(_task_id, **_kwargs):
+                return {"dependency_state": {"satisfied": True}}
+
+            @staticmethod
+            def task_has_live_execution(_task_id, **_kwargs):
+                return False
+
+            @staticmethod
+            def list_wake_intents(**_kwargs):
+                return []
+
+            @staticmethod
+            def list_runner_sessions(**_kwargs):
+                return []
+
+        denied = run_scoped_mission_tick(
+            TASK,
+            project=PROJECT,
+            scope_project=PROJECT,
+            scope_authority={"generation": 1},
+            actor="coordinator-test",
+            agent_id="coordinator-test",
+            journal=self.journal,
+            store_mod=Store,
+        )
+        self.assertNotEqual(True, denied.get("allowed"))
+        self.assertEqual(
+            [],
+            [
+                event for event in self.journal.list_events(
+                    TASK, project=PROJECT, after_sequence=0, limit=20,
+                )
+                if event["event_type"] == "observation_due"
+            ],
+        )
+
+        Store.allowed = True
+        with (
+            patch(
+                "switchboard.application.commands.github_mission_events.time.time",
+                return_value=wait_started_at + 301,
+            ),
+            patch(
+                "switchboard.application.mission_bot_v4.runtime."
+                "task_execution.start_task",
+                return_value={"action": "starting", "starting": True},
+            ),
+        ):
+            run_scoped_mission_tick(
+                TASK,
+                project=PROJECT,
+                scope_project=PROJECT,
+                scope_authority={"generation": 1},
+                actor="coordinator-test",
+                agent_id="coordinator-test",
+                journal=self.journal,
+                store_mod=Store,
+            )
+            run_scoped_mission_tick(
+                TASK,
+                project=PROJECT,
+                scope_project=PROJECT,
+                scope_authority={"generation": 1},
+                actor="coordinator-test",
+                agent_id="coordinator-test",
+                journal=self.journal,
+                store_mod=Store,
+            )
+        due_events = [
+            event for event in self.journal.list_events(
+                TASK, project=PROJECT, after_sequence=0, limit=20,
+            )
+            if event["event_type"] == "observation_due"
+        ]
+        self.assertEqual(1, len(due_events))
+        self.assertEqual("coordination", due_events[0]["source_plane"])
+
     def test_scoped_runtime_reports_a_partial_projection_truthfully(self):
         class Store:
             @staticmethod

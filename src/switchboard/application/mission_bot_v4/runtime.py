@@ -11,7 +11,11 @@ from collections.abc import Callable, Mapping
 import time
 from typing import Any
 
-from switchboard.application.commands import capacity_mission_events, task_execution
+from switchboard.application.commands import (
+    capacity_mission_events,
+    github_mission_events,
+    task_execution,
+)
 from switchboard.application.mission_bot_v4.worker import (
     ScopedMissionWorkerPorts,
     tick_scoped_mission,
@@ -304,6 +308,11 @@ def run_scoped_mission_tick(
                 "partial_projection": projected_events > 0,
                 **exc.as_dict(),
             }
+        github_mission_events.append_due_observations(
+            project=project,
+            task_id=task_id,
+            repository=journal,
+        )
     result = tick_scoped_mission(
         task_id,
         project=project,
