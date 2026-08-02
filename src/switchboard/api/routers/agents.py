@@ -29,7 +29,9 @@ from switchboard.application.contracts.agents import (
     CompleteHostEnrollmentCommand,
     DirectAssignmentMCPTokenCommand,
     FinalizeHostEnrollmentCommand,
+    GrantHostProjectAccessCommand,
     RevokeHostIdentityCommand,
+    RevokeHostProjectAccessCommand,
     RotateHostIdentityCommand,
     UpdateHostExecutionPolicyCommand,
 )
@@ -291,6 +293,38 @@ def create_router(*, resolve_project: ProjectResolver,
                                        project=resolved)
         control_plane_http(hosts)
         return {"hosts": hosts}
+
+    @router.get("/ixp/v1/agent-host-grants")
+    async def ixp_agent_host_grants(
+            request: Request, project: str = Query(...), host_id: str = "",
+            include_revoked: bool = False):
+        resolved = resolve_project(project)
+        resolve_principal(request, resolved, ("read",), dev_actor="agent-host-grants")
+        return {"grants": store.list_agent_host_project_grants(
+            source_project=resolved, host_id=host_id,
+            include_revoked=include_revoked)}
+
+    @router.post("/ixp/v1/agent-host-grants")
+    async def ixp_grant_agent_host_project_access(
+            request: Request, body: GrantHostProjectAccessCommand = Body(...)):
+        payload = body.model_dump(by_alias=True)
+        project = resolve_body_project(payload)
+        principal = resolve_principal(
+            request, project, ("admin", "write:system"), dev_actor="host-grant")
+        payload["project"] = project
+        return control_plane_http(enrollment_command.grant_project_access_mapping_result(
+            payload, actor=auth.actor(principal)))
+
+    @router.post("/ixp/v1/agent-host-grants/revoke")
+    async def ixp_revoke_agent_host_project_access(
+            request: Request, body: RevokeHostProjectAccessCommand = Body(...)):
+        payload = body.model_dump(by_alias=True)
+        project = resolve_body_project(payload)
+        principal = resolve_principal(
+            request, project, ("admin", "write:system"), dev_actor="host-grant-revoke")
+        payload["project"] = project
+        return control_plane_http(enrollment_command.revoke_project_access_mapping_result(
+            payload, actor=auth.actor(principal)))
 
     @router.post("/ixp/v1/agent_hosts/update")
     async def ixp_request_agent_host_update(request: Request,

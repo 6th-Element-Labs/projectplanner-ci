@@ -9,7 +9,9 @@ from switchboard.application.contracts.agents import (
     BeginHostEnrollmentCommand,
     CompleteHostEnrollmentCommand,
     FinalizeHostEnrollmentCommand,
+    GrantHostProjectAccessCommand,
     RevokeHostIdentityCommand,
+    RevokeHostProjectAccessCommand,
     RotateHostIdentityCommand,
     UpdateHostExecutionPolicyCommand,
 )
@@ -21,6 +23,10 @@ from switchboard.storage.repositories.agent_host_enrollments import (
     revoke_agent_host_identity,
     rotate_agent_host_identity,
     update_agent_host_execution_policy,
+)
+from switchboard.storage.repositories.agent_host_grants import (
+    create_agent_host_project_grant,
+    revoke_agent_host_project_grant,
 )
 
 
@@ -128,6 +134,40 @@ def update_execution_policy_mapping_result(
     )
 
 
+def grant_project_access_mapping_result(
+        data: Mapping[str, Any], *, actor: str) -> dict[str, Any]:
+    try:
+        command = GrantHostProjectAccessCommand.model_validate(dict(data or {}))
+    except ValidationError as exc:
+        return _validation_error(exc)
+    return create_agent_host_project_grant(
+        source_project=command.project,
+        host_id=command.host_id,
+        target_project=command.target_project,
+        canonical_repository=command.canonical_repository,
+        runtime=command.runtime,
+        provider=command.provider,
+        trust_zone=command.trust_zone,
+        isolation_mode=command.isolation_mode,
+        max_concurrency=command.max_concurrency,
+        actor=actor,
+    )
+
+
+def revoke_project_access_mapping_result(
+        data: Mapping[str, Any], *, actor: str) -> dict[str, Any]:
+    try:
+        command = RevokeHostProjectAccessCommand.model_validate(dict(data or {}))
+    except ValidationError as exc:
+        return _validation_error(exc)
+    return revoke_agent_host_project_grant(
+        source_project=command.project,
+        grant_id=command.grant_id,
+        reason=command.reason,
+        actor=actor,
+    )
+
+
 __all__ = [
     "begin_mapping_result",
     "complete_mapping_result",
@@ -135,4 +175,6 @@ __all__ = [
     "rotate_mapping_result",
     "revoke_mapping_result",
     "update_execution_policy_mapping_result",
+    "grant_project_access_mapping_result",
+    "revoke_project_access_mapping_result",
 ]

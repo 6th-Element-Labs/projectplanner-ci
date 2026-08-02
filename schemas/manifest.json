@@ -1,5 +1,5 @@
 {
-  "count": 60,
+  "count": 62,
   "schema": "switchboard.schema_manifest.v1",
   "schemas": [
     {
@@ -19,6 +19,10 @@
       "path": "switchboard.agent.finalize_host_enrollment_command.v1.json"
     },
     {
+      "$id": "switchboard.agent.grant_host_project_access_command.v1",
+      "path": "switchboard.agent.grant_host_project_access_command.v1.json"
+    },
+    {
       "$id": "switchboard.agent.register_agent_command.v1",
       "path": "switchboard.agent.register_agent_command.v1.json"
     },
@@ -29,6 +33,10 @@
     {
       "$id": "switchboard.agent.revoke_host_identity_command.v1",
       "path": "switchboard.agent.revoke_host_identity_command.v1.json"
+    },
+    {
+      "$id": "switchboard.agent.revoke_host_project_access_command.v1",
+      "path": "switchboard.agent.revoke_host_project_access_command.v1.json"
     },
     {
       "$id": "switchboard.agent.rotate_host_identity_command.v1",

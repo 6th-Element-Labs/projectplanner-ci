@@ -155,6 +155,43 @@ def run_registry_migrations(c: sqlite3.Connection) -> List[str]:
     done = _applied(c)
     newly: List[str] = []
 
+    host_grants_migration = "host2_agent_host_project_grants"
+    if host_grants_migration not in done:
+        c.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS agent_host_project_grants (
+                grant_id TEXT PRIMARY KEY,
+                source_project_id TEXT NOT NULL,
+                host_id TEXT NOT NULL,
+                owner_user_id TEXT,
+                owner_org_id TEXT,
+                target_project_id TEXT NOT NULL,
+                canonical_repository TEXT NOT NULL,
+                runtime TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                trust_zone TEXT NOT NULL,
+                isolation_mode TEXT NOT NULL,
+                max_concurrency INTEGER NOT NULL,
+                enrollment_identity_generation INTEGER NOT NULL,
+                attestation_fingerprint TEXT NOT NULL,
+                status TEXT NOT NULL,
+                revoked_at REAL,
+                revoke_reason TEXT,
+                created_at REAL NOT NULL,
+                created_by TEXT NOT NULL,
+                updated_at REAL NOT NULL,
+                updated_by TEXT NOT NULL,
+                UNIQUE(source_project_id, host_id, target_project_id, canonical_repository)
+            );
+            CREATE INDEX IF NOT EXISTS ix_agent_host_project_grants_target
+                ON agent_host_project_grants(target_project_id, status, host_id);
+            CREATE INDEX IF NOT EXISTS ix_agent_host_project_grants_source
+                ON agent_host_project_grants(source_project_id, host_id, status);
+            """
+        )
+        _record(c, host_grants_migration)
+        newly.append(host_grants_migration)
+
     for name, table, column, ddl, backfill in REGISTRY_COLUMN_MIGRATIONS:
         if name in done:
             continue

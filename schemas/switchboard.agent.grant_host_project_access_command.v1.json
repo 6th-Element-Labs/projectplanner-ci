@@ -1,0 +1,75 @@
+{
+  "$id": "switchboard.agent.grant_host_project_access_command.v1",
+  "additionalProperties": false,
+  "description": "Authorize one existing Host for one project/canonical repository.",
+  "properties": {
+    "canonical_repository": {
+      "minLength": 1,
+      "pattern": "^[^/\\s]+/[^/\\s]+$",
+      "title": "Canonical Repository",
+      "type": "string"
+    },
+    "host_id": {
+      "minLength": 1,
+      "pattern": "^host/.+",
+      "title": "Host Id",
+      "type": "string"
+    },
+    "isolation_mode": {
+      "minLength": 1,
+      "title": "Isolation Mode",
+      "type": "string"
+    },
+    "max_concurrency": {
+      "maximum": 32,
+      "minimum": 1,
+      "title": "Max Concurrency",
+      "type": "integer"
+    },
+    "project": {
+      "minLength": 1,
+      "pattern": ".*\\S.*",
+      "title": "Project",
+      "type": "string"
+    },
+    "provider": {
+      "minLength": 1,
+      "title": "Provider",
+      "type": "string"
+    },
+    "runtime": {
+      "minLength": 1,
+      "title": "Runtime",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.agent.grant_host_project_access_command.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "target_project": {
+      "minLength": 1,
+      "pattern": ".*\\S.*",
+      "title": "Target Project",
+      "type": "string"
+    },
+    "trust_zone": {
+      "minLength": 1,
+      "title": "Trust Zone",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project",
+    "host_id",
+    "target_project",
+    "canonical_repository",
+    "runtime",
+    "provider",
+    "trust_zone",
+    "isolation_mode",
+    "max_concurrency"
+  ],
+  "title": "GrantHostProjectAccessCommand",
+  "type": "object"
+}

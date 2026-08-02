@@ -4211,6 +4211,92 @@ def list_agent_hosts(runtime: str = "", lane: str = "", capability: str = "",
             return [_control_plane_unavailable("list_agent_hosts", project, started_at, exc)]
         raise
     hosts = [_host_row(r, now=now, required_release=required_release) for r in rows]
+    # HOST-2: project grants project an account/org-owned Host into a target
+    # project's discovery read model.  The source ``agent_hosts`` row remains
+    # the one Capacity/liveness authority; this projection creates neither an
+    # enrollment nor a runner record in the target project.
+    from switchboard.storage.repositories.agent_host_grants import (
+        list_agent_host_project_grants,
+    )
+    from switchboard.storage.repositories.projects import get_project_repo_topology
+    native_ids = {str(item.get("host_id") or "") for item in hosts}
+    target_canonical = str(((((get_project_repo_topology(project).get("roles") or {})
+                              .get("canonical") or {}).get("repo")) or ""))
+    for grant in list_agent_host_project_grants(target_project=project):
+        host_id = str(grant.get("host_id") or "")
+        if host_id in native_ids:
+            continue
+        reason = ""
+        if (not target_canonical or target_canonical.lower()
+                != str(grant.get("canonical_repository") or "").lower()):
+            reason = "canonical_repository_mismatch"
+        source_project = str(grant.get("source_project_id") or "")
+        try:
+            with _control_plane_conn(source_project) as source:
+                source_row = source.execute(
+                    "SELECT * FROM agent_hosts WHERE host_id=?", (host_id,),
+                ).fetchone()
+                enrollment = source.execute(
+                    "SELECT status,identity_generation,public_key_fingerprint "
+                    "FROM agent_host_enrollments WHERE project_id=? AND host_id=?",
+                    (source_project, host_id),
+                ).fetchone()
+                from switchboard.storage.repositories import host_releases
+                source_release = host_releases.get_promoted_release_in(source)
+        except (KeyError, sqlite3.OperationalError):
+            source_row = None
+            enrollment = None
+            source_release = None
+            reason = reason or "source_host_unavailable"
+        if not source_row:
+            continue
+        projected = _host_row(source_row, now=now, required_release=source_release)
+        enrollment_data = dict(enrollment) if enrollment else {}
+        if enrollment_data.get("status") != "active":
+            reason = reason or "host_enrollment_revoked"
+        elif int(enrollment_data.get("identity_generation") or 0) != int(
+                grant.get("enrollment_identity_generation") or 0):
+            reason = reason or "host_attestation_stale"
+        elif str(enrollment_data.get("public_key_fingerprint") or "") != str(
+                grant.get("attestation_fingerprint") or ""):
+            reason = reason or "host_attestation_stale"
+        if projected.get("stale"):
+            reason = reason or "host_attestation_stale"
+        if (projected.get("readiness") or {}).get("withholds_work"):
+            reason = reason or "host_release_attestation_stale"
+        grant_runtime = str(grant.get("runtime") or "")
+        projected["runtimes"] = [
+            item for item in projected.get("runtimes") or []
+            if str((item or {}).get("runtime") or (item or {}).get("name") or "")
+            == grant_runtime
+        ] if all(isinstance(item, dict) for item in projected.get("runtimes") or []) else [
+            item for item in projected.get("runtimes") or [] if str(item) == grant_runtime
+        ]
+        if not projected["runtimes"]:
+            reason = reason or "runtime_not_advertised"
+        capacity = dict(projected.get("capacity") or {})
+        capacity["placement"] = {
+            "host_class": "persistent",
+            "trust_zones": [str(grant.get("trust_zone") or "")],
+            "projects": [project],
+            "repositories": [str(grant.get("canonical_repository") or "")],
+            "isolation_modes": [str(grant.get("isolation_mode") or "")],
+            "wakeable": not bool(reason),
+            "drain_state": "accepting" if not reason else "denied",
+        }
+        projected["capacity"] = capacity
+        limits = dict(projected.get("limits") or {})
+        host_max = limits.get("max_sessions")
+        grant_max = int(grant.get("max_concurrency") or 1)
+        limits["max_sessions"] = min(int(host_max), grant_max) if host_max is not None else grant_max
+        projected["limits"] = limits
+        active = int(capacity.get("active_sessions") or 0)
+        projected["available_sessions"] = max(0, limits["max_sessions"] - active)
+        projected["shared_grant"] = {**grant, "eligible": not bool(reason),
+                                      "reason_code": reason}
+        if reason:
+            projected["stale"] = True
+        hosts.append(projected)
     out = []
     for host in hosts:
         if host.get("stale") and not include_stale:

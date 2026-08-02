@@ -19,6 +19,12 @@ REVOKE_HOST_IDENTITY_COMMAND_SCHEMA = "switchboard.agent.revoke_host_identity_co
 UPDATE_HOST_EXECUTION_POLICY_COMMAND_SCHEMA = (
     "switchboard.agent.update_host_execution_policy_command.v1"
 )
+GRANT_HOST_PROJECT_ACCESS_COMMAND_SCHEMA = (
+    "switchboard.agent.grant_host_project_access_command.v1"
+)
+REVOKE_HOST_PROJECT_ACCESS_COMMAND_SCHEMA = (
+    "switchboard.agent.revoke_host_project_access_command.v1"
+)
 DIRECT_ASSIGNMENT_MCP_TOKEN_COMMAND_SCHEMA = (
     "switchboard.agent.direct_assignment_mcp_token_command.v1"
 )
@@ -291,6 +297,49 @@ class UpdateHostExecutionPolicyCommand(VersionedModel):
             value, field_name="lane_allowlist") if str(item).strip()]
 
 
+class GrantHostProjectAccessCommand(VersionedModel):
+    """Authorize one existing Host for one project/canonical repository."""
+
+    SCHEMA: ClassVar[str] = GRANT_HOST_PROJECT_ACCESS_COMMAND_SCHEMA
+    model_config = ConfigDict(frozen=True)
+
+    schema_id: str = Field(default=GRANT_HOST_PROJECT_ACCESS_COMMAND_SCHEMA, alias="schema")
+    project: str = Field(min_length=1, pattern=r".*\S.*")
+    host_id: str = Field(min_length=1, pattern=r"^host/.+")
+    target_project: str = Field(min_length=1, pattern=r".*\S.*")
+    canonical_repository: str = Field(min_length=1, pattern=r"^[^/\s]+/[^/\s]+$")
+    runtime: str = Field(min_length=1)
+    provider: str = Field(min_length=1)
+    trust_zone: str = Field(min_length=1)
+    isolation_mode: str = Field(min_length=1)
+    max_concurrency: int = Field(ge=1, le=32)
+
+    @field_validator(
+        "project", "host_id", "target_project", "canonical_repository", "runtime",
+        "provider", "trust_zone", "isolation_mode", mode="before",
+    )
+    @classmethod
+    def _strip_grant_text(cls, value: Any) -> str:
+        return str(value or "").strip()
+
+
+class RevokeHostProjectAccessCommand(VersionedModel):
+    """Revoke one Host placement grant without revoking Host ownership."""
+
+    SCHEMA: ClassVar[str] = REVOKE_HOST_PROJECT_ACCESS_COMMAND_SCHEMA
+    model_config = ConfigDict(frozen=True)
+
+    schema_id: str = Field(default=REVOKE_HOST_PROJECT_ACCESS_COMMAND_SCHEMA, alias="schema")
+    project: str = Field(min_length=1, pattern=r".*\S.*")
+    grant_id: str = Field(min_length=1, pattern=r"^hostgrant-.+")
+    reason: str = "operator_revoke"
+
+    @field_validator("project", "grant_id", "reason", mode="before")
+    @classmethod
+    def _strip_revoke_grant_text(cls, value: Any) -> str:
+        return str(value or "").strip()
+
+
 class DirectAssignmentMCPTokenCommand(VersionedModel):
     """Exact host assignment exchanging its enrollment for a scoped MCP bearer."""
 
@@ -400,4 +449,6 @@ register(FinalizeHostEnrollmentCommand)
 register(RotateHostIdentityCommand)
 register(RevokeHostIdentityCommand)
 register(UpdateHostExecutionPolicyCommand)
+register(GrantHostProjectAccessCommand)
+register(RevokeHostProjectAccessCommand)
 register(DirectAssignmentMCPTokenCommand)

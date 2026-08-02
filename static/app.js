@@ -2242,12 +2242,15 @@ const TeepPlan = {
             const responses = await Promise.all([
                 fetch(`/ixp/v1/agent_hosts?project=${project}&include_stale=true`, { cache: 'no-store' }),
                 fetch(`/ixp/v1/host_releases/promoted?project=${project}`, { cache: 'no-store' }),
+                fetch(`/ixp/v1/agent-host-grants?project=${project}&include_revoked=true`, { cache: 'no-store' }),
             ]);
             for (const response of responses) {
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
             }
             hosts = (await responses[0].json()).hosts || [];
             release = (await responses[1].json()) || {};
+            const grants = (await responses[2].json()).grants || [];
+            hosts.forEach((host) => { host.project_grants = grants.filter((grant) => grant.host_id === host.host_id); });
             if (this.isAdmin) {
                 await Promise.all(hosts.map(async (host) => {
                     try {
@@ -2322,6 +2325,10 @@ const TeepPlan = {
             b.addEventListener('click', () => this._configureHostPolicy(b.getAttribute('data-host-policy'))));
         body.querySelectorAll('[data-host-update]').forEach((b) =>
             b.addEventListener('click', () => this._updateHost(b.getAttribute('data-host-update'))));
+        body.querySelectorAll('[data-host-grant]').forEach((b) =>
+            b.addEventListener('click', () => this._grantHostProjectAccess(b.getAttribute('data-host-grant'))));
+        body.querySelectorAll('[data-host-grant-revoke]').forEach((b) =>
+            b.addEventListener('click', () => this._revokeHostProjectAccess(b.getAttribute('data-host-grant-revoke'))));
         body.querySelectorAll('[data-fleet-download]').forEach((b) =>
             b.addEventListener('click', () => this._downloadHostRelease()));
         document.querySelectorAll('#fleet-update-banner [data-host-update]').forEach((b) =>
@@ -2395,6 +2402,14 @@ const TeepPlan = {
         const policyText = policy.max_sessions ? `${this.esc(laneText)} · ${this.esc(String(policy.max_sessions))} parallel` : 'Enrollment policy unavailable';
         const configure = this.isAdmin && h.enrollment && !h.enrollment.error
             ? `<button class="btn btn-sm btn-outline-primary" data-host-policy="${this.esc(h.host_id || '')}">Concurrency</button>` : '';
+        const authorize = this.isAdmin && h.enrollment && !h.enrollment.error
+            ? `<button class="btn btn-sm btn-outline-primary" data-host-grant="${this.esc(h.host_id || '')}">Authorize project…</button>` : '';
+        const grants = (h.project_grants || []).map((grant) => {
+            const activeGrant = grant.status === 'active';
+            return `<div class="small mt-1"><span class="badge bg-${activeGrant ? 'green' : 'secondary'}-lt">${activeGrant ? 'Authorized' : 'Revoked'}</span>
+                ${this.esc(grant.target_project_id)} · ${this.esc(grant.canonical_repository)} · ${this.esc(grant.runtime)} · ${this.esc(String(grant.max_concurrency))} parallel
+                ${activeGrant ? `<button class="btn btn-link btn-sm text-danger p-0 ms-1" data-host-grant-revoke="${this.esc(grant.grant_id)}">Revoke</button>` : ''}</div>`;
+        }).join('');
         // Only offered when there is actually something to install. A button
         // that cannot help is worse than no button: it reads as "I tried".
         const update = ready.actionable && ready.releaseManagement === 'signed_bundle' && !h.stale && ready.state !== 'updating'
@@ -2424,9 +2439,56 @@ const TeepPlan = {
             </div>
             <div class="tk-fleet-host-actions"><div class="btn-list">${update}
                 ${download}
-                <button class="btn btn-outline-secondary" data-wake-runtimes="${this.esc(rnames.join(','))}" type="button">Launch…</button>${configure}</div>
-                <span class="text-secondary small">${policyText}</span></div>
+                <button class="btn btn-outline-secondary" data-wake-runtimes="${this.esc(rnames.join(','))}" type="button">Launch…</button>${configure}${authorize}</div>
+                <span class="text-secondary small">${policyText}${grants}</span></div>
         </article>`;
+    },
+    async _grantHostProjectAccess(hostId) {
+        const targetProject = String(window.prompt('Target project id') || '').trim();
+        if (!targetProject) return;
+        try {
+            const topologyResponse = await fetch(`/api/projects/${encodeURIComponent(targetProject)}/repo_topology`, { cache: 'no-store' });
+            const topology = await topologyResponse.json().catch(() => ({}));
+            if (!topologyResponse.ok) throw new Error(topology.detail || `HTTP ${topologyResponse.status}`);
+            const repository = String((((topology.roles || {}).canonical || {}).repo) || '').trim();
+            if (!repository) throw new Error('Target project has no canonical repository.');
+            const host = (this._fleetHosts || []).find((item) => item.host_id === hostId) || {};
+            const advertised = (host.runtimes || []).map((item) => typeof item === 'string' ? item : item.runtime).filter(Boolean);
+            const runtime = String(window.prompt('Runtime', advertised[0] || 'codex') || '').trim();
+            const provider = String(window.prompt('Provider', 'openai-codex') || '').trim();
+            const trustZone = String(window.prompt('Trust zone', 'org_shared') || '').trim();
+            const isolation = String(window.prompt('Isolation mode', 'worktree') || '').trim();
+            const maxConcurrency = Number(window.prompt('Maximum parallel sessions', '1'));
+            const sourceProject = this.project || window.PM_PROJECT || 'maxwell';
+            const response = await fetch('/ixp/v1/agent-host-grants', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ project: sourceProject, host_id: hostId,
+                    target_project: targetProject, canonical_repository: repository,
+                    runtime, provider, trust_zone: trustZone, isolation_mode: isolation,
+                    max_concurrency: maxConcurrency }),
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok || result.error) throw new Error(result.message || result.detail || result.error || `HTTP ${response.status}`);
+            window.alert(`${hostId} is now authorized for ${targetProject} / ${repository}.`);
+            await this._loadFleetHosts();
+        } catch (error) {
+            window.alert(`Host authorization failed: ${error.message}`);
+        }
+    },
+    async _revokeHostProjectAccess(grantId) {
+        if (!window.confirm('Revoke this project/repository Host authorization? Existing Host ownership and other project grants are unchanged.')) return;
+        try {
+            const project = this.project || window.PM_PROJECT || 'maxwell';
+            const response = await fetch('/ixp/v1/agent-host-grants/revoke', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ project, grant_id: grantId, reason: 'fleet_operator_revoke' }),
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok || result.error) throw new Error(result.message || result.detail || result.error || `HTTP ${response.status}`);
+            await this._loadFleetHosts();
+        } catch (error) {
+            window.alert(`Host authorization could not be revoked: ${error.message}`);
+        }
     },
     async _updateHost(hostId) {
         const host = String(hostId || '').trim();
