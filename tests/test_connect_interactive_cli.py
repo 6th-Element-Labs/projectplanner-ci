@@ -54,13 +54,14 @@ def connect_wake(runtime, *, mission_key=""):
     }
     if mission_key:
         wake["policy"]["lifecycle"]["mission_key"] = mission_key
+    wake["policy"]["execution_context"] = with_generation(
+        ready_execution_context("WATCH-10", runtime=runtime), 1)
     wake["policy"]["execution_assignment"] = build_execution_assignment(
         task_id=wake["task_id"],
         assignment=wake["policy"]["assignment"],
         lifecycle=wake["policy"]["lifecycle"],
+        execution_context=wake["policy"]["execution_context"],
     )
-    wake["policy"]["execution_context"] = with_generation(
-        ready_execution_context("WATCH-10", runtime=runtime), 1)
     return wake
 
 

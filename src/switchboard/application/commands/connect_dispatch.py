@@ -18,6 +18,7 @@ from switchboard.application.session_boot import ADVERTISED_LAUNCH_RUNTIMES
 from switchboard.connect import Assignment, ResourceLimits
 from switchboard.domain.coordination.wake_intents import genuine_wake_intents
 from switchboard.storage.repositories import coordination as coordination_repo
+from switchboard.storage.repositories import tasks as tasks_repo
 from switchboard.application.commands import execution_context
 
 
@@ -52,6 +53,27 @@ def unsupported_runtime_payload(requested_runtime: str) -> dict[str, Any]:
         "repair": _UNSUPPORTED_RUNTIME_REPAIR,
         "message": _UNSUPPORTED_RUNTIME_REPAIR,
     }
+
+
+def _dependency_merge_requirements(
+    task: dict[str, Any], *, project: str,
+) -> list[str]:
+    """Return canonical merge commits that a downstream checkout must contain.
+
+    Dependency status controls whether Coordination may dispatch.  This second,
+    immutable fence carries any canonical code provenance into Capacity so the
+    host can prove the selected checkout actually contains those completed
+    inputs before a runner exists.
+    """
+    required: list[str] = []
+    for dependency_id in task.get("depends_on") or []:
+        dependency = tasks_repo.get_task(str(dependency_id), project=project) or {}
+        merged_sha = str(
+            (dependency.get("git_state") or {}).get("merged_sha") or ""
+        ).strip().lower()
+        if merged_sha and merged_sha not in required:
+            required.append(merged_sha)
+    return required
 
 
 def _hybrid_policy(
@@ -375,7 +397,16 @@ def enqueue_task(
             }
         checkout_sha = assigned_head
     try:
-        context = execution_context.with_checkout_sha(context, checkout_sha)
+        context = execution_context.with_checkout_sha(
+            context,
+            checkout_sha,
+            # Implementation starts are pinned to the canonical default-branch
+            # tip observed by Coordination. Capacity verifies the instruction;
+            # it never selects or advances the revision itself.
+            require_default_branch_tip=(lifecycle["role"] == "implementation"),
+            required_ancestor_shas=_dependency_merge_requirements(
+                task, project=project),
+        )
     except execution_context.ExecutionContextError as exc:
         return {
             "dispatched": False,

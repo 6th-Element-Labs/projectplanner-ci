@@ -154,7 +154,8 @@ def connect_wake(ctx, *, execution_id="execlease-adapter28", generation=1,
         "lifecycle": lifecycle,
         "execution_context": ctx,
         "execution_assignment": build_execution_assignment(
-            task_id="ADAPTER-28", assignment=assignment, lifecycle=lifecycle),
+            task_id="ADAPTER-28", assignment=assignment, lifecycle=lifecycle,
+            execution_context=ctx),
     }
     if credential_reference:
         policy["account_binding"] = {
@@ -359,6 +360,60 @@ def test_review_launches_at_exact_pr_head_not_canonical_base(root):
         "mismatched review checkout fails closed by name before spawn",
     )
     ok(refused_launcher.calls == [], "mismatched review starts no supervisor")
+
+
+def test_downstream_launch_proves_current_tip_contains_upstream_merge(root):
+    remote, old_sha = action_engine_remote(root)
+    writer = root / "upstream-writer"
+    git("clone", remote, str(writer))
+    git("config", "user.email", "adapter28@example.test", cwd=writer)
+    git("config", "user.name", "ADAPTER-28", cwd=writer)
+    (writer / "upstream.md").write_text("merged upstream output\n", encoding="utf-8")
+    git("add", "upstream.md", cwd=writer)
+    git("commit", "-m", "merge upstream dependency", cwd=writer)
+    upstream_sha = git("rev-parse", "HEAD", cwd=writer)
+    git("push", "origin", "main", cwd=writer)
+
+    stale_context = with_checkout_sha(
+        context(old_sha),
+        old_sha,
+        require_default_branch_tip=True,
+        required_ancestor_shas=[upstream_sha],
+    )
+    stale = connect_wake(
+        stale_context, execution_id="execlease-adapter28-stale-downstream")
+    with Launcher(remote) as launcher:
+        refused = agent_host.launch(
+            stale, host_inventory(), runner_session_id="run_stale_downstream")
+    ok(
+        refused.get("started") is False
+        and refused.get("reason") == "workspace_default_branch_tip_mismatch",
+        "stale downstream canonical assignment fails before spawn",
+    )
+    ok(launcher.calls == [], "stale downstream assignment starts no supervisor")
+
+    current_context = with_checkout_sha(
+        context(upstream_sha),
+        upstream_sha,
+        require_default_branch_tip=True,
+        required_ancestor_shas=[upstream_sha],
+    )
+    current = connect_wake(
+        current_context, execution_id="execlease-adapter28-current-downstream")
+    with Launcher(remote) as launcher:
+        rec = agent_host.launch(
+            current, host_inventory(), runner_session_id="run_current_downstream")
+    proof = rec["metadata"]["workspace_receipt"]["checkout_proof"]
+    ok(
+        rec.get("runner_session_id") == "run_adapter28"
+        and proof["default_branch_tip_sha"] == upstream_sha
+        and proof["required_ancestor_shas"] == [upstream_sha],
+        "host receipt proves downstream checkout is current and contains upstream merge",
+    )
+    ok(
+        (Path(rec["cwd"]) / "upstream.md").is_file(),
+        "downstream runner workspace contains the upstream merged output",
+    )
 
 
 def test_receipts_published_centrally_are_safe(root):
@@ -598,6 +653,9 @@ def test_legacy_wake_without_context_launches_from_private_worktree(root):
     git("remote", "add", "origin", remote, cwd=source)
     wake = connect_wake(context(sha), execution_id="execlease-legacy")
     del wake["policy"]["execution_context"]
+    wake["policy"]["execution_assignment"] = build_execution_assignment(
+        task_id="ADAPTER-28", assignment=wake["policy"]["assignment"],
+        lifecycle=wake["policy"]["lifecycle"])
     wake["policy"].pop("account_binding", None)
     inventory = host_inventory()
     inventory["repo_root"] = str(source)
@@ -640,6 +698,9 @@ def test_legacy_worktrees_dedupe_isolate_and_teardown(root):
             generation=generation,
         )
         wake["policy"].pop("execution_context")
+        wake["policy"]["execution_assignment"] = build_execution_assignment(
+            task_id="ADAPTER-28", assignment=wake["policy"]["assignment"],
+            lifecycle=wake["policy"]["lifecycle"])
         wake["policy"].pop("account_binding", None)
         return wake
 
@@ -676,6 +737,9 @@ def test_legacy_workspace_failures_start_no_process(root):
     git("remote", "add", "origin", remote, cwd=source)
     wake = connect_wake(context(sha), execution_id="execlease-unsafe-root")
     wake["policy"].pop("execution_context")
+    wake["policy"]["execution_assignment"] = build_execution_assignment(
+        task_id="ADAPTER-28", assignment=wake["policy"]["assignment"],
+        lifecycle=wake["policy"]["lifecycle"])
     wake["policy"].pop("account_binding", None)
     inventory = host_inventory()
     inventory["repo_root"] = str(source)
@@ -719,6 +783,8 @@ with tempfile.TemporaryDirectory(prefix="adapter28-") as temporary:
     base = Path(temporary)
     test_connect_launches_from_the_verified_workspace(base / "launch")
     test_review_launches_at_exact_pr_head_not_canonical_base(base / "review-head")
+    test_downstream_launch_proves_current_tip_contains_upstream_merge(
+        base / "downstream-tip")
     test_receipts_published_centrally_are_safe(base / "receipts")
     test_missing_workspace_refuses_before_any_process(base / "missing")
     test_rewound_repointed_and_revoked_workspaces_refuse(base / "drift")

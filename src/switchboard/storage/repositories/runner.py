@@ -2037,6 +2037,96 @@ def _complete_terminal_task_runner_cleanup_in(
             "claim_id": claim["id"], "work_session_id": work_session_id or None}
 
 
+def _complete_yielded_runner_cleanup_in(
+        c: sqlite3.Connection, record: Dict[str, Any], metadata: Dict[str, Any],
+        runner_session_id: str, actor: str, now: float) -> Optional[Dict[str, Any]]:
+    """Finalize one exact yielded generation after Capacity confirms its stop.
+
+    ``yield_mission`` first persists Coordination's role-boundary decision and
+    then carries that immutable receipt on the lease surrender.  The host
+    terminal receipt is the C3 acknowledgement that makes it safe to release
+    that generation's claim and Work Session.  Capacity verifies the supplied
+    receipt tuple; it never reads or infers Coordination journal state.
+    """
+    surrender = metadata.get("lease_surrender") or {}
+    if (str(metadata.get("terminalized_by") or "")
+            != "terminal_lease_surrendered"
+            or str(surrender.get("authority") or "") != "completion_owner"):
+        return None
+    task_id = str(record.get("task_id") or "").strip()
+    agent_id = str(record.get("agent_id") or "").strip()
+    execution_id = str(metadata.get("execution_id") or "").strip()
+    generation = int(metadata.get("execution_generation") or 0)
+    receipt = surrender.get("coordination_receipt") or {}
+    if (not task_id or not agent_id or not execution_id or generation <= 0
+            or str(surrender.get("execution_id") or "") != execution_id
+            or int(surrender.get("generation") or 0) != generation
+            or str(receipt.get("schema") or "")
+            != "switchboard.mission_yield_receipt.v1"
+            or str(receipt.get("event_type") or "") != "agent_yielded"
+            or not str(receipt.get("event_id") or "").strip()
+            or str(receipt.get("task_id") or "") != task_id
+            or str(receipt.get("execution_id") or "") != execution_id
+            or int(receipt.get("generation") or 0) != generation):
+        return None
+    claim = c.execute(
+        "SELECT * FROM task_claims WHERE runner_session_id=? AND task_id=? "
+        "AND agent_id=? ORDER BY claimed_at DESC LIMIT 1",
+        (runner_session_id, task_id, agent_id),
+    ).fetchone()
+    if not claim or str(claim["status"] or "") not in {"active", "completed"}:
+        return None
+    claim_id = str(claim["id"] or "")
+    newer_owner = c.execute(
+        "SELECT id FROM task_claims WHERE task_id=? AND status='active' "
+        "AND id<>? LIMIT 1", (task_id, claim_id),
+    ).fetchone()
+    if newer_owner:
+        return None
+    session = c.execute(
+        "SELECT work_session_id FROM work_sessions WHERE task_id=? AND claim_id=? "
+        "AND runner_session_id=? ORDER BY updated_at DESC,created_at DESC LIMIT 1",
+        (task_id, claim_id, runner_session_id),
+    ).fetchone()
+    if not session:
+        return None
+    work_session_id = str(session["work_session_id"] or "")
+    idempotent = str(claim["status"] or "") == "completed"
+    changed = False
+    if not idempotent:
+        c.execute(
+            "UPDATE task_claims SET status='completed',completed_at=? WHERE id=?",
+            (now, claim_id),
+        )
+        c.execute(
+            "UPDATE resource_leases SET released_at=? WHERE resource_type='task' "
+            "AND task_id=? AND agent_id=? AND released_at IS NULL",
+            (now, task_id, agent_id),
+        )
+        changed = True
+    session_update = c.execute(
+        "UPDATE work_sessions SET status='completed',"
+        "completed_at=COALESCE(completed_at,?),updated_at=?,updated_by=? "
+        "WHERE work_session_id=? AND task_id=? AND claim_id=? "
+        "AND runner_session_id=? AND status IN ('active','proposed','blocked')",
+        (now, now, actor, work_session_id, task_id, claim_id,
+         runner_session_id),
+    )
+    changed = changed or bool(session_update.rowcount)
+    if changed:
+        c.execute(
+            "INSERT INTO activity(task_id,actor,kind,payload,created_at) "
+            "VALUES (?,?,?,?,?)",
+            (task_id, actor, "task.claim.completed_by_yield_terminal_receipt",
+             json.dumps({"claim_id": claim_id, "execution_id": execution_id,
+                         "generation": generation,
+                         "runner_session_id": runner_session_id,
+                         "work_session_id": work_session_id}, sort_keys=True), now),
+        )
+    return {"completed": True, "idempotent": idempotent,
+            "claim_id": claim_id, "work_session_id": work_session_id}
+
+
 def _renew_personal_claim_from_runner_in(
         c: sqlite3.Connection, record: Dict[str, Any], principal_id: str,
         now: float) -> bool:
@@ -2622,8 +2712,13 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
         completion_resume = terminal_ack_claim_completion_in(
             c, runner_session_id, actor, principal_id, narrow_host, now,
             project=project)
-    terminal_task_cleanup = None
+    yielded_cleanup = None
     if runner_status in RUNNER_TERMINAL_STATUSES and not completion_resume:
+        yielded_cleanup = _complete_yielded_runner_cleanup_in(
+            c, record, metadata, runner_session_id, actor, now)
+    terminal_task_cleanup = None
+    if (runner_status in RUNNER_TERMINAL_STATUSES and not completion_resume
+            and not yielded_cleanup):
         terminal_task_cleanup = _complete_terminal_task_runner_cleanup_in(
             c, record, metadata, runner_session_id, actor, now)
     # A supervised execution ends when its process does.  The lease is acquired at
@@ -2663,7 +2758,7 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
                              "work_session_id": work_session_id,
                              "runner_status": runner_status}, sort_keys=True), now),
             )
-    if not completion_resume and not terminal_task_cleanup:
+    if not completion_resume and not yielded_cleanup and not terminal_task_cleanup:
         _release_terminal_runner_ownership_in(
             c, record, metadata, runner_session_id, actor, now)
     # BUG-263: a terminal generation may have already closed its claim while a
@@ -2871,7 +2966,8 @@ def get_runner_session(runner_session_id: str,
 def make_runner_lease_due(
         runner_session_id: str, *, reason: str, authority: str,
         actor: str, project: str = DEFAULT_PROJECT,
-        expected_identity: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        expected_identity: Optional[Dict[str, Any]] = None,
+        coordination_receipt: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Fence one exact generation and make its renewable lease due now.
 
     This is the canonical translation boundary for automatic stop requests such
@@ -2944,6 +3040,24 @@ def make_runner_lease_due(
                     "expected_identity": expected,
                     "current_identity": current,
                 }
+        receipt = dict(coordination_receipt or {})
+        if receipt:
+            receipt_matches = (
+                str(receipt.get("schema") or "")
+                == "switchboard.mission_yield_receipt.v1"
+                and str(receipt.get("event_type") or "") == "agent_yielded"
+                and bool(str(receipt.get("event_id") or "").strip())
+                and str(receipt.get("task_id") or "")
+                == str(row["task_id"] or "")
+                and str(receipt.get("execution_id") or "") == execution_id
+                and int(receipt.get("generation") or 0) == generation
+            )
+            if not receipt_matches:
+                return {
+                    "updated": False,
+                    "error": "coordination_receipt_mismatch",
+                    "runner_session_id": runner_session_id,
+                }
         if str(lease["lease_state"] or "") not in {
                 "reserved", "starting", "active", "stopping"}:
             return {"updated": True, "idempotent": True,
@@ -2967,6 +3081,7 @@ def make_runner_lease_due(
             "execution_id": execution_id,
             "generation": generation,
             "lease_epoch": lease_epoch,
+            **({"coordination_receipt": receipt} if receipt else {}),
         }
         ttl_s = max(10, int(row["heartbeat_ttl_s"] or 60))
         c.execute(

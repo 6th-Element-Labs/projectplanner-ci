@@ -141,6 +141,16 @@ def yield_mission(
         actor=actor,
         project=project,
         expected_identity=identity,
+        coordination_receipt={
+            "schema": "switchboard.mission_yield_receipt.v1",
+            "event_type": "agent_yielded",
+            "event_id": str(result.get("event_id") or ""),
+            "task_id": task_id,
+            "execution_id": execution_id,
+            "generation": int(generation),
+            "outcome": outcome,
+            "requested_role": requested_role,
+        },
     )
     if not surrender.get("updated"):
         raise MissionJournalError(

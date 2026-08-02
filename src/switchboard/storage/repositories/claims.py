@@ -189,6 +189,7 @@ def _assigned_execution_for_claim_in(
             contract,
             build_execution_assignment(
                 task_id=task_id, assignment=assignment, lifecycle=lifecycle,
+                execution_context=policy.get("execution_context") or {},
             ),
         )
     except (ExecutionAssignmentError, TypeError, ValueError):

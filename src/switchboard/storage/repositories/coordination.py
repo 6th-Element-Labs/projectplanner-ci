@@ -721,6 +721,7 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
                     task_id=str(task_id or ""),
                     assignment=assignment,
                     lifecycle=admitted,
+                    execution_context=policy.get("execution_context") or {},
                     # COORD-52: derived ONCE here, at dispatch, then carried verbatim.
                     # Never re-derive on the claim path — see execution_assignment's
                     # docstring for why exact-equality verification would fail.

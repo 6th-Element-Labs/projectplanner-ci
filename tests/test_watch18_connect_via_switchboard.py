@@ -116,13 +116,14 @@ wake = {
         },
     },
 }
+wake["policy"]["execution_context"] = with_generation(
+    ready_execution_context(wake["task_id"]), 1)
 wake["policy"]["execution_assignment"] = build_execution_assignment(
     task_id=wake["task_id"],
     assignment=wake["policy"]["assignment"],
     lifecycle=wake["policy"]["lifecycle"],
+    execution_context=wake["policy"]["execution_context"],
 )
-wake["policy"]["execution_context"] = with_generation(
-    ready_execution_context(wake["task_id"]), 1)
 inventory = {
     "host_id": "host/watch18",
     "repo_root": str(ROOT),

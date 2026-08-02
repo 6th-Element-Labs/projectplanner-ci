@@ -264,6 +264,61 @@ def _ensure_cache(cache_path: Path, remote: str, base_sha: str,
     return created, quarantined
 
 
+def _prove_checkout_requirements(
+    cache_path: Path, *, checkout_sha: str, default_branch: str,
+    requirements: Mapping[str, Any], deadline: float | None = None,
+) -> dict[str, Any]:
+    """Prove Coordination's immutable checkout instruction against fetched Git.
+
+    Capacity observes and records these facts but never selects a replacement
+    revision. A stale canonical assignment therefore fails before process spawn
+    instead of silently launching old code.
+    """
+    observed_tip = ""
+    if requirements.get("default_branch_tip") is True:
+        try:
+            observed_tip = _run(
+                ["git", "--git-dir", str(cache_path), "rev-parse",
+                 f"refs/heads/{default_branch}"],
+                deadline=deadline,
+            ).stdout.strip().lower()
+        except WorkspaceMaterializationError as exc:
+            if exc.code == "workspace_materialize_timeout":
+                raise
+            raise WorkspaceMaterializationError(
+                "workspace_default_branch_tip_unavailable",
+                "fetched canonical default-branch tip is unavailable",
+                default_branch=default_branch,
+            ) from exc
+        if observed_tip != checkout_sha:
+            raise WorkspaceMaterializationError(
+                "workspace_default_branch_tip_mismatch",
+                "assigned checkout is not the fetched canonical default-branch tip",
+                checkout_sha=checkout_sha,
+                observed_default_branch_tip=observed_tip or None,
+            )
+    for ancestor in requirements.get("ancestor_shas") or []:
+        try:
+            _run(
+                ["git", "--git-dir", str(cache_path), "merge-base",
+                 "--is-ancestor", ancestor, checkout_sha],
+                deadline=deadline,
+            )
+        except WorkspaceMaterializationError as exc:
+            if exc.code == "workspace_materialize_timeout":
+                raise
+            raise WorkspaceMaterializationError(
+                "workspace_required_ancestor_missing",
+                "assigned checkout does not contain a required dependency merge",
+                checkout_sha=checkout_sha,
+                required_ancestor_sha=ancestor,
+            ) from exc
+    return {
+        "default_branch_tip_sha": observed_tip or None,
+        "required_ancestor_shas": list(requirements.get("ancestor_shas") or []),
+    }
+
+
 def _check_workspace(path: Path, receipt_path: Path,
                      expected: Mapping[str, Any], *,
                      deadline: float | None = None) -> dict[str, Any]:
@@ -687,6 +742,26 @@ def _resolved_identity(
         raise WorkspaceMaterializationError(
             "execution_context_checkout_invalid",
             "exact execution checkout SHA is required")
+    requirements = context.get("checkout_requirements") or {}
+    if not isinstance(requirements, Mapping):
+        raise WorkspaceMaterializationError(
+            "execution_checkout_requirements_invalid",
+            "checkout requirements must be an object")
+    default_branch_tip = requirements.get("default_branch_tip", False)
+    if not isinstance(default_branch_tip, bool):
+        raise WorkspaceMaterializationError(
+            "execution_checkout_requirements_invalid",
+            "default-branch tip requirement must be boolean")
+    ancestors = requirements.get("ancestor_shas") or []
+    if (not isinstance(ancestors, list)
+            or any(not _SHA.fullmatch(str(value or "")) for value in ancestors)):
+        raise WorkspaceMaterializationError(
+            "execution_checkout_requirements_invalid",
+            "required ancestors must be exact 40-character SHA values")
+    requirements = {
+        "default_branch_tip": default_branch_tip,
+        "ancestor_shas": list(dict.fromkeys(str(value) for value in ancestors)),
+    }
     isolation = str((context.get("workspace") or {}).get("isolation") or "")
     if isolation not in {"worktree", "clone"}:
         raise WorkspaceMaterializationError(
@@ -727,6 +802,7 @@ def _resolved_identity(
         "remote": remote,
         "base_sha": base_sha,
         "checkout_sha": checkout_sha,
+        "checkout_requirements": requirements,
         "branch": branch,
     }
     return {
@@ -740,6 +816,8 @@ def _resolved_identity(
         "remote": remote,
         "base_sha": base_sha,
         "checkout_sha": checkout_sha,
+        "checkout_requirements": requirements,
+        "default_branch": str(context.get("default_branch") or ""),
         "branch": branch,
         "expected": expected,
     }
@@ -775,6 +853,13 @@ def materialize(
         cache_created, cache_quarantined = _ensure_cache(
             cache_path, remote, base_sha, checkout_sha, quarantine_root,
             deadline=deadline)
+        checkout_proof = _prove_checkout_requirements(
+            cache_path,
+            checkout_sha=checkout_sha,
+            default_branch=resolved["default_branch"],
+            requirements=resolved["checkout_requirements"],
+            deadline=deadline,
+        )
         if workspace_path.exists():
             if _workspace_valid(
                     workspace_path, receipt_path, expected, deadline=deadline):
@@ -810,6 +895,7 @@ def materialize(
                 "cache_quarantined": (
                     str(cache_quarantined) if cache_quarantined else None),
                 "workspace_path": str(workspace_path),
+                "checkout_proof": checkout_proof,
                 "created_at": time.time(),
             }
             receipt_path.parent.mkdir(parents=True, exist_ok=True)
@@ -895,7 +981,7 @@ def safe_receipt(receipt: Mapping[str, Any]) -> dict[str, Any]:
         key: receipt.get(key) for key in (
             "schema", "project_id", "task_id", "execution_id", "generation",
             "authority_digest", "context_digest", "repository", "base_sha",
-            "checkout_sha",
+            "checkout_sha", "checkout_requirements", "checkout_proof",
             "branch", "workspace_path", "created_at", "revoked_at",
             "revoked_reason", "source", "isolation", "workspace_backend",
         ) if receipt.get(key) is not None

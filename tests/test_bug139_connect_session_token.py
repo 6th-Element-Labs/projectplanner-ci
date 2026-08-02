@@ -39,11 +39,6 @@ def _wake():
             "generation": 1, "fence_epoch": 1,
         }},
     }
-    wake["policy"]["execution_assignment"] = build_execution_assignment(
-        task_id=wake["task_id"],
-        assignment=wake["policy"]["assignment"],
-        lifecycle=wake["policy"]["lifecycle"],
-    )
     wake["policy"]["execution_context"] = with_generation({
         "schema": "switchboard.execution_context.v1",
         "project_id": "switchboard",
@@ -62,6 +57,12 @@ def _wake():
         },
         "authority_digest": "sha256:bug139-authority",
     }, 1)
+    wake["policy"]["execution_assignment"] = build_execution_assignment(
+        task_id=wake["task_id"],
+        assignment=wake["policy"]["assignment"],
+        lifecycle=wake["policy"]["lifecycle"],
+        execution_context=wake["policy"]["execution_context"],
+    )
     return wake
 
 

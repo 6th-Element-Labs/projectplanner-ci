@@ -39,6 +39,7 @@ P = "switchboard"
 connect_dispatch.execution_context.resolve = lambda **kwargs: ready_execution_context(
     kwargs["task_id"], runtime=kwargs["runtime"])
 HEAD = "1af20970ba52ed4cb862c3ae08d44b6b9ccdcde0"
+UPSTREAM_MERGE = "2" * 40
 PR_BRANCH = "agent/switchboard/BUG-168/existing-pr"
 FINDINGS = [{
     "id": "reviewremediation-de1aaf65367940b9",
@@ -59,6 +60,12 @@ try:
         "pr_number": 831,
         "pr_url": "https://github.com/6th-Element-Labs/projectplanner/pull/831",
     }
+    task["depends_on"] = ["UP-1"]
+    connect_dispatch.tasks_repo.get_task = lambda task_id, **_kwargs: (
+        {"task_id": task_id, "status": "Done",
+         "git_state": {"merged_sha": UPSTREAM_MERGE}}
+        if task_id == "UP-1" else None
+    )
     result = connect_dispatch.enqueue_task(
         task, project=P, actor="bug168-test", runtime="codex",
         generation_ref=f"remediation:{HEAD}",
@@ -87,6 +94,10 @@ try:
     assert policy["lifecycle"]["pr_branch"] == PR_BRANCH
     assert policy["execution_context"]["base_sha"] == "a" * 40
     assert policy["execution_context"]["checkout_sha"] == HEAD
+    assert policy["execution_context"]["checkout_requirements"] == {
+        "default_branch_tip": False,
+        "ancestor_shas": [UPSTREAM_MERGE],
+    }
     assert contract["launch_pointer"] == {
         "trigger": "changes_requested",
         "evidence_url": task["git_state"]["pr_url"],
@@ -96,6 +107,23 @@ try:
         "required": True,
         "work_session_required": True,
         "role": "remediation",
+    }
+
+    downstream = store.create_task({
+        "workstream_id": "BUG",
+        "title": "Downstream implementation",
+        "depends_on": ["UP-1"],
+    }, actor="bug168-test", project=P)
+    downstream_result = connect_dispatch.enqueue_task(
+        downstream, project=P, actor="bug168-test", runtime="codex",
+        generation_ref="downstream-after-upstream", role="implementation")
+    downstream_wake = next(
+        row for row in store.list_wake_intents(project=P)
+        if row.get("wake_id") == downstream_result.get("wake_id"))
+    assert downstream_wake["policy"]["execution_context"]["checkout_sha"] == "a" * 40
+    assert downstream_wake["policy"]["execution_context"]["checkout_requirements"] == {
+        "default_branch_tip": True,
+        "ancestor_shas": [UPSTREAM_MERGE],
     }
 
     from switchboard.connect.contract import Assignment, ResourceLimits

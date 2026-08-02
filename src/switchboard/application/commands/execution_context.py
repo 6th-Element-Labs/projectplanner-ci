@@ -277,7 +277,9 @@ def with_generation(context: Mapping[str, Any], generation: int) -> dict[str, An
 
 
 def with_checkout_sha(
-    context: Mapping[str, Any], checkout_sha: str,
+    context: Mapping[str, Any], checkout_sha: str, *,
+    require_default_branch_tip: bool = False,
+    required_ancestor_shas: list[str] | tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Bind one server-derived checkout target without changing authority.
 
@@ -295,6 +297,20 @@ def with_checkout_sha(
         )
     result = dict(context)
     result["checkout_sha"] = exact_sha
+    ancestors: list[str] = []
+    for value in required_ancestor_shas:
+        ancestor = str(value or "").strip().lower()
+        if not _SHA.fullmatch(ancestor):
+            raise ExecutionContextError(
+                "execution_required_ancestor_invalid",
+                "every required checkout ancestor must be an exact 40-character SHA",
+            )
+        if ancestor not in ancestors:
+            ancestors.append(ancestor)
+    result["checkout_requirements"] = {
+        "default_branch_tip": bool(require_default_branch_tip),
+        "ancestor_shas": ancestors,
+    }
     result.pop("digest", None)
     result["digest"] = _digest(result)
     return result

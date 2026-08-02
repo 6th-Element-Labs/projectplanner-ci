@@ -106,6 +106,11 @@ try:
         },
         "authority_digest": "sha256:adr008",
     }, policy["lifecycle"]["generation"])
+    contract = build_execution_assignment(
+        task_id=task["task_id"], assignment=assignment,
+        lifecycle=policy["lifecycle"],
+        execution_context=policy["execution_context"], prior_attempts=prior)
+    policy["execution_assignment"] = contract
 
     inventory = {
         "host_id": "host/adr008",
@@ -161,7 +166,8 @@ try:
     # A first-ever dispatch has the same minimal assignment and still launches.
     bare = build_execution_assignment(
         task_id=task["task_id"], assignment=assignment,
-        lifecycle=policy["lifecycle"])
+        lifecycle=policy["lifecycle"],
+        execution_context=policy["execution_context"])
     assert bare == contract
     bare_wake = {
         **wake,

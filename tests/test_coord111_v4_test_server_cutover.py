@@ -14,6 +14,16 @@ from switchboard.connect.execution_assignment import build_execution_assignment
 from switchboard.connect.launcher import assignment_note
 
 
+def test_v4_isolated_edge_accepts_forwarded_hosts_on_loopback_only():
+    config = (_ROOT / "deploy" / "Caddyfile.v4-isolated-test").read_text(
+        encoding="utf-8"
+    )
+
+    assert "http://:8110 {" in config
+    assert "\tbind 127.0.0.1" in config
+    assert "http://127.0.0.1:8110 {" not in config
+
+
 def test_v4_test_owner_calls_only_the_scoped_v4_runtime():
     authority = {
         "schema": "switchboard.autopilot_scope_authority.v1",
@@ -338,10 +348,11 @@ def test_v4_assignment_uses_the_journal_yield_not_the_legacy_factory():
 
 
 if __name__ == "__main__":
+    test_v4_isolated_edge_accepts_forwarded_hosts_on_loopback_only()
     test_v4_test_owner_calls_only_the_scoped_v4_runtime()
     test_production_owner_still_calls_only_v1()
     test_v4_projects_terminal_provenance_before_completing_task_scope()
     test_v4_keeps_scope_active_when_terminal_projection_is_not_confirmed()
     test_v4_projects_terminal_provenance_before_completing_deliverable_scope()
     test_v4_assignment_uses_the_journal_yield_not_the_legacy_factory()
-    print("COORD-111 isolated v4 writer: 6 passed")
+    print("COORD-111 isolated v4 writer: 7 passed")

@@ -161,7 +161,7 @@ def main() -> int:
             "execution_context": context,
             "execution_assignment": build_execution_assignment(
                 task_id=task_id, assignment=assignment,
-                lifecycle=lifecycle),
+                lifecycle=lifecycle, execution_context=context),
             "account_binding": {"credential_reference": "provider-smoke",
                                 "provider": "openai-codex"},
         },

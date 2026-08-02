@@ -261,6 +261,7 @@ class MissionJournalTest(unittest.TestCase):
             def yield_execution(*_args, **_kwargs):
                 return {
                     "created": False,
+                    "event_id": "event-yield-1",
                     "execution_identity": {
                         "runner_session_id": "runner-1",
                         "execution_id": "exec-1",
@@ -284,6 +285,19 @@ class MissionJournalTest(unittest.TestCase):
                 repository=ReplayRepository(),
             )
         surrender.assert_called_once()
+        self.assertEqual(
+            {
+                "schema": "switchboard.mission_yield_receipt.v1",
+                "event_type": "agent_yielded",
+                "event_id": "event-yield-1",
+                "task_id": "T-1",
+                "execution_id": "exec-1",
+                "generation": 2,
+                "outcome": "waiting",
+                "requested_role": "review_merge",
+            },
+            surrender.call_args.kwargs["coordination_receipt"],
+        )
         self.assertTrue(result["surrender_requested"])
         self.assertTrue(result["surrender"]["updated"])
 
