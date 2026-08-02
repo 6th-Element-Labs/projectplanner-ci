@@ -1780,10 +1780,12 @@ def _release_terminal_runner_ownership_in(
     if (review_handoff_recovery and execution_role != "implementation"
             and not work_session):
         return None
-    if lease_expired and not work_session:
-        # Older host payloads omitted work_session_id. Resolve the generation's
-        # session from strongest to weakest identity, accepting the weak
-        # task+agent tuple only when it is unique.
+    if not work_session:
+        # Connect starts the runner before the CLI creates its Work Session, so
+        # a terminal control receipt can legitimately lack work_session_id even
+        # though the later claim bind persisted the exact runner generation.
+        # Resolve that exact claim-bound session first.  Only lease-expiry
+        # recovery may use the weaker legacy principal/task fallbacks.
         candidates: Dict[str, sqlite3.Row] = {}
         try:
             for row in c.execute(
@@ -1791,7 +1793,7 @@ def _release_terminal_runner_ownership_in(
                     "AND status IN ('active','proposed','blocked')",
                     (claim_id,)).fetchall():
                 candidates[str(row["work_session_id"])] = row
-            if not candidates:
+            if lease_expired and not candidates:
                 runner_row = c.execute(
                     "SELECT principal_id FROM runner_sessions "
                     "WHERE runner_session_id=?",
@@ -1807,7 +1809,7 @@ def _release_terminal_runner_ownership_in(
                             "AND status IN ('active','proposed','blocked')",
                             (task_id, principal_id)).fetchall():
                         candidates[str(row["work_session_id"])] = row
-            if not candidates:
+            if lease_expired and not candidates:
                 for row in c.execute(
                         "SELECT * FROM work_sessions WHERE task_id=? AND agent_id=? "
                         "AND status IN ('active','proposed','blocked')",
@@ -3446,13 +3448,32 @@ def complete_runner_control_request(request_id: str, result: Optional[Dict[str, 
                 str(session.get("runner_session_id") or ""), now)
         if (req.get("action") == "kill" and final_status == "completed"
                 and str(session_status or "").lower() not in RUNNER_WATCHABLE_STATUSES):
+            # A verified host kill is the terminal receipt for this exact
+            # Capacity generation.  Reuse the same claim/Work Session cleanup
+            # as a terminal runner heartbeat; otherwise a preclaim runner whose
+            # claim was bound later leaves Coordination ownership active.
+            metadata = session.get("metadata") if isinstance(
+                session.get("metadata"), dict) else {}
+            _release_terminal_runner_ownership_in(
+                c, session, metadata, str(session.get("runner_session_id") or ""),
+                actor, now,
+            )
+            execution_id = str(metadata.get("execution_id") or "").strip()
+            execution_generation = int(metadata.get("execution_generation") or 0)
+            wake_id = str(metadata.get("wake_id") or "").strip()
+            if execution_id and execution_generation > 0 and wake_id:
+                c.execute(
+                    "UPDATE resource_leases SET released_at=COALESCE(released_at,?), "
+                    "lease_state='terminal' WHERE id=? AND resource_type='execution' "
+                    "AND task_id=? AND wake_id=? AND execution_generation=?",
+                    (now, execution_id, str(session.get("task_id") or ""), wake_id,
+                     execution_generation),
+                )
             # The launch wake records dispatch, not process lifetime.  Once its
             # process is deliberately killed it must no longer remain a reusable
             # successful generation: start_task derives the next idempotency key
             # from this failed predecessor.  Otherwise Connect returns the old
             # completed wake as "started" without asking a host to spawn anything.
-            metadata = session.get("metadata") if isinstance(
-                session.get("metadata"), dict) else {}
             wake_id = str(metadata.get("wake_id") or "").strip()
             if wake_id:
                 wake_row = c.execute(

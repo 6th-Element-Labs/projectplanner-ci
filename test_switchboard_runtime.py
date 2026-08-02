@@ -1272,8 +1272,16 @@ try:
     ok(control_done["status"] == "completed" and
        store.get_runner_session("run_claimed", project=P)["status"] == "killed",
        "runner control completion updates runner session state")
-    ok(store.get_task(first["task_id"], project=P)["status"] == "In Progress",
-       "runner kill control never marks task complete")
+    killed_task = store.get_task(first["task_id"], project=P)
+    with _conn(P) as connection:
+        killed_claim_status = connection.execute(
+            "SELECT status FROM task_claims WHERE id=?",
+            (claimed["claim_id"],),
+        ).fetchone()["status"]
+    ok(killed_task["status"] == "Not Started"
+       and killed_task.get("assignee") is None
+       and killed_claim_status == "abandoned",
+       "runner kill control requeues the task without marking it complete")
     unmanaged = store.upsert_runner_session(
         {
             "runner_session_id": "run_unmanaged",
@@ -1360,6 +1368,16 @@ try:
     ok(exact_abandoned.get("abandoned") and exact_after_abandon["status"] == "Not Started" and
        exact_after_abandon.get("assignee") is None,
        "abandon_claim clears claim-owned assignee when returning task to queue")
+    claimed = store.claim_task(
+        first["task_id"],
+        agent_id="codex/TEST#1",
+        principal_id=p["id"],
+        actor=auth.actor(p),
+        idem_key="claim-task-after-runner-kill",
+        project=P,
+    )
+    ok(claimed.get("claimed"),
+       "task can be claimed again after its killed runner releases ownership")
     completed = store.complete_claim(
         claimed["claim_id"],
         evidence={"branch": "claude/TEST-1-first", "head_sha": "abc123", "pr_url": "https://example/pr/1"},
