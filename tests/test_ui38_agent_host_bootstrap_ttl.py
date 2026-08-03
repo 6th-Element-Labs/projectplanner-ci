@@ -27,6 +27,9 @@ from adapters import agent_host  # noqa: E402
 from adapters import switchboard_core as sb  # noqa: E402
 from db.connection import _conn  # noqa: E402
 from switchboard.api.routers.agents import create_router  # noqa: E402
+from switchboard.api.routers.ixp_work_sessions import (  # noqa: E402
+    create_router as create_work_sessions_router,
+)
 
 P = "switchboard"
 passed = failed = 0
@@ -131,6 +134,11 @@ try:
         resolve_body_project=lambda body: str(body.get("project") or ""),
         control_plane_http=lambda result: result,
     ))
+    app.include_router(create_work_sessions_router(
+        resolve_project=lambda project: project,
+        resolve_principal=resolve_principal,
+        resolve_body_project=lambda body: str(body.get("project") or ""),
+    ))
     client = TestClient(app)
     exact_body = {
         "project": P, "agent_id": agent_id, "task_id": task_id,
@@ -194,6 +202,49 @@ try:
         binding, principal_id=principal_id, project=P, action="heartbeat_agent")
     ok(bound_heartbeat.get("allowed") is True,
        "exact claim-bound worker heartbeat remains authorized after startup")
+    with _conn(P) as c:
+        c.execute(
+            "INSERT INTO task_claims(id,task_id,agent_id,principal_id,status,"
+            "claimed_at,expires_at,runner_session_id) VALUES (?,?,?,?,?,?,?,?)",
+            ("taskclaim-ui38", task_id, agent_id,
+             f"direct-session/{runner_id}", "active", now, now + 3600,
+             runner_id),
+        )
+    created_session = store.create_work_session({
+        "work_session_id": "worksession-ui38",
+        "task_id": task_id,
+        "claim_id": "taskclaim-ui38",
+        "agent_id": agent_id,
+        "principal_id": f"direct-session/{runner_id}",
+        "worktree_path": str(ROOT),
+        "branch": "codex/ui38",
+        "status": "active",
+        "dirty_status": "clean",
+    }, actor=host_id, principal_id=f"direct-session/{runner_id}", project=P)
+    ok(created_session.get("created") is True,
+       "claim-bound fixture has its exact direct-session Work Session")
+    preflight_allowed = store.check_agent_host_bootstrap_authority(
+        binding, principal_id=principal_id, project=P,
+        work_session_id="worksession-ui38", action="preflight_work_session")
+    ok(preflight_allowed.get("allowed") is True,
+       "narrow host may request preflight only for its exact bound Work Session")
+    preflight_denied = store.check_agent_host_bootstrap_authority(
+        {**binding, "runner_session_id": "run_other"},
+        principal_id=principal_id, project=P,
+        work_session_id="worksession-ui38", action="preflight_work_session")
+    ok(preflight_denied.get("allowed") is False,
+       "narrow host cannot preflight a Work Session through another runner")
+    preflight_response = client.post(
+        "/ixp/v1/work_sessions/worksession-ui38/preflight",
+        json={"project": P, "agent_id": agent_id,
+              "agent_host_bootstrap_binding": binding})
+    denied_response = client.post(
+        "/ixp/v1/work_sessions/worksession-ui38/preflight",
+        json={"project": P, "agent_id": agent_id,
+              "agent_host_bootstrap_binding": {
+                  **binding, "runner_session_id": "run_other"}})
+    ok(preflight_response.status_code == 200 and denied_response.status_code == 403,
+       "REST preflight admits the exact narrow host and rejects a crossed tuple")
     cross_renewal = store.upsert_runner_session({
         "runner_session_id": runner_id, "host_id": host_id, "agent_id": agent_id,
         "runtime": "codex", "task_id": "UI-9999", "status": "starting",

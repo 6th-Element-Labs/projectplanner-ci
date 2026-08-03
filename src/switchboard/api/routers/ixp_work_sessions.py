@@ -313,9 +313,14 @@ def create_router(*, resolve_project: ProjectResolver,
             body: dict = Body(default={})):
         body = body or {}
         project = resolve_body_project(body)
-        principal = resolve_principal(
-            request, project, ("write:ixp",),
+        principal = resolve_agent_host_principal(
+            resolve_principal, request, project,
             dev_actor=body.get("agent_id") or "work-session")
+        bootstrap = body.get("agent_host_bootstrap_binding") or {}
+        if is_narrow_agent_host_principal(principal):
+            require_agent_host_bootstrap_authority(
+                principal, bootstrap, "preflight_work_session", project,
+                work_session_id=work_session_id)
         result = work_session_commands.preflight(
             work_session_id, actor=auth.actor(principal), project=project,
             expected_branch=body.get("expected_branch") or "",

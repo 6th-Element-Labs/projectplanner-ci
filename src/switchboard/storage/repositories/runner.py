@@ -590,7 +590,8 @@ def check_agent_host_bootstrap_authority(
         }
     if action not in {
             "create_work_session", "claim_task", "expire_work_session",
-            "complete_wake", "register_agent", "heartbeat_agent"}:
+            "complete_wake", "register_agent", "heartbeat_agent",
+            "preflight_work_session"}:
         return {"allowed": False, "error_code": "agent_host_bootstrap_action_denied"}
 
     now = time.time()
@@ -623,7 +624,8 @@ def check_agent_host_bootstrap_authority(
         {"claimed", "completed", "failed", "cancelled", "expired"}
         if action == "expire_work_session" else
         ({"claimed", "completed"}
-         if action in {"complete_wake", "heartbeat_agent"} else {"claimed"})
+         if action in {"complete_wake", "heartbeat_agent",
+                       "preflight_work_session"} else {"claimed"})
     )
     if (not wake or wake_status not in allowed_wake_statuses
             or str(wake["claimed_by_host"] or "") != supplied["host_id"]):
@@ -655,13 +657,14 @@ def check_agent_host_bootstrap_authority(
             if actual != expected:
                 reasons.append(f"runner_{field}_mismatch")
         claim_bound_heartbeat = (
-            action == "heartbeat_agent"
+            action in {"heartbeat_agent", "preflight_work_session"}
             and bool(str(runner["claim_id"] or ""))
             and bool(str(metadata.get("work_session_id") or ""))
             and str(metadata.get("credential_admission_phase") or "") == "claim_bound"
             and str(runner["status"] or "").lower() in {"ready", "running"}
         )
-        if (action not in {"expire_work_session", "complete_wake", "heartbeat_agent"}
+        if (action not in {"expire_work_session", "complete_wake",
+                           "heartbeat_agent", "preflight_work_session"}
                 and str(runner["claim_id"] or "")):
             reasons.append("runner_already_claim_bound")
         runner_status = str(runner["status"] or "").lower()
@@ -696,14 +699,17 @@ def check_agent_host_bootstrap_authority(
         if action not in {"expire_work_session", "complete_wake"} and float(runner["heartbeat_at"] or 0) \
                 + max(10, int(runner["heartbeat_ttl_s"] or 60)) <= now:
             reasons.append("runner_preclaim_stale")
-    if action in {"claim_task", "expire_work_session"}:
+    if action in {"claim_task", "expire_work_session", "preflight_work_session"}:
         if not session:
             reasons.append("bootstrap_work_session_not_found")
         else:
             expected_session = {
                 "task_id": supplied["task_id"],
                 "agent_id": supplied["agent_id"],
-                "principal_id": str(principal_id or ""),
+                "principal_id": (
+                    f"direct-session/{supplied['runner_session_id']}"
+                    if action == "preflight_work_session"
+                    else str(principal_id or "")),
                 "status": "active",
             }
             for field, expected in expected_session.items():
@@ -714,6 +720,14 @@ def check_agent_host_bootstrap_authority(
                     reasons.append(f"work_session_{field}_mismatch")
             if action == "claim_task" and str(session["claim_id"] or ""):
                 reasons.append("work_session_already_claim_bound")
+            if action == "preflight_work_session":
+                if str(metadata.get("work_session_id") or "") != str(
+                        session["work_session_id"] or ""):
+                    reasons.append("runner_work_session_mismatch")
+                if (not runner or not str(runner["claim_id"] or "")
+                        or str(runner["claim_id"] or "") != str(
+                            session["claim_id"] or "")):
+                    reasons.append("runner_work_session_claim_mismatch")
     if reasons:
         return {
             "allowed": False,
