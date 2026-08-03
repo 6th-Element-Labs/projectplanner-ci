@@ -38,6 +38,16 @@ The proof used trusted command-line configuration overrides with
 configuration: the equivalent persistent configuration belongs in user-level
 `$CODEX_HOME/config.toml`, never project-local `.codex/config.toml`:
 
+ADAPTER-39 coverage receipts apply the same trust split. A request can report
+`tuple_status=certified` only when trusted launch configuration explicitly sets
+`COMPAND_FROZEN_TUPLE_CONFIG_ATTESTED=true` **and** the gateway observes the exact user
+agent/platform, endpoint/query, JSON model, `store`, streaming, and reasoning fields for
+the relevant frozen feature. The launch attestation owns the tuple fields unavailable on
+the HTTP request: binary hash, provider id/name and base URL, credential environment
+variable, wire API, request/stream retry limits, and stream idle timeout. Missing
+attestation, opaque/non-JSON input, or any observable mismatch reports `unknown`; a client
+version substring is never certification evidence.
+
 ```toml
 model = "gpt-5.4"
 model_provider = "compand_fixture"
