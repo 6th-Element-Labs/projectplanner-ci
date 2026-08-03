@@ -1675,7 +1675,7 @@
                     <div class="fw-semibold small">Task actions</div>
                     <div class="text-secondary small">These affect the task, not its deliverable link.</div>
                 </div>
-                <button type="button" class="btn btn-outline-secondary" data-mission-watch-task="${this.esc(id)}"><i class="ti ti-terminal-2 me-1"></i>Watch / Chat</button>
+                <button type="button" class="btn btn-outline-secondary" data-mission-watch-task="${this.esc(id)}" data-mission-watch-project="${this.esc(taskProject)}"><i class="ti ti-terminal-2 me-1"></i>Watch / Chat</button>
                 ${detail.status !== 'Done' ? `<span id="dl-node-autopilot">${this._taskAutopilotButtonHtml(id, taskProject, false)}</span>` : ''}
             </div>
             <div class="d-flex align-items-center gap-2 mb-3">

@@ -374,13 +374,14 @@
         opts = opts || {};
         const id = String(taskId || '').trim();
         if (!id) return false;
+        const taskProject = String(opts.project || window.PM_PROJECT || 'maxwell').trim();
         // Task-scoped intent only (BUG-91). It decides whether to keep the click
         // on the runner surface and whether to look through stale history — it
         // never decides WHICH runner is shown. The server picks that, every time.
         const remembered = String(this._runnerPtyIntentTask || '') === id;
         let watch;
         try {
-            const project = encodeURIComponent(window.PM_PROJECT || 'maxwell');
+            const project = encodeURIComponent(taskProject);
             const state = await (await fetch(
                 `/api/tasks/${encodeURIComponent(id)}/execution?project=${project}`,
                 { cache: 'no-store' })).json();
@@ -498,7 +499,7 @@
             // one repair action. Start and Retry are distinct service commands —
             // retry supersedes the failed attempt instead of racing a second one.
             const gateEl = document.getElementById('runner-pty-gate');
-            if (gateEl && !document.getElementById('runner-pty-start-retry')) {
+            if (!opts.attachOnly && gateEl && !document.getElementById('runner-pty-start-retry')) {
                 const btn = document.createElement('button');
                 btn.type = 'button';
                 btn.id = 'runner-pty-start-retry';
@@ -517,6 +518,7 @@
             // Same session already live — just move containers, don't reconnect.
             this._runnerPty.mode = mode;
             this._runnerPty.taskId = id;
+            this._runnerPty.project = taskProject;
             if (this._runnerPty.fitAddon) requestAnimationFrame(() => { try { this._runnerPty.fitAddon.fit(); } catch (e) { /* ignore */ } });
             return true;
         }
@@ -525,7 +527,10 @@
         if (els.title) els.title.textContent = `${id} · ${sid}`;
         if (els.sub) els.sub.textContent = `${(watch.bind && watch.bind.host_id) || ''}`.trim();
         this._runnerPtyGate('', 'secondary');
-        this._runnerPty = { taskId: id, runnerSessionId: sid, mode, reconnectAttempts: 0 };
+        this._runnerPty = {
+            taskId: id, runnerSessionId: sid, project: taskProject,
+            mode, reconnectAttempts: 0,
+        };
         await this._runnerPtyConnect();
         return true;
     },
@@ -722,7 +727,7 @@
             try {
                 const res = await fetch(`api/tasks/${encodeURIComponent(rp.taskId)}/execution/open`, {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ project: window.PM_PROJECT || 'maxwell' }),
+                    body: JSON.stringify({ project: rp.project || window.PM_PROJECT || 'maxwell' }),
                 });
                 ticket = await res.json();
                 if (!res.ok || ticket.error) {
@@ -972,17 +977,9 @@
         rp.ws = ws;
         ws.addEventListener('open', () => {
             if (this._runnerPty !== rp) return;
-            rp.reconnectAttempts = 0;
             rp.hostAttached = false;
             this._runnerPtyGate('Relay connected — waiting for Agent Host…', 'warning');
-            if (reconnecting && rp.term) {
-                // The relay's bounded replay buffer backfills from here, and
-                // since the terminal (unlike before) kept its prior
-                // scrollback, replay's tail can overlap what's already on
-                // screen — mark the seam instead of leaving it unexplained.
-                this._runnerPtyWritePreservingViewport(
-                    rp, '\r\n\x1b[2m─── reconnected ───\x1b[0m\r\n');
-            }
+            rp.pendingReconnectSeam = reconnecting && !!rp.term;
             const live = document.getElementById('runner-pty-live');
             if (live) live.hidden = true;
         });
@@ -990,10 +987,24 @@
             if (this._runnerPty !== rp) return;
             this._runnerPtyHandleFrame(rp, ev.data);
         });
-        const scheduleReconnect = () => {
+        const scheduleReconnect = (event) => {
             if (this._runnerPty !== rp) return;
             const live = document.getElementById('runner-pty-live');
             if (live) live.hidden = true;
+            const closeCode = Number(event && event.code || 0);
+            const closeReason = String(event && event.reason || '').trim();
+            if (closeCode === 4403) {
+                this._runnerPtyGate(
+                    `Watch refused by relay policy: ${this.esc(closeReason || 'attachment identity mismatch')}`,
+                    'danger');
+                return;
+            }
+            if (closeCode === 4401) {
+                // Authentication failures require a newly minted ticket; never
+                // retry the same rejected capability URL.
+                rp.relayUrl = '';
+                rp.relayExpiresAt = 0;
+            }
             rp.reconnectAttempts = (rp.reconnectAttempts || 0) + 1;
             if (rp.reconnectAttempts > 8) {
                 this._runnerPtyGate('Lost the relay connection and gave up reconnecting. Close and reopen Watch/Chat to retry.', 'danger');
@@ -1023,6 +1034,12 @@
             this._runnerPtyGate(`Session closed: ${this.esc(frame.reason || frame.detail || 'ended')}`, 'secondary');
         } else if (type === 'ready' && !frame.request_id
                 && Object.prototype.hasOwnProperty.call(frame, 'host_attached')) {
+            rp.reconnectAttempts = 0;
+            if (rp.pendingReconnectSeam && rp.term) {
+                this._runnerPtyWritePreservingViewport(
+                    rp, '\r\n\x1b[2m─── reconnected ───\x1b[0m\r\n');
+            }
+            rp.pendingReconnectSeam = false;
             rp.hostAttached = frame.host_attached === true;
             const live = document.getElementById('runner-pty-live');
             if (live) live.hidden = !rp.hostAttached;

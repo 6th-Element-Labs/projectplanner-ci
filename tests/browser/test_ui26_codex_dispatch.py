@@ -143,6 +143,28 @@ try:
            "a running task offers both Watch live and Open side panel on the modal")
         ok(page.locator("#task-primary-stop").is_visible(),
            "a running task offers Stop, wired to the Task Session stop command")
+        sidecar_click = page.evaluate("""
+            async () => {
+                const calls = [];
+                const originalOpen = TeepPlan.openRunnerSessionPanel;
+                TeepPlan.openRunnerSessionPanel = async (taskId, opts) => {
+                    calls.push({taskId, opts});
+                    document.getElementById('runner-pty-panel').hidden = false;
+                    return true;
+                };
+                document.getElementById('task-primary-watch-sidecar').click();
+                await new Promise((resolve) => setTimeout(resolve, 0));
+                const visible = !document.getElementById('runner-pty-panel').hidden;
+                TeepPlan.openRunnerSessionPanel = originalOpen;
+                return {calls, visible};
+            }
+        """)
+        ok(sidecar_click["visible"] and len(sidecar_click["calls"]) == 1,
+           "clicking Open side panel opens the CLI session panel exactly once")
+        ok(sidecar_click["calls"][0]["opts"]["attachOnly"] is True
+           and sidecar_click["calls"][0]["opts"]["project"] == "ui26-fixture-project",
+           "task-modal Watch carries its project and never starts capacity")
+        page.evaluate("() => { document.getElementById('runner-pty-panel').hidden = true; }")
 
         page.locator("#task-primary-runner").evaluate(
             "element => { element.dataset.taskStatus = 'Blocked'; }")

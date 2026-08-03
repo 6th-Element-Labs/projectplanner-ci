@@ -3251,6 +3251,7 @@ const TeepPlan = {
         let t = this.tasks.find((x) => x.task_id === id);
         if (!t && !project) return;
         const proj = (project || window.PM_PROJECT || 'maxwell').trim();
+        if (t) t = Object.assign({}, t, { _taskProject: proj });
         // Paint from the board cache first so a click never waits on get_task.
         // Production get_task is a heavy detail read (~1–4s) and must not gate
         // the modal; refresh in place once the network returns.
@@ -3260,7 +3261,7 @@ const TeepPlan = {
         try {
             const fresh = await (await fetch(`api/tasks/${encodeURIComponent(id)}?project=${encodeURIComponent(proj)}`)).json();
             if (fresh && fresh.task_id) {
-                t = Object.assign({}, t || {}, fresh);
+                t = Object.assign({}, t || {}, fresh, { _taskProject: proj });
                 const i = this.tasks.findIndex((x) => x.task_id === id);
                 if (i >= 0) this.tasks[i] = Object.assign({}, this.tasks[i], t);
                 gotFresh = true;
@@ -3282,7 +3283,10 @@ const TeepPlan = {
         // into it.
         if (typeof this._runnerPtyEvacuateIfDocked === 'function') this._runnerPtyEvacuateIfDocked();
         const taskModalEl = document.getElementById('task-modal');
-        if (taskModalEl) taskModalEl.dataset.taskId = t.task_id;
+        if (taskModalEl) {
+            taskModalEl.dataset.taskId = t.task_id;
+            taskModalEl.dataset.taskProject = t._taskProject || window.PM_PROJECT || 'maxwell';
+        }
         const meta = (label, val) => `<div class="col-6 mb-2"><div class="text-secondary" style="font-size:12px">${label}</div><div>${val}</div></div>`;
         const owner = this.esc(t.owner_org || '—') + (t.owner_person_or_role ? ' · ' + this.esc(t.owner_person_or_role) : '');
         const dates = `${this.esc(t.start_date || '?')} – ${this.esc(t.finish_date || '?')}`;
@@ -3464,22 +3468,34 @@ const TeepPlan = {
         if (primaryWatchHere) primaryWatchHere.addEventListener('click', async () => {
             const runner = document.getElementById('task-primary-runner');
             if (runner && runner.dataset.sessionState === 'blocked-live') {
-                await this.openRunnerSessionPanel(t.task_id);
+                await this.openRunnerSessionPanel(t.task_id, {
+                    project: t._taskProject, attachOnly: true,
+                });
                 const input = document.getElementById('runner-chat-input');
                 if (input) input.focus();
                 return;
             }
             const mount = document.getElementById('runner-pty-details-mount');
-            await this.openRunnerSessionPanel(t.task_id, { dockInto: mount || undefined });
+            await this.openRunnerSessionPanel(t.task_id, {
+                dockInto: mount || undefined,
+                project: t._taskProject,
+                attachOnly: true,
+            });
         });
         const primaryWatchSidecar = document.getElementById('task-primary-watch-sidecar');
         if (primaryWatchSidecar) primaryWatchSidecar.addEventListener('click', () => {
-            this.openRunnerSessionPanel(t.task_id);
+            this.openRunnerSessionPanel(t.task_id, {
+                project: t._taskProject, attachOnly: true,
+            });
         });
         const watchBtn = document.getElementById('runner-watch-open');
         if (watchBtn) watchBtn.addEventListener('click', () => {
             const mount = document.getElementById('runner-pty-dev-mount');
-            this.openRunnerSessionPanel(t.task_id, { dockInto: mount || undefined });
+            this.openRunnerSessionPanel(t.task_id, {
+                dockInto: mount || undefined,
+                project: t._taskProject,
+                attachOnly: true,
+            });
         });
         document.getElementById('details-status').addEventListener('change', (e) => this.quickStatus(t.task_id, e.target.value));
         document.getElementById('edit-delete').addEventListener('click', () => this.deleteTask(t.task_id));
@@ -5629,18 +5645,27 @@ const TeepPlan = {
         const missionShowArchived = document.getElementById('mission-show-archived');
         if (missionShowArchived) missionShowArchived.addEventListener('change', () => this.refreshMissionPage());
         const missionPage = document.getElementById('mission-page');
+        if (!this._missionWatchWired) {
+            this._missionWatchWired = true;
+            document.addEventListener('click', async (e) => {
+                const watch = e.target.closest('[data-mission-watch-task]');
+                if (!watch) return;
+                e.preventDefault();
+                e.stopPropagation();
+                await this.openRunnerSessionPanel(
+                    watch.getAttribute('data-mission-watch-task'),
+                    {
+                        includeStale: true,
+                        attachOnly: true,
+                        project: watch.getAttribute('data-mission-watch-project')
+                            || window.PM_PROJECT || 'maxwell',
+                    },
+                );
+            });
+        }
         if (missionPage && !this._missionWired) {
             this._missionWired = true;
             missionPage.addEventListener('click', async (e) => {
-                const watch = e.target.closest('[data-mission-watch-task]');
-                if (watch && missionPage.contains(watch)) {
-                    e.preventDefault();
-                    await this.openRunnerSessionPanel(
-                        watch.getAttribute('data-mission-watch-task'),
-                        { includeStale: true },
-                    );
-                    return;
-                }
                 const kill = e.target.closest('[data-mission-kill-task]');
                 if (kill && missionPage.contains(kill)) {
                     e.preventDefault();

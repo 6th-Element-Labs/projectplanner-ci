@@ -533,6 +533,49 @@ try:
                 or "Live" in readiness["readyGate"]),
            "only the explicit host-attached frame marks the terminal Live")
 
+        policy_close = page.evaluate("""
+            () => {
+                const OriginalWebSocket = window.WebSocket;
+                class FakeWebSocket {
+                    constructor() { this.listeners = {}; this.binaryType = ''; }
+                    addEventListener(name, fn) { this.listeners[name] = fn; }
+                    close() {}
+                }
+                window.WebSocket = FakeWebSocket;
+                const rp = TeepPlan._runnerPty;
+                if (rp.reconnectTimer) clearTimeout(rp.reconnectTimer);
+                rp.reconnectTimer = null;
+                rp.reconnectAttempts = 4;
+                TeepPlan._runnerPtyOpenSocket(rp, 'wss://relay.example/refused', true);
+                const fake = rp.ws;
+                fake.listeners.open({});
+                const attemptsAfterOpen = rp.reconnectAttempts;
+                fake.listeners.close({code: 4403, reason: 'claim_id_mismatch'});
+                const result = {
+                    attemptsAfterOpen,
+                    attemptsAfterClose: rp.reconnectAttempts,
+                    hasReconnectTimer: !!rp.reconnectTimer,
+                    gate: document.getElementById('runner-pty-gate').textContent,
+                };
+                window.WebSocket = OriginalWebSocket;
+                return result;
+            }
+        """)
+        ok(policy_close["attemptsAfterOpen"] == 4
+           and policy_close["attemptsAfterClose"] == 4
+           and not policy_close["hasReconnectTimer"],
+           "a socket open does not fake readiness and relay policy refusal is not retried")
+        ok("claim_id_mismatch" in policy_close["gate"],
+           "the exact relay policy refusal is visible instead of an infinite reconnect loop")
+        page.evaluate("""
+            () => TeepPlan._runnerPtyHandleFrame(
+                TeepPlan._runnerPty,
+                TeepPlan._runnerPtyEncodeFrame(
+                    'ready', {host_attached: true, relay_ready: true}))
+        """)
+        ok(page.evaluate("() => TeepPlan._runnerPty.reconnectAttempts") == 0,
+           "only a valid relay ready frame resets the reconnect budget")
+
         # SIMPLIFY-9: reconnect reuses the one unexpired session capability.
         # Once a refresh is needed it is task-scoped; the browser still sends no
         # runner id and the server resolves the current execution.
@@ -850,6 +893,32 @@ try:
            "clicking a visible dependency-map pill expands task controls with an explicit Watch/Chat action")
         ok(not clicked_node["visible"],
            "a dependency-map pill does not hijack the click by opening a terminal")
+        small_modal_watch = page.evaluate("""
+            async () => {
+                const calls = [];
+                const originalOpen = TeepPlan.openRunnerSessionPanel;
+                TeepPlan.openRunnerSessionPanel = async (taskId, opts) => {
+                    calls.push({taskId, opts});
+                    document.getElementById('runner-pty-panel').hidden = false;
+                    return true;
+                };
+                document.querySelector(
+                    '#dl-node-modal [data-mission-watch-task="FAKE-TASK-1"]'
+                ).click();
+                await new Promise((resolve) => setTimeout(resolve, 0));
+                const visible = !document.getElementById('runner-pty-panel').hidden;
+                TeepPlan.openRunnerSessionPanel = originalOpen;
+                return {calls, visible};
+            }
+        """)
+        ok(small_modal_watch["visible"] and len(small_modal_watch["calls"]) == 1,
+           "clicking the small-modal Watch / Chat control opens the CLI panel exactly once")
+        small_call = small_modal_watch["calls"][0]
+        ok(small_call["taskId"] == "FAKE-TASK-1"
+           and small_call["opts"]["project"] == "switchboard"
+           and small_call["opts"]["attachOnly"] is True,
+           "small-modal Watch carries the task project and remains attach-only")
+        page.evaluate("() => { document.getElementById('runner-pty-panel').hidden = true; }")
         page.evaluate("""
             () => {
                 const modal = document.getElementById('dl-node-modal');

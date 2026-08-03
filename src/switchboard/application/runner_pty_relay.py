@@ -403,6 +403,60 @@ class RelayHub:
         self._sessions: dict[str, _RelaySession] = {}
         self._lock = threading.RLock()
 
+    @staticmethod
+    def _placeholder_identity(value: Any, runner_session_id: str) -> bool:
+        text = str(value or "").strip()
+        sid = str(runner_session_id or "").strip()
+        return bool(sid) and text in {f"direct/{sid}", f"pending/{sid}"}
+
+    def _reconcile_attachment_binding(
+        self,
+        current: Mapping[str, Any],
+        incoming: Mapping[str, Any],
+        runner_session_id: str,
+    ) -> tuple[dict[str, str] | None, str]:
+        """Validate one attachment and upgrade only provisional lifecycle ids.
+
+        A native Host may open its relay before Task Execution has attached the
+        durable claim and Work Session.  Both identities are server-signed, and
+        the immutable runner/task/project/host/wake tuple must already match.
+        The relay may therefore replace only its generated direct/* or pending/*
+        claim and Work Session placeholders.  Once exact, a different exact
+        value remains a hard mismatch.
+        """
+        sid = str(runner_session_id or "").strip()
+        merged = domain.merge_binding(current)
+        for key in ("project_id", "host_id", "task_id", "wake_id", "runner_session_id"):
+            have = str(current.get(key) or "").strip()
+            want = str(incoming.get(key) or "").strip()
+            if have and want and have != want:
+                return None, f"{key}_mismatch"
+        upgraded = False
+        for key in ("claim_id", "work_session_id"):
+            have = str(current.get(key) or "").strip()
+            want = str(incoming.get(key) or "").strip()
+            if not have or not want or have == want:
+                continue
+            have_placeholder = self._placeholder_identity(have, sid)
+            want_placeholder = self._placeholder_identity(want, sid)
+            if have_placeholder and not want_placeholder:
+                merged[key] = want
+                upgraded = True
+                continue
+            if want_placeholder and not have_placeholder:
+                # An already-issued provisional ticket may reconnect, but it
+                # can never downgrade the exact in-memory binding.
+                continue
+            return None, f"{key}_mismatch"
+        if upgraded:
+            # The lifecycle ids are the only mutable fields.  Preserve every
+            # other value from the session's first signed attachment so an
+            # older provisional ticket cannot downgrade adjacent provenance.
+            profile = str(incoming.get("permission_profile") or "").strip()
+            if profile and profile != "operator_watch_pending":
+                merged["permission_profile"] = profile
+        return merged, ""
+
     def ensure_session(
         self,
         runner_session_id: str,
@@ -466,19 +520,10 @@ class RelayHub:
                         "error": "host_mismatch",
                         "reason": "host_id_mismatch",
                     }
-                pending_reservation = (
-                    str(existing.binding.get("permission_profile") or "")
-                    == "operator_watch_pending"
-                )
-                for key in ("task_id", "claim_id", "wake_id", "work_session_id",
-                            "runner_session_id"):
-                    have = str(existing.binding.get(key) or "").strip()
-                    want = str(bind.get(key) or "").strip()
-                    mutable_pending = pending_reservation and key in {
-                        "claim_id", "work_session_id",
-                    }
-                    if have and want and have != want and not mutable_pending:
-                        return {"ok": False, "error": f"{key}_mismatch"}
+                reconciled, mismatch = self._reconcile_attachment_binding(
+                    existing.binding, bind, sid)
+                if mismatch:
+                    return {"ok": False, "error": mismatch}
                 # BUG-74: one active host tunnel — never silently replace host_send.
                 if existing.host_send is not None:
                     return {
@@ -486,12 +531,9 @@ class RelayHub:
                         "error": "host_already_attached",
                         "reason": "single_host_tunnel",
                     }
-            session = self.ensure_session(session_id, bind)
-            if existing is not None and pending_reservation:
-                # Host authentication upgrades the reservation to the durable
-                # claim/Work Session bind without changing its exact
-                # runner/task/host/wake identity.
-                session.binding = domain.merge_binding(bind)
+            session = existing or self.ensure_session(session_id, bind)
+            if existing is not None and reconciled is not None:
+                session.binding = reconciled
             if session.closed:
                 return {"ok": False, "error": "session_closed", "reason": session.close_reason}
             jti = str(bind.get("jti") or "").strip()
@@ -564,19 +606,15 @@ class RelayHub:
                 sid, ticket_payload if existing is None else None)
             if session.closed:
                 return {"ok": False, "error": "session_closed", "reason": session.close_reason}
-            # Fail closed on cross-session/host/task when session already bound.
-            pending_reservation = (
-                str(ticket_payload.get("permission_profile") or "")
-                == "operator_watch_pending"
-            )
-            for key in ("host_id", "task_id", "claim_id", "wake_id", "work_session_id"):
-                have = str(session.binding.get(key) or "").strip()
-                want = str(ticket_payload.get(key) or "").strip()
-                mutable_pending = pending_reservation and key in {
-                    "claim_id", "work_session_id",
-                }
-                if have and want and have != want and not mutable_pending:
-                    return {"ok": False, "error": f"{key}_mismatch"}
+            # Fail closed on immutable identity or conflicting exact lifecycle
+            # identity.  A provisional direct/* or pending/* bind may become
+            # exact once, regardless of whether Host or browser arrives first.
+            reconciled, mismatch = self._reconcile_attachment_binding(
+                session.binding, ticket_payload, sid)
+            if mismatch:
+                return {"ok": False, "error": mismatch}
+            if reconciled is not None:
+                session.binding = reconciled
             cid = str(client_id or uuid.uuid4().hex)
             client = _BrowserClient(
                 client_id=cid,
