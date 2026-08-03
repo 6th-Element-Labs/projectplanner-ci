@@ -462,7 +462,17 @@ def append_terminal_runner_events(
             )
         status = str(session.get("status") or "").strip().lower()
         if status not in TERMINAL_EXECUTION_STATES:
-            continue
+            # Capacity's canonical liveness read model marks a nonterminal row
+            # stale once its renewable lease expires.  A host reboot cannot
+            # write a final receipt, so waiting for the stored status to change
+            # leaves v4 ACTIVE forever with no physical runner.  Consume the
+            # Capacity-owned expiry fact as the effective terminal outcome; do
+            # not infer death from claims, Work Sessions, messages, or mission
+            # timers.
+            if session.get("stale") is True and session.get("live") is False:
+                status = "expired"
+            else:
+                continue
         runner_id = str(session["runner_session_id"])
         started_at = _timestamp(
             session.get("started_at"), field="started_at", identity=f"runner {runner_id}",

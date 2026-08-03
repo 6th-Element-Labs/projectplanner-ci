@@ -1698,9 +1698,17 @@ def update_host(*, bundle_dir: Path, public_key_path: Path, state_path: Path,
     config_path = Path(state["config_path"])
     config = _read_json(config_path)
     previous_config = dict(config)
-    source_repo = _validated_source_repo_root(
-        source_repo_root or config.get("source_repo_root") or "")
-    work_source_root = _provision_host_source_mirror(source_repo, state_path.parent)
+    configured_source_repo = _validated_source_repo_root(
+        config.get("source_repo_root") or "")
+    # A signed self-update is unpacked below /tmp and operator-driven updates may
+    # likewise supply a short-lived checkout.  It is a valid seed for refreshing
+    # the Host-owned mirror, but it must never replace the durable runtime source
+    # persisted at enrollment.  Otherwise the service starts successfully, then
+    # crash-loops after reboot once the temporary checkout has been removed.
+    update_source_repo = _validated_source_repo_root(
+        source_repo_root or configured_source_repo)
+    work_source_root = _provision_host_source_mirror(
+        update_source_repo, state_path.parent)
     config["work_source_root"] = str(work_source_root)
     config["release_public_key_path"] = str(public_key_path.expanduser().resolve())
     current = prefix / "current"
@@ -1732,7 +1740,7 @@ def update_host(*, bundle_dir: Path, public_key_path: Path, state_path: Path,
 
     try:
         config["agent_host_version"] = manifest["version"]
-        config["source_repo_root"] = str(source_repo)
+        config["source_repo_root"] = str(configured_source_repo)
         _atomic_json(config_path, config, 0o600)
         render(config)
         if restart_service:

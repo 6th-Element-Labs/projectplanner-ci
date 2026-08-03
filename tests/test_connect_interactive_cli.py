@@ -100,8 +100,9 @@ ok(mission_mode == "connect" and mission_child[:2] == ["codex", "exec"],
    "Mission Bot Codex launches one-shot `codex exec` "
    f"(argv={mission_child[:3]})")
 ok("--dangerously-bypass-approvals-and-sandbox" in mission_child
-   and "mcp_servers.taikun_plan.required=true" in mission_child,
-   "Mission Bot Codex preserves autonomous permissions and required MCP")
+   and "mcp_servers.taikun_plan.required=true" in mission_child
+   and 'model_reasoning_effort="high"' in mission_child,
+   "Mission Bot Codex preserves readable reasoning, autonomous permissions, and required MCP")
 
 claude_cmd, _ = agent_host.launch_command(
     connect_wake("claude-code"), inventory, runner_session_id="run_interactive2",

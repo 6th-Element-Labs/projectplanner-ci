@@ -318,6 +318,26 @@ class CapacityMissionEventsTest(unittest.TestCase):
         )
         self.assertTrue(all(event["source_plane"] == "capacity" for event in events))
 
+    def test_expired_capacity_lease_projects_without_host_terminal_receipt(self):
+        row = terminal_runner(
+            "run-host-rebooted", status="running", generation=6,
+        )
+        row.update({"stale": True, "live": False})
+
+        first = self.runners([row])
+        replay = self.runners([row])
+
+        self.assertTrue(first["events"][0]["created"])
+        self.assertFalse(replay["events"][0]["created"])
+        event = self.journal.list_events(
+            TASK, project=PROJECT, after_sequence=1, limit=10,
+        )[0]
+        self.assertEqual("runner_ended", event["event_type"])
+        self.assertEqual("capacity", event["source_plane"])
+        self.assertEqual("expired", event["payload"]["terminal_status"])
+        self.assertEqual("execlease-runner", event["execution_id"])
+        self.assertEqual(6, event["generation"])
+
     def test_terminal_runner_replay_accepts_existing_exact_physical_identity(self):
         existing = self.journal.append_event(
             TASK,

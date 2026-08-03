@@ -1921,9 +1921,16 @@ try:
     pre_selector_config.pop("release_public_key_path", None)
     enrollment._atomic_json(mac_config_path, pre_selector_config, 0o600)
     manifest_021 = enrollment.create_signed_bundle(ROOT, bundle_021, "0.2.1", private_path)
+    transient_update_source = TMP / "transient-update-source"
+    subprocess.run(
+        ["git", "clone", "-q", _ROOT_ORIGIN,
+         str(transient_update_source)], check=True)
     updated = enrollment.update_host(
         bundle_dir=bundle_021, public_key_path=public_path, state_path=mac_state_path,
+        source_repo_root=transient_update_source,
         service_runner=fake_service)
+    shutil.rmtree(transient_update_source)
+    updated_config = json.loads(mac_config_path.read_text())
     updated_service_environment = plistlib.loads(
         mac_paths["service_path"].read_bytes())["EnvironmentVariables"]
     retry_prefix = TMP / "signed-release-retry"
@@ -1937,12 +1944,15 @@ try:
         corrupted_retry_denied = True
     ok(updated == {"updated": True, "version": "0.2.1"}
        and (mac_paths["prefix"] / "current").resolve().name == "0.2.1"
-       and json.loads(mac_config_path.read_text())["agent_host_version"] == "0.2.1"
+       and updated_config["agent_host_version"] == "0.2.1"
+       and updated_config["source_repo_root"] == str(ROOT.resolve())
+       and enrollment._validated_source_repo_root(
+           updated_config["source_repo_root"]) == ROOT.resolve()
        and updated_service_environment["PM_AGENT_HOST_PUBLIC_KEY_PATH"]
        == str(public_path.resolve())
        and updated_service_environment["PM_CONNECT_CODEX_EXECUTABLE"] == str(TEST_CODEX)
        and corrupted_retry_denied,
-       "signed update preserves service selectors and refuses mismatched release bytes")
+       "signed update preserves durable runtime roots and service selectors")
     bundle_022 = TMP / "bundle-0.2.2"
     enrollment.create_signed_bundle(ROOT, bundle_022, "0.2.2", private_path)
     alternate_public_path = TMP / "alternate-bundle-signing-public.pem"

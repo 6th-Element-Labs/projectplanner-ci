@@ -1490,9 +1490,14 @@ def _connect_mcp_endpoint():
 
 
 def _connect_codex_mcp_argv():
-    """Codex -c overrides that require host Communicate for Connect sessions."""
+    """Codex overrides required for readable, Switchboard-bound sessions."""
     endpoint = _connect_mcp_endpoint()
     return (
+        # The enrolled Host deliberately has an isolated CODEX_HOME containing
+        # auth, not the operator's mutable config. Pin the normal agent effort
+        # explicitly so Watch does not degrade to a no-reasoning transcript
+        # dominated by raw command output.
+        "-c", 'model_reasoning_effort="high"',
         "-c", f"mcp_servers.taikun_plan.url={json.dumps(endpoint)}",
         "-c", 'mcp_servers.taikun_plan.bearer_token_env_var='
               '"SWITCHBOARD_CONNECT_SESSION_TOKEN"',
