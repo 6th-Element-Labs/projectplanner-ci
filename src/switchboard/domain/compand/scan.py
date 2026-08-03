@@ -9,6 +9,7 @@ from typing import Mapping
 
 _RLE_SUFFIX = re.compile(r"^(.*) \[repeated ([1-9][0-9]*) times\]$")
 _MAX_COMMAND_BYTES = 1_048_576
+_MAX_RLE_REPEAT_COUNT = _MAX_COMMAND_BYTES
 
 
 class ScanEligibilityError(ValueError):
@@ -97,6 +98,16 @@ def build_line_rle_candidate(
 
     encoded, spans, repeated, removed = encode_line_rle(output)
     candidate_bytes = encoded.encode("utf-8")
+    try:
+        reconstructed_bytes = decode_line_rle(encoded).encode("utf-8")
+    except (UnicodeError, ValueError) as exc:
+        raise ScanEligibilityError(
+            f"line-rle-v1 exact reconstruction failed: {exc}"
+        ) from exc
+    if reconstructed_bytes != source_bytes:
+        raise ScanEligibilityError(
+            "line-rle-v1 candidate does not exactly reconstruct source bytes"
+        )
     return LineRleCandidate(
         source_artifact_sha256=f"sha256:{observed_hash}",
         candidate_artifact_sha256=(
@@ -120,19 +131,18 @@ def encode_line_rle(text: str) -> tuple[str, int, int, int]:
     index = 0
     while index < len(lines):
         line = lines[index]
+        content, ending = _split_line_ending(line)
         run_end = index + 1
         while run_end < len(lines) and lines[run_end] == line:
             run_end += 1
         count = run_end - index
-        complete = line.endswith(("\n", "\r"))
+        complete = bool(ending)
         if count >= 2 and complete:
-            content, ending = _split_line_ending(line)
             encoded.append(f"{content} [repeated {count} times]{ending}")
             span_count += 1
             repeated_line_count += count
             removed_line_count += count - 1
-        elif complete and _RLE_SUFFIX.fullmatch(_split_line_ending(line)[0]):
-            content, ending = _split_line_ending(line)
+        elif _RLE_SUFFIX.fullmatch(content):
             encoded.extend([f"{content} [repeated 1 times]{ending}"] * count)
         else:
             encoded.extend(lines[index:run_end])
@@ -144,13 +154,26 @@ def decode_line_rle(text: str) -> str:
     """Exact oracle for strings emitted by :func:`encode_line_rle`."""
 
     decoded: list[str] = []
+    decoded_bytes = 0
     for line in text.splitlines(keepends=True):
         content, ending = _split_line_ending(line)
         match = _RLE_SUFFIX.fullmatch(content)
         if match:
-            decoded.extend([match.group(1) + ending] * int(match.group(2)))
+            count = int(match.group(2))
+            if count > _MAX_RLE_REPEAT_COUNT:
+                raise ValueError("line-rle-v1 repeat count exceeds the safety limit")
+            decoded_line = match.group(1) + ending
+            expanded_bytes = len(decoded_line.encode("utf-8")) * count
+            if decoded_bytes + expanded_bytes > _MAX_COMMAND_BYTES:
+                raise ValueError("decoded line-rle-v1 output exceeds the byte limit")
+            decoded.append(decoded_line * count)
+            decoded_bytes += expanded_bytes
         else:
+            line_bytes = len(line.encode("utf-8"))
+            if decoded_bytes + line_bytes > _MAX_COMMAND_BYTES:
+                raise ValueError("decoded line-rle-v1 output exceeds the byte limit")
             decoded.append(line)
+            decoded_bytes += line_bytes
     return "".join(decoded)
 
 

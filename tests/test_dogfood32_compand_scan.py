@@ -87,16 +87,19 @@ def coverage_input(
     endpoint: str = "/v1/responses",
     classification: str = "captured",
     mode: str = "scan",
+    tuple_status: str = "certified",
+    client_version: str = "0.144.5",
+    source_version: str = "DOGFOOD-32-test",
 ) -> GatewayCoverageReceiptInput:
     return GatewayCoverageReceiptInput(
         correlation_id=correlation_id,
-        client_version="0.144.5",
+        client_version=client_version,
         mode=mode,
         certified_feature=feature,
-        tuple_status="certified",
+        tuple_status=tuple_status,
         observed_endpoint=endpoint,
         egress_classification=classification,
-        source_version="DOGFOOD-32-test",
+        source_version=source_version,
     )
 
 
@@ -239,7 +242,7 @@ class Dogfood32CompandScanTest(unittest.TestCase):
 
         with self.assertRaisesRegex(
             ValueError,
-            "coverage mismatch|direct_inference|blocking_reasons|evidence_hash",
+            "coverage_counts|coverage mismatch|direct_inference|blocking_reasons|evidence_hash",
         ):
             GatewayCoverageReceipt.model_validate(forged_payload)
 
@@ -285,7 +288,7 @@ class Dogfood32CompandScanTest(unittest.TestCase):
             ),
             ({"direct_inference_egress_observed": True}, "direct_inference"),
             ({"mutation_blocked": True}, "mutation_blocked"),
-            ({"blocking_reasons": ["unexplained_bypass"]}, "mutation_blocked"),
+            ({"blocking_reasons": ["unexplained_bypass"]}, "blocking_reasons"),
             ({"evidence_hash": "sha256:" + "0" * 64}, "evidence_hash"),
         )
         for changes, message in contradictions:
@@ -312,7 +315,7 @@ class Dogfood32CompandScanTest(unittest.TestCase):
         bypass_payload["evidence_hash"] = GatewayCoverageReceipt.compute_evidence_hash(
             bypass_payload
         )
-        with self.assertRaisesRegex(ValueError, "unexplained_bypass"):
+        with self.assertRaisesRegex(ValueError, "coverage_counts"):
             GatewayCoverageReceipt.model_validate(bypass_payload)
 
     def test_missing_or_bypassed_egress_blocks_mutation_without_hiding_counts(self) -> None:
@@ -385,6 +388,60 @@ class Dogfood32CompandScanTest(unittest.TestCase):
         self.assertIn(
             "process_level_egress_observation_missing",
             fixture_only.blocking_reasons,
+        )
+
+    def test_coverage_receipt_rejects_snapshot_blocker_strip_and_rehash(self) -> None:
+        receipt = compile_gateway_coverage_receipt(
+            system=system_snapshot(),
+            observation_window=observation_window(),
+            parity=parity(),
+            coverage_inputs=[
+                coverage_input("cmp_snapshot_mismatch", client_version="0.999.0")
+            ],
+            egress_observations=[egress("cmp_snapshot_mismatch")],
+        )
+        self.assertIn("system_snapshot_mismatch", receipt.blocking_reasons)
+        self.assertTrue(receipt.mutation_blocked)
+
+        forged = receipt.model_dump(mode="json", by_alias=True)
+        forged["blocking_reasons"] = []
+        forged["mutation_blocked"] = False
+        forged["evidence_hash"] = GatewayCoverageReceipt.compute_evidence_hash(forged)
+
+        with self.assertRaisesRegex(ValueError, "system_snapshot_mismatch"):
+            GatewayCoverageReceipt.model_validate(forged)
+
+        validation_bypassed = receipt.model_copy(
+            update={"blocking_reasons": (), "mutation_blocked": False}
+        )
+        decision = decide_compand_scan(
+            validation_bypassed,
+            [qualifying_measurement()],
+        )
+        self.assertEqual(decision.decision, "stop")
+        self.assertIn("coverage_receipt_integrity_invalid", decision.reasons)
+
+    def test_uncertified_tuple_emits_reconciled_unknown_blocked_receipt(self) -> None:
+        receipt = compile_gateway_coverage_receipt(
+            system=system_snapshot(),
+            observation_window=observation_window(),
+            parity=parity(),
+            coverage_inputs=[
+                coverage_input("cmp_unknown_tuple", tuple_status="unknown")
+            ],
+            egress_observations=[egress("cmp_unknown_tuple")],
+        )
+
+        self.assertEqual(receipt.coverage, "unknown")
+        self.assertEqual(receipt.coverage_counts.captured, 0)
+        self.assertEqual(receipt.coverage_counts.unknown, 1)
+        self.assertEqual(receipt.coverage_counts.total, 1)
+        self.assertTrue(receipt.mutation_blocked)
+        self.assertIn("uncertified_client_tuple", receipt.blocking_reasons)
+        self.assertIn("unreconciled_egress_observation", receipt.blocking_reasons)
+        self.assertEqual(
+            decide_compand_scan(receipt, [qualifying_measurement()]).decision,
+            "low_coverage_hold",
         )
 
     def test_advance_requires_a_captured_responses_inference_route(self) -> None:
@@ -565,6 +622,47 @@ class Dogfood32CompandScanTest(unittest.TestCase):
         )
         self.assertNotEqual(candidate.candidate_text, original)
         self.assertEqual(decode_line_rle(candidate.candidate_text), original)
+
+    def test_line_rle_oracle_escapes_terminal_marker_without_newline(self) -> None:
+        for call_id, original in (
+            ("call-terminal-marker", "literal [repeated 2 times]"),
+            (
+                "call-span-terminal-marker",
+                "same\nsame\nliteral [repeated 2 times]",
+            ),
+        ):
+            with self.subTest(call_id=call_id):
+                receipt = {
+                    "schema": "compand.command_result.v1",
+                    "call_id": call_id,
+                    "source_kind": "command_result",
+                    "trusted_adapter": True,
+                    "exit_status": 0,
+                    "content_type": "text/plain",
+                    "encoding": "utf-8",
+                    "truncated": False,
+                    "signed": False,
+                    "new_suffix": True,
+                    "byte_count": len(original.encode()),
+                    "output_sha256": hashlib.sha256(original.encode()).hexdigest(),
+                }
+                candidate = build_line_rle_candidate(
+                    receipt,
+                    expected_call_id=call_id,
+                    output_item={
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": original,
+                    },
+                )
+                self.assertNotEqual(candidate.candidate_text, original)
+                self.assertEqual(decode_line_rle(candidate.candidate_text), original)
+
+    def test_line_rle_decoder_bounds_pathological_repeat_counts(self) -> None:
+        with self.assertRaisesRegex(ValueError, "repeat count exceeds"):
+            decode_line_rle("x [repeated 1048577 times]")
+        with self.assertRaisesRegex(ValueError, "output exceeds"):
+            decode_line_rle("xxxxxxxx [repeated 1048576 times]")
 
     def test_absent_cache_fields_cannot_be_called_cache_adjusted_savings(self) -> None:
         original = "same\nsame\n"

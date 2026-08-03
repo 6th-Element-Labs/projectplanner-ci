@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Iterable
 
 from switchboard.contracts.compand import (
     CompandScanDecision,
     CompandSystemSnapshot,
-    CoverageCounts,
     DirectGatewayParity,
     EgressObservation,
     EgressObservationWindow,
@@ -22,28 +20,6 @@ from switchboard.contracts.compand import (
 from switchboard.domain.compand import LineRleCandidate
 
 
-_PARITY_FIELDS = (
-    "protocol",
-    "usage_fields",
-    "task_result",
-    "streaming",
-    "tools",
-    "errors",
-    "cancellation",
-)
-_FEATURE_PARITY_GATE = {
-    "responses": "protocol",
-    "models": "protocol",
-    "input_tokens": "protocol",
-    "sse": "streaming",
-    "tools": "tools",
-    "usage": "usage_fields",
-    "task_result": "task_result",
-    "errors": "errors",
-    "cancellation": "cancellation",
-}
-
-
 def compile_gateway_coverage_receipt(
     *,
     system: CompandSystemSnapshot,
@@ -55,113 +31,14 @@ def compile_gateway_coverage_receipt(
 ) -> GatewayCoverageReceipt:
     """Reconcile gateway and process observations without optimistic inference."""
 
-    if observation_window.window_ended_at < observation_window.window_started_at:
-        raise ValueError("egress observation window must end after it starts")
-    inputs = _unique_by_correlation(coverage_inputs, "gateway coverage input")
-    egress = _unique_by_correlation(egress_observations, "egress observation")
-    counts: Counter[str] = Counter()
-    reconciled_classifications: dict[str, str] = {}
-    reasons: set[str] = set()
-
-    for correlation_id in sorted(set(inputs) | set(egress)):
-        gateway_event = inputs.get(correlation_id)
-        process_event = egress.get(correlation_id)
-        classification = _reconciled_classification(gateway_event, process_event)
-        reconciled_classifications[correlation_id] = classification
-        counts[classification] += 1
-        if classification == "bypassed":
-            reasons.add("unexplained_bypass")
-        if classification == "unknown":
-            reasons.add("unreconciled_egress_observation")
-        if gateway_event is not None:
-            if gateway_event.tuple_status != "certified":
-                reasons.add("uncertified_client_tuple")
-            if (
-                gateway_event.client_version != system.client_version
-                or gateway_event.source_version != system.gateway_version
-            ):
-                reasons.add("system_snapshot_mismatch")
-
-    total = sum(counts.values())
-    if total == 0:
-        reasons.add("no_observed_in_scope_requests")
-    if observation_window.method == "fixture_loopback":
-        reasons.add("process_level_egress_observation_missing")
-    parity_failures = [field for field in _PARITY_FIELDS if not getattr(parity, field)]
-    reasons.update(f"direct_gateway_parity_failed:{field}" for field in parity_failures)
-
-    if counts["unknown"] or "uncertified_client_tuple" in reasons:
-        coverage = "unknown"
-    elif counts["bypassed"]:
-        coverage = "partial"
-    elif counts["captured"]:
-        coverage = "full"
-    elif counts["excluded"]:
-        coverage = "control_only"
-    else:
-        coverage = "unsupported"
-
-    observed_route_features = {
-        event.certified_feature
-        for correlation_id, event in inputs.items()
-        if event.tuple_status == "certified"
-        and reconciled_classifications.get(correlation_id) in {"captured", "excluded"}
-    }
-    captured_responses_route = any(
-        event.tuple_status == "certified"
-        and event.certified_feature == "responses"
-        and event.observed_endpoint == "/v1/responses"
-        and reconciled_classifications.get(correlation_id) == "captured"
-        and egress[correlation_id].method.upper() == "POST"
-        for correlation_id, event in inputs.items()
-        if correlation_id in egress
+    return GatewayCoverageReceipt.from_primitives(
+        system=system,
+        observation_window=observation_window,
+        parity=parity,
+        coverage_inputs=coverage_inputs,
+        egress_observations=egress_observations,
+        exercised_features=exercised_features,
     )
-    if not counts["captured"]:
-        reasons.add("no_captured_inference_requests")
-    if not captured_responses_route:
-        reasons.add("captured_responses_route_missing")
-    supplied_features = {
-        str(item).strip() for item in exercised_features if str(item).strip()
-    }
-    unknown_features = supplied_features - set(_FEATURE_PARITY_GATE)
-    reasons.update(f"unrecognized_feature_evidence:{item}" for item in unknown_features)
-    certified_features = {
-        feature
-        for feature in observed_route_features | supplied_features
-        if feature in _FEATURE_PARITY_GATE
-        and getattr(parity, _FEATURE_PARITY_GATE[feature])
-    }
-    endpoints = {
-        event.observed_endpoint for event in inputs.values() if event.observed_endpoint
-    }
-    modes = tuple(sorted({event.mode for event in inputs.values()}))
-    blocking_reasons = tuple(sorted(reasons))
-    receipt_payload: dict[str, object] = {
-        "schema": "gateway_coverage_receipt.v1",
-        "system": system.model_dump(mode="json", by_alias=True),
-        "modes_exercised": list(modes),
-        "certified_features": sorted(certified_features),
-        "observed_endpoints": sorted(endpoints),
-        "egress_observation": observation_window.model_dump(
-            mode="json", by_alias=True
-        ),
-        "coverage_counts": CoverageCounts(
-            captured=counts["captured"],
-            bypassed=counts["bypassed"],
-            excluded=counts["excluded"],
-            unknown=counts["unknown"],
-            total=total,
-        ).model_dump(mode="json"),
-        "coverage": coverage,
-        "direct_inference_egress_observed": bool(counts["bypassed"]),
-        "parity": parity.model_dump(mode="json", by_alias=True),
-        "mutation_blocked": bool(blocking_reasons),
-        "blocking_reasons": list(blocking_reasons),
-    }
-    receipt_payload["evidence_hash"] = GatewayCoverageReceipt.compute_evidence_hash(
-        receipt_payload
-    )
-    return GatewayCoverageReceipt.model_validate(receipt_payload)
 
 
 def measure_line_rle_candidate(
@@ -229,38 +106,6 @@ def decide_compand_scan(
     """Return the bounded line-rle-v1 decision without enabling mutation."""
 
     return recompute_compand_scan_decision(coverage, tuple(measurements))
-
-
-def _unique_by_correlation(events: Iterable[object], label: str) -> dict[str, object]:
-    result: dict[str, object] = {}
-    for event in events:
-        correlation_id = str(getattr(event, "correlation_id", "") or "")
-        if not correlation_id:
-            raise ValueError(f"{label} requires a correlation_id")
-        if correlation_id in result:
-            raise ValueError(f"duplicate {label} correlation_id: {correlation_id}")
-        result[correlation_id] = event
-    return result
-
-
-def _reconciled_classification(
-    gateway_event: GatewayCoverageReceiptInput | None,
-    process_event: EgressObservation | None,
-) -> str:
-    if process_event is None:
-        return "unknown"
-    if gateway_event is None:
-        return (
-            process_event.classification
-            if process_event.classification in {"bypassed", "excluded"}
-            else "unknown"
-        )
-    if (
-        gateway_event.observed_endpoint != process_event.endpoint
-        or gateway_event.egress_classification != process_event.classification
-    ):
-        return "unknown"
-    return process_event.classification
 
 
 def _validate_cached_count(count: ProviderTokenCount) -> None:

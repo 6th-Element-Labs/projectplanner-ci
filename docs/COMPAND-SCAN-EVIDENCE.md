@@ -21,6 +21,12 @@ streams by correlation ID:
 
 Missing or contradictory observations become `unknown`. Any bypass, unknown tuple,
 parity failure, snapshot mismatch, or absent process-level observation blocks mutation.
+The receipt persists the complete content-free gateway inputs, process-egress
+observations, and exercised-feature evidence. Bundle validation regenerates counts,
+routes, features, blockers, and promotion authority from those primitives; a replacement
+self-hash cannot make a stripped blocker authoritative. An observation with an
+uncertified tuple is accounted as `unknown`, even when the process observer saw traffic
+on the gateway path.
 Coverage with zero captured inference requests is also blocking: an `advance` decision
 requires a reconciled, certified `POST /v1/responses` capture, so `/v1/models` controls or
 `/v1/responses/input_tokens` count calls alone never provide promotion authority.
@@ -36,7 +42,9 @@ span/byte counts, whole-artifact hashes, provider count results, cache fields, l
 retries, task outcome, and dated projected input cost. The compiler revalidates canonical
 artifact hashes, non-empty byte evidence, and the exact span/line/removal relationships
 emitted by `line-rle-v1` before regenerating published costs, savings, cache exposure, and
-qualification; provider and model identity must match the run snapshot. A cheaper local
+qualification. Candidate construction also runs a bounded exact reconstruction oracle,
+including literal marker-looking terminal lines without a newline; provider and model
+identity must match the run snapshot. A cheaper local
 token count is not enough:
 `advance` requires exposed cache fields and a lower cache-adjusted projected provider input
 cost for at least one completed task.
