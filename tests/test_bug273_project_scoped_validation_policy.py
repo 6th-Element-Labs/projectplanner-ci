@@ -98,7 +98,7 @@ ok(switchboard_policy.get("unconfigured") is not True,
 simplemark_policy = project_validation_policy("simplemark")
 ok(simplemark_policy["project"] == "simplemark",
    "simplemark policy is scoped to simplemark")
-ok(simplemark_policy["required_status_context"] == "simplemark-ci/full-suite",
+ok(simplemark_policy["required_status_context"] == "gate",
    "simplemark gets its own CI context, not Switchboard's")
 ok(simplemark_policy["runner"]["command"] == "bash scripts/simplemark_ci.sh",
    "simplemark gets its own gate command, not a Python script it does not have")
