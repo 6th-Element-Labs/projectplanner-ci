@@ -1,0 +1,224 @@
+{
+  "schema": "compand.codex_responses_fixture_manifest.v1",
+  "fixture_version": "codex-cli-0.144.5-v1",
+  "captured_at": "2026-08-03",
+  "sanitized": true,
+  "certification_tuple": {
+    "client": "codex-cli",
+    "client_version": "0.144.5",
+    "binary_sha256": "d96ae1ca1ff6fc8587842fa04c92d3ee4d31651a811c2f89b65fcfd9c28473e2",
+    "os_arch": "Mac OS 26.3.0 arm64",
+    "user_agent": "codex_exec/0.144.5 (Mac OS 26.3.0; arm64) dumb (codex_exec; 0.144.5)",
+    "model": "gpt-5.4",
+    "auth_lane": "custom_api_provider",
+    "provider_id": "compand_fixture",
+    "base_url": "http://127.0.0.1:18765/v1",
+    "env_key": "COMPAND_FIXTURE_API_KEY",
+    "wire_api": "responses",
+    "reasoning_effort": "high",
+    "request_max_retries": 0,
+    "stream_max_retries": 0,
+    "stream_idle_timeout_ms": 5000
+  },
+  "capture": {
+    "normal_original_body_bytes": 34164,
+    "normal_original_body_sha256": "7b6741ca5a6329d6a60c890089d5b0a821c1142c67353a7b376fdc1822494580",
+    "tool_call_original_body_bytes": 34440,
+    "tool_call_original_body_sha256": "a277b33d4d4bd1835eb8d47593ae9df91ba5cb7601198ece6da3e8fa4418e6cb",
+    "tool_output_original_body_bytes": 34770,
+    "tool_output_original_body_sha256": "f61f884ce7b3386822457d40a7cdd148f67d1bf8614a7f273194fa1a3f4dfa12",
+    "raw_private_prompts_retained": false,
+    "credential_values_retained": false,
+    "model_discovery_conformant": false,
+    "model_discovery_limitation": "The minimal mock models response failed Codex model-catalog decoding; endpoint invocation only is observed."
+  },
+  "surface_coverage": {
+    "normal_stream": {
+      "evidence_class": "sanitized_codex_capture",
+      "exact_codex_observed": true,
+      "original_body_bytes": 34164,
+      "original_body_sha256": "7b6741ca5a6329d6a60c890089d5b0a821c1142c67353a7b376fdc1822494580",
+      "observed_client_outcome": "Codex consumed the loopback SSE stream and completed with fixture-ok.",
+      "unobserved_reason": null
+    },
+    "tool_call": {
+      "evidence_class": "sanitized_codex_capture",
+      "exact_codex_observed": true,
+      "original_body_bytes": 34440,
+      "original_body_sha256": "a277b33d4d4bd1835eb8d47593ae9df91ba5cb7601198ece6da3e8fa4418e6cb",
+      "observed_client_outcome": "Codex consumed the function_call stream and invoked the dummy command tool.",
+      "unobserved_reason": null
+    },
+    "tool_output_followup": {
+      "evidence_class": "sanitized_codex_capture",
+      "exact_codex_observed": true,
+      "original_body_bytes": 34770,
+      "original_body_sha256": "f61f884ce7b3386822457d40a7cdd148f67d1bf8614a7f273194fa1a3f4dfa12",
+      "observed_client_outcome": "Codex sent function_call plus function_call_output and consumed the terminal SSE stream.",
+      "unobserved_reason": null
+    },
+    "manual_continuation": {
+      "evidence_class": "provider_contract_only",
+      "exact_codex_observed": false,
+      "original_body_bytes": null,
+      "original_body_sha256": null,
+      "observed_client_outcome": null,
+      "unobserved_reason": "The sanitized shape is a provider-contract replay fixture; the pinned capture did not observe a general prior-history replay beyond the tool loop."
+    },
+    "previous_response_id": {
+      "evidence_class": "provider_contract_only",
+      "exact_codex_observed": false,
+      "original_body_bytes": null,
+      "original_body_sha256": null,
+      "observed_client_outcome": null,
+      "unobserved_reason": "Codex 0.144.5 was pinned with store=false and did not emit previous_response_id traffic."
+    },
+    "conversation": {
+      "evidence_class": "provider_contract_only",
+      "exact_codex_observed": false,
+      "original_body_bytes": null,
+      "original_body_sha256": null,
+      "observed_client_outcome": null,
+      "unobserved_reason": "Codex 0.144.5 was pinned with store=false and did not emit durable conversation traffic."
+    },
+    "retry": {
+      "evidence_class": "provider_contract_only",
+      "exact_codex_observed": false,
+      "original_body_bytes": null,
+      "original_body_sha256": null,
+      "observed_client_outcome": null,
+      "unobserved_reason": "The frozen tuple disabled request and stream retries, so the retry exchange is a replay contract fixture, not captured Codex traffic."
+    },
+    "cancellation": {
+      "evidence_class": "provider_contract_only",
+      "exact_codex_observed": false,
+      "original_body_bytes": null,
+      "original_body_sha256": null,
+      "observed_client_outcome": null,
+      "unobserved_reason": "The exact pinned capture did not disconnect mid-stream; the partial SSE body is a provider-contract fixture."
+    },
+    "errors": {
+      "evidence_class": "provider_contract_only",
+      "exact_codex_observed": false,
+      "original_body_bytes": null,
+      "original_body_sha256": null,
+      "observed_client_outcome": null,
+      "unobserved_reason": "The representative 400, 401, 429, and 500 bodies are sanitized provider-contract fixtures and were not emitted during the positive Codex capture."
+    },
+    "input_token_count": {
+      "evidence_class": "provider_contract_only",
+      "exact_codex_observed": false,
+      "original_body_bytes": null,
+      "original_body_sha256": null,
+      "observed_client_outcome": null,
+      "unobserved_reason": "The pinned Codex capture did not call POST /v1/responses/input_tokens; this fixture freezes the provider surface only."
+    },
+    "unsupported_shapes": {
+      "evidence_class": "unsupported",
+      "exact_codex_observed": false,
+      "original_body_bytes": null,
+      "original_body_sha256": null,
+      "observed_client_outcome": null,
+      "unobserved_reason": "These synthetic adversarial shapes define mandatory transparent passthrough and are intentionally excluded from exact Codex coverage."
+    }
+  },
+  "direct_passthrough": [
+    "requests/normal.json",
+    "requests/tool-output.json",
+    "requests/previous-response.json",
+    "requests/conversation.json",
+    "requests/manual-continuation.json",
+    "requests/retry.json",
+    "requests/input-token-count.json",
+    "requests/unsupported.json",
+    "responses/normal.json",
+    "responses/stream.sse",
+    "responses/tool-call.sse",
+    "responses/tool-complete.sse",
+    "responses/input-token-count.json",
+    "responses/cancellation.sse",
+    "responses/errors/400.json",
+    "responses/errors/401.json",
+    "responses/errors/429.json",
+    "responses/errors/500.json"
+  ],
+  "streams": {
+    "responses/stream.sse": [
+      "response.created",
+      "response.output_item.added",
+      "response.content_part.added",
+      "response.output_text.delta",
+      "response.output_text.done",
+      "response.content_part.done",
+      "response.output_item.done",
+      "response.completed"
+    ],
+    "responses/tool-call.sse": [
+      "response.created",
+      "response.output_item.added",
+      "response.function_call_arguments.delta",
+      "response.function_call_arguments.done",
+      "response.output_item.done",
+      "response.completed"
+    ],
+    "responses/tool-complete.sse": [
+      "response.created",
+      "response.output_item.added",
+      "response.content_part.added",
+      "response.output_text.delta",
+      "response.output_text.done",
+      "response.content_part.done",
+      "response.output_item.done",
+      "response.completed"
+    ],
+    "responses/cancellation.sse": [
+      "response.created",
+      "response.output_item.added",
+      "response.content_part.added",
+      "response.output_text.delta"
+    ]
+  },
+  "errors": {
+    "400": "responses/errors/400.json",
+    "401": "responses/errors/401.json",
+    "429": "responses/errors/429.json",
+    "500": "responses/errors/500.json"
+  },
+  "retry": {
+    "request": "requests/retry.json",
+    "attempts": [
+      {"attempt": 1, "response_status": 500, "response": "responses/errors/500.json"},
+      {"attempt": 2, "response_status": 200, "response": "responses/normal.json"}
+    ],
+    "request_body_must_remain_identical": true
+  },
+  "cancellation": {
+    "stream": "responses/cancellation.sse",
+    "outcome": "client_disconnected",
+    "terminal_event_present": false,
+    "synthetic_usage_allowed": false
+  },
+  "files_sha256": {
+    "eligibility/receipts.jsonl": "41611021df3ed129a5481600e044c29fc7cedab2dd80eef8997bd33c0ef49b67",
+    "ledgers/continuation.json": "3ef6fb373a3314c913c6e962f8f2e77c4a408577f162b6379714be17b8a69e3d",
+    "requests/conversation.json": "d384f4b7a3fc56ee4a58ba19d51701f901b144af26c6b8868ef394da671266fc",
+    "requests/input-token-count.json": "60cadb2a575a1e1bd16e95348443e3b314668ce81083ccc928cca16e4a88b310",
+    "requests/manual-continuation.json": "63d66d70e34e1273b57256c477366c8491a9192cd978312465813e64b0037170",
+    "requests/normal.json": "7a755c4175e88a91ee245c5a97e6a25bacc5104f4a3e4314aa5a19830f8533e3",
+    "requests/previous-response.json": "3175a508108d2a5821ac9e3c6fcc1134dd35098a2d6c41820fca3a2181a56928",
+    "requests/retry.json": "0366ddfdfa90fe6df43b28672ddc8763069290d69171af008034ab64fdfcde5b",
+    "requests/tool-output.json": "b5a5e910732baf922c2dbaca0ce9a7baf33c39099bdaf5ef2d728da0d7912148",
+    "requests/unsupported.json": "e8563906b5c44e44ba8701f68ddded02a88be3f60d924af8fcc31524ae233ee4",
+    "responses/cancellation.sse": "fd2d2d421518bd597192a23658167a5bc019a5a55e3731ef6af9fa0e7de501b9",
+    "responses/errors/400.json": "1dde36a0f9c89b2b856ae89c22e1a2a54c78c129edb7d48c441d36431edd17ec",
+    "responses/errors/401.json": "3dccc1d7d6cc7103100762cf614e43dd5ad1d8426f2f662a874571d9646d0e34",
+    "responses/errors/429.json": "1d5b11272bfdd154211cd7d0bbd1c210847f9fbb4961ebc9e7efe2fc27fdb959",
+    "responses/errors/500.json": "15ad3c8fef6e4b74dc4a916bfce74467f95e1c842ec54b0d3205e923e7757ef9",
+    "responses/input-token-count.json": "576d870d61dcb5ae0050288210a32736b5554bd9db174deba5c60a34a5d3b0c9",
+    "responses/normal.json": "1179e7bb1323b5f2bc6dc598a4fc089e7cee61fdba013a49dd5442ebd09b8a41",
+    "responses/stream.sse": "f7e565f3e82c395e6522c3b1743518dc2a411ada566b6837b6cd6041ff53a5da",
+    "responses/tool-call.sse": "acf019465319ba3fb9eb53243c03405777a0bfdf9e0e0e055abc1d252fab7e22",
+    "responses/tool-complete.sse": "5c895da586544f0d1daf9f9248b31dc4a3ba29ce64693500686b7476bad6168b",
+    "wire/exchanges.json": "e1535535e5d128bb0b2d86e4fe3b80c3a401995421691cfe1d1fa40b485b6669"
+  }
+}

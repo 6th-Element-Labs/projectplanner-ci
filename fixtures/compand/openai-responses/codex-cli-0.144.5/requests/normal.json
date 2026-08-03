@@ -1,0 +1,50 @@
+{
+  "client_metadata": {
+    "session_id": "<sanitized-id>",
+    "thread_id": "<sanitized-id>",
+    "turn_id": "<sanitized-id>",
+    "x-codex-installation-id": "<sanitized-id>",
+    "x-codex-turn-metadata": "<sanitized-metadata>",
+    "x-codex-window-id": "<sanitized-id>"
+  },
+  "include": ["reasoning.encrypted_content"],
+  "input": [
+    {
+      "content": [
+        {"text": "<sanitized:developer:sha256=29dad5ed6993c5e7:bytes=341>", "type": "input_text"},
+        {"text": "<sanitized:developer:sha256=927f95f814b252ee:bytes=3153>", "type": "input_text"},
+        {"text": "<sanitized:developer:sha256=b4536c3dbcedfee0:bytes=646>", "type": "input_text"}
+      ],
+      "role": "developer",
+      "type": "message"
+    },
+    {
+      "content": [{"text": "Reply only with fixture-ok", "type": "input_text"}],
+      "role": "user",
+      "type": "message"
+    }
+  ],
+  "instructions": "<sanitized:instructions:sha256=478e8a11b180adb2:bytes=14764>",
+  "model": "gpt-5.4",
+  "parallel_tool_calls": true,
+  "prompt_cache_key": "<sanitized-id>",
+  "reasoning": {"effort": "high"},
+  "store": false,
+  "stream": true,
+  "text": {"verbosity": "low"},
+  "tool_choice": "auto",
+  "tools": [
+    {
+      "description": "Runs a command in a PTY, returning output or a session ID for ongoing interaction.",
+      "name": "exec_command",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {"cmd": {"description": "Shell command to execute.", "type": "string"}},
+        "required": ["cmd"],
+        "type": "object"
+      },
+      "strict": false,
+      "type": "function"
+    }
+  ]
+}

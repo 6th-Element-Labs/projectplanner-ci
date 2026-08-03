@@ -1,0 +1,7 @@
+{
+  "model": "gpt-5.4",
+  "previous_response_id": "resp_fixture_previous_001",
+  "input": [{"role": "user", "content": "Continue with the next fixture turn."}],
+  "store": true,
+  "stream": true
+}

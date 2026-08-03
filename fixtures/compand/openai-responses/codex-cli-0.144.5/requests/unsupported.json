@@ -1,0 +1,8 @@
+[
+  {"fixture_id": "binary", "source_kind": "command_result", "content_type": "application/octet-stream", "encoding": "base64", "body": "AAEC", "passthrough": true},
+  {"fixture_id": "unknown_encoding", "source_kind": "command_result", "content_type": "text/plain", "encoding": "x-unknown", "body": "opaque", "passthrough": true},
+  {"fixture_id": "signed", "source_kind": "reasoning", "signature": "fixture-signature", "encrypted_content": "opaque-fixture-ciphertext", "passthrough": true},
+  {"fixture_id": "arbitrary_json", "source_kind": "arbitrary_json", "body": {"status": "success", "exit_code": 0}, "passthrough": true},
+  {"fixture_id": "oversized", "source_kind": "command_result", "byte_count": 1048577, "body_ref": "fixture://oversized-not-materialized", "passthrough": true},
+  {"fixture_id": "unknown_event", "type": "response.future_event", "payload": {"opaque": true}, "passthrough": true}
+]

@@ -119,6 +119,9 @@ These documents are evidence and design exploration, not accepted architecture:
   dated market signals, threats, hypotheses, and evidence quality.
 - [`TOKEN-OPTIMIZER-TECH-DEEP-DIVE.md`](TOKEN-OPTIMIZER-TECH-DEEP-DIVE.md):
   standalone protocol, state, transform, evidence, and trust design.
+- [`COMPAND-CODEX-RESPONSES-WIRE-CONTRACT.md`](COMPAND-CODEX-RESPONSES-WIRE-CONTRACT.md):
+  frozen Codex Responses fixture tuple, byte/order passthrough rules, typed tool-output
+  eligibility, and dual-ledger continuation contract for the Compand pilot.
 - [`TOKEN-OPTIMIZER-FEASIBILITY-DEEP-DIVE.md`](TOKEN-OPTIMIZER-FEASIBILITY-DEEP-DIVE.md):
   observed insertion evidence, coverage boundaries, and E1–E5 falsification plan.
 - [`WHY-NOT-FORK-ROUTELLM.md`](WHY-NOT-FORK-ROUTELLM.md):

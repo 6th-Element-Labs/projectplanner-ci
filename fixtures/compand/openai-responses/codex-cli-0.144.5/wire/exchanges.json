@@ -1,0 +1,100 @@
+[
+  {
+    "exchange_id": "observed-normal-stream",
+    "surface": "normal_stream",
+    "evidence_class": "sanitized_codex_capture",
+    "request": {"method": "POST", "path_query": "/v1/responses", "selected_headers": [["content-type", "application/json"], ["accept", "text/event-stream"], ["user-agent", "codex_exec/0.144.5 (Mac OS 26.3.0; arm64) dumb (codex_exec; 0.144.5)"]], "body_file": "requests/normal.json"},
+    "response": {"status": 200, "selected_headers": [["content-type", "text/event-stream"], ["x-request-id", "req_fixture_normal"]], "body_file": "responses/stream.sse"}
+  },
+  {
+    "exchange_id": "observed-tool-call",
+    "surface": "tool_call",
+    "evidence_class": "sanitized_codex_capture",
+    "request": {"method": "POST", "path_query": "/v1/responses?turn=tool-call", "selected_headers": [["content-type", "application/json"], ["accept", "text/event-stream"], ["user-agent", "codex_exec/0.144.5 (Mac OS 26.3.0; arm64) dumb (codex_exec; 0.144.5)"]], "body_file": "requests/normal.json"},
+    "response": {"status": 200, "selected_headers": [["content-type", "text/event-stream"], ["x-request-id", "req_fixture_tool_call"]], "body_file": "responses/tool-call.sse"}
+  },
+  {
+    "exchange_id": "observed-tool-output-followup",
+    "surface": "tool_output_followup",
+    "evidence_class": "sanitized_codex_capture",
+    "request": {"method": "POST", "path_query": "/v1/responses?turn=tool-output", "selected_headers": [["content-type", "application/json"], ["accept", "text/event-stream"], ["user-agent", "codex_exec/0.144.5 (Mac OS 26.3.0; arm64) dumb (codex_exec; 0.144.5)"]], "body_file": "requests/tool-output.json"},
+    "response": {"status": 200, "selected_headers": [["content-type", "text/event-stream"], ["x-request-id", "req_fixture_tool_complete"]], "body_file": "responses/tool-complete.sse"}
+  },
+  {
+    "exchange_id": "provider-previous-response",
+    "surface": "previous_response_id",
+    "evidence_class": "provider_contract_only",
+    "request": {"method": "POST", "path_query": "/v1/responses?fixture=previous-response", "selected_headers": [["content-type", "application/json"], ["accept", "application/json"], ["user-agent", "fixture-replay/1"]], "body_file": "requests/previous-response.json"},
+    "response": {"status": 200, "selected_headers": [["content-type", "application/json"], ["x-request-id", "req_fixture_previous"]], "body_file": "responses/normal.json"}
+  },
+  {
+    "exchange_id": "provider-conversation",
+    "surface": "conversation",
+    "evidence_class": "provider_contract_only",
+    "request": {"method": "POST", "path_query": "/v1/responses?fixture=conversation", "selected_headers": [["content-type", "application/json"], ["accept", "text/event-stream"], ["user-agent", "fixture-replay/1"]], "body_file": "requests/conversation.json"},
+    "response": {"status": 200, "selected_headers": [["content-type", "text/event-stream"], ["x-request-id", "req_fixture_conversation"]], "body_file": "responses/stream.sse"}
+  },
+  {
+    "exchange_id": "provider-manual-continuation",
+    "surface": "manual_continuation",
+    "evidence_class": "provider_contract_only",
+    "request": {"method": "POST", "path_query": "/v1/responses?fixture=manual-continuation", "selected_headers": [["content-type", "application/json"], ["accept", "text/event-stream"], ["user-agent", "fixture-replay/1"]], "body_file": "requests/manual-continuation.json"},
+    "response": {"status": 200, "selected_headers": [["content-type", "text/event-stream"], ["x-request-id", "req_fixture_manual"]], "body_file": "responses/stream.sse"}
+  },
+  {
+    "exchange_id": "provider-retry-500",
+    "surface": "retry",
+    "evidence_class": "provider_contract_only",
+    "request": {"method": "POST", "path_query": "/v1/responses?fixture=retry&attempt=1", "selected_headers": [["content-type", "application/json"], ["accept", "application/json"], ["user-agent", "fixture-replay/1"]], "body_file": "requests/retry.json"},
+    "response": {"status": 500, "selected_headers": [["content-type", "application/json"], ["x-request-id", "req_fixture_500"]], "body_file": "responses/errors/500.json"}
+  },
+  {
+    "exchange_id": "provider-retry-success",
+    "surface": "retry",
+    "evidence_class": "provider_contract_only",
+    "request": {"method": "POST", "path_query": "/v1/responses?fixture=retry&attempt=2", "selected_headers": [["content-type", "application/json"], ["accept", "application/json"], ["user-agent", "fixture-replay/1"]], "body_file": "requests/retry.json"},
+    "response": {"status": 200, "selected_headers": [["content-type", "application/json"], ["x-request-id", "req_fixture_retry_ok"]], "body_file": "responses/normal.json"}
+  },
+  {
+    "exchange_id": "provider-input-token-count",
+    "surface": "input_token_count",
+    "evidence_class": "provider_contract_only",
+    "request": {"method": "POST", "path_query": "/v1/responses/input_tokens", "selected_headers": [["content-type", "application/json"], ["accept", "application/json"], ["user-agent", "fixture-replay/1"]], "body_file": "requests/input-token-count.json"},
+    "response": {"status": 200, "selected_headers": [["content-type", "application/json"], ["x-request-id", "req_fixture_input_tokens"]], "body_file": "responses/input-token-count.json"}
+  },
+  {
+    "exchange_id": "unsupported-shape",
+    "surface": "unsupported_shapes",
+    "evidence_class": "unsupported",
+    "request": {"method": "POST", "path_query": "/v1/responses?fixture=unsupported", "selected_headers": [["content-type", "application/octet-stream"], ["accept", "application/json"], ["user-agent", "fixture-replay/1"]], "body_file": "requests/unsupported.json"},
+    "response": {"status": 200, "selected_headers": [["content-type", "application/json"], ["x-request-id", "req_fixture_unsupported"]], "body_file": "responses/normal.json"}
+  },
+  {
+    "exchange_id": "provider-cancellation",
+    "surface": "cancellation",
+    "evidence_class": "provider_contract_only",
+    "request": {"method": "POST", "path_query": "/v1/responses?fixture=cancellation", "selected_headers": [["content-type", "application/json"], ["accept", "text/event-stream"], ["user-agent", "fixture-replay/1"]], "body_file": "requests/normal.json"},
+    "response": {"status": 200, "selected_headers": [["content-type", "text/event-stream"], ["x-request-id", "req_fixture_cancellation"]], "body_file": "responses/cancellation.sse"}
+  },
+  {
+    "exchange_id": "provider-error-400",
+    "surface": "errors",
+    "evidence_class": "provider_contract_only",
+    "request": {"method": "POST", "path_query": "/v1/responses?fixture=error-400", "selected_headers": [["content-type", "application/json"], ["accept", "application/json"], ["user-agent", "fixture-replay/1"]], "body_file": "requests/normal.json"},
+    "response": {"status": 400, "selected_headers": [["content-type", "application/json"], ["x-request-id", "req_fixture_400"]], "body_file": "responses/errors/400.json"}
+  },
+  {
+    "exchange_id": "provider-error-401",
+    "surface": "errors",
+    "evidence_class": "provider_contract_only",
+    "request": {"method": "POST", "path_query": "/v1/responses?fixture=error-401", "selected_headers": [["content-type", "application/json"], ["accept", "application/json"], ["user-agent", "fixture-replay/1"]], "body_file": "requests/normal.json"},
+    "response": {"status": 401, "selected_headers": [["content-type", "application/json"], ["x-request-id", "req_fixture_401"]], "body_file": "responses/errors/401.json"}
+  },
+  {
+    "exchange_id": "provider-error-429",
+    "surface": "errors",
+    "evidence_class": "provider_contract_only",
+    "request": {"method": "POST", "path_query": "/v1/responses?fixture=error-429", "selected_headers": [["content-type", "application/json"], ["accept", "application/json"], ["user-agent", "fixture-replay/1"]], "body_file": "requests/normal.json"},
+    "response": {"status": 429, "selected_headers": [["content-type", "application/json"], ["retry-after", "1"], ["x-request-id", "req_fixture_429"]], "body_file": "responses/errors/429.json"}
+  }
+]

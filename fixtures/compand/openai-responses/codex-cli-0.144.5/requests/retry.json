@@ -1,0 +1,7 @@
+{
+  "model": "gpt-5.4",
+  "input": [{"role": "user", "content": "retry-fixture"}],
+  "store": false,
+  "stream": true,
+  "metadata": {"fixture": "retry-body-must-not-drift"}
+}

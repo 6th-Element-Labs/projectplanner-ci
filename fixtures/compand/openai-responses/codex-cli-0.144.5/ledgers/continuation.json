@@ -1,0 +1,33 @@
+{
+  "schema": "compand.dual_ledger_fixture.v1",
+  "context_epoch": "epoch-fixture-001",
+  "client_view_prefix": [
+    "{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"raw repeated fixture output\"}]}",
+    "{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"fixture acknowledgement\",\"annotations\":[]}]}"
+  ],
+  "provider_view_prefix": [
+    "{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"[frozen provider fixture sha256:1111111111111111]\"}]}",
+    "{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"fixture acknowledgement\",\"annotations\":[]}]}"
+  ],
+  "incoming_client_items": [
+    "{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"raw repeated fixture output\"}]}",
+    "{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"fixture acknowledgement\",\"annotations\":[]}]}",
+    "{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"new raw suffix\"}]}"
+  ],
+  "expected_provider_items": [
+    "{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"[frozen provider fixture sha256:1111111111111111]\"}]}",
+    "{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"fixture acknowledgement\",\"annotations\":[]}]}",
+    "{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"new raw suffix\"}]}"
+  ],
+  "retry_provider_items": [
+    "{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"[frozen provider fixture sha256:1111111111111111]\"}]}",
+    "{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"fixture acknowledgement\",\"annotations\":[]}]}",
+    "{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"new raw suffix\"}]}"
+  ],
+  "recompressed_drift_candidate": [
+    "{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"[recompressed provider fixture sha256:2222222222222222]\"}]}",
+    "{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"fixture acknowledgement\",\"annotations\":[]}]}",
+    "{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"new raw suffix\"}]}"
+  ],
+  "recompressed_drift_allowed": false
+}

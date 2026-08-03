@@ -1,0 +1,7 @@
+{
+  "model": "gpt-5.4",
+  "conversation": "conv_fixture_001",
+  "input": [{"role": "user", "content": "Append this fixture turn."}],
+  "store": true,
+  "stream": true
+}

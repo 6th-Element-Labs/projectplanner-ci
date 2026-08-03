@@ -1,0 +1,32 @@
+{
+  "id": "resp_fixture_normal_001",
+  "object": "response",
+  "created_at": 1785736000,
+  "status": "completed",
+  "error": null,
+  "incomplete_details": null,
+  "model": "gpt-5.4",
+  "output": [
+    {
+      "id": "msg_fixture_001",
+      "type": "message",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+        {"type": "output_text", "annotations": [], "logprobs": [], "text": "fixture-ok"}
+      ]
+    }
+  ],
+  "parallel_tool_calls": true,
+  "previous_response_id": null,
+  "reasoning": {"effort": "high", "summary": null},
+  "store": false,
+  "usage": {
+    "input_tokens": 32,
+    "input_tokens_details": {"cached_tokens": 16, "cache_write_tokens": 0},
+    "output_tokens": 4,
+    "output_tokens_details": {"reasoning_tokens": 0},
+    "total_tokens": 36
+  },
+  "metadata": {}
+}

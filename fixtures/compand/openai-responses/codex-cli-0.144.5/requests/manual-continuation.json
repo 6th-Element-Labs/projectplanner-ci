@@ -1,0 +1,12 @@
+{
+  "model": "gpt-5.4",
+  "input": [
+    {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "fixture turn one"}]},
+    {"type": "reasoning", "id": "rs_fixture_001", "encrypted_content": "opaque-fixture-ciphertext"},
+    {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "fixture answer one", "annotations": []}]},
+    {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "fixture turn two"}]}
+  ],
+  "store": false,
+  "stream": true,
+  "include": ["reasoning.encrypted_content"]
+}

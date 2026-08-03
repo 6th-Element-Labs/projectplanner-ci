@@ -1,0 +1,19 @@
+{
+  "capture": "live_sanitized_codex_tool_loop",
+  "model": "gpt-5.4",
+  "input": [
+    {
+      "arguments": "{\"cmd\":\"printf fixture-tool-output\"}",
+      "call_id": "call_fixture_001",
+      "name": "exec_command",
+      "type": "function_call"
+    },
+    {
+      "call_id": "call_fixture_001",
+      "output": "Chunk ID: 5f8558\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 5\nOutput:\nfixture-tool-output",
+      "type": "function_call_output"
+    }
+  ],
+  "store": false,
+  "stream": true
+}

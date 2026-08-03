@@ -1,0 +1,17 @@
+{
+  "model": "gpt-5.4",
+  "instructions": "Count the complete provider-visible fixture request.",
+  "input": [
+    {"role": "user", "content": "fixture count input"},
+    {"role": "assistant", "content": "fixture count output"},
+    {"role": "user", "content": "fixture count suffix"}
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "name": "fixture_tool",
+      "description": "Return deterministic fixture text.",
+      "parameters": {"type": "object", "properties": {}, "additionalProperties": false}
+    }
+  ]
+}
