@@ -33,9 +33,11 @@ the expected newly appended Responses `function_call_output`, matches its exact 
 to the receipt, and hashes that item's output bytes. It builds the candidate in memory,
 sends the original bytes on the authorized gateway path, and persists only aggregate
 span/byte counts, whole-artifact hashes, provider count results, cache fields, latency,
-retries, task outcome, and dated projected input cost. Published costs, savings, cache
-exposure, and qualification are validated and regenerated from those primitives; provider
-and model identity must match the run snapshot. A cheaper local token count is not enough:
+retries, task outcome, and dated projected input cost. The compiler revalidates canonical
+artifact hashes, non-empty byte evidence, and the exact span/line/removal relationships
+emitted by `line-rle-v1` before regenerating published costs, savings, cache exposure, and
+qualification; provider and model identity must match the run snapshot. A cheaper local
+token count is not enough:
 `advance` requires exposed cache fields and a lower cache-adjusted projected provider input
 cost for at least one completed task.
 

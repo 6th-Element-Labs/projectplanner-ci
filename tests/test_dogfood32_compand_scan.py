@@ -667,6 +667,60 @@ class Dogfood32CompandScanTest(unittest.TestCase):
         self.assertEqual(decision.qualifying_candidate_count, 0)
         self.assertIn("measurement_primitive_evidence_invalid", decision.reasons)
 
+    def test_impossible_candidate_primitives_cannot_create_promotion_authority(
+        self,
+    ) -> None:
+        valid = qualifying_measurement()
+        impossible_values = {
+            "repeated_span_count": 1,
+            "repeated_line_count": 0,
+            "removed_line_count": 0,
+            "original_bytes": 0,
+            "candidate_bytes": 0,
+        }
+        impossible_payload = {
+            **valid.model_dump(mode="json", by_alias=True),
+            **impossible_values,
+        }
+
+        with self.assertRaisesRegex(
+            ValueError, "line-rle-v1 artifact evidence must be non-empty"
+        ):
+            LineRleShadowMeasurement.model_validate(impossible_payload)
+
+        bypassed = valid.model_copy(update=impossible_values)
+        decision = decide_compand_scan(full_receipt(), [bypassed])
+        self.assertEqual(decision.decision, "stop")
+        self.assertEqual(decision.qualifying_candidate_count, 0)
+        self.assertIn("measurement_primitive_evidence_invalid", decision.reasons)
+
+        for changes, message in (
+            (
+                {"repeated_line_count": 1, "removed_line_count": 0},
+                "each repeated span must attest at least two repeated lines",
+            ),
+            (
+                {"repeated_line_count": 3, "removed_line_count": 1},
+                "removed_line_count must equal repeated lines minus repeated spans",
+            ),
+        ):
+            with self.subTest(changes=changes):
+                structurally_impossible = {
+                    **valid.model_dump(mode="json", by_alias=True),
+                    **changes,
+                }
+                with self.assertRaisesRegex(ValueError, message):
+                    LineRleShadowMeasurement.model_validate(structurally_impossible)
+
+    def test_malformed_candidate_artifact_hash_is_rejected(self) -> None:
+        payload = qualifying_measurement().model_dump(mode="json", by_alias=True)
+        payload["candidate_artifact_sha256"] = "not-a-content-address"
+
+        with self.assertRaisesRegex(
+            ValueError, "candidate_artifact_sha256 is not canonical sha256 evidence"
+        ):
+            LineRleShadowMeasurement.model_validate(payload)
+
 
 if __name__ == "__main__":
     unittest.main()

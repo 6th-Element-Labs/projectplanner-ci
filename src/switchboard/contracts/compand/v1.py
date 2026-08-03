@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from datetime import date, datetime
 from typing import Literal
 
@@ -13,6 +14,10 @@ GatewayMode = Literal["passthrough", "scan"]
 EgressClassification = Literal["captured", "bypassed", "excluded", "unknown"]
 CoverageStatus = Literal["full", "partial", "control_only", "unsupported", "unknown"]
 ScanDecisionKind = Literal["advance", "low_coverage_hold", "redesign", "stop"]
+
+
+_SHA256_EVIDENCE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_MAX_LINE_RLE_SOURCE_BYTES = 1_048_576
 
 
 class _FrozenContract(BaseModel):
@@ -255,9 +260,60 @@ class LineRleShadowMeasurement(_FrozenContract):
     shadow_original_forwarded_byte_for_byte: bool
     price_table: ProviderPriceTable
 
+    def validate_structural_primitives(self) -> None:
+        """Revalidate the content-free attestation emitted by the trusted builder."""
+
+        for field in (
+            "task_snapshot_sha256",
+            "source_artifact_sha256",
+            "candidate_artifact_sha256",
+        ):
+            value = getattr(self, field, None)
+            if not isinstance(value, str) or not _SHA256_EVIDENCE.fullmatch(value):
+                raise ValueError(f"{field} is not canonical sha256 evidence")
+        if not isinstance(self.run_id, str) or not self.run_id.strip():
+            raise ValueError("run_id is required")
+
+        primitives = {
+            "repeated_span_count": self.repeated_span_count,
+            "repeated_line_count": self.repeated_line_count,
+            "removed_line_count": self.removed_line_count,
+            "original_bytes": self.original_bytes,
+            "candidate_bytes": self.candidate_bytes,
+        }
+        for field, value in primitives.items():
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{field} is not a valid non-negative integer")
+        if self.original_bytes == 0 or self.candidate_bytes == 0:
+            raise ValueError("line-rle-v1 artifact evidence must be non-empty")
+        if self.original_bytes > _MAX_LINE_RLE_SOURCE_BYTES:
+            raise ValueError("line-rle-v1 source artifact exceeds the byte limit")
+
+        if self.repeated_span_count == 0:
+            if self.repeated_line_count or self.removed_line_count:
+                raise ValueError(
+                    "zero repeated spans require zero repeated and removed lines"
+                )
+            return
+        if self.repeated_line_count < self.repeated_span_count * 2:
+            raise ValueError(
+                "each repeated span must attest at least two repeated lines"
+            )
+        if self.removed_line_count != (
+            self.repeated_line_count - self.repeated_span_count
+        ):
+            raise ValueError(
+                "removed_line_count must equal repeated lines minus repeated spans"
+            )
+        if self.source_artifact_sha256 == self.candidate_artifact_sha256:
+            raise ValueError(
+                "a repeated-span candidate must differ from its source artifact"
+            )
+
     def recomputed_derived_values(self) -> dict[str, float | bool]:
         """Regenerate every derived economics field from primitive evidence."""
 
+        self.validate_structural_primitives()
         _validate_provider_token_count("original_count", self.original_count)
         _validate_provider_token_count("candidate_count", self.candidate_count)
         original_cost = _projected_input_cost(self.original_count, self.price_table)
