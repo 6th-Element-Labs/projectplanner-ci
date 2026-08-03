@@ -4275,8 +4275,18 @@ def list_agent_hosts(runtime: str = "", lane: str = "", capability: str = "",
         if not projected["runtimes"]:
             reason = reason or "runtime_not_advertised"
         capacity = dict(projected.get("capacity") or {})
+        # A shared project grant narrows project/repository/concurrency authority,
+        # but it must not erase the source Host's owner/provider attestation.  The
+        # provider-native connection verifier consumes these server-attested
+        # fields after Fleet grants the target project access.  Rebuilding the
+        # placement from only the grant made the Host look execution-eligible to
+        # readiness while making provider enrollment fail closed immediately
+        # afterwards (QA-139).
+        source_placement = dict(capacity.get("placement") or {})
         capacity["placement"] = {
+            **source_placement,
             "host_class": "persistent",
+            "trust_zone": str(grant.get("trust_zone") or ""),
             "trust_zones": [str(grant.get("trust_zone") or "")],
             "projects": [project],
             "repositories": [str(grant.get("canonical_repository") or "")],

@@ -83,7 +83,14 @@ try:
             (host_id, "Steve's Mac", "1.0", str(ROOT),
              json.dumps([{"runtime": "codex", "local_auth": {"available": True}}]),
              json.dumps({"max_sessions": 8}),
-             json.dumps({"active_sessions": 0, "placement": {"host_class": "persistent"}}),
+             json.dumps({"active_sessions": 0, "placement": {
+                 "host_class": "persistent",
+                 "owner_user_ids": ["user/steve"],
+                 "providers": ["openai-codex"],
+                 "account_affinity_ids": ["acct-simplemark"],
+                 "supports_scm_materialization": True,
+                 "scm_providers": ["github_app"],
+             }}),
              "principal/steve-host", now, now, 60, "online", ""),
         )
 
@@ -113,6 +120,12 @@ try:
        and placement.get("repositories") == ["StevenRidder/simplemark"]
        and grant_host.get("available_sessions") == 2,
        "target project discovers only the repo-scoped grant with bounded concurrency")
+    ok(placement.get("owner_user_ids") == ["user/steve"]
+       and placement.get("providers") == ["openai-codex"]
+       and placement.get("account_affinity_ids") == ["acct-simplemark"]
+       and placement.get("supports_scm_materialization") is True
+       and placement.get("scm_providers") == ["github_app"],
+       "grant projection preserves signed owner/provider/SCM attestation")
 
     wrong_repo = store.create_agent_host_project_grant(
         source_project=source, host_id=host_id, target_project="simplemark",
