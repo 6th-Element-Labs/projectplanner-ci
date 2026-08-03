@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import re
 from datetime import date, datetime
@@ -32,6 +34,15 @@ ScanClaimLimit = Literal[
 
 _SHA256_EVIDENCE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _MAX_LINE_RLE_SOURCE_BYTES = 1_048_576
+_PARITY_FIELDS = (
+    "protocol",
+    "usage_fields",
+    "task_result",
+    "streaming",
+    "tools",
+    "errors",
+    "cancellation",
+)
 
 
 class _FrozenContract(BaseModel):
@@ -196,6 +207,28 @@ class CoverageCounts(_FrozenContract):
     unknown: StrictInt = Field(ge=0)
     total: StrictInt = Field(ge=0)
 
+    def validate_primitives(self) -> None:
+        """Reject forged aggregate counts, including validation-bypassed objects."""
+
+        values: dict[str, int] = {}
+        for field in ("captured", "bypassed", "excluded", "unknown", "total"):
+            value = getattr(self, field, None)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"coverage_counts.{field} is not a non-negative integer")
+            values[field] = value
+        expected_total = sum(
+            values[field] for field in ("captured", "bypassed", "excluded", "unknown")
+        )
+        if values["total"] != expected_total:
+            raise ValueError(
+                "coverage_counts.total must equal captured+bypassed+excluded+unknown"
+            )
+
+    @model_validator(mode="after")
+    def validate_total(self) -> "CoverageCounts":
+        self.validate_primitives()
+        return self
+
 
 class GatewayCoverageReceipt(_FrozenContract):
     """Immutable, content-free insertion and coverage evidence."""
@@ -215,6 +248,107 @@ class GatewayCoverageReceipt(_FrozenContract):
     mutation_blocked: StrictBool
     blocking_reasons: tuple[str, ...]
     evidence_hash: str
+
+    @staticmethod
+    def compute_evidence_hash(payload: dict[str, object]) -> str:
+        """Hash the canonical receipt payload without trusting a supplied hash."""
+
+        canonical = dict(payload)
+        canonical.pop("evidence_hash", None)
+        digest = hashlib.sha256(
+            json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode(
+                "utf-8"
+            )
+        ).hexdigest()
+        return f"sha256:{digest}"
+
+    def recomputed_evidence_hash(self) -> str:
+        return self.compute_evidence_hash(
+            self.model_dump(mode="json", by_alias=True, exclude={"evidence_hash"})
+        )
+
+    def expected_coverage(self) -> CoverageStatus:
+        """Derive aggregate coverage solely from primitive request counts."""
+
+        self.coverage_counts.validate_primitives()
+        if self.coverage_counts.unknown:
+            return "unknown"
+        if self.coverage_counts.bypassed:
+            return "partial"
+        if self.coverage_counts.captured:
+            return "full"
+        if self.coverage_counts.excluded:
+            return "control_only"
+        return "unsupported"
+
+    def required_blocking_reasons(self) -> set[str]:
+        """Regenerate minimum fail-closed reasons from receipt primitives."""
+
+        self.coverage_counts.validate_primitives()
+        reasons: set[str] = set()
+        if self.coverage_counts.total == 0:
+            reasons.add("no_observed_in_scope_requests")
+        if self.coverage_counts.bypassed:
+            reasons.add("unexplained_bypass")
+        if self.coverage_counts.unknown:
+            reasons.add("unreconciled_egress_observation")
+        if self.egress_observation.method == "fixture_loopback":
+            reasons.add("process_level_egress_observation_missing")
+        for field in _PARITY_FIELDS:
+            value = getattr(self.parity, field, None)
+            if not isinstance(value, bool):
+                raise ValueError(f"parity.{field} is not a boolean")
+            if value is False:
+                reasons.add(f"direct_gateway_parity_failed:{field}")
+        if self.coverage_counts.captured <= 0:
+            reasons.add("no_captured_inference_requests")
+        if (
+            "responses" not in self.certified_features
+            or "/v1/responses" not in self.observed_endpoints
+        ):
+            reasons.add("captured_responses_route_missing")
+        return reasons
+
+    def validate_derived_truth(self) -> None:
+        """Cross-check every caller-supplied aggregate and its canonical hash."""
+
+        expected_coverage = self.expected_coverage()
+        if self.coverage != expected_coverage:
+            raise ValueError(
+                f"coverage mismatch: expected {expected_coverage}, got {self.coverage}"
+            )
+        expected_direct_egress = bool(self.coverage_counts.bypassed)
+        if self.direct_inference_egress_observed is not expected_direct_egress:
+            raise ValueError(
+                "direct_inference_egress_observed does not match bypassed count"
+            )
+        if not isinstance(self.blocking_reasons, tuple):
+            raise ValueError("blocking_reasons must be a canonical tuple")
+        canonical_reasons = tuple(sorted(set(self.blocking_reasons)))
+        if self.blocking_reasons != canonical_reasons:
+            raise ValueError("blocking_reasons must be sorted and unique")
+        missing_reasons = self.required_blocking_reasons() - set(
+            self.blocking_reasons
+        )
+        if missing_reasons:
+            raise ValueError(
+                "blocking_reasons omit derived reasons: "
+                + ", ".join(sorted(missing_reasons))
+            )
+        if self.mutation_blocked is not bool(self.blocking_reasons):
+            raise ValueError("mutation_blocked does not match blocking_reasons")
+        if not isinstance(self.evidence_hash, str) or not _SHA256_EVIDENCE.fullmatch(
+            self.evidence_hash
+        ):
+            raise ValueError("evidence_hash is not canonical sha256 evidence")
+        expected_hash = self.recomputed_evidence_hash()
+        if self.evidence_hash != expected_hash:
+            raise ValueError("evidence_hash does not match canonical receipt evidence")
+
+    @model_validator(mode="after")
+    def validate_receipt_truth(self) -> "GatewayCoverageReceipt":
+        self.validate_derived_truth()
+        return self
 
 
 class ProviderPriceTable(_FrozenContract):
@@ -450,6 +584,14 @@ class CompandScanEvidenceBundle(_FrozenContract):
     ) -> CompandScanEvidenceAuthority:
         """Apply the conservative ADR-0026/CES-1 Phase 1 Scan ceiling."""
 
+        try:
+            coverage.validate_derived_truth()
+        except (AttributeError, TypeError, ValueError):
+            return CompandScanEvidenceAuthority(
+                evidence_state="exploratory",
+                claim_limit="diagnostic_only",
+            )
+
         qualifying_measurements = 0
         for item in measurements:
             try:
@@ -496,6 +638,8 @@ class CompandScanEvidenceBundle(_FrozenContract):
             and parity_passes
             and coverage.coverage == "full"
             and coverage.coverage_counts.captured > 0
+            and coverage.coverage_counts.bypassed == 0
+            and coverage.coverage_counts.unknown == 0
             and coverage.mutation_blocked is False
             and not coverage.blocking_reasons
         )

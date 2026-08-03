@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import math
 from collections import Counter
 from collections.abc import Iterable
@@ -138,32 +136,32 @@ def compile_gateway_coverage_receipt(
     }
     modes = tuple(sorted({event.mode for event in inputs.values()}))
     blocking_reasons = tuple(sorted(reasons))
-    receipt = GatewayCoverageReceipt(
-        system=system,
-        modes_exercised=modes,
-        certified_features=tuple(sorted(certified_features)),
-        observed_endpoints=tuple(sorted(endpoints)),
-        egress_observation=observation_window,
-        coverage_counts=CoverageCounts(
+    receipt_payload: dict[str, object] = {
+        "schema": "gateway_coverage_receipt.v1",
+        "system": system.model_dump(mode="json", by_alias=True),
+        "modes_exercised": list(modes),
+        "certified_features": sorted(certified_features),
+        "observed_endpoints": sorted(endpoints),
+        "egress_observation": observation_window.model_dump(
+            mode="json", by_alias=True
+        ),
+        "coverage_counts": CoverageCounts(
             captured=counts["captured"],
             bypassed=counts["bypassed"],
             excluded=counts["excluded"],
             unknown=counts["unknown"],
             total=total,
-        ),
-        coverage=coverage,
-        direct_inference_egress_observed=bool(counts["bypassed"]),
-        parity=parity,
-        mutation_blocked=bool(blocking_reasons),
-        blocking_reasons=blocking_reasons,
-        evidence_hash="",
+        ).model_dump(mode="json"),
+        "coverage": coverage,
+        "direct_inference_egress_observed": bool(counts["bypassed"]),
+        "parity": parity.model_dump(mode="json", by_alias=True),
+        "mutation_blocked": bool(blocking_reasons),
+        "blocking_reasons": list(blocking_reasons),
+    }
+    receipt_payload["evidence_hash"] = GatewayCoverageReceipt.compute_evidence_hash(
+        receipt_payload
     )
-    canonical = receipt.model_dump(mode="json", by_alias=True)
-    canonical.pop("evidence_hash", None)
-    evidence_hash = hashlib.sha256(
-        json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
-    return receipt.model_copy(update={"evidence_hash": f"sha256:{evidence_hash}"})
+    return GatewayCoverageReceipt.model_validate(receipt_payload)
 
 
 def measure_line_rle_candidate(
@@ -231,6 +229,15 @@ def decide_compand_scan(
     """Return the bounded line-rle-v1 decision without enabling mutation."""
 
     measured = tuple(measurements)
+    try:
+        coverage.validate_derived_truth()
+    except (AttributeError, TypeError, ValueError):
+        return CompandScanDecision(
+            decision="stop",
+            reasons=("coverage_receipt_integrity_invalid",),
+            measured_candidate_count=len(measured),
+            qualifying_candidate_count=0,
+        )
     integrity_reasons: set[str] = set()
     qualifying: list[LineRleShadowMeasurement] = []
     for item in measured:
@@ -285,6 +292,10 @@ def _coverage_promotion_reasons(coverage: GatewayCoverageReceipt) -> set[str]:
     """Recheck the minimum insertion proof required for an advance decision."""
 
     reasons = set(coverage.blocking_reasons)
+    if coverage.coverage_counts.bypassed:
+        reasons.add("unexplained_bypass")
+    if coverage.coverage_counts.unknown:
+        reasons.add("unreconciled_egress_observation")
     if coverage.coverage != "full":
         reasons.add(f"coverage_not_full:{coverage.coverage}")
     if coverage.coverage_counts.captured <= 0:

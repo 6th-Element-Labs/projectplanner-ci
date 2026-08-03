@@ -17,11 +17,13 @@ from switchboard.application.commands.compand_scan import (
 )
 from switchboard.contracts.compand import (
     CompandScanDecision,
+    CompandScanEvidenceBundle,
     CompandSystemSnapshot,
     CoverageCounts,
     DirectGatewayParity,
     EgressObservation,
     EgressObservationWindow,
+    GatewayCoverageReceipt,
     GatewayCoverageReceiptInput,
     LineRleShadowMeasurement,
     ProviderPriceTable,
@@ -213,6 +215,106 @@ class Dogfood32CompandScanTest(unittest.TestCase):
         self.assertTrue(receipt.evidence_hash.startswith("sha256:"))
         self.assertEqual(receipt, full_receipt())
 
+    def test_forged_persisted_coverage_receipt_is_rejected_and_cannot_promote(
+        self,
+    ) -> None:
+        valid = full_receipt()
+        forged_payload = valid.model_dump(mode="json", by_alias=True)
+        forged_payload["coverage_counts"] = {
+            "captured": 2,
+            "bypassed": 1,
+            "excluded": 1,
+            "unknown": 0,
+            "total": 4,
+        }
+        forged_payload.update(
+            coverage="full",
+            direct_inference_egress_observed=False,
+            mutation_blocked=False,
+            blocking_reasons=[],
+        )
+        # This models the demonstrated persisted forgery: the old valid hash is
+        # retained even though both primitive and derived truth were changed.
+        forged_payload["evidence_hash"] = valid.evidence_hash
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "coverage mismatch|direct_inference|blocking_reasons|evidence_hash",
+        ):
+            GatewayCoverageReceipt.model_validate(forged_payload)
+
+        validation_bypassed = valid.model_copy(
+            update={
+                "coverage_counts": CoverageCounts(
+                    captured=2,
+                    bypassed=1,
+                    excluded=1,
+                    unknown=0,
+                    total=4,
+                ),
+                "coverage": "full",
+                "direct_inference_egress_observed": False,
+                "mutation_blocked": False,
+                "blocking_reasons": (),
+            }
+        )
+        decision = decide_compand_scan(validation_bypassed, [qualifying_measurement()])
+        self.assertEqual(decision.decision, "stop")
+        self.assertEqual(decision.qualifying_candidate_count, 0)
+        self.assertIn("coverage_receipt_integrity_invalid", decision.reasons)
+
+        authority = CompandScanEvidenceBundle.derive_authority(
+            validation_bypassed,
+            (qualifying_measurement(),),
+            CompandScanDecision(
+                decision="advance",
+                reasons=("cache_adjusted_candidate_is_cheaper",),
+                measured_candidate_count=1,
+                qualifying_candidate_count=1,
+            ),
+        )
+        self.assertEqual(authority.evidence_state, "exploratory")
+        self.assertEqual(authority.claim_limit, "diagnostic_only")
+
+    def test_coverage_receipt_rejects_inconsistent_counts_reasons_and_hash(self) -> None:
+        valid_payload = full_receipt().model_dump(mode="json", by_alias=True)
+        contradictions = (
+            (
+                {"coverage_counts": {**valid_payload["coverage_counts"], "total": 99}},
+                "coverage_counts.total",
+            ),
+            ({"direct_inference_egress_observed": True}, "direct_inference"),
+            ({"mutation_blocked": True}, "mutation_blocked"),
+            ({"blocking_reasons": ["unexplained_bypass"]}, "mutation_blocked"),
+            ({"evidence_hash": "sha256:" + "0" * 64}, "evidence_hash"),
+        )
+        for changes, message in contradictions:
+            with self.subTest(changes=changes):
+                with self.assertRaisesRegex(ValueError, message):
+                    GatewayCoverageReceipt.model_validate(
+                        {**valid_payload, **changes}
+                    )
+
+        bypass_payload = {
+            **valid_payload,
+            "coverage_counts": {
+                "captured": 2,
+                "bypassed": 1,
+                "excluded": 1,
+                "unknown": 0,
+                "total": 4,
+            },
+            "coverage": "partial",
+            "direct_inference_egress_observed": True,
+            "mutation_blocked": True,
+            "blocking_reasons": [],
+        }
+        bypass_payload["evidence_hash"] = GatewayCoverageReceipt.compute_evidence_hash(
+            bypass_payload
+        )
+        with self.assertRaisesRegex(ValueError, "unexplained_bypass"):
+            GatewayCoverageReceipt.model_validate(bypass_payload)
+
     def test_missing_or_bypassed_egress_blocks_mutation_without_hiding_counts(self) -> None:
         missing = compile_gateway_coverage_receipt(
             system=system_snapshot(),
@@ -224,6 +326,9 @@ class Dogfood32CompandScanTest(unittest.TestCase):
         self.assertEqual(missing.coverage, "unknown")
         self.assertEqual(missing.coverage_counts.unknown, 1)
         self.assertIn("unreconciled_egress_observation", missing.blocking_reasons)
+        missing_decision = decide_compand_scan(missing, [qualifying_measurement()])
+        self.assertEqual(missing_decision.decision, "low_coverage_hold")
+        self.assertEqual(missing_decision.qualifying_candidate_count, 0)
 
         bypassed = compile_gateway_coverage_receipt(
             system=system_snapshot(),
@@ -244,7 +349,27 @@ class Dogfood32CompandScanTest(unittest.TestCase):
         self.assertTrue(bypassed.direct_inference_egress_observed)
         self.assertEqual(bypassed.coverage_counts.bypassed, 1)
         self.assertIn("unexplained_bypass", bypassed.blocking_reasons)
-        self.assertEqual(decide_compand_scan(bypassed, []).decision, "low_coverage_hold")
+        bypassed_decision = decide_compand_scan(
+            bypassed, [qualifying_measurement()]
+        )
+        self.assertEqual(bypassed_decision.decision, "low_coverage_hold")
+        self.assertEqual(bypassed_decision.qualifying_candidate_count, 0)
+
+        forged_advance = CompandScanDecision(
+            decision="advance",
+            reasons=("cache_adjusted_candidate_is_cheaper",),
+            measured_candidate_count=1,
+            qualifying_candidate_count=1,
+        )
+        for blocked_receipt in (missing, bypassed):
+            with self.subTest(coverage=blocked_receipt.coverage):
+                authority = CompandScanEvidenceBundle.derive_authority(
+                    blocked_receipt,
+                    (qualifying_measurement(),),
+                    forged_advance,
+                )
+                self.assertEqual(authority.evidence_state, "exploratory")
+                self.assertEqual(authority.claim_limit, "diagnostic_only")
 
         fixture_only = compile_gateway_coverage_receipt(
             system=system_snapshot(),
