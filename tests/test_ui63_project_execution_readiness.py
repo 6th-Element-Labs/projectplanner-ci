@@ -79,7 +79,7 @@ def host():
     }
 
 
-def evaluate(configured):
+def evaluate(configured, hosts=None):
     missing_policy = {
         "readiness": {
             "passed": False,
@@ -123,7 +123,7 @@ def evaluate(configured):
         patch.object(readiness, "default_scm_connection_repository", scm),
         patch.object(
             readiness, "list_agent_hosts",
-            lambda **_kwargs: [host()] if configured else []),
+            lambda **_kwargs: (hosts if hosts is not None else ([host()] if configured else []))),
     ):
         return readiness.get_project_execution_readiness("atlas")
 
@@ -147,6 +147,15 @@ ok(green["states"]["configuration"]["passed"] is True
    and green["states"]["ephemeral"]["burst_enabled"] is True
    and green["states"]["autopilot"]["status"] == "ready",
    "green readiness exposes configuration, persistent, ephemeral, and Autopilot states")
+
+full_host = host()
+full_host["available_sessions"] = 0
+capacity_blocked = evaluate(True, [full_host])
+capacity_blocker = capacity_blocked["states"]["persistent"]["blockers"][0]
+ok(capacity_blocked["states"]["persistent"]["candidate_host_ids"] == ["host/atlas"]
+   and capacity_blocker["details"]["host_id"] == "host/atlas"
+   and capacity_blocked["checked_inputs"]["host_diagnostics"][0]["eligible"] is False,
+   "capacity blockers name the exact Fleet Host without treating it as eligible")
 
 projects_api = (ROOT / "src/switchboard/api/routers/projects.py").read_text()
 projects_mcp = (ROOT / "src/switchboard/mcp/tools/projects.py").read_text()

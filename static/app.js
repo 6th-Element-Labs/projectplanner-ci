@@ -2193,6 +2193,8 @@ const TeepPlan = {
     // operator launch or cancel a sleeping agent; runner rows expose logs/snapshot and a
     // human-gated (typed-confirm) kill. Every write is an audited MCP-backed REST call.
     renderFleet() {
+        const repairContext = this._fleetReadinessRepairContext();
+        if (repairContext.hostId) this._fleetFilter = 'all';
         if (!this._fleetWired) {
             this._fleetWired = true;
             const refresh = document.getElementById('fleet-refresh');
@@ -2219,6 +2221,23 @@ const TeepPlan = {
         // in (a lingering `?deliverable=` in the URL doesn't mean this tab is scoped) and
         // silently drops runners the page itself is showing, including their Watch button.
         this.renderFleetDock();
+    },
+    _fleetReadinessRepairContext() {
+        const params = new URLSearchParams(window.location.search || '');
+        return {
+            fromExecution: params.get('readiness_from') === 'execution',
+            hostId: String(params.get('fleet_host') || ''),
+            project: String(params.get('project') || window.PM_PROJECT || 'maxwell'),
+        };
+    },
+    _fleetReadinessReturnHref() {
+        const context = this._fleetReadinessRepairContext();
+        const params = new URLSearchParams(window.location.search || '');
+        params.set('project', context.project);
+        params.set('readiness_returned', '1');
+        params.delete('readiness_from');
+        params.delete('fleet_host');
+        return `${window.location.pathname}?${params.toString()}#tab-settings/execution`;
     },
     _loadFleet() {
         this._loadFleetHosts();
@@ -2250,7 +2269,17 @@ const TeepPlan = {
             hosts = (await responses[0].json()).hosts || [];
             release = (await responses[1].json()) || {};
             const grants = (await responses[2].json()).grants || [];
-            hosts.forEach((host) => { host.project_grants = grants.filter((grant) => grant.host_id === host.host_id); });
+            hosts.forEach((host) => {
+                const direct = grants.filter((grant) => grant.host_id === host.host_id);
+                // A target project sees an account-owned shared Host through the
+                // grant projection. Preserve that server-provided grant even though
+                // Fleet's source-project grant inventory is not duplicated here.
+                if (host.shared_grant && !direct.some(
+                    (grant) => grant.grant_id === host.shared_grant.grant_id)) {
+                    direct.push(host.shared_grant);
+                }
+                host.project_grants = direct;
+            });
             if (this.isAdmin) {
                 await Promise.all(hosts.map(async (host) => {
                     try {
@@ -2319,6 +2348,21 @@ const TeepPlan = {
         } else {
             body.innerHTML = shown.map(({ host }) => this._hostCard(host)).join('');
         }
+        const repairContext = this._fleetReadinessRepairContext();
+        if (repairContext.hostId) {
+            const card = [...body.querySelectorAll('[data-fleet-host-id]')].find(
+                (node) => node.getAttribute('data-fleet-host-id') === repairContext.hostId);
+            if (card) {
+                card.classList.add('tk-fleet-host-target');
+                card.setAttribute('tabindex', '-1');
+                window.requestAnimationFrame(() => {
+                    card.focus({ preventScroll: true });
+                    card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                });
+            } else if (repairContext.fromExecution) {
+                body.insertAdjacentHTML('afterbegin', `<div class="alert alert-danger m-3" role="alert"><strong>${this.esc(repairContext.hostId)}</strong> is not visible in the current Fleet inventory. Return to Settings to rerun the authoritative gate.<div><a class="btn btn-sm btn-outline-danger mt-2" href="${this.esc(this._fleetReadinessReturnHref())}">Return to execution readiness</a></div></div>`);
+            }
+        }
         body.querySelectorAll('[data-wake-runtimes]').forEach((b) =>
             b.addEventListener('click', () => this._openWakeModal(b.getAttribute('data-wake-runtimes'))));
         body.querySelectorAll('[data-host-policy]').forEach((b) =>
@@ -2328,7 +2372,9 @@ const TeepPlan = {
         body.querySelectorAll('[data-host-grant]').forEach((b) =>
             b.addEventListener('click', () => this._grantHostProjectAccess(b.getAttribute('data-host-grant'))));
         body.querySelectorAll('[data-host-grant-revoke]').forEach((b) =>
-            b.addEventListener('click', () => this._revokeHostProjectAccess(b.getAttribute('data-host-grant-revoke'))));
+            b.addEventListener('click', () => this._revokeHostProjectAccess(
+                b.getAttribute('data-host-grant-revoke'),
+                b.getAttribute('data-host-grant-project'))));
         body.querySelectorAll('[data-fleet-download]').forEach((b) =>
             b.addEventListener('click', () => this._downloadHostRelease()));
         document.querySelectorAll('#fleet-update-banner [data-host-update]').forEach((b) =>
@@ -2394,6 +2440,10 @@ const TeepPlan = {
         const max = lim.max_sessions != null ? lim.max_sessions
             : (h.available_sessions != null ? active + h.available_sessions : '—');
         const ready = this._hostReadiness(h);
+        const placement = cap.placement || {};
+        const owner = (cap.owner || {}).user_id
+            || (placement.owner_user_ids || [])[0]
+            || 'Account-managed Host';
         const rnames = (h.runtimes || []).map((r) => (typeof r === 'string' ? r : (r && (r.runtime || r.name)) || '')).filter(Boolean);
         const runtimes = rnames.join(', ') || 'No runtime reported';
         const policy = (h.enrollment || {}).execution_policy || {};
@@ -2406,9 +2456,11 @@ const TeepPlan = {
             ? `<button class="btn btn-sm btn-outline-primary" data-host-grant="${this.esc(h.host_id || '')}">Authorize project…</button>` : '';
         const grants = (h.project_grants || []).map((grant) => {
             const activeGrant = grant.status === 'active';
-            return `<div class="small mt-1"><span class="badge bg-${activeGrant ? 'green' : 'secondary'}-lt">${activeGrant ? 'Authorized' : 'Revoked'}</span>
-                ${this.esc(grant.target_project_id)} · ${this.esc(grant.canonical_repository)} · ${this.esc(grant.runtime)} · ${this.esc(String(grant.max_concurrency))} parallel
-                ${activeGrant ? `<button class="btn btn-link btn-sm text-danger p-0 ms-1" data-host-grant-revoke="${this.esc(grant.grant_id)}">Revoke</button>` : ''}</div>`;
+            const target = grant.target_project_id || 'Project';
+            return `<div class="tk-fleet-host-grant small mt-2"><div><span class="badge bg-${activeGrant ? 'green' : 'secondary'}-lt me-1">${activeGrant ? 'Authorized' : 'Revoked'}</span>
+                <strong>${this.esc(target)} ${activeGrant ? 'may use this host' : 'access is revoked'}</strong></div>
+                <div class="text-secondary">Repository <code>${this.esc(grant.canonical_repository || 'not scoped')}</code> · Runtime ${this.esc(grant.runtime || 'not set')} · ${this.esc(String(grant.max_concurrency || 0))} parallel</div>
+                ${activeGrant ? `<button class="btn btn-link btn-sm text-danger p-0 mt-1" aria-label="Revoke ${this.esc(target)} access to this host" data-host-grant-revoke="${this.esc(grant.grant_id)}" data-host-grant-project="${this.esc(grant.source_project_id || this.project || window.PM_PROJECT || 'maxwell')}">Revoke access</button>` : ''}</div>`;
         }).join('');
         // Only offered when there is actually something to install. A button
         // that cannot help is worse than no button: it reads as "I tried".
@@ -2418,11 +2470,15 @@ const TeepPlan = {
             ? '<button class="btn btn-outline-secondary" data-fleet-download type="button">Download</button>' : '';
         const digestMatch = ready.installedDigest && ready.requiredDigest && ready.installedDigest === ready.requiredDigest;
         const deploymentManaged = ready.releaseManagement === 'deployment_managed';
-        return `<article class="tk-fleet-host-card" data-host-state="${this.esc(ready.state)}">
+        const repairContext = this._fleetReadinessRepairContext();
+        const returnToSettings = repairContext.fromExecution && repairContext.hostId === String(h.host_id || '')
+            ? `<a class="btn btn-outline-primary" href="${this.esc(this._fleetReadinessReturnHref())}"><i class="ti ti-arrow-back-up me-1" aria-hidden="true"></i>Return to execution readiness</a>` : '';
+        return `<article class="tk-fleet-host-card" data-host-state="${this.esc(ready.state)}" data-fleet-host-id="${this.esc(h.host_id || '')}">
             <div class="tk-fleet-host-main">
                 <div class="tk-fleet-host-icon"><i class="ti ti-device-desktop"></i></div>
                 <div class="tk-fleet-host-title"><h4>${this.esc(h.hostname || h.host_id || 'Host')}</h4>
-                    <div class="text-secondary small font-monospace">${this.esc(h.host_id || '')}</div></div>
+                    <div class="text-secondary small font-monospace">${this.esc(h.host_id || '')}</div>
+                    <div class="text-secondary small">Host owner: ${this.esc(owner)}</div></div>
                 <div class="tk-fleet-host-heartbeat"><span class="status-dot bg-${h.stale ? 'secondary' : 'green'}"></span>${h.stale ? 'Offline' : 'Online'} · ${this.esc(this._fleetAge(h.heartbeat_at))}</div>
             </div>
             <div class="tk-fleet-host-details">
@@ -2439,7 +2495,7 @@ const TeepPlan = {
             </div>
             <div class="tk-fleet-host-actions"><div class="btn-list">${update}
                 ${download}
-                <button class="btn btn-outline-secondary" data-wake-runtimes="${this.esc(rnames.join(','))}" type="button">Launch…</button>${configure}${authorize}</div>
+                <button class="btn btn-outline-secondary" data-wake-runtimes="${this.esc(rnames.join(','))}" type="button">Launch…</button>${configure}${authorize}${returnToSettings}</div>
                 <span class="text-secondary small">${policyText}${grants}</span></div>
         </article>`;
     },
@@ -2475,10 +2531,10 @@ const TeepPlan = {
             window.alert(`Host authorization failed: ${error.message}`);
         }
     },
-    async _revokeHostProjectAccess(grantId) {
+    async _revokeHostProjectAccess(grantId, sourceProject) {
         if (!window.confirm('Revoke this project/repository Host authorization? Existing Host ownership and other project grants are unchanged.')) return;
         try {
-            const project = this.project || window.PM_PROJECT || 'maxwell';
+            const project = sourceProject || this.project || window.PM_PROJECT || 'maxwell';
             const response = await fetch('/ixp/v1/agent-host-grants/revoke', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ project, grant_id: grantId, reason: 'fleet_operator_revoke' }),

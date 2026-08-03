@@ -40,7 +40,8 @@ with sync_playwright() as runtime:
 
     page.route("**/ixp/v1/**", ixp)
     page.goto(
-        f"http://127.0.0.1:{SERVER.server_port}/index.html?project=switchboard#tab-fleet",
+        f"http://127.0.0.1:{SERVER.server_port}/index.html?project=switchboard"
+        "&fleet_host=host%2Fsteve-existing-mac&readiness_from=execution#tab-fleet",
         wait_until="domcontentloaded")
     page.wait_for_load_state("networkidle")
     page.wait_for_selector("#fleet-hosts-body")
@@ -50,19 +51,27 @@ with sync_playwright() as runtime:
       TeepPlan._fleetRelease = {};
       TeepPlan._fleetHosts = [{host_id:'host/steve-existing-mac',hostname:"Steve's Mac",
         stale:false,heartbeat_at:Date.now()/1000,runtimes:[{runtime:'codex'}],
-        limits:{max_sessions:8},capacity:{active_sessions:0},enrollment:{execution_policy:{}},
+        limits:{max_sessions:8},capacity:{active_sessions:0,owner:{user_id:'user/steve'}},enrollment:{execution_policy:{}},
         readiness:{state:'ready',contract_matches:true},project_grants:[
           {grant_id:'hostgrant-simplemark',status:'active',target_project_id:'simplemark',
-           canonical_repository:'StevenRidder/simplemark',runtime:'codex',max_concurrency:2},
+           source_project_id:'switchboard',canonical_repository:'StevenRidder/simplemark',runtime:'codex',max_concurrency:2},
           {grant_id:'hostgrant-old',status:'revoked',target_project_id:'old',
-           canonical_repository:'example/old',runtime:'codex',max_concurrency:1}
+           source_project_id:'switchboard',canonical_repository:'example/old',runtime:'codex',max_concurrency:1}
         ]}];
       TeepPlan._renderFleetHosts();
     }""")
     card = page.locator(".tk-fleet-host-card")
     assert card.count() == 1, page.locator("#fleet-hosts-body").inner_html()
+    assert "tk-fleet-host-target" in (card.get_attribute("class") or "")
+    assert "Host owner: user/steve" in card.inner_text()
     assert card.locator("[data-host-grant]").is_visible()
-    assert "simplemark · StevenRidder/simplemark · codex · 2 parallel" in card.inner_text()
+    assert "simplemark may use this host" in card.inner_text()
+    assert "Repository StevenRidder/simplemark · Runtime codex · 2 parallel" in card.inner_text()
+    assert "old access is revoked" in card.inner_text()
+    return_link = card.get_by_role("link", name="Return to execution readiness")
+    assert "project=switchboard" in return_link.get_attribute("href")
+    assert "readiness_returned=1" in return_link.get_attribute("href")
+    assert "#tab-settings/execution" in return_link.get_attribute("href")
     assert card.locator("[data-host-grant-revoke]").count() == 1
     page.once("dialog", lambda dialog: dialog.accept())
     card.locator("[data-host-grant-revoke]").click()

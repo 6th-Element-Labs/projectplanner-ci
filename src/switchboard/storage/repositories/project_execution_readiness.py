@@ -210,17 +210,31 @@ def get_project_execution_readiness(
     placement_policy = dict(policy.get("placement") or {})
     allowed_classes = set(placement_policy.get("host_classes") or [])
     allowed_zones = set(placement_policy.get("trust_zones") or [])
-    hosts = list_agent_hosts(include_stale=False, project=project)
+    # Include stale/ineligible rows in the explanatory read model.  Admission
+    # still excludes them below, but Settings needs the exact Host identity to
+    # route an operator to Fleet instead of offering a generic second set of
+    # host controls.  This is evidence only; runner liveness remains owned by
+    # the Capacity plane.
+    hosts = list_agent_hosts(include_stale=True, project=project)
     eligible_persistent: List[str] = []
     eligible_ephemeral: List[str] = []
+    persistent_host_ids: List[str] = []
+    ephemeral_host_ids: List[str] = []
+    host_diagnostics: List[Dict[str, Any]] = []
     for host in hosts:
         placement = _host_placement(host)
         host_class = str(placement.get("host_class") or "")
+        host_id = str(host.get("host_id") or "")
+        if host_class == "persistent" and host_id:
+            persistent_host_ids.append(host_id)
+        if host_class == "ephemeral" and host_id:
+            ephemeral_host_ids.append(host_id)
         zones = set(placement.get("trust_zones") or [])
         projects = set(placement.get("projects") or [])
         repositories = {str(item).lower() for item in placement.get("repositories") or []}
         eligible = (
-            _runtime_available(host, allowed_runtimes)
+            not host.get("stale")
+            and _runtime_available(host, allowed_runtimes)
             and (host.get("available_sessions") is None
                  or int(host.get("available_sessions") or 0) > 0)
             and placement.get("wakeable") is not False
@@ -230,9 +244,24 @@ def get_project_execution_readiness(
             and (not allowed_zones or not zones or bool(allowed_zones & zones))
         )
         if eligible and host_class == "persistent":
-            eligible_persistent.append(str(host.get("host_id") or ""))
+            eligible_persistent.append(host_id)
         if eligible and host_class == "ephemeral":
-            eligible_ephemeral.append(str(host.get("host_id") or ""))
+            eligible_ephemeral.append(host_id)
+        if host_id:
+            host_diagnostics.append({
+                "host_id": host_id,
+                "host_class": host_class,
+                "online": not bool(host.get("stale")),
+                "available_sessions": host.get("available_sessions"),
+                "wakeable": placement.get("wakeable") is not False,
+                "drain_state": str(placement.get("drain_state") or "accepting"),
+                "repositories": sorted(repositories),
+                "grant_status": str(
+                    ((host.get("shared_grant") or {}).get("status")) or ""),
+                "reason_code": str(
+                    ((host.get("shared_grant") or {}).get("reason_code")) or ""),
+                "eligible": eligible,
+            })
 
     # Execution policy names the operator-facing placement classes (personal
     # and shared), while Agent Host inventory reports the physical lifecycle
@@ -245,14 +274,21 @@ def get_project_execution_readiness(
         persistent_blockers.append(_blocker(
             "persistent_capacity_unavailable", "persistent",
             "No eligible persistent Agent Host currently has capacity.",
-            "Enroll or repair an online persistent host matching runtime, trust zone, repository, and isolation policy."))
+            ("Open the named Fleet host and repair its project/repository grant, "
+             "capacity, or revocation state."
+             if persistent_host_ids else
+             "Enroll or repair an online persistent host matching runtime, trust zone, repository, and isolation policy."),
+            host_id=persistent_host_ids[0] if persistent_host_ids else "",
+            host_ids=persistent_host_ids,
+            canonical_repository=canonical))
     persistent = _state(
         "persistent", not persistent_required or bool(eligible_persistent),
         ("Persistent capacity is not selected by policy." if not persistent_required
          else "Eligible persistent capacity is online." if eligible_persistent
          else "Persistent capacity is unavailable."),
         persistent_blockers, required=persistent_required,
-        eligible_host_ids=eligible_persistent)
+        eligible_host_ids=eligible_persistent,
+        candidate_host_ids=persistent_host_ids)
     if not persistent_required:
         persistent["status"] = "not_required"
 
@@ -266,7 +302,12 @@ def get_project_execution_readiness(
         ephemeral_blockers.append(_blocker(
             "ephemeral_capacity_unavailable", "ephemeral",
             "Ephemeral execution is selected but no burst policy or eligible host is available.",
-            "Enable bounded burst capacity or register an eligible ephemeral host."))
+            ("Open the named Fleet host and repair its capacity or grant."
+             if ephemeral_host_ids else
+             "Enable bounded burst capacity or register an eligible ephemeral host."),
+            host_id=ephemeral_host_ids[0] if ephemeral_host_ids else "",
+            host_ids=ephemeral_host_ids,
+            canonical_repository=canonical))
     ephemeral = _state(
         "ephemeral",
         not ephemeral_required or burst_configured or bool(eligible_ephemeral),
@@ -276,7 +317,8 @@ def get_project_execution_readiness(
         ephemeral_blockers, required=ephemeral_required,
         burst_enabled=burst.get("enabled") is True,
         max_concurrent=int(burst.get("max_concurrent_ephemeral") or 0),
-        eligible_host_ids=eligible_ephemeral)
+        eligible_host_ids=eligible_ephemeral,
+        candidate_host_ids=ephemeral_host_ids)
     if not ephemeral_required:
         ephemeral["status"] = "not_required"
 
@@ -343,7 +385,8 @@ def get_project_execution_readiness(
                 (policy.get("lifecycle") or {}).get("revision") or 0),
             "provider_connection_count": len(connections),
             "scm_connection_reference": scm_reference,
-            "live_host_count": len(hosts),
+            "live_host_count": sum(not bool(host.get("stale")) for host in hosts),
+            "host_diagnostics": host_diagnostics,
         },
     }
 

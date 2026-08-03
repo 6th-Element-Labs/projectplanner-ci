@@ -797,8 +797,60 @@
 
         /* ---- Project settings --------------------------------------------- */
 
+        _settingsExecutionFleetHref(project, hostId) {
+            const params = new URLSearchParams(window.location.search || '');
+            params.set('project', project);
+            params.set('readiness_from', 'execution');
+            if (hostId) params.set('fleet_host', hostId);
+            else params.delete('fleet_host');
+            params.delete('readiness_returned');
+            return `${window.location.pathname}?${params.toString()}#tab-fleet`;
+        },
+
+        _settingsExecutionRepairAction(category, project, blocker, state) {
+            const details = blocker.details || {};
+            if (category === 'provider' || category === 'scm') {
+                return `<button type="button" class="btn btn-sm btn-outline-primary mt-2" data-set-action="execution-focus:${category}">Fix here</button>`;
+            }
+            if (category !== 'persistent' && category !== 'ephemeral') return '';
+            const hostIds = [...new Set([
+                ...(details.host_ids || []),
+                ...(state.candidate_host_ids || []),
+                details.host_id || '',
+            ].map((value) => String(value || '')).filter(Boolean))];
+            if (!hostIds.length) hostIds.push('');
+            return hostIds.map((hostId) => {
+                const label = hostId ? `Open ${hostId} in Fleet` : 'Open Fleet';
+                const fleetHref = (this._settingsExecutionFleetHref
+                    || methods._settingsExecutionFleetHref).call(this, project, hostId);
+                return `<a class="btn btn-sm btn-outline-primary mt-2 me-1" data-readiness-host-link="${this.esc(hostId)}" href="${this.esc(fleetHref)}"><i class="ti ti-server-bolt me-1" aria-hidden="true"></i>${this.esc(label)}</a>`;
+            }).join('');
+        },
+
+        _settingsExecutionConnectionSummary(provider, scm, canonicalRepo, hostClass) {
+            const personal = String((provider || {}).connection_kind || 'personal_subscription') === 'personal_subscription';
+            const billing = personal
+                ? 'Personal subscription · no metered API billing'
+                : 'Metered API / pay-as-you-go';
+            const owner = (provider || {}).user_id || ((provider || {}).ownership_proof || {}).owner_user_id || 'Owner not reported';
+            const revocation = (provider || {}).revocation_state || (provider || {}).lifecycle_state || 'unknown';
+            const repositories = ((scm || {}).repository_allowlist || []).join(', ') || canonicalRepo || 'Not authorized';
+            const rows = (this._settingsRows || methods._settingsRows).call(this, [
+                    ['Connection owner', `<code>${this.esc(owner)}</code>`],
+                    ['Billing mode', this.esc(billing)],
+                    ['Provider revocation', `<span class="badge ${['revoked', 'deleted', 'expired'].includes(String(revocation).toLowerCase()) ? 'bg-red-lt text-red' : 'bg-secondary-lt'}">${this.esc(revocation)}</span>`],
+                    ['Repository scope', `<code>${this.esc(repositories)}</code>`],
+                    ['Host placement', this.esc(hostClass ? `${hostClass} capacity` : 'Not selected')],
+                ]);
+            return `<div class="card mt-3" id="execution-integration-summary"><div class="card-header py-2"><h4 class="card-title mb-0">Current execution integration</h4></div>
+                <div class="card-body py-3">${rows}</div></div>`;
+        },
+
         async _settingsExecutionSection() {
             const proj = window.PM_PROJECT || 'maxwell';
+            const repairAction = (...args) => (
+                this._settingsExecutionRepairAction || methods._settingsExecutionRepairAction
+            ).call(this, ...args);
             const [data, policy, providerData, scmData, topology] = await Promise.all([
                 this._sfetch(`api/projects/${encodeURIComponent(proj)}/execution_readiness`),
                 this._sfetch(`api/projects/${encodeURIComponent(proj)}/execution_policy`),
@@ -825,7 +877,9 @@
                 const blockers = (state.blockers || []).map((blocker) =>
                     `<li class="mb-2"><strong>${this.esc(blocker.message || blocker.code || 'Blocked')}</strong>`
                     + `<div class="text-secondary">${this.esc(blocker.repair || '')}</div>`
-                    + `<code class="small">${this.esc(blocker.code || '')}</code></li>`).join('');
+                    + `<code class="small">${this.esc(blocker.code || '')}</code>`
+                    + repairAction(key, proj, blocker, state)
+                    + `</li>`).join('');
                 const details = blockers
                     ? `<ul class="small ps-3 mb-0">${blockers}</ul>`
                     : `<div class="small text-secondary">${this.esc(state.message || '')}</div>`;
@@ -834,7 +888,8 @@
                     <span class="badge ${tone} ms-auto">${this.esc(state.status || 'unknown')}</span></div>
                     <div class="card-body py-3">${details}</div></div></div>`;
             }).join('');
-            const overallTone = data.passed ? 'success' : 'danger';
+            const authoritativeReady = data.passed === true;
+            const overallTone = authoritativeReady ? 'success' : 'danger';
             const selectedProvider = ((policy.providers || {}).selectors || [])[0] || {};
             const selectedProviderReference = selectedProvider.connection_reference || '';
             const providerAliases = {
@@ -910,6 +965,27 @@
                 ['shared', 'Shared host'],
                 ['ephemeral', 'Ephemeral host'],
             ].map(([value, label]) => `<option value="${value}" ${value === selectedHostClass ? 'selected' : ''}>${label}</option>`).join('');
+            const selectedProviderConnection = providerConnections.find(
+                (item) => item.credential_reference === selectedProviderReference) || {};
+            const selectedScmConnection = scmConnections.find(
+                (item) => item.connection_id === selectedScmReference) || {};
+            const firstBlocker = (data.blockers || [])[0] || null;
+            const sourceErrors = [
+                policy.error ? `Execution policy: ${policy.error}` : '',
+                providerData.error ? `Provider connections: ${providerData.error}` : '',
+                scmData.error ? `SCM connections: ${scmData.error}` : '',
+                topology.error ? `Repository topology: ${topology.error}` : '',
+            ].filter(Boolean);
+            const sourceErrorBanner = sourceErrors.length
+                ? `<div class="alert alert-danger py-2 px-3" id="execution-integration-errors" role="alert"><strong>Could not load current integration details.</strong><div class="small">${sourceErrors.map((error) => this.esc(error)).join(' · ')}</div></div>`
+                : '';
+            const returnedFromFleet = new URLSearchParams(window.location.search || '').get('readiness_returned') === '1';
+            const remaining = authoritativeReady || !firstBlocker ? ''
+                : `<div class="alert alert-danger py-2 px-3" id="execution-remaining-blocker" role="alert"><strong>Start remains blocked.</strong>
+                    <div>${this.esc(firstBlocker.message || data.message || '')}</div>
+                    <div class="small">${this.esc(firstBlocker.repair || '')}</div>
+                    <code class="small">${this.esc(firstBlocker.code || data.reason_code || '')}</code>
+                    ${repairAction(firstBlocker.category || '', proj, firstBlocker, states[firstBlocker.category] || {})}</div>`;
             const editor = `<form id="execution-policy-form" class="card card-body mt-3">
                 <h4>Execution policy</h4><p class="small text-secondary">Choose verified references only. Credentials are never entered or returned here.</p>
                 <div class="row g-3"><div class="col-md-6"><label class="form-label" for="execution-provider">Provider connection</label><select class="form-select" id="execution-provider"><option value="">Select verified connection</option>${providerOptions}</select></div>
@@ -924,10 +1000,22 @@
                 subtitle: 'The same authoritative gate is rerun whenever an operator presses Start.',
                 actions: '<button class="btn btn-sm btn-outline-secondary" type="button" data-set-action="execution-refresh"><i class="ti ti-refresh me-1"></i>Rerun gate</button>',
                 body: `<div class="alert alert-${overallTone} py-2 px-3" id="execution-readiness-summary">
-                    <strong>${data.passed ? 'Ready' : 'Blocked'}</strong> · ${this.esc(data.message || '')}
+                    <strong>${authoritativeReady ? 'Ready' : 'Blocked'}</strong> · ${this.esc(data.message || '')}
                     ${data.reason_code ? `<div><code>${this.esc(data.reason_code)}</code></div>` : ''}</div>
-                    <div class="row g-3">${cards}</div>${editor}`,
+                    ${sourceErrorBanner}
+                    ${returnedFromFleet ? '<div class="alert alert-info py-2 px-3" id="execution-returned-from-fleet" role="status"><i class="ti ti-refresh me-1" aria-hidden="true"></i>Returned from Fleet. This gate was rerun from authoritative server state.</div>' : ''}
+                    ${remaining}<div class="row g-3">${cards}</div>
+                    ${(this._settingsExecutionConnectionSummary || methods._settingsExecutionConnectionSummary).call(this, selectedProviderConnection, selectedScmConnection, canonicalRepo, selectedHostClass)}${editor}`,
             });
+        },
+
+        _settingsExecutionFocus(category) {
+            const id = category === 'provider' ? 'execution-provider'
+                : (category === 'scm' ? 'execution-scm' : 'execution-host-class');
+            const field = document.getElementById(id);
+            if (!field) return;
+            field.focus({ preventScroll: true });
+            field.scrollIntoView({ block: 'center', behavior: 'smooth' });
         },
 
         // UI-20 (4/6): the UI-5 Members & access modal folded in-place. The section nav is
@@ -1717,9 +1805,12 @@
         const res = await fetch(url, opt);
         let data = {}; try { data = await res.json(); } catch (e) { /* empty */ }
         if (!res.ok) {
-            if (res.status === 403 || res.status === 401) throw new Error('Admin (write:system) access required.');
             const d = data && (data.detail || data.error);
-            throw new Error(typeof d === 'string' ? d : (d && (d.error || d.message || d.hint)) || `HTTP ${res.status}`);
+            const serverMessage = typeof d === 'string'
+                ? d : (d && (d.error || d.message || d.hint));
+            if (serverMessage) throw new Error(serverMessage);
+            if (res.status === 403 || res.status === 401) throw new Error('Admin (write:system) access required.');
+            throw new Error(`HTTP ${res.status}`);
         }
         return data;
     },
@@ -1864,6 +1955,9 @@
 
     async _settingsAction(action) {
         if (String(action || '').startsWith('project-')) return this._projectAdminAction(action);
+        if (String(action || '').startsWith('execution-focus:')) {
+            return this._settingsExecutionFocus(action.slice('execution-focus:'.length));
+        }
         if (String(action || '').startsWith('tokens-revoke:')) return this._settingsRevokeToken(decodeURIComponent(action.slice('tokens-revoke:'.length)));
         if (String(action || '').startsWith('comms-rm:')) {
             const rest = action.slice('comms-rm:'.length);
