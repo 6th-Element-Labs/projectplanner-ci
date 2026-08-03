@@ -51,9 +51,28 @@ __all__ = [
 ]
 
 
+class _ClosingSQLiteConnection(sqlite3.Connection):
+    """Close a project-registry connection when its context block ends.
+
+    ``sqlite3.Connection`` commits or rolls back on ``__exit__`` but otherwise
+    leaves the file handle open.  Project-registry callers use
+    ``with _registry_conn()`` as their ownership boundary, so that boundary
+    must also release the connection deterministically.
+    """
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            return super().__exit__(exc_type, exc, tb)
+        finally:
+            self.close()
+
+
 def _registry_conn():
     os.makedirs(os.path.dirname(PROJECT_REGISTRY_DB_PATH), exist_ok=True)
-    c = sqlite3.connect(PROJECT_REGISTRY_DB_PATH)
+    c = sqlite3.connect(
+        PROJECT_REGISTRY_DB_PATH,
+        factory=_ClosingSQLiteConnection,
+    )
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA journal_mode=WAL")
     return c
