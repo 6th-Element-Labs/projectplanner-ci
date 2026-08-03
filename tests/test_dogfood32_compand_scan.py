@@ -17,6 +17,7 @@ from switchboard.contracts.compand import (
     EgressObservation,
     EgressObservationWindow,
     GatewayCoverageReceiptInput,
+    LineRleShadowMeasurement,
     ProviderPriceTable,
     ProviderTokenCount,
 )
@@ -207,6 +208,7 @@ class Dogfood32CompandScanTest(unittest.TestCase):
         output_sha = hashlib.sha256(original.encode()).hexdigest()
         command_receipt = {
             "schema": "compand.command_result.v1",
+            "call_id": "call-natural-1",
             "source_kind": "command_result",
             "trusted_adapter": True,
             "exit_status": 0,
@@ -215,11 +217,18 @@ class Dogfood32CompandScanTest(unittest.TestCase):
             "truncated": False,
             "signed": False,
             "new_suffix": True,
-            "output": original,
             "byte_count": len(original.encode()),
             "output_sha256": output_sha,
         }
-        candidate = build_line_rle_candidate(command_receipt)
+        candidate = build_line_rle_candidate(
+            command_receipt,
+            expected_call_id="call-natural-1",
+            output_item={
+                "type": "function_call_output",
+                "call_id": "call-natural-1",
+                "output": original,
+            },
+        )
         self.assertEqual(decode_line_rle(candidate.candidate_text), original)
         self.assertEqual(candidate.repeated_span_count, 1)
         self.assertEqual(candidate.repeated_line_count, 3)
@@ -227,7 +236,7 @@ class Dogfood32CompandScanTest(unittest.TestCase):
         self.assertNotIn(original, repr(candidate))
 
         prices = ProviderPriceTable(
-            provider="openai",
+            provider="compand_fixture",
             model="gpt-5.4",
             effective_date=date(2026, 8, 3),
             input_usd_per_million_tokens=10,
@@ -261,10 +270,27 @@ class Dogfood32CompandScanTest(unittest.TestCase):
         self.assertEqual(decision.decision, "advance")
         self.assertFalse(decision.mutation_authorized)
 
+        wrong_provider = measurement.model_copy(
+            update={
+                "price_table": prices.model_copy(update={"provider": "other-provider"})
+            }
+        )
+        provider_decision = decide_compand_scan(full_receipt(), [wrong_provider])
+        self.assertEqual(provider_decision.decision, "stop")
+        self.assertIn("measurement_provider_mismatch", provider_decision.reasons)
+
+        wrong_model = measurement.model_copy(
+            update={"price_table": prices.model_copy(update={"model": "other-model"})}
+        )
+        model_decision = decide_compand_scan(full_receipt(), [wrong_model])
+        self.assertEqual(model_decision.decision, "stop")
+        self.assertIn("measurement_model_mismatch", model_decision.reasons)
+
     def test_line_rle_oracle_escapes_literal_marker_lines(self) -> None:
         original = "literal [repeated 2 times]\nliteral [repeated 1 times]\n"
         receipt = {
             "schema": "compand.command_result.v1",
+            "call_id": "call-marker",
             "source_kind": "command_result",
             "trusted_adapter": True,
             "exit_status": 0,
@@ -273,11 +299,18 @@ class Dogfood32CompandScanTest(unittest.TestCase):
             "truncated": False,
             "signed": False,
             "new_suffix": True,
-            "output": original,
             "byte_count": len(original.encode()),
             "output_sha256": hashlib.sha256(original.encode()).hexdigest(),
         }
-        candidate = build_line_rle_candidate(receipt)
+        candidate = build_line_rle_candidate(
+            receipt,
+            expected_call_id="call-marker",
+            output_item={
+                "type": "function_call_output",
+                "call_id": "call-marker",
+                "output": original,
+            },
+        )
         self.assertNotEqual(candidate.candidate_text, original)
         self.assertEqual(decode_line_rle(candidate.candidate_text), original)
 
@@ -286,6 +319,7 @@ class Dogfood32CompandScanTest(unittest.TestCase):
         candidate = build_line_rle_candidate(
             {
                 "schema": "compand.command_result.v1",
+                "call_id": "call-no-cache",
                 "source_kind": "command_result",
                 "trusted_adapter": True,
                 "exit_status": 0,
@@ -294,13 +328,18 @@ class Dogfood32CompandScanTest(unittest.TestCase):
                 "truncated": False,
                 "signed": False,
                 "new_suffix": True,
-                "output": original,
                 "byte_count": len(original),
                 "output_sha256": hashlib.sha256(original.encode()).hexdigest(),
-            }
+            },
+            expected_call_id="call-no-cache",
+            output_item={
+                "type": "function_call_output",
+                "call_id": "call-no-cache",
+                "output": original,
+            },
         )
         prices = ProviderPriceTable(
-            provider="openai",
+            provider="compand_fixture",
             model="gpt-5.4",
             effective_date=date(2026, 8, 3),
             input_usd_per_million_tokens=10,
@@ -334,10 +373,125 @@ class Dogfood32CompandScanTest(unittest.TestCase):
             build_line_rle_candidate(
                 {
                     "schema": "compand.command_result.v1",
+                    "call_id": "call-untrusted",
                     "source_kind": "command_result",
                     "trusted_adapter": False,
-                }
+                },
+                expected_call_id="call-untrusted",
+                output_item={
+                    "type": "function_call_output",
+                    "call_id": "call-untrusted",
+                    "output": "ignored",
+                },
             )
+
+    def test_command_receipt_requires_exact_new_output_call_id_binding(self) -> None:
+        output = "same\nsame\n"
+        base = {
+            "schema": "compand.command_result.v1",
+            "source_kind": "command_result",
+            "trusted_adapter": True,
+            "exit_status": 0,
+            "content_type": "text/plain",
+            "encoding": "utf-8",
+            "truncated": False,
+            "signed": False,
+            "new_suffix": True,
+            "byte_count": len(output.encode()),
+            "output_sha256": hashlib.sha256(output.encode()).hexdigest(),
+        }
+        item = {
+            "type": "function_call_output",
+            "call_id": "call-bound",
+            "output": output,
+        }
+        with self.assertRaisesRegex(ScanEligibilityError, "expected_call_id is required"):
+            build_line_rle_candidate(
+                {**base, "call_id": "call-bound"},
+                expected_call_id="",
+                output_item=item,
+            )
+        with self.assertRaisesRegex(ScanEligibilityError, "receipt call_id is required"):
+            build_line_rle_candidate(
+                base,
+                expected_call_id="call-bound",
+                output_item=item,
+            )
+        with self.assertRaisesRegex(ScanEligibilityError, "receipt call_id does not match"):
+            build_line_rle_candidate(
+                {**base, "call_id": "call-other"},
+                expected_call_id="call-bound",
+                output_item=item,
+            )
+        with self.assertRaisesRegex(
+            ScanEligibilityError, "function_call_output call_id does not match"
+        ):
+            build_line_rle_candidate(
+                {**base, "call_id": "call-bound"},
+                expected_call_id="call-bound",
+                output_item={**item, "call_id": "call-other"},
+            )
+        with self.assertRaisesRegex(ScanEligibilityError, "output_sha256 does not bind"):
+            build_line_rle_candidate(
+                {
+                    **base,
+                    "call_id": "call-bound",
+                    "output_sha256": "0" * 64,
+                },
+                expected_call_id="call-bound",
+                output_item=item,
+            )
+
+    def test_equal_token_counts_cannot_advance_with_forged_derived_values(self) -> None:
+        prices = ProviderPriceTable(
+            provider="compand_fixture",
+            model="gpt-5.4",
+            effective_date=date(2026, 8, 3),
+            input_usd_per_million_tokens=10,
+            cached_input_usd_per_million_tokens=1,
+            source="dated-test-table",
+        )
+        count = ProviderTokenCount(
+            input_tokens=20,
+            cached_input_tokens=10,
+            count_call_latency_ms=1,
+        )
+        forged = LineRleShadowMeasurement.model_construct(
+            run_id="run-forged-equal-counts",
+            task_snapshot_sha256="sha256:" + "b" * 64,
+            source_artifact_sha256="sha256:" + "d" * 64,
+            candidate_artifact_sha256="sha256:" + "e" * 64,
+            repeated_span_count=1,
+            repeated_line_count=2,
+            removed_line_count=1,
+            original_bytes=10,
+            candidate_bytes=8,
+            original_count=count,
+            candidate_count=count,
+            cache_fields_exposed=True,
+            projected_original_input_usd=0.00011,
+            projected_candidate_input_usd=0.00001,
+            projected_input_savings_usd=0.0001,
+            cache_adjusted_candidate_is_cheaper=True,
+            gateway_latency_ms=1,
+            gateway_retry_count=0,
+            task_completed=True,
+            shadow_original_forwarded_byte_for_byte=True,
+            price_table=prices,
+        )
+        with self.assertRaisesRegex(ValueError, "derived economics mismatch"):
+            LineRleShadowMeasurement.model_validate(
+                forged.model_dump(mode="json", by_alias=True)
+            )
+        decision = decide_compand_scan(full_receipt(), [forged])
+        self.assertEqual(decision.decision, "stop")
+        self.assertEqual(decision.qualifying_candidate_count, 0)
+        self.assertTrue(
+            any(
+                reason.startswith("measurement_derived_value_mismatch:")
+                for reason in decision.reasons
+            )
+        )
 
 
 if __name__ == "__main__":

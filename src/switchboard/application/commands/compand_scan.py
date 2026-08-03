@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections import Counter
 from collections.abc import Iterable
 
@@ -173,7 +174,7 @@ def measure_line_rle_candidate(
     )
     original_cost = _projected_input_cost(original_count, price_table)
     candidate_cost = _projected_input_cost(candidate_count, price_table)
-    savings = original_cost - candidate_cost
+    savings = round(original_cost - candidate_cost, 12)
     cheaper = bool(
         candidate.repeated_span_count
         and cache_exposed
@@ -215,28 +216,25 @@ def decide_compand_scan(
     """Return the bounded line-rle-v1 decision without enabling mutation."""
 
     measured = tuple(measurements)
-    qualifying = tuple(
-        item for item in measured if item.cache_adjusted_candidate_is_cheaper
-    )
+    integrity_reasons: set[str] = set()
+    qualifying: list[LineRleShadowMeasurement] = []
+    for item in measured:
+        item_reasons, recomputed_qualifies = _measurement_integrity_reasons(
+            coverage, item
+        )
+        integrity_reasons.update(item_reasons)
+        if not item_reasons and recomputed_qualifies:
+            qualifying.append(item)
     parity_failures = [
         field for field in _PARITY_FIELDS if not getattr(coverage.parity, field)
     ]
-    snapshot_mismatch = any(
-        item.task_snapshot_sha256 != coverage.system.task_snapshot_sha256
-        or item.price_table.model != coverage.system.model
-        for item in measured
-    )
-    if parity_failures or snapshot_mismatch or any(
+    if parity_failures or integrity_reasons or any(
         not item.shadow_original_forwarded_byte_for_byte for item in measured
     ):
         reasons = tuple(
             sorted(
                 {*(f"parity_failed:{field}" for field in parity_failures)}
-                | (
-                    {"measurement_system_snapshot_mismatch"}
-                    if snapshot_mismatch
-                    else set()
-                )
+                | integrity_reasons
                 | (
                     {"shadow_payload_was_not_byte_preserved"}
                     if any(
@@ -263,6 +261,50 @@ def decide_compand_scan(
         measured_candidate_count=len(measured),
         qualifying_candidate_count=len(qualifying),
     )
+
+
+def _measurement_integrity_reasons(
+    coverage: GatewayCoverageReceipt,
+    item: LineRleShadowMeasurement,
+) -> tuple[set[str], bool]:
+    """Cross-check one supplied measurement and recompute qualification."""
+
+    reasons: set[str] = set()
+    if item.task_snapshot_sha256 != coverage.system.task_snapshot_sha256:
+        reasons.add("measurement_task_snapshot_mismatch")
+    if item.price_table.model != coverage.system.model:
+        reasons.add("measurement_model_mismatch")
+    provider = item.price_table.provider.strip().casefold()
+    expected_providers = {
+        coverage.system.provider_id.strip().casefold(),
+        coverage.system.provider_name.strip().casefold(),
+    }
+    if not provider or provider not in expected_providers:
+        reasons.add("measurement_provider_mismatch")
+
+    try:
+        expected = item.recomputed_derived_values()
+    except (TypeError, ValueError):
+        return reasons | {"measurement_primitive_evidence_invalid"}, False
+    for field in (
+        "projected_original_input_usd",
+        "projected_candidate_input_usd",
+        "projected_input_savings_usd",
+    ):
+        if not math.isclose(
+            float(getattr(item, field)),
+            float(expected[field]),
+            rel_tol=0.0,
+            abs_tol=5e-13,
+        ):
+            reasons.add(f"measurement_derived_value_mismatch:{field}")
+    for field in (
+        "cache_fields_exposed",
+        "cache_adjusted_candidate_is_cheaper",
+    ):
+        if getattr(item, field) is not expected[field]:
+            reasons.add(f"measurement_derived_value_mismatch:{field}")
+    return reasons, bool(expected["cache_adjusted_candidate_is_cheaper"])
 
 
 def _unique_by_correlation(events: Iterable[object], label: str) -> dict[str, object]:

@@ -71,10 +71,24 @@ class LineRleCandidate:
         )
 
 
-def build_line_rle_candidate(receipt: Mapping[str, object]) -> LineRleCandidate:
-    """Validate one trusted command receipt and build an in-memory candidate."""
+def build_line_rle_candidate(
+    receipt: Mapping[str, object],
+    *,
+    expected_call_id: str,
+    output_item: Mapping[str, object],
+) -> LineRleCandidate:
+    """Validate one new Responses tool-output item and its trusted receipt.
 
-    output = _eligible_output(receipt)
+    ``expected_call_id`` comes from the adapter's newly appended suffix boundary.
+    Requiring it separately prevents a self-consistent but unrelated receipt/item pair
+    from becoming eligibility authority.
+    """
+
+    output = _eligible_output(
+        receipt,
+        expected_call_id=expected_call_id,
+        output_item=output_item,
+    )
     source_bytes = output.encode("utf-8")
     supplied_hash = str(receipt.get("output_sha256") or "")
     observed_hash = hashlib.sha256(source_bytes).hexdigest()
@@ -140,7 +154,27 @@ def decode_line_rle(text: str) -> str:
     return "".join(decoded)
 
 
-def _eligible_output(receipt: Mapping[str, object]) -> str:
+def _eligible_output(
+    receipt: Mapping[str, object],
+    *,
+    expected_call_id: str,
+    output_item: Mapping[str, object],
+) -> str:
+    if not isinstance(expected_call_id, str) or not expected_call_id:
+        raise ScanEligibilityError("expected_call_id is required")
+    if output_item.get("type") != "function_call_output":
+        raise ScanEligibilityError("new suffix item must be function_call_output")
+    item_call_id = output_item.get("call_id")
+    if item_call_id != expected_call_id:
+        raise ScanEligibilityError(
+            "function_call_output call_id does not match expected_call_id"
+        )
+    receipt_call_id = receipt.get("call_id")
+    if not isinstance(receipt_call_id, str) or not receipt_call_id:
+        raise ScanEligibilityError("receipt call_id is required")
+    if receipt_call_id != expected_call_id:
+        raise ScanEligibilityError("receipt call_id does not match expected_call_id")
+
     exact = {
         "schema": "compand.command_result.v1",
         "source_kind": "command_result",
@@ -157,9 +191,9 @@ def _eligible_output(receipt: Mapping[str, object]) -> str:
     exit_status = receipt.get("exit_status")
     if isinstance(exit_status, bool) or exit_status != 0:
         raise ScanEligibilityError("exit_status must be integer zero")
-    output = receipt.get("output")
+    output = output_item.get("output")
     if not isinstance(output, str):
-        raise ScanEligibilityError("output must be UTF-8 text")
+        raise ScanEligibilityError("function_call_output.output must be UTF-8 text")
     byte_count = receipt.get("byte_count")
     observed_bytes = len(output.encode("utf-8"))
     if isinstance(byte_count, bool) or byte_count != observed_bytes:

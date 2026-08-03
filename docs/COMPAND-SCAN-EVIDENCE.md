@@ -25,12 +25,16 @@ Loopback fixture hooks deliberately compile to `low_coverage_hold`; they prove r
 mechanics, not live insertion.
 
 The shadow economics path accepts only a trusted `compand.command_result.v1` receipt for
-a successful, complete UTF-8 command result. It builds the candidate in memory, sends the
-original bytes on the authorized gateway path, and persists only aggregate span/byte
-counts, whole-artifact hashes, provider count results, cache fields, latency, retries,
-task outcome, and dated projected input cost. A cheaper local token count is not enough:
-`advance` requires exposed cache fields and a lower cache-adjusted projected provider
-input cost for at least one completed task.
+a successful, complete UTF-8 command result. The eligibility boundary separately requires
+the expected newly appended Responses `function_call_output`, matches its exact `call_id`
+to the receipt, and hashes that item's output bytes. It builds the candidate in memory,
+sends the original bytes on the authorized gateway path, and persists only aggregate
+span/byte counts, whole-artifact hashes, provider count results, cache fields, latency,
+retries, task outcome, and dated projected input cost. Published costs, savings, cache
+exposure, and qualification are validated and regenerated from those primitives; provider
+and model identity must match the run snapshot. A cheaper local token count is not enough:
+`advance` requires exposed cache fields and a lower cache-adjusted projected provider input
+cost for at least one completed task.
 
 Every decision has `mutation_authorized=false`. `advance` means only that the next
 separately gated experiment may be considered.

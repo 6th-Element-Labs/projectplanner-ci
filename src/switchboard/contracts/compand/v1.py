@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import math
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 GatewayMode = Literal["passthrough", "scan"]
@@ -15,7 +16,12 @@ ScanDecisionKind = Literal["advance", "low_coverage_hold", "redesign", "stop"]
 
 
 class _FrozenContract(BaseModel):
-    model_config = ConfigDict(frozen=True, populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(
+        frozen=True,
+        populate_by_name=True,
+        extra="forbid",
+        allow_inf_nan=False,
+    )
 
 
 class GatewayErrorDetail(_FrozenContract):
@@ -249,6 +255,68 @@ class LineRleShadowMeasurement(_FrozenContract):
     shadow_original_forwarded_byte_for_byte: bool
     price_table: ProviderPriceTable
 
+    def recomputed_derived_values(self) -> dict[str, float | bool]:
+        """Regenerate every derived economics field from primitive evidence."""
+
+        original_cost = _projected_input_cost(self.original_count, self.price_table)
+        candidate_cost = _projected_input_cost(self.candidate_count, self.price_table)
+        savings = round(original_cost - candidate_cost, 12)
+        cache_exposed = (
+            self.original_count.cached_input_tokens is not None
+            and self.candidate_count.cached_input_tokens is not None
+        )
+        cheaper = bool(
+            self.repeated_span_count
+            and cache_exposed
+            and savings > 0
+            and self.task_completed
+            and self.shadow_original_forwarded_byte_for_byte
+        )
+        return {
+            "cache_fields_exposed": cache_exposed,
+            "projected_original_input_usd": original_cost,
+            "projected_candidate_input_usd": candidate_cost,
+            "projected_input_savings_usd": savings,
+            "cache_adjusted_candidate_is_cheaper": cheaper,
+        }
+
+    @model_validator(mode="after")
+    def validate_derived_economics(self) -> "LineRleShadowMeasurement":
+        """Reject evidence whose published economics do not match its primitives."""
+
+        for label, count in (
+            ("original_count", self.original_count),
+            ("candidate_count", self.candidate_count),
+        ):
+            cached = count.cached_input_tokens
+            if cached is not None and cached > count.input_tokens:
+                raise ValueError(f"{label}.cached_input_tokens exceeds input_tokens")
+        expected = self.recomputed_derived_values()
+        mismatches: list[str] = []
+        for field in (
+            "projected_original_input_usd",
+            "projected_candidate_input_usd",
+            "projected_input_savings_usd",
+        ):
+            if not math.isclose(
+                float(getattr(self, field)),
+                float(expected[field]),
+                rel_tol=0.0,
+                abs_tol=5e-13,
+            ):
+                mismatches.append(field)
+        for field in (
+            "cache_fields_exposed",
+            "cache_adjusted_candidate_is_cheaper",
+        ):
+            if getattr(self, field) is not expected[field]:
+                mismatches.append(field)
+        if mismatches:
+            raise ValueError(
+                "derived economics mismatch: " + ", ".join(sorted(mismatches))
+            )
+        return self
+
 
 class CompandScanDecision(_FrozenContract):
     """Bounded DOGFOOD-32 decision; it never enables mutation by itself."""
@@ -262,3 +330,15 @@ class CompandScanDecision(_FrozenContract):
     measured_candidate_count: int = Field(ge=0)
     qualifying_candidate_count: int = Field(ge=0)
     mutation_authorized: Literal[False] = False
+
+
+def _projected_input_cost(
+    count: ProviderTokenCount, price_table: ProviderPriceTable
+) -> float:
+    cached = count.cached_input_tokens or 0
+    uncached = count.input_tokens - cached
+    value = (
+        uncached * price_table.input_usd_per_million_tokens
+        + cached * price_table.cached_input_usd_per_million_tokens
+    ) / 1_000_000
+    return round(value, 12)
