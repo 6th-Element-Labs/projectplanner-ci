@@ -1650,30 +1650,58 @@
         if (!id) return;
         const link = ((this.missionStatus || {}).linked_tasks || []).find((l) => String(l.task_id) === id) || {};
         const taskProject = link.project_id || projectId || window.PM_PROJECT;
+        const detail = link.task_detail || link.task || {};
+        const taskTitle = detail.title || id;
+        const taskStatus = detail.status || 'Not Started';
+        const deliverable = (this.deliverables || []).find((d) => d.id === this.selectedDeliverableId) || {};
         this._dlNode = { task_id: id, task_project: taskProject };
+        const heading = document.getElementById('dl-node-title');
+        if (heading) heading.innerHTML = `
+            <span class="tk-deliverable-task-kicker">
+                <span class="font-monospace">${this.esc(id)}</span>
+                <span class="badge bg-secondary-lt">${this.esc(taskStatus)}</span>
+            </span>
+            <span class="tk-deliverable-task-title">${this.esc(taskTitle)}</span>`;
         const body = document.getElementById('dl-node-body');
         body.innerHTML = `
-            <div class="mb-3"><div class="text-secondary small">${this.esc(taskProject)}</div>
-                <div class="h4 mb-0">${this.esc(id)}</div></div>
-            <div class="row g-2 mb-2">
+            <div class="tk-deliverable-task-context">
+                <i class="ti ti-target"></i>
+                <span>${this.esc(deliverable.title || this.selectedDeliverableId || 'Deliverable')}</span>
+                <i class="ti ti-chevron-right"></i>
+                <strong>This deliverable</strong>
+            </div>
+            <div class="tk-deliverable-task-actions">
+                <div class="me-auto">
+                    <div class="fw-semibold small">Task actions</div>
+                    <div class="text-secondary small">These affect the task, not its deliverable link.</div>
+                </div>
+                <button type="button" class="btn btn-outline-secondary" data-mission-watch-task="${this.esc(id)}"><i class="ti ti-terminal-2 me-1"></i>Watch / Chat</button>
+                ${detail.status !== 'Done' ? `<span id="dl-node-autopilot">${this._taskAutopilotButtonHtml(id, taskProject, false)}</span>` : ''}
+            </div>
+            <div class="d-flex align-items-center gap-2 mb-3">
+                <div class="fw-semibold">Deliverable relationship</div>
+                <a href="#" class="small ms-auto" id="dl-node-open">View full task <i class="ti ti-arrow-up-right ms-1"></i></a>
+            </div>
+            <div class="row g-3 mb-3">
                 <div class="col-md-6"><label class="form-label">Milestone</label><select id="dl-node-milestone" class="form-select">${this._missionMilestoneOptions(link.milestone_id)}</select></div>
                 <div class="col-md-6"><label class="form-label">Role</label><select id="dl-node-role" class="form-select">${this._roleOptions(link.role || 'contributes')}</select></div>
-            </div>
-            <label class="form-check mb-3"><input class="form-check-input" type="checkbox" id="dl-node-blocks"${link.blocks_deliverable ? ' checked' : ''}>
-                <span class="form-check-label">This task blocks the deliverable</span></label>
-            <div class="d-flex flex-wrap gap-2">
-                <a href="#" class="small" id="dl-node-open"><i class="ti ti-external-link me-1"></i>Open task detail</a>
-                <button type="button" class="btn btn-sm btn-outline-azure" data-mission-watch-task="${this.esc(id)}"><i class="ti ti-terminal-2 me-1"></i>Open Watch / Chat</button>
             </div>`;
-        const detail = link.task_detail || link.task || {};
-        if (detail.status !== 'Done') {
-            body.insertAdjacentHTML('beforeend', `<div class="mt-3" id="dl-node-autopilot">${this._taskAutopilotButtonHtml(id, taskProject, false)}</div>`);
-        }
+        body.insertAdjacentHTML('beforeend', `
+            <label class="tk-deliverable-blocking-check">
+                <input class="form-check-input" type="checkbox" id="dl-node-blocks"${link.blocks_deliverable ? ' checked' : ''}>
+                <span><strong>Blocks this deliverable</strong><small>Count this task as a blocker until it is verified.</small></span>
+            </label>`);
         this._dlFlash('dl-node-flash', '', 'text-secondary');
         document.getElementById('dl-node-open')?.addEventListener('click', (e) => {
             e.preventDefault();
+            // Wait for the relationship sheet to finish closing before the full
+            // task workspace opens. Opening immediately left two backdrops and
+            // two modal transitions stacked on desktop and mobile.
+            const modal = document.getElementById('dl-node-modal');
+            modal?.addEventListener('hidden.bs.modal', () => {
+                this.openLinkedTask(id, taskProject);
+            }, { once: true });
             this._dlHide('dl-node-modal');
-            this.openLinkedTask(id, taskProject);
         });
         document.getElementById('dl-node-autopilot')?.addEventListener('click', (e) => {
             const btn = e.target.closest('[data-autopilot-action]');

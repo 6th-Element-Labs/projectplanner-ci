@@ -918,7 +918,7 @@
     </div>
 
     <!-- Task detail modal -->
-    <div class="modal modal-blur fade" id="task-modal" tabindex="-1" role="dialog" aria-hidden="true">
+    <div class="modal modal-blur fade tk-task-modal" id="task-modal" tabindex="-1" role="dialog" aria-hidden="true">
         <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable" role="document">
             <div class="modal-content">
                 <div class="modal-header">
@@ -926,8 +926,10 @@
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body" id="task-modal-body"></div>
-                <div class="modal-footer">
-                    <button type="button" class="btn" data-bs-dismiss="modal">Close</button>
+                <div class="modal-footer tk-task-modal-footer">
+                    <span id="task-modal-save-state" class="badge bg-green-lt me-auto"><i class="ti ti-circle-check me-1"></i>Saved</span>
+                    <button type="button" id="task-modal-discuss" class="btn btn-outline-secondary"><i class="ti ti-message-circle me-1"></i>Task discussion</button>
+                    <button type="button" id="task-modal-edit" class="btn btn-primary"><i class="ti ti-pencil me-1"></i>Edit task</button>
                 </div>
             </div>
         </div>
@@ -1126,14 +1128,14 @@
                 <button type="button" id="dl-kpi-link-save" class="btn btn-primary"><i class="ti ti-link me-1"></i>Link to KPI</button></div>
         </div></div>
     </div>
-    <div class="modal modal-blur fade" id="dl-node-modal" tabindex="-1" role="dialog" aria-hidden="true">
+    <div class="modal modal-blur fade tk-deliverable-task-modal" id="dl-node-modal" tabindex="-1" role="dialog" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered" role="document"><div class="modal-content">
-            <div class="modal-header"><h5 class="modal-title"><i class="ti ti-adjustments me-2"></i>Task on this deliverable</h5>
+            <div class="modal-header"><h5 class="modal-title" id="dl-node-title">Task on this deliverable</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
             <div class="modal-body" id="dl-node-body"></div>
             <div class="modal-footer"><span id="dl-node-flash" class="small text-secondary me-auto"></span>
-                <button type="button" id="dl-node-unlink" class="btn btn-outline-danger"><i class="ti ti-unlink me-1"></i>Unlink</button>
-                <button type="button" id="dl-node-save" class="btn btn-primary"><i class="ti ti-device-floppy me-1"></i>Save</button></div>
+                <button type="button" id="dl-node-unlink" class="btn btn-outline-danger"><i class="ti ti-unlink me-1"></i>Remove link</button>
+                <button type="button" id="dl-node-save" class="btn btn-primary"><i class="ti ti-device-floppy me-1"></i>Save relationship</button></div>
         </div></div>
     </div>
 

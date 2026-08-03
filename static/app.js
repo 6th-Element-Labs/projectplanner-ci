@@ -2849,12 +2849,12 @@ const TeepPlan = {
     },
 
     taskPrimaryRunnerHtml(t) {
-        return `<div class="card card-sm mb-3" id="task-primary-runner" data-task-id="${this.esc(t.task_id)}" data-task-status="${this.esc(t.status || '')}" data-session-state="checking">
-            <div class="card-body">
+        return `<div class="card card-sm tk-task-runner" id="task-primary-runner" data-task-id="${this.esc(t.task_id)}" data-task-status="${this.esc(t.status || '')}" data-session-state="checking">
+            <div class="card-body py-2">
                 <div class="d-flex flex-column flex-md-row align-items-md-center gap-3">
-                    <span class="avatar rounded bg-primary-lt text-primary flex-shrink-0"><i class="ti ti-terminal-2"></i></span>
+                    <span class="avatar rounded bg-azure-lt text-azure flex-shrink-0"><i class="ti ti-terminal-2"></i></span>
                     <div class="flex-fill" style="min-width:0">
-                        <div class="d-flex align-items-center gap-2 mb-1">
+                        <div class="d-flex align-items-center gap-2">
                             <span class="fw-semibold" id="task-primary-runner-title">Checking task session</span>
                             <span id="task-primary-runner-badge" class="badge bg-secondary-lt">Checking</span>
                         </div>
@@ -2872,7 +2872,21 @@ const TeepPlan = {
                 </div>
             </div>
         </div>
-        <div id="runner-pty-details-mount" class="mb-3"></div>`;
+        <div id="runner-pty-details-mount"></div>`;
+    },
+
+    taskModalTitleHtml(t) {
+        const honest = t.honest_display || {};
+        const displayLabel = honest.label || t.status || '';
+        const color = honest.lifecycle_phase === 'start_failed_retry'
+            ? 'orange'
+            : (this.STATUS_COLOR[t.status] || 'secondary');
+        return `<span class="tk-task-title-kicker">
+            <span class="font-monospace">${this.esc(t.task_id)}</span>
+            <span class="badge bg-${color}-lt">${this.esc(displayLabel || '—')}</span>
+            ${t.is_blocking ? '<span class="badge bg-red-lt"><i class="ti ti-alert-triangle me-1"></i>Blocking</span>' : ''}
+        </span>
+        <span class="tk-task-title-text">${this.esc(t.title)}</span>`;
     },
 
     _resumeTaskReviewFromPrimary(button, taskId) {
@@ -3226,8 +3240,6 @@ const TeepPlan = {
         const sc = honest.lifecycle_phase === 'start_failed_retry'
             ? 'orange'
             : (this.STATUS_COLOR[t.status] || 'secondary');
-        document.getElementById('task-modal-title').innerHTML =
-            `<span class="status-dot bg-${sc} me-2" title="${this.esc(displayLabel)}"></span><span class="text-secondary fw-normal me-2">${this.esc(t.task_id)}</span>${this.esc(t.title)}`;
         const assignee = this.esc(t.assignee || '—');
         const blocks = this.tasks.filter((x) => (x.depends_on || []).includes(t.task_id)).map((x) => this.esc(x.task_id)).join(', ') || 'none';
         const wsLabel = this.esc(t._wsId || '') + (t._wsName ? ' · ' + this.esc(t._wsName) : '');
@@ -3251,55 +3263,96 @@ const TeepPlan = {
                 ${honest.reason ? `<div class="mt-1 text-secondary">${this.esc(honest.reason)}</div>` : ''}
                </div>`
             : '';
-        document.getElementById('task-modal-title').innerHTML =
-            `<span class="status-dot bg-${sc} me-2"></span><span class="text-secondary font-monospace fw-normal me-2">${this.esc(t.task_id)}</span>${this.esc(t.title)}${t.is_blocking ? ' <span class="badge bg-red-lt ms-2"><i class="ti ti-alert-triangle me-1"></i>Blocking</span>' : ''}`;
+        const property = (label, value) => `<div class="tk-task-property">
+            <div class="tk-task-property-label">${label}</div>
+            <div class="tk-task-property-value">${value}</div>
+        </div>`;
+        const acceptance = (icon, label, value) => `<div class="tk-task-acceptance-row">
+            <i class="ti ti-${icon}"></i>
+            <div><strong>${label}</strong><div class="text-secondary">${this.esc(value || 'Not defined')}</div></div>
+        </div>`;
+        const narration = t.narration || (t.narration_state || {}).stale && t.narration_raw;
+        const outcomeHtml = narration
+            ? `<div class="markdown${t.narration ? '' : ' text-secondary'}">${this.md(narration)}</div>`
+            : `<p class="text-secondary mb-0" style="white-space:pre-wrap">${this.esc(t.description || 'No outcome has been written yet.')}</p>`;
+        const deliverableLinks = (((t.project_context || {}).deliverable_links) || []).map((l) =>
+            `<span class="badge bg-purple-lt me-1"><i class="ti ti-target-arrow me-1"></i>${this.esc(l.deliverable_title || l.deliverable_id)}</span>`
+        ).join('') || '<span class="text-secondary">Not linked</span>';
+        document.getElementById('task-modal-title').innerHTML = this.taskModalTitleHtml(t);
         document.getElementById('task-modal-body').innerHTML = `
             ${this.taskPrimaryRunnerHtml(t)}
-            <ul class="nav nav-tabs" role="tablist">
-                <li class="nav-item" role="presentation"><a class="nav-link active" data-bs-toggle="tab" href="#m-details" role="tab"><i class="ti ti-info-circle me-1"></i>Details</a></li>
+            <ul class="nav nav-tabs tk-task-tabs" role="tablist">
+                <li class="nav-item" role="presentation"><a class="nav-link active" data-bs-toggle="tab" href="#m-details" role="tab"><i class="ti ti-info-circle me-1"></i>Overview</a></li>
                 <li class="nav-item" role="presentation"><a class="nav-link" data-bs-toggle="tab" href="#m-edit" role="tab"><i class="ti ti-pencil me-1"></i>Edit</a></li>
-                <li class="nav-item" role="presentation"><a class="nav-link" data-bs-toggle="tab" href="#m-dev" role="tab"><i class="ti ti-terminal-2 me-1"></i>Dev</a></li>
+                <li class="nav-item" role="presentation"><a class="nav-link" data-bs-toggle="tab" href="#m-dev" role="tab"><i class="ti ti-terminal-2 me-1"></i>Agent</a></li>
                 <li class="nav-item" role="presentation"><a class="nav-link" data-bs-toggle="tab" href="#m-activity" role="tab"><i class="ti ti-history me-1"></i>Activity</a></li>
             </ul>
-            <div class="tab-content mt-3">
+            <div class="tab-content tk-task-tab-content">
                 <div class="tab-pane fade show active" id="m-details" role="tabpanel">
                     ${this.taskAutopilotExceptionHtml(t)}
                     ${this.completionProjectionHtml(t, false)}
-                    <div class="progress progress-sm mb-3"><div class="progress-bar bg-${sc}" style="width:${pct}%"></div></div>
-                    <div class="text-secondary small mb-3 d-flex align-items-center"><span class="status-dot bg-${sc} me-2"></span>${this.esc(displayLabel || '—')}${honest.lifecycle_phase === 'start_failed_retry' ? '' : ` · ${pct}% complete`}</div>
                     ${honestLine}
-                    ${this.taskNarrationHtml(t)}
-                    <div class="subheader mb-2">Economics</div>
-                    ${this.tallyDetailHtml(tally)}
-                    ${this.taskProjectContextHtml(t)}
-                    <div class="subheader mb-2">Properties</div>
-                    <div class="datagrid mb-3">
-                        <div class="datagrid-item"><div class="datagrid-title">Status</div>
-                            <div class="datagrid-content"><select id="details-status" class="form-select form-select-sm" style="max-width:200px">${statusOpts}</select></div></div>
-                        ${dg('Done provenance', provenanceHtml)}
-                        ${dg('External CI', this.externalCiDetail(t))}
-                        ${dg('Publication', this.publicationDetail(t))}
-                        ${dg('Owner', av(t.owner_person_or_role || t.owner_org) + owner)}
-                        ${dg('Assignee', t.assignee ? av(t.assignee) + this.esc(t.assignee) : '—')}
-                        ${dg('Phase', this.esc(t.phase || '—'))}
-                        ${dg('Workstream', `<span class="text-uppercase">${this.esc(t._wsId || '—')}</span>${t._wsName ? ' · ' + this.esc(t._wsName) : ''}`)}
-                        ${dg('Timeline', dates)}
-                        ${dg('Effort', effort)}
-                        ${dg('Risk', riskHtml)}
-                        ${dg('Depends on', badgeList(t.depends_on, 'link'))}
-                        ${dg('Blocks', badgeList(blockArr, 'arrow-bar-to-right'))}
+                    <div class="tk-task-overview-grid">
+                        <div class="tk-task-overview-main">
+                            <section class="tk-task-section">
+                                <div class="tk-task-section-head"><h3>Outcome</h3><a data-bs-toggle="tab" href="#m-edit">Edit</a></div>
+                                ${outcomeHtml}
+                            </section>
+                            <section class="tk-task-section">
+                                <div class="tk-task-section-head"><h3>Acceptance</h3></div>
+                                <div class="tk-task-acceptance-list">
+                                    ${acceptance('login', 'Entry criteria', t.entry_criteria)}
+                                    ${acceptance('logout', 'Exit criteria', t.exit_criteria)}
+                                    ${acceptance('package', 'Deliverable', t.deliverable)}
+                                </div>
+                            </section>
+                            <section class="tk-task-section">
+                                <div class="tk-task-section-head"><h3>Dependencies</h3></div>
+                                <div class="d-flex flex-wrap gap-2">
+                                    <span class="tk-task-dependency"><i class="ti ti-arrow-left"></i>${(t.depends_on || []).length ? `Depends on ${badgeList(t.depends_on, 'link')}` : 'No prerequisites'}</span>
+                                    <span class="tk-task-dependency"><i class="ti ti-arrow-right"></i>${blockArr.length ? `Blocks ${badgeList(blockArr, 'arrow-bar-to-right')}` : 'Blocks no tasks'}</span>
+                                </div>
+                            </section>
+                            <section class="tk-task-section">
+                                <details class="tk-task-description"${(t.description || '').length < 520 ? ' open' : ''}>
+                                    <summary>Description &amp; notes <span>${(t.description || '').length < 520 ? 'Hide' : 'Show full text'}</span></summary>
+                                    <div class="text-secondary pt-2" style="white-space:pre-wrap">${this.esc(t.description || 'No additional description.')}</div>
+                                </details>
+                            </section>
+                            <section class="tk-task-section">
+                                <div class="tk-task-section-head"><h3>Recent activity</h3><a data-bs-toggle="tab" href="#m-activity">View all <i class="ti ti-arrow-right"></i></a></div>
+                                <div id="details-activity"></div>
+                            </section>
+                            <details class="tk-task-more-context">
+                                <summary><i class="ti ti-layout-list me-1"></i>More context — economics, project authority, and repository roles</summary>
+                                <div class="pt-3">
+                                    <div class="subheader mb-2">Economics</div>
+                                    ${this.tallyDetailHtml(tally)}
+                                    ${this.taskProjectContextHtml(t)}
+                                </div>
+                            </details>
+                        </div>
+                        <aside class="tk-task-properties">
+                            <div class="tk-task-section-head"><h3>Properties</h3><a data-bs-toggle="tab" href="#m-edit">Edit</a></div>
+                            <div class="tk-task-property-list">
+                                ${property('Status', `<select id="details-status" class="form-select form-select-sm">${statusOpts}</select>`)}
+                                ${property('Assignee', t.assignee ? av(t.assignee) + this.esc(t.assignee) : '—')}
+                                ${property('Owner', av(t.owner_person_or_role || t.owner_org) + owner)}
+                                ${property('Phase', this.esc(t.phase || '—'))}
+                                ${property('Workstream', `<span class="text-uppercase">${this.esc(t._wsId || '—')}</span>${t._wsName ? ' · ' + this.esc(t._wsName) : ''}`)}
+                                ${property('Timeline', dates)}
+                                ${property('Effort', effort)}
+                                ${property('Risk', riskHtml)}
+                                ${property('Deliverable', deliverableLinks)}
+                            </div>
+                            <div class="tk-task-proof">
+                                <div class="tk-task-section-head"><h3>Delivery &amp; proof</h3><i class="ti ti-shield-check text-secondary"></i></div>
+                                ${property('Provenance', provenanceHtml)}
+                                ${property('External CI', this.externalCiDetail(t))}
+                                ${property('Publication', this.publicationDetail(t))}
+                            </div>
+                        </aside>
                     </div>
-                    <div class="subheader mb-2">Description</div>
-                    <p class="text-secondary" style="white-space:pre-wrap">${this.esc(t.description || '—')}</p>
-                    <div class="subheader mb-2 mt-3">Gates</div>
-                    <div class="row g-2">
-                        ${gateCard('login', 'Entry criteria', t.entry_criteria, false, false)}
-                        ${gateCard('logout', 'Exit criteria', t.exit_criteria, false, false)}
-                        ${gateCard('package', 'Deliverable', t.deliverable, true, true)}
-                    </div>
-                    <div class="subheader mb-2 mt-4 d-flex align-items-center">Recent activity
-                        <a class="ms-auto small fw-normal text-reset" data-bs-toggle="tab" href="#m-activity" role="tab">View all <i class="ti ti-arrow-right"></i></a></div>
-                    <div id="details-activity"></div>
                 </div>
                 <div class="tab-pane fade" id="m-edit" role="tabpanel">
                     ${this._taskFormHtml(t, 'edit-')}
@@ -3382,6 +3435,14 @@ const TeepPlan = {
         if (!this.canUseLlm) chatSend.title = 'Your role does not include use:llm';
         chatSend.addEventListener('click', () => this.sendChat(t.task_id));
         document.getElementById('chat-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') this.sendChat(t.task_id); });
+        const showTaskTab = (selector) => {
+            const trigger = document.querySelector(`#task-modal a[href="${selector}"]`);
+            if (trigger && window.bootstrap) window.bootstrap.Tab.getOrCreateInstance(trigger).show();
+        };
+        const editTask = document.getElementById('task-modal-edit');
+        if (editTask) editTask.onclick = () => showTaskTab('#m-edit');
+        const discussTask = document.getElementById('task-modal-discuss');
+        if (discussTask) discussTask.onclick = () => showTaskTab('#m-activity');
         window.bootstrap.Modal.getOrCreateInstance(document.getElementById('task-modal')).show();
     },
 
@@ -3508,7 +3569,9 @@ const TeepPlan = {
             const updated = await res.json();
             const i = this.tasks.findIndex((x) => x.task_id === id);
             if (i >= 0) this.tasks[i] = Object.assign({}, this.tasks[i], updated);
-            document.getElementById('task-modal-title').innerHTML = `<span class="me-2">${this.esc(updated.task_id)}</span>${this.esc(updated.title)}`;
+            document.getElementById('task-modal-title').innerHTML = this.taskModalTitleHtml(
+                i >= 0 ? this.tasks[i] : updated,
+            );
             flash('Saved', 'green');
             this.renderBoard();
             this.renderTasks();
