@@ -775,10 +775,11 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
     projection = _projection(task_id, project)
     task = projection.get("task") or {}
     if role in {"review_merge", "remediation"}:
-        requested_head = str(source_sha or "").strip().lower()
+        supplied_head = str(source_sha or "").strip().lower()
         persisted_pr_head = str(
             (task.get("git_state") or {}).get("head_sha") or ""
         ).strip().lower()
+        requested_head = supplied_head or persisted_pr_head
         if (
             not _SHA.fullmatch(requested_head)
             or not _SHA.fullmatch(persisted_pr_head)
@@ -794,6 +795,12 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
                 requested_head_sha=requested_head or None,
                 persisted_pr_head_sha=persisted_pr_head or None,
             )
+        # Operator recovery adapters intentionally omit source_sha. Task
+        # Execution owns the exact-head decision and may derive it only from
+        # the already-persisted canonical PR head. Explicit callers (including
+        # Mission Bot v4) still reach the equality check above and fail closed
+        # when their immutable assignment disagrees.
+        source_sha = requested_head
     task_scope: dict[str, Any] = {}
     if (str(task.get("status") or "") == "Triage"
             and role == "implementation"
