@@ -1489,10 +1489,10 @@ def _connect_mcp_endpoint():
     return f"{base}/mcp?{urllib.parse.urlencode({'project': PROJECT})}"
 
 
-def _connect_codex_mcp_argv():
+def _connect_codex_mcp_argv(*, verification_runtime=None):
     """Codex overrides required for readable, Switchboard-bound sessions."""
     endpoint = _connect_mcp_endpoint()
-    return (
+    overrides = (
         # The enrolled Host deliberately has an isolated CODEX_HOME containing
         # auth, not the operator's mutable config. Pin the normal agent effort
         # explicitly so Watch does not degrade to a no-reasoning transcript
@@ -1503,6 +1503,13 @@ def _connect_codex_mcp_argv():
               '"SWITCHBOARD_CONNECT_SESSION_TOKEN"',
         "-c", "mcp_servers.taikun_plan.required=true",
     )
+    if verification_runtime:
+        # macOS /etc/zprofile runs path_helper for login shells and can move
+        # the Host-proven virtualenv behind /usr/bin.  The child already has
+        # the verified PATH; keep Codex shell tools non-login so that exact
+        # Capacity-owned environment reaches commands unchanged.
+        overrides += ("-c", "allow_login_shell=false")
+    return overrides
 
 
 def _project_python_runtime(execution_context):
@@ -1797,7 +1804,9 @@ def require_connect_generation_binding(wake):
         raise ValueError(f"connect generation binding refused: {exc.code}") from exc
 
 
-def launch_command(wake, inventory, runner_session_id="", workspace_path=""):
+def launch_command(
+        wake, inventory, runner_session_id="", workspace_path="",
+        verification_runtime=None):
     """Build the supervisor command for a wake without executing it."""
     sel = wake.get("selector") or {}
     eligible = eligible_runtime(wake, inventory)
@@ -1854,7 +1863,8 @@ def launch_command(wake, inventory, runner_session_id="", workspace_path=""):
         # require the same taikun_plan MCP surface Direct already uses so
         # "via Switchboard" means MCP tools, not improvised REST/curl.
         if runtime == "codex":
-            before = before + _connect_codex_mcp_argv()
+            before = before + _connect_codex_mcp_argv(
+                verification_runtime=verification_runtime)
             if str((connect_policy.get("lifecycle") or {}).get(
                     "mission_key") or "").strip():
                 before = ("exec",) + before
@@ -2028,7 +2038,8 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
             }
     cmd, mode = launch_command(
         wake, inventory, runner_session_id=runner_session_id,
-        workspace_path=workspace_path)
+        workspace_path=workspace_path,
+        verification_runtime=verification_runtime)
     try:
         env = os.environ.copy()
         if mode == "connect":

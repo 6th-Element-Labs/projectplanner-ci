@@ -91,6 +91,15 @@ ok("mcp_servers.taikun_plan.required=true" in child
            for part in child if isinstance(part, str)),
    "codex Connect boots with required MCP and the via-Switchboard note")
 
+locked_cmd, _ = agent_host.launch_command(
+    connect_wake("codex"), inventory, runner_session_id="run_locked_runtime",
+    workspace_path=str(ROOT), verification_runtime={
+        "schema": "switchboard.host_python_runtime.v1",
+    })
+locked_child = locked_cmd[locked_cmd.index("--") + 1:]
+ok("allow_login_shell=false" in locked_child,
+   "a Host-proven runtime reaches Codex with login-shell PATH rewriting disabled")
+
 mission_cmd, mission_mode = agent_host.launch_command(
     connect_wake("codex", mission_key="mission-bot:WATCH-10:1"),
     inventory, runner_session_id="run_mission_one_shot",
