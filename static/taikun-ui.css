@@ -555,7 +555,8 @@ body.tk-density-control .h1{ font-variant-numeric:tabular-nums; }
   #fleet-dock > .card {
     border: 0 !important;
     border-radius: 0 !important;
-    bottom: 0 !important;
+    /* Keep the five primary destinations available while this sheet is open. */
+    bottom: calc(var(--tk-mobile-nav-h, 4.25rem) + env(safe-area-inset-bottom)) !important;
     left: 0 !important;
     max-height: none !important;
     right: 0 !important;

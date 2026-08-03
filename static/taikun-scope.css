@@ -9,6 +9,7 @@
 .tk-mono{ font-family:var(--tblr-font-monospace,ui-monospace,SFMono-Regular,Menlo,monospace); font-variant-numeric:tabular-nums; }
 
 .tk-scope-page{ --scope-drawer-width:min(480px,44vw); }
+.tk-scope-back{ display:none; }
 .tk-scope-head{ display:flex;align-items:flex-start;justify-content:space-between;gap:1.5rem; }
 .tk-scope-breadcrumb{ color:var(--tblr-secondary);font-size:.875rem;margin-bottom:.35rem; }
 .tk-scope-conversation{ min-height:calc(100vh - 13rem);overflow:hidden; }
@@ -59,6 +60,7 @@
   .tk-scope-page.drawer-expanded .tk-scope-head,.tk-scope-page.drawer-expanded .tk-scope-conversation{ margin-right:min(745px,69vw); }
 }
 @media (max-width: 767.98px){
+  .tk-scope-back{ display:inline-flex;align-items:center;margin-top:.75rem;padding-left:0; }
   .tk-scope-head{ display:block; }
   .tk-scope-head>.btn{ margin-top:1rem; }
   .tk-scope-conversation{ min-height:calc(100vh - 13rem);margin-bottom:1rem; }

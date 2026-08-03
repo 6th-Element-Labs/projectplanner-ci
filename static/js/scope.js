@@ -227,8 +227,20 @@
                 if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); send(); }
             });
             el('scope-chat-clear').addEventListener('click', async () => {
-                await fetch('api/chat?' + qs({ session: SESSION }), { method: 'DELETE' });
-                el('scope-chat-log').innerHTML = '<div class="tk-scope-empty" id="scope-chat-empty"><h3>Start a new Scope discussion</h3><p>Describe the outcome or paste the next piece of context below.</p></div>';
+                if (!window.confirm('Delete this Scope conversation? The approved Scope artifact and its history will not be changed.')) return;
+                try {
+                    const response = await fetch('api/chat?' + qs({ session: SESSION }), { method: 'DELETE' });
+                    const data = await response.json().catch(() => ({}));
+                    if (!response.ok) throw new Error(data.detail || ('HTTP ' + response.status));
+                    runId = null;
+                    el('scope-chat-log').innerHTML = '<div class="tk-scope-empty" id="scope-chat-empty"><h3>Start a new Scope discussion</h3><p>Describe the outcome or paste the next piece of context below.</p></div>';
+                    flash('Scope conversation deleted. The approved Scope artifact was not changed.', 'success');
+                } catch (error) {
+                    flash('Could not delete the Scope conversation: ' + error.message, 'danger');
+                }
+            });
+            el('scope-back').addEventListener('click', () => {
+                if (window.TAIKUN_showTab) window.TAIKUN_showTab('#tab-exec');
             });
             document.querySelectorAll('[data-scope-prompt]').forEach((button) => button.addEventListener('click', () => send(button.dataset.scopePrompt)));
             document.addEventListener('keydown', (event) => { if (event.key === 'Escape') setDrawer(false, false); });

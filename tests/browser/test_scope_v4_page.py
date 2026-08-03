@@ -74,6 +74,7 @@ try:
         page = browser.new_page(viewport={"width": 1440, "height": 960})
         errors: list[str] = []
         chat_posts: list[dict] = []
+        chat_deletes: list[str] = []
         page.on("pageerror", lambda exc: errors.append(str(exc)))
 
         def chat_history(route: Route) -> None:
@@ -89,6 +90,7 @@ try:
                     '{"run_id":"scope-test-run","project":"maxwell","status":"pending"}'
                 ))
             else:
+                chat_deletes.append(route.request.url)
                 route.fulfill(status=200, content_type="application/json", body='{"cleared":"scope"}')
 
         page.route("**/api/chat/history?*", chat_history)
@@ -142,6 +144,37 @@ try:
         page.wait_for_selector("#scope-artifact-open")
         ok(page.locator("#scope-artifact-open").is_visible(),
            "mobile keeps the persistent Scope version control by the composer")
+        ok(page.locator("#scope-back").is_visible()
+           and page.locator("#scope-back").inner_text().strip() == "Overview",
+           "mobile Scope provides an explicit exit to the main page")
+        ok(page.locator("#scope-chat-clear").inner_text().strip() == "Delete conversation",
+           "Scope conversation deletion is a visible labelled action")
+        page.on("dialog", lambda dialog: dialog.accept())
+        page.locator("#scope-chat-clear").click()
+        page.wait_for_selector("#scope-chat-empty")
+        ok(len(chat_deletes) == 1,
+           "Delete conversation confirms and clears the durable Scope session")
+
+        page.evaluate("""() => {
+            document.querySelector('#fleet-dock').innerHTML =
+              '<div class="card" style="position:fixed;right:1rem;bottom:1rem;z-index:1031">Fleet sheet</div>';
+        }""")
+        fleet_box = page.locator("#fleet-dock > .card").bounding_box()
+        nav_box = page.locator(".tk-mobile-nav").bounding_box()
+        ok(bool(fleet_box and nav_box
+                and fleet_box["y"] + fleet_box["height"] <= nav_box["y"] + 1),
+           "expanded Fleet sheet preserves the mobile navigation escape route")
+        page.evaluate("document.querySelector('#fleet-dock').innerHTML = ''")
+
+        page.locator("#scope-back").click()
+        page.wait_for_selector("#tab-exec.active")
+        ok(page.evaluate("location.hash") == "#tab-exec",
+           "top-level navigation records the selected page in the URL")
+        page.go_back(wait_until="networkidle")
+        page.wait_for_selector("#tab-scope.active")
+        ok(page.evaluate("location.hash") == "#tab-scope",
+           "browser Back returns to Scope with the visible pane and URL aligned")
+
         page.locator("#scope-artifact-open").click()
         page.wait_for_selector("#scope-artifact-drawer.show")
         mobile_drawer = page.locator("#scope-artifact-drawer").bounding_box()

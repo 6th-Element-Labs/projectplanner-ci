@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mobile Fleet preserves its compact card and full-screen sheet interaction."""
+"""Mobile Fleet preserves its compact card and navigation-safe sheet interaction."""
 from __future__ import annotations
 
 import os
@@ -91,8 +91,8 @@ with sync_playwright() as runtime:
     sheet = m.locator("#fleet-dock > .card").bounding_box()
     ok(sheet and round(sheet["x"]) == 0 and round(sheet["y"]) == 0,
        f"expanded Fleet sheet starts at the viewport origin, got {sheet}")
-    ok(sheet and round(sheet["width"]) == 390 and round(sheet["height"]) == 844,
-       f"expanded Fleet sheet fills the 390x844 viewport, got {sheet}")
+    ok(sheet and round(sheet["width"]) == 390 and round(sheet["height"]) == 776,
+       f"expanded Fleet sheet fills the canvas above the 68px destination bar, got {sheet}")
     ok(m.locator("#fleet-dock-grab").is_visible(),
        "the expanded phone sheet exposes its drag/collapse handle")
     mobile_min = box(m, "#fleet-dock-min")
@@ -149,7 +149,7 @@ css = (ROOT / "static/taikun-ui.css").read_text()
 ok("display: contents" in css,
    "desktop keeps its original single-row layout by dissolving the mobile wrappers")
 ok("body:has(#fleet-dock > .card) { overflow: hidden; }" in css,
-   "the expanded mobile Fleet sheet owns the viewport without background scroll")
+   "the expanded mobile Fleet sheet owns the app canvas without background scroll")
 
 if failures:
     for line in failures:

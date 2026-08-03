@@ -26,8 +26,8 @@
     <link href="taikun-tabler.css?v=23" rel="stylesheet"/>
     <!-- taikun-ui: brand + polish layer over Tabler (white canvas, soft cards, refined tabs/modal).
          Loaded after taikun-tabler.css?v=23 so it wins. -->
-    <link href="taikun-ui.css?v=33" rel="stylesheet"/>
-    <link href="taikun-scope.css?v=2" rel="stylesheet"/>
+    <link href="taikun-ui.css?v=34" rel="stylesheet"/>
+    <link href="taikun-scope.css?v=3" rel="stylesheet"/>
     <link href="rooms.css?v=1" rel="stylesheet"/>
     <style>
       .epic-head{cursor:pointer}
@@ -458,6 +458,9 @@
                              durable kickoff artifact is a Watch-style drawer. Chat has no
                              execution authority; every approval remains an explicit action. -->
                         <div class="tab-pane tk-scope-page" id="tab-scope" role="tabpanel">
+                            <button class="btn btn-ghost-secondary tk-scope-back" id="scope-back" type="button">
+                                <i class="ti ti-arrow-left me-1"></i>Overview
+                            </button>
                             <div class="tk-scope-head mt-3">
                                 <div>
                                     <div class="tk-scope-breadcrumb"><span id="scope-project-label">Project</span> / Scope</div>
@@ -473,7 +476,9 @@
                                         <h3 class="card-title mb-1"><i class="ti ti-messages me-2"></i>Scope discussion</h3>
                                         <div class="text-secondary small">Project conversation · available to clients here and agents through the project interfaces</div>
                                     </div>
-                                    <button class="btn btn-sm btn-ghost-secondary" id="scope-chat-clear" type="button" title="Clear this Scope conversation"><i class="ti ti-trash"></i></button>
+                                    <button class="btn btn-sm btn-outline-danger" id="scope-chat-clear" type="button">
+                                        <i class="ti ti-trash me-1"></i>Delete conversation
+                                    </button>
                                 </div>
                                 <div class="card-body tk-scope-chat-log" id="scope-chat-log" aria-live="polite">
                                     <div class="tk-scope-empty" id="scope-chat-empty">
@@ -1220,7 +1225,7 @@
     <script src="js/proof-console.js?v=1"></script>
     <script src="js/project-admin.js?v=1"></script>
     <script src="js/settings.js?v=2"></script>
-    <script src="js/scope.js?v=2"></script>
+    <script src="js/scope.js?v=3"></script>
     <script src="js/attention.js?v=4"></script>
     <script src="js/fleet-dock.js?v=5"></script>
     <script src="app.js?v=88"></script>
@@ -1248,7 +1253,24 @@
           var ctrl = ctrlFor(href);
           if (ctrl) window.bootstrap.Tab.getOrCreateInstance(ctrl).show();
         }
+        function routeFromLocation() {
+          var match = /^#(tab-[a-z0-9-]+)(?:\/[a-z0-9-]+)?$/i.exec((location.hash || '').trim());
+          if (match) showTab('#' + match[1]);
+        }
         window.TAIKUN_showTab = showTab;
+        // Bootstrap changes the visible pane without changing the URL. Keep
+        // top-level destinations in browser history so Back, refresh, and a
+        // copied link all return to the page the operator actually selected.
+        document.addEventListener('shown.bs.tab', function (e) {
+          var ctrl = e.target && e.target.closest && e.target.closest('#main-nav [data-bs-toggle="tab"]');
+          var href = ctrl && ctrl.getAttribute('href');
+          var currentIsChildRoute = href && location.hash.indexOf(href + '/') === 0;
+          if (href && /^#tab-[a-z0-9-]+$/i.test(href) && location.hash !== href && !currentIsChildRoute) {
+            history.pushState(null, '', href);
+          }
+        });
+        window.addEventListener('popstate', routeFromLocation);
+        window.addEventListener('hashchange', routeFromLocation);
         document.addEventListener('click', function (e) {
           var a = e.target.closest('[data-bs-toggle="tab"]');
           if (!a) return;
