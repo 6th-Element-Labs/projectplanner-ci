@@ -14,6 +14,7 @@ from switchboard.storage.repositories import tasks as tasks_repo
 
 
 BOARD = ROOT / "static" / "js" / "board.js"
+INDEX = ROOT / "static" / "index.html"
 
 
 def main() -> int:
@@ -61,6 +62,7 @@ def main() -> int:
         assert result["columns"] == ["Not Started", "In Progress", "Done"]
         assert "bg-blue" in result["card"]
         assert live_status_is_projection_only()
+        assert 'src="js/board.js?v=4"' in INDEX.read_text(encoding="utf-8")
         print("PASS live runner projects In Progress without workflow mutation")
         return 0
     finally:
