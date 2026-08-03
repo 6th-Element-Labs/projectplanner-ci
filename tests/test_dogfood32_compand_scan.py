@@ -139,6 +139,59 @@ def full_receipt():
     )
 
 
+def qualifying_measurement() -> LineRleShadowMeasurement:
+    original = "same\nsame\n"
+    candidate = build_line_rle_candidate(
+        {
+            "schema": "compand.command_result.v1",
+            "call_id": "call-qualifying",
+            "source_kind": "command_result",
+            "trusted_adapter": True,
+            "exit_status": 0,
+            "content_type": "text/plain",
+            "encoding": "utf-8",
+            "truncated": False,
+            "signed": False,
+            "new_suffix": True,
+            "byte_count": len(original.encode()),
+            "output_sha256": hashlib.sha256(original.encode()).hexdigest(),
+        },
+        expected_call_id="call-qualifying",
+        output_item={
+            "type": "function_call_output",
+            "call_id": "call-qualifying",
+            "output": original,
+        },
+    )
+    return measure_line_rle_candidate(
+        candidate,
+        run_id="run-qualifying",
+        task_snapshot_sha256="sha256:" + "b" * 64,
+        original_count=ProviderTokenCount(
+            input_tokens=20,
+            cached_input_tokens=10,
+            count_call_latency_ms=1,
+        ),
+        candidate_count=ProviderTokenCount(
+            input_tokens=5,
+            cached_input_tokens=0,
+            count_call_latency_ms=1,
+        ),
+        price_table=ProviderPriceTable(
+            provider="compand_fixture",
+            model="gpt-5.4",
+            effective_date=date(2026, 8, 3),
+            input_usd_per_million_tokens=10,
+            cached_input_usd_per_million_tokens=1,
+            source="dated-test-table",
+        ),
+        gateway_latency_ms=1,
+        gateway_retry_count=0,
+        task_completed=True,
+        shadow_original_forwarded_byte_for_byte=True,
+    )
+
+
 class Dogfood32CompandScanTest(unittest.TestCase):
     def test_coverage_receipt_reconciles_every_observation_and_is_stable(self) -> None:
         receipt = full_receipt()
@@ -202,6 +255,74 @@ class Dogfood32CompandScanTest(unittest.TestCase):
             "process_level_egress_observation_missing",
             fixture_only.blocking_reasons,
         )
+
+    def test_advance_requires_a_captured_responses_inference_route(self) -> None:
+        measurement = qualifying_measurement()
+        control_only = compile_gateway_coverage_receipt(
+            system=system_snapshot(),
+            observation_window=observation_window(),
+            parity=parity(),
+            coverage_inputs=[
+                coverage_input(
+                    "cmp_models_only",
+                    feature="models",
+                    endpoint="/v1/models",
+                    classification="excluded",
+                )
+            ],
+            egress_observations=[
+                egress(
+                    "cmp_models_only",
+                    endpoint="/v1/models",
+                    classification="excluded",
+                    reason="control_endpoint",
+                )
+            ],
+        )
+
+        self.assertEqual(control_only.coverage, "control_only")
+        self.assertEqual(control_only.coverage_counts.captured, 0)
+        self.assertTrue(control_only.mutation_blocked)
+        self.assertIn(
+            "no_captured_inference_requests", control_only.blocking_reasons
+        )
+        self.assertIn(
+            "captured_responses_route_missing", control_only.blocking_reasons
+        )
+        control_decision = decide_compand_scan(control_only, [measurement])
+        self.assertEqual(control_decision.decision, "low_coverage_hold")
+        self.assertEqual(control_decision.qualifying_candidate_count, 0)
+        self.assertFalse(control_decision.mutation_authorized)
+
+        count_only = compile_gateway_coverage_receipt(
+            system=system_snapshot(),
+            observation_window=observation_window(),
+            parity=parity(),
+            coverage_inputs=[
+                coverage_input(
+                    "cmp_count_only",
+                    feature="input_tokens",
+                    endpoint="/v1/responses/input_tokens",
+                )
+            ],
+            egress_observations=[
+                egress(
+                    "cmp_count_only",
+                    endpoint="/v1/responses/input_tokens",
+                )
+            ],
+        )
+
+        self.assertEqual(count_only.coverage, "full")
+        self.assertNotIn(
+            "no_captured_inference_requests", count_only.blocking_reasons
+        )
+        self.assertIn(
+            "captured_responses_route_missing", count_only.blocking_reasons
+        )
+        count_decision = decide_compand_scan(count_only, [measurement])
+        self.assertEqual(count_decision.decision, "low_coverage_hold")
+        self.assertEqual(count_decision.qualifying_candidate_count, 0)
 
     def test_line_rle_shadow_measurement_is_reversible_and_content_free(self) -> None:
         original = "private-alpha\nprivate-line\nprivate-line\nprivate-line\nprivate-omega\n"

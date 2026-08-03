@@ -21,6 +21,9 @@ streams by correlation ID:
 
 Missing or contradictory observations become `unknown`. Any bypass, unknown tuple,
 parity failure, snapshot mismatch, or absent process-level observation blocks mutation.
+Coverage with zero captured inference requests is also blocking: an `advance` decision
+requires a reconciled, certified `POST /v1/responses` capture, so `/v1/models` controls or
+`/v1/responses/input_tokens` count calls alone never provide promotion authority.
 Loopback fixture hooks deliberately compile to `low_coverage_hold`; they prove receipt
 mechanics, not live insertion.
 

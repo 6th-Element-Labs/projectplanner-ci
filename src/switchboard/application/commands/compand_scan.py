@@ -62,12 +62,14 @@ def compile_gateway_coverage_receipt(
     inputs = _unique_by_correlation(coverage_inputs, "gateway coverage input")
     egress = _unique_by_correlation(egress_observations, "egress observation")
     counts: Counter[str] = Counter()
+    reconciled_classifications: dict[str, str] = {}
     reasons: set[str] = set()
 
     for correlation_id in sorted(set(inputs) | set(egress)):
         gateway_event = inputs.get(correlation_id)
         process_event = egress.get(correlation_id)
         classification = _reconciled_classification(gateway_event, process_event)
+        reconciled_classifications[correlation_id] = classification
         counts[classification] += 1
         if classification == "bypassed":
             reasons.add("unexplained_bypass")
@@ -103,10 +105,23 @@ def compile_gateway_coverage_receipt(
 
     observed_route_features = {
         event.certified_feature
-        for event in inputs.values()
+        for correlation_id, event in inputs.items()
         if event.tuple_status == "certified"
-        and event.egress_classification in {"captured", "excluded"}
+        and reconciled_classifications.get(correlation_id) in {"captured", "excluded"}
     }
+    captured_responses_route = any(
+        event.tuple_status == "certified"
+        and event.certified_feature == "responses"
+        and event.observed_endpoint == "/v1/responses"
+        and reconciled_classifications.get(correlation_id) == "captured"
+        and egress[correlation_id].method.upper() == "POST"
+        for correlation_id, event in inputs.items()
+        if correlation_id in egress
+    )
+    if not counts["captured"]:
+        reasons.add("no_captured_inference_requests")
+    if not captured_responses_route:
+        reasons.add("captured_responses_route_missing")
     supplied_features = {
         str(item).strip() for item in exercised_features if str(item).strip()
     }
@@ -228,6 +243,7 @@ def decide_compand_scan(
     parity_failures = [
         field for field in _PARITY_FIELDS if not getattr(coverage.parity, field)
     ]
+    coverage_promotion_reasons = _coverage_promotion_reasons(coverage)
     if parity_failures or integrity_reasons or any(
         not item.shadow_original_forwarded_byte_for_byte for item in measured
     ):
@@ -246,9 +262,9 @@ def decide_compand_scan(
             )
         )
         decision = "stop"
-    elif coverage.mutation_blocked:
+    elif coverage_promotion_reasons:
         decision = "low_coverage_hold"
-        reasons = coverage.blocking_reasons
+        reasons = tuple(sorted(coverage_promotion_reasons))
     elif qualifying:
         decision = "advance"
         reasons = ("cache_adjusted_candidate_is_cheaper",)
@@ -259,8 +275,28 @@ def decide_compand_scan(
         decision=decision,
         reasons=reasons,
         measured_candidate_count=len(measured),
-        qualifying_candidate_count=len(qualifying),
+        qualifying_candidate_count=(
+            len(qualifying) if not coverage_promotion_reasons else 0
+        ),
     )
+
+
+def _coverage_promotion_reasons(coverage: GatewayCoverageReceipt) -> set[str]:
+    """Recheck the minimum insertion proof required for an advance decision."""
+
+    reasons = set(coverage.blocking_reasons)
+    if coverage.coverage != "full":
+        reasons.add(f"coverage_not_full:{coverage.coverage}")
+    if coverage.coverage_counts.captured <= 0:
+        reasons.add("no_captured_inference_requests")
+    if (
+        "responses" not in coverage.certified_features
+        or "/v1/responses" not in coverage.observed_endpoints
+    ):
+        reasons.add("captured_responses_route_missing")
+    if coverage.mutation_blocked and not reasons:
+        reasons.add("coverage_receipt_blocks_promotion")
+    return reasons
 
 
 def _measurement_integrity_reasons(
