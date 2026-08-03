@@ -166,6 +166,19 @@ try:
            "expanded Fleet sheet preserves the mobile navigation escape route")
         page.evaluate("document.querySelector('#fleet-dock').innerHTML = ''")
 
+        page.evaluate("""() => {
+            document.querySelector('#saturation-dock').innerHTML =
+              '<button id="saturation-critical-banner" type="button" class="alert alert-danger tk-pressure-banner text-start w-100" role="alert">'
+              + '<span class="d-flex align-items-center gap-2"><i class="ti ti-alert-triangle"></i>'
+              + '<span class="flex-fill"><strong>System pressure is critical.</strong> Load shedding is active.</span>'
+              + '<i class="ti ti-chevron-right"></i></span></button>';
+        }""")
+        banner_box = page.locator("#saturation-critical-banner").bounding_box()
+        scope_back_box = page.locator("#scope-back").bounding_box()
+        ok(bool(banner_box and scope_back_box
+                and scope_back_box["y"] >= banner_box["y"] + banner_box["height"]),
+           "critical system status leaves the mobile Scope exit unobscured")
+
         page.locator("#scope-back").click()
         page.wait_for_selector("#tab-exec.active")
         ok(page.evaluate("location.hash") == "#tab-exec",

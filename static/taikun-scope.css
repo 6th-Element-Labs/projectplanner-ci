@@ -61,6 +61,12 @@
 }
 @media (max-width: 767.98px){
   .tk-scope-back{ display:inline-flex;align-items:center;margin-top:.75rem;padding-left:0;scroll-margin-top:calc(var(--tk-header-h) + .75rem); }
+  /* A critical pressure banner is fixed immediately below the toolbar.  Keep
+     Scope's only mobile escape control in normal flow beneath that banner. */
+  body:has(#saturation-dock:not(:empty)) .tk-scope-back{
+    margin-top:calc(var(--tk-header-h) + 4.5rem);
+    scroll-margin-top:calc(var(--tk-header-h) + 4.5rem);
+  }
   .tk-scope-head{ display:block; }
   .tk-scope-head>.btn{ margin-top:1rem; }
   .tk-scope-conversation{ min-height:calc(100vh - 13rem);margin-bottom:1rem; }
