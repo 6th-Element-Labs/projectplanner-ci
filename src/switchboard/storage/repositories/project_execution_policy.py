@@ -32,8 +32,19 @@ from constants import (
     PROJECT_EXECUTION_TRUST_ZONES,
     PROJECT_EXECUTION_WORKSPACE_ROLES,
 )
+from switchboard.domain.provider_credentials import (
+    CredentialPolicyError,
+    normalize_provider,
+)
 from switchboard.storage.repositories.activity import append_activity, get_meta, set_meta
+from switchboard.storage.repositories.provider_credentials import (
+    CredentialVaultError, default_provider_credential_repository,
+    provider_connection_ready,
+)
 from switchboard.storage.repositories.projects import get_project_repo_topology
+from switchboard.storage.repositories.scm_connections import (
+    SCMConnectionError, default_scm_connection_repository,
+)
 
 META_KEY = "execution_policy"
 
@@ -389,6 +400,11 @@ def set_project_execution_policy(project: str = DEFAULT_PROJECT, *,
             "message": "project execution policy update rejected; nothing was persisted",
         }
 
+    if lifecycle["status"] == "active":
+        connection_error = validate_activation_connections(merged, project)
+        if connection_error:
+            return connection_error
+
     record = {"schema": PROJECT_EXECUTION_POLICY_SCHEMA, **merged}
     set_meta(META_KEY, record, project=project)
     result = get_project_execution_policy(project)
@@ -402,6 +418,55 @@ def set_project_execution_policy(project: str = DEFAULT_PROJECT, *,
         },
         task_id=None, project=project)
     return {"project": project, "execution_policy": result}
+
+
+def validate_activation_connections(policy: Dict[str, Any], project: str) -> Optional[Dict[str, Any]]:
+    """Resolve selected references before an active policy can be persisted."""
+    for selector in policy["providers"]["selectors"]:
+        reference = selector["connection_reference"]
+        try:
+            connection = default_provider_credential_repository.get_metadata(
+                reference, project=project, admin=True)
+        except CredentialVaultError as exc:
+            return {"error": exc.code, "reason_code": "provider_connection_missing",
+                    "project": project, "connection_reference": reference,
+                    "diagnostic_cause": str(exc),
+                    "message": "selected provider connection is unavailable for this project"}
+        try:
+            provider_matches = (
+                normalize_provider(connection.get("provider"))
+                == normalize_provider(selector["provider"])
+            )
+        except CredentialPolicyError:
+            provider_matches = False
+        if not provider_matches or not provider_connection_ready(connection):
+            return {"error": "provider_connection_not_ready",
+                    "reason_code": "provider_connection_not_ready", "project": project,
+                    "connection_reference": reference,
+                    "message": "selected provider connection is stale, unverified, or has a different provider"}
+
+    reference = policy["scm"]["connection_reference"]
+    try:
+        connection = default_scm_connection_repository.get(reference)
+    except SCMConnectionError as exc:
+        return {"error": exc.code, "reason_code": "scm_connection_missing",
+                "project": project, "connection_reference": reference,
+                "diagnostic_cause": str(exc),
+                "message": "selected SCM connection is unavailable"}
+    topology = get_project_repo_topology(project)
+    canonical = str((((topology.get("roles") or {}).get("canonical") or {}).get("repo")) or "").lower()
+    required = {"clone", "fetch", "push", "create_pr"}
+    authorized = (connection.get("lifecycle_state") == "active"
+                  and project in set(connection.get("project_allowlist") or [])
+                  and canonical in {str(item).lower() for item in connection.get("repository_allowlist") or []}
+                  and required <= set(connection.get("operation_scopes") or []))
+    provider = str(policy["scm"]["provider"] or "").lower()
+    if provider not in {"github", "github_app"} or connection.get("provider") != "github_app" or not authorized:
+        return {"error": "scm_connection_not_authorized",
+                "reason_code": "scm_connection_not_authorized", "project": project,
+                "connection_reference": reference,
+                "message": "selected SCM connection is not active and authorized for the canonical repository"}
+    return None
 
 
 def _deep_merge(base: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any]:

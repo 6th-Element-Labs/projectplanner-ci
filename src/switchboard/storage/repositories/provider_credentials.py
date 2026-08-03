@@ -39,6 +39,7 @@ PROVIDER_CREDENTIAL_LEASE_ADMISSION_SCHEMA = (
 )
 PROVIDER_CREDENTIAL_EVENT_SCHEMA = "switchboard.provider_credential_event.v1"
 LIVE_LEASE_STATES = ("issued", "materializing", "active")
+UNUSABLE_REFRESH_STATES = ("expired", "revoked", "stale")
 
 
 class CredentialVaultError(ValueError):
@@ -52,6 +53,21 @@ class CredentialVaultError(ValueError):
 
     def as_dict(self) -> dict[str, Any]:
         return {"error": self.code, "error_code": self.code, "message": self.message}
+
+
+def provider_connection_ready(connection: Mapping[str, Any]) -> bool:
+    """Return the vault's public execution-readiness verdict for a connection."""
+    lifecycle = str(connection.get("lifecycle_state") or "").strip().lower()
+    revocation = str(connection.get("revocation_state") or "").strip().lower()
+    refresh = str(connection.get("refresh_state") or "").strip().lower()
+    materialization = str(connection.get("materialization_mode") or "").strip().lower()
+    if lifecycle != "active" or revocation != "not_revoked":
+        return False
+    if refresh in UNUSABLE_REFRESH_STATES:
+        return False
+    if materialization == "host_native":
+        return connection.get("last_verified_at") is not None
+    return bool(connection.get("credential_present"))
 
 
 def _json_object(value: Any) -> dict[str, Any]:
@@ -195,7 +211,7 @@ class ProviderCredentialRepository:
         if state == "active" and expires_at is not None and float(expires_at) <= timestamp:
             state = "expired"
         billing_id = str(item.get("billing_account_id") or "")
-        return {
+        public = {
             "schema": PROVIDER_CONNECTION_SCHEMA,
             "credential_reference": item.get("credential_reference"),
             "execution_connection_id": item.get("credential_reference"),
@@ -239,6 +255,8 @@ class ProviderCredentialRepository:
             "updated_at": item.get("updated_at"),
             "updated_by": item.get("updated_by"),
         }
+        public["execution_ready"] = provider_connection_ready(public)
+        return public
 
     @staticmethod
     def _active_lease_count_in(c: sqlite3.Connection, credential_reference: str,

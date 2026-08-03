@@ -799,7 +799,13 @@
 
         async _settingsExecutionSection() {
             const proj = window.PM_PROJECT || 'maxwell';
-            const data = await this._sfetch(`api/projects/${encodeURIComponent(proj)}/execution_readiness`);
+            const [data, policy, providerData, scmData, topology] = await Promise.all([
+                this._sfetch(`api/projects/${encodeURIComponent(proj)}/execution_readiness`),
+                this._sfetch(`api/projects/${encodeURIComponent(proj)}/execution_policy`),
+                this._sfetch(`api/projects/${encodeURIComponent(proj)}/provider-connections`),
+                this._sfetch(`api/projects/${encodeURIComponent(proj)}/scm-connections`),
+                this._sfetch(`api/projects/${encodeURIComponent(proj)}/repo_topology`),
+            ]);
             if (data.error) return this._settingsErrCard('Execution readiness', data.error);
             const states = data.states || {};
             const labels = {
@@ -829,6 +835,88 @@
                     <div class="card-body py-3">${details}</div></div></div>`;
             }).join('');
             const overallTone = data.passed ? 'success' : 'danger';
+            const selectedProvider = ((policy.providers || {}).selectors || [])[0] || {};
+            const selectedProviderReference = selectedProvider.connection_reference || '';
+            const providerAliases = {
+                openai: 'openai-codex', codex: 'openai-codex', chatgpt: 'openai-codex',
+                'openai-codex': 'openai-codex', anthropic: 'anthropic-claude',
+                claude: 'anthropic-claude', 'claude-code': 'anthropic-claude',
+                'anthropic-claude': 'anthropic-claude', cursor: 'cursor',
+            };
+            const providerId = (value) => providerAliases[String(value || '').toLowerCase()] || '';
+            const providerConnections = [...(providerData.connections || [])];
+            if (selectedProviderReference && !providerConnections.some(
+                (item) => item.credential_reference === selectedProviderReference)) {
+                providerConnections.push({
+                    credential_reference: selectedProviderReference,
+                    provider: selectedProvider.provider || '',
+                    provider_account_id: selectedProviderReference,
+                    execution_ready: false,
+                });
+            }
+            const providerOptions = providerConnections
+                .filter((item) => item.execution_ready === true
+                    || item.credential_reference === selectedProviderReference)
+                .map((item) => {
+                    const isStored = item.credential_reference === selectedProviderReference;
+                    const ready = item.execution_ready === true && (!isStored
+                        || (providerId(item.provider)
+                            && providerId(item.provider) === providerId(selectedProvider.provider)));
+                    const label = `${item.provider || selectedProvider.provider || 'Provider'} · ${item.provider_account_id || item.credential_reference}`
+                        + (ready ? '' : ' — unavailable');
+                    return `<option value="${this.esc(item.credential_reference)}" data-provider="${this.esc(item.provider || selectedProvider.provider || '')}" data-execution-ready="${ready}" data-stored-selection="${isStored}" data-account-affinity-id="${this.esc(isStored ? (selectedProvider.account_affinity_id || '') : '')}" data-priority="${this.esc(isStored ? String(selectedProvider.priority ?? '') : '')}" ${isStored ? 'selected' : ''} ${ready ? '' : 'disabled'}>${this.esc(label)}</option>`;
+                }).join('');
+            const scm = policy.scm || {};
+            const selectedScmReference = scm.connection_reference || '';
+            const canonicalRepo = String((((topology.roles || {}).canonical || {}).repo) || '').toLowerCase();
+            const requiredScmScopes = ['clone', 'fetch', 'push', 'create_pr'];
+            const scmReady = (item) => {
+                const projects = (item.project_allowlist || []).map((value) => String(value).toLowerCase());
+                const repositories = (item.repository_allowlist || []).map((value) => String(value).toLowerCase());
+                const scopes = (item.operation_scopes || []).map((value) => String(value).toLowerCase());
+                return item.lifecycle_state === 'active'
+                    && item.provider === 'github_app'
+                    && projects.includes(String(proj).toLowerCase())
+                    && !!canonicalRepo && repositories.includes(canonicalRepo)
+                    && requiredScmScopes.every((scope) => scopes.includes(scope));
+            };
+            const scmConnections = [...(scmData.connections || [])];
+            if (selectedScmReference && !scmConnections.some(
+                (item) => item.connection_id === selectedScmReference)) {
+                scmConnections.push({
+                    connection_id: selectedScmReference,
+                    provider: scm.provider || '',
+                    lifecycle_state: 'unavailable',
+                    project_allowlist: [], repository_allowlist: [], operation_scopes: [],
+                });
+            }
+            const scmOptions = scmConnections
+                .filter((item) => scmReady(item) || item.connection_id === selectedScmReference)
+                .map((item) => {
+                    const isStored = item.connection_id === selectedScmReference;
+                    const ready = scmReady(item);
+                    const repositories = (item.repository_allowlist || []).join(', ') || item.connection_id;
+                    const label = `GitHub · ${repositories}${ready ? '' : ' — unavailable'}`;
+                    const policyProvider = isStored ? (scm.provider || 'github') : 'github';
+                    return `<option value="${this.esc(item.connection_id)}" data-execution-ready="${ready}" data-policy-provider="${this.esc(policyProvider)}" ${isStored ? 'selected' : ''} ${ready ? '' : 'disabled'}>${this.esc(label)}</option>`;
+                }).join('');
+            const runtimes = policy.runtimes || {};
+            const placement = policy.placement || {};
+            const policyHostClasses = ['personal', 'shared', 'ephemeral'];
+            const selectedHostClass = (placement.host_classes || []).find(
+                (item) => policyHostClasses.includes(item)) || '';
+            const placementOptions = [
+                ['personal', 'Personal host'],
+                ['shared', 'Shared host'],
+                ['ephemeral', 'Ephemeral host'],
+            ].map(([value, label]) => `<option value="${value}" ${value === selectedHostClass ? 'selected' : ''}>${label}</option>`).join('');
+            const editor = `<form id="execution-policy-form" class="card card-body mt-3">
+                <h4>Execution policy</h4><p class="small text-secondary">Choose verified references only. Credentials are never entered or returned here.</p>
+                <div class="row g-3"><div class="col-md-6"><label class="form-label" for="execution-provider">Provider connection</label><select class="form-select" id="execution-provider"><option value="">Select verified connection</option>${providerOptions}</select></div>
+                <div class="col-md-6"><label class="form-label" for="execution-scm">GitHub SCM connection</label><select class="form-select" id="execution-scm"><option value="">Select authorized installation</option>${scmOptions}</select></div>
+                <div class="col-md-4"><label class="form-label" for="execution-runtime">Default runtime</label><select class="form-select" id="execution-runtime"><option value="codex" ${runtimes.default === 'codex' ? 'selected' : ''}>Codex</option><option value="claude_code" ${runtimes.default === 'claude_code' ? 'selected' : ''}>Claude Code</option></select></div>
+                <div class="col-md-4"><label class="form-label" for="execution-host-class">Placement</label><select class="form-select" id="execution-host-class"><option value="" ${selectedHostClass ? '' : 'selected'}>Select placement</option>${placementOptions}</select></div>
+                <div class="col-md-4 d-flex align-items-end"><button type="button" class="btn btn-primary w-100" data-set-action="execution-save">Save &amp; activate</button></div></div><div id="execution-policy-flash" class="small mt-2"></div></form>`;
             return this._settingsCard({
                 id: 'settings-execution-readiness',
                 title: 'Execution readiness',
@@ -838,7 +926,7 @@
                 body: `<div class="alert alert-${overallTone} py-2 px-3" id="execution-readiness-summary">
                     <strong>${data.passed ? 'Ready' : 'Blocked'}</strong> · ${this.esc(data.message || '')}
                     ${data.reason_code ? `<div><code>${this.esc(data.reason_code)}</code></div>` : ''}</div>
-                    <div class="row g-3">${cards}</div>`,
+                    <div class="row g-3">${cards}</div>${editor}`,
             });
         },
 
@@ -1774,7 +1862,7 @@
             <div class="table-responsive"><table class="table table-vcenter card-table mb-0"><thead><tr><th>Task</th><th>Public repo</th><th>Ref</th><th>SHA</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
     },
 
-    _settingsAction(action) {
+    async _settingsAction(action) {
         if (String(action || '').startsWith('project-')) return this._projectAdminAction(action);
         if (String(action || '').startsWith('tokens-revoke:')) return this._settingsRevokeToken(decodeURIComponent(action.slice('tokens-revoke:'.length)));
         if (String(action || '').startsWith('comms-rm:')) {
@@ -1810,6 +1898,43 @@
             case 'move-task': return this.moveTask();
             case 'refresh': return this.renderSettings();
             case 'execution-refresh': return this.renderSettings();
+            case 'execution-save': {
+                const provider = document.getElementById('execution-provider');
+                const scm = document.getElementById('execution-scm');
+                const runtime = document.getElementById('execution-runtime').value;
+                const hostClass = document.getElementById('execution-host-class').value;
+                const selected = provider.options[provider.selectedIndex];
+                const selectedScm = scm.options[scm.selectedIndex];
+                const flash = document.getElementById('execution-policy-flash');
+                if (!provider.value || !scm.value) { flash.textContent = 'Select both verified connections.'; return; }
+                if (selected.dataset.executionReady !== 'true') { flash.textContent = 'The stored provider connection is unavailable. Choose a verified connection.'; return; }
+                if (selectedScm.dataset.executionReady !== 'true') { flash.textContent = 'The stored SCM connection is unavailable for this project and repository. Choose an authorized installation.'; return; }
+                const trustZoneByHostClass = {
+                    personal: 'personal', shared: 'org_shared', ephemeral: 'cloud_ephemeral',
+                };
+                const trustZone = trustZoneByHostClass[hostClass];
+                if (!trustZone) { flash.textContent = 'Select a placement.'; return; }
+                const providerSelector = {
+                    provider: selected.dataset.provider,
+                    connection_reference: provider.value,
+                };
+                if (selected.dataset.storedSelection === 'true') {
+                    providerSelector.account_affinity_id = selected.dataset.accountAffinityId || '';
+                    if (selected.dataset.priority !== '') {
+                        providerSelector.priority = Number.parseInt(selected.dataset.priority, 10);
+                    }
+                }
+                try {
+                    await this._sSend(`api/projects/${encodeURIComponent(window.PM_PROJECT || 'maxwell')}/execution_policy`, 'POST', {
+                        runtimes: { allowed: [runtime], default: runtime },
+                        placement: { host_classes: [hostClass], trust_zones: [trustZone], burst: { enabled: false, max_concurrent_ephemeral: 0 } },
+                        providers: { selectors: [providerSelector] },
+                        scm: { provider: selectedScm.dataset.policyProvider || 'github', connection_reference: scm.value }, lifecycle: { status: 'active' },
+                    });
+                    return this.renderSettings();
+                } catch (error) { flash.textContent = error.message || String(error); }
+                return;
+            }
             case 'ai-governance-refresh': return this.renderSettings();
             case 'ai-governance-disable': return this._settingsAiGovernanceToggle(true);
             case 'ai-governance-enable': return this._settingsAiGovernanceToggle(false);

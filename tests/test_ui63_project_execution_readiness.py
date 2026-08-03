@@ -99,6 +99,9 @@ def evaluate(configured):
         "provider": "openai-codex",
         "lifecycle_state": "active",
         "refresh_state": "ready",
+        "revocation_state": "not_revoked",
+        "materialization_mode": "host_native",
+        "last_verified_at": 1,
     }] if configured else [])
     scm = SCMRepository({
         "connection_id": "scm/atlas",

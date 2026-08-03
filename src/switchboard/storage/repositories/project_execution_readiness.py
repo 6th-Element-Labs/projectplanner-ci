@@ -20,6 +20,7 @@ from switchboard.storage.repositories.projects import (
 from switchboard.storage.repositories.provider_credentials import (
     CredentialVaultError,
     default_provider_credential_repository,
+    provider_connection_ready,
 )
 from switchboard.storage.repositories.scm_connections import (
     SCMConnectionError,
@@ -150,8 +151,7 @@ def get_project_execution_readiness(
                 f"Provider connection {reference or '(unset)'} is unavailable.",
                 "Connect and verify the selected AI provider in Personal AI accounts.",
                 provider=provider, connection_reference=reference))
-        elif (connection.get("lifecycle_state") != "active"
-              or connection.get("refresh_state") not in {"ready", "valid", "active"}):
+        elif not provider_connection_ready(connection):
             provider_blockers.append(_blocker(
                 "provider_connection_not_ready", "provider",
                 f"Provider connection {reference} is not ready.",

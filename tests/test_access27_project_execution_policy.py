@@ -29,6 +29,9 @@ import db.connection as db_connection  # noqa: E402
 import project_contract  # noqa: E402
 import store  # noqa: E402
 from constants import PROJECT_EXECUTION_POLICY_SCHEMA  # noqa: E402
+from switchboard.storage.repositories import project_execution_policy as policy_repository  # noqa: E402
+from switchboard.storage.repositories.provider_credentials import CredentialVaultError  # noqa: E402
+from switchboard.storage.repositories.scm_connections import SCMConnectionError  # noqa: E402
 
 
 passed = failed = 0
@@ -70,8 +73,37 @@ def make_project(project_id: str, canonical_repo: str) -> None:
         canonical_default_branch="main")
 
 
+class ProviderConnections:
+    unavailable = False
+
+    def get_metadata(self, reference, *, project, admin):
+        if self.unavailable:
+            raise CredentialVaultError("provider_connection_not_found", "missing")
+        return {"provider": "anthropic", "lifecycle_state": "active",
+                "refresh_state": "ready", "revocation_state": "not_revoked",
+                "materialization_mode": "vault_envelope", "credential_present": True}
+
+
+class SCMConnections:
+    authorized = True
+    unavailable = False
+
+    def get(self, reference):
+        if self.unavailable:
+            raise SCMConnectionError("scm_connection_not_found", "missing SCM connection")
+        return {"provider": "github_app", "lifecycle_state": "active",
+                "project_allowlist": ["exec-alpha", "exec-beta"],
+                "repository_allowlist": (["acme/alpha", "acme/beta"]
+                                         if self.authorized else ["acme/other"]),
+                "operation_scopes": ["clone", "fetch", "push", "create_pr"]}
+
+
 try:
     store.init_db("switchboard")
+    provider_connections = ProviderConnections()
+    scm_connections = SCMConnections()
+    policy_repository.default_provider_credential_repository = provider_connections
+    policy_repository.default_scm_connection_repository = scm_connections
 
     # --- typed readiness failure: nothing configured ------------------------
     make_project("exec-alpha", "acme/alpha")
@@ -116,6 +148,33 @@ try:
            f"invalid fixture rejected with a typed error: {label}")
     ok(store.get_project_execution_policy("exec-alpha")["configured"] is False,
        "a rejected update persists nothing — the project stays unconfigured")
+
+    # --- activation resolves connection authority before persistence -------
+    provider_connections.unavailable = True
+    missing_provider = store.set_project_execution_policy(
+        project="exec-alpha", updates=VALID_POLICY, actor="fixture")
+    provider_connections.unavailable = False
+    ok(missing_provider.get("reason_code") == "provider_connection_missing"
+       and missing_provider.get("diagnostic_cause") == "missing"
+       and store.get_project_execution_policy("exec-alpha")["configured"] is False,
+       "direct activation rejects an unavailable provider, preserving its cause")
+
+    scm_connections.unavailable = True
+    missing_scm = store.set_project_execution_policy(
+        project="exec-alpha", updates=VALID_POLICY, actor="fixture")
+    scm_connections.unavailable = False
+    ok(missing_scm.get("reason_code") == "scm_connection_missing"
+       and missing_scm.get("diagnostic_cause") == "missing SCM connection"
+       and store.get_project_execution_policy("exec-alpha")["configured"] is False,
+       "direct activation rejects unavailable SCM, preserving its cause")
+
+    scm_connections.authorized = False
+    wrong_repository = store.set_project_execution_policy(
+        project="exec-alpha", updates=VALID_POLICY, actor="fixture")
+    scm_connections.authorized = True
+    ok(wrong_repository.get("reason_code") == "scm_connection_not_authorized"
+       and store.get_project_execution_policy("exec-alpha")["configured"] is False,
+       "direct activation rejects wrong-repository SCM authority without persistence")
 
     # --- references and policy only ----------------------------------------
     for forbidden in ({"workspace": {"branch": "feature/x"}},
@@ -216,6 +275,18 @@ try:
     ok("policy_json must be valid JSON" in str(mcp_bad_json.get("error"))
        and str(mcp_unknown.get("error")).startswith("unknown project"),
        "malformed bodies and unknown projects fail closed on the MCP surface")
+
+    before_mcp_rejection = store.get_project_execution_policy("exec-beta")
+    provider_connections.unavailable = True
+    mcp_rejected = json.loads(mcp_server.set_project_execution_policy(
+        None, project="exec-beta",
+        policy_json=json.dumps({"lifecycle": {"status": "active"}})))
+    provider_connections.unavailable = False
+    after_mcp_rejection = store.get_project_execution_policy("exec-beta")
+    ok(mcp_rejected.get("reason_code") == "provider_connection_missing"
+       and after_mcp_rejection["lifecycle"]["revision"]
+       == before_mcp_rejection["lifecycle"]["revision"],
+       "MCP activation shares connection validation and persists no rejected revision")
 
     from switchboard.mcp import authorization  # noqa: E402
 

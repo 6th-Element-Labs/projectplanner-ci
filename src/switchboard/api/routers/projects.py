@@ -6,6 +6,7 @@ from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from fastapi.responses import Response
+from pydantic import BaseModel, ConfigDict
 
 import auth
 import comms
@@ -26,6 +27,19 @@ CurrentUserResolver = Callable[[str], Optional[dict]]
 AccessibleProjectIds = Callable[[str, bool], Any]
 EtagJson = Callable[..., Response]
 WebhookSecretConfigured = Callable[[], bool]
+
+
+class ExecutionPolicyUpdate(BaseModel):
+    """Typed, credential-free partial project execution policy."""
+
+    model_config = ConfigDict(extra="forbid")
+    runtimes: dict[str, Any] | None = None
+    workspace: dict[str, Any] | None = None
+    placement: dict[str, Any] | None = None
+    providers: dict[str, Any] | None = None
+    scm: dict[str, str] | None = None
+    autopilot: dict[str, Any] | None = None
+    lifecycle: dict[str, Any] | None = None
 
 
 def create_router(*, resolve_project: ProjectResolver,
@@ -127,12 +141,13 @@ def create_router(*, resolve_project: ProjectResolver,
 
     @router.post("/api/projects/{project}/execution_policy")
     async def set_project_execution_policy(request: Request, project: str,
-                                           body: dict = Body(...)):
+                                           body: ExecutionPolicyUpdate):
         """Merge an execution-policy update. Rejected updates persist nothing."""
         principal = resolve_principal(request, project, ("write:system",), dev_actor="web")
+        updates = body.model_dump(exclude_none=True)
         result = store.set_project_execution_policy(
             project=resolve_project(project),
-            updates=body if isinstance(body, dict) else {},
+            updates=updates,
             actor=auth.actor(principal))
         if result.get("error"):
             raise HTTPException(400, result)

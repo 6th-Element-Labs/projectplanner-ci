@@ -56,6 +56,9 @@ def configure_ready_project(project: str, *, actor: str = "test") -> None:
         refresh_state="ready",
         materialization_mode="host_native",
     )
+    provider = default_provider_credential_repository.verify_host_native(
+        provider["credential_reference"], project=project, actor=actor,
+        principal_user_id=user_id)
     scm = default_scm_connection_repository.create(
         {
             "provider": "github_app",

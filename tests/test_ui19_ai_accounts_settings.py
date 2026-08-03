@@ -43,6 +43,10 @@ from switchboard.domain.provider_capacity import account_fingerprint  # noqa: E4
 from switchboard.storage.repositories.provider_credentials import (  # noqa: E402
     CredentialVaultError,
     default_provider_credential_repository as repository,
+    provider_connection_ready,
+)
+from switchboard.storage.repositories import (  # noqa: E402
+    project_execution_policy as policy_repository,
 )
 from switchboard.mcp.tools import provider_credentials as mcp_tools  # noqa: E402
 
@@ -150,6 +154,7 @@ bound = commands.bind_host_native_mapping(
 reference = bound.get("execution_connection_id")
 ok(bool(reference) and bound.get("materialization_mode") == "host_native"
    and bound.get("credential_present") is False
+   and bound.get("execution_ready") is False
    and bound.get("connection_kind") == "personal_subscription"
    and ACCOUNT_ID not in json.dumps(bound.get("ownership_proof") or {}),
    "bind-host succeeds against a host that already declared the account, yields redacted proof")
@@ -195,8 +200,44 @@ verified = commands.verify_mapping(
     actor=USER_A, principal_user_id=USER_A, principal_kind="user", raise_errors=True)
 ok(verified.get("last_verified_at") is not None
    and verified.get("last_verified_by") == USER_A
+   and verified.get("execution_ready") is True
    and verified.get("credential_version") == before.get("credential_version"),
    "verify stamps last_verified_at/by without bumping credential_version (no rotation)")
+
+
+class _AuthorizedSCM:
+    def get(self, reference):
+        return {
+            "provider": "github_app", "lifecycle_state": "active",
+            "project_allowlist": [PROJECT],
+            "repository_allowlist": ["6th-element-labs/projectplanner"],
+            "operation_scopes": ["clone", "fetch", "push", "create_pr"],
+        }
+
+
+store.set_project_repo_topology(
+    project=PROJECT, canonical_repo="6th-Element-Labs/projectplanner",
+    canonical_default_branch="master")
+policy_repository.default_scm_connection_repository = _AuthorizedSCM()
+activated = store.set_project_execution_policy(project=PROJECT, actor=USER_A, updates={
+    "runtimes": {"allowed": ["codex"], "default": "codex"},
+    "workspace": {"repo_role": "canonical", "isolation": "worktree"},
+    "placement": {"host_classes": ["personal"], "trust_zones": ["personal"],
+                  "burst": {"enabled": False, "max_concurrent_ephemeral": 0}},
+    "providers": {"selectors": [{"provider": PROVIDER,
+                                    "connection_reference": reference}]},
+    "scm": {"provider": "github", "connection_reference": "scm-ui19"},
+    "autopilot": {"enabled": False, "profile_id": ""},
+    "lifecycle": {"status": "active"},
+})
+ok(not activated.get("error")
+   and activated["execution_policy"]["providers"]["selectors"][0][
+       "connection_reference"] == reference,
+   "a Settings-created provider-native connection becomes policy-selectable after real verification")
+ok(not provider_connection_ready({**verified, "refresh_state": "stale"})
+   and not provider_connection_ready({**verified, "lifecycle_state": "expired"})
+   and not provider_connection_ready({**verified, "revocation_state": "revoked"}),
+   "the shared readiness authority still rejects stale, expired, and revoked connections")
 
 # ---------------------------------------------------------------------------
 # 3b. Reconnect (rotate on a host_native connection) also has no proof to send

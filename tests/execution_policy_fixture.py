@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import copy
+
 import store
 
 from switchboard.application.commands.execution_context import with_generation
+from switchboard.storage.repositories.provider_credentials import (
+    default_provider_credential_repository,
+)
+from switchboard.storage.repositories.scm_connections import (
+    default_scm_connection_repository,
+)
 
 
 READY_EXECUTION_POLICY = {
@@ -108,10 +116,86 @@ def ready_host_placement(project: str = "switchboard") -> dict:
 
 
 def install_ready_execution_policy(project: str) -> None:
+    topology = store.get_project_repo_topology(project)
+    canonical = str(
+        (((topology.get("roles") or {}).get("canonical") or {}).get("repo")) or ""
+    )
+    if not canonical:
+        canonical = f"example/{project}"
+        store.set_project_repo_topology(
+            project=project,
+            canonical_repo=canonical,
+            canonical_default_branch="main",
+        )
+    organization = canonical.split("/", 1)[0]
+    user_id = f"{project}-execution-policy-fixture"
+
+    store.ensure_org(
+        store.DEFAULT_ORG_ID,
+        "Execution policy fixtures",
+        created_by="test-fixture",
+    )
+    store.set_project_access(
+        project,
+        store.DEFAULT_ORG_ID,
+        purpose="Hermetic execution policy fixture",
+        created_by="test-fixture",
+    )
+    store.ensure_user(
+        user_id,
+        f"{user_id}@example.test",
+        "Execution policy fixture",
+        created_by="test-fixture",
+    )
+    store.add_org_member(
+        store.DEFAULT_ORG_ID,
+        user_id,
+        role="member",
+        created_by="test-fixture",
+    )
+
+    provider_references = {}
+    for provider in ("openai-codex", "anthropic-claude", "cursor"):
+        connection = default_provider_credential_repository.enroll(
+            project=project,
+            user_id=user_id,
+            provider=provider,
+            provider_account_id=f"{project}-{provider}-fixture",
+            auth_type="personal_subscription",
+            project_allowlist=[project],
+            actor="test-fixture",
+            refresh_state="ready",
+            materialization_mode="host_native",
+        )
+        connection = default_provider_credential_repository.verify_host_native(
+            connection["credential_reference"],
+            project=project,
+            actor="test-fixture",
+            principal_user_id=user_id,
+        )
+        provider_references[provider] = connection["credential_reference"]
+
+    scm = default_scm_connection_repository.create(
+        {
+            "provider": "github_app",
+            "installation_ref": f"github-app:{project}-fixture",
+            "org_allowlist": [organization],
+            "project_allowlist": [project],
+            "repository_allowlist": [canonical],
+            "operation_scopes": ["clone", "fetch", "push", "create_pr"],
+            "project": project,
+        },
+        actor="test-fixture",
+    )
+
+    policy = copy.deepcopy(READY_EXECUTION_POLICY)
+    for selector in policy["providers"]["selectors"]:
+        selector["connection_reference"] = provider_references[selector["provider"]]
+    policy["scm"]["connection_reference"] = scm["connection_id"]
     store.set_meta("canonical_main_sha", "a" * 40, project=project)
     result = store.set_project_execution_policy(
         project=project,
-        updates=READY_EXECUTION_POLICY,
+        updates=policy,
         actor="test-fixture",
     )
     assert not result.get("error"), result

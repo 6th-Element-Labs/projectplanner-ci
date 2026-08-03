@@ -69,7 +69,17 @@ with sync_playwright() as runtime:
                 const ctx = {
                     esc: (value) => String(value ?? '').replaceAll('&', '&amp;')
                         .replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
-                    _sfetch: async () => payload,
+                    _sfetch: async (url) => {
+                        if (url.endsWith('/execution_policy')) return {
+                            runtimes: {allowed: ['codex'], default: 'codex'},
+                            placement: {host_classes: ['personal'], trust_zones: ['personal']},
+                            providers: {selectors: [{provider: 'codex', connection_reference: 'provider/atlas'}]},
+                            scm: {provider: 'github', connection_reference: 'scm/atlas'},
+                        };
+                        if (url.endsWith('/provider-connections')) return {connections: [{credential_reference: 'provider/atlas', provider: 'codex', provider_account_id: 'Atlas', lifecycle_state: 'active', refresh_state: 'not_applicable', execution_ready: true}]};
+                        if (url.endsWith('/scm-connections')) return {connections: [{connection_id: 'scm/atlas', lifecycle_state: 'active', repository_allowlist: ['acme/atlas']}]};
+                        return payload;
+                    },
                     _settingsCard: methods._settingsCard,
                 };
                 return await methods._settingsExecutionSection.call(ctx);
@@ -81,6 +91,9 @@ with sync_playwright() as runtime:
     assert page.locator('[data-readiness-state="scm"] .badge').inner_text() == "blocked"
     assert "Create an SCM installation connection." in page.locator(
         '[data-readiness-state="scm"]').inner_text()
+    assert page.locator('#execution-provider').input_value() == 'provider/atlas'
+    assert page.locator('#execution-scm').input_value() == 'scm/atlas'
+    assert page.locator('#execution-policy-form').locator('input').count() == 0
 
     green_html = render(GREEN)
     page.locator("#mount").evaluate("(node, html) => node.innerHTML = html", green_html)
