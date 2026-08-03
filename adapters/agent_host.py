@@ -100,6 +100,7 @@ P_CLAIM_RUNNER_CONTROL = "/ixp/v1/claim_runner_control"
 P_COMPLETE_RUNNER_CONTROL = "/ixp/v1/complete_runner_control"
 P_LIST_RUNNERS = "/ixp/v1/runner_sessions"
 P_LIST_WORK_SESSIONS = "/ixp/v1/work_sessions"
+P_PREFLIGHT_WORK_SESSION = "/ixp/v1/work_sessions/{work_session_id}/preflight"
 P_DIRECT_SESSION_MCP_TOKEN = "/ixp/v1/direct_assignments/mcp_token"
 P_RUNNER_LEASE_DUE = "/ixp/v1/runner_lease_due"
 P_TALLY_SPEND = "/tally/v1/spend/ingest"
@@ -3321,19 +3322,12 @@ def renew_live_direct_runners(inventory):
     renewed = []
     sessions = _drain_runners(host_id)
     needs_late_binding = any(
-        str((row.get("metadata") or {}).get("credential_admission_phase") or "").lower()
-        in {"preclaim", "pending"}
-        and row.get("alive") is True
-        and str(row.get("status") or "").lower() == "running"
-        for row in sessions
-    )
+        _direct_work_session_join_needed(row) for row in sessions)
     work_sessions = _drain_work_sessions() if needs_late_binding else []
     for session in sessions:
         metadata = dict(session.get("metadata") or {})
         native_transport = metadata.get("native_host_execution") is True
-        admission_preclaim = str(
-            metadata.get("credential_admission_phase") or "").lower() in {
-                "preclaim", "pending"}
+        admission_preclaim = _direct_work_session_join_needed(session)
         claim_id = str(session.get("claim_id") or "")
         work_session_id = str(metadata.get("work_session_id") or "")
         late_binding = _direct_work_session_binding(session, work_sessions)
@@ -3514,6 +3508,32 @@ def renew_live_direct_runners(inventory):
             (result or {}).get("error") if isinstance(result, dict)
             else "heartbeat_runner_session_failed"
         )
+        preflight_refresh = None
+        if (late_binding and host_preflight and not final_error
+                and work_session_id):
+            # BUG-97: the binding heartbeat makes the host attestation durable;
+            # immediately ask Coordination to validate that exact evidence and
+            # replace the provisional pending report. This is an evidence
+            # projection only: Capacity still owns runner liveness and does not
+            # mutate task lifecycle state.
+            preflight_refresh = _try(
+                "POST",
+                P_PREFLIGHT_WORK_SESSION.format(
+                    work_session_id=urllib.parse.quote(
+                        work_session_id, safe="")),
+                {
+                    "project": PROJECT,
+                    "agent_id": session.get("agent_id") or f"codex/{task_id}",
+                    "expected_branch": host_preflight.get("branch") or "",
+                    "agent_host_bootstrap_binding": {
+                        "wake_id": wake_id,
+                        "host_id": host_id,
+                        "runner_session_id": session.get("runner_session_id") or "",
+                        "task_id": task_id,
+                        "agent_id": session.get("agent_id") or f"codex/{task_id}",
+                    },
+                },
+            )
         _collect_companion_relay_auth_fault(session.get("runner_session_id"))
         requested_relay = _consume_host_relay_refresh_request(
             session.get("runner_session_id"), host_id)
@@ -3542,6 +3562,10 @@ def renew_live_direct_runners(inventory):
             "task_id": task_id,
             "renewed": bool(result and not result.get("error")),
             "error": final_error,
+            **({
+                "work_session_preflight_refreshed": bool(
+                    not preflight_refresh.get("error")),
+            } if isinstance(preflight_refresh, dict) else {}),
             "renew_deferred": bool(not result or final_error),
             "relay_url_minted": bool(server_relay.get("host_url")),
             **({
@@ -3560,6 +3584,20 @@ def _drain_work_sessions(*, task_id="", status="active"):
     return sessions if isinstance(sessions, list) else []
 
 
+def _direct_work_session_join_needed(session):
+    """Return whether one live direct runner still lacks its exact WS tuple."""
+    session = dict(session or {})
+    metadata = dict(session.get("metadata") or {})
+    return bool(
+        session.get("alive") is True
+        and str(session.get("status") or "").lower() == "running"
+        and (metadata.get("direct_assignment") is True
+             or metadata.get("connect_assignment") is True)
+        and (not str(session.get("claim_id") or "").strip()
+             or not str(metadata.get("work_session_id") or "").strip())
+    )
+
+
 def _direct_work_session_binding(session, work_sessions, *, allowed_statuses=None):
     """Find the one Work Session created by this exact direct Codex process.
 
@@ -3573,22 +3611,38 @@ def _direct_work_session_binding(session, work_sessions, *, allowed_statuses=Non
     runner_session_id = str(session.get("runner_session_id") or "").strip()
     if (not runner_session_id
             or not (metadata.get("direct_assignment") is True
-                    or metadata.get("connect_assignment") is True)
-            or session.get("claim_id")
-            or metadata.get("work_session_id")):
+                    or metadata.get("connect_assignment") is True)):
         return None
     expected_principal = f"direct-session/{runner_session_id}"
     task_id = str(session.get("task_id") or "").upper()
     agent_id = str(session.get("agent_id") or "")
+    execution_id = str(metadata.get("execution_id") or "").strip()
+    generation = metadata.get("execution_generation")
+    claim_id = str(session.get("claim_id") or "").strip()
+    work_session_id = str(metadata.get("work_session_id") or "").strip()
     allowed = {str(value).lower() for value in (allowed_statuses or {"active"})}
     matches = []
     for candidate in work_sessions or []:
+        env = dict(candidate.get("env") or {})
         if (str(candidate.get("status") or "").lower() not in allowed
                 or str(candidate.get("principal_id") or "") != expected_principal
                 or str(candidate.get("task_id") or "").upper() != task_id
                 or str(candidate.get("agent_id") or "") != agent_id
                 or not str(candidate.get("claim_id") or "").strip()
                 or not str(candidate.get("work_session_id") or "").strip()):
+            continue
+        if (claim_id
+                and str(candidate.get("claim_id") or "").strip() != claim_id):
+            continue
+        if (work_session_id
+                and str(candidate.get("work_session_id") or "").strip()
+                != work_session_id):
+            continue
+        if (execution_id
+                and str(env.get("execution_id") or "").strip() != execution_id):
+            continue
+        if (generation not in (None, "")
+                and str(env.get("execution_generation") or "") != str(generation)):
             continue
         matches.append(candidate)
     return dict(matches[0]) if len(matches) == 1 else None
