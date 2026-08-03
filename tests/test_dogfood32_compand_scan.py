@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
+import sys
+import tempfile
 import unittest
 from datetime import date, datetime, timezone
+from pathlib import Path
 
 from path_setup import ROOT  # noqa: F401 - adds src/ to sys.path
 from switchboard.application.commands.compand_scan import (
@@ -13,6 +17,7 @@ from switchboard.application.commands.compand_scan import (
 )
 from switchboard.contracts.compand import (
     CompandSystemSnapshot,
+    CoverageCounts,
     DirectGatewayParity,
     EgressObservation,
     EgressObservationWindow,
@@ -711,6 +716,79 @@ class Dogfood32CompandScanTest(unittest.TestCase):
                 }
                 with self.assertRaisesRegex(ValueError, message):
                     LineRleShadowMeasurement.model_validate(structurally_impossible)
+
+    def test_count_primitives_reject_booleans_and_coercible_non_integers(
+        self,
+    ) -> None:
+        valid = qualifying_measurement()
+        measurement_payload = valid.model_dump(mode="json", by_alias=True)
+        for field in (
+            "repeated_span_count",
+            "repeated_line_count",
+            "removed_line_count",
+            "original_bytes",
+            "candidate_bytes",
+            "gateway_retry_count",
+        ):
+            for invalid in (True, "1", 1.0):
+                with self.subTest(model="measurement", field=field, value=invalid):
+                    with self.assertRaises(ValueError):
+                        LineRleShadowMeasurement.model_validate(
+                            {**measurement_payload, field: invalid}
+                        )
+
+        provider_payload = valid.original_count.model_dump(mode="json", by_alias=True)
+        for field in ("input_tokens", "cached_input_tokens", "retry_count"):
+            for invalid in (True, "1", 1.0):
+                with self.subTest(model="provider_count", field=field, value=invalid):
+                    with self.assertRaises(ValueError):
+                        ProviderTokenCount.model_validate(
+                            {**provider_payload, field: invalid}
+                        )
+
+        coverage_payload = full_receipt().coverage_counts.model_dump(mode="json")
+        for field in ("captured", "bypassed", "excluded", "unknown", "total"):
+            for invalid in (True, "1", 1.0):
+                with self.subTest(model="coverage_count", field=field, value=invalid):
+                    with self.assertRaises(ValueError):
+                        CoverageCounts.model_validate(
+                            {**coverage_payload, field: invalid}
+                        )
+
+        bypassed = valid.model_copy(update={"gateway_retry_count": True})
+        decision = decide_compand_scan(full_receipt(), [bypassed])
+        self.assertEqual(decision.decision, "stop")
+        self.assertEqual(decision.qualifying_candidate_count, 0)
+        self.assertIn("measurement_primitive_evidence_invalid", decision.reasons)
+
+    def test_evidence_cli_rejects_boolean_count_primitive(self) -> None:
+        fixture_path = (
+            ROOT / "fixtures/compand/dogfood-32/fixture-loopback-input.json"
+        )
+        payload = json.loads(fixture_path.read_text(encoding="utf-8"))
+        measurement = qualifying_measurement().model_dump(mode="json", by_alias=True)
+        measurement["repeated_span_count"] = True
+        payload["measurements"] = [measurement]
+
+        with tempfile.TemporaryDirectory(prefix="dogfood32-strict-count-") as tmp:
+            input_path = Path(tmp) / "input.json"
+            output_path = Path(tmp) / "output.json"
+            input_path.write_text(json.dumps(payload), encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/compand_scan_evidence.py"),
+                    str(input_path),
+                    str(output_path),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("repeated_span_count", result.stderr)
+            self.assertFalse(output_path.exists())
 
     def test_malformed_candidate_artifact_hash_is_rejected(self) -> None:
         payload = qualifying_measurement().model_dump(mode="json", by_alias=True)

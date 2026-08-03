@@ -7,7 +7,7 @@ import re
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
 
 GatewayMode = Literal["passthrough", "scan"]
@@ -137,9 +137,9 @@ class CompandSystemSnapshot(_FrozenContract):
     adapter: Literal["openai-responses/v1"] = "openai-responses/v1"
     wire_api: Literal["responses"] = "responses"
     reasoning_effort: str
-    request_max_retries: int = Field(ge=0)
-    stream_max_retries: int = Field(ge=0)
-    stream_idle_timeout_ms: int = Field(gt=0)
+    request_max_retries: StrictInt = Field(ge=0)
+    stream_max_retries: StrictInt = Field(ge=0)
+    stream_idle_timeout_ms: StrictInt = Field(gt=0)
     gateway_version: str
     task_snapshot_sha256: str
     configuration_sha256: str
@@ -176,11 +176,11 @@ class DirectGatewayParity(_FrozenContract):
 
 
 class CoverageCounts(_FrozenContract):
-    captured: int = Field(ge=0)
-    bypassed: int = Field(ge=0)
-    excluded: int = Field(ge=0)
-    unknown: int = Field(ge=0)
-    total: int = Field(ge=0)
+    captured: StrictInt = Field(ge=0)
+    bypassed: StrictInt = Field(ge=0)
+    excluded: StrictInt = Field(ge=0)
+    unknown: StrictInt = Field(ge=0)
+    total: StrictInt = Field(ge=0)
 
 
 class GatewayCoverageReceipt(_FrozenContract):
@@ -224,10 +224,10 @@ class ProviderTokenCount(_FrozenContract):
     schema_id: Literal["compand.provider_token_count.v1"] = Field(
         default="compand.provider_token_count.v1", alias="schema"
     )
-    input_tokens: int = Field(ge=0)
-    cached_input_tokens: int | None = Field(default=None, ge=0)
+    input_tokens: StrictInt = Field(ge=0)
+    cached_input_tokens: StrictInt | None = Field(default=None, ge=0)
     count_call_latency_ms: float = Field(ge=0)
-    retry_count: int = Field(default=0, ge=0)
+    retry_count: StrictInt = Field(default=0, ge=0)
     source: Literal["provider_input_tokens"] = "provider_input_tokens"
 
 
@@ -242,11 +242,11 @@ class LineRleShadowMeasurement(_FrozenContract):
     task_snapshot_sha256: str
     source_artifact_sha256: str
     candidate_artifact_sha256: str
-    repeated_span_count: int = Field(ge=0)
-    repeated_line_count: int = Field(ge=0)
-    removed_line_count: int = Field(ge=0)
-    original_bytes: int = Field(ge=0)
-    candidate_bytes: int = Field(ge=0)
+    repeated_span_count: StrictInt = Field(ge=0)
+    repeated_line_count: StrictInt = Field(ge=0)
+    removed_line_count: StrictInt = Field(ge=0)
+    original_bytes: StrictInt = Field(ge=0)
+    candidate_bytes: StrictInt = Field(ge=0)
     original_count: ProviderTokenCount
     candidate_count: ProviderTokenCount
     cache_fields_exposed: bool
@@ -255,7 +255,7 @@ class LineRleShadowMeasurement(_FrozenContract):
     projected_input_savings_usd: float
     cache_adjusted_candidate_is_cheaper: bool
     gateway_latency_ms: float = Field(ge=0)
-    gateway_retry_count: int = Field(ge=0)
+    gateway_retry_count: StrictInt = Field(ge=0)
     task_completed: bool
     shadow_original_forwarded_byte_for_byte: bool
     price_table: ProviderPriceTable
@@ -280,6 +280,7 @@ class LineRleShadowMeasurement(_FrozenContract):
             "removed_line_count": self.removed_line_count,
             "original_bytes": self.original_bytes,
             "candidate_bytes": self.candidate_bytes,
+            "gateway_retry_count": self.gateway_retry_count,
         }
         for field, value in primitives.items():
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -386,8 +387,8 @@ class CompandScanDecision(_FrozenContract):
     technique: Literal["line-rle-v1"] = "line-rle-v1"
     decision: ScanDecisionKind
     reasons: tuple[str, ...]
-    measured_candidate_count: int = Field(ge=0)
-    qualifying_candidate_count: int = Field(ge=0)
+    measured_candidate_count: StrictInt = Field(ge=0)
+    qualifying_candidate_count: StrictInt = Field(ge=0)
     mutation_authorized: Literal[False] = False
 
 
