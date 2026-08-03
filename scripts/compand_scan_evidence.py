@@ -18,6 +18,8 @@ from switchboard.application.commands.compand_scan import (  # noqa: E402
     decide_compand_scan,
 )
 from switchboard.contracts.compand import (  # noqa: E402
+    CompandScanEvidenceAuthority,
+    CompandScanEvidenceBundle,
     CompandSystemSnapshot,
     DirectGatewayParity,
     EgressObservation,
@@ -60,21 +62,39 @@ def main() -> int:
         for item in payload.get("measurements", [])
     )
     decision = decide_compand_scan(receipt, measurements)
-    result = {
-        "schema": "compand.scan_evidence_bundle.v1",
-        "evidence_state": payload.get("evidence_state", "exploratory"),
-        "claim_limit": payload.get("claim_limit", "diagnostic_only"),
-        "source_input_sha256": f"sha256:{hashlib.sha256(raw).hexdigest()}",
-        "coverage_receipt": receipt.model_dump(mode="json", by_alias=True),
-        "measurements": [
-            item.model_dump(mode="json", by_alias=True) for item in measurements
-        ],
-        "decision": decision.model_dump(mode="json", by_alias=True),
-        "limitations": list(payload.get("limitations", [])),
-    }
+    requested_authority = CompandScanEvidenceAuthority.model_validate(
+        {
+            "evidence_state": payload.get("evidence_state"),
+            "claim_limit": payload.get("claim_limit"),
+        }
+    )
+    derived_authority = CompandScanEvidenceBundle.derive_authority(
+        receipt, measurements, decision
+    )
+    if requested_authority != derived_authority:
+        raise ValueError(
+            "requested evidence authority contradicts the derived ADR-0026/CES-1 "
+            f"ceiling: expected {derived_authority.evidence_state}/"
+            f"{derived_authority.claim_limit}"
+        )
+    result = CompandScanEvidenceBundle(
+        evidence_state=derived_authority.evidence_state,
+        claim_limit=derived_authority.claim_limit,
+        source_input_sha256=f"sha256:{hashlib.sha256(raw).hexdigest()}",
+        coverage_receipt=receipt,
+        measurements=measurements,
+        decision=decision,
+        limitations=tuple(payload.get("limitations", [])),
+    )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
-        json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        json.dumps(
+            result.model_dump(mode="json", by_alias=True),
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
     )
     return 0
 

@@ -16,6 +16,7 @@ from switchboard.application.commands.compand_scan import (
     measure_line_rle_candidate,
 )
 from switchboard.contracts.compand import (
+    CompandScanDecision,
     CompandSystemSnapshot,
     CoverageCounts,
     DirectGatewayParity,
@@ -511,6 +512,41 @@ class Dogfood32CompandScanTest(unittest.TestCase):
                 },
             )
 
+    def test_command_receipt_truth_primitives_require_actual_booleans(self) -> None:
+        output = "same\nsame\n"
+        base = {
+            "schema": "compand.command_result.v1",
+            "call_id": "call-strict-booleans",
+            "source_kind": "command_result",
+            "trusted_adapter": True,
+            "exit_status": 0,
+            "content_type": "text/plain",
+            "encoding": "utf-8",
+            "truncated": False,
+            "signed": False,
+            "new_suffix": True,
+            "byte_count": len(output.encode()),
+            "output_sha256": hashlib.sha256(output.encode()).hexdigest(),
+        }
+        item = {
+            "type": "function_call_output",
+            "call_id": "call-strict-booleans",
+            "output": output,
+        }
+        for field, invalid in (
+            ("trusted_adapter", 1),
+            ("truncated", 0),
+            ("signed", 0),
+            ("new_suffix", 1),
+        ):
+            with self.subTest(field=field, value=invalid):
+                with self.assertRaisesRegex(ScanEligibilityError, field):
+                    build_line_rle_candidate(
+                        {**base, field: invalid},
+                        expected_call_id="call-strict-booleans",
+                        output_item=item,
+                    )
+
     def test_command_receipt_requires_exact_new_output_call_id_binding(self) -> None:
         output = "same\nsame\n"
         base = {
@@ -761,6 +797,60 @@ class Dogfood32CompandScanTest(unittest.TestCase):
         self.assertEqual(decision.qualifying_candidate_count, 0)
         self.assertIn("measurement_primitive_evidence_invalid", decision.reasons)
 
+    def test_evidence_truth_primitives_reject_coercible_booleans(self) -> None:
+        parity_payload = parity().model_dump(mode="json", by_alias=True)
+        for field in (
+            "protocol",
+            "usage_fields",
+            "task_result",
+            "streaming",
+            "tools",
+            "errors",
+            "cancellation",
+        ):
+            for invalid in (1, 0, "yes", "false"):
+                with self.subTest(model="parity", field=field, value=invalid):
+                    with self.assertRaises(ValueError):
+                        DirectGatewayParity.model_validate(
+                            {**parity_payload, field: invalid}
+                        )
+
+        measurement_payload = qualifying_measurement().model_dump(
+            mode="json", by_alias=True
+        )
+        for field in (
+            "cache_fields_exposed",
+            "cache_adjusted_candidate_is_cheaper",
+            "task_completed",
+            "shadow_original_forwarded_byte_for_byte",
+        ):
+            for invalid in (1, 0, "yes", "false"):
+                with self.subTest(model="measurement", field=field, value=invalid):
+                    with self.assertRaises(ValueError):
+                        LineRleShadowMeasurement.model_validate(
+                            {**measurement_payload, field: invalid}
+                        )
+
+        coverage_payload = full_receipt().model_dump(mode="json", by_alias=True)
+        for field in ("direct_inference_egress_observed", "mutation_blocked"):
+            for invalid in (1, 0, "yes", "false"):
+                with self.subTest(model="coverage", field=field, value=invalid):
+                    with self.assertRaises(ValueError):
+                        type(full_receipt()).model_validate(
+                            {**coverage_payload, field: invalid}
+                        )
+
+        for invalid in (True, 1, "false"):
+            with self.subTest(model="decision", value=invalid):
+                with self.assertRaises(ValueError):
+                    CompandScanDecision(
+                        decision="advance",
+                        reasons=(),
+                        measured_candidate_count=0,
+                        qualifying_candidate_count=0,
+                        mutation_authorized=invalid,
+                    )
+
     def test_evidence_cli_rejects_boolean_count_primitive(self) -> None:
         fixture_path = (
             ROOT / "fixtures/compand/dogfood-32/fixture-loopback-input.json"
@@ -789,6 +879,62 @@ class Dogfood32CompandScanTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("repeated_span_count", result.stderr)
             self.assertFalse(output_path.exists())
+
+    def test_evidence_cli_derives_and_enforces_phase_one_claim_ceiling(self) -> None:
+        fixture_path = (
+            ROOT / "fixtures/compand/dogfood-32/fixture-loopback-input.json"
+        )
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+        with tempfile.TemporaryDirectory(prefix="dogfood32-claim-ceiling-") as tmp:
+            output_path = Path(tmp) / "baseline-output.json"
+            baseline = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/compand_scan_evidence.py"),
+                    str(fixture_path),
+                    str(output_path),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(baseline.returncode, 0, baseline.stderr)
+            compiled = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual(compiled["ces_phase"], "phase_1_scan")
+            self.assertEqual(compiled["evidence_state"], "exploratory")
+            self.assertEqual(compiled["claim_limit"], "diagnostic_only")
+            self.assertEqual(compiled["decision"]["decision"], "low_coverage_hold")
+
+            contradictions = (
+                {"evidence_state": "verified"},
+                {"claim_limit": "production_roi"},
+                {"claim_limit": "broad_product_savings"},
+                {"evidence_state": "unknown_green_state"},
+                {"claim_limit": "unbounded_claim"},
+            )
+            for index, changes in enumerate(contradictions):
+                with self.subTest(changes=changes):
+                    input_path = Path(tmp) / f"contradiction-{index}.json"
+                    rejected_output = Path(tmp) / f"rejected-{index}.json"
+                    input_path.write_text(
+                        json.dumps({**fixture, **changes}), encoding="utf-8"
+                    )
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            str(ROOT / "scripts/compand_scan_evidence.py"),
+                            str(input_path),
+                            str(rejected_output),
+                        ],
+                        cwd=ROOT,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(rejected_output.exists())
 
     def test_malformed_candidate_artifact_hash_is_rejected(self) -> None:
         payload = qualifying_measurement().model_dump(mode="json", by_alias=True)

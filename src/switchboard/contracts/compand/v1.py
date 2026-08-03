@@ -7,13 +7,27 @@ import re
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_validator
 
 
 GatewayMode = Literal["passthrough", "scan"]
 EgressClassification = Literal["captured", "bypassed", "excluded", "unknown"]
 CoverageStatus = Literal["full", "partial", "control_only", "unsupported", "unknown"]
 ScanDecisionKind = Literal["advance", "low_coverage_hold", "redesign", "stop"]
+EvidenceState = Literal[
+    "exploratory",
+    "provisional",
+    "verified",
+    "independently_reproduced",
+    "suspended",
+]
+ScanClaimLimit = Literal[
+    "diagnostic_only",
+    "named_scan_mechanism_only",
+    "provisional_c2_named_corpus_only",
+    "production_roi",
+    "broad_product_savings",
+]
 
 
 _SHA256_EVIDENCE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -166,13 +180,13 @@ class DirectGatewayParity(_FrozenContract):
     schema_id: Literal["compand.direct_gateway_parity.v1"] = Field(
         default="compand.direct_gateway_parity.v1", alias="schema"
     )
-    protocol: bool
-    usage_fields: bool
-    task_result: bool
-    streaming: bool
-    tools: bool
-    errors: bool
-    cancellation: bool
+    protocol: StrictBool
+    usage_fields: StrictBool
+    task_result: StrictBool
+    streaming: StrictBool
+    tools: StrictBool
+    errors: StrictBool
+    cancellation: StrictBool
 
 
 class CoverageCounts(_FrozenContract):
@@ -196,9 +210,9 @@ class GatewayCoverageReceipt(_FrozenContract):
     egress_observation: EgressObservationWindow
     coverage_counts: CoverageCounts
     coverage: CoverageStatus
-    direct_inference_egress_observed: bool
+    direct_inference_egress_observed: StrictBool
     parity: DirectGatewayParity
-    mutation_blocked: bool
+    mutation_blocked: StrictBool
     blocking_reasons: tuple[str, ...]
     evidence_hash: str
 
@@ -249,15 +263,15 @@ class LineRleShadowMeasurement(_FrozenContract):
     candidate_bytes: StrictInt = Field(ge=0)
     original_count: ProviderTokenCount
     candidate_count: ProviderTokenCount
-    cache_fields_exposed: bool
+    cache_fields_exposed: StrictBool
     projected_original_input_usd: float = Field(ge=0)
     projected_candidate_input_usd: float = Field(ge=0)
     projected_input_savings_usd: float
-    cache_adjusted_candidate_is_cheaper: bool
+    cache_adjusted_candidate_is_cheaper: StrictBool
     gateway_latency_ms: float = Field(ge=0)
     gateway_retry_count: StrictInt = Field(ge=0)
-    task_completed: bool
-    shadow_original_forwarded_byte_for_byte: bool
+    task_completed: StrictBool
+    shadow_original_forwarded_byte_for_byte: StrictBool
     price_table: ProviderPriceTable
 
     def validate_structural_primitives(self) -> None:
@@ -285,6 +299,14 @@ class LineRleShadowMeasurement(_FrozenContract):
         for field, value in primitives.items():
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"{field} is not a valid non-negative integer")
+        for field in (
+            "cache_fields_exposed",
+            "cache_adjusted_candidate_is_cheaper",
+            "task_completed",
+            "shadow_original_forwarded_byte_for_byte",
+        ):
+            if not isinstance(getattr(self, field, None), bool):
+                raise ValueError(f"{field} is not a boolean")
         if self.original_bytes == 0 or self.candidate_bytes == 0:
             raise ValueError("line-rle-v1 artifact evidence must be non-empty")
         if self.original_bytes > _MAX_LINE_RLE_SOURCE_BYTES:
@@ -389,7 +411,124 @@ class CompandScanDecision(_FrozenContract):
     reasons: tuple[str, ...]
     measured_candidate_count: StrictInt = Field(ge=0)
     qualifying_candidate_count: StrictInt = Field(ge=0)
-    mutation_authorized: Literal[False] = False
+    mutation_authorized: StrictBool = False
+
+    @model_validator(mode="after")
+    def validate_mutation_authority(self) -> "CompandScanDecision":
+        if self.mutation_authorized is not False:
+            raise ValueError("DOGFOOD-32 scan evidence cannot authorize mutation")
+        return self
+
+
+class CompandScanEvidenceAuthority(_FrozenContract):
+    """Typed caller assertion that must equal the compiler-derived ceiling."""
+
+    evidence_state: EvidenceState
+    claim_limit: ScanClaimLimit
+
+
+class CompandScanEvidenceBundle(_FrozenContract):
+    """Immutable Scan bundle whose claim authority is derived from its evidence."""
+
+    schema_id: Literal["compand.scan_evidence_bundle.v1"] = Field(
+        default="compand.scan_evidence_bundle.v1", alias="schema"
+    )
+    ces_phase: Literal["phase_1_scan"] = "phase_1_scan"
+    evidence_state: EvidenceState
+    claim_limit: ScanClaimLimit
+    source_input_sha256: str
+    coverage_receipt: GatewayCoverageReceipt
+    measurements: tuple[LineRleShadowMeasurement, ...]
+    decision: CompandScanDecision
+    limitations: tuple[str, ...] = ()
+
+    @staticmethod
+    def derive_authority(
+        coverage: GatewayCoverageReceipt,
+        measurements: tuple[LineRleShadowMeasurement, ...],
+        decision: CompandScanDecision,
+    ) -> CompandScanEvidenceAuthority:
+        """Apply the conservative ADR-0026/CES-1 Phase 1 Scan ceiling."""
+
+        qualifying_measurements = 0
+        for item in measurements:
+            try:
+                derived = item.recomputed_derived_values()
+            except (TypeError, ValueError):
+                continue
+            provider = item.price_table.provider.strip().casefold()
+            expected_providers = {
+                coverage.system.provider_id.strip().casefold(),
+                coverage.system.provider_name.strip().casefold(),
+            }
+            if (
+                derived["cache_adjusted_candidate_is_cheaper"] is True
+                and item.task_snapshot_sha256
+                == coverage.system.task_snapshot_sha256
+                and item.price_table.model == coverage.system.model
+                and provider in expected_providers
+            ):
+                qualifying_measurements += 1
+
+        parity_passes = all(
+            getattr(coverage.parity, field, None) is True
+            for field in (
+                "protocol",
+                "usage_fields",
+                "task_result",
+                "streaming",
+                "tools",
+                "errors",
+                "cancellation",
+            )
+        )
+        process_level_observation = coverage.egress_observation.method in {
+            "process_network_capture",
+            "process_socket_audit",
+        }
+        supported_advance = (
+            decision.decision == "advance"
+            and decision.mutation_authorized is False
+            and decision.measured_candidate_count == len(measurements)
+            and decision.qualifying_candidate_count == qualifying_measurements
+            and qualifying_measurements > 0
+            and process_level_observation
+            and parity_passes
+            and coverage.coverage == "full"
+            and coverage.coverage_counts.captured > 0
+            and coverage.mutation_blocked is False
+            and not coverage.blocking_reasons
+        )
+        if supported_advance:
+            # Scan lacks the frozen paired release and clean-environment reproduction
+            # required for provisional C2 or verified CES-1 evidence.
+            return CompandScanEvidenceAuthority(
+                evidence_state="exploratory",
+                claim_limit="named_scan_mechanism_only",
+            )
+        return CompandScanEvidenceAuthority(
+            evidence_state="exploratory",
+            claim_limit="diagnostic_only",
+        )
+
+    @model_validator(mode="after")
+    def validate_claim_ceiling(self) -> "CompandScanEvidenceBundle":
+        if not _SHA256_EVIDENCE.fullmatch(self.source_input_sha256):
+            raise ValueError("source_input_sha256 is not canonical sha256 evidence")
+        derived = self.derive_authority(
+            self.coverage_receipt,
+            self.measurements,
+            self.decision,
+        )
+        if (
+            self.evidence_state != derived.evidence_state
+            or self.claim_limit != derived.claim_limit
+        ):
+            raise ValueError(
+                "evidence authority exceeds the derived ADR-0026/CES-1 ceiling: "
+                f"expected {derived.evidence_state}/{derived.claim_limit}"
+            )
+        return self
 
 
 def _validate_provider_token_count(label: str, count: ProviderTokenCount) -> None:

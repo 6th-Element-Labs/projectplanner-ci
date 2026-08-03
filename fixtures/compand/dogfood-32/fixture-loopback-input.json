@@ -1,5 +1,5 @@
 {
-  "claim_limit": "Fixture parity and receipt mechanics only; no natural-traffic or production economics claim.",
+  "claim_limit": "diagnostic_only",
   "coverage_inputs": [
     {
       "certified_feature": "responses",

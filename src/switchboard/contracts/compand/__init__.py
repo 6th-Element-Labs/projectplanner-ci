@@ -2,6 +2,8 @@
 
 from .v1 import (
     CompandScanDecision,
+    CompandScanEvidenceAuthority,
+    CompandScanEvidenceBundle,
     CompandSystemSnapshot,
     CoverageCounts,
     DirectGatewayParity,
@@ -20,6 +22,8 @@ from .v1 import (
 
 __all__ = [
     "CompandScanDecision",
+    "CompandScanEvidenceAuthority",
+    "CompandScanEvidenceBundle",
     "CompandSystemSnapshot",
     "CoverageCounts",
     "DirectGatewayParity",

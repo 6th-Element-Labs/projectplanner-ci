@@ -175,15 +175,20 @@ def _eligible_output(
     if receipt_call_id != expected_call_id:
         raise ScanEligibilityError("receipt call_id does not match expected_call_id")
 
-    exact = {
-        "schema": "compand.command_result.v1",
-        "source_kind": "command_result",
+    boolean_primitives = {
         "trusted_adapter": True,
-        "content_type": "text/plain",
-        "encoding": "utf-8",
         "truncated": False,
         "signed": False,
         "new_suffix": True,
+    }
+    for key, expected in boolean_primitives.items():
+        if receipt.get(key) is not expected:
+            raise ScanEligibilityError(f"{key} is not eligible for line-rle-v1")
+    exact = {
+        "schema": "compand.command_result.v1",
+        "source_kind": "command_result",
+        "content_type": "text/plain",
+        "encoding": "utf-8",
     }
     for key, expected in exact.items():
         if receipt.get(key) != expected:

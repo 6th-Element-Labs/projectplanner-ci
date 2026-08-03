@@ -44,6 +44,15 @@ cost for at least one completed task.
 Every decision has `mutation_authorized=false`. `advance` means only that the next
 separately gated experiment may be considered.
 
+The compiler accepts a typed caller assertion for `evidence_state` and `claim_limit`,
+then compares it with authority derived from the observation method, coverage blockers,
+parity, decision, and qualifying measurements. The Phase 1 Scan schema can emit only
+`exploratory/diagnostic_only` for held or invalid evidence, or
+`exploratory/named_scan_mechanism_only` for a fully supported `advance`. It cannot emit
+provisional C2, verified, production-ROI, or broad-product-savings authority because it
+does not contain the frozen paired CES-1 release and clean-environment reproduction those
+claims require. Unknown or contradictory assertions fail before an output file is written.
+
 ## Reproduction
 
 The checked-in fixture bundle is an honest negative control. It uses the frozen Codex
