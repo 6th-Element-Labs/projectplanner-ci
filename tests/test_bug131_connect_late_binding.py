@@ -101,6 +101,15 @@ try:
         claimed_runner,
         [{**work_session(), "claim_id": "taskclaim-other"}]) is None,
        "an already-bound claim cannot join another claim's Work Session")
+    session_bound_runner = runner()
+    session_bound_runner["metadata"]["work_session_id"] = "worksession-bug131"
+    ok(agent_host._direct_work_session_binding(
+        session_bound_runner, [work_session()]) is not None,
+       "an already-bound Work Session can still acquire its missing claim")
+    ok(agent_host._direct_work_session_binding(
+        session_bound_runner,
+        [{**work_session(), "work_session_id": "worksession-other"}]) is None,
+       "an already-bound Work Session cannot join another session")
 
     calls = []
     posted.clear()

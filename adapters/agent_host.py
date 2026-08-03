@@ -3609,8 +3609,7 @@ def _direct_work_session_binding(session, work_sessions, *, allowed_statuses=Non
     runner_session_id = str(session.get("runner_session_id") or "").strip()
     if (not runner_session_id
             or not (metadata.get("direct_assignment") is True
-                    or metadata.get("connect_assignment") is True)
-            or metadata.get("work_session_id")):
+                    or metadata.get("connect_assignment") is True)):
         return None
     expected_principal = f"direct-session/{runner_session_id}"
     task_id = str(session.get("task_id") or "").upper()
@@ -3618,6 +3617,7 @@ def _direct_work_session_binding(session, work_sessions, *, allowed_statuses=Non
     execution_id = str(metadata.get("execution_id") or "").strip()
     generation = metadata.get("execution_generation")
     claim_id = str(session.get("claim_id") or "").strip()
+    work_session_id = str(metadata.get("work_session_id") or "").strip()
     allowed = {str(value).lower() for value in (allowed_statuses or {"active"})}
     matches = []
     for candidate in work_sessions or []:
@@ -3631,6 +3631,10 @@ def _direct_work_session_binding(session, work_sessions, *, allowed_statuses=Non
             continue
         if (claim_id
                 and str(candidate.get("claim_id") or "").strip() != claim_id):
+            continue
+        if (work_session_id
+                and str(candidate.get("work_session_id") or "").strip()
+                != work_session_id):
             continue
         if (execution_id
                 and str(env.get("execution_id") or "").strip() != execution_id):
