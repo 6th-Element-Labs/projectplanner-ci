@@ -3562,8 +3562,10 @@ def renew_live_direct_runners(inventory):
             "task_id": task_id,
             "renewed": bool(result and not result.get("error")),
             "error": final_error,
-            "work_session_preflight_refreshed": bool(
-                preflight_refresh and not preflight_refresh.get("error")),
+            **({
+                "work_session_preflight_refreshed": bool(
+                    not preflight_refresh.get("error")),
+            } if isinstance(preflight_refresh, dict) else {}),
             "renew_deferred": bool(not result or final_error),
             "relay_url_minted": bool(server_relay.get("host_url")),
             **({

@@ -76,9 +76,11 @@ try:
         return {"ok": True}
 
     agent_host._try = record_try
-    agent_host.renew_live_direct_runners({"host_id": "host/bug131"})
+    refreshed = agent_host.renew_live_direct_runners({"host_id": "host/bug131"})
     ok(any(path.endswith("/worksession-bug131/preflight") for path in paths),
        "the binding heartbeat immediately requests server-side preflight validation")
+    ok(refreshed[0].get("work_session_preflight_refreshed") is True,
+       "an attempted successful refresh is explicitly reported")
     preflight_body = next(
         body for path, body in zip(paths, posted)
         if path.endswith("/worksession-bug131/preflight"))
