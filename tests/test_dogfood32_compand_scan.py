@@ -547,6 +547,53 @@ class Dogfood32CompandScanTest(unittest.TestCase):
                         output_item=item,
                     )
 
+    def test_command_receipt_integer_primitives_are_strict(self) -> None:
+        output = "same\nsame\n"
+        byte_count = len(output.encode("utf-8"))
+        base = {
+            "schema": "compand.command_result.v1",
+            "call_id": "call-strict-integers",
+            "source_kind": "command_result",
+            "trusted_adapter": True,
+            "exit_status": 0,
+            "content_type": "text/plain",
+            "encoding": "utf-8",
+            "truncated": False,
+            "signed": False,
+            "new_suffix": True,
+            "byte_count": byte_count,
+            "output_sha256": hashlib.sha256(output.encode()).hexdigest(),
+        }
+        item = {
+            "type": "function_call_output",
+            "call_id": "call-strict-integers",
+            "output": output,
+        }
+        for field, invalid in (
+            ("exit_status", 0.0),
+            ("exit_status", "0"),
+            ("exit_status", False),
+            ("exit_status", True),
+            ("byte_count", float(byte_count)),
+            ("byte_count", str(byte_count)),
+            ("byte_count", False),
+            ("byte_count", True),
+        ):
+            with self.subTest(field=field, value=invalid):
+                with self.assertRaisesRegex(ScanEligibilityError, field):
+                    build_line_rle_candidate(
+                        {**base, field: invalid},
+                        expected_call_id="call-strict-integers",
+                        output_item=item,
+                    )
+
+        candidate = build_line_rle_candidate(
+            base,
+            expected_call_id="call-strict-integers",
+            output_item=item,
+        )
+        self.assertEqual(candidate.original_bytes, byte_count)
+
     def test_command_receipt_requires_exact_new_output_call_id_binding(self) -> None:
         output = "same\nsame\n"
         base = {

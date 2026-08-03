@@ -194,14 +194,14 @@ def _eligible_output(
         if receipt.get(key) != expected:
             raise ScanEligibilityError(f"{key} is not eligible for line-rle-v1")
     exit_status = receipt.get("exit_status")
-    if isinstance(exit_status, bool) or exit_status != 0:
+    if type(exit_status) is not int or exit_status != 0:
         raise ScanEligibilityError("exit_status must be integer zero")
     output = output_item.get("output")
     if not isinstance(output, str):
         raise ScanEligibilityError("function_call_output.output must be UTF-8 text")
     byte_count = receipt.get("byte_count")
     observed_bytes = len(output.encode("utf-8"))
-    if isinstance(byte_count, bool) or byte_count != observed_bytes:
+    if type(byte_count) is not int or byte_count != observed_bytes:
         raise ScanEligibilityError("byte_count does not bind the supplied output")
     if observed_bytes > _MAX_COMMAND_BYTES:
         raise ScanEligibilityError("output exceeds the line-rle-v1 byte limit")
