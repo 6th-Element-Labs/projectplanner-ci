@@ -212,8 +212,26 @@ class _SerializedWriteProxy:
 
     def _run_write(self, fn):
         def thunk():
-            with _open_sqlite(self._db_path, self._timeout_s) as writer:
-                return fn(writer)
+            writer = _open_sqlite(self._db_path, self._timeout_s)
+            cursor = None
+            try:
+                with writer:
+                    result = fn(writer)
+                    if isinstance(result, sqlite3.Cursor):
+                        cursor = result
+                        return _DetachedWriteCursor(cursor)
+                    return result
+            finally:
+                try:
+                    if cursor is not None:
+                        cursor.close()
+                finally:
+                    # sqlite3.Connection's context manager commits or rolls
+                    # back; it does not close. Schema setup issues hundreds of
+                    # separate mutations, so leaving each writer reachable
+                    # through its returned cursor exhausts the process FD
+                    # limit (BUG-288).
+                    writer.close()
         return write_through(self._db_path, thunk)
 
     def execute(self, sql, parameters=()):
@@ -239,6 +257,65 @@ class _SerializedWriteProxy:
 
     def __exit__(self, exc_type, exc, tb):
         return self._conn.__exit__(exc_type, exc, tb)
+
+
+class _DetachedWriteCursor:
+    """Cursor metadata/results copied before a serialized writer is closed.
+
+    Mutating callers rely on ``rowcount`` and ``lastrowid`` after ``execute``.
+    Keeping the real cursor alive would also keep its temporary writer
+    connection alive, so copy the small cursor surface before closing both.
+    Rows are retained for dynamically supplied write statements that use a
+    ``RETURNING`` clause.
+    """
+
+    def __init__(self, cursor: sqlite3.Cursor):
+        self.arraysize = cursor.arraysize
+        self.description = cursor.description
+        self.lastrowid = cursor.lastrowid
+        self._rows = cursor.fetchall() if cursor.description is not None else []
+        # sqlite updates rowcount only after all RETURNING rows are fetched.
+        self.rowcount = cursor.rowcount
+        self._offset = 0
+        self._closed = False
+
+    def _check_open(self) -> None:
+        if self._closed:
+            raise sqlite3.ProgrammingError("Cannot operate on a closed cursor.")
+
+    def fetchone(self):
+        self._check_open()
+        if self._offset >= len(self._rows):
+            return None
+        row = self._rows[self._offset]
+        self._offset += 1
+        return row
+
+    def fetchmany(self, size=None):
+        self._check_open()
+        count = self.arraysize if size is None else size
+        start = self._offset
+        self._offset = min(len(self._rows), start + count)
+        return self._rows[start:self._offset]
+
+    def fetchall(self):
+        self._check_open()
+        rows = self._rows[self._offset:]
+        self._offset = len(self._rows)
+        return rows
+
+    def close(self) -> None:
+        self._closed = True
+        self._rows = []
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        row = self.fetchone()
+        if row is None:
+            raise StopIteration
+        return row
 
 
 class _LifecycleGuardedCursor:
