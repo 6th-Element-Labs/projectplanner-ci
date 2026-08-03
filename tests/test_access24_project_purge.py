@@ -18,6 +18,7 @@ os.environ["PM_HELM_DB_PATH"] = str(Path(TMP) / "helm.db")
 os.environ["PM_SWITCHBOARD_DB_PATH"] = str(Path(TMP) / "switchboard.db")
 os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = str(Path(TMP) / "project_registry.db")
 os.environ["PM_DYNAMIC_PROJECTS_DIR"] = TMP
+os.environ["PM_SQLITE_POOL_IDLE_PER_DB"] = "0"
 os.environ["PM_AUTH_MODE"] = "dev-open"
 os.environ["PM_TOP_LEVEL_PROJECTS"] = "maxwell,helm,switchboard"
 
@@ -229,6 +230,12 @@ try:
        and retried.get("idempotent") is True and retried.get("database_removed") is True
        and not retry_db.exists(),
        "a failed database removal remains visible and an authorized retry completes cleanup")
+
+    # The destructive cases unlink fixture databases that still have pooled handles.
+    # Release those handles and restore the shared registry parent before creating
+    # the independent cleanup-review fixtures below.
+    db_connection._close_pooled_conns()
+    Path(TMP).mkdir(parents=True, exist_ok=True)
 
     create_project("review-only")
     report = impact("review-only")
