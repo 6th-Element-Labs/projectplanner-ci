@@ -166,6 +166,13 @@ def create_router(*, resolve_project: ProjectResolver,
     @router.post("/api/projects/{project}/repo_topology")
     async def set_project_repo_topology(request: Request, project: str, body: dict = Body(...)):
         resolve_principal(request, "switchboard", ("write:system",), dev_actor="web")
+
+        def first_present(*keys: str):
+            for key in keys:
+                if key in body:
+                    return body[key]
+            return None
+
         result = store.set_project_repo_topology(
             project=resolve_project(project),
             canonical_repo=body.get("canonical_repo") or body.get("private_repo") or "",
@@ -175,20 +182,13 @@ def create_router(*, resolve_project: ProjectResolver,
             topology_type=body.get("topology_type") or "",
             canonical_default_branch=body.get("canonical_default_branch") or body.get("default_branch") or "",
             canonical_claim_gate=body.get("canonical_claim_gate") or body.get("claim_gate") or "",
-            public_ci_required_status_contexts=(
-                body.get("public_ci_required_status_contexts") or
-                body.get("ci_required_status_contexts") or
-                body.get("required_status_contexts") or
-                ""
-            ),
-            public_ci_sync_scripts=(
-                body.get("public_ci_sync_scripts") or
-                body.get("ci_sync_scripts") or
-                body.get("sync_scripts") or
-                ""
-            ),
-            public_publish_scripts=body.get("public_publish_scripts") or body.get("publish_scripts") or "",
-            release_publish_scripts=body.get("release_publish_scripts") or "",
+            public_ci_required_status_contexts=first_present(
+                "public_ci_required_status_contexts", "ci_required_status_contexts",
+                "required_status_contexts"),
+            public_ci_sync_scripts=first_present(
+                "public_ci_sync_scripts", "ci_sync_scripts", "sync_scripts"),
+            public_publish_scripts=first_present("public_publish_scripts", "publish_scripts"),
+            release_publish_scripts=first_present("release_publish_scripts"),
         )
         if result.get("error"):
             raise HTTPException(400, result["error"])

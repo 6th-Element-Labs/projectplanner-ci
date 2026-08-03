@@ -333,12 +333,12 @@ def set_project_repo_topology(ctx: Context, project: str = "maxwell",
                               topology_type: str = "",
                               canonical_default_branch: str = "",
                               canonical_claim_gate: str = "",
-                              public_ci_required_status_contexts: str = "",
-                              public_ci_sync_scripts: str = "",
-                              public_publish_scripts: str = "",
-                              release_publish_scripts: str = "",
-                              ci_repo: str = "", ci_required_status_contexts: str = "",
-                              ci_sync_scripts: str = "") -> str:
+                              public_ci_required_status_contexts: str | None = None,
+                              public_ci_sync_scripts: str | None = None,
+                              public_publish_scripts: str | None = None,
+                              release_publish_scripts: str | None = None,
+                              ci_repo: str = "", ci_required_status_contexts: str | None = None,
+                              ci_sync_scripts: str | None = None) -> str:
     """Configure first-class repository roles for a project.
 
     canonical_repo is the only code-truth / Done authority. public_ci_repo is a

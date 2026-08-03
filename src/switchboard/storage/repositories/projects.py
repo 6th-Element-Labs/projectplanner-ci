@@ -392,9 +392,11 @@ def _merge_repo_role(roles: Dict[str, Dict[str, Any]], role: str, data) -> None:
     target = roles.setdefault(role, _repo_role_template(role))
     for key, value in data.items():
         if key in {"required_status_contexts", "sync_scripts", "publish_scripts"}:
-            merged = _coerce_str_list(value)
-            if merged:
-                target[key] = merged
+            # An explicit empty list is meaningful: it clears a built-in or
+            # previously stored role contract.  Only an omitted/null field
+            # means "leave the existing value alone."
+            if value is not None:
+                target[key] = _coerce_str_list(value)
         elif key == "claim_gate":
             target[key] = _normalize_claim_gate(value)
         elif value is not None:
@@ -595,9 +597,9 @@ def set_project_repo_topology(project: str = DEFAULT_PROJECT, canonical_repo: st
                               ci_sync_scripts=None) -> Dict[str, Any]:
     if ci_repo and not public_ci_repo:
         public_ci_repo = ci_repo
-    if ci_required_status_contexts and not public_ci_required_status_contexts:
+    if ci_required_status_contexts is not None and public_ci_required_status_contexts is None:
         public_ci_required_status_contexts = ci_required_status_contexts
-    if ci_sync_scripts and not public_ci_sync_scripts:
+    if ci_sync_scripts is not None and public_ci_sync_scripts is None:
         public_ci_sync_scripts = ci_sync_scripts
 
     updates = {
@@ -635,9 +637,8 @@ def set_project_repo_topology(project: str = DEFAULT_PROJECT, canonical_repo: st
         if claim_gate and role == "canonical":
             target["claim_gate"] = _normalize_claim_gate(claim_gate)
         for field in ("required_status_contexts", "sync_scripts", "publish_scripts"):
-            values = _coerce_str_list(data.get(field))
-            if values:
-                target[field] = values
+            if data.get(field) is not None:
+                target[field] = _coerce_str_list(data.get(field))
     set_meta("repo_topology", topology, project=project)
     canonical = ((topology.get("roles") or {}).get("canonical") or {}).get("repo", "").strip()
     if canonical:
