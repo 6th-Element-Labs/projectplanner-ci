@@ -11,6 +11,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 
+# This self-contained fixture owns the host version and generic work-module
+# defaults.  Managed Agent Host runners export live values for both, which are
+# not inputs to these repository tests and must not affect module import.
+for key in ("PM_AGENT_HOST_VERSION", "PM_AGENT_WORK_MODULE"):
+    os.environ.pop(key, None)
+
 
 def _load(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
