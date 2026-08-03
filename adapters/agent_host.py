@@ -1505,6 +1505,53 @@ def _connect_codex_mcp_argv():
     )
 
 
+def _project_python_runtime(execution_context):
+    """Prove the Python runtime inherited by projectplanner Connect sessions.
+
+    Fresh Git workspaces intentionally do not contain the operator checkout's
+    ignored ``.venv`` directory.  The enrolled Host already runs inside the
+    locked project environment, so expose that exact interpreter to its child
+    instead of letting a CLI fall through to macOS ``/usr/bin/python3``.
+
+    This is a Capacity preflight only.  It neither selects work nor changes a
+    lifecycle role.  Other repositories are left untouched until they declare
+    their own verification profile.
+    """
+    repository = str((execution_context or {}).get("repository") or "").lower()
+    if repository != "6th-element-labs/projectplanner":
+        return None
+    version = tuple(int(part) for part in sys.version_info[:3])
+    if version < (3, 12, 0):
+        raise WorkspaceMaterializationError(
+            "verification_runtime_unavailable",
+            "projectplanner requires the Host's locked Python 3.12+ runtime",
+            required_python=">=3.12",
+            observed_python=".".join(str(part) for part in version),
+        )
+    executable = Path(sys.executable).expanduser()
+    if not executable.is_file() or not os.access(executable, os.X_OK):
+        raise WorkspaceMaterializationError(
+            "verification_runtime_unavailable",
+            "the Host Python interpreter is not executable",
+            required_python=">=3.12",
+        )
+    bin_dir = executable.parent
+    return {
+        "schema": "switchboard.host_python_runtime.v1",
+        "python_version": ".".join(str(part) for part in version),
+        # Keep the venv path as the executable instruction. Resolving the
+        # symlink would bypass pyvenv.cfg and silently lose locked packages.
+        "python_executable": str(executable),
+        "python_realpath": str(executable.resolve()),
+        "environment": {
+            "PATH": os.pathsep.join(filter(None, (
+                str(bin_dir), os.environ.get("PATH", "")))),
+            **({"VIRTUAL_ENV": str(Path(sys.prefix).resolve())}
+               if sys.prefix != sys.base_prefix else {}),
+        },
+    }
+
+
 def _issue_connect_session_mcp_token(wake, inventory, runner_session_id):
     """Mint the task principal used by a Connect session's MCP client."""
     result = sb._http("POST", P_DIRECT_SESSION_MCP_TOKEN, {
@@ -1943,6 +1990,7 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
     materialized_workspace = None
     workspace_request = None
     verify_workspace = None
+    verification_runtime = None
     mode = wake_mode(wake, inventory)
     workspace_path = ""
     if mode == "connect":
@@ -1951,6 +1999,7 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
         task_id = str(wake.get("task_id") or "")
         try:
             workspace_request = connect_workspace_request(wake, inventory)
+            verification_runtime = _project_python_runtime(execution_context)
             materialize_workspace = (
                 materialize_repository_workspace
                 if execution_context else materialize_host_worktree)
@@ -2019,6 +2068,13 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
             env["PM_MCP_TOKEN"] = session_token
             env.pop("SWITCHBOARD_TOKEN", None)
         env.update({str(k): str(v) for k, v in (extra_env or {}).items()})
+        if verification_runtime:
+            # Capacity's verified runtime wins over inherited/caller PATH. A
+            # test hook or service environment must not reintroduce the system
+            # Python fallback after the preflight passed.
+            env.update(verification_runtime["environment"])
+            env["PM_VERIFICATION_PYTHON"] = str(
+                verification_runtime["python_executable"])
         if materialized_workspace:
             # Last gate before any process exists: re-prove the directory the
             # CLI is about to be handed is still the authorized checkout. The
@@ -2081,6 +2137,11 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
                 rec["cwd"] = workspace_path
                 rec.setdefault("metadata", {})["workspace_receipt"] = (
                     safe_workspace_receipt(materialized_workspace.receipt))
+            if verification_runtime:
+                rec.setdefault("metadata", {})["verification_runtime"] = {
+                    key: value for key, value in verification_runtime.items()
+                    if key != "environment"
+                }
         return rec
     except Exception as e:
         if materialized_workspace:
