@@ -10,6 +10,7 @@ import queue
 import sqlite3
 import threading
 import time
+from contextlib import closing
 from concurrent.futures import Future
 from typing import Any, Callable, Dict, Optional
 
@@ -109,8 +110,12 @@ class SqliteWriteQueue:
             return
         self._last_checkpoint_at = now
         try:
-            with sqlite3.connect(self.db_path, timeout=1.0) as conn:
-                conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            # sqlite3.Connection.__exit__ commits or rolls back but does not
+            # close the handle.  Checkpointing is queue maintenance, so there
+            # is no caller-owned cursor or connection to retain after it runs.
+            with closing(sqlite3.connect(self.db_path, timeout=1.0)) as conn:
+                with conn:
+                    conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
             with self._metrics_lock:
                 self._metrics["checkpoints"] += 1
         except sqlite3.Error:
