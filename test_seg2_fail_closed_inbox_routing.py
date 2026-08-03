@@ -2,7 +2,6 @@
 """SEG-2 routing matrix, cache scaling, and fail-closed side-effect proof."""
 import os
 import tempfile
-import time
 
 tmp = tempfile.mkdtemp(prefix="seg2-routing-")
 os.environ["PM_DB_PATH"] = os.path.join(tmp, "maxwell.db")
@@ -41,26 +40,40 @@ __import__("comms").persisted_routes = lambda: calls.__setitem__("persisted_rout
 inbox_routing.invalidate_routes()
 assert inbox_routing.route("a@boats.test", "plan@taikunai.com") == (True, "helm")
 cold_build_calls = dict(calls)
-start = time.perf_counter()
 for _ in range(20_000):
     assert inbox_routing.route("a@boats.test", "plan@taikunai.com") == (True, "helm")
-elapsed = time.perf_counter() - start
 assert calls == cold_build_calls, (cold_build_calls, calls)
 assert calls["persisted_routes"] == 1
-assert elapsed < 2.0, elapsed
 
 # Increasing the configured project/route count does not change lookup work.
-timings = []
+class ProbeCountingRoutes(dict):
+    def __init__(self, routes):
+        super().__init__(routes)
+        self.probes = 0
+
+    def __contains__(self, key):
+        self.probes += 1
+        return super().__contains__(key)
+
+    def __getitem__(self, key):
+        self.probes += 1
+        return super().__getitem__(key)
+
+    def __iter__(self):
+        raise AssertionError("domain routing must not scan configured routes")
+
+
+probe_counts = []
 for route_count in (10, 1_000, 10_000):
     domains = {f"tenant-{i}.example": "helm" for i in range(route_count)}
     domains["boats.test"] = "helm"
-    index = inbox_routing.RouteIndex(domains, {"plan+helm@taikunai.com": "helm"},
+    routes = ProbeCountingRoutes(domains)
+    index = inbox_routing.RouteIndex(routes, {"plan+helm@taikunai.com": "helm"},
                                      frozenset({"helm"}), "")
-    started = time.perf_counter()
     for _ in range(20_000):
         assert inbox_routing.domain_project("a@east.boats.test", index) == "helm"
-    timings.append(time.perf_counter() - started)
-assert max(timings) < max(0.2, min(timings) * 3), timings
+    probe_counts.append(routes.probes)
+assert probe_counts == [60_000, 60_000, 60_000], probe_counts
 
 # Quarantine decisions do not call the ingest pipeline or mutate Maxwell.
 before = (store.inbox_pending_count(project="maxwell"), len(store.list_tasks(project="maxwell")))
