@@ -2,6 +2,7 @@
 """Real Chromium journey across Tasks, Coord, and Deliverables process cuts."""
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import socket
@@ -26,13 +27,23 @@ EMAIL = "ms126-browser@example.test"
 PASSWORD = "ms126-browser-password"
 
 
-def free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
+def reserve_port() -> socket.socket:
+    """Keep an ephemeral TCP port owned until Uvicorn inherits its socket."""
+    reservation = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    reservation.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    reservation.bind(("127.0.0.1", 0))
+    return reservation
 
 
-ports = {name: free_port() for name in ("app", "auth", "tasks", "coord", "deliverables")}
+port_reservations = {
+    name: reserve_port()
+    for name in ("app", "auth", "tasks", "coord", "deliverables")
+}
+ports = {
+    name: int(reservation.getsockname()[1])
+    for name, reservation in port_reservations.items()
+}
+assert len(set(ports.values())) == len(ports), ports
 urls = {name: f"http://127.0.0.1:{port}" for name, port in ports.items()}
 env = dict(os.environ)
 env.update({
@@ -50,6 +61,10 @@ env.update({
     "SWITCHBOARD_TASKS_READY_PROJECT": PROJECT,
     "SWITCHBOARD_COORD_READY_PROJECT": PROJECT,
     "SWITCHBOARD_DELIVERABLES_READY_PROJECT": PROJECT,
+    "SWITCHBOARD_AUTH_SERVICE_NAME": "switchboard-auth",
+    "SWITCHBOARD_TASKS_SERVICE_NAME": "switchboard-tasks",
+    "SWITCHBOARD_COORD_SERVICE_NAME": "switchboard-coord",
+    "SWITCHBOARD_DELIVERABLES_SERVICE_NAME": "switchboard-deliverables",
     "PYTHONPATH": f"{ROOT}:{ROOT / 'src'}",
 })
 for key in ("PM_AUTH_HTTP_PRIMARY", "PM_TASKS_HTTP_PRIMARY", "PM_COORD_HTTP_PRIMARY",
@@ -87,36 +102,68 @@ store.grant_project_role(PROJECT, "user", user["id"], "viewer",
                          created_by="test", scopes=["read"])
 
 
-def start(*args: str) -> subprocess.Popen:
-    return subprocess.Popen([sys.executable, "-m", "uvicorn", *args], cwd=ROOT, env=env,
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+def start(name: str, *args: str) -> subprocess.Popen:
+    reservation = port_reservations[name]
+    fd = reservation.fileno()
+    try:
+        return subprocess.Popen(
+            [sys.executable, "-m", "uvicorn", *args, "--fd", str(fd)],
+            cwd=ROOT,
+            env=env,
+            pass_fds=(fd,),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+    finally:
+        # Popen returns only after the child has inherited the descriptor, so
+        # there is never an unowned bind window for another parallel test.
+        reservation.close()
 
 
-processes = {
-    "app": start("app:app", "--host", "127.0.0.1", "--port", str(ports["app"])),
-    "auth": start("--factory", "switchboard.services.auth.app:create_app", "--host", "127.0.0.1", "--port", str(ports["auth"])),
-    "tasks": start("--factory", "switchboard.services.tasks.app:create_app", "--host", "127.0.0.1", "--port", str(ports["tasks"])),
-    "coord": start("--factory", "switchboard.services.coord.app:create_app", "--host", "127.0.0.1", "--port", str(ports["coord"])),
-    "deliverables": start("--factory", "switchboard.services.deliverables.app:create_app", "--host", "127.0.0.1", "--port", str(ports["deliverables"])),
+service_commands = {
+    "app": ("app:app",),
+    "auth": ("--factory", "switchboard.services.auth.app:create_app"),
+    "tasks": ("--factory", "switchboard.services.tasks.app:create_app"),
+    "coord": ("--factory", "switchboard.services.coord.app:create_app"),
+    "deliverables": (
+        "--factory", "switchboard.services.deliverables.app:create_app",
+    ),
 }
+expected_service_names = {
+    "app": "taikun-pm",
+    "auth": "switchboard-auth",
+    "tasks": "switchboard-tasks",
+    "coord": "switchboard-coord",
+    "deliverables": "switchboard-deliverables",
+}
+processes: dict[str, subprocess.Popen] = {}
 
 
 def wait_ready(name: str, timeout: float = 25) -> None:
     process = processes[name]
     path = "/health" if name == "app" else "/ready"
+    expected_service = expected_service_names[name]
+    last_observation = "no response"
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
             with urllib.request.urlopen(urls[name] + path, timeout=1) as response:
-                if response.status == 200:
+                payload = json.load(response)
+                last_observation = f"HTTP {response.status}: {payload!r}"
+                if (response.status == 200
+                        and payload.get("service") == expected_service):
                     return
-        except (urllib.error.URLError, OSError):
-            pass
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            last_observation = f"{type(exc).__name__}: {exc}"
         if process.poll() is not None:
             output = process.stdout.read() if process.stdout else ""
             raise RuntimeError(f"{name} exited before ready: {output[-2000:]}")
         time.sleep(0.2)
-    raise TimeoutError(f"{name} did not become ready")
+    raise TimeoutError(
+        f"{name} did not become ready as {expected_service}; "
+        f"last observation: {last_observation}"
+    )
 
 
 def stop(process: subprocess.Popen) -> None:
@@ -145,6 +192,8 @@ def edge_target(url: str) -> str | None:
 
 
 try:
+    for service_name, command in service_commands.items():
+        processes[service_name] = start(service_name, *command)
     for service_name in processes:
         wait_ready(service_name)
     with sync_playwright() as runtime:
@@ -213,8 +262,10 @@ try:
         browser.close()
     print("PASS ARCH-MS-126 real Chromium login and project/board/task/deliverable/mission journey")
     print("PASS ARCH-MS-126 anonymous, expired, bearer, cookie, and wrong-project identity matrix")
-    print("PASS ARCH-MS-126 all 8121-8124 readiness probes passed")
+    print("PASS ARCH-MS-126 all readiness probes returned the expected service identity")
 finally:
+    for reservation in port_reservations.values():
+        reservation.close()
     for process in processes.values():
         stop(process)
     shutil.rmtree(TMP, ignore_errors=True)
