@@ -118,7 +118,7 @@
   },
   "$id": "switchboard.review_verdict.v1",
   "additionalProperties": false,
-  "description": "Persisted review judgment for exactly one task PR head.",
+  "description": "One immutable revision in the review judgment for a task PR head.",
   "properties": {
     "created_at": {
       "title": "Created At",
@@ -153,6 +153,11 @@
       "default": null,
       "title": "Invalidated By Head Sha"
     },
+    "is_current_revision": {
+      "default": true,
+      "title": "Is Current Revision",
+      "type": "boolean"
+    },
     "open_finding_count": {
       "default": 0,
       "title": "Open Finding Count",
@@ -183,6 +188,11 @@
       "default": null,
       "title": "Reviewer Principal Id"
     },
+    "revision": {
+      "default": 1,
+      "title": "Revision",
+      "type": "integer"
+    },
     "schema": {
       "default": "switchboard.review_verdict.v1",
       "title": "Schema",
@@ -196,6 +206,30 @@
     "status": {
       "title": "Status",
       "type": "string"
+    },
+    "superseded_by_verdict_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Superseded By Verdict Id"
+    },
+    "supersedes_verdict_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Supersedes Verdict Id"
     },
     "task_id": {
       "title": "Task Id",

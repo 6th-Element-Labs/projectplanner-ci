@@ -334,8 +334,11 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
      "CREATE TABLE IF NOT EXISTS review_verdicts ("
      "verdict_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, pr_url TEXT NOT NULL, "
      "head_sha TEXT NOT NULL, reviewer_principal TEXT NOT NULL, status TEXT NOT NULL, "
+     "revision INTEGER NOT NULL DEFAULT 1, supersedes_verdict_id TEXT, "
      "source TEXT NOT NULL DEFAULT 'review_command', created_at REAL NOT NULL, "
-     "recorded_at REAL NOT NULL, UNIQUE(task_id, pr_url, head_sha))"),
+     "recorded_at REAL NOT NULL, "
+     "UNIQUE(task_id, pr_url, head_sha, revision), "
+     "UNIQUE(supersedes_verdict_id))"),
     ("0034_review_findings",
      "CREATE TABLE IF NOT EXISTS review_findings ("
      "verdict_id TEXT NOT NULL, task_id TEXT NOT NULL, finding_id TEXT NOT NULL, "
@@ -561,6 +564,9 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
     ("0119_ix_decision_records_convergence",
      "CREATE INDEX IF NOT EXISTS ix_decision_records_convergence "
      "ON decision_records(project, task_id, head_sha, generation)"),
+    # BUG-300 — append-only same-head verdict revisions. A later exact-head
+    # review may make the gate stricter without overwriting the earlier pass.
+    ("0120_review_verdict_revisions", "SELECT 1"),
 ]
 
 
@@ -592,6 +598,7 @@ def _record(c: sqlite3.Connection, name: str) -> None:
 
 
 REVIEW_VERDICT_PR_IDENTITY_MIGRATION = "0116_review_verdict_exact_pr_identity"
+REVIEW_VERDICT_REVISIONS_MIGRATION = "0120_review_verdict_revisions"
 
 
 def _review_verdict_unique_columns(c: sqlite3.Connection) -> set[tuple[str, ...]]:
@@ -612,6 +619,9 @@ def _review_verdict_unique_columns(c: sqlite3.Connection) -> set[tuple[str, ...]
 def _migrate_review_verdict_pr_identity(c: sqlite3.Connection) -> bool:
     """Replace the legacy task/SHA key with immutable task/PR/SHA authority."""
     if not _table_exists(c, "review_verdicts"):
+        return False
+    # New databases already carry the stricter revisioned PR identity.
+    if _column_exists(c, "review_verdicts", "revision"):
         return False
     if ("task_id", "pr_url", "head_sha") in _review_verdict_unique_columns(c):
         return False
@@ -634,6 +644,47 @@ def _migrate_review_verdict_pr_identity(c: sqlite3.Connection) -> bool:
     )
     c.execute("DROP TABLE review_verdicts")
     c.execute("ALTER TABLE review_verdicts__0116 RENAME TO review_verdicts")
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS ix_review_verdicts_task "
+        "ON review_verdicts(task_id, created_at)"
+    )
+    return True
+
+
+def _migrate_review_verdict_revisions(c: sqlite3.Connection) -> bool:
+    """Replace the single exact-head row with an append-only revision ledger."""
+    if not _table_exists(c, "review_verdicts"):
+        return False
+    expected_key = ("task_id", "pr_url", "head_sha", "revision")
+    if (
+        _column_exists(c, "review_verdicts", "revision")
+        and _column_exists(c, "review_verdicts", "supersedes_verdict_id")
+        and expected_key in _review_verdict_unique_columns(c)
+    ):
+        return False
+    c.execute(
+        "CREATE TABLE review_verdicts__0120 ("
+        "verdict_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, "
+        "pr_url TEXT NOT NULL, head_sha TEXT NOT NULL, "
+        "reviewer_principal TEXT NOT NULL, reviewer_principal_id TEXT, "
+        "review_mode TEXT NOT NULL DEFAULT 'standard', status TEXT NOT NULL, "
+        "revision INTEGER NOT NULL DEFAULT 1, supersedes_verdict_id TEXT, "
+        "source TEXT NOT NULL DEFAULT 'review_command', created_at REAL NOT NULL, "
+        "recorded_at REAL NOT NULL, "
+        "UNIQUE(task_id, pr_url, head_sha, revision), "
+        "UNIQUE(supersedes_verdict_id))"
+    )
+    c.execute(
+        "INSERT INTO review_verdicts__0120("
+        "verdict_id,task_id,pr_url,head_sha,reviewer_principal,"
+        "reviewer_principal_id,review_mode,status,revision,supersedes_verdict_id,"
+        "source,created_at,recorded_at) "
+        "SELECT verdict_id,task_id,pr_url,head_sha,reviewer_principal,"
+        "reviewer_principal_id,review_mode,status,1,NULL,source,created_at,recorded_at "
+        "FROM review_verdicts"
+    )
+    c.execute("DROP TABLE review_verdicts")
+    c.execute("ALTER TABLE review_verdicts__0120 RENAME TO review_verdicts")
     c.execute(
         "CREATE INDEX IF NOT EXISTS ix_review_verdicts_task "
         "ON review_verdicts(task_id, created_at)"
@@ -678,7 +729,10 @@ def run_additive_migrations(c: sqlite3.Connection) -> List[str]:
     for name, sql in DDL_MIGRATIONS:
         if name in applied:
             continue
-        if name == REVIEW_VERDICT_PR_IDENTITY_MIGRATION:
+        if name in {
+            REVIEW_VERDICT_PR_IDENTITY_MIGRATION,
+            REVIEW_VERDICT_REVISIONS_MIGRATION,
+        }:
             # This ledger entry is registered below only after the transactional
             # rebuild (or its structural no-op) succeeds.
             continue
@@ -702,6 +756,11 @@ def run_additive_migrations(c: sqlite3.Connection) -> List[str]:
         _migrate_review_verdict_pr_identity(c)
         _record(c, REVIEW_VERDICT_PR_IDENTITY_MIGRATION)
         newly.append(REVIEW_VERDICT_PR_IDENTITY_MIGRATION)
+
+    if REVIEW_VERDICT_REVISIONS_MIGRATION not in applied:
+        _migrate_review_verdict_revisions(c)
+        _record(c, REVIEW_VERDICT_REVISIONS_MIGRATION)
+        newly.append(REVIEW_VERDICT_REVISIONS_MIGRATION)
 
     return newly
 

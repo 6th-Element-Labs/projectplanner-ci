@@ -151,24 +151,28 @@ try:
     ok(replay.get("idempotent_replay") is True
        and replay.get("verdict", {}).get("verdict_id") == stored.get("verdict_id"),
        "identical write for the same head is idempotent")
-    conflict = commands.execute_mapping(
+    superseded = commands.execute_mapping(
         verdict(task_id, findings=[finding("RV-DIFFERENT")]),
         actor=REVIEWER, principal_id=REVIEWER_PRINCIPAL_ID, project=PROJECT)
-    ok(conflict.get("error_code") == "review_verdict_conflict",
-       "a different verdict cannot overwrite the same task/head record")
+    latest = superseded.get("verdict") or {}
+    ok(superseded.get("superseded") is True
+       and latest.get("supersedes_verdict_id") == stored.get("verdict_id")
+       and latest.get("finding_count") == 3,
+       "a later blocking finding appends a revision without overwriting the prior verdict")
 
     current = queries.get_for(task_id, project=PROJECT)
     listed = queries.list_findings_for(
         task_id, project=PROJECT, state="open", finding_class="auto",
         severity="high", current_head_only=True)
-    ok(current and current["verdict_id"] == stored["verdict_id"],
+    ok(current and current["verdict_id"] == latest["verdict_id"]
+       and current["revision"] == 2,
        "current-head verdict is queryable without transcript context")
-    ok(len(listed) == 2 and all(item["valid_for_current_head"] for item in listed),
+    ok(len(listed) == 3 and all(item["valid_for_current_head"] for item in listed),
        "review findings are queryable by state, class, severity, and current head")
 
     detail = store.get_task(task_id, project=PROJECT)
-    ok(detail.get("finding_count") == 2
-       and detail.get("review_verdict", {}).get("current_head_finding_count") == 2,
+    ok(detail.get("finding_count") == 3
+       and detail.get("review_verdict", {}).get("current_head_finding_count") == 3,
        "task finding_count reflects real code-review findings, not session hygiene")
 
     store.mark_task_pr_opened(
@@ -182,7 +186,7 @@ try:
        "a new head SHA invalidates the prior verdict without deleting history")
     ok(no_current is None
        and detail_after_push["review_verdict"]["current_verdict_status"] == "missing"
-       and detail_after_push["review_verdict"]["historical_finding_count"] == 2,
+       and detail_after_push["review_verdict"]["historical_finding_count"] == 3,
        "new code requires a fresh verdict while preserving historical findings")
     ok(queries.list_findings_for(
         task_id, project=PROJECT, current_head_only=True) == [],

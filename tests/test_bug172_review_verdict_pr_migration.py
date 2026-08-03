@@ -71,7 +71,10 @@ def connection() -> sqlite3.Connection:
         item[0] for item in runner.ADDITIVE_COLUMN_MIGRATIONS
     } | {item[0] for item in runner.DDL_MIGRATIONS}
     for name in sorted(
-        all_names - {runner.REVIEW_VERDICT_PR_IDENTITY_MIGRATION}
+        all_names - {
+            runner.REVIEW_VERDICT_PR_IDENTITY_MIGRATION,
+            runner.REVIEW_VERDICT_REVISIONS_MIGRATION,
+        }
     ):
         c.execute(
             "INSERT INTO schema_migrations VALUES (?,1)",
@@ -87,7 +90,10 @@ class ReviewVerdictPrIdentityMigration(unittest.TestCase):
         try:
             applied = runner.run_additive_migrations(c)
             self.assertEqual(
-                applied, [runner.REVIEW_VERDICT_PR_IDENTITY_MIGRATION])
+                applied, [
+                    runner.REVIEW_VERDICT_PR_IDENTITY_MIGRATION,
+                    runner.REVIEW_VERDICT_REVISIONS_MIGRATION,
+                ])
             old = c.execute(
                 "SELECT * FROM review_verdicts WHERE verdict_id='verdict-old'"
             ).fetchone()
@@ -103,7 +109,11 @@ class ReviewVerdictPrIdentityMigration(unittest.TestCase):
                 "verdict-old",
             )
             c.execute(
-                "INSERT INTO review_verdicts VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO review_verdicts("
+                "verdict_id,task_id,pr_url,head_sha,reviewer_principal,"
+                "reviewer_principal_id,review_mode,status,revision,"
+                "supersedes_verdict_id,source,created_at,recorded_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     "verdict-new",
                     "COORD-46",
@@ -113,6 +123,8 @@ class ReviewVerdictPrIdentityMigration(unittest.TestCase):
                     "principal/shared",
                     "adversarial",
                     "pass",
+                    1,
+                    None,
                     "review_command",
                     3.0,
                     4.0,
@@ -125,6 +137,10 @@ class ReviewVerdictPrIdentityMigration(unittest.TestCase):
                     ("a" * 40,),
                 ).fetchone()[0],
                 2,
+            )
+            self.assertIn(
+                ("task_id", "pr_url", "head_sha", "revision"),
+                runner._review_verdict_unique_columns(c),
             )
             self.assertEqual(runner.run_additive_migrations(c), [])
         finally:

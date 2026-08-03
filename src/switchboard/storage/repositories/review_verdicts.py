@@ -10,7 +10,7 @@ from typing import Any, Iterable, Mapping, Optional
 from constants import DEFAULT_PROJECT
 from db.connection import _conn, _write_through
 from switchboard.contracts.reviews import REVIEW_FINDING_SCHEMA, REVIEW_VERDICT_SCHEMA
-from switchboard.domain.pr_identity import same_pr_identity
+from switchboard.domain.pr_identity import canonical_pr_identity, same_pr_identity
 
 
 REVIEW_SUMMARY_SCHEMA = "switchboard.review_summary.v1"
@@ -94,16 +94,56 @@ def _finding_from_row(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+def _row_revision(row: sqlite3.Row) -> int:
+    return int(row["revision"] or 1) if "revision" in row.keys() else 1
+
+
+def _latest_verdict_row_in(
+        c: sqlite3.Connection, *, task_id: str, head_sha: str,
+        pr_url: str = "") -> Optional[sqlite3.Row]:
+    rows = c.execute(
+        "SELECT * FROM review_verdicts WHERE task_id=? AND head_sha=? "
+        "ORDER BY revision DESC, created_at DESC",
+        (task_id, head_sha),
+    ).fetchall()
+    if pr_url:
+        matches = [row for row in rows if same_pr_identity(pr_url, row["pr_url"])]
+        return matches[0] if matches else None
+    identities = {canonical_pr_identity(row["pr_url"]) for row in rows}
+    return rows[0] if rows and len(identities) == 1 else None
+
+
+def _lineage_rows_in(c: sqlite3.Connection, row: sqlite3.Row) -> list[sqlite3.Row]:
+    """Return every immutable verdict revision contributing to ``row``."""
+    rows = c.execute(
+        "SELECT * FROM review_verdicts "
+        "WHERE task_id=? AND head_sha=? AND revision<=? "
+        "ORDER BY revision",
+        (row["task_id"], row["head_sha"], _row_revision(row)),
+    ).fetchall()
+    return [item for item in rows if same_pr_identity(row["pr_url"], item["pr_url"])]
+
+
 def _verdict_from_row(c: sqlite3.Connection, row: sqlite3.Row,
                       current_head_sha: str = "",
                       current_pr_url: str = "") -> dict[str, Any]:
-    findings = [
-        _finding_from_row(finding)
-        for finding in c.execute(
-            "SELECT * FROM review_findings WHERE verdict_id=? ORDER BY finding_id",
-            (row["verdict_id"],),
-        ).fetchall()
-    ]
+    lineage = _lineage_rows_in(c, row)
+    lineage_ids = [item["verdict_id"] for item in lineage]
+    findings: list[dict[str, Any]] = []
+    if lineage_ids:
+        placeholders = ",".join("?" for _ in lineage_ids)
+        findings = [
+            _finding_from_row(finding)
+            for finding in c.execute(
+                "SELECT * FROM review_findings WHERE verdict_id IN (" +
+                placeholders + ") ORDER BY finding_id",
+                lineage_ids,
+            ).fetchall()
+        ]
+    successor = c.execute(
+        "SELECT verdict_id FROM review_verdicts WHERE supersedes_verdict_id=?",
+        (row["verdict_id"],),
+    ).fetchone()
     current = str(current_head_sha or "").strip()
     current_pr = str(current_pr_url or "").strip()
     valid = bool(
@@ -112,6 +152,7 @@ def _verdict_from_row(c: sqlite3.Connection, row: sqlite3.Row,
             not current_pr
             or same_pr_identity(current_pr, row["pr_url"])
         )
+        and not successor
     )
     return {
         "schema": REVIEW_VERDICT_SCHEMA,
@@ -123,6 +164,13 @@ def _verdict_from_row(c: sqlite3.Connection, row: sqlite3.Row,
         "reviewer_principal_id": row["reviewer_principal_id"],
         "review_mode": row["review_mode"],
         "status": row["status"],
+        "revision": _row_revision(row),
+        "supersedes_verdict_id": (
+            row["supersedes_verdict_id"]
+            if "supersedes_verdict_id" in row.keys() else None
+        ),
+        "superseded_by_verdict_id": successor["verdict_id"] if successor else None,
+        "is_current_revision": successor is None,
         "created_at": row["created_at"],
         "findings": findings,
         "finding_count": len(findings),
@@ -170,25 +218,41 @@ def _canonical_verdict(verdict: Mapping[str, Any]) -> str:
     })
 
 
+def _canonical_finding(finding: Mapping[str, Any]) -> str:
+    payload = {
+        key: finding.get(key)
+        for key in (
+            "schema", "id", "location", "category", "severity",
+            "invariant_violated", "repair_requirement", "class", "state",
+            "resolved_by", "resolved_principal_id", "resolved_reason",
+            "resolved_sha", "resolved_at",
+        )
+    }
+    payload["schema"] = payload.get("schema") or REVIEW_FINDING_SCHEMA
+    payload["state"] = payload.get("state") or "open"
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
 def _insert_verdict_row_in(c: sqlite3.Connection, data: Mapping[str, Any], *,
                            source: str, created_at: float, recorded_at: float) -> str:
+    revision = max(1, int(data.get("revision") or 1))
     digest = hashlib.sha256(
         (
             f"{data['task_id']}\x1f{data['pr_url']}\x1f"
-            f"{data['head_sha']}"
+            f"{data['head_sha']}\x1f{revision}"
         ).encode("utf-8")
     ).hexdigest()[:16]
     verdict_id = str(data.get("verdict_id") or f"reviewverdict-{digest}")
     c.execute(
         "INSERT INTO review_verdicts("
         "verdict_id, task_id, pr_url, head_sha, reviewer_principal, "
-        "reviewer_principal_id, review_mode, status, source, created_at, recorded_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        "reviewer_principal_id, review_mode, status, revision, supersedes_verdict_id, "
+        "source, created_at, recorded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             verdict_id, data["task_id"], data["pr_url"], data["head_sha"],
             data["reviewer_principal"], data["reviewer_principal_id"],
-            data.get("review_mode") or "standard", data["status"], source,
-            created_at, recorded_at,
+            data.get("review_mode") or "standard", data["status"], revision,
+            data.get("supersedes_verdict_id"), source, created_at, recorded_at,
         ),
     )
     return verdict_id
@@ -294,9 +358,8 @@ class ReviewVerdictRepository:
                     status_code=409,
                     details={"expected_pr_url": current_pr},
                 )
-            # Persist one representation so the existing exact unique key remains
-            # the sole stored authority. Equivalent API/browser URL spellings do
-            # not create parallel verdict rows or hashes.
+            # Persist one PR representation so equivalent API/browser URL spellings
+            # stay in one exact-head revision lineage.
             payload["pr_url"] = current_pr
             # Reviewer independence is deliberately NOT enforced. It was added in COORD-18 and
             # removed here: every fleet agent authenticates through the same shared
@@ -328,7 +391,9 @@ class ReviewVerdictRepository:
                 c, payload, task_id=task_id, pr_url=current_pr,
                 head_sha=current_head)
             if existing_result is not None:
-                return existing_result
+                if not existing_result.get("supersede"):
+                    return existing_result
+                payload = dict(existing_result["payload"])
             now = time.time()
             try:
                 verdict_id = _insert_verdict_row_in(
@@ -339,7 +404,7 @@ class ReviewVerdictRepository:
                 existing_result = self._existing_result_in(
                     c, payload, task_id=task_id, pr_url=current_pr,
                     head_sha=current_head)
-                if existing_result is None:
+                if existing_result is None or existing_result.get("supersede"):
                     raise
                 return existing_result
             _insert_findings_in(
@@ -353,41 +418,125 @@ class ReviewVerdictRepository:
                 "reviewer_principal_id": reviewer_principal_id,
                 "review_mode": payload.get("review_mode") or "standard",
                 "status": payload["status"],
+                "revision": int(payload.get("revision") or 1),
+                "supersedes_verdict_id": payload.get("supersedes_verdict_id"),
                 "finding_count": len(payload.get("findings") or []),
                 "principal_id": reviewer_principal_id,
             }
             c.execute(
                 "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
                 "VALUES (?,?,?,?,?)",
-                (task_id, actor, "review.verdict_recorded",
+                (task_id, actor, (
+                    "review.verdict_superseded"
+                    if payload.get("supersedes_verdict_id")
+                    else "review.verdict_recorded"
+                ),
                  json.dumps(event, sort_keys=True), now),
             )
             row = c.execute(
                 "SELECT * FROM review_verdicts WHERE verdict_id=?", (verdict_id,)
             ).fetchone()
-            return {"created": True, "idempotent_replay": False,
-                    "verdict": _verdict_from_row(
-                        c, row, current_head, current_pr)}
+            return {
+                "created": True,
+                "idempotent_replay": False,
+                "superseded": bool(payload.get("supersedes_verdict_id")),
+                "superseded_verdict_id": payload.get("supersedes_verdict_id"),
+                "verdict": _verdict_from_row(c, row, current_head, current_pr),
+            }
 
     @staticmethod
     def _existing_result_in(c: sqlite3.Connection, payload: Mapping[str, Any], *,
                             task_id: str, pr_url: str,
                             head_sha: str) -> Optional[dict[str, Any]]:
-        existing = c.execute(
-            "SELECT * FROM review_verdicts "
-            "WHERE task_id=? AND pr_url=? AND head_sha=?",
-            (task_id, pr_url, head_sha),
-        ).fetchone()
+        existing = _latest_verdict_row_in(
+            c, task_id=task_id, pr_url=pr_url, head_sha=head_sha)
         if not existing:
             return None
         verdict = _verdict_from_row(c, existing, head_sha, pr_url)
         if _canonical_verdict(verdict) == _canonical_command(payload):
             return {"created": False, "idempotent_replay": True, "verdict": verdict}
+        if payload.get("status") == "changes_requested":
+            existing_findings = {
+                str(item.get("id") or ""): item
+                for item in verdict.get("findings") or []
+            }
+            additions = []
+            for finding in payload.get("findings") or []:
+                finding_id = str(finding.get("id") or "")
+                previous = existing_findings.get(finding_id)
+                if previous is None:
+                    additions.append(dict(finding))
+                    continue
+                if _canonical_finding(previous) != _canonical_finding(finding):
+                    raise ReviewVerdictError(
+                        "review_finding_conflict",
+                        "an appended finding cannot alter an existing same-head finding",
+                        status_code=409,
+                        details={
+                            "verdict_id": existing["verdict_id"],
+                            "finding_id": finding_id,
+                        },
+                    )
+            if not additions:
+                same_writer = (
+                    verdict.get("reviewer_principal") == payload.get("reviewer_principal")
+                    and verdict.get("reviewer_principal_id")
+                    == payload.get("reviewer_principal_id")
+                    and verdict.get("review_mode")
+                    == (payload.get("review_mode") or "standard")
+                    and verdict.get("status") == payload.get("status")
+                )
+                incoming_ids = {
+                    str(item.get("id") or "")
+                    for item in payload.get("findings") or []
+                }
+                historical_replay = False
+                if incoming_ids:
+                    for revision_row in _lineage_rows_in(c, existing):
+                        revision_ids = {
+                            str(row["finding_id"] or "")
+                            for row in c.execute(
+                                "SELECT finding_id FROM review_findings "
+                                "WHERE verdict_id=?",
+                                (revision_row["verdict_id"],),
+                            ).fetchall()
+                        }
+                        if (
+                            revision_ids == incoming_ids
+                            and revision_row["reviewer_principal"]
+                            == payload.get("reviewer_principal")
+                            and revision_row["reviewer_principal_id"]
+                            == payload.get("reviewer_principal_id")
+                            and revision_row["review_mode"]
+                            == (payload.get("review_mode") or "standard")
+                            and revision_row["status"] == payload.get("status")
+                        ):
+                            historical_replay = True
+                            break
+                if same_writer or historical_replay:
+                    return {
+                        "created": False,
+                        "idempotent_replay": True,
+                        "verdict": verdict,
+                    }
+            elif any((item.get("state") or "open") == "open" for item in additions):
+                next_payload = dict(payload)
+                next_payload["findings"] = additions
+                next_payload["revision"] = _row_revision(existing) + 1
+                next_payload["supersedes_verdict_id"] = existing["verdict_id"]
+                return {
+                    "supersede": True,
+                    "payload": next_payload,
+                    "previous_verdict": verdict,
+                }
         raise ReviewVerdictError(
             "review_verdict_conflict",
-            "a different review verdict already exists for this task PR/head",
+            "same-head verdict evolution may only append blocking findings",
             status_code=409,
-            details={"verdict_id": existing["verdict_id"]},
+            details={
+                "verdict_id": existing["verdict_id"],
+                "revision": _row_revision(existing),
+            },
         )
 
     def get(self, task_id: str, *, head_sha: str = "", pr_url: str = "",
@@ -402,28 +551,8 @@ class ReviewVerdictRepository:
             ).strip()
             if not selected_head:
                 return None
-            if selected_pr:
-                rows = c.execute(
-                    "SELECT * FROM review_verdicts "
-                    "WHERE task_id=? AND head_sha=? ORDER BY created_at",
-                    (task_id, selected_head),
-                ).fetchall()
-                matches = [
-                    candidate for candidate in rows
-                    if same_pr_identity(selected_pr, candidate["pr_url"])
-                ]
-                # Equivalent legacy URL spellings mapping to more than one row
-                # are ambiguous and fail closed.
-                row = matches[0] if len(matches) == 1 else None
-            else:
-                rows = c.execute(
-                    "SELECT * FROM review_verdicts "
-                    "WHERE task_id=? AND head_sha=? ORDER BY created_at",
-                    (task_id, selected_head),
-                ).fetchall()
-                # A legacy historical lookup is safe only while the SHA maps
-                # to exactly one PR. Replacement-PR ambiguity fails closed.
-                row = rows[0] if len(rows) == 1 else None
+            row = _latest_verdict_row_in(
+                c, task_id=task_id, head_sha=selected_head, pr_url=selected_pr)
             return (
                 _verdict_from_row(c, row, current_head, current_pr)
                 if row else None
@@ -509,18 +638,8 @@ class ReviewVerdictRepository:
                     "task has no recorded PR URL; finding resolution cannot be fenced",
                     status_code=409,
                 )
-            verdict_rows = c.execute(
-                "SELECT * FROM review_verdicts "
-                "WHERE task_id=? AND head_sha=?",
-                (task_id, current_head),
-            ).fetchall()
-            matching_verdicts = [
-                row for row in verdict_rows
-                if same_pr_identity(current_pr, row["pr_url"])
-            ]
-            verdict_row = (
-                matching_verdicts[0] if len(matching_verdicts) == 1 else None
-            )
+            verdict_row = _latest_verdict_row_in(
+                c, task_id=task_id, head_sha=current_head, pr_url=current_pr)
             if not verdict_row:
                 raise ReviewVerdictError(
                     "review_verdict_not_found",
@@ -528,15 +647,20 @@ class ReviewVerdictRepository:
                     status_code=404,
                     details={"head_sha": current_head},
                 )
-            finding_row = c.execute(
-                "SELECT * FROM review_findings WHERE verdict_id=? AND finding_id=?",
-                (verdict_row["verdict_id"], finding_id),
-            ).fetchone()
-            if not finding_row:
+            lineage_ids = [row["verdict_id"] for row in _lineage_rows_in(c, verdict_row)]
+            placeholders = ",".join("?" for _ in lineage_ids)
+            finding_rows = c.execute(
+                "SELECT * FROM review_findings WHERE verdict_id IN (" +
+                placeholders + ") AND finding_id=?",
+                [*lineage_ids, finding_id],
+            ).fetchall()
+            if len(finding_rows) != 1:
                 raise ReviewVerdictError(
                     "review_finding_not_found", "review finding does not exist",
                     status_code=404, details={"finding_id": finding_id},
                 )
+            finding_row = finding_rows[0]
+            finding_verdict_id = finding_row["verdict_id"]
             existing = _finding_from_row(finding_row)
             if existing["state"] != "open":
                 same_resolution = (
@@ -568,12 +692,13 @@ class ReviewVerdictRepository:
                 "resolved_at=?, updated_at=? WHERE verdict_id=? AND finding_id=?",
                 (
                     state, resolver, resolver_principal_id, reason, resolved_sha,
-                    now, now, verdict_row["verdict_id"], finding_id,
+                    now, now, finding_verdict_id, finding_id,
                 ),
             )
             open_count = int(c.execute(
-                "SELECT COUNT(*) FROM review_findings WHERE verdict_id=? AND state='open'",
-                (verdict_row["verdict_id"],),
+                "SELECT COUNT(*) FROM review_findings WHERE verdict_id IN (" +
+                placeholders + ") AND state='open'",
+                lineage_ids,
             ).fetchone()[0])
             promoted = open_count == 0 and previous_verdict_status != "pass"
             if promoted:
@@ -606,7 +731,7 @@ class ReviewVerdictRepository:
             )
             updated_finding = c.execute(
                 "SELECT * FROM review_findings WHERE verdict_id=? AND finding_id=?",
-                (verdict_row["verdict_id"], finding_id),
+                (finding_verdict_id, finding_id),
             ).fetchone()
             updated_verdict = c.execute(
                 "SELECT * FROM review_verdicts WHERE verdict_id=?",
@@ -654,11 +779,9 @@ class ReviewVerdictRepository:
                         return []
                     where.append("v.head_sha=?")
                     params.append(current_git[task_id]["head_sha"])
-                    where.append("v.pr_url=?")
-                    params.append(current_git[task_id]["pr_url"])
             rows = c.execute(
                 "SELECT f.*, v.pr_url, v.head_sha, v.reviewer_principal, "
-                "v.reviewer_principal_id, "
+                "v.reviewer_principal_id, v.revision, v.supersedes_verdict_id, "
                 "v.status AS verdict_status, v.created_at AS verdict_created_at "
                 "FROM review_findings f JOIN review_verdicts v "
                 "ON v.verdict_id=f.verdict_id WHERE " + " AND ".join(where) +
@@ -674,6 +797,9 @@ class ReviewVerdictRepository:
                     current_git[row["task_id"]] = git_state
                 current = git_state["head_sha"]
                 current_pr = git_state["pr_url"]
+                if current_head_only and not same_pr_identity(
+                        current_pr, row["pr_url"]):
+                    continue
                 item.update({
                     "verdict_id": row["verdict_id"],
                     "task_id": row["task_id"],
@@ -681,20 +807,22 @@ class ReviewVerdictRepository:
                     "head_sha": row["head_sha"],
                     "reviewer_principal": row["reviewer_principal"],
                     "reviewer_principal_id": row["reviewer_principal_id"],
+                    "origin_revision": int(row["revision"] or 1),
+                    "origin_supersedes_verdict_id": row["supersedes_verdict_id"],
                     "verdict_status": row["verdict_status"],
                     "verdict_created_at": row["verdict_created_at"],
                     "valid_for_current_head": bool(
                         current
                         and current_pr
                         and current == row["head_sha"]
-                        and current_pr == row["pr_url"]
+                        and same_pr_identity(current_pr, row["pr_url"])
                     ),
                     "invalidated_by_head_sha": (
                         current if current and current != row["head_sha"] else None
                     ),
                     "invalidated_by_pr_url": (
                         current_pr
-                        if current_pr and current_pr != row["pr_url"]
+                        if current_pr and not same_pr_identity(current_pr, row["pr_url"])
                         else None
                     ),
                 })
@@ -721,11 +849,9 @@ def review_verdict_summary_in(c: sqlite3.Connection, task_id: str,
     total_open = int(counts["open_count"] or 0)
     current_row = None
     if current_head_sha and current_pr_url:
-        current_row = c.execute(
-            "SELECT * FROM review_verdicts "
-            "WHERE task_id=? AND pr_url=? AND head_sha=?",
-            (task_id, current_pr_url, current_head_sha),
-        ).fetchone()
+        current_row = _latest_verdict_row_in(
+            c, task_id=task_id, head_sha=current_head_sha,
+            pr_url=current_pr_url)
     current_verdict = (
         _verdict_from_row(
             c, current_row, current_head_sha, current_pr_url)
@@ -776,11 +902,9 @@ def review_merge_gate(task_id: str, head_sha: str, *,
             c, task_id, current_head, current_pr)
         row = None
         if requested_head and current_pr:
-            row = c.execute(
-                "SELECT * FROM review_verdicts "
-                "WHERE task_id=? AND pr_url=? AND head_sha=?",
-                (task_id, current_pr, requested_head),
-            ).fetchone()
+            row = _latest_verdict_row_in(
+                c, task_id=task_id, head_sha=requested_head,
+                pr_url=current_pr)
         verdict = (
             _verdict_from_row(c, row, current_head, current_pr)
             if row else None

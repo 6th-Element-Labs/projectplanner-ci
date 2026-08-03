@@ -31,12 +31,15 @@ def _services() -> ReviewToolServices:
 
 def record_review_verdict(verdict_json: str, ctx: Context,
                           project: str = "maxwell") -> str:
-    """Persist one authenticated code-review verdict for the task's exact current PR head.
+    """Persist an authenticated verdict for the task's exact current PR head.
 
     verdict_json follows switchboard.review_verdict.record_command.v1 and includes
     task_id, pr_url, head_sha, reviewer_principal, status=pass|changes_requested,
     review_mode=standard|adversarial, and findings[]. The authenticated worker may
     review its own diff; exact-head evidence and actor binding remain mandatory.
+    Identical writes replay idempotently. A later changes_requested write may only
+    append blocking findings; it creates an immutable superseding revision and can
+    never turn unresolved same-head defects back into a pass.
     """
     services = _services()
     principal = services.require_write(ctx, project, ("write:ixp",))

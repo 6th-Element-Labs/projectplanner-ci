@@ -176,7 +176,7 @@ class ResolveReviewFindingCommand(VersionedModel):
 
 
 class ReviewVerdict(VersionedModel):
-    """Persisted review judgment for exactly one task PR head."""
+    """One immutable revision in the review judgment for a task PR head."""
 
     SCHEMA: ClassVar[str] = REVIEW_VERDICT_SCHEMA
     model_config = ConfigDict(frozen=True, populate_by_name=True, extra="forbid")
@@ -190,6 +190,10 @@ class ReviewVerdict(VersionedModel):
     reviewer_principal_id: str | None = None
     review_mode: str = "standard"
     status: str
+    revision: int = 1
+    supersedes_verdict_id: str | None = None
+    superseded_by_verdict_id: str | None = None
+    is_current_revision: bool = True
     created_at: float
     findings: tuple[ReviewFinding, ...] = ()
     finding_count: int = 0
@@ -206,7 +210,10 @@ class ReviewVerdict(VersionedModel):
     def _strip_text(cls, value: Any) -> str:
         return str(value or "").strip()
 
-    @field_validator("reviewer_principal_id", mode="before")
+    @field_validator(
+        "reviewer_principal_id", "supersedes_verdict_id",
+        "superseded_by_verdict_id", mode="before",
+    )
     @classmethod
     def _strip_principal_id(cls, value: Any) -> str | None:
         text = str(value or "").strip()
