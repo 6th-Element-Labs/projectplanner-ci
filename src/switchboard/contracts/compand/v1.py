@@ -258,9 +258,19 @@ class LineRleShadowMeasurement(_FrozenContract):
     def recomputed_derived_values(self) -> dict[str, float | bool]:
         """Regenerate every derived economics field from primitive evidence."""
 
+        _validate_provider_token_count("original_count", self.original_count)
+        _validate_provider_token_count("candidate_count", self.candidate_count)
         original_cost = _projected_input_cost(self.original_count, self.price_table)
         candidate_cost = _projected_input_cost(self.candidate_count, self.price_table)
+        for label, cost in (
+            ("projected_original_input_usd", original_cost),
+            ("projected_candidate_input_usd", candidate_cost),
+        ):
+            if not math.isfinite(cost) or cost < 0:
+                raise ValueError(f"{label} is not a valid non-negative cost")
         savings = round(original_cost - candidate_cost, 12)
+        if not math.isfinite(savings):
+            raise ValueError("projected_input_savings_usd is not finite")
         cache_exposed = (
             self.original_count.cached_input_tokens is not None
             and self.candidate_count.cached_input_tokens is not None
@@ -284,13 +294,6 @@ class LineRleShadowMeasurement(_FrozenContract):
     def validate_derived_economics(self) -> "LineRleShadowMeasurement":
         """Reject evidence whose published economics do not match its primitives."""
 
-        for label, count in (
-            ("original_count", self.original_count),
-            ("candidate_count", self.candidate_count),
-        ):
-            cached = count.cached_input_tokens
-            if cached is not None and cached > count.input_tokens:
-                raise ValueError(f"{label}.cached_input_tokens exceeds input_tokens")
         expected = self.recomputed_derived_values()
         mismatches: list[str] = []
         for field in (
@@ -330,6 +333,40 @@ class CompandScanDecision(_FrozenContract):
     measured_candidate_count: int = Field(ge=0)
     qualifying_candidate_count: int = Field(ge=0)
     mutation_authorized: Literal[False] = False
+
+
+def _validate_provider_token_count(label: str, count: ProviderTokenCount) -> None:
+    """Validate count primitives even when callers bypass Pydantic construction."""
+
+    input_tokens = getattr(count, "input_tokens", None)
+    cached_tokens = getattr(count, "cached_input_tokens", None)
+    retry_count = getattr(count, "retry_count", None)
+    latency = getattr(count, "count_call_latency_ms", None)
+    for field, value in (
+        ("input_tokens", input_tokens),
+        ("retry_count", retry_count),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"{label}.{field} is not a valid non-negative integer")
+    if cached_tokens is not None and (
+        isinstance(cached_tokens, bool)
+        or not isinstance(cached_tokens, int)
+        or cached_tokens < 0
+    ):
+        raise ValueError(
+            f"{label}.cached_input_tokens is not a valid non-negative integer"
+        )
+    if cached_tokens is not None and cached_tokens > input_tokens:
+        raise ValueError(f"{label}.cached_input_tokens exceeds input_tokens")
+    if (
+        isinstance(latency, bool)
+        or not isinstance(latency, (int, float))
+        or not math.isfinite(float(latency))
+        or latency < 0
+    ):
+        raise ValueError(
+            f"{label}.count_call_latency_ms is not a valid non-negative number"
+        )
 
 
 def _projected_input_cost(

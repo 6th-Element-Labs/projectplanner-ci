@@ -493,6 +493,59 @@ class Dogfood32CompandScanTest(unittest.TestCase):
             )
         )
 
+    def test_cached_tokens_above_total_fail_closed_when_validation_was_bypassed(
+        self,
+    ) -> None:
+        prices = ProviderPriceTable(
+            provider="compand_fixture",
+            model="gpt-5.4",
+            effective_date=date(2026, 8, 3),
+            input_usd_per_million_tokens=10,
+            cached_input_usd_per_million_tokens=1,
+            source="dated-test-table",
+        )
+        invalid_original = ProviderTokenCount.model_construct(
+            input_tokens=5,
+            cached_input_tokens=10,
+            count_call_latency_ms=1,
+            retry_count=0,
+            source="provider_input_tokens",
+        )
+        candidate = ProviderTokenCount(
+            input_tokens=1,
+            cached_input_tokens=0,
+            count_call_latency_ms=1,
+        )
+        forged = LineRleShadowMeasurement.model_construct(
+            run_id="run-invalid-cached-count",
+            task_snapshot_sha256="sha256:" + "b" * 64,
+            source_artifact_sha256="sha256:" + "d" * 64,
+            candidate_artifact_sha256="sha256:" + "e" * 64,
+            repeated_span_count=1,
+            repeated_line_count=2,
+            removed_line_count=1,
+            original_bytes=10,
+            candidate_bytes=8,
+            original_count=invalid_original,
+            candidate_count=candidate,
+            cache_fields_exposed=True,
+            projected_original_input_usd=-0.00004,
+            projected_candidate_input_usd=0.00001,
+            projected_input_savings_usd=-0.00005,
+            cache_adjusted_candidate_is_cheaper=False,
+            gateway_latency_ms=1,
+            gateway_retry_count=0,
+            task_completed=True,
+            shadow_original_forwarded_byte_for_byte=True,
+            price_table=prices,
+        )
+
+        decision = decide_compand_scan(full_receipt(), [forged])
+
+        self.assertEqual(decision.decision, "stop")
+        self.assertEqual(decision.qualifying_candidate_count, 0)
+        self.assertIn("measurement_primitive_evidence_invalid", decision.reasons)
+
 
 if __name__ == "__main__":
     unittest.main()
