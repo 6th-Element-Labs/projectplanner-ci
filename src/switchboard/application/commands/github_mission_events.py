@@ -268,9 +268,11 @@ def _mapped_tasks(
     repository: MissionJournalRepository,
 ) -> list[str]:
     if event in _STATUS_EVENTS:
-        return repository.task_ids_for_head(
-            str(identity.get("head_sha") or ""), project=project,
-        )
+        head_sha = str(identity.get("head_sha") or "")
+        return list(dict.fromkeys([
+            *repository.task_ids_for_head(head_sha, project=project),
+            *repository.task_ids_for_merge_group_sha(head_sha, project=project),
+        ]))
     if event in _POLICY_EVENTS:
         return repository.active_task_ids(project=project)
 

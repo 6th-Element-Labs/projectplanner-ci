@@ -211,6 +211,49 @@ class GithubMissionEventsTest(unittest.TestCase):
         self.assertEqual("f" * 40, event["head_sha"])
         self.assertEqual("merge_group", json.loads(event["payload_json"])["object_type"])
 
+    def test_merge_group_status_maps_through_its_synthetic_head(self):
+        self.repository.ensure_item("RECON-14", project="switchboard")
+        with self.repository._connection("switchboard") as connection:
+            connection.execute(
+                "INSERT INTO task_git_state(task_id,head_sha,pr_number) VALUES (?,?,?)",
+                ("RECON-14", "e" * 40, 42),
+            )
+        project_delivery(
+            "merge_group",
+            {
+                "action": "checks_requested",
+                "repository": {"full_name": "6th-Element-Labs/projectplanner"},
+                "merge_group": {
+                    "head_sha": "f" * 40,
+                    "base_sha": "0" * 40,
+                    "head_ref": "refs/heads/gh-readonly-queue/master/pr-42-deadbeef",
+                },
+            },
+            project="switchboard",
+            repository=self.repository,
+        )
+        result = project_delivery(
+            "status",
+            {
+                "repository": {"full_name": "6th-Element-Labs/projectplanner"},
+                "sha": "f" * 40,
+                "context": "Switchboard CI / VM gate",
+                "state": "failure",
+                "target_url": "https://github.test/actions/runs/30775085751",
+            },
+            project="switchboard",
+            repository=self.repository,
+        )
+        self.assertEqual(["RECON-14"], result["mapped_task_ids"])
+        event = self._events()[-1]
+        payload = json.loads(event["payload_json"])
+        self.assertEqual("status", payload["object_type"])
+        self.assertEqual("failure", payload["status_state"])
+        self.assertEqual(
+            "https://github.test/actions/runs/30775085751",
+            payload["target_url"],
+        )
+
     def test_review_uses_durable_pr_mapping_when_text_has_no_task_id(self):
         self.repository.ensure_item("RECON-14", project="switchboard")
         with self.repository._connection("switchboard") as connection:

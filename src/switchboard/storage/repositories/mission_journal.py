@@ -278,6 +278,32 @@ class MissionJournalRepository:
             ).fetchall()
         return [str(row["task_id"]) for row in rows]
 
+    def task_ids_for_merge_group_sha(
+        self, head_sha: str, *, project: str,
+    ) -> list[str]:
+        """Return active missions that observed this exact merge-group head.
+
+        GitHub reports the queue check on a synthetic merge-group commit rather
+        than on the pull request head.  The earlier ``merge_group`` event is the
+        durable, project-local correlation fact; no branch-name inference or
+        provider lookup is needed here.
+        """
+        normalized = str(head_sha or "").strip()
+        if not normalized:
+            return []
+        with self._connection(project) as connection:
+            rows = connection.execute(
+                "SELECT DISTINCT e.task_id FROM mission_events e "
+                "JOIN mission_items m ON m.project_id=e.project_id "
+                "AND m.task_id=e.task_id "
+                "WHERE e.project_id=? AND lower(e.head_sha)=lower(?) "
+                "AND e.event_type='github_changed' "
+                "AND json_extract(e.payload_json,'$.object_type')='merge_group' "
+                "AND m.state<>'DONE' ORDER BY e.task_id",
+                (project, normalized),
+            ).fetchall()
+        return [str(row["task_id"]) for row in rows]
+
     def task_ids_for_pr_number(self, pr_number: int, *, project: str) -> list[str]:
         """Return tasks bound to one canonical pull-request number."""
         if isinstance(pr_number, bool) or not isinstance(pr_number, int) or pr_number <= 0:

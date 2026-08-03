@@ -62,6 +62,18 @@ def _start_was_admitted(receipt: Mapping[str, Any]) -> bool:
     }
 
 
+def _launch_event_pointer(event: Mapping[str, Any]) -> dict[str, Any]:
+    """Expose only the journal's already-bounded immutable event evidence."""
+    return {
+        "event_sequence": int(event.get("sequence") or 0),
+        "event_id": event.get("event_id"),
+        "event_type": event.get("event_type"),
+        "head_sha": event.get("head_sha"),
+        "external_ref": event.get("external_ref"),
+        "payload": dict(event.get("payload") or {}),
+    }
+
+
 def tick_scoped_mission(
     task_id: str,
     *,
@@ -161,10 +173,20 @@ def tick_scoped_mission(
         "schema": "switchboard.mission_launch_pointer.v4",
         "project": project,
         "task_id": task_id,
-        "event_sequence": event_pointer,
-        "event_id": event.get("event_id"),
-        "event_type": event.get("event_type"),
+        **_launch_event_pointer(event),
     }
+    if str(event.get("event_type") or "") == "agent_yielded":
+        yielded = dict(event.get("payload") or {})
+        observed_through = int(yielded.get("observed_through") or 0)
+        if 0 < observed_through < event_pointer:
+            observed = ports.journal.list_events(
+                task_id,
+                project=project,
+                after_sequence=observed_through - 1,
+                limit=1,
+            )
+            if observed and int(observed[0].get("sequence") or 0) == observed_through:
+                pointer["trigger_event"] = _launch_event_pointer(observed[0])
     receipt = ports.start_task(
         task_id,
         project=project,

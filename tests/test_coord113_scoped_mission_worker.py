@@ -2,6 +2,7 @@
 """COORD-113: restore and harden the fenced COORD-110 pager."""
 from __future__ import annotations
 
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -122,6 +123,62 @@ class ScopedMissionWorkerTest(unittest.TestCase):
         self.assertEqual("review_merge", self.starts[0]["role"])
         self.assertEqual("runner_live", replay["reason"])
         self.assertEqual(1, len(self.starts))
+
+    def test_yield_launch_carries_the_exact_observed_trigger_event(self):
+        self.create(role="review_merge")
+        failure = self.journal.append_event(
+            "COORD-113",
+            project="switchboard",
+            event_type="github_changed",
+            source_plane="communication",
+            idempotency_key="merge-group-failure-113",
+            head_sha="f" * 40,
+            external_ref="https://github.test/actions/runs/7",
+            payload={
+                "object_type": "status",
+                "status_context": "Switchboard CI / VM gate",
+                "status_state": "failure",
+                "target_url": "https://github.test/actions/runs/7",
+            },
+        )
+        yielded = self.journal.append_event(
+            "COORD-113",
+            project="switchboard",
+            event_type="agent_yielded",
+            source_plane="coordination",
+            idempotency_key="yield-113",
+            generation=2,
+            execution_id="exec-113",
+            payload={
+                "outcome": "continue",
+                "requested_role": "remediation",
+                "observed_through": failure["sequence"],
+                "latest_sequence_at_yield": failure["sequence"],
+                "cursor_current": True,
+            },
+        )
+        self.journal.update_item(
+            "COORD-113",
+            project="switchboard",
+            state="ACTIVE",
+            requested_role="remediation",
+            expected_version=self.journal.get_item(
+                "COORD-113", project="switchboard",
+            )["version"],
+            handled_through=yielded["sequence"] - 1,
+        )
+
+        result = self.tick()
+
+        self.assertEqual("start_task", result["action"])
+        pointer = json.loads(self.starts[0]["instruction"])
+        self.assertEqual("agent_yielded", pointer["event_type"])
+        self.assertEqual(failure["sequence"], pointer["trigger_event"]["event_sequence"])
+        self.assertEqual("failure", pointer["trigger_event"]["payload"]["status_state"])
+        self.assertEqual(
+            "https://github.test/actions/runs/7",
+            pointer["trigger_event"]["external_ref"],
+        )
 
     def test_scope_dependencies_human_and_runner_each_wait_without_start(self):
         self.create()
