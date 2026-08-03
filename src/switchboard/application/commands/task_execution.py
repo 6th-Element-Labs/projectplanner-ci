@@ -739,6 +739,7 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
                decision_attempt: int = 0, state_version: int = 0,
                mission_key: str = "",
                mission_dossier: Optional[Mapping[str, Any]] = None,
+               mission_launch_pointer: Optional[Mapping[str, Any]] = None,
                launcher: Optional[Callable[..., dict[str, Any]]] = None) -> dict[str, Any]:
     """Start or resume THE task session (COORD-44 contract, service-owned).
 
@@ -1021,6 +1022,7 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
                 state_version=state_version,
                 mission_key=logical_mission,
                 mission_dossier=dict(mission_dossier or {}),
+                mission_launch_pointer=dict(mission_launch_pointer or {}),
                 # Task Execution owns admission. Resolve the evidence policy
                 # from the same task snapshot used to create this generation,
                 # rather than relying on a later wake-layer task re-read.

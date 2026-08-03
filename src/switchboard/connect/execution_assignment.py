@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any, Mapping
 
 
@@ -11,6 +12,17 @@ SCHEMA = "switchboard.execution_assignment.v1"
 EXACT_HEAD_ROLES = frozenset({"review_merge", "remediation"})
 VALID_ROLES = frozenset({"implementation", *EXACT_HEAD_ROLES})
 OFFLINE_EVIDENCE_PROFILE = "offline_evidence"
+MISSION_LAUNCH_POINTER_SCHEMA = "switchboard.mission_launch_pointer.v4"
+_SHA = re.compile(r"^[0-9a-f]{40}$")
+_MISSION_POINTER_FIELDS = frozenset({
+    "schema",
+    "event_id",
+    "event_sequence",
+    "ci_context",
+    "failure_state",
+    "evidence_url",
+    "exact_head_sha",
+})
 
 #: Every field name this module can put in a contract, including the optional
 #: ones. ``require_exact_execution_assignment`` compares whole dicts, so an
@@ -52,7 +64,11 @@ def contract_fingerprint() -> str:
     byte-identical contracts for the same lifecycle.
     """
     payload = json.dumps(
-        {"schema": SCHEMA, "fields": sorted(CONTRACT_FIELDS)},
+        {
+            "schema": SCHEMA,
+            "fields": sorted(CONTRACT_FIELDS),
+            "mission_launch_pointer_schema": MISSION_LAUNCH_POINTER_SCHEMA,
+        },
         sort_keys=True, separators=(",", ":"),
     )
     return "eac1:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
@@ -80,6 +96,66 @@ class ExecutionAssignmentError(ValueError):
     def __init__(self, code: str):
         super().__init__(code)
         self.code = code
+
+
+def normalize_mission_launch_pointer(
+    pointer: Mapping[str, Any] | None,
+    *,
+    expected_head_sha: str,
+) -> dict[str, Any]:
+    """Validate the bounded durable CI pointer used for v4 remediation.
+
+    This is an immutable evidence address, not a diagnosis.  Keeping an exact
+    field set prevents a mission dossier, log excerpt, or prompt from growing
+    into a second coordination authority inside the runner assignment.
+    """
+    if not isinstance(pointer, Mapping) or not pointer:
+        raise ExecutionAssignmentError(
+            "execution_assignment_remediation_pointer_missing")
+    if set(pointer) != _MISSION_POINTER_FIELDS:
+        raise ExecutionAssignmentError(
+            "execution_assignment_remediation_pointer_invalid")
+
+    schema = str(pointer.get("schema") or "").strip()
+    event_id = str(pointer.get("event_id") or "").strip()
+    ci_context = str(pointer.get("ci_context") or "").strip()
+    failure_state = str(pointer.get("failure_state") or "").strip().lower()
+    evidence_url = str(pointer.get("evidence_url") or "").strip()
+    exact_head_sha = str(pointer.get("exact_head_sha") or "").strip().lower()
+    expected_head = str(expected_head_sha or "").strip().lower()
+    try:
+        event_sequence = int(pointer.get("event_sequence") or 0)
+    except (TypeError, ValueError) as exc:
+        raise ExecutionAssignmentError(
+            "execution_assignment_remediation_pointer_invalid") from exc
+
+    if (
+        schema != MISSION_LAUNCH_POINTER_SCHEMA
+        or not event_id
+        or len(event_id) > 128
+        or event_sequence <= 0
+        or not ci_context
+        or len(ci_context) > 255
+        or not failure_state
+        or len(failure_state) > 64
+        or not evidence_url.startswith(("https://", "http://"))
+        or len(evidence_url) > 2048
+        or not _SHA.fullmatch(exact_head_sha)
+    ):
+        raise ExecutionAssignmentError(
+            "execution_assignment_remediation_pointer_invalid")
+    if not _SHA.fullmatch(expected_head) or exact_head_sha != expected_head:
+        raise ExecutionAssignmentError(
+            "execution_assignment_remediation_pointer_head_mismatch")
+    return {
+        "schema": schema,
+        "event_id": event_id,
+        "event_sequence": event_sequence,
+        "ci_context": ci_context,
+        "failure_state": failure_state,
+        "evidence_url": evidence_url,
+        "exact_head_sha": exact_head_sha,
+    }
 
 
 def build_execution_assignment(
@@ -168,13 +244,24 @@ def build_execution_assignment(
     }
     if profile:
         contract["session_policy_profile"] = profile
-    # A launch pointer is intentionally not a diagnosis.  One trigger and one
-    # starting URL save the agent a lookup while every current fact remains
-    # discoverable through MCP/GitHub.
-    pointer: dict[str, Any] = {
-        "trigger": str(lifecycle.get("reason_code") or ""),
-        "evidence_url": _launch_pointer_url(lifecycle),
-    }
+    # A launch pointer is intentionally not a diagnosis. Mission Bot v4 may
+    # preserve one exact durable CI event for remediation; all other starts
+    # retain the small generic pointer.
+    mission_pointer = lifecycle.get("mission_launch_pointer")
+    requires_mission_pointer = (
+        role == "remediation"
+        and str(lifecycle.get("mission_key") or "").strip().startswith("v4:")
+    )
+    if mission_pointer or requires_mission_pointer:
+        pointer = normalize_mission_launch_pointer(
+            mission_pointer if isinstance(mission_pointer, Mapping) else None,
+            expected_head_sha=head_sha,
+        )
+    else:
+        pointer = {
+            "trigger": str(lifecycle.get("reason_code") or ""),
+            "evidence_url": _launch_pointer_url(lifecycle),
+        }
     contract["launch_pointer"] = pointer
     return contract
 

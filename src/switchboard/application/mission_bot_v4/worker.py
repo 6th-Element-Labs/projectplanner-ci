@@ -74,6 +74,25 @@ def _launch_event_pointer(event: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _ci_remediation_pointer(
+    event: Mapping[str, Any], *, exact_head_sha: str,
+) -> dict[str, Any]:
+    """Copy one persisted CI event address without interpreting its cause."""
+    payload = event.get("payload")
+    payload = payload if isinstance(payload, Mapping) else {}
+    return {
+        "schema": "switchboard.mission_launch_pointer.v4",
+        "event_id": str(event.get("event_id") or ""),
+        "event_sequence": int(
+            event.get("sequence") or event.get("event_sequence") or 0),
+        "ci_context": str(payload.get("status_context") or ""),
+        "failure_state": str(payload.get("status_state") or ""),
+        "evidence_url": str(
+            event.get("external_ref") or payload.get("target_url") or ""),
+        "exact_head_sha": str(exact_head_sha or "").strip().lower(),
+    }
+
+
 def tick_scoped_mission(
     task_id: str,
     *,
@@ -187,18 +206,32 @@ def tick_scoped_mission(
             )
             if observed and int(observed[0].get("sequence") or 0) == observed_through:
                 pointer["trigger_event"] = _launch_event_pointer(observed[0])
+    persisted_pr_head = str((task.get("git_state") or {}).get("head_sha") or "")
+    exact_head_sha = (
+        persisted_pr_head
+        if role in {"review_merge", "remediation"}
+        else str(event.get("head_sha") or persisted_pr_head or "")
+    )
+    mission_launch_pointer: dict[str, Any] = {}
+    if role == "remediation":
+        trigger = pointer.get("trigger_event") or pointer
+        trigger_payload = trigger.get("payload") if isinstance(trigger, Mapping) else {}
+        trigger_payload = (
+            trigger_payload if isinstance(trigger_payload, Mapping) else {}
+        )
+        if trigger_payload.get("status_context") or trigger_payload.get("status_state"):
+            mission_launch_pointer = _ci_remediation_pointer(
+                trigger, exact_head_sha=exact_head_sha,
+            )
     receipt = ports.start_task(
         task_id,
         project=project,
         actor=actor,
         role=role,
-        source_sha=str(
-            event.get("head_sha")
-            or (task.get("git_state") or {}).get("head_sha")
-            or ""
-        ),
+        source_sha=exact_head_sha,
         mission_key=mission_key,
         instruction=json.dumps(pointer, sort_keys=True, separators=(",", ":")),
+        mission_launch_pointer=mission_launch_pointer,
         scope_authority=dict(scope_authority),
     )
     if not _start_was_admitted(receipt):

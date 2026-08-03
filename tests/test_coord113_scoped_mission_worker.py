@@ -126,6 +126,7 @@ class ScopedMissionWorkerTest(unittest.TestCase):
 
     def test_yield_launch_carries_the_exact_observed_trigger_event(self):
         self.create(role="review_merge")
+        self.task["git_state"]["head_sha"] = "f" * 40
         failure = self.journal.append_event(
             "COORD-113",
             project="switchboard",
@@ -178,6 +179,18 @@ class ScopedMissionWorkerTest(unittest.TestCase):
         self.assertEqual(
             "https://github.test/actions/runs/7",
             pointer["trigger_event"]["external_ref"],
+        )
+        self.assertEqual(
+            {
+                "schema": "switchboard.mission_launch_pointer.v4",
+                "event_id": failure["event_id"],
+                "event_sequence": failure["sequence"],
+                "ci_context": "Switchboard CI / VM gate",
+                "failure_state": "failure",
+                "evidence_url": "https://github.test/actions/runs/7",
+                "exact_head_sha": "f" * 40,
+            },
+            self.starts[0]["mission_launch_pointer"],
         )
 
     def test_scope_dependencies_human_and_runner_each_wait_without_start(self):
@@ -350,12 +363,17 @@ class ProductionPortsTest(unittest.TestCase):
                 source_sha="abc",
                 instruction="{}",
                 mission_key="mission-1",
+                mission_launch_pointer={"event_id": "missionevent-113"},
                 scope_authority=authority,
             )
         self.assertEqual("starting", receipt["action"])
         self.assertEqual(
             ["runner_sessions", "scope", "start_task"],
             [name for name, _detail in calls],
+        )
+        self.assertEqual(
+            {"event_id": "missionevent-113"},
+            calls[-1][1]["mission_launch_pointer"],
         )
 
     def test_scope_refusal_prevents_start_and_preserves_reason_codes(self):

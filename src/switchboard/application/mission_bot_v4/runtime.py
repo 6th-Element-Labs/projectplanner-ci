@@ -118,6 +118,8 @@ def production_ports(
                 source_sha=str(kwargs.get("source_sha") or ""),
                 instruction=str(kwargs.get("instruction") or ""),
                 mission_key=str(kwargs.get("mission_key") or ""),
+                mission_launch_pointer=dict(
+                    kwargs.get("mission_launch_pointer") or {}),
             )
         except task_execution.TaskExecutionError as exc:
             # Preserve the typed Task Execution refusal; do not replace it with

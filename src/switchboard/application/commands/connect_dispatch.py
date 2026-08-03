@@ -16,6 +16,10 @@ from typing import Any
 
 from switchboard.application.session_boot import ADVERTISED_LAUNCH_RUNTIMES
 from switchboard.connect import Assignment, ResourceLimits
+from switchboard.connect.execution_assignment import (
+    ExecutionAssignmentError,
+    normalize_mission_launch_pointer,
+)
 from switchboard.domain.coordination.wake_intents import genuine_wake_intents
 from switchboard.storage.repositories import coordination as coordination_repo
 from switchboard.storage.repositories import tasks as tasks_repo
@@ -265,6 +269,7 @@ def enqueue_task(
     state_version: int = 0,
     mission_key: str = "",
     mission_dossier: dict[str, Any] | None = None,
+    mission_launch_pointer: dict[str, Any] | None = None,
     session_policy_profile: str = "",
 ) -> dict[str, Any]:
     """Persist one provider-neutral assignment for any Start surface.
@@ -370,6 +375,25 @@ def enqueue_task(
         })
     if mission_key:
         lifecycle["mission_key"] = str(mission_key)
+    requires_mission_pointer = (
+        lifecycle["role"] == "remediation"
+        and str(mission_key or "").strip().startswith("v4:")
+    )
+    if mission_launch_pointer or requires_mission_pointer:
+        try:
+            lifecycle["mission_launch_pointer"] = normalize_mission_launch_pointer(
+                mission_launch_pointer,
+                expected_head_sha=lifecycle["head_sha"],
+            )
+        except ExecutionAssignmentError as exc:
+            return {
+                "dispatched": False,
+                "error": exc.code,
+                "diagnostic_cause": str(exc),
+                "failure_class": "missing_data",
+                "role": lifecycle["role"],
+                "task_id": task_id,
+            }
     if mission_dossier:
         lifecycle["mission_dossier"] = dict(mission_dossier)
     if (lifecycle["role"] in {"review_merge", "remediation"}
