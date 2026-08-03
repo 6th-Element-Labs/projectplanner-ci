@@ -443,6 +443,25 @@ def list_tasks_for_board(project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]
     """
     return list_tasks_slim(project=project)
 
+
+def _board_live_task_ids(project: str) -> set[str]:
+    """Return task ids backed by a live canonical runner lease.
+
+    This is read-side projection only. It must never update durable workflow
+    status or treat claims, Work Sessions, or agent presence as liveness.
+    """
+    from switchboard.domain import execution_liveness
+    from switchboard.storage.repositories import runner as runner_repo
+
+    now = time.time()
+    return {
+        str(session.get("task_id") or "").strip()
+        for session in runner_repo.list_runner_sessions(
+            include_stale=True, project=project)
+        if session.get("task_id")
+        and execution_liveness.is_live(session, now=now)
+    }
+
 def board_rollups(project: str = DEFAULT_PROJECT,
                   tasks: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Compute board-level counts from live task rows, not seed metadata."""
@@ -1510,12 +1529,16 @@ def _build_board_payload(project: str, lite: bool, cards: bool = False) -> Dict[
         completion_projection.attach_many(tasks, project=project)
     except Exception:
         pass
-    # SIMPLIFY-3: attach honest_display only for In Progress corpses — keeps the
-    # HARDEN-34 budget for the rest of the board while fixing the SEG-5 lie.
+    # SIMPLIFY-3 / ADR-0008 C1: enrich the small set of stored In Progress rows
+    # plus tasks backed by a live canonical runner. This changes only the board
+    # projection; Task Execution remains the liveness authority and durable task
+    # status remains untouched.
     try:
         from switchboard.application.queries import task_session as task_session_query
+        live_task_ids = _board_live_task_ids(project)
         for row in tasks:
-            if str(row.get("status") or "") == "In Progress":
+            if (str(row.get("status") or "") == "In Progress"
+                    or str(row.get("task_id") or "") in live_task_ids):
                 task_session_query.attach_honest_display(row, project=project)
     except Exception:
         pass

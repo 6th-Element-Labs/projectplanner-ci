@@ -118,11 +118,23 @@
         return 'status';
     },
 
+    _boardTaskStatus(task) {
+        const raw = (task && task.status) || 'Not Started';
+        const honest = (task && task.honest_display) || {};
+        // Task Execution is the live-work authority. Keep the durable workflow
+        // row untouched, but paint any canonically live runner as In Progress.
+        // Canonical Done remains provenance-owned and cannot be hidden by a
+        // stale presentation hint. A live remediation of a Blocked task is
+        // active work and therefore belongs in the In Progress projection.
+        if (raw === 'Done') return raw;
+        return honest.lifecycle_phase === 'running' ? 'In Progress' : raw;
+    },
+
     _boardColumns(mode) {
         if (mode === 'phase') return this.PHASES;
         // Status kanban: canonical order, only columns that have tasks, unknowns last.
         const order = ['Not Started', 'In Progress', 'In Review', 'Blocked', 'Done'];
-        const present = new Set((this.tasks || []).map((t) => t.status).filter(Boolean));
+        const present = new Set((this.tasks || []).map((t) => this._boardTaskStatus(t)).filter(Boolean));
         const cols = order.filter((s) => present.has(s));
         [...present].forEach((s) => { if (order.indexOf(s) < 0) cols.push(s); });
         return cols.length ? cols : order;
@@ -139,7 +151,9 @@
         const cols = this._boardColumns(mode);
         const colorMap = mode === 'phase' ? this.PHASE_COLOR : this.STATUS_COLOR;
         board.innerHTML = cols.map((colName) => {
-            const col = tasks.filter((t) => (mode === 'phase' ? t.phase : t.status) === colName);
+            const col = tasks.filter((t) => (
+                mode === 'phase' ? t.phase : this._boardTaskStatus(t)
+            ) === colName);
             const days = col.reduce((s, t) => s + (t.effort_days || 0), 0);
             const color = colorMap[colName] || 'secondary';
             const cards = col.length
@@ -164,9 +178,10 @@
         const honest = t.honest_display || {};
         // SIMPLIFY-3: prefer TaskSession label over raw workflow status.
         const displayLabel = honest.label || t.status || '';
+        const displayStatus = this._boardTaskStatus(t);
         const sc = honest.lifecycle_phase === 'start_failed_retry'
             ? 'orange'
-            : (this.STATUS_COLOR[t.status] || 'secondary');
+            : (this.STATUS_COLOR[displayStatus] || 'secondary');
         const deps = (t.depends_on || []).length;
         const tally = this.taskTally(t.task_id);
         const econ = this.tallyMini(tally);
