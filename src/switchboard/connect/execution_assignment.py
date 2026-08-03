@@ -12,6 +12,8 @@ SCHEMA = "switchboard.execution_assignment.v1"
 EXACT_HEAD_ROLES = frozenset({"review_merge", "remediation"})
 VALID_ROLES = frozenset({"implementation", *EXACT_HEAD_ROLES})
 OFFLINE_EVIDENCE_PROFILE = "offline_evidence"
+CODE_STRICT_PROFILE = "code_strict"
+SWITCHBOARD_CI_VERIFICATION_PROFILE = "switchboard_ci_locked_v1"
 MISSION_LAUNCH_POINTER_SCHEMA = "switchboard.mission_launch_pointer.v4"
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 _MISSION_POINTER_FIELDS = frozenset({
@@ -52,6 +54,7 @@ CONTRACT_FIELDS: tuple[str, ...] = (
     "claim_expectations",
     "typed_tools",
     "session_policy_profile",
+    "verification_profile",
     "launch_pointer",
 )
 
@@ -88,6 +91,28 @@ def claim_expectations_for(profile: str, role: str) -> dict[str, Any]:
         ),
         "role": role,
     }
+
+
+def verification_profile_for(
+    session_policy_profile: str,
+    execution_context: Mapping[str, Any] | None,
+) -> str:
+    """Select the one bounded Capacity proof owned by Coordination.
+
+    This returns a name, never a command.  Capacity owns how that name is
+    materialized and proven, while the immutable assignment makes the selected
+    policy visible to the runner and claim bind.
+    """
+    profile = str(session_policy_profile or "").strip().lower()
+    repository = str(
+        (execution_context or {}).get("repository") or ""
+    ).strip().lower()
+    if (
+        profile == CODE_STRICT_PROFILE
+        and repository == "6th-element-labs/projectplanner"
+    ):
+        return SWITCHBOARD_CI_VERIFICATION_PROFILE
+    return ""
 
 
 class ExecutionAssignmentError(ValueError):
@@ -244,6 +269,11 @@ def build_execution_assignment(
     }
     if profile:
         contract["session_policy_profile"] = profile
+    verification_profile = str(
+        lifecycle.get("verification_profile") or ""
+    ).strip().lower()
+    if verification_profile:
+        contract["verification_profile"] = verification_profile
     # A launch pointer is intentionally not a diagnosis. Mission Bot v4 may
     # preserve one exact durable CI event for remediation; all other starts
     # retain the small generic pointer.

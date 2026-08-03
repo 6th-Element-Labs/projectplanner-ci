@@ -65,6 +65,11 @@ from switchboard.connect import (  # noqa: E402
     ResourceLimits,
     build_launch_spec,
 )
+from switchboard.connect.verification_profile import (  # noqa: E402
+    VerificationRuntimeError,
+    failure as verification_failure,
+    prove as prove_verification_profile,
+)
 from switchboard.domain.coordination.runtime_profile import (  # noqa: E402
     RUNTIME_BINARIES,
     build_runtime_profile,
@@ -1513,7 +1518,7 @@ def _connect_codex_mcp_argv(*, verification_runtime=None):
     return overrides
 
 
-def _project_python_runtime(execution_context):
+def _project_python_runtime(execution_context, *, require_isolated=False):
     """Prove the Python runtime inherited by projectplanner Connect sessions.
 
     Fresh Git workspaces intentionally do not contain the operator checkout's
@@ -1533,6 +1538,7 @@ def _project_python_runtime(execution_context):
         raise WorkspaceMaterializationError(
             "verification_runtime_unavailable",
             "projectplanner requires the Host's locked Python 3.12+ runtime",
+            diagnostic_cause="python_version_unsupported",
             required_python=">=3.12",
             observed_python=".".join(str(part) for part in version),
         )
@@ -1541,7 +1547,15 @@ def _project_python_runtime(execution_context):
         raise WorkspaceMaterializationError(
             "verification_runtime_unavailable",
             "the Host Python interpreter is not executable",
+            diagnostic_cause="python_executable_unavailable",
             required_python=">=3.12",
+        )
+    if require_isolated and sys.prefix == sys.base_prefix:
+        raise WorkspaceMaterializationError(
+            "verification_runtime_unavailable",
+            "the verification Python is not inside an isolated environment",
+            diagnostic_cause="test_environment_not_isolated",
+            python_executable=str(executable),
         )
     bin_dir = executable.parent
     return {
@@ -1558,6 +1572,21 @@ def _project_python_runtime(execution_context):
                if sys.prefix != sys.base_prefix else {}),
         },
     }
+
+
+def _verification_failure(cause, message, **details):
+    return verification_failure(cause, message, **details)
+
+
+def _prove_verification_profile(profile, workspace, execution_context, assignment):
+    return prove_verification_profile(
+        profile,
+        workspace,
+        execution_context,
+        assignment,
+        python_runtime_provider=lambda context: _project_python_runtime(
+            context, require_isolated=True),
+    )
 
 
 def _issue_connect_session_mcp_token(wake, inventory, runner_session_id):
@@ -2002,15 +2031,20 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
     workspace_request = None
     verify_workspace = None
     verification_runtime = None
+    verification_toolchain_receipt = None
     mode = wake_mode(wake, inventory)
     workspace_path = ""
     if mode == "connect":
         execution_context = dict(
             (wake.get("policy") or {}).get("execution_context") or {})
+        execution_assignment = dict(
+            (wake.get("policy") or {}).get("execution_assignment") or {})
+        verification_profile = str(
+            execution_assignment.get("verification_profile") or ""
+        ).strip().lower()
         task_id = str(wake.get("task_id") or "")
         try:
             workspace_request = connect_workspace_request(wake, inventory)
-            verification_runtime = _project_python_runtime(execution_context)
             materialize_workspace = (
                 materialize_repository_workspace
                 if execution_context else materialize_host_worktree)
@@ -2024,8 +2058,23 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
             materialized_workspace = _materialize_for_launch(
                 materialize_workspace, workspace_request, wake, inventory)
             workspace_path = str(materialized_workspace.path)
-        except WorkspaceMaterializationError as exc:
-            return {
+            if verification_profile:
+                (
+                    verification_runtime,
+                    verification_toolchain_receipt,
+                ) = _prove_verification_profile(
+                    verification_profile,
+                    materialized_workspace,
+                    execution_context,
+                    execution_assignment,
+                )
+            else:
+                # Compatibility behavior for tasks that do not select a test
+                # profile: preserve BUG-283's locked shell Python, but never
+                # claim a toolchain receipt or substitute an alternate command.
+                verification_runtime = _project_python_runtime(execution_context)
+        except (WorkspaceMaterializationError, VerificationRuntimeError) as exc:
+            failure = {
                 "runner_session_id": runner_session_id or None,
                 "started": False,
                 "wake_mode": mode,
@@ -2035,8 +2084,15 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
                 "reason": exc.code,
                 "failure_class": "failed_gate",
                 "provider_error": exc.message,
-                "workspace_materialization": exc.as_dict(),
             }
+            evidence_key = (
+                "verification_runtime"
+                if isinstance(exc, VerificationRuntimeError)
+                or exc.code == "verification_runtime_unavailable"
+                else "workspace_materialization"
+            )
+            failure[evidence_key] = exc.as_dict()
+            return failure
     cmd, mode = launch_command(
         wake, inventory, runner_session_id=runner_session_id,
         workspace_path=workspace_path,
@@ -2154,6 +2210,10 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
                     key: value for key, value in verification_runtime.items()
                     if key != "environment"
                 }
+            if verification_toolchain_receipt:
+                rec.setdefault("metadata", {})[
+                    "verification_toolchain_receipt"
+                ] = verification_toolchain_receipt
         return rec
     except Exception as e:
         if materialized_workspace:

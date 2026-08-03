@@ -42,7 +42,10 @@ from switchboard.domain.ixp.protocol import (
     normalize_send_ack_deadline,
     protocol_envelope,
 )
-from switchboard.connect.execution_assignment import build_execution_assignment
+from switchboard.connect.execution_assignment import (
+    build_execution_assignment,
+    verification_profile_for,
+)
 
 
 from switchboard.domain.provider_credentials import CredentialPrincipal
@@ -640,6 +643,24 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
             lifecycle_request["session_policy_profile"] = (
                 _store_facade()._task_work_session_profile(
                     profile_task, "", project=project))
+    if (
+        isinstance(lifecycle_request, dict)
+        and lifecycle_request.get("schema")
+        == "switchboard.execution_lifecycle.v1"
+    ):
+        # Coordination selects one bounded profile name.  A caller-provided
+        # command or unknown profile never survives into the server-minted
+        # assignment; Capacity owns the implementation of known names.
+        selected_verification_profile = verification_profile_for(
+            str(lifecycle_request.get("session_policy_profile") or ""),
+            policy.get("execution_context") or {},
+        )
+        if selected_verification_profile:
+            lifecycle_request["verification_profile"] = (
+                selected_verification_profile
+            )
+        else:
+            lifecycle_request.pop("verification_profile", None)
     try:
         with _control_plane_conn(project) as c:
             active_claim = (
