@@ -15,6 +15,9 @@ OFFLINE_EVIDENCE_PROFILE = "offline_evidence"
 CODE_STRICT_PROFILE = "code_strict"
 SWITCHBOARD_CI_VERIFICATION_PROFILE = "switchboard_ci_locked_v1"
 MISSION_LAUNCH_POINTER_SCHEMA = "switchboard.mission_launch_pointer.v4"
+REVIEW_REMEDIATION_POINTER_SCHEMA = (
+    "switchboard.review_remediation_launch_pointer.v4"
+)
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 _MISSION_POINTER_FIELDS = frozenset({
     "schema",
@@ -22,6 +25,16 @@ _MISSION_POINTER_FIELDS = frozenset({
     "event_sequence",
     "ci_context",
     "failure_state",
+    "evidence_url",
+    "exact_head_sha",
+})
+_REVIEW_REMEDIATION_POINTER_FIELDS = frozenset({
+    "schema",
+    "event_id",
+    "event_sequence",
+    "verdict_id",
+    "remediation_id",
+    "finding_ids",
     "evidence_url",
     "exact_head_sha",
 })
@@ -70,7 +83,10 @@ def contract_fingerprint() -> str:
         {
             "schema": SCHEMA,
             "fields": sorted(CONTRACT_FIELDS),
-            "mission_launch_pointer_schema": MISSION_LAUNCH_POINTER_SCHEMA,
+            "mission_launch_pointer_schemas": sorted({
+                MISSION_LAUNCH_POINTER_SCHEMA,
+                REVIEW_REMEDIATION_POINTER_SCHEMA,
+            }),
         },
         sort_keys=True, separators=(",", ":"),
     )
@@ -128,7 +144,7 @@ def normalize_mission_launch_pointer(
     *,
     expected_head_sha: str,
 ) -> dict[str, Any]:
-    """Validate the bounded durable CI pointer used for v4 remediation.
+    """Validate one bounded durable cause pointer used for v4 remediation.
 
     This is an immutable evidence address, not a diagnosis.  Keeping an exact
     field set prevents a mission dossier, log excerpt, or prompt from growing
@@ -137,11 +153,15 @@ def normalize_mission_launch_pointer(
     if not isinstance(pointer, Mapping) or not pointer:
         raise ExecutionAssignmentError(
             "execution_assignment_remediation_pointer_missing")
+    schema = str(pointer.get("schema") or "").strip()
+    if schema == REVIEW_REMEDIATION_POINTER_SCHEMA:
+        return _normalize_review_remediation_pointer(
+            pointer, expected_head_sha=expected_head_sha,
+        )
     if set(pointer) != _MISSION_POINTER_FIELDS:
         raise ExecutionAssignmentError(
             "execution_assignment_remediation_pointer_invalid")
 
-    schema = str(pointer.get("schema") or "").strip()
     event_id = str(pointer.get("event_id") or "").strip()
     ci_context = str(pointer.get("ci_context") or "").strip()
     failure_state = str(pointer.get("failure_state") or "").strip().lower()
@@ -178,6 +198,69 @@ def normalize_mission_launch_pointer(
         "event_sequence": event_sequence,
         "ci_context": ci_context,
         "failure_state": failure_state,
+        "evidence_url": evidence_url,
+        "exact_head_sha": exact_head_sha,
+    }
+
+
+def _normalize_review_remediation_pointer(
+    pointer: Mapping[str, Any],
+    *,
+    expected_head_sha: str,
+) -> dict[str, Any]:
+    """Validate a review verdict/finding address without importing its prose."""
+    if set(pointer) != _REVIEW_REMEDIATION_POINTER_FIELDS:
+        raise ExecutionAssignmentError(
+            "execution_assignment_remediation_pointer_invalid")
+
+    event_id = str(pointer.get("event_id") or "").strip()
+    verdict_id = str(pointer.get("verdict_id") or "").strip()
+    remediation_id = str(pointer.get("remediation_id") or "").strip()
+    evidence_url = str(pointer.get("evidence_url") or "").strip()
+    exact_head_sha = str(pointer.get("exact_head_sha") or "").strip().lower()
+    expected_head = str(expected_head_sha or "").strip().lower()
+    raw_finding_ids = pointer.get("finding_ids")
+    if not isinstance(raw_finding_ids, list):
+        raise ExecutionAssignmentError(
+            "execution_assignment_remediation_pointer_invalid")
+    finding_ids = sorted({
+        str(finding_id or "").strip()
+        for finding_id in raw_finding_ids
+        if str(finding_id or "").strip()
+    })
+    try:
+        event_sequence = int(pointer.get("event_sequence") or 0)
+    except (TypeError, ValueError) as exc:
+        raise ExecutionAssignmentError(
+            "execution_assignment_remediation_pointer_invalid") from exc
+
+    if (
+        not event_id
+        or len(event_id) > 128
+        or event_sequence <= 0
+        or not verdict_id
+        or len(verdict_id) > 128
+        or not remediation_id
+        or len(remediation_id) > 128
+        or not finding_ids
+        or len(finding_ids) > 64
+        or any(len(finding_id) > 128 for finding_id in finding_ids)
+        or not evidence_url.startswith(("https://", "http://"))
+        or len(evidence_url) > 2048
+        or not _SHA.fullmatch(exact_head_sha)
+    ):
+        raise ExecutionAssignmentError(
+            "execution_assignment_remediation_pointer_invalid")
+    if not _SHA.fullmatch(expected_head) or exact_head_sha != expected_head:
+        raise ExecutionAssignmentError(
+            "execution_assignment_remediation_pointer_head_mismatch")
+    return {
+        "schema": REVIEW_REMEDIATION_POINTER_SCHEMA,
+        "event_id": event_id,
+        "event_sequence": event_sequence,
+        "verdict_id": verdict_id,
+        "remediation_id": remediation_id,
+        "finding_ids": finding_ids,
         "evidence_url": evidence_url,
         "exact_head_sha": exact_head_sha,
     }

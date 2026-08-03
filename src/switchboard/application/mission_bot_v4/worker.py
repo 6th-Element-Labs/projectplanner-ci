@@ -93,6 +93,45 @@ def _ci_remediation_pointer(
     }
 
 
+def _review_remediation_pointer(
+    event: Mapping[str, Any],
+    *,
+    task: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Address the persisted verdict and findings that caused remediation."""
+    summary = task.get("review_remediation")
+    summary = summary if isinstance(summary, Mapping) else {}
+    remediation = summary.get("current")
+    remediation = remediation if isinstance(remediation, Mapping) else {}
+    criteria = remediation.get("acceptance_criteria")
+    criteria = criteria if isinstance(criteria, list) else []
+    finding_ids = sorted({
+        str(finding.get("id") or "").strip()
+        for finding in criteria
+        if isinstance(finding, Mapping) and str(finding.get("id") or "").strip()
+    })
+    return {
+        "schema": "switchboard.review_remediation_launch_pointer.v4",
+        "event_id": str(event.get("event_id") or ""),
+        "event_sequence": int(
+            event.get("sequence") or event.get("event_sequence") or 0),
+        "verdict_id": str(remediation.get("verdict_id") or ""),
+        "remediation_id": str(remediation.get("remediation_id") or ""),
+        "finding_ids": finding_ids,
+        "evidence_url": str(
+            remediation.get("source_pr_url")
+            or (task.get("git_state") or {}).get("pr_url")
+            or ""
+        ),
+        # Preserve the reviewed head from the verdict-owned remediation row.
+        # Connect compares it with Task Execution's current exact head and
+        # refuses stale review evidence instead of silently retargeting it.
+        "exact_head_sha": str(
+            remediation.get("source_head_sha") or ""
+        ).strip().lower(),
+    }
+
+
 def tick_scoped_mission(
     task_id: str,
     *,
@@ -222,6 +261,10 @@ def tick_scoped_mission(
         if trigger_payload.get("status_context") or trigger_payload.get("status_state"):
             mission_launch_pointer = _ci_remediation_pointer(
                 trigger, exact_head_sha=exact_head_sha,
+            )
+        else:
+            mission_launch_pointer = _review_remediation_pointer(
+                trigger, task=task,
             )
     receipt = ports.start_task(
         task_id,

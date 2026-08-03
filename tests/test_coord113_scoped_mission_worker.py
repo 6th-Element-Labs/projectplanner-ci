@@ -193,6 +193,65 @@ class ScopedMissionWorkerTest(unittest.TestCase):
             self.starts[0]["mission_launch_pointer"],
         )
 
+    def test_review_yield_launch_carries_verdict_findings_and_exact_head(self):
+        self.create(role="review_merge")
+        self.task["git_state"].update({
+            "head_sha": "e" * 40,
+            "pr_url": "https://github.test/pull/1303",
+        })
+        self.task["review_remediation"] = {"current": {
+            "verdict_id": "reviewverdict-dogfood32",
+            "remediation_id": "reviewremediation-dogfood32-round-3",
+            "source_head_sha": "e" * 40,
+            "source_pr_url": "https://github.test/pull/1303",
+            "acceptance_criteria": [
+                {"id": "dogfood32-block-control-only-advance"},
+            ],
+        }}
+        yielded = self.journal.append_event(
+            "COORD-113",
+            project="switchboard",
+            event_type="agent_yielded",
+            source_plane="coordination",
+            idempotency_key="review-yield-113",
+            generation=6,
+            execution_id="exec-review-113",
+            payload={
+                "outcome": "continue",
+                "requested_role": "remediation",
+                "observed_through": 0,
+                "latest_sequence_at_yield": 0,
+                "cursor_current": True,
+            },
+        )
+        self.journal.update_item(
+            "COORD-113",
+            project="switchboard",
+            state="ACTIVE",
+            requested_role="remediation",
+            expected_version=self.journal.get_item(
+                "COORD-113", project="switchboard",
+            )["version"],
+            handled_through=yielded["sequence"] - 1,
+        )
+
+        result = self.tick()
+
+        self.assertEqual("start_task", result["action"])
+        self.assertEqual(
+            {
+                "schema": "switchboard.review_remediation_launch_pointer.v4",
+                "event_id": yielded["event_id"],
+                "event_sequence": yielded["sequence"],
+                "verdict_id": "reviewverdict-dogfood32",
+                "remediation_id": "reviewremediation-dogfood32-round-3",
+                "finding_ids": ["dogfood32-block-control-only-advance"],
+                "evidence_url": "https://github.test/pull/1303",
+                "exact_head_sha": "e" * 40,
+            },
+            self.starts[0]["mission_launch_pointer"],
+        )
+
     def test_scope_dependencies_human_and_runner_each_wait_without_start(self):
         self.create()
         self.scope_allowed = False

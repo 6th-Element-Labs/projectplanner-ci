@@ -36,6 +36,16 @@ POINTER = {
     "evidence_url": "https://github.test/actions/runs/123",
     "exact_head_sha": HEAD,
 }
+REVIEW_POINTER = {
+    "schema": "switchboard.review_remediation_launch_pointer.v4",
+    "event_id": "missionevent-review-remediation",
+    "event_sequence": 19,
+    "verdict_id": "reviewverdict-dogfood32",
+    "remediation_id": "reviewremediation-dogfood32-round-3",
+    "finding_ids": ["dogfood32-block-control-only-advance"],
+    "evidence_url": "https://github.test/pull/1303",
+    "exact_head_sha": HEAD,
+}
 
 
 def task(title: str) -> dict:
@@ -80,6 +90,64 @@ try:
     )
     assert wake["policy"]["lifecycle"]["mission_launch_pointer"] == POINTER
     assert wake["policy"]["execution_assignment"]["launch_pointer"] == POINTER
+
+    review_driven = task("preserve review remediation pointer")
+    review_result = connect_dispatch.enqueue_task(
+        review_driven,
+        project=P,
+        actor="coord123-test",
+        runtime="codex",
+        generation_ref="v4:1:DOGFOOD-32:19:remediation",
+        role="remediation",
+        source_sha=HEAD,
+        mission_key="v4:1:DOGFOOD-32:19:remediation",
+        mission_launch_pointer=REVIEW_POINTER,
+    )
+    assert review_result["dispatched"] is True
+    review_wake = next(
+        row for row in store.list_wake_intents(project=P)
+        if row.get("wake_id") == review_result.get("wake_id")
+    )
+    assert review_wake["policy"]["lifecycle"]["mission_launch_pointer"] == (
+        REVIEW_POINTER
+    )
+    assert review_wake["policy"]["execution_assignment"]["launch_pointer"] == (
+        REVIEW_POINTER
+    )
+
+    incomplete_review = task("refuse incomplete review remediation pointer")
+    refused_incomplete_review = connect_dispatch.enqueue_task(
+        incomplete_review,
+        project=P,
+        actor="coord123-test",
+        runtime="codex",
+        generation_ref="v4:1:DOGFOOD-32:20:remediation",
+        role="remediation",
+        source_sha=HEAD,
+        mission_key="v4:1:DOGFOOD-32:20:remediation",
+        mission_launch_pointer={**REVIEW_POINTER, "finding_ids": []},
+    )
+    assert refused_incomplete_review["dispatched"] is False
+    assert refused_incomplete_review["error"] == (
+        "execution_assignment_remediation_pointer_invalid"
+    )
+
+    stale_review = task("refuse stale review remediation head")
+    refused_stale_review = connect_dispatch.enqueue_task(
+        stale_review,
+        project=P,
+        actor="coord123-test",
+        runtime="codex",
+        generation_ref="v4:1:DOGFOOD-32:21:remediation",
+        role="remediation",
+        source_sha=HEAD,
+        mission_key="v4:1:DOGFOOD-32:21:remediation",
+        mission_launch_pointer={**REVIEW_POINTER, "exact_head_sha": "b" * 40},
+    )
+    assert refused_stale_review["dispatched"] is False
+    assert refused_stale_review["error"] == (
+        "execution_assignment_remediation_pointer_head_mismatch"
+    )
 
     production_missing = task("refuse actually missing production pointer")
     saved_projection = task_execution._projection
