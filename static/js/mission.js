@@ -190,8 +190,8 @@
         return `<div class="d-flex flex-column align-items-end gap-1">
             <div class="btn-list justify-content-end">
                 <span class="badge bg-${status === 'paused' ? 'yellow' : 'green'}-lt"><span class="status-dot ${status === 'active' ? 'status-dot-animated ' : ''}bg-${status === 'paused' ? 'yellow' : 'green'} me-1"></span>${this.esc(stateLabel)}${taskReceipts ? ` · ${taskReceipts} this wave` : ''}</span>
-                <button class="btn btn-sm btn-outline-primary" type="button" data-autopilot-action="${status === 'paused' ? 'resume' : 'pause'}" data-autopilot-scope="deliverable"><i class="ti ti-${status === 'paused' ? 'player-play' : 'player-pause'} me-1"></i>${status === 'paused' ? 'Resume' : 'Pause'}</button>
-                <button class="btn btn-sm btn-outline-danger" type="button" data-autopilot-action="stop" data-autopilot-scope="deliverable"><i class="ti ti-player-stop me-1"></i>Stop</button>
+                <button class="btn btn-outline-primary" type="button" data-autopilot-action="${status === 'paused' ? 'resume' : 'pause'}" data-autopilot-scope="deliverable"><i class="ti ti-${status === 'paused' ? 'player-play' : 'player-pause'} me-1"></i>${status === 'paused' ? 'Resume' : 'Pause'}</button>
+                <button class="btn btn-outline-danger" type="button" data-autopilot-action="stop" data-autopilot-scope="deliverable"><i class="ti ti-player-stop me-1"></i>Stop</button>
             </div>${waitingHelp}<span id="mission-autopilot-flash" class="small text-secondary"></span></div>`;
     },
 

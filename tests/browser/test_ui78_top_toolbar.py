@@ -136,6 +136,18 @@ try:
         scopes = page.evaluate("""async () => (await (await fetch(
           'api/deliverables/ui78-toolbar/autopilot')).json()).scopes""")
         assert len(scopes) == 1 and scopes[0]["scope_type"] == "deliverable", scopes
+        pause = page.locator('[data-autopilot-action="pause"][data-autopilot-scope="deliverable"]')
+        stop = page.locator('[data-autopilot-action="stop"][data-autopilot-scope="deliverable"]')
+        more = page.get_by_role("button", name="More deliverable actions")
+        pause.wait_for(state="visible")
+        desktop_action_heights = [
+            round(locator.bounding_box()["height"])
+            for locator in (pause, stop, more)
+        ]
+        assert max(desktop_action_heights) - min(desktop_action_heights) <= 1, desktop_action_heights
+        assert min(desktop_action_heights) >= 36, desktop_action_heights
+        assert "btn-sm" not in (pause.get_attribute("class") or "")
+        assert "btn-sm" not in (stop.get_attribute("class") or "")
 
         page.set_viewport_size({"width": 1024, "height": 768})
         tablet_overflow = page.evaluate("""() => ({
@@ -172,6 +184,11 @@ try:
         assert page.locator(".navbar-vertical").evaluate("el => getComputedStyle(el).display") == "none"
         assert page.locator(".tk-mobile-nav").evaluate("el => getComputedStyle(el).display") == "grid"
         assert page.locator(".tk-mobile-nav > .nav-link").count() == 4
+        mobile_action_heights = [
+            round(locator.bounding_box()["height"])
+            for locator in (pause, stop, more)
+        ]
+        assert max(mobile_action_heights) - min(mobile_action_heights) <= 1, mobile_action_heights
         mobile_overflow = page.evaluate("""() => ({
           scrollWidth: document.documentElement.scrollWidth,
           innerWidth: window.innerWidth,
