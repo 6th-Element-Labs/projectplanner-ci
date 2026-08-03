@@ -13,6 +13,7 @@ drain terminates, and a bad release is not retried forever.
 """
 from __future__ import annotations
 
+import io
 import os
 import shutil
 import tempfile
@@ -151,6 +152,55 @@ try:
             ok(False, f"{label} was accepted")
         except up.UpdateError:
             ok(True, f"{label} is refused explicitly")
+
+    # The release endpoint is authenticated. The enrolled Host bearer is added
+    # only after the URL has passed the same-origin transport fence.
+    original_urlopen = up.urllib.request.urlopen
+    original_base = os.environ.get("PM_SWITCHBOARD_PUBLIC_BASE")
+    original_token = os.environ.get("PM_MCP_TOKEN")
+    captured = {}
+
+    def fake_urlopen(request, *, timeout):
+        captured.update(url=request.full_url,
+                        authorization=request.get_header("Authorization"),
+                        timeout=timeout)
+        return io.BytesIO(b"signed-host-bundle")
+
+    try:
+        os.environ["PM_SWITCHBOARD_PUBLIC_BASE"] = "https://plan.example"
+        os.environ["PM_MCP_TOKEN"] = "enrolled-host-token"
+        up.urllib.request.urlopen = fake_urlopen
+        downloaded = Path(TMP) / "authenticated-host-bundle.tar.gz"
+        up._download(
+            "/ixp/v1/host_releases/hostrel-1/bundle?project=switchboard",
+            downloaded)
+        ok(captured == {
+               "url": "https://plan.example/ixp/v1/host_releases/hostrel-1/bundle?project=switchboard",
+               "authorization": "Bearer enrolled-host-token",
+               "timeout": up.DOWNLOAD_TIMEOUT_S,
+           }, "the Host downloads from Switchboard with its enrolled bearer")
+        ok(downloaded.read_bytes() == b"signed-host-bundle",
+           "the authenticated response is written as the candidate bundle")
+
+        os.environ.pop("PM_MCP_TOKEN")
+        captured.clear()
+        try:
+            up._download("https://plan.example/releases/host.tgz",
+                         Path(TMP) / "must-not-download.tar.gz")
+            ok(False, "a Host without its bearer attempted a release download")
+        except up.UpdateError as exc:
+            ok("PM_MCP_TOKEN" in str(exc) and not captured,
+               "a missing Host bearer fails before the network request")
+    finally:
+        up.urllib.request.urlopen = original_urlopen
+        if original_base is None:
+            os.environ.pop("PM_SWITCHBOARD_PUBLIC_BASE", None)
+        else:
+            os.environ["PM_SWITCHBOARD_PUBLIC_BASE"] = original_base
+        if original_token is None:
+            os.environ.pop("PM_MCP_TOKEN", None)
+        else:
+            os.environ["PM_MCP_TOKEN"] = original_token
 
     # ── it must terminate ──────────────────────────────────────────────────
     mid = plan(state={"phase": up.DRAINING, "started_at": 1000.0}, now=1060.0)

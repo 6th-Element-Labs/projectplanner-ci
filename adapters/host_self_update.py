@@ -167,7 +167,16 @@ def _download(url: str, target: "Path") -> None:
     trusted_base = (os.environ.get("PM_SWITCHBOARD_PUBLIC_BASE")
                     or os.environ.get("PM_BASE") or "").strip()
     resolved = resolve_download_url(url, trusted_base)
-    with urllib.request.urlopen(resolved, timeout=DOWNLOAD_TIMEOUT_S) as response:
+    token = _text(os.environ.get("PM_MCP_TOKEN"))
+    if not token:
+        raise UpdateError(
+            "PM_MCP_TOKEN is unset; Host release download is not authenticated")
+    # Resolve and constrain the origin before attaching the enrolled Host bearer.
+    # This keeps the credential on the same trusted Switchboard boundary used by
+    # every other Host control request.
+    request = urllib.request.Request(
+        resolved, headers={"Authorization": f"Bearer {token}"})
+    with urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT_S) as response:
         with open(target, "wb") as handle:
             while True:
                 chunk = response.read(1 << 20)
