@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BUG-35 — synchronous MCP tools must not block the request event loop."""
+"""BUG-35/BUG-294 — sync MCP tools must not block the request event loop."""
 import asyncio
 import inspect
 import json
@@ -17,11 +17,24 @@ def check(condition, message):
 dispatcher = MCPToolDispatcher(max_workers=2, inline_tools={"control_plane_probe"})
 loop_thread = None
 slow_threads = []
+responsive_worker_started = threading.Event()
+release_responsive_worker = threading.Event()
 
 
 def slow_tool(delay: float = 0.25):
     slow_threads.append(threading.get_ident())
     time.sleep(delay)
+    return "slow-complete"
+
+
+def held_tool():
+    """Stay pending off-loop until the responsiveness probe has run."""
+    worker_thread = threading.get_ident()
+    slow_threads.append(worker_thread)
+    responsive_worker_started.set()
+    if worker_thread == loop_thread:
+        return "ran-on-event-loop"
+    release_responsive_worker.wait()
     return "slow-complete"
 
 
@@ -33,27 +46,30 @@ def timeout_tool():
     raise TimeoutError("tool-level timeout")
 
 
-async_slow = dispatcher.wrap(slow_tool)
+async_slow = dispatcher.wrap(held_tool)
 inline_probe = dispatcher.wrap(control_plane_probe)
 
 check(inspect.iscoroutinefunction(async_slow), "ordinary sync tools register as async handlers")
 check(inline_probe is control_plane_probe, "tiny probe remains an inline handler")
-check(inspect.signature(async_slow) == inspect.signature(slow_tool),
+check(inspect.signature(async_slow) == inspect.signature(held_tool),
       "worker wrapper preserves the FastMCP schema signature")
 
 
 async def responsiveness_test():
     global loop_thread
     loop_thread = threading.get_ident()
-    started = time.perf_counter()
-    pending = asyncio.create_task(async_slow(0.25))
-    await asyncio.sleep(0.03)
-    probe = inline_probe()
-    probe_elapsed = time.perf_counter() - started
-    check(not pending.done(), "slow tool is still running when probe returns")
-    check(probe_elapsed < 0.1,
-          f"probe stays below 100ms while slow tool runs ({probe_elapsed * 1000:.1f}ms)")
-    check(probe["thread"] == loop_thread, "probe executes on the request event loop")
+    pending = asyncio.create_task(async_slow())
+    try:
+        # The worker holds itself pending, so host scheduling delay cannot look
+        # like event-loop blocking. An inline regression returns immediately.
+        while not responsive_worker_started.is_set() and not pending.done():
+            await asyncio.sleep(0)
+        probe = inline_probe()
+        check(responsive_worker_started.is_set(), "slow tool reached its worker")
+        check(not pending.done(), "slow tool is still running when probe returns")
+        check(probe["thread"] == loop_thread, "probe executes on the request event loop")
+    finally:
+        release_responsive_worker.set()
     check(await pending == "slow-complete", "worker returns the original tool result")
 
 
