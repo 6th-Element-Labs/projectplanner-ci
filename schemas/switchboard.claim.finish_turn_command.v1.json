@@ -1,0 +1,81 @@
+{
+  "$id": "switchboard.claim.finish_turn_command.v1",
+  "additionalProperties": false,
+  "description": "One bounded, generation-fenced implementation completion submission.\n\nThe contract deliberately has no status, next-role, merge, Done, or host-control\nfields.  Those decisions remain server-owned after the evidence is accepted.",
+  "properties": {
+    "branch": {
+      "title": "Branch",
+      "type": "string"
+    },
+    "claim_id": {
+      "title": "Claim Id",
+      "type": "string"
+    },
+    "executed_test_run_id": {
+      "title": "Executed Test Run Id",
+      "type": "string"
+    },
+    "execution_id": {
+      "title": "Execution Id",
+      "type": "string"
+    },
+    "generation": {
+      "title": "Generation",
+      "type": "integer"
+    },
+    "git_diff_check": {
+      "title": "Git Diff Check",
+      "type": "string"
+    },
+    "head_sha": {
+      "title": "Head Sha",
+      "type": "string"
+    },
+    "mission_project": {
+      "default": "",
+      "title": "Mission Project",
+      "type": "string"
+    },
+    "pr_number": {
+      "title": "Pr Number",
+      "type": "integer"
+    },
+    "pr_url": {
+      "title": "Pr Url",
+      "type": "string"
+    },
+    "project": {
+      "default": "maxwell",
+      "title": "Project",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.claim.finish_turn_command.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    },
+    "work_session_id": {
+      "title": "Work Session Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "task_id",
+    "claim_id",
+    "execution_id",
+    "generation",
+    "work_session_id",
+    "branch",
+    "head_sha",
+    "pr_number",
+    "pr_url",
+    "executed_test_run_id",
+    "git_diff_check"
+  ],
+  "title": "FinishTurnCommand",
+  "type": "object"
+}

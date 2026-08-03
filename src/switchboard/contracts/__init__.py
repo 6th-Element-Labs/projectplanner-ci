@@ -86,9 +86,11 @@ from .claims import (
     CLAIM_NEXT_COMMAND_SCHEMA,
     CLAIM_TASK_COMMAND_SCHEMA,
     COMPLETE_CLAIM_COMMAND_SCHEMA,
+    FINISH_TURN_COMMAND_SCHEMA,
     ClaimNextCommand,
     ClaimTaskCommand,
     CompleteClaimCommand,
+    FinishTurnCommand,
 )
 from .wakes import (
     CLAIM_WAKE_COMMAND_SCHEMA,
@@ -146,6 +148,7 @@ __all__ = [
     "CLAIM_TASK_COMMAND_SCHEMA",
     "CLAIM_WAKE_COMMAND_SCHEMA",
     "COMPLETE_CLAIM_COMMAND_SCHEMA",
+    "FINISH_TURN_COMMAND_SCHEMA",
     "COMPLETE_WAKE_COMMAND_SCHEMA",
     "ACCEPTANCE_REVIEW_SCHEMA",
     "BRIEF_SCHEMA",
@@ -197,6 +200,7 @@ __all__ = [
     "ClaimTaskCommand",
     "ClaimWakeCommand",
     "CompleteClaimCommand",
+    "FinishTurnCommand",
     "CompleteWakeCommand",
     "CreateTaskCommand",
     "DeleteProviderConnectionCommand",

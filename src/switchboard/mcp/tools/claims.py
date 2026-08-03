@@ -18,6 +18,7 @@ from switchboard.application.commands import claim_next as claim_next_command
 from switchboard.application.commands import claim_task as claim_task_command
 from switchboard.application.commands import complete_claim as complete_claim_command
 from switchboard.application.commands import executed_test_runs as executed_test_runs_command
+from switchboard.application.commands import finish_turn as finish_turn_command
 from switchboard.application.pr_ready import PullRequestReadyGateway
 
 
@@ -153,6 +154,53 @@ def complete_claim(claim_id: str, ctx: Context, evidence: str = "", final_status
         actor=binding["actor"],
         ensure_ready=services.ensure_pr_ready,
     ))
+
+
+def finish_turn(claim_id: str, task_id: str, execution_id: str, generation: int,
+                work_session_id: str, branch: str, head_sha: str, pr_number: int,
+                pr_url: str, executed_test_run_id: str, git_diff_check: str,
+                ctx: Context, project: str = "maxwell",
+                agent_id: str = "", mission_project: str = "") -> str:
+    """Submit one bounded implementation finish and begin the existing C3 handoff.
+
+    The call is generation-fenced and accepts only commit/push/diff/test evidence.
+    It cannot choose Done, merge, the next role, or host lifecycle.  A valid call
+    returns the existing Stopping receipt; the host acknowledgement remains required
+    before the claim and Work Session expose In Review.
+    """
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:ixp",))
+    target = store.claim_binding_target(claim_id, project=project)
+    binding = services.resolve_write_actor(
+        principal,
+        project=project,
+        task_id=target.get("task_id") or task_id,
+        agent_id=agent_id or target.get("agent_id") or "",
+    )
+    if not binding.get("ok"):
+        return services.dumps(binding)
+    result = finish_turn_command.execute_mapping_result(
+        {
+            "claim_id": claim_id,
+            "task_id": task_id,
+            "execution_id": execution_id,
+            "generation": generation,
+            "work_session_id": work_session_id,
+            "branch": branch,
+            "head_sha": head_sha,
+            "pr_number": pr_number,
+            "pr_url": pr_url,
+            "executed_test_run_id": executed_test_run_id,
+            "git_diff_check": git_diff_check,
+            "project": project,
+            "mission_project": mission_project,
+        },
+        actor=binding["actor"],
+        ensure_ready=services.ensure_pr_ready,
+    )
+    if result.get("accepted"):
+        services.write_binding_comment(task_id, binding, project)
+    return services.dumps(result)
 
 
 def record_executed_test_run(test_run_json: str, ctx: Context,
@@ -342,6 +390,7 @@ CLAIM_TOOL_NAMES = (
     "claim_next",
     "claim_task",
     "complete_claim",
+    "finish_turn",
     "record_executed_test_run",
     "record_human_blocker",
     "agent_requires_human",

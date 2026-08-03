@@ -1,5 +1,5 @@
 {
-  "count": 62,
+  "count": 63,
   "schema": "switchboard.schema_manifest.v1",
   "schemas": [
     {
@@ -57,6 +57,10 @@
     {
       "$id": "switchboard.claim.complete_claim_command.v1",
       "path": "switchboard.claim.complete_claim_command.v1.json"
+    },
+    {
+      "$id": "switchboard.claim.finish_turn_command.v1",
+      "path": "switchboard.claim.finish_turn_command.v1.json"
     },
     {
       "$id": "switchboard.deliverable_acceptance_review.v1",

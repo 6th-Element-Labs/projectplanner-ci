@@ -213,7 +213,7 @@ WRITE_TOOLS = frozenset({
     "archive_task", "archive_work_session_workspace", "cancel_monitor",
     "begin_agent_host_enrollment", "bind_host_native_provider_connection",
     "claim_external_effect", "claim_files", "claim_next", "claim_resource",
-    "claim_runner_control", "claim_task", "claim_wake", "complete_claim",
+    "claim_runner_control", "claim_task", "claim_wake", "complete_claim", "finish_turn",
     "complete_runner_control", "complete_wake", "create_board", "create_deliverable",
     "create_kpi", "create_managed_work_session", "create_mission", "create_project",
     "create_project_board", "create_project_purge_intent", "create_scoped_token",

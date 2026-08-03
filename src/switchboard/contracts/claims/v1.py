@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, ClassVar, Mapping
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
@@ -12,6 +13,7 @@ from ..registry import register
 CLAIM_TASK_COMMAND_SCHEMA = "switchboard.claim.claim_task_command.v1"
 CLAIM_NEXT_COMMAND_SCHEMA = "switchboard.claim.claim_next_command.v1"
 COMPLETE_CLAIM_COMMAND_SCHEMA = "switchboard.claim.complete_claim_command.v1"
+FINISH_TURN_COMMAND_SCHEMA = "switchboard.claim.finish_turn_command.v1"
 
 
 def coerce_string_list(value: Any, *, upper: bool = False) -> tuple[str, ...]:
@@ -230,6 +232,114 @@ class CompleteClaimCommand(VersionedModel):
         return cls.model_validate(data)
 
 
+class FinishTurnCommand(VersionedModel):
+    """One bounded, generation-fenced implementation completion submission.
+
+    The contract deliberately has no status, next-role, merge, Done, or host-control
+    fields.  Those decisions remain server-owned after the evidence is accepted.
+    """
+
+    SCHEMA: ClassVar[str] = FINISH_TURN_COMMAND_SCHEMA
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_id: str = Field(default=FINISH_TURN_COMMAND_SCHEMA, alias="schema")
+    task_id: str
+    claim_id: str
+    execution_id: str
+    generation: int
+    work_session_id: str
+    branch: str
+    head_sha: str
+    pr_number: int
+    pr_url: str
+    executed_test_run_id: str
+    git_diff_check: str
+    project: str = "maxwell"
+    mission_project: str = ""
+
+    @field_validator(
+        "task_id", "claim_id", "execution_id", "work_session_id", "branch",
+        "head_sha", "pr_url", "executed_test_run_id", "git_diff_check",
+        "project", "mission_project", mode="before",
+    )
+    @classmethod
+    def _strip_finish_text(cls, value: Any) -> str:
+        return str(value or "").strip()
+
+    @field_validator("task_id", mode="after")
+    @classmethod
+    def _normalize_task_id(cls, value: str) -> str:
+        return value.upper()
+
+    @field_validator("head_sha", mode="after")
+    @classmethod
+    def _normalize_head_sha(cls, value: str) -> str:
+        return value.lower()
+
+    @field_validator("git_diff_check", mode="after")
+    @classmethod
+    def _normalize_diff_check(cls, value: str) -> str:
+        normalized = value.lower().replace("_", " ").strip()
+        if normalized in {"clean", "pass", "passed", "success"}:
+            return "passed"
+        return normalized
+
+    @field_validator("generation", "pr_number", mode="before")
+    @classmethod
+    def _coerce_positive_int(cls, value: Any) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("must be an integer") from exc
+
+    @model_validator(mode="after")
+    def _validate_finish_turn(self) -> "FinishTurnCommand":
+        required = {
+            "task_id": self.task_id,
+            "claim_id": self.claim_id,
+            "execution_id": self.execution_id,
+            "work_session_id": self.work_session_id,
+            "branch": self.branch,
+            "pr_url": self.pr_url,
+            "executed_test_run_id": self.executed_test_run_id,
+            "project": self.project,
+        }
+        missing = [name for name, value in required.items() if not value]
+        if missing:
+            raise ValueError("required fields missing: " + ", ".join(missing))
+        if self.generation <= 0:
+            raise ValueError("generation must be positive")
+        if self.pr_number <= 0:
+            raise ValueError("pr_number must be positive")
+        if not re.fullmatch(r"[0-9a-f]{40}", self.head_sha):
+            raise ValueError("head_sha must be a 40-character lowercase git SHA")
+        match = re.search(r"/pull/(\d+)(?:/)?$", self.pr_url)
+        if not match or int(match.group(1)) != self.pr_number:
+            raise ValueError("pr_url must identify pr_number")
+        if self.git_diff_check != "passed":
+            raise ValueError("git_diff_check must report passed")
+        return self
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "FinishTurnCommand":
+        return cls.model_validate(dict(value or {}))
+
+    def completion_evidence(self) -> dict[str, Any]:
+        """Return only evidence fields consumed by the existing completion owner."""
+        return {
+            "branch": self.branch,
+            "head_sha": self.head_sha,
+            "pr_number": self.pr_number,
+            "pr_url": self.pr_url,
+            "git_diff_check": "passed",
+            "executed_test_run_id": self.executed_test_run_id,
+            "work_session_id": self.work_session_id,
+            "execution_id": self.execution_id,
+            "execution_generation": self.generation,
+        }
+
+
 register(ClaimTaskCommand)
 register(ClaimNextCommand)
 register(CompleteClaimCommand)
+register(FinishTurnCommand)
