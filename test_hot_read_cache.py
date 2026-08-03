@@ -13,16 +13,17 @@ contention that surfaced as the CI "database is locked". #159 fixed only
   2. NON-SERIALIZING — proven over a real ASGI transport: while a deliberately
      slow /api/signals builds, concurrent /health calls still return promptly and
      two slow reads overlap instead of serializing.
-  3. SHORT-TTL CACHE — a warmed hot read is served from store._READ_CACHE in
-     <20ms, rebuilds at most once per stamp, and invalidates immediately on a
-     write — INCLUDING a write to a linked task in ANOTHER project (the mission
-     views fan out cross-project, so the cache stamp must too).
+  3. SHORT-TTL CACHE — a warmed hot read is served from store._READ_CACHE
+     without rebuilding, rebuilds at most once per stamp, and invalidates
+     immediately on a write — INCLUDING a write to a linked task in ANOTHER
+     project (the mission views fan out cross-project, so the cache stamp must too).
 """
 import asyncio
 import os
 import shutil
 import sys
 import tempfile
+import threading
 import time
 
 _TMP = tempfile.mkdtemp(prefix="hotcache-")
@@ -122,79 +123,112 @@ try:
         ok(seen.get(p) is True, f"{p} is threadpooled (sync def, runs off the event loop)")
 
     # === 2) NON-SERIALIZING over a real ASGI transport ==========================
-    # Make the signals build deliberately slow; a threadpooled handler must let the
-    # loop keep serving /health, and two slow reads must overlap (not serialize).
-    #
-    # BUG-136: the shared public CI sandbox is 2-10x slower than local, and pure
-    # scheduler/GC noise reached ~260ms there — over the old 250ms /health bound
-    # (SLOW=0.5 * 0.5), failing two unrelated PRs in one night. The bounds below
-    # only need to discriminate stalled from concurrent: a stalled /health costs
-    # >= SLOW (it waits out a full injected build) and a serialized pair of slow
-    # reads costs >= 2*SLOW (injected sleeps cannot compress). SLOW=1.0 keeps
-    # both bounds a full engine-gap away from observed noise while every failure
-    # mode still overshoots them decisively. Override for slower boxes via env.
-    SLOW = max(0.2, float(os.environ.get("PM_TEST_SLOW_READ_S", "1.0") or 1.0))
-    restore_slow, _ = None, None
+    # Hold both signals builds behind an explicit gate. A threadpooled handler lets
+    # both builders ENTER concurrently and /health COMPLETE before the gate opens.
+    # An event-loop-blocking or serialized implementation cannot establish that
+    # ordering. This is deliberately structural rather than a latency benchmark:
+    # BUG-312 showed that canonical 12-way CI can deschedule this process long
+    # enough to violate absolute wall-clock bounds even though the requests overlap.
+    # The timer is only a deadlock fail-safe for a broken implementation, not a
+    # performance assertion; healthy runs open the gate immediately.
+    gate_timeout = max(
+        2.0,
+        float(os.environ.get("PM_TEST_CONCURRENCY_GATE_TIMEOUT_S", "10.0") or 10.0),
+    )
+    release_slow = threading.Event()
+    first_slow_started = threading.Event()
+    both_slow_started = threading.Event()
+    slow_lock = threading.Lock()
+    slow_state = {"active": 0}
     _real_compute = signals._compute_plan_signals
 
     def _slow_compute(*a, **k):
-        time.sleep(SLOW)
-        return _real_compute(*a, **k)
+        with slow_lock:
+            slow_state["active"] += 1
+            first_slow_started.set()
+            if slow_state["active"] >= 2 and not release_slow.is_set():
+                both_slow_started.set()
+        release_slow.wait(gate_timeout)
+        try:
+            return _real_compute(*a, **k)
+        finally:
+            with slow_lock:
+                slow_state["active"] -= 1
 
     signals._compute_plan_signals = _slow_compute
     store._READ_CACHE.clear()  # force cache misses so both slow builds actually run
+    deadline = time.monotonic() + gate_timeout
+    fail_safe = threading.Timer(gate_timeout, release_slow.set)
+    fail_safe.daemon = True
+    fail_safe.start()
     try:
         async def race():
             transport = ASGITransport(app=app)
             async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
-                async def timed(coro_factory):
-                    t0 = time.time()
-                    r = await coro_factory()
-                    return r, (time.time() - t0)
-
-                started = time.time()
-                results = await asyncio.gather(
-                    timed(lambda: c.get("/api/signals", params={"project": HOME})),
-                    timed(lambda: c.get("/api/signals", params={"project": OTHER})),
-                    timed(lambda: c.get("/health")),
-                    timed(lambda: c.get("/health")),
-                    timed(lambda: c.get("/health")),
+                signal_tasks = [
+                    asyncio.create_task(c.get("/api/signals", params={"project": HOME})),
+                    asyncio.create_task(c.get("/api/signals", params={"project": OTHER})),
+                ]
+                await asyncio.to_thread(
+                    first_slow_started.wait,
+                    max(0.0, deadline - time.monotonic()),
                 )
-                wall = time.time() - started
-                return results, wall
 
-        (results, wall) = asyncio.run(race())
-        sig_home, sig_other = results[0], results[1]
-        healths = results[2:]
-        ok(sig_home[0].status_code == 200 and sig_other[0].status_code == 200,
+                async def health_probe():
+                    response = await c.get("/health")
+                    return response, not release_slow.is_set()
+
+                healths = await asyncio.gather(*(health_probe() for _ in range(3)))
+                await asyncio.to_thread(
+                    both_slow_started.wait,
+                    max(0.0, deadline - time.monotonic()),
+                )
+                release_slow.set()
+                signals_responses = await asyncio.gather(*signal_tasks)
+                return signals_responses, healths
+
+        signals_responses, healths = asyncio.run(race())
+        ok(all(response.status_code == 200 for response in signals_responses),
            "both slow /api/signals return 200")
-        ok(all(h[0].status_code == 200 for h in healths), "concurrent /health calls return 200")
-        max_health = max(h[1] for h in healths)
-        # Stalled /health would wait out a full injected build (>= SLOW); half of
-        # SLOW separates that decisively while leaving SLOW*0.5 of noise headroom.
-        ok(max_health < SLOW * 0.5,
-           f"/health not stalled behind the slow read ({max_health*1000:.0f}ms << {SLOW*1000:.0f}ms build)")
-        # Serialized slow reads cost >= 2*SLOW; overlapped ~= SLOW + noise. 1.7x
-        # sits between them with SLOW*0.7 of noise headroom on contended boxes.
-        ok(wall < SLOW * 1.7,
-           f"two slow reads overlapped in the threadpool (wall {wall*1000:.0f}ms < {SLOW*1.7*1000:.0f}ms serial bound)")
+        ok(all(response.status_code == 200 for response, _ in healths),
+           "concurrent /health calls return 200")
+        ok(all(completed_before_release for _, completed_before_release in healths),
+           "/health completes while the slow reads are held off the event loop")
+        ok(both_slow_started.is_set(),
+           "two slow reads enter the threadpool concurrently before release")
     finally:
+        release_slow.set()
+        fail_safe.cancel()
         signals._compute_plan_signals = _real_compute
 
-    # === 3) SHORT-TTL CACHE: hit <20ms, rebuild-once, write invalidates =========
-    def warm_hit_ms(fn):
-        fn()                       # miss (populate)
-        t0 = time.time()
-        fn()                       # hit
-        return (time.time() - t0) * 1000
+    # === 3) SHORT-TTL CACHE: hit skips builder, write invalidates ================
+    # Wall time includes host scheduling and is not a cache-behavior signal. Prove
+    # the invariant directly: miss+hit invokes the expensive builder exactly once.
+    def warm_hit_skips_rebuild(fn, module, builder_name):
+        store._READ_CACHE.clear()
+        restore, calls = count_calls(module, builder_name)
+        try:
+            fn()                       # miss (populate)
+            fn()                       # hit (must skip builder)
+            return calls["n"] == 1
+        finally:
+            restore()
 
-    store._READ_CACHE.clear()
-    ok(warm_hit_ms(lambda: store.board_payload(HOME, lite=True)) < 20, "board cache hit < 20ms")
-    ok(warm_hit_ms(lambda: signals.compute_plan_signals(project=HOME)) < 20, "signals cache hit < 20ms")
-    ok(warm_hit_ms(lambda: store.get_mission_status(project=HOME, deliverable_id=DID)) < 20,
-       "mission_status cache hit < 20ms")
-    ok(warm_hit_ms(lambda: store.get_deliverable_dependency_graph(project=HOME, deliverable_id=DID)) < 20,
-       "dependency_graph cache hit < 20ms")
+    ok(warm_hit_skips_rebuild(
+        lambda: store.board_payload(HOME, lite=True), store, "_build_board_payload"),
+       "board cache hit skips rebuild")
+    ok(warm_hit_skips_rebuild(
+        lambda: signals.compute_plan_signals(project=HOME), signals,
+        "_compute_plan_signals"),
+       "signals cache hit skips rebuild")
+    ok(warm_hit_skips_rebuild(
+        lambda: store.get_mission_status(project=HOME, deliverable_id=DID), store,
+        "_build_mission_status"),
+       "mission_status cache hit skips rebuild")
+    ok(warm_hit_skips_rebuild(
+        lambda: store.get_deliverable_dependency_graph(project=HOME, deliverable_id=DID),
+        store, "_build_deliverable_dependency_graph"),
+       "dependency_graph cache hit skips rebuild")
 
     # rebuild-at-most-once-per-stamp + same-project invalidation (board & signals)
     store._READ_CACHE.clear()
