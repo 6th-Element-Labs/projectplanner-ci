@@ -15,7 +15,7 @@ def database(*, live_replacement: bool = False) -> sqlite3.Connection:
     c.executescript("""
         CREATE TABLE task_claims (
             id TEXT PRIMARY KEY, task_id TEXT, agent_id TEXT, status TEXT,
-            abandon_reason TEXT
+            abandon_reason TEXT, runner_session_id TEXT
         );
         CREATE TABLE resource_leases (
             resource_type TEXT, task_id TEXT, agent_id TEXT, released_at REAL
@@ -28,7 +28,8 @@ def database(*, live_replacement: bool = False) -> sqlite3.Connection:
             work_session_id TEXT PRIMARY KEY, task_id TEXT, claim_id TEXT,
             agent_id TEXT, principal_id TEXT, repo TEXT, branch TEXT,
             head_sha TEXT, worktree_path TEXT, clone_path TEXT, status TEXT,
-            completed_at REAL, updated_at REAL, updated_by TEXT
+            completed_at REAL, updated_at REAL, updated_by TEXT,
+            runner_session_id TEXT
         );
         CREATE TABLE task_git_state (
             task_id TEXT PRIMARY KEY, branch TEXT, head_sha TEXT,
@@ -43,16 +44,17 @@ def database(*, live_replacement: bool = False) -> sqlite3.Connection:
             task_id TEXT, actor TEXT, kind TEXT, payload TEXT, created_at REAL
         );
     """)
-    c.execute("INSERT INTO task_claims VALUES (?,?,?,?,?)",
-              ("claim-73", "COORD-73", "agent/old", "active", None))
+    c.execute("INSERT INTO task_claims VALUES (?,?,?,?,?,?)",
+              ("claim-73", "COORD-73", "agent/old", "active", None,
+               "run-dead"))
     c.execute("INSERT INTO resource_leases VALUES (?,?,?,NULL)",
               ("task", "COORD-73", "agent/old"))
     c.execute("INSERT INTO tasks VALUES (?,?,?,?,?,?)",
               ("COORD-73", "In Progress", "agent/old", None, "{}", 0))
-    c.execute("INSERT INTO work_sessions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+    c.execute("INSERT INTO work_sessions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
         "ws-73", "COORD-73", "claim-73", "agent/old", "principal/old",
         "6th-Element-Labs/projectplanner", "codex/COORD-73", "a" * 40,
-        "/tmp/coord73", "", "active", None, 0, "",
+        "/tmp/coord73", "", "active", None, 0, "", "run-dead",
     ))
     c.execute("INSERT INTO task_git_state VALUES (?,?,?,?,?)",
               ("COORD-73", "codex/COORD-73", "a" * 40, None, None))
@@ -75,9 +77,11 @@ metadata = {
     "terminalized_by": "runner_lease_expiry",
     "failure_reason": "runner heartbeat lease expired",
     "execution_generation": 1,
+    "work_session_id": "ws-73",
 }
 
-# Missing metadata.work_session_id resolves through the exact claim binding.
+# C3 may resolve a late terminal receipt only through the exact claim+runner
+# binding; no task/agent fallback is allowed.
 c = database()
 handoff = runner._release_terminal_runner_ownership_in(
     c, record, metadata, "run-dead", "host/test", 100.0)

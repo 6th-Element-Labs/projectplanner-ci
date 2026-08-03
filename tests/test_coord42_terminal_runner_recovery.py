@@ -16,7 +16,7 @@ def database(status: str = "In Progress") -> sqlite3.Connection:
     c.executescript("""
         CREATE TABLE task_claims (
             id TEXT PRIMARY KEY, task_id TEXT, agent_id TEXT, status TEXT,
-            abandon_reason TEXT
+            abandon_reason TEXT, runner_session_id TEXT
         );
         CREATE TABLE resource_leases (
             resource_type TEXT, task_id TEXT, agent_id TEXT, released_at REAL
@@ -27,7 +27,8 @@ def database(status: str = "In Progress") -> sqlite3.Connection:
         );
         CREATE TABLE work_sessions (
             work_session_id TEXT PRIMARY KEY, repo TEXT, branch TEXT,
-            head_sha TEXT, worktree_path TEXT, clone_path TEXT, status TEXT
+            head_sha TEXT, worktree_path TEXT, clone_path TEXT, status TEXT,
+            task_id TEXT, claim_id TEXT, agent_id TEXT, runner_session_id TEXT
         );
         CREATE TABLE task_git_state (
             task_id TEXT PRIMARY KEY, branch TEXT, head_sha TEXT,
@@ -37,15 +38,17 @@ def database(status: str = "In Progress") -> sqlite3.Connection:
             task_id TEXT, actor TEXT, kind TEXT, payload TEXT, created_at REAL
         );
     """)
-    c.execute("INSERT INTO task_claims VALUES (?,?,?,?,?)",
-              ("claim-1", "COORD-42", "codex/COORD-42", "active", None))
+    c.execute("INSERT INTO task_claims VALUES (?,?,?,?,?,?)",
+              ("claim-1", "COORD-42", "codex/COORD-42", "active", None,
+               "run-dead"))
     c.execute("INSERT INTO resource_leases VALUES (?,?,?,NULL)",
               ("task", "COORD-42", "codex/COORD-42"))
     c.execute("INSERT INTO tasks VALUES (?,?,?,?,?,?)",
               ("COORD-42", status, "codex/COORD-42", "autopilot", "{}", 0))
-    c.execute("INSERT INTO work_sessions VALUES (?,?,?,?,?,?,?)", (
+    c.execute("INSERT INTO work_sessions VALUES (?,?,?,?,?,?,?,?,?,?,?)", (
         "ws-1", "6th-Element-Labs/projectplanner", "codex/COORD-42-existing",
-        "a" * 40, "/tmp/coord42", "", "expired"))
+        "a" * 40, "/tmp/coord42", "", "expired", "COORD-42", "claim-1",
+        "codex/COORD-42", "run-dead"))
     c.execute("INSERT INTO task_git_state VALUES (?,?,?,?,?)", (
         "COORD-42", "codex/COORD-42-existing", "a" * 40, 700,
         "https://github.example/pr/700"))
@@ -59,6 +62,7 @@ def terminal_record() -> tuple[dict, dict]:
         "status": "failed", "cwd": "/tmp/coord42",
     }, {
         "work_session_id": "ws-1", "role": "implementation",
+        "execution_generation": 1,
         "failure_reason": "executed_tests_failed", "log_path": "/tmp/stdout.log",
     })
 
@@ -124,10 +128,54 @@ assert review_personal_db.execute(
 assert review_personal_db.execute(
     "SELECT released_at FROM resource_leases").fetchone()[0] == 100.0
 review_personal_db.execute(
-    "INSERT INTO task_claims VALUES (?,?,?,?,?)",
-    ("claim-2", "COORD-42", "codex/COORD-42-remediation", "active", None))
+    "INSERT INTO task_claims VALUES (?,?,?,?,?,?)",
+    ("claim-2", "COORD-42", "codex/COORD-42-remediation", "active", None,
+     "run-new"))
 assert review_personal_db.execute(
     "SELECT count(*) FROM task_claims WHERE status='active'").fetchone()[0] == 1
+
+# BUG-309: a stale terminal payload must not release a replacement review claim
+# that is not yet bound to its own runner.
+pending_replacement_db = database("In Review")
+pending_replacement_db.execute(
+    "UPDATE task_claims SET status='completed' WHERE id='claim-1'")
+pending_replacement_db.execute(
+    "INSERT INTO task_claims VALUES (?,?,?,?,?,?)",
+    ("claim-new", "COORD-42", "codex/COORD-42", "active", None, None))
+pending_replacement, pending_replacement_metadata = terminal_record()
+pending_replacement["claim_id"] = "claim-new"
+assert runner._release_terminal_runner_ownership_in(
+    pending_replacement_db, pending_replacement, pending_replacement_metadata,
+    "run-dead", "test", 100.0) is None
+assert pending_replacement_db.execute(
+    "SELECT status FROM task_claims WHERE id='claim-new'").fetchone()[0] == "active"
+blocked = pending_replacement_db.execute(
+    "SELECT payload FROM activity "
+    "WHERE kind='task.terminal_runner_ownership_blocked'").fetchone()
+assert blocked and json.loads(blocked[0])["reason_code"] == (
+    "terminal_runner_claim_binding_mismatch")
+
+# The Work Session is a second C3 fence: a claim with the same runner still
+# cannot be released through an old session from a different generation.
+wrong_session_db = database("In Review")
+wrong_session_db.execute(
+    "UPDATE task_claims SET status='completed' WHERE id='claim-1'")
+wrong_session_db.execute(
+    "INSERT INTO task_claims VALUES (?,?,?,?,?,?)",
+    ("claim-new", "COORD-42", "codex/COORD-42", "active", None,
+     "run-dead"))
+wrong_session, wrong_session_metadata = terminal_record()
+wrong_session["claim_id"] = "claim-new"
+assert runner._release_terminal_runner_ownership_in(
+    wrong_session_db, wrong_session, wrong_session_metadata,
+    "run-dead", "test", 100.0) is None
+assert wrong_session_db.execute(
+    "SELECT status FROM task_claims WHERE id='claim-new'").fetchone()[0] == "active"
+blocked = wrong_session_db.execute(
+    "SELECT payload FROM activity "
+    "WHERE kind='task.terminal_runner_ownership_blocked'").fetchone()
+assert blocked and json.loads(blocked[0])["reason_code"] == (
+    "terminal_runner_work_session_binding_mismatch")
 assert runner._release_terminal_runner_ownership_in(
     review_personal_db, review_personal, review_personal_metadata,
     "run-dead", "test", 101.0) is None

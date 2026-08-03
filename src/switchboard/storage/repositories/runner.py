@@ -1693,8 +1693,27 @@ def _release_terminal_runner_ownership_in(
     claim_id = str(record.get("claim_id") or "").strip()
     agent_id = str(record.get("agent_id") or "").strip()
     lease_expired = metadata.get("terminalized_by") == "runner_lease_expiry"
+    fenced_execution = any(
+        metadata.get(field) not in (None, "", 0)
+        for field in ("execution_id", "execution_generation", "lease_epoch")
+    )
     if status not in RUNNER_TERMINAL_STATUSES or not (task_id and agent_id):
         return None
+
+    def ownership_blocked(reason_code: str, **details: Any) -> None:
+        """Keep a stale terminal receipt observable without touching newer work."""
+        c.execute(
+            "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+            "VALUES (?,?,?,?,?)",
+            (task_id, actor, "task.terminal_runner_ownership_blocked",
+             json.dumps({
+                 "reason_code": reason_code,
+                 "needs_you": True,
+                 "runner_session_id": runner_session_id,
+                 "claim_id": claim_id or None,
+                 **details,
+             }, sort_keys=True), now),
+        )
 
     # Connect starts the runner before the worker can claim. The claim stores
     # the exact runner generation during the authenticated Work Session bind,
@@ -1754,6 +1773,22 @@ def _release_terminal_runner_ownership_in(
             or str(claim["task_id"] or "") != task_id
             or str(claim["agent_id"] or "") != agent_id):
         return None
+    # C3 applies to every generation-fenced v4/Connect execution. Task and
+    # agent labels are not an ownership proof there: the next reviewer can
+    # legitimately have the same pair while waiting to start. Preserve the
+    # older, unfenced managed-runner path; it has no generation assignment to
+    # confuse with a replacement execution.
+    if fenced_execution:
+        if "runner_session_id" not in claim.keys():
+            ownership_blocked("terminal_runner_claim_binding_missing")
+            return None
+        bound_runner_session_id = str(claim["runner_session_id"] or "").strip()
+        if bound_runner_session_id != runner_session_id:
+            ownership_blocked(
+                "terminal_runner_claim_binding_mismatch",
+                bound_runner_session_id=bound_runner_session_id or None,
+            )
+            return None
 
     task = c.execute(
         "SELECT status, assignee, deliverable, agent_state FROM tasks WHERE task_id=?",
@@ -1778,7 +1813,27 @@ def _release_terminal_runner_ownership_in(
         "SELECT * FROM work_sessions WHERE work_session_id=?",
         (work_session_id,),
     ).fetchone() if work_session_id else None
-    if work_session:
+    if (review_handoff_recovery and execution_role != "implementation"
+            and not work_session):
+        return None
+    if not work_session and fenced_execution:
+        # A late-bound runner can terminalize before its next heartbeat copies
+        # the Work Session id back to runner metadata. Resolve only the already
+        # persisted exact claim+runner tuple; never fall back to task, agent,
+        # or principal labels.
+        exact_sessions = c.execute(
+            "SELECT * FROM work_sessions WHERE claim_id=? AND runner_session_id=?",
+            (claim_id, runner_session_id),
+        ).fetchall()
+        if len(exact_sessions) != 1:
+            ownership_blocked(
+                "terminal_runner_work_session_missing",
+                exact_work_session_count=len(exact_sessions),
+            )
+            return None
+        work_session = exact_sessions[0]
+        work_session_id = str(work_session["work_session_id"] or "")
+    if fenced_execution:
         work_session_fields = set(work_session.keys())
         exact_fields = {
             "task_id": task_id,
@@ -1786,65 +1841,19 @@ def _release_terminal_runner_ownership_in(
             "agent_id": agent_id,
             "runner_session_id": runner_session_id,
         }
-        if any(
-                field in work_session_fields
-                and str(work_session[field] or "") != expected
-                for field, expected in exact_fields.items()):
-            return None
-    if (review_handoff_recovery and execution_role != "implementation"
-            and not work_session):
-        return None
-    if not work_session:
-        # Connect starts the runner before the CLI creates its Work Session, so
-        # a terminal control receipt can legitimately lack work_session_id even
-        # though the later claim bind persisted the exact runner generation.
-        # Resolve that exact claim-bound session first.  Only lease-expiry
-        # recovery may use the weaker legacy principal/task fallbacks.
-        candidates: Dict[str, sqlite3.Row] = {}
-        try:
-            for row in c.execute(
-                    "SELECT * FROM work_sessions WHERE claim_id=? "
-                    "AND status IN ('active','proposed','blocked')",
-                    (claim_id,)).fetchall():
-                candidates[str(row["work_session_id"])] = row
-            if lease_expired and not candidates:
-                runner_row = c.execute(
-                    "SELECT principal_id FROM runner_sessions "
-                    "WHERE runner_session_id=?",
-                    (runner_session_id,),
-                ).fetchone()
-                principal_id = (
-                    str(runner_row["principal_id"] or "") if runner_row else ""
-                )
-                if principal_id:
-                    for row in c.execute(
-                            "SELECT * FROM work_sessions "
-                            "WHERE task_id=? AND principal_id=? "
-                            "AND status IN ('active','proposed','blocked')",
-                            (task_id, principal_id)).fetchall():
-                        candidates[str(row["work_session_id"])] = row
-            if lease_expired and not candidates:
-                for row in c.execute(
-                        "SELECT * FROM work_sessions WHERE task_id=? AND agent_id=? "
-                        "AND status IN ('active','proposed','blocked')",
-                        (task_id, agent_id)).fetchall():
-                    candidates[str(row["work_session_id"])] = row
-        except sqlite3.OperationalError:
-            candidates = {}
-        if len(candidates) == 1:
-            work_session_id, work_session = next(iter(candidates.items()))
-        elif len(candidates) > 1:
-            c.execute(
-                "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
-                "VALUES (?,?,?,?,?)",
-                (task_id, actor, "task.runner_lease_orphan_recovery_blocked",
-                 json.dumps({
-                     "reason_code": "orphan_claim_after_runner_lease_expiry",
-                     "needs_you": True,
-                     "runner_session_id": runner_session_id,
-                     "claim_id": claim_id,
-                     "ambiguous_work_session_ids": sorted(candidates),
-                 }, sort_keys=True), now),
+        missing_fields = sorted(
+            field for field in exact_fields if field not in work_session_fields)
+        mismatches = {
+            field: str(work_session[field] or "") or None
+            for field, expected in exact_fields.items()
+            if field in work_session_fields and str(work_session[field] or "") != expected
+        }
+        if missing_fields or mismatches:
+            ownership_blocked(
+                "terminal_runner_work_session_binding_mismatch",
+                work_session_id=work_session_id,
+                missing_fields=missing_fields,
+                observed=mismatches,
             )
             return None
     git_state = c.execute(
