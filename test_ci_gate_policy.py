@@ -91,12 +91,15 @@ ok("test_concurrent_load_ratchet.py" in ci_suite
    and "concurrent_load_gate.py" not in ci_suite
    and "cross_process_load_gate.py" not in ci_suite
    and "concurrent_load_gate.py" in perf_suite
-   and "cross_process_load_gate.py" in perf_suite,
+   and "cross_process_load_gate.py" in perf_suite
+   and "SWITCHBOARD_SEG3_ENFORCE_WALL_CLOCK=1" in perf_suite
+   and "test_seg3_mcp_project_authorization.py" in perf_suite,
    "timing ratchets are scheduled monitoring, never PR or queue blockers")
 perf_workflow = (actions_dir / "performance-monitor.yml").read_text(encoding="utf-8")
 ok("schedule:" in perf_workflow
    and "scripts/switchboard_perf_ci.sh" in perf_workflow
-   and "Switchboard CI / VM gate" not in perf_workflow,
+   and "Switchboard CI / VM gate" not in perf_workflow
+   and "seg3-authorization-report.json" in perf_workflow,
    "scheduled performance workflow publishes no required status")
 ok("app.js composition root stays below 5,000 lines" not in
    Path("test_arch_ms21_frontend_modules.py").read_text(encoding="utf-8"),

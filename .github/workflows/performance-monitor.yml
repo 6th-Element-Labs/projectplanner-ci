@@ -56,6 +56,7 @@ jobs:
         env:
           CONCURRENT_LOAD_REPORT: ".artifacts/concurrent-load-report.json"
           CROSS_PROCESS_LOAD_REPORT: ".artifacts/cross-process-load-report.json"
+          SEG3_AUTHORIZATION_REPORT: ".artifacts/seg3-authorization-report.json"
         run: bash scripts/switchboard_perf_ci.sh
 
       - name: Upload timing reports
@@ -66,4 +67,5 @@ jobs:
           path: |
             .artifacts/concurrent-load-report.json
             .artifacts/cross-process-load-report.json
+            .artifacts/seg3-authorization-report.json
           if-no-files-found: warn
