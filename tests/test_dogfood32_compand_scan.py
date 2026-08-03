@@ -1108,6 +1108,54 @@ class Dogfood32CompandScanTest(unittest.TestCase):
                     self.assertNotEqual(result.returncode, 0)
                     self.assertFalse(rejected_output.exists())
 
+    def test_bundle_recomputes_decision_from_every_measurement(self) -> None:
+        receipt = full_receipt()
+        qualifying = qualifying_measurement()
+        mismatched = qualifying.model_copy(
+            update={"task_snapshot_sha256": "sha256:" + "d" * 64}
+        )
+        measurements = (qualifying, mismatched)
+        canonical = decide_compand_scan(receipt, measurements)
+        self.assertEqual(canonical.decision, "stop")
+        self.assertEqual(canonical.measured_candidate_count, 2)
+        self.assertEqual(canonical.qualifying_candidate_count, 1)
+        self.assertIn("measurement_task_snapshot_mismatch", canonical.reasons)
+
+        caller_supplied_advance = CompandScanDecision(
+            decision="advance",
+            reasons=("cache_adjusted_candidate_is_cheaper",),
+            measured_candidate_count=2,
+            qualifying_candidate_count=1,
+        )
+        authority = CompandScanEvidenceBundle.derive_authority(
+            receipt,
+            measurements,
+            caller_supplied_advance,
+        )
+        self.assertEqual(authority.evidence_state, "exploratory")
+        self.assertEqual(authority.claim_limit, "diagnostic_only")
+
+        common = {
+            "evidence_state": "exploratory",
+            "claim_limit": "diagnostic_only",
+            "source_input_sha256": "sha256:" + "e" * 64,
+            "coverage_receipt": receipt,
+            "measurements": measurements,
+        }
+        with self.assertRaisesRegex(
+            ValueError, "decision does not match the canonical complete-evidence decision"
+        ):
+            CompandScanEvidenceBundle(
+                **common,
+                decision=caller_supplied_advance,
+            )
+
+        downgraded = CompandScanEvidenceBundle(
+            **common,
+            decision=canonical,
+        )
+        self.assertEqual(downgraded.claim_limit, "diagnostic_only")
+
     def test_malformed_candidate_artifact_hash_is_rejected(self) -> None:
         payload = qualifying_measurement().model_dump(mode="json", by_alias=True)
         payload["candidate_artifact_sha256"] = "not-a-content-address"

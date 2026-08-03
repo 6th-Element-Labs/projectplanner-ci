@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from collections import Counter
 from collections.abc import Iterable
 
@@ -18,6 +17,7 @@ from switchboard.contracts.compand import (
     LineRleShadowMeasurement,
     ProviderPriceTable,
     ProviderTokenCount,
+    recompute_compand_scan_decision,
 )
 from switchboard.domain.compand import LineRleCandidate
 
@@ -228,130 +228,7 @@ def decide_compand_scan(
 ) -> CompandScanDecision:
     """Return the bounded line-rle-v1 decision without enabling mutation."""
 
-    measured = tuple(measurements)
-    try:
-        coverage.validate_derived_truth()
-    except (AttributeError, TypeError, ValueError):
-        return CompandScanDecision(
-            decision="stop",
-            reasons=("coverage_receipt_integrity_invalid",),
-            measured_candidate_count=len(measured),
-            qualifying_candidate_count=0,
-        )
-    integrity_reasons: set[str] = set()
-    qualifying: list[LineRleShadowMeasurement] = []
-    for item in measured:
-        item_reasons, recomputed_qualifies = _measurement_integrity_reasons(
-            coverage, item
-        )
-        integrity_reasons.update(item_reasons)
-        if not item_reasons and recomputed_qualifies:
-            qualifying.append(item)
-    parity_failures = [
-        field for field in _PARITY_FIELDS if not getattr(coverage.parity, field)
-    ]
-    coverage_promotion_reasons = _coverage_promotion_reasons(coverage)
-    if parity_failures or integrity_reasons or any(
-        not item.shadow_original_forwarded_byte_for_byte for item in measured
-    ):
-        reasons = tuple(
-            sorted(
-                {*(f"parity_failed:{field}" for field in parity_failures)}
-                | integrity_reasons
-                | (
-                    {"shadow_payload_was_not_byte_preserved"}
-                    if any(
-                        not item.shadow_original_forwarded_byte_for_byte
-                        for item in measured
-                    )
-                    else set()
-                )
-            )
-        )
-        decision = "stop"
-    elif coverage_promotion_reasons:
-        decision = "low_coverage_hold"
-        reasons = tuple(sorted(coverage_promotion_reasons))
-    elif qualifying:
-        decision = "advance"
-        reasons = ("cache_adjusted_candidate_is_cheaper",)
-    else:
-        decision = "redesign"
-        reasons = ("no_cache_adjusted_positive_candidate",)
-    return CompandScanDecision(
-        decision=decision,
-        reasons=reasons,
-        measured_candidate_count=len(measured),
-        qualifying_candidate_count=(
-            len(qualifying) if not coverage_promotion_reasons else 0
-        ),
-    )
-
-
-def _coverage_promotion_reasons(coverage: GatewayCoverageReceipt) -> set[str]:
-    """Recheck the minimum insertion proof required for an advance decision."""
-
-    reasons = set(coverage.blocking_reasons)
-    if coverage.coverage_counts.bypassed:
-        reasons.add("unexplained_bypass")
-    if coverage.coverage_counts.unknown:
-        reasons.add("unreconciled_egress_observation")
-    if coverage.coverage != "full":
-        reasons.add(f"coverage_not_full:{coverage.coverage}")
-    if coverage.coverage_counts.captured <= 0:
-        reasons.add("no_captured_inference_requests")
-    if (
-        "responses" not in coverage.certified_features
-        or "/v1/responses" not in coverage.observed_endpoints
-    ):
-        reasons.add("captured_responses_route_missing")
-    if coverage.mutation_blocked and not reasons:
-        reasons.add("coverage_receipt_blocks_promotion")
-    return reasons
-
-
-def _measurement_integrity_reasons(
-    coverage: GatewayCoverageReceipt,
-    item: LineRleShadowMeasurement,
-) -> tuple[set[str], bool]:
-    """Cross-check one supplied measurement and recompute qualification."""
-
-    reasons: set[str] = set()
-    if item.task_snapshot_sha256 != coverage.system.task_snapshot_sha256:
-        reasons.add("measurement_task_snapshot_mismatch")
-    if item.price_table.model != coverage.system.model:
-        reasons.add("measurement_model_mismatch")
-    provider = item.price_table.provider.strip().casefold()
-    expected_providers = {
-        coverage.system.provider_id.strip().casefold(),
-        coverage.system.provider_name.strip().casefold(),
-    }
-    if not provider or provider not in expected_providers:
-        reasons.add("measurement_provider_mismatch")
-
-    try:
-        expected = item.recomputed_derived_values()
-    except (TypeError, ValueError):
-        return reasons | {"measurement_primitive_evidence_invalid"}, False
-    for field in (
-        "projected_original_input_usd",
-        "projected_candidate_input_usd",
-        "projected_input_savings_usd",
-    ):
-        if not math.isclose(
-            float(getattr(item, field)),
-            float(expected[field]),
-            rel_tol=0.0,
-            abs_tol=5e-13,
-        ):
-            reasons.add(f"measurement_derived_value_mismatch:{field}")
-    for field in (
-        "cache_fields_exposed",
-        "cache_adjusted_candidate_is_cheaper",
-    ):
-        if getattr(item, field) is not expected[field]:
-            reasons.add(f"measurement_derived_value_mismatch:{field}")
-    return reasons, bool(expected["cache_adjusted_candidate_is_cheaper"])
+    return recompute_compand_scan_decision(coverage, tuple(measurements))
 
 
 def _unique_by_correlation(events: Iterable[object], label: str) -> dict[str, object]:

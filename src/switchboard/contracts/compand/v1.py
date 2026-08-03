@@ -554,6 +554,73 @@ class CompandScanDecision(_FrozenContract):
         return self
 
 
+def recompute_compand_scan_decision(
+    coverage: GatewayCoverageReceipt,
+    measurements: tuple[LineRleShadowMeasurement, ...],
+) -> CompandScanDecision:
+    """Regenerate the bounded decision from every supplied evidence primitive."""
+
+    measured = tuple(measurements)
+    try:
+        coverage.validate_derived_truth()
+    except (AttributeError, TypeError, ValueError):
+        return CompandScanDecision(
+            decision="stop",
+            reasons=("coverage_receipt_integrity_invalid",),
+            measured_candidate_count=len(measured),
+            qualifying_candidate_count=0,
+        )
+
+    integrity_reasons: set[str] = set()
+    qualifying_count = 0
+    for item in measured:
+        item_reasons, recomputed_qualifies = _measurement_integrity_reasons(
+            coverage, item
+        )
+        integrity_reasons.update(item_reasons)
+        if not item_reasons and recomputed_qualifies:
+            qualifying_count += 1
+
+    parity_failures = [
+        field for field in _PARITY_FIELDS if getattr(coverage.parity, field, None) is not True
+    ]
+    coverage_promotion_reasons = _coverage_promotion_reasons(coverage)
+    byte_preservation_failed = any(
+        getattr(item, "shadow_original_forwarded_byte_for_byte", None) is not True
+        for item in measured
+    )
+    if parity_failures or integrity_reasons or byte_preservation_failed:
+        reasons = tuple(
+            sorted(
+                {*(f"parity_failed:{field}" for field in parity_failures)}
+                | integrity_reasons
+                | (
+                    {"shadow_payload_was_not_byte_preserved"}
+                    if byte_preservation_failed
+                    else set()
+                )
+            )
+        )
+        decision: ScanDecisionKind = "stop"
+    elif coverage_promotion_reasons:
+        decision = "low_coverage_hold"
+        reasons = tuple(sorted(coverage_promotion_reasons))
+    elif qualifying_count:
+        decision = "advance"
+        reasons = ("cache_adjusted_candidate_is_cheaper",)
+    else:
+        decision = "redesign"
+        reasons = ("no_cache_adjusted_positive_candidate",)
+    return CompandScanDecision(
+        decision=decision,
+        reasons=reasons,
+        measured_candidate_count=len(measured),
+        qualifying_candidate_count=(
+            qualifying_count if not coverage_promotion_reasons else 0
+        ),
+    )
+
+
 class CompandScanEvidenceAuthority(_FrozenContract):
     """Typed caller assertion that must equal the compiler-derived ceiling."""
 
@@ -592,48 +659,25 @@ class CompandScanEvidenceBundle(_FrozenContract):
                 claim_limit="diagnostic_only",
             )
 
-        qualifying_measurements = 0
-        for item in measurements:
-            try:
-                derived = item.recomputed_derived_values()
-            except (TypeError, ValueError):
-                continue
-            provider = item.price_table.provider.strip().casefold()
-            expected_providers = {
-                coverage.system.provider_id.strip().casefold(),
-                coverage.system.provider_name.strip().casefold(),
-            }
-            if (
-                derived["cache_adjusted_candidate_is_cheaper"] is True
-                and item.task_snapshot_sha256
-                == coverage.system.task_snapshot_sha256
-                and item.price_table.model == coverage.system.model
-                and provider in expected_providers
-            ):
-                qualifying_measurements += 1
+        canonical_decision = recompute_compand_scan_decision(coverage, measurements)
+        if decision != canonical_decision:
+            return CompandScanEvidenceAuthority(
+                evidence_state="exploratory",
+                claim_limit="diagnostic_only",
+            )
 
         parity_passes = all(
-            getattr(coverage.parity, field, None) is True
-            for field in (
-                "protocol",
-                "usage_fields",
-                "task_result",
-                "streaming",
-                "tools",
-                "errors",
-                "cancellation",
-            )
+            getattr(coverage.parity, field, None) is True for field in _PARITY_FIELDS
         )
         process_level_observation = coverage.egress_observation.method in {
             "process_network_capture",
             "process_socket_audit",
         }
         supported_advance = (
-            decision.decision == "advance"
-            and decision.mutation_authorized is False
-            and decision.measured_candidate_count == len(measurements)
-            and decision.qualifying_candidate_count == qualifying_measurements
-            and qualifying_measurements > 0
+            canonical_decision.decision == "advance"
+            and canonical_decision.mutation_authorized is False
+            and canonical_decision.measured_candidate_count == len(measurements)
+            and canonical_decision.qualifying_candidate_count > 0
             and process_level_observation
             and parity_passes
             and coverage.coverage == "full"
@@ -659,6 +703,15 @@ class CompandScanEvidenceBundle(_FrozenContract):
     def validate_claim_ceiling(self) -> "CompandScanEvidenceBundle":
         if not _SHA256_EVIDENCE.fullmatch(self.source_input_sha256):
             raise ValueError("source_input_sha256 is not canonical sha256 evidence")
+        canonical_decision = recompute_compand_scan_decision(
+            self.coverage_receipt,
+            self.measurements,
+        )
+        if self.decision != canonical_decision:
+            raise ValueError(
+                "decision does not match the canonical complete-evidence decision: "
+                f"expected {canonical_decision.model_dump(mode='json', by_alias=True)}"
+            )
         derived = self.derive_authority(
             self.coverage_receipt,
             self.measurements,
@@ -673,6 +726,79 @@ class CompandScanEvidenceBundle(_FrozenContract):
                 f"expected {derived.evidence_state}/{derived.claim_limit}"
             )
         return self
+
+
+def _coverage_promotion_reasons(coverage: GatewayCoverageReceipt) -> set[str]:
+    """Recheck the minimum insertion proof required for an advance decision."""
+
+    reasons = set(coverage.blocking_reasons)
+    if coverage.coverage_counts.bypassed:
+        reasons.add("unexplained_bypass")
+    if coverage.coverage_counts.unknown:
+        reasons.add("unreconciled_egress_observation")
+    if coverage.coverage != "full":
+        reasons.add(f"coverage_not_full:{coverage.coverage}")
+    if coverage.coverage_counts.captured <= 0:
+        reasons.add("no_captured_inference_requests")
+    if (
+        "responses" not in coverage.certified_features
+        or "/v1/responses" not in coverage.observed_endpoints
+    ):
+        reasons.add("captured_responses_route_missing")
+    if coverage.mutation_blocked and not reasons:
+        reasons.add("coverage_receipt_blocks_promotion")
+    return reasons
+
+
+def _measurement_integrity_reasons(
+    coverage: GatewayCoverageReceipt,
+    item: LineRleShadowMeasurement,
+) -> tuple[set[str], bool]:
+    """Cross-check one measurement without allowing invalid evidence to disappear."""
+
+    reasons: set[str] = set()
+    try:
+        if item.task_snapshot_sha256 != coverage.system.task_snapshot_sha256:
+            reasons.add("measurement_task_snapshot_mismatch")
+        if item.price_table.model != coverage.system.model:
+            reasons.add("measurement_model_mismatch")
+        provider = item.price_table.provider.strip().casefold()
+        expected_providers = {
+            coverage.system.provider_id.strip().casefold(),
+            coverage.system.provider_name.strip().casefold(),
+        }
+        if not provider or provider not in expected_providers:
+            reasons.add("measurement_provider_mismatch")
+    except (AttributeError, TypeError, ValueError):
+        reasons.add("measurement_primitive_evidence_invalid")
+
+    try:
+        expected = item.recomputed_derived_values()
+    except (AttributeError, TypeError, ValueError):
+        return reasons | {"measurement_primitive_evidence_invalid"}, False
+    for field in (
+        "projected_original_input_usd",
+        "projected_candidate_input_usd",
+        "projected_input_savings_usd",
+    ):
+        try:
+            matches = math.isclose(
+                float(getattr(item, field)),
+                float(expected[field]),
+                rel_tol=0.0,
+                abs_tol=5e-13,
+            )
+        except (AttributeError, TypeError, ValueError):
+            matches = False
+        if not matches:
+            reasons.add(f"measurement_derived_value_mismatch:{field}")
+    for field in (
+        "cache_fields_exposed",
+        "cache_adjusted_candidate_is_cheaper",
+    ):
+        if getattr(item, field, None) is not expected[field]:
+            reasons.add(f"measurement_derived_value_mismatch:{field}")
+    return reasons, bool(expected["cache_adjusted_candidate_is_cheaper"])
 
 
 def _validate_provider_token_count(label: str, count: ProviderTokenCount) -> None:

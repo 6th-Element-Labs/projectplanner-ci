@@ -18,6 +18,7 @@ from .v1 import (
     ProviderPriceTable,
     ProviderTokenCount,
     ScanObservation,
+    recompute_compand_scan_decision,
 )
 
 __all__ = [
@@ -38,4 +39,5 @@ __all__ = [
     "ProviderPriceTable",
     "ProviderTokenCount",
     "ScanObservation",
+    "recompute_compand_scan_decision",
 ]
