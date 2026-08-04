@@ -707,22 +707,31 @@ def _arm_task_scope(task_id: str, *, project: str, role: str,
         "claude": "claude-code",
         "openai": "codex",
     }.get(str(runtime or "codex").strip().lower(), str(runtime or "codex"))
-    from switchboard.storage.repositories import autopilot_scopes as scopes_repo
+    from switchboard.application.commands import autopilot
     try:
-        live = scopes_repo.list_autopilot_scopes(
-            project=project, status="active,paused", limit=500,
-            include_last_result=False)
-        for row in live:
-            if (str(row.get("scope_type") or "") == "task"
-                    and str(row.get("task_id") or "").upper() == task_id):
-                return {"scope_id": row.get("scope_id"), "already_started": True}
-        started = scopes_repo.start_autopilot_scope(
-            project=project, scope_type="task", task_project=project,
-            task_id=task_id, runtime=scope_runtime, actor=actor)
+        # Use the same application command as REST/MCP.  That command creates
+        # the inert v4 mission inbox and its first event before publishing the
+        # scope.  Calling the repository here used to create an active W2 scope
+        # with no mission row, so every production tick returned
+        # ``mission_not_found`` forever.
+        started = autopilot.control_autopilot(
+            "",
+            project=project,
+            action="start",
+            scope_type="task",
+            task_project=project,
+            task_id=task_id,
+            runtime=scope_runtime,
+            actor=actor,
+        )["scope"]
     except Exception as exc:  # noqa: BLE001
         # Capacity already started; report the gap rather than failing the start
         # or silently pretending the task can drive itself.
-        return {"error": "scope_not_armed", "reason": str(exc)}
+        return {
+            "error": "scope_not_armed",
+            "reason": str(exc),
+            "cause": f"{type(exc).__name__}: {exc}",
+        }
     if started.get("error"):
         return {"error": "scope_not_armed", "reason": started.get("error")}
     return {"scope_id": started.get("scope_id"),

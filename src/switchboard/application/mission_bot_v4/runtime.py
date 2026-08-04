@@ -14,6 +14,7 @@ from typing import Any
 from switchboard.application.commands import (
     capacity_mission_events,
     github_mission_events,
+    mission_journal as mission_journal_commands,
     task_execution,
 )
 from switchboard.application.mission_bot_v4.worker import (
@@ -234,6 +235,7 @@ def run_scoped_mission_tick(
         task_project=project,
         task_id=task_id,
     ) or {}
+    mission_bootstrap: dict[str, Any] | None = None
     projection: dict[str, Any] | None = None
     review_handoff_projection: dict[str, Any] | None = None
     terminal_projection: dict[str, Any] | None = None
@@ -241,6 +243,74 @@ def run_scoped_mission_tick(
         task_reader = getattr(store_mod, "get_task", None)
         if not callable(task_reader):
             task_reader = tasks.get_task
+        task = task_reader(task_id, project=project) or {}
+        if journal.get_item(task_id, project=project) is None:
+            # COORD-127: scopes created by Task Execution before the v4 cutover
+            # can be live while their inert mission inbox is absent.  Repair
+            # only after the exact W2 holder/fence/target validates.  This
+            # mutation starts no process; the worker validates the same scope
+            # again immediately before its sole ``start_task`` effect.
+            boundary = ports.validate_scope(
+                dict(scope_authority),
+                project=project,
+                task_project=project,
+                task_id=task_id,
+            ) or {}
+            if boundary.get("allowed") is not True:
+                return {
+                    "schema": "switchboard.mission_worker_tick.v4",
+                    "task_id": task_id,
+                    "action": "wait",
+                    "reason": str(
+                        boundary.get("error") or "scope_authority_denied"),
+                    "reason_codes": list(boundary.get("reason_codes") or []),
+                    "mutations": 0,
+                }
+            if not task:
+                return {
+                    "schema": "switchboard.mission_worker_tick.v4",
+                    "task_id": task_id,
+                    "action": "block_release",
+                    "reason": "task_not_found",
+                    "release_blocked": True,
+                    "mutations": 0,
+                    "failure_class": "missing_data",
+                }
+            try:
+                created = journal.create_mission(
+                    task_id,
+                    project=project,
+                    requested_role=(
+                        mission_journal_commands.initial_requested_role(task)
+                    ),
+                )
+            except Exception as exc:  # noqa: BLE001 - preserve bootstrap cause
+                return {
+                    "schema": "switchboard.mission_worker_tick.v4",
+                    "task_id": task_id,
+                    "action": "block_release",
+                    "reason": "mission_bootstrap_failed",
+                    "release_blocked": True,
+                    "mutations": 0,
+                    "failure_class": "missing_data",
+                    "error": str(
+                        getattr(exc, "code", "mission_bootstrap_failed")),
+                    "message": str(exc),
+                }
+            mission_bootstrap = {
+                "schema": "switchboard.mission_bootstrap_repair.v1",
+                "repaired": True,
+                "task_id": task_id,
+                "project": project,
+                "scope_id": str(scope_authority.get("scope_id") or ""),
+                "scope_generation": int(
+                    scope_authority.get("generation") or 0),
+                "scope_fence": int(scope_authority.get("fence_epoch") or 0),
+                "requested_role": str(
+                    (created.get("mission") or {}).get("requested_role") or ""),
+                "event_sequence": int(
+                    (created.get("event") or {}).get("sequence") or 0),
+            }
         terminal_projection = project_terminal_provenance(
             task_id,
             project=project,
@@ -328,6 +398,8 @@ def run_scoped_mission_tick(
         result["review_handoff_projection"] = review_handoff_projection
     if terminal_projection is not None:
         result["terminal_projection"] = terminal_projection
+    if mission_bootstrap is not None:
+        result["mission_bootstrap"] = mission_bootstrap
     return result
 
 
