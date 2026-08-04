@@ -18,7 +18,8 @@ def test_bell_and_queue_share_the_authoritative_projection():
     attention = ATTENTION.read_text(encoding="utf-8")
     app = APP.read_text(encoding="utf-8")
     index = INDEX.read_text(encoding="utf-8")
-    assert "setCount(data.count)" in attention
+    assert "setCount(actionableCount)" in attention
+    assert "data.actionable_count" in attention
     assert "window.PMAttention = { load }" in attention
     assert "await window.PMAttention.load" in app
     assert 'aria-label="Open Needs-you queue"' in index
@@ -40,4 +41,7 @@ def test_completion_handoff_and_receipt_gated_states_are_explicit():
     assert "request.status === 'resolved' && request.delivery_receipt" in source
     assert "failed', 'expired', 'cancelled', 'orphaned" in source
     assert "if (delivering) return" in source
+    assert "ackable_by_viewer" in source
+    assert "manual_only" in source
+    assert "no automatic lifecycle action" in source
     assert "needs-custom" not in source

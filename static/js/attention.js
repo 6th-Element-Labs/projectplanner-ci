@@ -14,6 +14,7 @@
     let filter = 'all';
     let stateFilter = 'open';
     let searchText = '';
+    let actionableCount = 0;
     let tracked = null;
     let delivering = false;
     // The status line under the detail pane. renderDetail() rebuilds #needs-flash as an
@@ -33,6 +34,8 @@
     };
     const STATE = {
         pending: ['bg-yellow-lt', 'Needs decision'],
+        message: ['bg-secondary-lt', 'Communication'],
+        acknowledged: ['bg-secondary-lt', 'Acknowledged'],
         decision_recorded: ['bg-azure-lt', 'Resuming'],
         delivering: ['bg-azure-lt', 'Resuming'],
         resolved: ['bg-green-lt', 'Resumed'],
@@ -103,7 +106,8 @@
             const data = await res.json();
             if (!res.ok) throw new Error(apiError(data, res.status));
             items = data.items || [];
-            setCount(data.count);
+            actionableCount = Number(data.actionable_count == null ? data.count : data.actionable_count) || 0;
+            setCount(actionableCount);
         } catch (e) {
             if (renderQueue) list.innerHTML = `<div class="text-secondary p-3"><i class="ti ti-plug-connected-x me-1"></i>Could not load api/attention (${esc(e.message)})</div>`;
             return;
@@ -118,6 +122,10 @@
     }
 
     function stateKey(i) {
+        // Agent traffic is a durable operator-visible communication record.
+        // It remains in the Inbox after acknowledgement; the message store,
+        // not this read projection, owns its receipt state.
+        if (i.source === 'agent') return 'open';
         const status = String((i.payload || {}).status || 'pending').toLowerCase();
         if (status === 'decision_recorded' || status === 'delivering' || status === 'resolved') return 'resuming';
         if (['failed', 'expired', 'cancelled', 'orphaned'].includes(status)) return 'stopped';
@@ -167,7 +175,7 @@
         const sourceSelect = el('needs-source'); const stateSelect = el('needs-state-filter');
         const search = el('needs-search'); const deleteAllButton = el('needs-delete-all');
         if (!list || !detail) return;
-        if (cnt) cnt.textContent = String(items.length);
+        if (cnt) cnt.textContent = String(actionableCount);
 
         const counts = { all: items.length };
         Object.keys(SRC).forEach((k) => { counts[k] = items.filter((i) => i.source === k).length; });
@@ -237,6 +245,7 @@
                         ${p.deliverable_id ? ` · ${esc(p.deliverable_id)}` : ''}
                         ${p.pr_number ? ` · PR #${esc(p.pr_number)}` : ''}
                         ${p.head_sha ? ` · ${esc(String(p.head_sha).slice(0, 8))}` : ''}
+                        ${p.delivery_status ? ` · delivery ${esc(p.delivery_status)}` : ''}
                         ${i.delivery_impact ? ` · ${esc(i.delivery_impact)}` : ''}</div>
                     ${p.reason_code ? `<div class="small mt-1">${esc(p.reason_code)}</div>` : ''}
                 </button>`;
@@ -289,6 +298,8 @@
         const isInbox = it.source === 'inbox';
         const isProvider = it.source === 'provider' && Array.isArray(it.payload && it.payload.choices) && it.payload.choices.length;
         const p = it.payload || {};
+        const canAckAgentMessage = isAgent && p.ackable_by_viewer === true && it.decide;
+        const manualOnly = isProvider && p.manual_only === true;
         const completion = it.kind === 'completion_human';
         const wake = p.completion_wake || {};
         let state = STATE[p.status] || STATE.pending;
@@ -331,13 +342,19 @@
                 <details class="mb-3"><summary class="tk-eyebrow" style="cursor:pointer">Frozen payload</summary><div class="card card-sm mt-2"><div class="card-body p-3">${datagrid(p.frozen_payload)}</div></div></details>` :
                 `${section('Decision type and blast radius', { decision_type: it.kind, blast_radius: p.blast_radius })}
                  ${section('Evidence', p.evidence)}
+                 ${section('Message delivery', isAgent ? {
+                     recipient: p.recipient,
+                     status: p.delivery_status,
+                     receipt: p.delivery_receipt,
+                 } : null)}
                  ${section('Frozen payload', p.frozen_payload || p)}`}
-            ${isAgent ? `
+            ${canAckAgentMessage ? `
                 <div class="tk-eyebrow mb-2">Your answer</div>
                 <div class="d-flex gap-2 mb-2">
                     <input class="form-control" id="needs-reply" placeholder="Answer — recorded as the ack response; the sender's monitor resolves"/>
                     <button type="button" class="btn btn-primary" id="needs-ack"><i class="ti ti-send me-1"></i>Answer &amp; ack</button>
-                </div>` : isInbox ? `
+                </div>` : isAgent ? `
+                <div class="alert alert-secondary py-2 mb-2"><strong>Communication record.</strong> ${p.acknowledged ? 'This message has already been acknowledged.' : p.requires_ack ? `Directed to ${esc(p.recipient || 'another recipient')}; only that recipient can acknowledge it.` : 'No acknowledgement is required.'}</div>` : isInbox ? `
                 <div class="tk-eyebrow mb-2">Decide</div>
                 <div class="btn-list mb-2">
                     <button type="button" class="btn btn-primary" id="needs-confirm"><i class="ti ti-checks me-1"></i>Confirm — apply proposals</button>
@@ -347,7 +364,7 @@
                 <div class="tk-eyebrow mb-2">Decide</div>
                 <div class="btn-list mb-2">${choiceButtons}</div>
                 <div class="text-secondary small mb-2">Only the frozen choices above are authorized. Policy, permission, and blast-radius changes require a new audited request.</div>
-                <div class="text-secondary small mb-2">Resuming means the decision was accepted. Resumed appears only after a bound delivery/execution receipt.</div>
+                <div class="text-secondary small mb-2">${manualOnly ? esc(p.manual_only_explanation || 'This records the operator decision only; no automatic lifecycle action is authorized.') : 'Resuming means the decision was accepted. Resumed appears only after a bound delivery/execution receipt.'}</div>
                 ${['failed', 'expired', 'cancelled', 'orphaned'].includes(p.status) ? '<button type="button" class="btn btn-outline-danger" id="needs-recover"><i class="ti ti-refresh me-1"></i>Refresh recovery state</button>' : ''}` : `
                 <div class="tk-eyebrow mb-2">Authoritative source</div>
                 <div class="card card-sm mb-2"><div class="card-body p-2">${datagrid(it.links)}</div></div>
@@ -362,7 +379,7 @@
             <div class="text-secondary small mt-3 pt-2 border-top">Decisions and deletion route to the store that owns the alert.</div>`;
 
         const flash = setFlash;
-        if (isAgent) {
+        if (canAckAgentMessage) {
             const send = async () => {
                 const resp = (el('needs-reply').value || '').trim();
                 flash('Sending…');
@@ -433,7 +450,11 @@
                     });
                     renderDetail(detail, tracked);
                     const wake = data.completion_wake || {};
-                    if (completion && wake.status === 'failed') {
+                    if (manualOnly) {
+                        delivering = false;
+                        flash('Decision recorded — this escalation has no automatic lifecycle action.', 'text-secondary');
+                        setTimeout(() => load(), 900);
+                    } else if (completion && wake.status === 'failed') {
                         flash(`Decision recorded — wake retry queued${wake.last_error ? ': ' + wake.last_error : '.'}`, 'text-danger');
                         pollRequest(it.payload.request_id);
                     } else if (completion && wake.status === 'pending') {

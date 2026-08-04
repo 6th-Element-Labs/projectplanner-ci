@@ -5,7 +5,8 @@ into one normalized, ranked feed.  The feed is a projection only: every item
 keeps a stable pointer to its authoritative source and all decisions continue
 to route to that source's write API.
 
-  * ``agent_messages``  — unacked required messages (an agent is parked on you)
+  * ``agent_messages``  — bounded durable agent communication, with delivery and
+    acknowledgement truth kept explicit
   * ``inbox``           — pending triaged inbound (plan@taikunai.com, uploads)
 
 That legacy feed remains read-only: deciding an item routes to endpoints that own
@@ -44,6 +45,7 @@ ProjectResolver = Callable[[str], str]
 PrincipalResolver = Callable[..., dict]
 BodyProjectResolver = Callable[[dict], str]
 PendingAcksFn = Callable[..., List[Dict[str, Any]]]
+ListAgentMessagesFn = Callable[..., List[Dict[str, Any]]]
 ListInboxFn = Callable[..., List[Dict[str, Any]]]
 ListDeliverablesFn = Callable[..., List[Dict[str, Any]]]
 GetMissionStatusFn = Callable[..., Dict[str, Any]]
@@ -121,8 +123,26 @@ def _age_s(ts: Any) -> int:
         return 0
 
 
-def _agent_item(msg: Dict[str, Any]) -> Dict[str, Any]:
-    """An unacked required agent message — someone's session is parked on you."""
+def _agent_item(msg: Dict[str, Any], *, viewer: str = "") -> Dict[str, Any]:
+    """One durable agent communication, with explicit delivery/ack authority."""
+    recipient = str(msg.get("to_agent") or "")
+    requires_ack = bool(msg.get("requires_ack"))
+    acknowledged = msg.get("acked_at") is not None
+    # switchboard/operator is the durable human destination, not a fake Agent
+    # Host identity.  A signed-in operator may acknowledge that address, while
+    # every agent-to-agent message stays visible but read-only to the browser.
+    ackable_by_viewer = bool(
+        requires_ack and not acknowledged and recipient and (
+            recipient == str(viewer or "")
+            or recipient == "switchboard/operator"
+        )
+    )
+    status = (
+        "acknowledged" if acknowledged else
+        "pending" if requires_ack else
+        "message"
+    )
+    delivery = msg.get("delivery") if isinstance(msg.get("delivery"), dict) else {}
     return {
         "attention_id": f"message:{msg.get('id')}",
         "source_id": f"message:{msg.get('id')}",
@@ -135,19 +155,31 @@ def _agent_item(msg: Dict[str, Any]) -> Dict[str, Any]:
         "to": msg.get("to_agent") or "",
         "age_s": _age_s(msg.get("sent_at")),
         "deadline": msg.get("ack_deadline"),
-        "delivery_impact": "blocking",
+        "delivery_impact": "blocking" if requires_ack and not acknowledged else "none",
         "unfinished_downstream": int(msg.get("unfinished_downstream") or 0),
         "links": {
             "task": f"#task/{msg.get('task_id')}" if msg.get("task_id") else None,
             "provider": None, "host": msg.get("host_id"),
             "session": msg.get("runner_session_id") or msg.get("work_session_id"),
         },
-        "payload": {"message_id": msg.get("id"),
-                    "requires_ack": bool(msg.get("requires_ack")),
-                    "monitor": (msg.get("monitor") or {}).get("status") if isinstance(msg.get("monitor"), dict) else None},
-        # the write path that resolves this item (already exists today)
-        "decide": {"method": "POST", "path": "/api/agent_messages/ack",
-                   "body": {"message_id": msg.get("id"), "response": "<your answer>"}},
+        "payload": {
+            "message_id": msg.get("id"),
+            "requires_ack": requires_ack,
+            "acknowledged": acknowledged,
+            "ackable_by_viewer": ackable_by_viewer,
+            "recipient": recipient,
+            "status": status,
+            "monitor": (msg.get("monitor") or {}).get("status")
+            if isinstance(msg.get("monitor"), dict) else None,
+            "delivery_status": msg.get("delivery_status") or delivery.get("status"),
+            "delivery_receipt": msg.get("delivery_receipt"),
+        },
+        # The existing acknowledgement endpoint remains the owner of the
+        # message write.  Visibility never grants a browser permission to ack
+        # a message addressed to another agent.
+        "decide": ({"method": "POST", "path": "/api/agent_messages/ack",
+                    "body": {"message_id": msg.get("id"), "response": "<your answer>"}}
+                   if ackable_by_viewer else None),
     }
 
 
@@ -274,8 +306,11 @@ def _provider_item(item: Dict[str, Any]) -> Dict[str, Any]:
             "completed_work_summary": context.get("completed_work_summary"),
             "why_automation_stopped": context.get("why_automation_stopped"),
             "what_you_need_to_do": context.get("what_you_need_to_do"),
+            "minimum_decision": context.get("minimum_decision"),
             "resume_condition": context.get("resume_condition"),
             "next_automatic_action": context.get("next_automatic_action"),
+            "manual_only": bool(context.get("manual_only")),
+            "manual_only_explanation": context.get("manual_only_explanation"),
             "evidence": context.get("evidence") or context.get("evidence_refs"),
             "blast_radius": context.get("blast_radius"),
             "frozen_payload": context,
@@ -415,6 +450,7 @@ def create_router(*, resolve_project: ProjectResolver,
                   resolve_body_project: BodyProjectResolver,
                   list_pending_acks: PendingAcksFn,
                   list_inbox: ListInboxFn,
+                  list_agent_messages: Optional[ListAgentMessagesFn] = None,
                   list_deliverables: Optional[ListDeliverablesFn] = None,
                   get_mission_status: Optional[GetMissionStatusFn] = None,
                   list_decisions: Optional[ListDecisionsFn] = None,
@@ -431,8 +467,13 @@ def create_router(*, resolve_project: ProjectResolver,
         me = agent_id or auth.actor(principal)
 
         items: List[Dict[str, Any]] = []
-        for msg in list_pending_acks(agent_id=me, project=proj):
-            items.append(_agent_item(msg))
+        messages = (
+            list_agent_messages(project=proj, limit=500)
+            if list_agent_messages is not None
+            else list_pending_acks(agent_id="", project=proj)
+        )
+        for msg in messages:
+            items.append(_agent_item(msg, viewer=me))
         for it in list_inbox("pending", project=proj):
             items.append(_inbox_item(it))
         provider_queue = service.list_operator_queue(
@@ -472,8 +513,17 @@ def create_router(*, resolve_project: ProjectResolver,
             for source in ("provider", "agent", "inbox", "mission", "decision",
                            "runner")
         }
+        # The operator can replay all agent communication here, but the bell
+        # remains an honest action count rather than growing with read-only
+        # history or a message addressed to another runner.
+        actionable_count = sum(
+            1 for item in items
+            if item["source"] != "agent"
+            or bool((item.get("payload") or {}).get("ackable_by_viewer"))
+        )
         return {"schema": ATTENTION_PROJECTION_SCHEMA, "project": proj,
-                "count": len(items), "items": items, "sources": sources}
+                "count": len(items), "actionable_count": actionable_count,
+                "items": items, "sources": sources}
 
     @router.get("/api/attention/requests")
     async def list_attention_requests(

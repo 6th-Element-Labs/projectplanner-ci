@@ -24,6 +24,7 @@ os.environ["PM_REVIEW_REMEDIATION_MAX_ROUNDS"] = "1"
 
 import store  # noqa: E402
 from db.connection import _conn  # noqa: E402
+from switchboard.application.attention import default_attention_service  # noqa: E402
 from switchboard.application.commands import mission_journal as mission_journal_commands  # noqa: E402
 from switchboard.application.commands import review_verdicts  # noqa: E402
 from switchboard.application.mission_bot_v4.worker import (  # noqa: E402
@@ -33,6 +34,10 @@ from switchboard.application.mission_bot_v4.worker import (  # noqa: E402
 from switchboard.storage.repositories.mission_journal import (  # noqa: E402
     default_mission_journal_repository as journal,
 )
+from switchboard.storage.repositories.review_remediations import (  # noqa: E402
+    default_review_remediation_repository,
+)
+from switchboard.domain.projects.context import ProjectContext  # noqa: E402
 
 
 PROJECT = "switchboard"
@@ -169,6 +174,51 @@ class HumanEscalationStopTest(unittest.TestCase):
             f"review-remediation:{remediation['remediation_id']}",
             human_events[0]["external_ref"],
         )
+        alert = remediation["operator_alert"]["request"]
+        self.assertEqual(
+            f"review-remediation:{remediation['remediation_id']}",
+            alert["request_id"],
+        )
+        self.assertEqual("switchboard.coordinator_escalation", alert["provider"])
+        self.assertTrue(alert["context"]["manual_only"])
+        self.assertEqual(
+            remediation["mission_human_hold"]["human_request_id"],
+            alert["request_id"],
+        )
+        self.assertTrue(alert["choices"])
+        self.assertIn("minimum_decision", alert["context"])
+
+        # The alert is an operator-visible record, not a second mission-Human
+        # decision authority.  Its acknowledgement cannot unpark or launch.
+        decision = default_attention_service.decide(
+            ProjectContext(
+                project_id=PROJECT,
+                source="test",
+                principal_id="principal/operator",
+                effective_scopes=("write:ixp",),
+            ),
+            alert["request_id"],
+            {
+                "expected_version": 1,
+                "choice": {"id": alert["choices"][0]["id"]},
+                "idempotency_key": "coord126-manual-alert",
+            },
+            actor="operator",
+        )
+        self.assertEqual("decision_recorded", decision["request"]["status"])
+        self.assertNotIn("mission", decision)
+        self.assertEqual("HUMAN", journal.get_item(task_id, project=PROJECT)["state"])
+        replay_verdict = dict(_verdict(task_id, HEAD_2, "COORD126-2"))
+        replay_verdict["verdict_id"] = remediation["verdict_id"]
+        replay = default_review_remediation_repository.handle_verdict(
+            replay_verdict, actor=REVIEWER, project=PROJECT)
+        self.assertTrue(replay["operator_alert"]["idempotent_replay"])
+        with _conn(PROJECT) as connection:
+            alert_count = connection.execute(
+                "SELECT COUNT(*) FROM attention_requests WHERE request_id=?",
+                (alert["request_id"],),
+            ).fetchone()[0]
+        self.assertEqual(1, alert_count)
 
         self._register_review_runner(task_id)
         before = journal.get_item(task_id, project=PROJECT)

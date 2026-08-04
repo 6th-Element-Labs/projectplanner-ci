@@ -24,6 +24,7 @@ from switchboard.domain.completion.repair_proof import (
 from switchboard.storage.repositories.coordination import (
     deliver_coordination_escalation,
 )
+from switchboard.storage.repositories import attention as attention_repo
 from switchboard.storage.repositories.mission_journal import (
     default_mission_journal_repository,
 )
@@ -578,6 +579,155 @@ def required_review_mode_in(c: sqlite3.Connection, task_id: str,
 class ReviewRemediationRepository:
     """Project-scoped review-remediation state and side-effect orchestration."""
 
+    @staticmethod
+    def _human_escalation_plan(
+            remediation: Mapping[str, Any], *, project: str) -> dict[str, Any]:
+        """Build the one frozen operator decision for an escalated review.
+
+        The plan is coordination evidence.  It does not carry a start, retry,
+        wake, or lease command: Mission Bot remains parked on the already
+        recorded Human journal fact until an operator explicitly resolves the
+        underlying work through its owner.
+        """
+        import coordinator_escalation
+
+        reason = str(
+            remediation.get("escalation_reason")
+            or "review_remediation_exception"
+        )
+        escalation_class = (
+            "unreachable_agent_no_host" if reason == "wake_failed" else
+            "repeated_failures" if reason == "round_budget_exhausted" else
+            "policy_violation" if reason in {
+                "active_claim_conflict", "terminal_task_conflict",
+            } else
+            "ambiguous_requirements"
+        )
+        plan = coordinator_escalation.build_escalation_plan(
+            escalation_class=escalation_class,
+            project=project,
+            task_id=str(remediation.get("task_id") or ""),
+            failed_condition=(
+                "Review remediation "
+                f"{remediation.get('remediation_id')} requires a human: {reason}."
+            ),
+            source={"kind": "review_remediation", "remediation": dict(remediation)},
+            blocks=(
+                ["merge", "dispatch"]
+                if not remediation.get("acceptance_criteria") else ["merge"]
+            ),
+        )
+        if not plan:
+            raise ValueError("review remediation escalation plan is invalid")
+        return plan
+
+    @staticmethod
+    def _human_escalation_attention_data(
+            remediation: Mapping[str, Any], *, project: str) -> dict[str, Any]:
+        """Project an existing Human hold into the established Attention store.
+
+        This is deliberately a manual-only projection.  Recording its choice
+        is useful operator evidence, but cannot unpark the mission, control a
+        runner, or initiate another remediation round.
+        """
+        plan = ReviewRemediationRepository._human_escalation_plan(
+            remediation, project=project)
+        remediation_id = str(remediation.get("remediation_id") or "").strip()
+        request_id = f"review-remediation:{remediation_id}"
+        choices = list(plan.get("recommended_choices") or [])
+        if not remediation_id or not choices:
+            raise ValueError("review remediation human alert lacks identity or choices")
+        minimum_decision = str(plan.get("minimum_decision") or "").strip()
+        failed_condition = str(plan.get("failed_condition") or "").strip()
+        return {
+            "request_id": request_id,
+            "task_id": str(remediation.get("task_id") or "").strip(),
+            "provider": "switchboard.coordinator_escalation",
+            "provider_request_id": request_id,
+            "schema_version": "switchboard.coordinator_human_escalation.v1",
+            "prompt": failed_condition,
+            "choices": choices,
+            "recommended_default": {"id": str(choices[0].get("id") or "")},
+            "idempotency_key": request_id,
+            # This is a named human destination, not a host binding or an
+            # instruction to launch a Capacity-plane runtime.
+            "host_id": "switchboard/operator",
+            "context": {
+                "schema": "switchboard.coordinator_human_escalation.v1",
+                "manual_only": True,
+                "manual_only_explanation": (
+                    "This records the operator decision only. It cannot start, "
+                    "stop, retry, wake, or resume work."
+                ),
+                "task_id": str(remediation.get("task_id") or "").strip(),
+                "remediation_id": remediation_id,
+                "verdict_id": str(remediation.get("verdict_id") or "").strip(),
+                "round": remediation.get("round_no"),
+                "max_rounds": remediation.get("max_rounds"),
+                "reason_code": str(remediation.get("escalation_reason") or ""),
+                "head_sha": str(remediation.get("source_head_sha") or "").strip(),
+                "pr_url": str(remediation.get("source_pr_url") or "").strip(),
+                "failed_condition": failed_condition,
+                "minimum_decision": minimum_decision,
+                "why_automation_stopped": failed_condition,
+                "what_you_need_to_do": minimum_decision,
+                "next_automatic_action": "None — this escalation is manual-only.",
+                "blocks": list(plan.get("blocks") or []),
+                "escalation_class": plan.get("escalation_class"),
+                "failure_class": plan.get("failure_class"),
+                "evidence": {
+                    "review_remediation_id": remediation_id,
+                    "review_verdict_id": str(remediation.get("verdict_id") or ""),
+                    "escalation_signature": plan.get("signature"),
+                },
+            },
+        }
+
+    @staticmethod
+    def _project_human_escalation(
+            remediation: Mapping[str, Any], *, actor: str,
+            project: str) -> dict[str, Any]:
+        """Backfill a durable alert for a pre-existing escalated remediation.
+
+        New escalations write their hold and alert together below.  This small
+        idempotent path means reprocessing an older verdict (such as the
+        DOGFOOD-32 incident) repairs its missing UI projection without
+        creating a second lifecycle or messaging authority.
+        """
+        remediation_id = str(remediation.get("remediation_id") or "").strip()
+        request_id = f"review-remediation:{remediation_id}"
+        task_id = str(remediation.get("task_id") or "").strip()
+
+        def persist() -> dict[str, Any]:
+            with _conn(project) as connection:
+                existing_row = connection.execute(
+                    "SELECT provider, task_id FROM attention_requests "
+                    "WHERE request_id=? AND project_id=?",
+                    (request_id, project),
+                ).fetchone()
+                if existing_row:
+                    if (
+                        str(existing_row["provider"] or "")
+                        != "switchboard.coordinator_escalation"
+                        or str(existing_row["task_id"] or "") != task_id
+                    ):
+                        raise ValueError(
+                            "review remediation alert identity conflicts with "
+                            "the existing attention request"
+                        )
+                    return {
+                        "created": False,
+                        "idempotent_replay": True,
+                        "request": attention_repo.get_attention_request_in(
+                            connection, request_id, project=project),
+                    }
+                data = ReviewRemediationRepository._human_escalation_attention_data(
+                    remediation, project=project)
+                return attention_repo.create_attention_request_in(
+                    connection, data, project=project, actor=actor)
+
+        return _write_through(project, persist)
+
     def resolve_cross_task_repair(
             self, repair_task_id: str, *, actor: str,
             project: str = DEFAULT_PROJECT) -> dict[str, Any]:
@@ -699,6 +849,9 @@ class ReviewRemediationRepository:
             staged["needs_wake"] = False
             staged["needs_lifecycle_ensure"] = True
         if staged.get("escalation_required"):
+            if "operator_alert" not in staged:
+                staged["operator_alert"] = self._project_human_escalation(
+                    staged, actor="switchboard/auto-remediation", project=project)
             staged["human_escalation"] = self._deliver_escalation(
                 staged, actor=actor, project=project)
         return staged
@@ -959,31 +1112,24 @@ class ReviewRemediationRepository:
                     now=now,
                 )
                 result["mission_human_hold"] = human_hold
+                # The hold is Coordination truth.  Its operator alert is an
+                # atomic, manual-only Attention projection: it cannot race C3
+                # into a start/stop/retry path or replace the directed message
+                # as Communication delivery evidence.
+                result["operator_alert"] = attention_repo.create_attention_request_in(
+                    c,
+                    self._human_escalation_attention_data(result, project=project),
+                    project=project,
+                    actor="switchboard/auto-remediation",
+                    now=now,
+                )
             return result
 
     @staticmethod
     def _deliver_escalation(remediation: Mapping[str, Any], *, actor: str,
                             project: str) -> dict[str, Any]:
-        import coordinator_escalation
-        reason = str(remediation.get("escalation_reason") or "review_remediation_exception")
-        klass = (
-            "unreachable_agent_no_host" if reason == "wake_failed" else
-            "repeated_failures" if reason == "round_budget_exhausted" else
-            "policy_violation" if reason in {"active_claim_conflict", "terminal_task_conflict"} else
-            "ambiguous_requirements"
-        )
-        plan = coordinator_escalation.build_escalation_plan(
-            escalation_class=klass,
-            project=project,
-            task_id=str(remediation.get("task_id") or ""),
-            failed_condition=(
-                f"Review remediation {remediation.get('remediation_id')} requires a human: {reason}."
-            ),
-            source={"kind": "review_remediation", "remediation": dict(remediation)},
-            blocks=["merge", "dispatch"] if not remediation.get("acceptance_criteria") else ["merge"],
-        )
-        if not plan:
-            return {"ok": False, "delivered": False, "error": "escalation_plan_failed"}
+        plan = ReviewRemediationRepository._human_escalation_plan(
+            remediation, project=project)
         return deliver_coordination_escalation(
             plan, actor="switchboard/auto-remediation", notify_outbound=False,
         )

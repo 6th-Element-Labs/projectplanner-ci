@@ -107,6 +107,17 @@ created = default_attention_repository.create_request({
     },
 }, actor="ui41-browser", project="switchboard")
 request_id = created["request"]["request_id"]
+operator_message = store.send_agent_message(
+    "ui41-runner",
+    "switchboard/operator",
+    "The exact worker needs an operator decision.",
+    task_id=task_id,
+    requires_ack=True,
+    signal="coordinator_escalation",
+    priority=95,
+    idem_key="ui41-operator-message",
+    project="switchboard",
+)
 
 with socket.socket() as sock:
     sock.bind(("127.0.0.1", 0))
@@ -163,10 +174,23 @@ try:
         page.on("console", lambda message: errors.append(message.text)
                 if message.type == "error" else None)
         page.goto(base + "/?project=switchboard", wait_until="domcontentloaded")
-        page.wait_for_function("document.querySelector('#ack-inbox-count').textContent === '1'")
+        page.wait_for_function("document.querySelector('#ack-inbox-count').textContent === '2'")
         page.locator("#btn-ack-inbox").click()
         page.wait_for_selector("#tab-inbox-hub", state="visible")
         page.wait_for_selector("#tab-needs.active")
+        page.locator(f'[data-nid="message:{operator_message["id"]}"]').click()
+        # ``switchboard/operator`` is the durable human destination, so this
+        # directed message is answerable rather than the read-only history
+        # panel used for agent-to-agent traffic.
+        page.wait_for_selector("#needs-ack", state="visible")
+        assert page.locator("#needs-ack").is_visible()
+        with page.expect_response(
+            lambda response: "/api/agent_messages/ack" in response.url
+        ) as message_ack_response:
+            page.locator("#needs-ack").click()
+        assert message_ack_response.value.ok, message_ack_response.value.text()
+        page.wait_for_function("document.querySelector('#ack-inbox-count').textContent === '1'")
+        page.locator('[data-nid^="provider:"]').click()
         page.wait_for_selector("text=Implementation complete, human action required")
         assert page.locator('[data-nid^="provider:"]').count() == 1
         assert page.locator("#needs-delete").is_visible()

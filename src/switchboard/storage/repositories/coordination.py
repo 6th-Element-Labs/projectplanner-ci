@@ -3301,9 +3301,39 @@ def list_agent_messages(project: str = DEFAULT_PROJECT, *, limit: int = 500,
         inner += " LIMIT ?"; p.append(int(limit))
     # Take the newest window (inner, DESC) then re-sort ascending for display.
     q = f"SELECT * FROM ({inner}) ORDER BY sent_at ASC, id ASC"
+    now = time.time()
     with _conn(project) as c:
         rows = c.execute(q, p).fetchall()
-    return [dict(r) for r in rows]
+        return [_message_with_delivery_in(c, r, now=now) for r in rows]
+
+
+def _message_with_delivery_in(
+        connection: sqlite3.Connection, row: sqlite3.Row, *, now: float,
+) -> Dict[str, Any]:
+    """Attach Communication-plane truth to one persisted message.
+
+    The same durable message is used by the coordination history and the
+    operator Inbox projection.  Enriching it here means neither surface has to
+    infer that mailbox storage was a runtime delivery.
+    """
+    message = dict(row)
+    message_id = int(row["id"])
+    message["monitor"] = _load_monitor_for_message(connection, message_id)
+    message["mailbox_stored"] = True
+    message["delivery"] = _agent_delivery_state(
+        connection, message.get("to_agent") or "", now)
+    message["delivery_status"] = message["delivery"]["status"]
+    task_exists = bool(
+        message.get("task_id") and connection.execute(
+            "SELECT 1 FROM tasks WHERE task_id=?", (message["task_id"],)
+        ).fetchone()
+    )
+    message["delivery_receipt"] = build_message_delivery_receipt(
+        message["delivery"],
+        task_comment=(not message["delivery"].get("reachable") and task_exists),
+        acked_at=message.get("acked_at"),
+    )
+    return message
 
 def get_message_status(message_id: int, project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
     """Sender polls this to see whether a message has been acked."""
@@ -3312,22 +3342,7 @@ def get_message_status(message_id: int, project: str = DEFAULT_PROJECT) -> Optio
         r = c.execute("SELECT * FROM agent_messages WHERE id=?", (message_id,)).fetchone()
         if not r:
             return None
-        out = dict(r)
-        out["monitor"] = _load_monitor_for_message(c, message_id)
-        out["mailbox_stored"] = True
-        out["delivery"] = _agent_delivery_state(c, out.get("to_agent") or "", now)
-        out["delivery_status"] = out["delivery"]["status"]
-        task_exists = bool(
-            out.get("task_id") and c.execute(
-                "SELECT 1 FROM tasks WHERE task_id=?", (out["task_id"],)
-            ).fetchone()
-        )
-        out["delivery_receipt"] = build_message_delivery_receipt(
-            out["delivery"],
-            task_comment=(not out["delivery"].get("reachable") and task_exists),
-            acked_at=out.get("acked_at"),
-        )
-        return out
+        return _message_with_delivery_in(c, r, now=now)
 
 def list_pending_acks(agent_id: str = "", project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
     """Unacked required messages plus their durable monitor state."""
@@ -3339,12 +3354,8 @@ def list_pending_acks(agent_id: str = "", project: str = DEFAULT_PROJECT) -> Lis
     q += " ORDER BY COALESCE(ack_deadline, 9999999999999), priority DESC, id"
     with _conn(project) as c:
         rows = c.execute(q, params).fetchall()
-        out = []
-        for r in rows:
-            msg = dict(r)
-            msg["monitor"] = _load_monitor_for_message(c, int(r["id"]))
-            out.append(msg)
-        return out
+        now = time.time()
+        return [_message_with_delivery_in(c, r, now=now) for r in rows]
 
 def list_coordination_monitors(status: str = "", kind: str = "", task_id: str = "",
                                project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:

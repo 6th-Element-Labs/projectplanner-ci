@@ -12,13 +12,32 @@ from switchboard.api.routers.attention import (
 def test_agent_item_carries_the_decide_contract():
     it = _agent_item({"id": 7, "message": "which loader?", "from_agent": "atlas",
                       "to_agent": "web", "task_id": "ENGINE-9", "requires_ack": 1,
-                      "sent_at": 0, "monitor": {"status": "pending"}})
+                      "sent_at": 0, "monitor": {"status": "pending"}}, viewer="web")
     assert it["attention_id"] == "message:7"
     assert it["source"] == "agent"
     assert it["task_id"] == "ENGINE-9"
     assert it["decide"]["path"] == "/api/agent_messages/ack"
     assert it["decide"]["body"]["message_id"] == 7
     assert it["payload"]["monitor"] == "pending"
+    assert it["payload"]["ackable_by_viewer"] is True
+
+
+def test_agent_item_shows_other_agent_traffic_without_granting_ack_authority():
+    it = _agent_item({
+        "id": 8, "message": "review generation started", "from_agent": "runner/a",
+        "to_agent": "runner/b", "task_id": "ENGINE-9", "requires_ack": 1,
+        "sent_at": 0, "delivery_status": "unreachable",
+    }, viewer="web")
+    assert it["payload"]["delivery_status"] == "unreachable"
+    assert it["payload"]["ackable_by_viewer"] is False
+    assert it["decide"] is None
+
+    operator = _agent_item({
+        "id": 9, "message": "Human decision required", "from_agent": "runner/a",
+        "to_agent": "switchboard/operator", "requires_ack": 1, "sent_at": 0,
+    }, viewer="web")
+    assert operator["payload"]["ackable_by_viewer"] is True
+    assert operator["decide"]["path"] == "/api/agent_messages/ack"
 
 
 def test_inbox_item_summarizes_triage_and_routes_to_confirm():
@@ -35,7 +54,8 @@ def test_inbox_item_summarizes_triage_and_routes_to_confirm():
 
 
 def test_rank_is_impact_then_downstream_then_deadline_then_age():
-    blocking = _agent_item({"id": 1, "message": "q", "sent_at": 20})
+    blocking = _agent_item({"id": 1, "message": "q", "sent_at": 20,
+                            "requires_ack": True})
     risky = _inbox_item({"id": 2, "subject": "s", "received_at": 10,
                          "triage": {"proposals": [{"task_id": "A"}] * 9}})
     assert sorted([risky, blocking], key=_rank)[0]["source"] == "agent"
@@ -110,9 +130,7 @@ def test_projection_is_project_scoped_counts_sources_and_tracks_source_transitio
             "effective_scopes": ["read"],
         },
         resolve_body_project=lambda body: body["project"],
-        list_pending_acks=lambda **kwargs: [{
-            "id": 9, "message": "Ack", "requires_ack": True, "sent_at": 20,
-        }] if kwargs["project"] == "switchboard" else [],
+        list_pending_acks=lambda **_kwargs: AssertionError("legacy pending filter used"),
         list_inbox=lambda status, project: [{
             "id": 4, "subject": "Review", "received_at": 30, "triage": {},
         }] if status == "pending" and project == "switchboard" else [],
@@ -125,26 +143,39 @@ def test_projection_is_project_scoped_counts_sources_and_tracks_source_transitio
         list_decisions=lambda **kwargs: [{
             "id": 2, "title": "Open", "status": "proposed",
         }] if kwargs["project"] == "switchboard" and kwargs["status"] == "proposed" else [],
+        list_agent_messages=lambda **kwargs: [
+            {"id": 9, "message": "Ack", "requires_ack": True, "sent_at": 20,
+             "to_agent": "switchboard/operator", "delivery_status": "unreachable"},
+            {"id": 10, "message": "FYI", "requires_ack": False, "sent_at": 21,
+             "to_agent": "runner/other", "delivery_status": "stored"},
+        ] if kwargs["project"] == "switchboard" else [],
         service=service,
     ))
     client = TestClient(app)
     first = client.get("/api/attention?project=switchboard").json()
     assert first["schema"] == "switchboard.attention_projection.v1"
-    assert first["count"] == 5
+    assert first["count"] == 6
+    assert first["actionable_count"] == 5
     assert first["sources"] == {
-        "provider": 1, "agent": 1, "inbox": 1, "mission": 1, "decision": 1,
+        "provider": 1, "agent": 2, "inbox": 1, "mission": 1, "decision": 1,
         "runner": 0,
     }
     assert len({item["source_id"] for item in first["items"]}) == first["count"]
+    agent_items = [item for item in first["items"] if item["source"] == "agent"]
+    assert {item["source_id"] for item in agent_items} == {"message:9", "message:10"}
+    assert next(item for item in agent_items if item["source_id"] == "message:9")["decide"]
+    assert next(item for item in agent_items if item["source_id"] == "message:10")["decide"] is None
 
     service.items = []  # authoritative provider transition: no shadow queue record remains
     second = client.get("/api/attention?project=switchboard").json()
-    assert second["count"] == 4
+    assert second["count"] == 5
+    assert second["actionable_count"] == 4
     assert second["sources"]["provider"] == 0
 
 
 if __name__ == "__main__":
     test_agent_item_carries_the_decide_contract()
+    test_agent_item_shows_other_agent_traffic_without_granting_ack_authority()
     test_inbox_item_summarizes_triage_and_routes_to_confirm()
     test_rank_is_impact_then_downstream_then_deadline_then_age()
     test_rank_prefers_deadlines_then_breadth_within_a_source()
