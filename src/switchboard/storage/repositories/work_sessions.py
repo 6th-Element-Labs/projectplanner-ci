@@ -368,7 +368,12 @@ def _work_session_health(session: Dict[str, Any],
     status = (session.get("status") or "").strip().lower()
     dirty = (session.get("dirty_status") or "unknown").strip().lower()
     path = session.get("worktree_path") or session.get("clone_path") or ""
-    preflight = ((session.get("hygiene") or {}).get("repo_preflight") or {})
+    preflight = (session.get("hygiene") or {}).get("repo_preflight")
+    if not isinstance(preflight, dict):
+        # Legacy rows may carry a scalar (e.g. true) written before the payload
+        # validator enforced the report shape; treat it as no recorded preflight
+        # so the missing_work_session_preflight finding stays visible.
+        preflight = {}
 
     if status == "active" and session.get("expires_at") and float(session.get("expires_at") or 0) < now:
         findings.append(_session_health_finding(
@@ -666,6 +671,14 @@ def _validate_work_session_payload(payload: Dict[str, Any], project: str,
         parsed, err = _work_session_json(value, default, expected, public_key)
         if err:
             errors.append(err)
+        if public_key == "hygiene" and isinstance(parsed, dict):
+            # A bare true/"clean" is not a preflight attestation; storing it made
+            # every health read of the project crash on preflight.get(...).
+            preflight = parsed.get("repo_preflight")
+            if preflight is not None and not isinstance(preflight, dict):
+                errors.append(
+                    "hygiene.repo_preflight must be a repo preflight report object "
+                    "(run preflight_work_session); scalar values are not attestations")
         normalized[stored_key] = json.dumps(parsed, sort_keys=True)
 
     if not partial or "expires_at" in payload:
