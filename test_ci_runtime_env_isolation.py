@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 
 
 ROOT = Path(__file__).resolve().parent
@@ -114,6 +115,31 @@ ok(observed["preserved"] == {
     "PATH": environment["PATH"],
     "SWITCHBOARD_CI_STRICT": "1",
 }, "ordinary process and CI controls are preserved")
+
+with tempfile.TemporaryDirectory(prefix="bug293-ci-boundary-") as probe_dir:
+    probe_path = Path(probe_dir) / "test_ci_boundary_probe.py"
+    probe_path.write_text(
+        "import os\n"
+        "raise SystemExit(0 if os.environ.get('PM_AGENT_HOST_VERSION') is None else 1)\n",
+        encoding="utf-8",
+    )
+    boundary_environment = os.environ.copy()
+    boundary_environment.update({
+        "PM_AGENT_HOST_VERSION": "poison-live-host-version",
+        "PYTHON": sys.executable,
+        "SWITCHBOARD_CI_RESULTS": probe_dir,
+    })
+    boundary = subprocess.run(
+        ["bash", str(CI_SCRIPT), "__run_one", str(probe_path)],
+        cwd=ROOT,
+        env=boundary_environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+ok(boundary.returncode == 0 and f"PASS  {probe_path}" in boundary.stdout,
+   "the canonical CI worker boundary drops the live Agent Host version")
 
 ci_source = CI_SCRIPT.read_text(encoding="utf-8")
 ok('scripts/ci_runtime_env.sh' in ci_source,
