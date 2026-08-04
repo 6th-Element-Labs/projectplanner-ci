@@ -36,7 +36,7 @@ class SingleWriterSchemaFdTest(unittest.TestCase):
             self.assertIsNone(returning.fetchone())
             reader.close()
 
-    def test_all_builtin_projects_initialize_under_256_fd_limit(self):
+    def test_builtin_and_dynamic_projects_initialize_under_256_fd_limit(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             env = os.environ.copy()
             env.update({
@@ -62,6 +62,15 @@ class SingleWriterSchemaFdTest(unittest.TestCase):
                     for project in ("maxwell", "helm", "switchboard"):
                         store.init_db(project)
                         counts[project] = len(os.listdir("/dev/fd"))
+                    for project in ("dynamic-one", "dynamic-two"):
+                        created = store.create_project(
+                            project.replace("-", " ").title(),
+                            project_id=project,
+                            actor="BUG-292/test",
+                        )
+                        if not created.get("created"):
+                            raise RuntimeError(created)
+                        counts[project] = len(os.listdir("/dev/fd"))
                     print(json.dumps(counts, sort_keys=True))
                 """)],
                 cwd=ROOT,
@@ -73,6 +82,8 @@ class SingleWriterSchemaFdTest(unittest.TestCase):
 
         self.assertEqual(child.returncode, 0, child.stderr or child.stdout)
         counts = json.loads(child.stdout.strip().splitlines()[-1])
+        self.assertIn("dynamic-one", counts)
+        self.assertIn("dynamic-two", counts)
         self.assertLess(
             max(counts.values()),
             64,
