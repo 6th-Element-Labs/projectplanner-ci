@@ -29,6 +29,12 @@ SELF="$ROOT/scripts/switchboard_ci.sh"
 # Parallelism for the Python suite. Every test file is hermetic — it points the store at its
 # own tempfile.mkdtemp DB (PM_*_DB_PATH) and binds no fixed port — so files run concurrently
 # with no shared-state contention. Override with SWITCHBOARD_CI_JOBS; default = CPU count.
+#
+# Multiple managed workspaces can run this gate on one Agent Host at the same time. Their
+# per-gate xargs pools therefore share a host-wide advisory slot pool, rather than each
+# independently consuming the full CPU count. This keeps private Uvicorn/Chromium startup
+# responsive under canonical parallel CI without weakening readiness assertions or skipping
+# browser tests. Override the aggregate ceiling with SWITCHBOARD_CI_HOST_JOBS.
 _cpu_count() {
   if command -v nproc >/dev/null 2>&1; then nproc
   elif command -v getconf >/dev/null 2>&1; then getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4
@@ -37,6 +43,24 @@ _cpu_count() {
   fi
 }
 JOBS="${SWITCHBOARD_CI_JOBS:-$(_cpu_count)}"
+HOST_JOBS="${SWITCHBOARD_CI_HOST_JOBS:-$(_cpu_count)}"
+BROWSER_WEIGHT="${SWITCHBOARD_CI_BROWSER_WEIGHT:-4}"
+
+case "$HOST_JOBS" in
+  ''|*[!0-9]*|0)
+    echo "Unsupported SWITCHBOARD_CI_HOST_JOBS=$HOST_JOBS (expected a positive integer)." >&2
+    exit 2
+    ;;
+esac
+case "$BROWSER_WEIGHT" in
+  ''|*[!0-9]*|0)
+    echo "Unsupported SWITCHBOARD_CI_BROWSER_WEIGHT=$BROWSER_WEIGHT (expected a positive integer)." >&2
+    exit 2
+    ;;
+esac
+if [ "$BROWSER_WEIGHT" -gt "$HOST_JOBS" ]; then
+  BROWSER_WEIGHT="$HOST_JOBS"
+fi
 
 section() {
   printf '\n== %s ==\n' "$1"
@@ -48,9 +72,13 @@ section() {
 # the remaining suite instead of aborting on the first red test.
 _run_one_test() {
   local test_file="$1"
-  local safe out rc
+  local safe out rc weight=1
   safe="$(printf '%s' "$test_file" | tr '/.' '__')"
-  if out="$("$PYTHON" "$test_file" 2>&1)"; then
+  case "$test_file" in
+    tests/browser/*) weight="$BROWSER_WEIGHT" ;;
+  esac
+  if out="$("$PYTHON" scripts/ci_host_slot.py --slots "$HOST_JOBS" --weight "$weight" -- \
+      "$PYTHON" "$test_file" 2>&1)"; then
     printf 'PASS  %s\n' "$test_file"
   else
     rc=$?
@@ -128,7 +156,7 @@ run_discovered_tests() {
     return 1
   fi
 
-  section "Python tests — ${total} files, ${JOBS}-way parallel (${SCOPE})"
+  section "Python tests — ${total} files, ${JOBS}-way local / ${HOST_JOBS}-slot host (${SCOPE}; browser weight ${BROWSER_WEIGHT})"
   # One worker process per file, JOBS at a time. Workers self-report and always exit 0
   # (recording failures as files), so the whole suite runs even when some tests are red.
   SWITCHBOARD_CI_RESULTS="$results_dir" \
