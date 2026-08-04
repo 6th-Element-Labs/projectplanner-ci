@@ -86,6 +86,13 @@ def declared_tool_names() -> tuple[set[str], dict[str, set[str]]]:
 
 
 try:
+    ok(timing_signal(7.9, 7.9, 8.0) == "within_budget",
+       "authorization timing classifies in-budget work")
+    ok(timing_signal(10.8301, 0.5, 8.0) == "scheduler_contention",
+       "authorization timing separates wall-only scheduler contention")
+    ok(timing_signal(10.8301, 8.1, 8.0) == "hot_path_regression",
+       "authorization timing prioritizes a CPU hot-path regression")
+
     store.init_project_registry()
     for project in ("maxwell", "helm", "switchboard"):
         store.init_db(project)
