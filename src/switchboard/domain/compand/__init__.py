@@ -14,6 +14,21 @@ from .scan import (
     decode_line_rle,
     encode_line_rle,
 )
+from .lab import (
+    AppliedTransform,
+    DetectionContext,
+    EconomicsEstimate,
+    LabArm,
+    LabStage,
+    LineRleTechnique,
+    ReasonCode,
+    StageStatus,
+    Technique,
+    TechniqueCandidate,
+    VerificationProof,
+    candidate_id_for,
+    sha256_evidence,
+)
 
 __all__ = [
     "ClientCredentialRegistry",
@@ -26,4 +41,17 @@ __all__ = [
     "build_line_rle_candidate",
     "decode_line_rle",
     "encode_line_rle",
+    "AppliedTransform",
+    "DetectionContext",
+    "EconomicsEstimate",
+    "LabArm",
+    "LabStage",
+    "LineRleTechnique",
+    "ReasonCode",
+    "StageStatus",
+    "Technique",
+    "TechniqueCandidate",
+    "VerificationProof",
+    "candidate_id_for",
+    "sha256_evidence",
 ]

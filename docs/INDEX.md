@@ -136,6 +136,8 @@ These documents are evidence and design exploration, not accepted architecture:
 - [`compand/phase2/BENCHMARK-CARD.md`](compand/phase2/BENCHMARK-CARD.md):
   frozen Phase 2 arms, technique inventory, estimands, statistical rules, hard gates,
   grades, KPI bindings, and machine-readable publication contract.
+- [`compand/phase2/LAB-REPLAY.md`](compand/phase2/LAB-REPLAY.md):
+  one-process, one-technique development replay command and immutable evidence layout.
 - [`TOKEN-OPTIMIZATION-BUSINESS-MODEL.md`](TOKEN-OPTIMIZATION-BUSINESS-MODEL.md)
   and `TOKEN-OPTIMIZATION-BUSINESS-MODEL.xlsx`: assumption-driven market, revenue,
   and unit-economics scenarios; not an investment-grade forecast.
