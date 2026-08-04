@@ -130,7 +130,12 @@ def test_projection_is_project_scoped_counts_sources_and_tracks_source_transitio
             "effective_scopes": ["read"],
         },
         resolve_body_project=lambda body: body["project"],
-        list_pending_acks=lambda **_kwargs: AssertionError("legacy pending filter used"),
+        list_pending_acks=lambda **kwargs: [{
+            "id": 9, "message": "Ack", "requires_ack": True, "sent_at": 20,
+            "to_agent": "switchboard/operator", "delivery_status": "unreachable",
+        }] if kwargs == {
+            "agent_id": "switchboard/operator", "project": "switchboard",
+        } else [],
         list_inbox=lambda status, project: [{
             "id": 4, "subject": "Review", "received_at": 30, "triage": {},
         }] if status == "pending" and project == "switchboard" else [],
@@ -143,32 +148,25 @@ def test_projection_is_project_scoped_counts_sources_and_tracks_source_transitio
         list_decisions=lambda **kwargs: [{
             "id": 2, "title": "Open", "status": "proposed",
         }] if kwargs["project"] == "switchboard" and kwargs["status"] == "proposed" else [],
-        list_agent_messages=lambda **kwargs: [
-            {"id": 9, "message": "Ack", "requires_ack": True, "sent_at": 20,
-             "to_agent": "switchboard/operator", "delivery_status": "unreachable"},
-            {"id": 10, "message": "FYI", "requires_ack": False, "sent_at": 21,
-             "to_agent": "runner/other", "delivery_status": "stored"},
-        ] if kwargs["project"] == "switchboard" else [],
         service=service,
     ))
     client = TestClient(app)
     first = client.get("/api/attention?project=switchboard").json()
     assert first["schema"] == "switchboard.attention_projection.v1"
-    assert first["count"] == 6
+    assert first["count"] == 5
     assert first["actionable_count"] == 5
     assert first["sources"] == {
-        "provider": 1, "agent": 2, "inbox": 1, "mission": 1, "decision": 1,
+        "provider": 1, "agent": 1, "inbox": 1, "mission": 1, "decision": 1,
         "runner": 0,
     }
     assert len({item["source_id"] for item in first["items"]}) == first["count"]
     agent_items = [item for item in first["items"] if item["source"] == "agent"]
-    assert {item["source_id"] for item in agent_items} == {"message:9", "message:10"}
-    assert next(item for item in agent_items if item["source_id"] == "message:9")["decide"]
-    assert next(item for item in agent_items if item["source_id"] == "message:10")["decide"] is None
+    assert {item["source_id"] for item in agent_items} == {"message:9"}
+    assert agent_items[0]["decide"]
 
     service.items = []  # authoritative provider transition: no shadow queue record remains
     second = client.get("/api/attention?project=switchboard").json()
-    assert second["count"] == 5
+    assert second["count"] == 4
     assert second["actionable_count"] == 4
     assert second["sources"]["provider"] == 0
 

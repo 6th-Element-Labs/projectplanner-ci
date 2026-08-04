@@ -118,6 +118,17 @@ operator_message = store.send_agent_message(
     idem_key="ui41-operator-message",
     project="switchboard",
 )
+internal_message = store.send_agent_message(
+    "ui41-runner",
+    "runner/other",
+    "Internal runner handoff must not appear in the Human Inbox.",
+    task_id=task_id,
+    requires_ack=True,
+    signal="runner_handoff",
+    priority=95,
+    idem_key="ui41-internal-message",
+    project="switchboard",
+)
 
 with socket.socket() as sock:
     sock.bind(("127.0.0.1", 0))
@@ -178,6 +189,9 @@ try:
         page.locator("#btn-ack-inbox").click()
         page.wait_for_selector("#tab-inbox-hub", state="visible")
         page.wait_for_selector("#tab-needs.active")
+        assert page.locator(
+            f'[data-nid="message:{internal_message["id"]}"]'
+        ).count() == 0
         page.locator(f'[data-nid="message:{operator_message["id"]}"]').click()
         # ``switchboard/operator`` is the durable human destination, so this
         # directed message is answerable rather than the read-only history

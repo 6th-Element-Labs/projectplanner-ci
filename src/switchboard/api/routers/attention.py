@@ -5,8 +5,8 @@ into one normalized, ranked feed.  The feed is a projection only: every item
 keeps a stable pointer to its authoritative source and all decisions continue
 to route to that source's write API.
 
-  * ``agent_messages``  — bounded durable agent communication, with delivery and
-    acknowledgement truth kept explicit
+  * ``agent_messages``  — unacknowledged messages explicitly directed to the
+    Human operator, with delivery and acknowledgement truth kept explicit
   * ``inbox``           — pending triaged inbound (plan@taikunai.com, uploads)
 
 That legacy feed remains read-only: deciding an item routes to endpoints that own
@@ -45,7 +45,6 @@ ProjectResolver = Callable[[str], str]
 PrincipalResolver = Callable[..., dict]
 BodyProjectResolver = Callable[[dict], str]
 PendingAcksFn = Callable[..., List[Dict[str, Any]]]
-ListAgentMessagesFn = Callable[..., List[Dict[str, Any]]]
 ListInboxFn = Callable[..., List[Dict[str, Any]]]
 ListDeliverablesFn = Callable[..., List[Dict[str, Any]]]
 GetMissionStatusFn = Callable[..., Dict[str, Any]]
@@ -450,7 +449,6 @@ def create_router(*, resolve_project: ProjectResolver,
                   resolve_body_project: BodyProjectResolver,
                   list_pending_acks: PendingAcksFn,
                   list_inbox: ListInboxFn,
-                  list_agent_messages: Optional[ListAgentMessagesFn] = None,
                   list_deliverables: Optional[ListDeliverablesFn] = None,
                   get_mission_status: Optional[GetMissionStatusFn] = None,
                   list_decisions: Optional[ListDecisionsFn] = None,
@@ -464,16 +462,16 @@ def create_router(*, resolve_project: ProjectResolver,
                             agent_id: str = ""):
         proj = resolve_project(project)
         principal = resolve_principal(request, proj, ("read",), dev_actor="web")
-        me = agent_id or auth.actor(principal)
 
         items: List[Dict[str, Any]] = []
-        messages = (
-            list_agent_messages(project=proj, limit=500)
-            if list_agent_messages is not None
-            else list_pending_acks(agent_id="", project=proj)
-        )
+        # The operator Inbox is a work queue, not the durable agent-message
+        # history.  Only an unacknowledged message addressed to the durable
+        # Human recipient belongs here; the Communication-plane message history retains
+        # all other records for its own observability surfaces.
+        messages = list_pending_acks(
+            agent_id="switchboard/operator", project=proj)
         for msg in messages:
-            items.append(_agent_item(msg, viewer=me))
+            items.append(_agent_item(msg, viewer="switchboard/operator"))
         for it in list_inbox("pending", project=proj):
             items.append(_inbox_item(it))
         provider_queue = service.list_operator_queue(
@@ -513,9 +511,9 @@ def create_router(*, resolve_project: ProjectResolver,
             for source in ("provider", "agent", "inbox", "mission", "decision",
                            "runner")
         }
-        # The operator can replay all agent communication here, but the bell
-        # remains an honest action count rather than growing with read-only
-        # history or a message addressed to another runner.
+        # The bell is an action count.  Agent items are already restricted to
+        # directed, unacknowledged Human messages; retain the explicit check
+        # as a defensive boundary for future projection sources.
         actionable_count = sum(
             1 for item in items
             if item["source"] != "agent"

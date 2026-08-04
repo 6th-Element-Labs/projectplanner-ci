@@ -20,7 +20,7 @@ def test_bell_and_queue_share_the_authoritative_projection():
     index = INDEX.read_text(encoding="utf-8")
     assert "setCount(actionableCount)" in attention
     assert "data.actionable_count" in attention
-    assert "window.PMAttention = { load }" in attention
+    assert "window.PMAttention = { load, deleteAll }" in attention
     assert "await window.PMAttention.load" in app
     assert 'aria-label="Open Needs-you queue"' in index
 
