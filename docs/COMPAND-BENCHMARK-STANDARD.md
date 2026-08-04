@@ -180,6 +180,12 @@ preliminary bundle does not authorize expansion.
 
 Phase 2 makes CES-1 an executable publication workstream:
 
+The initial executable contract is frozen in the
+[`Compand Phase 2 benchmark card`](compand/phase2/BENCHMARK-CARD.md). Its machine-readable
+catalog, benchmark, corpus/system manifests, and public scorecard schema fail closed until
+their declared readiness blockers are resolved; they do not themselves constitute a CES-1
+result or authorize confirmatory traffic.
+
 1. freeze the benchmark card, corpus manifest, hypotheses, estimands, grade
    schema, Value Index mapping, and statistical analysis plan;
 2. implement immutable raw, normalized, and published evidence layers;

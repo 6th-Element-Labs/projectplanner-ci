@@ -1,0 +1,275 @@
+schema: compand.ces1.benchmark.v1
+benchmark_id: compand-phase2-technique-lab
+version: 1.0.0
+status: frozen_contract
+frozen_at: '2026-08-04'
+authority:
+  adr: ADR-0026/Compand-evidence
+  standard: CES-1
+  task: DOCS-8
+
+scope:
+  enforcement_lane: cloud_gateway_only
+  product_wide_public_savings_authorized: false
+  production_promotion_authorized: false
+  codexzero_role: prior_art_and_adversarial_fixtures_only
+  codexzero_claims_accepted_as_evidence: false
+  host_plus_cloud_effects_assumed_additive: false
+  confirmatory_traffic_allowed: false
+  confirmatory_blockers:
+    - phase1_task_level_variance_not_available
+    - corpus_content_hashes_not_materialized
+    - final_provider_model_price_snapshot_not_frozen
+    - live_switchboard_kpi_rows_not_linked
+
+inputs:
+  technique_catalog: technique-catalog.json
+  corpus_manifest: corpus-manifest.json
+  system_card: system-card.json
+  public_scorecard_schema: public-scorecard.schema.json
+  benchmark_card: BENCHMARK-CARD.md
+
+arms:
+  B0:
+    name: unchanged_baseline
+    provider_payload: byte_identical_to_authorized_direct_payload
+    mutation: none
+  S1:
+    name: shadow
+    provider_payload: byte_identical_to_B0
+    mutation: none
+    outputs: detection_and_projected_economics_only
+  E1:
+    name: enforced_alone
+    active_technique_count: 1
+    prerequisite: technique_is_cloud_gateway_enforceable
+  C1:
+    name: post_pass_combination
+    prerequisite: every_member_has_passing_frozen_E1_scorecard
+    required_effects: [standalone, incremental, interaction]
+
+hypotheses:
+  confirmatory:
+    - id: H1_NET_COST
+      statement: E1 lowers provider-confirmed net cost per verified completed task versus paired B0.
+      estimand: net_cost_per_verified_task_usd_paired_difference
+      direction: decrease
+    - id: H2_QUALITY_NI
+      statement: E1 is non-inferior to paired B0 on verified task outcome.
+      estimand: verified_task_success_rate_paired_difference
+      direction: noninferiority
+      margin_absolute: -0.05
+    - id: H3_PROTOCOL_SAFETY
+      statement: E1 introduces no protocol, isolation, authorization, or exact-recovery hard-gate failure.
+      estimand: hard_gate_failure_count
+      direction: equal
+      target: 0
+  exploratory:
+    - id: X1_INPUT_USAGE
+      estimand: provider_input_token_paired_difference
+    - id: X2_CACHE_USAGE
+      estimand: provider_cached_input_token_paired_difference
+    - id: X3_OUTPUT_USAGE
+      estimand: provider_output_token_paired_difference
+    - id: X4_LATENCY
+      estimand: end_to_end_task_latency_paired_difference
+    - id: X5_TAIL_COST
+      estimand: net_cost_per_verified_task_p95_paired_difference
+    - id: X6_NATURAL_COVERAGE
+      estimand: natural_eligible_spend_coverage_ratio
+    - id: X7_RECOVERY_BURDEN
+      estimand: recovery_calls_and_operator_minutes_per_task
+
+estimands:
+  economic_denominator: verified_completed_coding_task
+  unit_of_analysis: task_pair
+  pairing_keys: [task_id, repository_commit, workload_revision, agent_profile, model_snapshot, repetition]
+  primary:
+    id: net_cost_per_verified_task_usd_paired_difference
+    formula: (E1_provider_cost + E1_compand_cost) / E1_verified_tasks - (B0_provider_cost + B0_compand_cost) / B0_verified_tasks
+    source_of_truth: provider_usage_or_charge_plus_measured_compand_overhead
+  quality:
+    id: verified_task_success_rate_paired_difference
+    formula: E1_verified_success - B0_verified_success
+    noninferiority_margin_absolute: -0.05
+  combination:
+    incremental_formula: C1_effect - strongest_member_E1_effect
+    interaction_formula: C1_effect - sum(member_E1_effects)
+    no_double_counting: true
+
+design:
+  allocation: randomized_blocked_pairs
+  blocking: [workload_stratum, task_id, agent_profile, model_snapshot, cache_condition]
+  evaluator_blinding: arm_labels_replaced_by_run_opaque_ids
+  independent_repetitions_per_task_arm_minimum: 3
+  order_schedule: deterministic_hash_seeded_ABBA
+  order_seed: compand-phase2-ces1-v1
+  cache_schedule:
+    conditions: [cold, warm_same_prefix, warm_changed_suffix, expired]
+    cold: fresh_provider_conversation_and_no_reusable_prefix
+    warm_same_prefix: identical_frozen_prefix_and_provider_eligible_reuse_window
+    warm_changed_suffix: identical_frozen_prefix_with_only_new_suffix_changed
+    expired: wait_or_simulate_only_with_provider_validated_TTL
+    provider_cache_fields_must_remain_missing_when_unexposed: true
+    local_cache_estimates_may_not_replace_provider_usage: true
+
+sample_size:
+  phase1_input:
+    release: line-rle-v1_twelve_run_pilot
+    usable_task_level_variance: false
+    interpretation: mechanism evidence only; no Phase 2 variance estimate is available in the repository
+  variance_pilot:
+    classification: exploratory
+    minimum_task_pairs: 12
+    may_use_existing_phase1_runs_only_if_pairing_and_cost_fields_validate: true
+  confirmatory_formula:
+    method: paired_mean_interval_precision
+    confidence: 0.95
+    half_width_usd: max(0.05, 0.10 * mean_B0_net_cost_per_verified_task_usd)
+    formula: ceil((1.96 * sd_paired_cost_difference / half_width_usd) ** 2)
+    minimum_task_pairs: 30
+    maximum_task_pairs: 200
+    repetitions_per_task_arm_minimum: 3
+  freeze_rule: final_N_and_variance_inputs_are_hashed_before_any_confirmatory_run
+  infeasible_rule: if_calculated_N_exceeds_200_report_inconclusive_and_do_not_relax_precision
+
+analysis:
+  primary_interval: paired_stratified_bootstrap_95_percent
+  bootstrap_resamples: 10000
+  bootstrap_seed: 260804
+  central_tendency: [mean, median]
+  tails: [p05, p95, maximum]
+  quality_interval: paired_score_interval_95_percent
+  multiplicity:
+    confirmatory_economic_family: Holm_Bonferroni_familywise_alpha_0.05_across_E1_techniques
+    quality_gate: simultaneous_95_percent_intervals_across_E1_techniques
+    exploratory: Benjamini_Hochberg_q_0.10
+  c1_policy: exploratory_until_a_separate_combination_family_is_preregistered
+  subgroup_minimum_task_pairs: 10
+  sparse_subgroups: report_counts_only
+
+run_rules:
+  retry:
+    infrastructure_invalid_attempts: retain_with_parent_attempt_and_reason
+    allowed_retry_causes: [provider_unavailable_before_usage, harness_crash_before_provider_dispatch, corrupted_fixture_load]
+    normal_failures_not_retryable: [task_failure, timeout, agent_error, recovery_call, protocol_error, expensive_tail]
+    maximum_infrastructure_retries: 1
+  exclusion:
+    allowed_only_if: preregistered_infrastructure_invalid_reason
+    post_arm_observation_exclusion: forbidden
+    all_exclusions_published: true
+  missing_data:
+    provider_usage: unknown_and_blocks_economic_grade
+    task_outcome: failure_for_primary_denominator_and_unknown_for_value_index
+    optional_cache_field: remain_missing_not_zero
+    latency: invalid_only_if_clock_attestation_failed
+    no_imputation_for_primary_endpoints: true
+  stop:
+    immediate_safety_stop: any_protocol_isolation_authorization_or_recovery_corruption
+    futility: none_before_frozen_N
+    efficacy: none_before_frozen_N
+    operational_stop: provider_or_model_snapshot_changes
+    stopped_runs: retained_and_reported
+
+hard_gates:
+  - id: correctness
+    pass: all_required_oracles_and_mutants_pass
+  - id: attribution
+    pass: exactly_one_technique_in_E1_and_every_score_input_traces_to_run_events
+  - id: isolation
+    pass: zero_cross_tenant_cross_principal_cross_session_access
+  - id: reproducibility
+    pass: deterministic_rerun_matches_declared_hashes_and_scores
+  - id: protocol_safety
+    pass: zero_signature_ordering_continuation_retry_streaming_corruption
+  - id: exact_recovery
+    pass: every_exact_or_recoverable_claim_reconstructs_original_bytes_and_sha256
+  - id: fail_open
+    pass: optimization_uncertainty_sends_original_only_through_already_authorized_route
+  - id: whole_task_economics
+    pass: adjusted_primary_economic_effect_is_positive_for_claimed_population
+  - id: quality_noninferiority
+    pass: simultaneous_95_percent_lower_bound_greater_than_or_equal_to_minus_0.05
+  - id: clean_environment_regeneration
+    pass: released_command_regenerates_all_required_tables_figures_and_scorecards_with_matching_checksums
+
+grades:
+  hard_gate_failure_grade: F
+  bands:
+    A: {minimum: 85, maximum: 100}
+    B: {minimum: 70, maximum: 84.999}
+    C: {minimum: 50, maximum: 69.999}
+    D: {minimum: 0, maximum: 49.999}
+  technical:
+    correctness: 35
+    reproducibility: 20
+    failure_transparency: 20
+    latency_reliability: 15
+    simplicity: 10
+  user_value:
+    net_cost_per_verified_task: 40
+    natural_eligible_spend_coverage: 25
+    outcome_noninferiority: 25
+    latency_friction: 10
+  company_value:
+    defensible_evidence: 30
+    margin_potential: 25
+    cross_lane_applicability: 20
+    operations_burden: 15
+    ip_design_around_evidence: 10
+  asset_value:
+    certified_reusable_profile: 30
+    failure_and_rollback_corpus: 25
+    cross_lane_calibration: 20
+    reproducible_evidence_compiler: 15
+    ip_prior_art_record: 10
+  override_rules:
+    company_or_asset_may_override_safety: false
+    company_or_asset_may_override_negative_user_value: false
+    technique_value_and_asset_value_must_remain_separate: true
+
+evidence:
+  tiers: [C1, C2, C3, C4, C5]
+  states: [exploratory, provisional, verified, independently_reproduced, suspended]
+  value_states: [projected, measured, verified, market_validated, ip_supported]
+  only_verified_outcomes_move_value_index: true
+  product_wide_claim_requires: independently_reproduced
+
+kpis:
+  outputs:
+    - {id: compand.p2.net_cost_per_verified_task_usd, unit: usd_per_verified_task, direction: decrease, board_kpi_id: null}
+    - {id: compand.p2.natural_eligible_spend_coverage_ratio, unit: ratio, direction: increase, board_kpi_id: null}
+    - {id: compand.p2.task_outcome_noninferiority_rate, unit: ratio, direction: maintain, board_kpi_id: null}
+    - {id: compand.p2.gateway_added_latency_p95_ms, unit: milliseconds, direction: decrease, board_kpi_id: null}
+    - {id: compand.p2.reliable_request_rate, unit: ratio, direction: increase, board_kpi_id: null}
+    - {id: compand.p2.exact_recovery_success_rate, unit: ratio, direction: maintain, board_kpi_id: null}
+  board_binding_state: pending_live_kpi_registration
+  missing_board_ids_block_value_index_movement: true
+
+publication:
+  immutable_layers: [raw, normalized, published]
+  correction_policy: new_release_and_changelog_only
+  scorecard_sha256:
+    algorithm: sha256
+    canonicalization: RFC_8785_JSON_Canonicalization_Scheme
+    excluded_json_pointer: /trace/scorecard_sha256
+    encoding: UTF-8
+    digest_format: lowercase_hexadecimal
+  required_release_paths:
+    - benchmark.yaml
+    - BENCHMARK-CARD.md
+    - LIMITATIONS.md
+    - SECURITY.md
+    - corpus-manifest.json
+    - system-card.json
+    - runs/<run_id>/manifest.json
+    - runs/<run_id>/receipts.jsonl
+    - runs/<run_id>/usage.json
+    - runs/<run_id>/outcome.json
+    - results/task-level.csv
+    - results/scorecards.json
+    - analysis/
+    - reproduce
+    - CHECKSUMS
+    - CHANGELOG.md
+    - reproduction/

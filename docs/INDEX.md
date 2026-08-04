@@ -12,6 +12,7 @@ looking like current instruction.
 | Understand the system | [Current architecture](#current-architecture) below |
 | Understand lifecycle authority | [Three-plane architecture packet](#three-plane-architecture-packet) |
 | Understand Compand evidence and certification | [`ADR-0026 — Compand benchmark publication`](decisions/0026-compand-benchmark-publication.md) and [`CES-1`](COMPAND-BENCHMARK-STANDARD.md) |
+| Build or grade the Compand Phase 2 Technique Lab | [`Phase 2 frozen benchmark contract`](compand/phase2/BENCHMARK-CARD.md) and its [machine-readable files](compand/phase2/) |
 | Find an architectural decision | [`decisions/INDEX.md`](decisions/INDEX.md) |
 | Follow fleet workflow and Done rules | [`WORKING-AGREEMENT.md`](WORKING-AGREEMENT.md), unless the live agreement is available |
 | Operate production | [`SWITCHBOARD-RUNBOOK.md`](SWITCHBOARD-RUNBOOK.md) |
@@ -132,6 +133,9 @@ These documents are evidence and design exploration, not accepted architecture:
 - [`COMPAND-BENCHMARK-STANDARD.md`](COMPAND-BENCHMARK-STANDARD.md):
   normative CES-1 experiment, grading, publication, and reproduction procedure
   governed by ADR-0026.
+- [`compand/phase2/BENCHMARK-CARD.md`](compand/phase2/BENCHMARK-CARD.md):
+  frozen Phase 2 arms, technique inventory, estimands, statistical rules, hard gates,
+  grades, KPI bindings, and machine-readable publication contract.
 - [`TOKEN-OPTIMIZATION-BUSINESS-MODEL.md`](TOKEN-OPTIMIZATION-BUSINESS-MODEL.md)
   and `TOKEN-OPTIMIZATION-BUSINESS-MODEL.xlsx`: assumption-driven market, revenue,
   and unit-economics scenarios; not an investment-grade forecast.

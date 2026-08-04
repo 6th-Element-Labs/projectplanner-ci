@@ -1,0 +1,89 @@
+{
+  "schema": "compand.ces1.system_card.v1",
+  "system_card_id": "compand-phase2-system",
+  "version": "1.0.0-contract",
+  "status": "partially_pinned_confirmatory_blocked",
+  "frozen_at": "2026-08-04",
+  "authority": ["ADR-0026/Compand-evidence", "CES-1", "DOCS-8"],
+  "execution": {
+    "architecture": "single_process_deterministic_replay_harness",
+    "plugin_isolation": "one_removable_plugin_per_technique_no_cross_plugin_imports_except_shared_contract",
+    "evidence_store": "append_only_JSONL_with_raw_normalized_published_layers",
+    "database": "SQLite_or_JSONL_only",
+    "runtime": "Python_3.12_or_newer",
+    "network_policy": "declared_per_run",
+    "clean_environment": "locked_container_or_clean_machine_from_release_only"
+  },
+  "known_wire_baseline": {
+    "source": "COMPAND-CODEX-RESPONSES-WIRE-CONTRACT.md",
+    "client": "Codex CLI",
+    "client_version": "0.144.5",
+    "client_binary_sha256": "d96ae1ca1ff6fc8587842fa04c92d3ee4d31651a811c2f89b65fcfd9c28473e2",
+    "wire_api": "responses",
+    "model": "gpt-5.4",
+    "reasoning_effort": "high",
+    "auth_lane": "custom_provider_api_key_fixture_only",
+    "store": false,
+    "stream_idle_timeout_ms": 5000,
+    "evidence_ceiling": "protocol_mechanism_not_transform_certification"
+  },
+  "confirmatory_snapshot": {
+    "agent_build": null,
+    "agent_binary_sha256": null,
+    "dialect_id": null,
+    "dialect_version": null,
+    "model_provider": null,
+    "model_id": null,
+    "model_snapshot": null,
+    "tokenizer_id": null,
+    "tokenizer_version": null,
+    "provider_usage_schema_version": null,
+    "provider_price_schedule_id": null,
+    "provider_price_effective_at": null,
+    "evaluator_id": null,
+    "evaluator_version": null,
+    "harness_git_sha": null,
+    "technique_catalog_sha256": null,
+    "benchmark_yaml_sha256": null,
+    "corpus_manifest_sha256": null,
+    "container_image_digest": null,
+    "confirmatory_ready": false,
+    "freeze_rule": "all_null_fields_must_be_concrete_and_hashed_before_confirmatory_traffic"
+  },
+  "usage_truth": {
+    "provider_reported_usage_authoritative_when_exposed": true,
+    "local_tokenizer_role": "decision_input_and_independent_estimate",
+    "missing_optional_usage_fields": "remain_missing_not_zero",
+    "required_categories": [
+      "input_tokens",
+      "cached_input_tokens_when_exposed",
+      "cache_write_tokens_when_exposed",
+      "output_tokens",
+      "reasoning_tokens_when_exposed",
+      "provider_charge_when_exposed",
+      "compand_compute_storage_gateway_recovery_cost"
+    ]
+  },
+  "security_and_tenancy": {
+    "gateway_and_upstream_credentials_distinct": true,
+    "raw_credentials_in_evidence": false,
+    "artifact_scope": ["tenant", "principal", "session", "context_epoch"],
+    "zero_retention_disables_recovery_dependent_techniques": true,
+    "optimization_uncertainty": "fail_open_to_original_already_authorized_route",
+    "policy_uncertainty": "fail_closed_no_passthrough_bypass",
+    "unknown_dialect": "observe_or_certified_hygiene_only"
+  },
+  "recertification_triggers": [
+    "agent_build_change",
+    "dialect_change",
+    "model_or_provider_snapshot_change",
+    "tokenizer_change",
+    "usage_schema_change",
+    "price_schedule_change",
+    "technique_or_codec_change",
+    "corpus_revision",
+    "evaluator_change",
+    "protocol_or_streaming_change",
+    "retention_or_artifact_authorization_change"
+  ]
+}

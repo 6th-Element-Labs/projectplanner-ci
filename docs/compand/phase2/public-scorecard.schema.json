@@ -1,0 +1,235 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://switchboard.local/schemas/compand/ces1/public-scorecard.v1.json",
+  "title": "Compand CES-1 public technique scorecard",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "release_id",
+    "technique",
+    "certification_tuple",
+    "evidence",
+    "sample",
+    "effects",
+    "hard_gates",
+    "grades",
+    "kpis",
+    "disposition",
+    "trace"
+  ],
+  "properties": {
+    "schema": {"const": "compand.ces1.public_scorecard.v1"},
+    "release_id": {"type": "string", "minLength": 1},
+    "technique": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "arm"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]+-v[0-9]+$"},
+        "version": {"type": "string"},
+        "arm": {"enum": ["B0", "S1", "E1", "C1"]},
+        "members": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      }
+    },
+    "certification_tuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent", "dialect", "model_provider_snapshot", "workload_revision", "ces_release"],
+      "properties": {
+        "agent": {"type": "string"},
+        "dialect": {"type": "string"},
+        "model_provider_snapshot": {"type": "string"},
+        "workload_revision": {"type": "string"},
+        "ces_release": {"type": "string"}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tier", "state", "value_states", "claim"],
+      "properties": {
+        "tier": {"enum": ["C1", "C2", "C3", "C4", "C5"]},
+        "state": {"enum": ["exploratory", "provisional", "verified", "independently_reproduced", "suspended"]},
+        "value_states": {
+          "type": "array",
+          "items": {"enum": ["projected", "measured", "verified", "market_validated", "ip_supported"]},
+          "uniqueItems": true
+        },
+        "claim": {"type": "string"},
+        "independent_reproducer": {"type": ["string", "null"]}
+      }
+    },
+    "sample": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task_pairs", "independent_repetitions", "failures", "invalid_attempts", "exclusions", "missing"],
+      "properties": {
+        "task_pairs": {"type": "integer", "minimum": 0},
+        "independent_repetitions": {"type": "integer", "minimum": 0},
+        "failures": {"type": "integer", "minimum": 0},
+        "invalid_attempts": {"type": "integer", "minimum": 0},
+        "exclusions": {"type": "integer", "minimum": 0},
+        "missing": {"type": "integer", "minimum": 0}
+      }
+    },
+    "effects": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["net_cost_per_verified_task", "verified_task_success", "latency_p95", "reliability", "exact_recovery"],
+      "properties": {
+        "net_cost_per_verified_task": {"$ref": "#/$defs/effect"},
+        "verified_task_success": {"$ref": "#/$defs/effect"},
+        "latency_p95": {"$ref": "#/$defs/effect"},
+        "reliability": {"$ref": "#/$defs/effect"},
+        "exact_recovery": {"$ref": "#/$defs/effect"},
+        "incremental": {"$ref": "#/$defs/effect"},
+        "interaction": {"$ref": "#/$defs/effect"}
+      }
+    },
+    "hard_gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["correctness", "attribution", "isolation", "reproducibility", "protocol_safety", "exact_recovery", "fail_open", "whole_task_economics", "quality_noninferiority", "clean_environment_regeneration"],
+      "properties": {
+        "correctness": {"$ref": "#/$defs/gate"},
+        "attribution": {"$ref": "#/$defs/gate"},
+        "isolation": {"$ref": "#/$defs/gate"},
+        "reproducibility": {"$ref": "#/$defs/gate"},
+        "protocol_safety": {"$ref": "#/$defs/gate"},
+        "exact_recovery": {"$ref": "#/$defs/gate"},
+        "fail_open": {"$ref": "#/$defs/gate"},
+        "whole_task_economics": {"$ref": "#/$defs/gate"},
+        "quality_noninferiority": {"$ref": "#/$defs/gate"},
+        "clean_environment_regeneration": {"$ref": "#/$defs/gate"}
+      }
+    },
+    "grades": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["technical", "user_value", "company_value", "asset_value", "hard_gate_grade"],
+      "properties": {
+        "technical": {"$ref": "#/$defs/grade"},
+        "user_value": {"$ref": "#/$defs/grade"},
+        "company_value": {"$ref": "#/$defs/grade"},
+        "asset_value": {"$ref": "#/$defs/grade"},
+        "hard_gate_grade": {"enum": ["pass", "F"]}
+      }
+    },
+    "kpis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "compand.p2.net_cost_per_verified_task_usd",
+        "compand.p2.natural_eligible_spend_coverage_ratio",
+        "compand.p2.task_outcome_noninferiority_rate",
+        "compand.p2.gateway_added_latency_p95_ms",
+        "compand.p2.reliable_request_rate",
+        "compand.p2.exact_recovery_success_rate"
+      ],
+      "properties": {
+        "compand.p2.net_cost_per_verified_task_usd": {"$ref": "#/$defs/kpi"},
+        "compand.p2.natural_eligible_spend_coverage_ratio": {"$ref": "#/$defs/kpi"},
+        "compand.p2.task_outcome_noninferiority_rate": {"$ref": "#/$defs/kpi"},
+        "compand.p2.gateway_added_latency_p95_ms": {"$ref": "#/$defs/kpi"},
+        "compand.p2.reliable_request_rate": {"$ref": "#/$defs/kpi"},
+        "compand.p2.exact_recovery_success_rate": {"$ref": "#/$defs/kpi"}
+      }
+    },
+    "disposition": {"enum": ["promote_cloud_canary", "shadow_only", "diagnostic_only", "redesign", "reject", "unsupported", "suspend"]},
+    "trace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["benchmark_sha256", "catalog_sha256", "corpus_sha256", "system_card_sha256", "run_ids", "event_root_sha256", "scorecard_sha256"],
+      "properties": {
+        "benchmark_sha256": {"$ref": "#/$defs/sha256"},
+        "catalog_sha256": {"$ref": "#/$defs/sha256"},
+        "corpus_sha256": {"$ref": "#/$defs/sha256"},
+        "system_card_sha256": {"$ref": "#/$defs/sha256"},
+        "run_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true},
+        "event_root_sha256": {"$ref": "#/$defs/sha256"},
+        "scorecard_sha256": {
+          "$ref": "#/$defs/sha256",
+          "$comment": "SHA-256 of the RFC 8785 JSON Canonicalization Scheme serialization after removing /trace/scorecard_sha256; store the lowercase hexadecimal digest in this member."
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["passed", "evidence_ids"],
+      "properties": {
+        "passed": {"type": "boolean"},
+        "evidence_ids": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "reason": {"type": ["string", "null"]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"passed": {"const": true}}, "required": ["passed"]},
+          "then": {"properties": {"evidence_ids": {"minItems": 1}}}
+        }
+      ]
+    },
+    "effect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["estimate", "lower_95", "upper_95", "unit", "numerator", "denominator"],
+      "properties": {
+        "estimate": {"type": ["number", "null"]},
+        "lower_95": {"type": ["number", "null"]},
+        "upper_95": {"type": ["number", "null"]},
+        "unit": {"type": "string"},
+        "numerator": {"type": "number"},
+        "denominator": {"type": "number", "minimum": 0}
+      }
+    },
+    "grade": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["score", "band", "components"],
+      "properties": {
+        "score": {"type": "number", "minimum": 0, "maximum": 100},
+        "band": {"enum": ["A", "B", "C", "D", "F"]},
+        "components": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {"type": "number"}
+        }
+      }
+    },
+    "kpi": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "unit", "evidence_state", "board_kpi_id", "movement_allowed"],
+      "properties": {
+        "value": {"type": ["number", "null"]},
+        "unit": {"type": "string"},
+        "evidence_state": {"enum": ["projected", "measured", "verified", "market_validated", "ip_supported"]},
+        "board_kpi_id": {"type": ["string", "null"], "minLength": 1},
+        "movement_allowed": {"type": "boolean"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"movement_allowed": {"const": true}},
+            "required": ["movement_allowed"]
+          },
+          "then": {
+            "properties": {
+              "evidence_state": {"const": "verified"},
+              "board_kpi_id": {"type": "string", "minLength": 1}
+            },
+            "required": ["evidence_state", "board_kpi_id"]
+          }
+        }
+      ]
+    }
+  }
+}

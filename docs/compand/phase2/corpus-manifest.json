@@ -1,0 +1,157 @@
+{
+  "schema": "compand.ces1.corpus_manifest.v1",
+  "corpus_id": "compand-phase2-technique-corpus",
+  "version": "1.0.0-contract",
+  "status": "contract_only_not_materialized",
+  "frozen_at": "2026-08-04",
+  "authority": ["ADR-0026/Compand-evidence", "CES-1", "DOCS-8", "QA-56"],
+  "content_policy": {
+    "raw_customer_content_allowed": false,
+    "sources": ["sanitized_synthetic", "license_reviewed_open_fixture", "generated_protocol_fixture"],
+    "immutable_after_partition": true,
+    "content_addressing": "sha256",
+    "contamination_check_required": true,
+    "license_record_required": true
+  },
+  "materialization": {
+    "corpus_root_sha256": null,
+    "manifest_sha256": null,
+    "fixture_count": 0,
+    "confirmatory_ready": false,
+    "blocking_reasons": [
+      "fixture_files_not_yet_created_by_QA-56",
+      "partition_hashes_not_yet_frozen",
+      "hidden_holdout_custodian_not_yet_attested"
+    ]
+  },
+  "partitions": [
+    {
+      "id": "development",
+      "purpose": "plugin implementation and parser debugging",
+      "target_fraction": 0.50,
+      "developer_visible": true,
+      "grader_visible": true,
+      "root_sha256": null
+    },
+    {
+      "id": "golden",
+      "purpose": "frozen positive and negative transform oracles",
+      "target_fraction": 0.25,
+      "developer_visible": true,
+      "grader_visible": true,
+      "root_sha256": null
+    },
+    {
+      "id": "hidden_holdout",
+      "purpose": "grader certification and generalization check",
+      "target_fraction": 0.25,
+      "developer_visible": false,
+      "grader_visible": true,
+      "root_sha256": null,
+      "custody": "independent_QA-58_holdout_custodian"
+    }
+  ],
+  "fixture_contract": {
+    "required_fields": [
+      "fixture_id",
+      "revision",
+      "partition",
+      "workload_stratum",
+      "input_sha256",
+      "baseline_provider_view_sha256",
+      "expected_outcome",
+      "eligible_techniques",
+      "expected_disposition_by_technique",
+      "required_invariants",
+      "license",
+      "generator_or_source"
+    ],
+    "allowed_dispositions": [
+      "transform",
+      "decline_framing_overhead",
+      "decline_cache_harm",
+      "decline_ineligible",
+      "fail_recovery",
+      "detect_corruption",
+      "reject_cross_scope_access",
+      "no_material_opportunity"
+    ]
+  },
+  "fixture_families": [
+    {
+      "id": "repeated_lines",
+      "covers": ["line-rle-v1", "framing_overhead", "off_by_one_repeat_mutants"],
+      "required_cases": ["positive_run", "single_line", "mixed_endings", "warning_output", "count_not_smaller"]
+    },
+    {
+      "id": "exact_and_partial_overlap",
+      "covers": ["exact-duplicate-reference-v1", "subresult-chunk-dedup-v1", "parallel-overlap-dedup-v1"],
+      "required_cases": ["exact_visible_source", "missing_source", "evicted_source", "cross_session_hash", "below_70_percent_overlap"]
+    },
+    {
+      "id": "structured_json_and_tables",
+      "covers": ["json-minify-v1", "structured-data-codec-v1"],
+      "required_cases": ["ordered_rows", "nulls", "numeric_vs_string", "duplicate_keys", "heterogeneous_rows", "invalid_json"]
+    },
+    {
+      "id": "terminal_and_progress",
+      "covers": ["ansi-osc-strip-v1", "line-ending-normalize-v1", "trailing-noise-trim-v1"],
+      "required_cases": ["sgr", "osc8", "carriage_return_spinner", "source_code_crlf", "signature_bytes", "unknown_control"]
+    },
+    {
+      "id": "file_rereads_and_diffs",
+      "covers": ["unchanged-file-identity-v1", "delta-reread-v1"],
+      "required_cases": ["unchanged", "small_edit", "high_churn", "binary", "stale_base", "edited_history_fork"]
+    },
+    {
+      "id": "commands_checks_and_logs",
+      "covers": ["command-aware-projection-v1", "successful-check-projection-v1"],
+      "required_cases": ["successful_long_check", "failed_check", "warning_on_success", "unknown_version", "truncated", "oversized", "ambiguous_exit_status"]
+    },
+    {
+      "id": "cache_sensitive_prefixes",
+      "covers": ["prefix-cache-shaping-v1"],
+      "required_cases": ["cold", "warm_same_prefix", "warm_changed_suffix", "expired", "smaller_but_more_expensive", "missing_cache_fields"]
+    },
+    {
+      "id": "cooperative_context",
+      "covers": ["context-paging-v1", "schema-deferral-v1", "turn-elimination-v1", "agent-memory-summary-v1"],
+      "required_cases": ["no_cloud_seam", "certified_context_epoch", "failed_expansion", "tool_discovery_needed", "no_op_poll", "ordered_batch"]
+    },
+    {
+      "id": "behavioral_and_lossy",
+      "covers": ["semantic-cache-v1", "injected-efficiency-instructions-v1", "injected-text-hard-compression-v1", "output-shaping-v1", "vision-budget-v1"],
+      "required_cases": ["near_match_code_prompt", "changed_single_line", "own_text_only", "required_detail_truncated", "visual_small_detail"]
+    },
+    {
+      "id": "protocol_and_isolation",
+      "covers": ["all_enforceable_techniques"],
+      "required_cases": ["stream_order", "cancelled_stream", "retry_identity", "401", "429", "500", "cross_tenant", "cross_principal", "cross_session", "unauthorized_artifact"]
+    },
+    {
+      "id": "ordinary_no_op_traffic",
+      "covers": ["all_enforceable_techniques"],
+      "required_cases": ["no_candidate", "candidate_not_smaller", "candidate_cache_harm", "unknown_dialect", "zero_retention"]
+    }
+  ],
+  "task_outcomes": {
+    "oracle_version": "pending_QA-56",
+    "baseline_outcome_hash": null,
+    "quality_metric": "verified_task_success",
+    "noninferiority_margin_absolute": -0.05,
+    "blinded_evaluator_required": true
+  },
+  "mutation_families_required": [
+    "wrong_repeat_count",
+    "changed_order",
+    "stale_reference",
+    "missing_artifact",
+    "token_count_error",
+    "cache_harm_admitted",
+    "protocol_corruption",
+    "tenant_session_leak",
+    "incorrect_aggregate",
+    "omitted_failure",
+    "stale_or_altered_evidence"
+  ]
+}
