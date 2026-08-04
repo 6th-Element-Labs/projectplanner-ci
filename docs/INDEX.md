@@ -122,6 +122,9 @@ These documents are evidence and design exploration, not accepted architecture:
 - [`COMPAND-CODEX-RESPONSES-WIRE-CONTRACT.md`](COMPAND-CODEX-RESPONSES-WIRE-CONTRACT.md):
   frozen Codex Responses fixture tuple, byte/order passthrough rules, typed tool-output
   eligibility, and dual-ledger continuation contract for the Compand pilot.
+- [`COMPAND-SCAN-EVIDENCE.md`](COMPAND-SCAN-EVIDENCE.md):
+  content-free coverage reconciliation, shadow `line-rle-v1` economics, bounded
+  decisions, and immutable evidence reproduction for DOGFOOD-32.
 - [`TOKEN-OPTIMIZER-FEASIBILITY-DEEP-DIVE.md`](TOKEN-OPTIMIZER-FEASIBILITY-DEEP-DIVE.md):
   observed insertion evidence, coverage boundaries, and E1–E5 falsification plan.
 - [`WHY-NOT-FORK-ROUTELLM.md`](WHY-NOT-FORK-ROUTELLM.md):

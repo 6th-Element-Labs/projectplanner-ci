@@ -1,19 +1,43 @@
 """Typed Compand gateway contracts."""
 
 from .v1 import (
+    CompandScanDecision,
+    CompandScanEvidenceAuthority,
+    CompandScanEvidenceBundle,
+    CompandSystemSnapshot,
+    CoverageCounts,
+    DirectGatewayParity,
     EgressObservation,
+    EgressObservationWindow,
+    GatewayCoverageReceipt,
     GatewayCoverageReceiptInput,
     GatewayErrorDetail,
     GatewayErrorEnvelope,
     GatewayTelemetry,
+    LineRleShadowMeasurement,
+    ProviderPriceTable,
+    ProviderTokenCount,
     ScanObservation,
+    recompute_compand_scan_decision,
 )
 
 __all__ = [
+    "CompandScanDecision",
+    "CompandScanEvidenceAuthority",
+    "CompandScanEvidenceBundle",
+    "CompandSystemSnapshot",
+    "CoverageCounts",
+    "DirectGatewayParity",
     "EgressObservation",
+    "EgressObservationWindow",
+    "GatewayCoverageReceipt",
     "GatewayCoverageReceiptInput",
     "GatewayErrorDetail",
     "GatewayErrorEnvelope",
     "GatewayTelemetry",
+    "LineRleShadowMeasurement",
+    "ProviderPriceTable",
+    "ProviderTokenCount",
     "ScanObservation",
+    "recompute_compand_scan_decision",
 ]

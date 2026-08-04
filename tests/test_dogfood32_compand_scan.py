@@ -1,0 +1,1596 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+from datetime import date, datetime, timezone
+from pathlib import Path
+
+from path_setup import ROOT  # noqa: F401 - adds src/ to sys.path
+from switchboard.application.commands.compand_scan import (
+    compile_gateway_coverage_receipt,
+    decide_compand_scan,
+    measure_line_rle_candidate,
+)
+from switchboard.contracts.compand import (
+    CompandScanDecision,
+    CompandScanEvidenceBundle,
+    CompandSystemSnapshot,
+    CoverageCounts,
+    DirectGatewayParity,
+    EgressObservation,
+    EgressObservationWindow,
+    GatewayCoverageReceipt,
+    GatewayCoverageReceiptInput,
+    LineRleShadowMeasurement,
+    ProviderPriceTable,
+    ProviderTokenCount,
+)
+from switchboard.domain.compand import (
+    ScanEligibilityError,
+    build_line_rle_candidate,
+    decode_line_rle,
+)
+
+
+def evidence_cli_environment() -> dict[str, str]:
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    return env
+
+
+def system_snapshot() -> CompandSystemSnapshot:
+    return CompandSystemSnapshot(
+        client_version="0.144.5",
+        client_binary_sha256="sha256:" + "a" * 64,
+        os_arch="Mac OS 26.3.0 arm64",
+        model="gpt-5.4",
+        provider_id="compand_fixture",
+        provider_name="Compand Fixture Capture",
+        provider_base_url="http://127.0.0.1:18765/v1",
+        credential_environment_variable="COMPAND_FIXTURE_API_KEY",
+        reasoning_effort="high",
+        request_max_retries=0,
+        stream_max_retries=0,
+        stream_idle_timeout_ms=5000,
+        gateway_version="DOGFOOD-32-test",
+        task_snapshot_sha256="sha256:" + "b" * 64,
+        configuration_sha256="sha256:" + "c" * 64,
+    )
+
+
+def parity(**changes: bool) -> DirectGatewayParity:
+    values = {
+        "protocol": True,
+        "usage_fields": True,
+        "task_result": True,
+        "streaming": True,
+        "tools": True,
+        "errors": True,
+        "cancellation": True,
+    }
+    values.update(changes)
+    return DirectGatewayParity(**values)
+
+
+def observation_window() -> EgressObservationWindow:
+    return EgressObservationWindow(
+        method="process_socket_audit",
+        window_started_at=datetime(2026, 8, 3, tzinfo=timezone.utc),
+        window_ended_at=datetime(2026, 8, 3, 0, 5, tzinfo=timezone.utc),
+        observer_version="dogfood32-test",
+        ancillary_destination_classes=("github",),
+    )
+
+
+def coverage_input(
+    correlation_id: str,
+    *,
+    feature: str = "responses",
+    endpoint: str = "/v1/responses",
+    classification: str = "captured",
+    mode: str = "scan",
+    tuple_status: str = "certified",
+    client_version: str = "0.144.5",
+    source_version: str = "DOGFOOD-32-test",
+) -> GatewayCoverageReceiptInput:
+    return GatewayCoverageReceiptInput(
+        correlation_id=correlation_id,
+        client_version=client_version,
+        mode=mode,
+        certified_feature=feature,
+        tuple_status=tuple_status,
+        observed_endpoint=endpoint,
+        egress_classification=classification,
+        source_version=source_version,
+    )
+
+
+def egress(
+    correlation_id: str,
+    *,
+    endpoint: str = "/v1/responses",
+    classification: str = "captured",
+    reason: str = "certified_gateway_path",
+) -> EgressObservation:
+    return EgressObservation(
+        correlation_id=correlation_id,
+        method="POST",
+        endpoint=endpoint,
+        classification=classification,
+        reason_code=reason,
+    )
+
+
+def full_receipt():
+    inputs = [
+        coverage_input("cmp_1", mode="passthrough"),
+        coverage_input("cmp_2", mode="scan"),
+        coverage_input(
+            "cmp_models",
+            feature="models",
+            endpoint="/v1/models",
+            classification="excluded",
+        ),
+    ]
+    observations = [
+        egress("cmp_1"),
+        egress("cmp_2"),
+        egress(
+            "cmp_models",
+            endpoint="/v1/models",
+            classification="excluded",
+            reason="control_endpoint",
+        ),
+    ]
+    return compile_gateway_coverage_receipt(
+        system=system_snapshot(),
+        observation_window=observation_window(),
+        parity=parity(),
+        coverage_inputs=inputs,
+        egress_observations=observations,
+        exercised_features=("sse", "tools", "usage", "errors", "cancellation"),
+    )
+
+
+def single_mode_receipt(mode: str):
+    return compile_gateway_coverage_receipt(
+        system=system_snapshot(),
+        observation_window=observation_window(),
+        parity=parity(),
+        coverage_inputs=[coverage_input(f"cmp_{mode}", mode=mode)],
+        egress_observations=[egress(f"cmp_{mode}")],
+        exercised_features=("sse", "tools", "usage", "errors", "cancellation"),
+    )
+
+
+def qualifying_measurement() -> LineRleShadowMeasurement:
+    original = "same\nsame\n"
+    candidate = build_line_rle_candidate(
+        {
+            "schema": "compand.command_result.v1",
+            "call_id": "call-qualifying",
+            "source_kind": "command_result",
+            "trusted_adapter": True,
+            "exit_status": 0,
+            "content_type": "text/plain",
+            "encoding": "utf-8",
+            "truncated": False,
+            "signed": False,
+            "new_suffix": True,
+            "byte_count": len(original.encode()),
+            "output_sha256": hashlib.sha256(original.encode()).hexdigest(),
+        },
+        expected_call_id="call-qualifying",
+        output_item={
+            "type": "function_call_output",
+            "call_id": "call-qualifying",
+            "output": original,
+        },
+    )
+    return measure_line_rle_candidate(
+        candidate,
+        run_id="run-qualifying",
+        task_snapshot_sha256="sha256:" + "b" * 64,
+        original_count=ProviderTokenCount(
+            input_tokens=20,
+            cached_input_tokens=10,
+            count_call_latency_ms=1,
+        ),
+        candidate_count=ProviderTokenCount(
+            input_tokens=5,
+            cached_input_tokens=0,
+            count_call_latency_ms=1,
+        ),
+        price_table=ProviderPriceTable(
+            provider="compand_fixture",
+            model="gpt-5.4",
+            effective_date=date(2026, 8, 3),
+            input_usd_per_million_tokens=10,
+            cached_input_usd_per_million_tokens=1,
+            source="dated-test-table",
+        ),
+        gateway_latency_ms=1,
+        gateway_retry_count=0,
+        task_completed=True,
+        shadow_original_forwarded_byte_for_byte=True,
+    )
+
+
+class Dogfood32CompandScanTest(unittest.TestCase):
+    def test_system_snapshot_rejects_noncanonical_identity_hashes(self) -> None:
+        payload = system_snapshot().model_dump(mode="json", by_alias=True)
+        invalid_values = (
+            "",
+            "a" * 64,
+            "sha256:" + "a" * 63,
+            "sha256:" + "A" * 64,
+            "sha256:" + "g" * 64,
+        )
+
+        for field in (
+            "client_binary_sha256",
+            "task_snapshot_sha256",
+            "configuration_sha256",
+        ):
+            for invalid in invalid_values:
+                with self.subTest(field=field, value=invalid):
+                    with self.assertRaisesRegex(ValueError, field):
+                        CompandSystemSnapshot.model_validate(
+                            {**payload, field: invalid}
+                        )
+
+    def test_invalid_system_hashes_cannot_gain_promotion_authority(self) -> None:
+        valid_receipt = full_receipt()
+        valid_measurement = qualifying_measurement()
+        valid_decision = decide_compand_scan(valid_receipt, [valid_measurement])
+        valid_authority = CompandScanEvidenceBundle.derive_authority(
+            valid_receipt,
+            (valid_measurement,),
+            valid_decision,
+        )
+        self.assertEqual(valid_decision.decision, "advance")
+        self.assertEqual(valid_authority.claim_limit, "named_scan_mechanism_only")
+
+        receipt_payload = valid_receipt.model_dump(mode="json", by_alias=True)
+        for field, invalid in (
+            ("client_binary_sha256", "not-a-content-address"),
+            ("task_snapshot_sha256", "sha256:" + "B" * 64),
+            ("configuration_sha256", ""),
+        ):
+            with self.subTest(field=field):
+                forged = json.loads(json.dumps(receipt_payload))
+                forged["system"][field] = invalid
+                forged["evidence_hash"] = GatewayCoverageReceipt.compute_evidence_hash(
+                    forged
+                )
+                with self.assertRaisesRegex(ValueError, field):
+                    GatewayCoverageReceipt.model_validate(forged)
+
+    def test_validation_bypassed_system_hashes_fail_closed_after_rehash(self) -> None:
+        valid_receipt = full_receipt()
+        measurement = qualifying_measurement()
+
+        for field, invalid in (
+            ("client_binary_sha256", "not-a-content-address"),
+            ("task_snapshot_sha256", "sha256:" + "B" * 64),
+            ("configuration_sha256", ""),
+        ):
+            with self.subTest(field=field):
+                forged_system = valid_receipt.system.model_copy(
+                    update={field: invalid}
+                )
+                forged_receipt = valid_receipt.model_copy(
+                    update={"system": forged_system}
+                )
+                forged_receipt = forged_receipt.model_copy(
+                    update={
+                        "evidence_hash": forged_receipt.recomputed_evidence_hash()
+                    }
+                )
+
+                decision = decide_compand_scan(forged_receipt, (measurement,))
+                authority = CompandScanEvidenceBundle.derive_authority(
+                    forged_receipt,
+                    (measurement,),
+                    decision,
+                )
+                self.assertEqual(decision.decision, "stop")
+                self.assertIn("coverage_receipt_integrity_invalid", decision.reasons)
+                self.assertEqual(authority.evidence_state, "exploratory")
+                self.assertEqual(authority.claim_limit, "diagnostic_only")
+
+    def test_coverage_receipt_reconciles_every_observation_and_is_stable(self) -> None:
+        receipt = full_receipt()
+        self.assertEqual(receipt.coverage, "full")
+        self.assertFalse(receipt.mutation_blocked)
+        self.assertFalse(receipt.direct_inference_egress_observed)
+        self.assertEqual(receipt.coverage_counts.captured, 2)
+        self.assertEqual(receipt.coverage_counts.excluded, 1)
+        self.assertEqual(receipt.coverage_counts.total, 3)
+        self.assertEqual(receipt.modes_exercised, ("passthrough", "scan"))
+        self.assertIn("responses", receipt.certified_features)
+        self.assertIn("cancellation", receipt.certified_features)
+        self.assertTrue(receipt.evidence_hash.startswith("sha256:"))
+        self.assertEqual(receipt, full_receipt())
+
+    def test_scan_only_coverage_cannot_advance_or_gain_named_authority(self) -> None:
+        receipt = single_mode_receipt("scan")
+        reason = "required_mode_missing:passthrough"
+
+        self.assertEqual(receipt.modes_exercised, ("scan",))
+        self.assertTrue(receipt.mutation_blocked)
+        self.assertIn(reason, receipt.blocking_reasons)
+        forged_payload = receipt.model_dump(mode="json", by_alias=True)
+        forged_payload.update(mutation_blocked=False, blocking_reasons=[])
+        forged_payload["evidence_hash"] = GatewayCoverageReceipt.compute_evidence_hash(
+            forged_payload
+        )
+        with self.assertRaisesRegex(ValueError, "derived truth mismatch"):
+            GatewayCoverageReceipt.model_validate(forged_payload)
+
+        decision = decide_compand_scan(receipt, [qualifying_measurement()])
+        self.assertEqual(decision.decision, "low_coverage_hold")
+        self.assertEqual(decision.qualifying_candidate_count, 0)
+        self.assertIn(reason, decision.reasons)
+
+        authority = CompandScanEvidenceBundle.derive_authority(
+            receipt,
+            (qualifying_measurement(),),
+            decision,
+        )
+        self.assertEqual(authority.evidence_state, "exploratory")
+        self.assertEqual(authority.claim_limit, "diagnostic_only")
+
+    def test_passthrough_only_coverage_cannot_advance_or_gain_named_authority(
+        self,
+    ) -> None:
+        receipt = single_mode_receipt("passthrough")
+        reason = "required_mode_missing:scan"
+
+        self.assertEqual(receipt.modes_exercised, ("passthrough",))
+        self.assertTrue(receipt.mutation_blocked)
+        self.assertIn(reason, receipt.blocking_reasons)
+        forged_payload = receipt.model_dump(mode="json", by_alias=True)
+        forged_payload.update(mutation_blocked=False, blocking_reasons=[])
+        forged_payload["evidence_hash"] = GatewayCoverageReceipt.compute_evidence_hash(
+            forged_payload
+        )
+        with self.assertRaisesRegex(ValueError, "derived truth mismatch"):
+            GatewayCoverageReceipt.model_validate(forged_payload)
+
+        decision = decide_compand_scan(receipt, [qualifying_measurement()])
+        self.assertEqual(decision.decision, "low_coverage_hold")
+        self.assertEqual(decision.qualifying_candidate_count, 0)
+        self.assertIn(reason, decision.reasons)
+
+        authority = CompandScanEvidenceBundle.derive_authority(
+            receipt,
+            (qualifying_measurement(),),
+            decision,
+        )
+        self.assertEqual(authority.evidence_state, "exploratory")
+        self.assertEqual(authority.claim_limit, "diagnostic_only")
+
+    def test_forged_persisted_coverage_receipt_is_rejected_and_cannot_promote(
+        self,
+    ) -> None:
+        valid = full_receipt()
+        forged_payload = valid.model_dump(mode="json", by_alias=True)
+        forged_payload["coverage_counts"] = {
+            "captured": 2,
+            "bypassed": 1,
+            "excluded": 1,
+            "unknown": 0,
+            "total": 4,
+        }
+        forged_payload.update(
+            coverage="full",
+            direct_inference_egress_observed=False,
+            mutation_blocked=False,
+            blocking_reasons=[],
+        )
+        # This models the demonstrated persisted forgery: the old valid hash is
+        # retained even though both primitive and derived truth were changed.
+        forged_payload["evidence_hash"] = valid.evidence_hash
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "coverage_counts|coverage mismatch|direct_inference|blocking_reasons|evidence_hash",
+        ):
+            GatewayCoverageReceipt.model_validate(forged_payload)
+
+        validation_bypassed = valid.model_copy(
+            update={
+                "coverage_counts": CoverageCounts(
+                    captured=2,
+                    bypassed=1,
+                    excluded=1,
+                    unknown=0,
+                    total=4,
+                ),
+                "coverage": "full",
+                "direct_inference_egress_observed": False,
+                "mutation_blocked": False,
+                "blocking_reasons": (),
+            }
+        )
+        decision = decide_compand_scan(validation_bypassed, [qualifying_measurement()])
+        self.assertEqual(decision.decision, "stop")
+        self.assertEqual(decision.qualifying_candidate_count, 0)
+        self.assertIn("coverage_receipt_integrity_invalid", decision.reasons)
+
+        authority = CompandScanEvidenceBundle.derive_authority(
+            validation_bypassed,
+            (qualifying_measurement(),),
+            CompandScanDecision(
+                decision="advance",
+                reasons=("cache_adjusted_candidate_is_cheaper",),
+                measured_candidate_count=1,
+                qualifying_candidate_count=1,
+            ),
+        )
+        self.assertEqual(authority.evidence_state, "exploratory")
+        self.assertEqual(authority.claim_limit, "diagnostic_only")
+
+    def test_coverage_receipt_rejects_inconsistent_counts_reasons_and_hash(self) -> None:
+        valid_payload = full_receipt().model_dump(mode="json", by_alias=True)
+        contradictions = (
+            (
+                {"coverage_counts": {**valid_payload["coverage_counts"], "total": 99}},
+                "coverage_counts.total",
+            ),
+            ({"direct_inference_egress_observed": True}, "direct_inference"),
+            ({"mutation_blocked": True}, "mutation_blocked"),
+            ({"blocking_reasons": ["unexplained_bypass"]}, "blocking_reasons"),
+            ({"evidence_hash": "sha256:" + "0" * 64}, "evidence_hash"),
+        )
+        for changes, message in contradictions:
+            with self.subTest(changes=changes):
+                with self.assertRaisesRegex(ValueError, message):
+                    GatewayCoverageReceipt.model_validate(
+                        {**valid_payload, **changes}
+                    )
+
+        bypass_payload = {
+            **valid_payload,
+            "coverage_counts": {
+                "captured": 2,
+                "bypassed": 1,
+                "excluded": 1,
+                "unknown": 0,
+                "total": 4,
+            },
+            "coverage": "partial",
+            "direct_inference_egress_observed": True,
+            "mutation_blocked": True,
+            "blocking_reasons": [],
+        }
+        bypass_payload["evidence_hash"] = GatewayCoverageReceipt.compute_evidence_hash(
+            bypass_payload
+        )
+        with self.assertRaisesRegex(ValueError, "coverage_counts"):
+            GatewayCoverageReceipt.model_validate(bypass_payload)
+
+    def test_missing_or_bypassed_egress_blocks_mutation_without_hiding_counts(self) -> None:
+        missing = compile_gateway_coverage_receipt(
+            system=system_snapshot(),
+            observation_window=observation_window(),
+            parity=parity(),
+            coverage_inputs=[coverage_input("cmp_missing")],
+            egress_observations=[],
+        )
+        self.assertEqual(missing.coverage, "unknown")
+        self.assertEqual(missing.coverage_counts.unknown, 1)
+        self.assertIn("unreconciled_egress_observation", missing.blocking_reasons)
+        missing_decision = decide_compand_scan(missing, [qualifying_measurement()])
+        self.assertEqual(missing_decision.decision, "low_coverage_hold")
+        self.assertEqual(missing_decision.qualifying_candidate_count, 0)
+
+        bypassed = compile_gateway_coverage_receipt(
+            system=system_snapshot(),
+            observation_window=observation_window(),
+            parity=parity(),
+            coverage_inputs=[coverage_input("cmp_captured")],
+            egress_observations=[
+                egress("cmp_captured"),
+                egress(
+                    "direct_1",
+                    endpoint="https://api.openai.com/v1/responses",
+                    classification="bypassed",
+                    reason="direct_openai_egress",
+                ),
+            ],
+        )
+        self.assertEqual(bypassed.coverage, "partial")
+        self.assertTrue(bypassed.direct_inference_egress_observed)
+        self.assertEqual(bypassed.coverage_counts.bypassed, 1)
+        self.assertIn("unexplained_bypass", bypassed.blocking_reasons)
+        bypassed_decision = decide_compand_scan(
+            bypassed, [qualifying_measurement()]
+        )
+        self.assertEqual(bypassed_decision.decision, "low_coverage_hold")
+        self.assertEqual(bypassed_decision.qualifying_candidate_count, 0)
+
+        forged_advance = CompandScanDecision(
+            decision="advance",
+            reasons=("cache_adjusted_candidate_is_cheaper",),
+            measured_candidate_count=1,
+            qualifying_candidate_count=1,
+        )
+        for blocked_receipt in (missing, bypassed):
+            with self.subTest(coverage=blocked_receipt.coverage):
+                authority = CompandScanEvidenceBundle.derive_authority(
+                    blocked_receipt,
+                    (qualifying_measurement(),),
+                    forged_advance,
+                )
+                self.assertEqual(authority.evidence_state, "exploratory")
+                self.assertEqual(authority.claim_limit, "diagnostic_only")
+
+        fixture_only = compile_gateway_coverage_receipt(
+            system=system_snapshot(),
+            observation_window=observation_window().model_copy(
+                update={"method": "fixture_loopback"}
+            ),
+            parity=parity(),
+            coverage_inputs=[coverage_input("cmp_fixture")],
+            egress_observations=[egress("cmp_fixture")],
+        )
+        self.assertEqual(fixture_only.coverage, "full")
+        self.assertTrue(fixture_only.mutation_blocked)
+        self.assertIn(
+            "process_level_egress_observation_missing",
+            fixture_only.blocking_reasons,
+        )
+
+    def test_coverage_receipt_rejects_snapshot_blocker_strip_and_rehash(self) -> None:
+        receipt = compile_gateway_coverage_receipt(
+            system=system_snapshot(),
+            observation_window=observation_window(),
+            parity=parity(),
+            coverage_inputs=[
+                coverage_input("cmp_snapshot_mismatch", client_version="0.999.0")
+            ],
+            egress_observations=[egress("cmp_snapshot_mismatch")],
+        )
+        self.assertIn("system_snapshot_mismatch", receipt.blocking_reasons)
+        self.assertTrue(receipt.mutation_blocked)
+
+        forged = receipt.model_dump(mode="json", by_alias=True)
+        forged["blocking_reasons"] = []
+        forged["mutation_blocked"] = False
+        forged["evidence_hash"] = GatewayCoverageReceipt.compute_evidence_hash(forged)
+
+        with self.assertRaisesRegex(ValueError, "system_snapshot_mismatch"):
+            GatewayCoverageReceipt.model_validate(forged)
+
+        validation_bypassed = receipt.model_copy(
+            update={"blocking_reasons": (), "mutation_blocked": False}
+        )
+        decision = decide_compand_scan(
+            validation_bypassed,
+            [qualifying_measurement()],
+        )
+        self.assertEqual(decision.decision, "stop")
+        self.assertIn("coverage_receipt_integrity_invalid", decision.reasons)
+
+    def test_uncertified_tuple_emits_reconciled_unknown_blocked_receipt(self) -> None:
+        receipt = compile_gateway_coverage_receipt(
+            system=system_snapshot(),
+            observation_window=observation_window(),
+            parity=parity(),
+            coverage_inputs=[
+                coverage_input("cmp_unknown_tuple", tuple_status="unknown")
+            ],
+            egress_observations=[egress("cmp_unknown_tuple")],
+        )
+
+        self.assertEqual(receipt.coverage, "unknown")
+        self.assertEqual(receipt.coverage_counts.captured, 0)
+        self.assertEqual(receipt.coverage_counts.unknown, 1)
+        self.assertEqual(receipt.coverage_counts.total, 1)
+        self.assertTrue(receipt.mutation_blocked)
+        self.assertIn("uncertified_client_tuple", receipt.blocking_reasons)
+        self.assertIn("unreconciled_egress_observation", receipt.blocking_reasons)
+        self.assertEqual(
+            decide_compand_scan(receipt, [qualifying_measurement()]).decision,
+            "low_coverage_hold",
+        )
+
+    def test_advance_requires_a_captured_responses_inference_route(self) -> None:
+        measurement = qualifying_measurement()
+        control_only = compile_gateway_coverage_receipt(
+            system=system_snapshot(),
+            observation_window=observation_window(),
+            parity=parity(),
+            coverage_inputs=[
+                coverage_input(
+                    "cmp_models_only",
+                    feature="models",
+                    endpoint="/v1/models",
+                    classification="excluded",
+                )
+            ],
+            egress_observations=[
+                egress(
+                    "cmp_models_only",
+                    endpoint="/v1/models",
+                    classification="excluded",
+                    reason="control_endpoint",
+                )
+            ],
+        )
+
+        self.assertEqual(control_only.coverage, "control_only")
+        self.assertEqual(control_only.coverage_counts.captured, 0)
+        self.assertTrue(control_only.mutation_blocked)
+        self.assertIn(
+            "no_captured_inference_requests", control_only.blocking_reasons
+        )
+        self.assertIn(
+            "captured_responses_route_missing", control_only.blocking_reasons
+        )
+        control_decision = decide_compand_scan(control_only, [measurement])
+        self.assertEqual(control_decision.decision, "low_coverage_hold")
+        self.assertEqual(control_decision.qualifying_candidate_count, 0)
+        self.assertFalse(control_decision.mutation_authorized)
+
+        count_only = compile_gateway_coverage_receipt(
+            system=system_snapshot(),
+            observation_window=observation_window(),
+            parity=parity(),
+            coverage_inputs=[
+                coverage_input(
+                    "cmp_count_only",
+                    feature="input_tokens",
+                    endpoint="/v1/responses/input_tokens",
+                )
+            ],
+            egress_observations=[
+                egress(
+                    "cmp_count_only",
+                    endpoint="/v1/responses/input_tokens",
+                )
+            ],
+        )
+
+        self.assertEqual(count_only.coverage, "full")
+        self.assertNotIn(
+            "no_captured_inference_requests", count_only.blocking_reasons
+        )
+        self.assertIn(
+            "captured_responses_route_missing", count_only.blocking_reasons
+        )
+        count_decision = decide_compand_scan(count_only, [measurement])
+        self.assertEqual(count_decision.decision, "low_coverage_hold")
+        self.assertEqual(count_decision.qualifying_candidate_count, 0)
+
+    def test_line_rle_shadow_measurement_is_reversible_and_content_free(self) -> None:
+        original = "private-alpha\nprivate-line\nprivate-line\nprivate-line\nprivate-omega\n"
+        output_sha = hashlib.sha256(original.encode()).hexdigest()
+        command_receipt = {
+            "schema": "compand.command_result.v1",
+            "call_id": "call-natural-1",
+            "source_kind": "command_result",
+            "trusted_adapter": True,
+            "exit_status": 0,
+            "content_type": "text/plain",
+            "encoding": "utf-8",
+            "truncated": False,
+            "signed": False,
+            "new_suffix": True,
+            "byte_count": len(original.encode()),
+            "output_sha256": output_sha,
+        }
+        candidate = build_line_rle_candidate(
+            command_receipt,
+            expected_call_id="call-natural-1",
+            output_item={
+                "type": "function_call_output",
+                "call_id": "call-natural-1",
+                "output": original,
+            },
+        )
+        self.assertEqual(decode_line_rle(candidate.candidate_text), original)
+        self.assertEqual(candidate.repeated_span_count, 1)
+        self.assertEqual(candidate.repeated_line_count, 3)
+        self.assertEqual(candidate.removed_line_count, 2)
+        self.assertNotIn(original, repr(candidate))
+
+        prices = ProviderPriceTable(
+            provider="compand_fixture",
+            model="gpt-5.4",
+            effective_date=date(2026, 8, 3),
+            input_usd_per_million_tokens=10,
+            cached_input_usd_per_million_tokens=1,
+            source="dated-test-table",
+        )
+        measurement = measure_line_rle_candidate(
+            candidate,
+            run_id="run-natural-1",
+            task_snapshot_sha256="sha256:" + "b" * 64,
+            original_count=ProviderTokenCount(
+                input_tokens=20, cached_input_tokens=10, count_call_latency_ms=12
+            ),
+            candidate_count=ProviderTokenCount(
+                input_tokens=10, cached_input_tokens=5, count_call_latency_ms=11
+            ),
+            price_table=prices,
+            gateway_latency_ms=4,
+            gateway_retry_count=0,
+            task_completed=True,
+            shadow_original_forwarded_byte_for_byte=True,
+        )
+        self.assertTrue(measurement.cache_adjusted_candidate_is_cheaper)
+        self.assertGreater(measurement.projected_input_savings_usd, 0)
+        serialized = json.dumps(measurement.model_dump(mode="json", by_alias=True))
+        self.assertNotIn("private-alpha", serialized)
+        self.assertNotIn("private-line", serialized)
+        self.assertNotIn("private-omega", serialized)
+
+        decision = decide_compand_scan(full_receipt(), [measurement])
+        self.assertEqual(decision.decision, "advance")
+        self.assertFalse(decision.mutation_authorized)
+
+        wrong_provider = measurement.model_copy(
+            update={
+                "price_table": prices.model_copy(update={"provider": "other-provider"})
+            }
+        )
+        provider_decision = decide_compand_scan(full_receipt(), [wrong_provider])
+        self.assertEqual(provider_decision.decision, "stop")
+        self.assertIn("measurement_provider_mismatch", provider_decision.reasons)
+
+        wrong_model = measurement.model_copy(
+            update={"price_table": prices.model_copy(update={"model": "other-model"})}
+        )
+        model_decision = decide_compand_scan(full_receipt(), [wrong_model])
+        self.assertEqual(model_decision.decision, "stop")
+        self.assertIn("measurement_model_mismatch", model_decision.reasons)
+
+    def test_validation_bypassed_token_count_sources_fail_closed(self) -> None:
+        receipt = full_receipt()
+        measurement = qualifying_measurement()
+
+        for field, invalid_source in (
+            ("original_count", "local_tokenizer"),
+            ("candidate_count", "gateway_estimate"),
+        ):
+            with self.subTest(field=field, source=invalid_source):
+                invalid_count = getattr(measurement, field).model_copy(
+                    update={"source": invalid_source}
+                )
+                invalid_measurement = measurement.model_copy(
+                    update={field: invalid_count}
+                )
+
+                decision = decide_compand_scan(receipt, [invalid_measurement])
+                authority = CompandScanEvidenceBundle.derive_authority(
+                    receipt,
+                    (invalid_measurement,),
+                    decision,
+                )
+
+                self.assertEqual(decision.decision, "stop")
+                self.assertIn(
+                    "measurement_primitive_evidence_invalid", decision.reasons
+                )
+                self.assertEqual(authority.evidence_state, "exploratory")
+                self.assertEqual(authority.claim_limit, "diagnostic_only")
+
+    def test_validation_bypassed_gateway_latency_fails_closed(self) -> None:
+        receipt = full_receipt()
+        measurement = qualifying_measurement()
+
+        for invalid_latency in (-1, float("nan"), True, "1"):
+            with self.subTest(gateway_latency_ms=invalid_latency):
+                invalid_measurement = measurement.model_copy(
+                    update={"gateway_latency_ms": invalid_latency}
+                )
+
+                decision = decide_compand_scan(receipt, [invalid_measurement])
+                authority = CompandScanEvidenceBundle.derive_authority(
+                    receipt,
+                    (invalid_measurement,),
+                    decision,
+                )
+
+                self.assertEqual(decision.decision, "stop")
+                self.assertIn(
+                    "measurement_primitive_evidence_invalid", decision.reasons
+                )
+                self.assertEqual(authority.evidence_state, "exploratory")
+                self.assertEqual(authority.claim_limit, "diagnostic_only")
+
+    def test_line_rle_oracle_escapes_literal_marker_lines(self) -> None:
+        original = "literal [repeated 2 times]\nliteral [repeated 1 times]\n"
+        receipt = {
+            "schema": "compand.command_result.v1",
+            "call_id": "call-marker",
+            "source_kind": "command_result",
+            "trusted_adapter": True,
+            "exit_status": 0,
+            "content_type": "text/plain",
+            "encoding": "utf-8",
+            "truncated": False,
+            "signed": False,
+            "new_suffix": True,
+            "byte_count": len(original.encode()),
+            "output_sha256": hashlib.sha256(original.encode()).hexdigest(),
+        }
+        candidate = build_line_rle_candidate(
+            receipt,
+            expected_call_id="call-marker",
+            output_item={
+                "type": "function_call_output",
+                "call_id": "call-marker",
+                "output": original,
+            },
+        )
+        self.assertNotEqual(candidate.candidate_text, original)
+        self.assertEqual(decode_line_rle(candidate.candidate_text), original)
+
+    def test_line_rle_oracle_escapes_terminal_marker_without_newline(self) -> None:
+        for call_id, original in (
+            ("call-terminal-marker", "literal [repeated 2 times]"),
+            (
+                "call-span-terminal-marker",
+                "same\nsame\nliteral [repeated 2 times]",
+            ),
+        ):
+            with self.subTest(call_id=call_id):
+                receipt = {
+                    "schema": "compand.command_result.v1",
+                    "call_id": call_id,
+                    "source_kind": "command_result",
+                    "trusted_adapter": True,
+                    "exit_status": 0,
+                    "content_type": "text/plain",
+                    "encoding": "utf-8",
+                    "truncated": False,
+                    "signed": False,
+                    "new_suffix": True,
+                    "byte_count": len(original.encode()),
+                    "output_sha256": hashlib.sha256(original.encode()).hexdigest(),
+                }
+                candidate = build_line_rle_candidate(
+                    receipt,
+                    expected_call_id=call_id,
+                    output_item={
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": original,
+                    },
+                )
+                self.assertNotEqual(candidate.candidate_text, original)
+                self.assertEqual(decode_line_rle(candidate.candidate_text), original)
+
+    def test_line_rle_decoder_bounds_pathological_repeat_counts(self) -> None:
+        with self.assertRaisesRegex(ValueError, "repeat count exceeds"):
+            decode_line_rle("x [repeated 1048577 times]")
+        with self.assertRaisesRegex(ValueError, "output exceeds"):
+            decode_line_rle("xxxxxxxx [repeated 1048576 times]")
+
+    def test_absent_cache_fields_cannot_be_called_cache_adjusted_savings(self) -> None:
+        original = "same\nsame\n"
+        candidate = build_line_rle_candidate(
+            {
+                "schema": "compand.command_result.v1",
+                "call_id": "call-no-cache",
+                "source_kind": "command_result",
+                "trusted_adapter": True,
+                "exit_status": 0,
+                "content_type": "text/plain",
+                "encoding": "utf-8",
+                "truncated": False,
+                "signed": False,
+                "new_suffix": True,
+                "byte_count": len(original),
+                "output_sha256": hashlib.sha256(original.encode()).hexdigest(),
+            },
+            expected_call_id="call-no-cache",
+            output_item={
+                "type": "function_call_output",
+                "call_id": "call-no-cache",
+                "output": original,
+            },
+        )
+        prices = ProviderPriceTable(
+            provider="compand_fixture",
+            model="gpt-5.4",
+            effective_date=date(2026, 8, 3),
+            input_usd_per_million_tokens=10,
+            cached_input_usd_per_million_tokens=1,
+            source="dated-test-table",
+        )
+        measurement = measure_line_rle_candidate(
+            candidate,
+            run_id="run-no-cache-fields",
+            task_snapshot_sha256="sha256:" + "b" * 64,
+            original_count=ProviderTokenCount(
+                input_tokens=20, count_call_latency_ms=1
+            ),
+            candidate_count=ProviderTokenCount(
+                input_tokens=5, count_call_latency_ms=1
+            ),
+            price_table=prices,
+            gateway_latency_ms=1,
+            gateway_retry_count=0,
+            task_completed=True,
+            shadow_original_forwarded_byte_for_byte=True,
+        )
+        self.assertFalse(measurement.cache_fields_exposed)
+        self.assertFalse(measurement.cache_adjusted_candidate_is_cheaper)
+        self.assertEqual(
+            decide_compand_scan(full_receipt(), [measurement]).decision, "redesign"
+        )
+
+    def test_untrusted_or_unbound_command_output_is_ineligible(self) -> None:
+        with self.assertRaisesRegex(ScanEligibilityError, "trusted_adapter"):
+            build_line_rle_candidate(
+                {
+                    "schema": "compand.command_result.v1",
+                    "call_id": "call-untrusted",
+                    "source_kind": "command_result",
+                    "trusted_adapter": False,
+                },
+                expected_call_id="call-untrusted",
+                output_item={
+                    "type": "function_call_output",
+                    "call_id": "call-untrusted",
+                    "output": "ignored",
+                },
+            )
+
+    def test_command_receipt_truth_primitives_require_actual_booleans(self) -> None:
+        output = "same\nsame\n"
+        base = {
+            "schema": "compand.command_result.v1",
+            "call_id": "call-strict-booleans",
+            "source_kind": "command_result",
+            "trusted_adapter": True,
+            "exit_status": 0,
+            "content_type": "text/plain",
+            "encoding": "utf-8",
+            "truncated": False,
+            "signed": False,
+            "new_suffix": True,
+            "byte_count": len(output.encode()),
+            "output_sha256": hashlib.sha256(output.encode()).hexdigest(),
+        }
+        item = {
+            "type": "function_call_output",
+            "call_id": "call-strict-booleans",
+            "output": output,
+        }
+        for field, invalid in (
+            ("trusted_adapter", 1),
+            ("truncated", 0),
+            ("signed", 0),
+            ("new_suffix", 1),
+        ):
+            with self.subTest(field=field, value=invalid):
+                with self.assertRaisesRegex(ScanEligibilityError, field):
+                    build_line_rle_candidate(
+                        {**base, field: invalid},
+                        expected_call_id="call-strict-booleans",
+                        output_item=item,
+                    )
+
+    def test_command_receipt_integer_primitives_are_strict(self) -> None:
+        output = "same\nsame\n"
+        byte_count = len(output.encode("utf-8"))
+        base = {
+            "schema": "compand.command_result.v1",
+            "call_id": "call-strict-integers",
+            "source_kind": "command_result",
+            "trusted_adapter": True,
+            "exit_status": 0,
+            "content_type": "text/plain",
+            "encoding": "utf-8",
+            "truncated": False,
+            "signed": False,
+            "new_suffix": True,
+            "byte_count": byte_count,
+            "output_sha256": hashlib.sha256(output.encode()).hexdigest(),
+        }
+        item = {
+            "type": "function_call_output",
+            "call_id": "call-strict-integers",
+            "output": output,
+        }
+        for field, invalid in (
+            ("exit_status", 0.0),
+            ("exit_status", "0"),
+            ("exit_status", False),
+            ("exit_status", True),
+            ("byte_count", float(byte_count)),
+            ("byte_count", str(byte_count)),
+            ("byte_count", False),
+            ("byte_count", True),
+        ):
+            with self.subTest(field=field, value=invalid):
+                with self.assertRaisesRegex(ScanEligibilityError, field):
+                    build_line_rle_candidate(
+                        {**base, field: invalid},
+                        expected_call_id="call-strict-integers",
+                        output_item=item,
+                    )
+
+        candidate = build_line_rle_candidate(
+            base,
+            expected_call_id="call-strict-integers",
+            output_item=item,
+        )
+        self.assertEqual(candidate.original_bytes, byte_count)
+
+    def test_command_receipt_requires_exact_new_output_call_id_binding(self) -> None:
+        output = "same\nsame\n"
+        base = {
+            "schema": "compand.command_result.v1",
+            "source_kind": "command_result",
+            "trusted_adapter": True,
+            "exit_status": 0,
+            "content_type": "text/plain",
+            "encoding": "utf-8",
+            "truncated": False,
+            "signed": False,
+            "new_suffix": True,
+            "byte_count": len(output.encode()),
+            "output_sha256": hashlib.sha256(output.encode()).hexdigest(),
+        }
+        item = {
+            "type": "function_call_output",
+            "call_id": "call-bound",
+            "output": output,
+        }
+        with self.assertRaisesRegex(ScanEligibilityError, "expected_call_id is required"):
+            build_line_rle_candidate(
+                {**base, "call_id": "call-bound"},
+                expected_call_id="",
+                output_item=item,
+            )
+        with self.assertRaisesRegex(ScanEligibilityError, "receipt call_id is required"):
+            build_line_rle_candidate(
+                base,
+                expected_call_id="call-bound",
+                output_item=item,
+            )
+        with self.assertRaisesRegex(ScanEligibilityError, "receipt call_id does not match"):
+            build_line_rle_candidate(
+                {**base, "call_id": "call-other"},
+                expected_call_id="call-bound",
+                output_item=item,
+            )
+        with self.assertRaisesRegex(
+            ScanEligibilityError, "function_call_output call_id does not match"
+        ):
+            build_line_rle_candidate(
+                {**base, "call_id": "call-bound"},
+                expected_call_id="call-bound",
+                output_item={**item, "call_id": "call-other"},
+            )
+        with self.assertRaisesRegex(ScanEligibilityError, "output_sha256 does not bind"):
+            build_line_rle_candidate(
+                {
+                    **base,
+                    "call_id": "call-bound",
+                    "output_sha256": "0" * 64,
+                },
+                expected_call_id="call-bound",
+                output_item=item,
+            )
+
+    def test_equal_token_counts_cannot_advance_with_forged_derived_values(self) -> None:
+        prices = ProviderPriceTable(
+            provider="compand_fixture",
+            model="gpt-5.4",
+            effective_date=date(2026, 8, 3),
+            input_usd_per_million_tokens=10,
+            cached_input_usd_per_million_tokens=1,
+            source="dated-test-table",
+        )
+        count = ProviderTokenCount(
+            input_tokens=20,
+            cached_input_tokens=10,
+            count_call_latency_ms=1,
+        )
+        forged = LineRleShadowMeasurement.model_construct(
+            run_id="run-forged-equal-counts",
+            task_snapshot_sha256="sha256:" + "b" * 64,
+            source_artifact_sha256="sha256:" + "d" * 64,
+            candidate_artifact_sha256="sha256:" + "e" * 64,
+            repeated_span_count=1,
+            repeated_line_count=2,
+            removed_line_count=1,
+            original_bytes=10,
+            candidate_bytes=8,
+            original_count=count,
+            candidate_count=count,
+            cache_fields_exposed=True,
+            projected_original_input_usd=0.00011,
+            projected_candidate_input_usd=0.00001,
+            projected_input_savings_usd=0.0001,
+            cache_adjusted_candidate_is_cheaper=True,
+            gateway_latency_ms=1,
+            gateway_retry_count=0,
+            task_completed=True,
+            shadow_original_forwarded_byte_for_byte=True,
+            price_table=prices,
+        )
+        with self.assertRaisesRegex(ValueError, "derived economics mismatch"):
+            LineRleShadowMeasurement.model_validate(
+                forged.model_dump(mode="json", by_alias=True)
+            )
+        decision = decide_compand_scan(full_receipt(), [forged])
+        self.assertEqual(decision.decision, "stop")
+        self.assertEqual(decision.qualifying_candidate_count, 0)
+        self.assertTrue(
+            any(
+                reason.startswith("measurement_derived_value_mismatch:")
+                for reason in decision.reasons
+            )
+        )
+
+    def test_cached_tokens_above_total_fail_closed_when_validation_was_bypassed(
+        self,
+    ) -> None:
+        prices = ProviderPriceTable(
+            provider="compand_fixture",
+            model="gpt-5.4",
+            effective_date=date(2026, 8, 3),
+            input_usd_per_million_tokens=10,
+            cached_input_usd_per_million_tokens=1,
+            source="dated-test-table",
+        )
+        invalid_original = ProviderTokenCount.model_construct(
+            input_tokens=5,
+            cached_input_tokens=10,
+            count_call_latency_ms=1,
+            retry_count=0,
+            source="provider_input_tokens",
+        )
+        candidate = ProviderTokenCount(
+            input_tokens=1,
+            cached_input_tokens=0,
+            count_call_latency_ms=1,
+        )
+        forged = LineRleShadowMeasurement.model_construct(
+            run_id="run-invalid-cached-count",
+            task_snapshot_sha256="sha256:" + "b" * 64,
+            source_artifact_sha256="sha256:" + "d" * 64,
+            candidate_artifact_sha256="sha256:" + "e" * 64,
+            repeated_span_count=1,
+            repeated_line_count=2,
+            removed_line_count=1,
+            original_bytes=10,
+            candidate_bytes=8,
+            original_count=invalid_original,
+            candidate_count=candidate,
+            cache_fields_exposed=True,
+            projected_original_input_usd=-0.00004,
+            projected_candidate_input_usd=0.00001,
+            projected_input_savings_usd=-0.00005,
+            cache_adjusted_candidate_is_cheaper=False,
+            gateway_latency_ms=1,
+            gateway_retry_count=0,
+            task_completed=True,
+            shadow_original_forwarded_byte_for_byte=True,
+            price_table=prices,
+        )
+
+        decision = decide_compand_scan(full_receipt(), [forged])
+
+        self.assertEqual(decision.decision, "stop")
+        self.assertEqual(decision.qualifying_candidate_count, 0)
+        self.assertIn("measurement_primitive_evidence_invalid", decision.reasons)
+
+    def test_impossible_candidate_primitives_cannot_create_promotion_authority(
+        self,
+    ) -> None:
+        valid = qualifying_measurement()
+        impossible_values = {
+            "repeated_span_count": 1,
+            "repeated_line_count": 0,
+            "removed_line_count": 0,
+            "original_bytes": 0,
+            "candidate_bytes": 0,
+        }
+        impossible_payload = {
+            **valid.model_dump(mode="json", by_alias=True),
+            **impossible_values,
+        }
+
+        with self.assertRaisesRegex(
+            ValueError, "line-rle-v1 artifact evidence must be non-empty"
+        ):
+            LineRleShadowMeasurement.model_validate(impossible_payload)
+
+        bypassed = valid.model_copy(update=impossible_values)
+        decision = decide_compand_scan(full_receipt(), [bypassed])
+        self.assertEqual(decision.decision, "stop")
+        self.assertEqual(decision.qualifying_candidate_count, 0)
+        self.assertIn("measurement_primitive_evidence_invalid", decision.reasons)
+
+        for changes, message in (
+            (
+                {"repeated_line_count": 1, "removed_line_count": 0},
+                "each repeated span must attest at least two repeated lines",
+            ),
+            (
+                {"repeated_line_count": 3, "removed_line_count": 1},
+                "removed_line_count must equal repeated lines minus repeated spans",
+            ),
+        ):
+            with self.subTest(changes=changes):
+                structurally_impossible = {
+                    **valid.model_dump(mode="json", by_alias=True),
+                    **changes,
+                }
+                with self.assertRaisesRegex(ValueError, message):
+                    LineRleShadowMeasurement.model_validate(structurally_impossible)
+
+    def test_count_primitives_reject_booleans_and_coercible_non_integers(
+        self,
+    ) -> None:
+        valid = qualifying_measurement()
+        measurement_payload = valid.model_dump(mode="json", by_alias=True)
+        for field in (
+            "repeated_span_count",
+            "repeated_line_count",
+            "removed_line_count",
+            "original_bytes",
+            "candidate_bytes",
+            "gateway_retry_count",
+        ):
+            for invalid in (True, "1", 1.0):
+                with self.subTest(model="measurement", field=field, value=invalid):
+                    with self.assertRaises(ValueError):
+                        LineRleShadowMeasurement.model_validate(
+                            {**measurement_payload, field: invalid}
+                        )
+
+        provider_payload = valid.original_count.model_dump(mode="json", by_alias=True)
+        for field in ("input_tokens", "cached_input_tokens", "retry_count"):
+            for invalid in (True, "1", 1.0):
+                with self.subTest(model="provider_count", field=field, value=invalid):
+                    with self.assertRaises(ValueError):
+                        ProviderTokenCount.model_validate(
+                            {**provider_payload, field: invalid}
+                        )
+
+        coverage_payload = full_receipt().coverage_counts.model_dump(mode="json")
+        for field in ("captured", "bypassed", "excluded", "unknown", "total"):
+            for invalid in (True, "1", 1.0):
+                with self.subTest(model="coverage_count", field=field, value=invalid):
+                    with self.assertRaises(ValueError):
+                        CoverageCounts.model_validate(
+                            {**coverage_payload, field: invalid}
+                        )
+
+        bypassed = valid.model_copy(update={"gateway_retry_count": True})
+        decision = decide_compand_scan(full_receipt(), [bypassed])
+        self.assertEqual(decision.decision, "stop")
+        self.assertEqual(decision.qualifying_candidate_count, 0)
+        self.assertIn("measurement_primitive_evidence_invalid", decision.reasons)
+
+    def test_evidence_truth_primitives_reject_coercible_booleans(self) -> None:
+        parity_payload = parity().model_dump(mode="json", by_alias=True)
+        for field in (
+            "protocol",
+            "usage_fields",
+            "task_result",
+            "streaming",
+            "tools",
+            "errors",
+            "cancellation",
+        ):
+            for invalid in (1, 0, "yes", "false"):
+                with self.subTest(model="parity", field=field, value=invalid):
+                    with self.assertRaises(ValueError):
+                        DirectGatewayParity.model_validate(
+                            {**parity_payload, field: invalid}
+                        )
+
+        measurement_payload = qualifying_measurement().model_dump(
+            mode="json", by_alias=True
+        )
+        for field in (
+            "cache_fields_exposed",
+            "cache_adjusted_candidate_is_cheaper",
+            "task_completed",
+            "shadow_original_forwarded_byte_for_byte",
+        ):
+            for invalid in (1, 0, "yes", "false"):
+                with self.subTest(model="measurement", field=field, value=invalid):
+                    with self.assertRaises(ValueError):
+                        LineRleShadowMeasurement.model_validate(
+                            {**measurement_payload, field: invalid}
+                        )
+
+        coverage_payload = full_receipt().model_dump(mode="json", by_alias=True)
+        for field in ("direct_inference_egress_observed", "mutation_blocked"):
+            for invalid in (1, 0, "yes", "false"):
+                with self.subTest(model="coverage", field=field, value=invalid):
+                    with self.assertRaises(ValueError):
+                        type(full_receipt()).model_validate(
+                            {**coverage_payload, field: invalid}
+                        )
+
+        for invalid in (True, 1, "false"):
+            with self.subTest(model="decision", value=invalid):
+                with self.assertRaises(ValueError):
+                    CompandScanDecision(
+                        decision="advance",
+                        reasons=(),
+                        measured_candidate_count=0,
+                        qualifying_candidate_count=0,
+                        mutation_authorized=invalid,
+                    )
+
+    def test_evidence_cli_rejects_boolean_count_primitive(self) -> None:
+        fixture_path = (
+            ROOT / "fixtures/compand/dogfood-32/fixture-loopback-input.json"
+        )
+        payload = json.loads(fixture_path.read_text(encoding="utf-8"))
+        measurement = qualifying_measurement().model_dump(mode="json", by_alias=True)
+        measurement["repeated_span_count"] = True
+        payload["measurements"] = [measurement]
+
+        with tempfile.TemporaryDirectory(prefix="dogfood32-strict-count-") as tmp:
+            input_path = Path(tmp) / "input.json"
+            output_path = Path(tmp) / "output.json"
+            input_path.write_text(json.dumps(payload), encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/compand_scan_evidence.py"),
+                    str(input_path),
+                    str(output_path),
+                ],
+                cwd=ROOT,
+                env=evidence_cli_environment(),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("repeated_span_count", result.stderr)
+            self.assertFalse(output_path.exists())
+
+    def test_evidence_cli_rejects_invalid_system_hashes_without_output(self) -> None:
+        fixture_path = (
+            ROOT / "fixtures/compand/dogfood-32/fixture-loopback-input.json"
+        )
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+        invalid_hashes = (
+            ("client_binary_sha256", "not-a-content-address"),
+            ("task_snapshot_sha256", "sha256:" + "B" * 64),
+            ("configuration_sha256", ""),
+        )
+
+        with tempfile.TemporaryDirectory(prefix="dogfood32-system-hash-") as tmp:
+            for index, (field, invalid) in enumerate(invalid_hashes):
+                with self.subTest(field=field):
+                    payload = json.loads(json.dumps(fixture))
+                    payload["system"][field] = invalid
+                    input_path = Path(tmp) / f"input-{index}.json"
+                    output_path = Path(tmp) / f"output-{index}.json"
+                    input_path.write_text(json.dumps(payload), encoding="utf-8")
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            str(ROOT / "scripts/compand_scan_evidence.py"),
+                            str(input_path),
+                            str(output_path),
+                        ],
+                        cwd=ROOT,
+                        env=evidence_cli_environment(),
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(field, result.stderr)
+                    self.assertFalse(output_path.exists())
+
+    def test_evidence_cli_refuses_to_replace_existing_output(self) -> None:
+        fixture_path = (
+            ROOT / "fixtures/compand/dogfood-32/fixture-loopback-input.json"
+        )
+        original = b"immutable evidence already published\n"
+
+        with tempfile.TemporaryDirectory(prefix="dogfood32-existing-output-") as tmp:
+            output_path = Path(tmp) / "evidence.json"
+            output_path.write_bytes(original)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/compand_scan_evidence.py"),
+                    str(fixture_path),
+                    str(output_path),
+                ],
+                cwd=ROOT,
+                env=evidence_cli_environment(),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                f"refusing to replace immutable evidence: {output_path}",
+                result.stderr,
+            )
+            self.assertEqual(output_path.read_bytes(), original)
+
+    def test_evidence_cli_exclusively_creates_concurrent_output(self) -> None:
+        fixture_path = (
+            ROOT / "fixtures/compand/dogfood-32/fixture-loopback-input.json"
+        )
+
+        with tempfile.TemporaryDirectory(prefix="dogfood32-concurrent-output-") as tmp:
+            output_path = Path(tmp) / "evidence.json"
+            command = [
+                sys.executable,
+                str(ROOT / "scripts/compand_scan_evidence.py"),
+                str(fixture_path),
+                str(output_path),
+            ]
+            processes = [
+                subprocess.Popen(
+                    command,
+                    cwd=ROOT,
+                    env=evidence_cli_environment(),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                for _ in range(2)
+            ]
+            results = [
+                (process.returncode, stderr)
+                for process in processes
+                for _, stderr in [process.communicate()]
+            ]
+
+            self.assertEqual(
+                sum(returncode == 0 for returncode, _ in results),
+                1,
+                results,
+            )
+            loser_errors = [
+                stderr for returncode, stderr in results if returncode != 0
+            ]
+            self.assertEqual(len(loser_errors), 1, results)
+            self.assertIn(
+                f"refusing to replace immutable evidence: {output_path}",
+                loser_errors[0],
+            )
+            compiled = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual(compiled["ces_phase"], "phase_1_scan")
+
+    def test_evidence_cli_derives_and_enforces_phase_one_claim_ceiling(self) -> None:
+        fixture_path = (
+            ROOT / "fixtures/compand/dogfood-32/fixture-loopback-input.json"
+        )
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+        with tempfile.TemporaryDirectory(prefix="dogfood32-claim-ceiling-") as tmp:
+            output_path = Path(tmp) / "baseline-output.json"
+            baseline = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/compand_scan_evidence.py"),
+                    str(fixture_path),
+                    str(output_path),
+                ],
+                cwd=ROOT,
+                env=evidence_cli_environment(),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(baseline.returncode, 0, baseline.stderr)
+            compiled = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual(compiled["ces_phase"], "phase_1_scan")
+            self.assertEqual(compiled["evidence_state"], "exploratory")
+            self.assertEqual(compiled["claim_limit"], "diagnostic_only")
+            self.assertEqual(compiled["decision"]["decision"], "low_coverage_hold")
+
+            contradictions = (
+                {"evidence_state": "verified"},
+                {"claim_limit": "production_roi"},
+                {"claim_limit": "broad_product_savings"},
+                {"evidence_state": "unknown_green_state"},
+                {"claim_limit": "unbounded_claim"},
+            )
+            for index, changes in enumerate(contradictions):
+                with self.subTest(changes=changes):
+                    input_path = Path(tmp) / f"contradiction-{index}.json"
+                    rejected_output = Path(tmp) / f"rejected-{index}.json"
+                    input_path.write_text(
+                        json.dumps({**fixture, **changes}), encoding="utf-8"
+                    )
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            str(ROOT / "scripts/compand_scan_evidence.py"),
+                            str(input_path),
+                            str(rejected_output),
+                        ],
+                        cwd=ROOT,
+                        env=evidence_cli_environment(),
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(rejected_output.exists())
+
+    def test_bundle_recomputes_decision_from_every_measurement(self) -> None:
+        receipt = full_receipt()
+        qualifying = qualifying_measurement()
+        mismatched = qualifying.model_copy(
+            update={"task_snapshot_sha256": "sha256:" + "d" * 64}
+        )
+        measurements = (qualifying, mismatched)
+        canonical = decide_compand_scan(receipt, measurements)
+        self.assertEqual(canonical.decision, "stop")
+        self.assertEqual(canonical.measured_candidate_count, 2)
+        self.assertEqual(canonical.qualifying_candidate_count, 1)
+        self.assertIn("measurement_task_snapshot_mismatch", canonical.reasons)
+
+        caller_supplied_advance = CompandScanDecision(
+            decision="advance",
+            reasons=("cache_adjusted_candidate_is_cheaper",),
+            measured_candidate_count=2,
+            qualifying_candidate_count=1,
+        )
+        authority = CompandScanEvidenceBundle.derive_authority(
+            receipt,
+            measurements,
+            caller_supplied_advance,
+        )
+        self.assertEqual(authority.evidence_state, "exploratory")
+        self.assertEqual(authority.claim_limit, "diagnostic_only")
+
+        common = {
+            "evidence_state": "exploratory",
+            "claim_limit": "diagnostic_only",
+            "source_input_sha256": "sha256:" + "e" * 64,
+            "coverage_receipt": receipt,
+            "measurements": measurements,
+        }
+        with self.assertRaisesRegex(
+            ValueError, "decision does not match the canonical complete-evidence decision"
+        ):
+            CompandScanEvidenceBundle(
+                **common,
+                decision=caller_supplied_advance,
+            )
+
+        downgraded = CompandScanEvidenceBundle(
+            **common,
+            decision=canonical,
+        )
+        self.assertEqual(downgraded.claim_limit, "diagnostic_only")
+
+    def test_malformed_candidate_artifact_hash_is_rejected(self) -> None:
+        payload = qualifying_measurement().model_dump(mode="json", by_alias=True)
+        payload["candidate_artifact_sha256"] = "not-a-content-address"
+
+        with self.assertRaisesRegex(
+            ValueError, "candidate_artifact_sha256 is not canonical sha256 evidence"
+        ):
+            LineRleShadowMeasurement.model_validate(payload)
+
+
+if __name__ == "__main__":
+    unittest.main()

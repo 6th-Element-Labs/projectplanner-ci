@@ -1,0 +1,106 @@
+{
+  "claim_limit": "diagnostic_only",
+  "coverage_inputs": [
+    {
+      "certified_feature": "responses",
+      "client_version": "0.144.5",
+      "correlation_id": "observed-normal-stream",
+      "egress_classification": "captured",
+      "mode": "passthrough",
+      "observed_endpoint": "/v1/responses",
+      "source_version": "ADAPTER-39@cf94eb008933+693e1e9c3b1d",
+      "tuple_status": "certified"
+    },
+    {
+      "certified_feature": "responses",
+      "client_version": "0.144.5",
+      "correlation_id": "observed-tool-call",
+      "egress_classification": "captured",
+      "mode": "scan",
+      "observed_endpoint": "/v1/responses",
+      "source_version": "ADAPTER-39@cf94eb008933+693e1e9c3b1d",
+      "tuple_status": "certified"
+    },
+    {
+      "certified_feature": "responses",
+      "client_version": "0.144.5",
+      "correlation_id": "observed-tool-output-followup",
+      "egress_classification": "captured",
+      "mode": "scan",
+      "observed_endpoint": "/v1/responses",
+      "source_version": "ADAPTER-39@cf94eb008933+693e1e9c3b1d",
+      "tuple_status": "certified"
+    }
+  ],
+  "egress_observations": [
+    {
+      "classification": "captured",
+      "correlation_id": "observed-normal-stream",
+      "endpoint": "/v1/responses",
+      "method": "POST",
+      "reason_code": "fixture_gateway_path"
+    },
+    {
+      "classification": "captured",
+      "correlation_id": "observed-tool-call",
+      "endpoint": "/v1/responses",
+      "method": "POST",
+      "reason_code": "fixture_gateway_path"
+    },
+    {
+      "classification": "captured",
+      "correlation_id": "observed-tool-output-followup",
+      "endpoint": "/v1/responses",
+      "method": "POST",
+      "reason_code": "fixture_gateway_path"
+    }
+  ],
+  "evidence_state": "exploratory",
+  "exercised_features": [
+    "responses",
+    "sse",
+    "tools",
+    "usage",
+    "errors",
+    "cancellation"
+  ],
+  "limitations": [
+    "Loopback hooks are not process-level egress observation for a live Codex task.",
+    "No natural eligible repeated-line candidate was provider-counted.",
+    "The explicit decision must remain low_coverage_hold and cannot authorize ENFORCE-22."
+  ],
+  "measurements": [],
+  "observation_window": {
+    "ancillary_destination_classes": [],
+    "method": "fixture_loopback",
+    "observer_version": "ADAPTER-39-test-harness",
+    "window_ended_at": "2026-08-03T00:05:00Z",
+    "window_started_at": "2026-08-03T00:00:00Z"
+  },
+  "parity": {
+    "cancellation": true,
+    "errors": true,
+    "protocol": true,
+    "streaming": true,
+    "task_result": true,
+    "tools": true,
+    "usage_fields": true
+  },
+  "system": {
+    "client_binary_sha256": "sha256:d96ae1ca1ff6fc8587842fa04c92d3ee4d31651a811c2f89b65fcfd9c28473e2",
+    "client_version": "0.144.5",
+    "configuration_sha256": "sha256:c19ca793dbb55778997c83d65ba51c6ec6907aba0b65c630622d7e0ee205072b",
+    "credential_environment_variable": "COMPAND_FIXTURE_API_KEY",
+    "gateway_version": "ADAPTER-39@cf94eb008933+693e1e9c3b1d",
+    "model": "gpt-5.4",
+    "os_arch": "Mac OS 26.3.0 arm64",
+    "provider_base_url": "http://127.0.0.1:18765/v1",
+    "provider_id": "compand_fixture",
+    "provider_name": "Compand Fixture Capture",
+    "reasoning_effort": "high",
+    "request_max_retries": 0,
+    "stream_idle_timeout_ms": 5000,
+    "stream_max_retries": 0,
+    "task_snapshot_sha256": "sha256:e1535535e5d128bb0b2d86e4fe3b80c3a401995421691cfe1d1fa40b485b6669"
+  }
+}
