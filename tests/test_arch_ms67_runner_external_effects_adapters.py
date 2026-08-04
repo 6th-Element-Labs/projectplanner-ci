@@ -35,6 +35,7 @@ def ok(condition, message):
 
 EXTRACTED_MCP = {
     "list_runner_sessions": runner_tools,
+    "get_runner_session": runner_tools,
     "register_runner_session": runner_tools,
     "claim_runner_control": runner_tools,
     "complete_runner_control": runner_tools,

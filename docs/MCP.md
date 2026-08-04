@@ -110,10 +110,14 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
   requested_role, ...)` — authenticated exact-execution handoff. A stale cursor
   cannot hide a newer event, and Capacity alone expires the fenced runner lease.
 - `register_host(...)`, `heartbeat_host(...)`, `list_agent_hosts(...)`, `host_status(...)`
-- `register_runner_session(...)`, `list_runner_sessions(...)`,
+- `register_runner_session(...)`, `list_runner_sessions(...)`, `get_runner_session(...)`,
   `list_runner_control_requests(...)`, `claim_runner_control(...)`,
   `complete_runner_control(...)`. Operator start, open, message, stop, and retry
-  use the task-execution tools; callers never select a runner id.
+  use the task-execution tools; callers never select a runner id. Runner-session lists
+  are bounded keyset pages: pass the last row's `heartbeat_at` and
+  `runner_session_id` as the next page cursor. Compact pages default to 50 rows
+  (maximum 200), full pages default to 10 (maximum 25), and exact expanded
+  evidence belongs in `get_runner_session`.
 - `create_work_session(...)`, `get_work_session(...)`, `list_work_sessions(...)`,
   `update_work_session(...)` — bind code work to project, repo role, branch, worktree/clone path,
   hygiene state, leases, and lifecycle before later claim/complete/merge gates enforce it.

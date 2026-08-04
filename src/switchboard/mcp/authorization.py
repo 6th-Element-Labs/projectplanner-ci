@@ -172,6 +172,7 @@ READ_TOOLS = frozenset({
     "get_deliverable_breakdown_proposal",
     "get_deliverable_dependency_graph", "get_deliverable_tally",
     "get_autopilot", "get_execution_transcript", "get_external_ci_run",
+    "get_runner_session",
     "get_kpi_tally", "get_lane_delta",
     "get_mcp_observability", "get_message_status", "get_mission_brief",
     "get_mission_status", "get_narration_health", "get_plan_signals",

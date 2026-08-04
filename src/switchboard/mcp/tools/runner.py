@@ -24,6 +24,12 @@ class RunnerToolServices:
 
 _SERVICES: RunnerToolServices | None = None
 
+_DEFAULT_COMPACT_LIMIT = 50
+_DEFAULT_FULL_LIMIT = 10
+_MAX_COMPACT_LIMIT = 200
+_MAX_FULL_LIMIT = 25
+_MAX_RUNNER_RESPONSE_BYTES = 1_000_000
+
 
 def _services() -> RunnerToolServices:
     if _SERVICES is None:
@@ -34,12 +40,72 @@ def _services() -> RunnerToolServices:
 def list_runner_sessions(project: str = "maxwell", host_id: str = "",
                          runtime: str = "", task_id: str = "",
                          status: str = "", include_stale: bool = False,
-                         full: bool = False) -> str:
+                         full: bool = False, limit: int = 0,
+                         before_heartbeat_at: float | None = None,
+                         before_runner_session_id: str = "") -> str:
+    """List one bounded keyset page, newest first.
+
+    For the next page, pass the last row's heartbeat_at and runner_session_id
+    back as before_heartbeat_at and before_runner_session_id. ``full`` controls
+    fields, never cardinality; use get_runner_session for exact full detail.
+    """
     services = _services()
+    maximum = _MAX_FULL_LIMIT if full else _MAX_COMPACT_LIMIT
+    requested = int(limit or (_DEFAULT_FULL_LIMIT if full else _DEFAULT_COMPACT_LIMIT))
+    if requested < 1 or requested > maximum:
+        return services.dumps({
+            "error": "runner_session_limit_out_of_range",
+            "failure_class": "invalid_input",
+            "requested_limit": requested,
+            "maximum_limit": maximum,
+            "message": "Use bounded keyset pages or get_runner_session for one full record.",
+        })
+    if ((before_heartbeat_at is None) != (not before_runner_session_id)):
+        return services.dumps({
+            "error": "runner_session_cursor_incomplete",
+            "failure_class": "invalid_input",
+            "message": "before_heartbeat_at and before_runner_session_id must be supplied together.",
+        })
     result = runner_control_command.list_sessions(
         host_id=host_id, runtime=runtime, task_id=task_id, status=status,
-        include_stale=include_stale, project=project)
-    return services.dumps(result if full else read_summaries.runner_sessions(result))
+        include_stale=include_stale, limit=requested,
+        before_heartbeat_at=before_heartbeat_at,
+        before_runner_session_id=before_runner_session_id,
+        include_claim=False, summary=not full, project=project)
+    payload = result if full else read_summaries.runner_sessions(result)
+    serialized = services.dumps(payload)
+    if len(serialized.encode("utf-8")) > _MAX_RUNNER_RESPONSE_BYTES:
+        return services.dumps({
+            "error": "runner_session_result_too_large",
+            "failure_class": "failed_gate",
+            "returned_rows": len(result),
+            "maximum_bytes": _MAX_RUNNER_RESPONSE_BYTES,
+            "message": "Retry with a smaller limit or use get_runner_session for exact detail.",
+        })
+    return serialized
+
+
+def get_runner_session(runner_session_id: str,
+                       project: str = "maxwell") -> str:
+    """Return one exact full runner record instead of expanding list history."""
+    services = _services()
+    result = runner_control_command.get_session(
+        runner_session_id, project=project)
+    if result is None:
+        return services.dumps({
+            "error": "runner_session_not_found",
+            "runner_session_id": runner_session_id,
+        })
+    serialized = services.dumps(result)
+    if len(serialized.encode("utf-8")) > _MAX_RUNNER_RESPONSE_BYTES:
+        return services.dumps({
+            "error": "runner_session_result_too_large",
+            "failure_class": "failed_gate",
+            "runner_session_id": runner_session_id,
+            "maximum_bytes": _MAX_RUNNER_RESPONSE_BYTES,
+            "message": "Use get_execution_transcript or the audit export for oversized evidence.",
+        })
+    return serialized
 
 
 def register_runner_session(runner_session_json: str, ctx: Context,
@@ -96,6 +162,7 @@ def complete_runner_control(request_id: str, ctx: Context,
 
 RUNNER_TOOL_NAMES = (
     "list_runner_sessions",
+    "get_runner_session",
     "register_runner_session",
     "list_runner_control_requests",
     "claim_runner_control",

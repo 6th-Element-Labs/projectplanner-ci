@@ -245,6 +245,9 @@ ADDITIVE_COLUMN_MIGRATIONS: List[Tuple[str, str, str, str]] = [
 # Idempotent DDL migrations (``CREATE ... IF NOT EXISTS``) applied after the column set,
 # once each, recorded in the same ledger. (name, sql).
 DDL_MIGRATIONS: List[Tuple[str, str]] = [
+    ("0136_ix_runner_sessions_heartbeat_id",
+     "CREATE INDEX IF NOT EXISTS ix_runner_sessions_heartbeat_id "
+     "ON runner_sessions(heartbeat_at DESC, runner_session_id)"),
     ("0121_execution_publications",
      "CREATE TABLE IF NOT EXISTS execution_publications ("
      "publication_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, "

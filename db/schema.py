@@ -1027,6 +1027,8 @@ def apply_schema(c):
             ON runner_sessions(host_id, heartbeat_at);
         CREATE INDEX IF NOT EXISTS ix_runner_sessions_task
             ON runner_sessions(task_id, status);
+        CREATE INDEX IF NOT EXISTS ix_runner_sessions_heartbeat_id
+            ON runner_sessions(heartbeat_at DESC, runner_session_id);
         CREATE TABLE IF NOT EXISTS direct_session_tokens (
             token_hash        TEXT PRIMARY KEY,
             project_id        TEXT NOT NULL,

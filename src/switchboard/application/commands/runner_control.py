@@ -136,12 +136,27 @@ def list_sessions(
         status: str = "",
         include_stale: bool = False,
         pending_completion: bool = False,
+        limit: int = 0,
+        before_heartbeat_at: Optional[float] = None,
+        before_runner_session_id: str = "",
+        include_claim: bool = True,
+        summary: bool = False,
         project: Optional[str] = None) -> list[dict[str, Any]]:
     return runner_repo.list_runner_sessions(
         host_id=host_id, runtime=runtime, task_id=task_id, status=status,
         include_stale=include_stale, pending_completion=pending_completion,
+        limit=limit, before_heartbeat_at=before_heartbeat_at,
+        before_runner_session_id=before_runner_session_id,
+        include_claim=include_claim, summary=summary,
         project=project or DEFAULT_PROJECT,
     )
+
+
+def get_session(runner_session_id: str, *,
+                project: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """Return one exact full-fidelity runner record, including its bound claim."""
+    return runner_repo.get_runner_session(
+        runner_session_id, project=project or DEFAULT_PROJECT)
 
 
 def resolve_watch(

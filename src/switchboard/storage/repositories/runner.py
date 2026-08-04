@@ -2863,11 +2863,43 @@ def upsert_runner_session(record: Dict[str, Any], principal_id: str = "",
     return result
 
 
+def _runner_session_summary_row(row: sqlite3.Row,
+                                now: Optional[float] = None) -> Dict[str, Any]:
+    """Build the stable list projection without expanding snapshot/control blobs."""
+    now = time.time() if now is None else now
+    d = dict(row)
+    metadata = _json_obj(d.pop("metadata_json", "{}"), {})
+    d["expires_at"] = execution_liveness.expires_at(d)
+    d["stale"] = execution_liveness.is_expired(d, now=now)
+    d["live"] = execution_liveness.is_live(d, now=now)
+    identity = execution_liveness.execution_identity({**d, "metadata": metadata})
+    d["execution"] = identity
+    for field in (
+            "work_session_id", "execution_id", "execution_generation",
+            "execution_role", "source_sha", "branch", "ended_at"):
+        value = metadata.get(field)
+        if value not in (None, ""):
+            d[field] = value
+    d.setdefault("execution_id", identity.get("execution_id"))
+    d.setdefault("execution_generation", identity.get("generation"))
+    d.setdefault("execution_role", identity.get("role"))
+    return d
+
+
 def list_runner_sessions(host_id: str = "", runtime: str = "", task_id: str = "",
                          status: str = "", include_stale: bool = False,
                          pending_completion: bool = False,
-                         project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
-    q = "SELECT * FROM runner_sessions WHERE 1=1"
+                         project: str = DEFAULT_PROJECT, *, limit: int = 0,
+                         before_heartbeat_at: Optional[float] = None,
+                         before_runner_session_id: str = "",
+                         include_claim: bool = True,
+                         summary: bool = False) -> List[Dict[str, Any]]:
+    columns = (
+        "runner_session_id,host_id,agent_id,runtime,task_id,claim_id,pid,status,cwd,"
+        "metadata_json,principal_id,started_at,heartbeat_at,heartbeat_ttl_s,updated_at"
+        if summary else "*"
+    )
+    q = f"SELECT {columns} FROM runner_sessions WHERE 1=1"
     params: List[Any] = []
     if host_id:
         q += " AND host_id=?"; params.append(host_id)
@@ -2877,11 +2909,32 @@ def list_runner_sessions(host_id: str = "", runtime: str = "", task_id: str = ""
         q += " AND task_id=?"; params.append(task_id)
     if status:
         q += " AND status=?"; params.append(status)
-    q += " ORDER BY heartbeat_at DESC, runner_session_id"
     now = time.time()
+    if not include_stale:
+        # SQL equivalent of execution_liveness.is_expired. This only narrows
+        # rows; the domain predicate below remains the liveness authority.
+        q += (" AND heartbeat_at + CASE WHEN heartbeat_ttl_s < ? THEN ? "
+              "ELSE heartbeat_ttl_s END > ?")
+        params.extend((execution_liveness.MIN_HEARTBEAT_TTL_S,
+                       execution_liveness.MIN_HEARTBEAT_TTL_S, now))
+    if before_heartbeat_at is not None:
+        q += (" AND (heartbeat_at < ? OR "
+              "(heartbeat_at = ? AND runner_session_id > ?))")
+        params.extend((before_heartbeat_at, before_heartbeat_at,
+                       str(before_runner_session_id or "")))
+    q += " ORDER BY heartbeat_at DESC, runner_session_id"
+    if int(limit or 0) > 0:
+        q += " LIMIT ?"
+        params.append(int(limit))
     with _conn(project) as c:
         rows = c.execute(q, params).fetchall()
-        sessions = [_runner_session_row(r, now=now, include_claim=True, c=c) for r in rows]
+        if summary:
+            sessions = [_runner_session_summary_row(r, now=now) for r in rows]
+        else:
+            sessions = [
+                _runner_session_row(r, now=now, include_claim=include_claim, c=c)
+                for r in rows
+            ]
     if pending_completion:
         sessions = [
             session for session in sessions
