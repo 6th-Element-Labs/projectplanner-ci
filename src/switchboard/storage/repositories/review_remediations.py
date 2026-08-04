@@ -24,6 +24,9 @@ from switchboard.domain.completion.repair_proof import (
 from switchboard.storage.repositories.coordination import (
     deliver_coordination_escalation,
 )
+from switchboard.storage.repositories.mission_journal import (
+    default_mission_journal_repository,
+)
 
 
 REMEDIATION_SCHEMA = "switchboard.review_remediation.v1"
@@ -946,6 +949,16 @@ class ReviewRemediationRepository:
                 "lane": str(task["workstream_id"] or ""),
                 "max_rounds": max_rounds,
             })
+            if human_required:
+                human_hold = default_mission_journal_repository.record_human_requested_in(
+                    c,
+                    task_id,
+                    project=project,
+                    human_request_id=f"review-remediation:{remediation_id}",
+                    reason_code=reason,
+                    now=now,
+                )
+                result["mission_human_hold"] = human_hold
             return result
 
     @staticmethod

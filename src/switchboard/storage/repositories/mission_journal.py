@@ -1165,6 +1165,7 @@ class MissionJournalRepository:
                             "yield key already identifies a different mission event",
                         )
                     persisted_payload = dict(event.get("payload") or {})
+                    human_held = str(item["state"] or "") == "HUMAN"
                     return {
                         "schema": "switchboard.mission_yield.v4",
                         "task_id": task_id,
@@ -1178,7 +1179,7 @@ class MissionJournalRepository:
                         "cursor_current": bool(
                             persisted_payload.get("cursor_current")
                         ),
-                        "state": "ACTIVE",
+                        "state": "HUMAN" if human_held else "ACTIVE",
                         "pending_state": (
                             "WAITING"
                             if normalized_outcome == "waiting"
@@ -1211,6 +1212,7 @@ class MissionJournalRepository:
                     },
                 )
                 if event["created"]:
+                    human_held = str(item["state"] or "") == "HUMAN"
                     # A current ``continue`` yield is the material handoff the
                     # next pager generation must consume.  Keep that event
                     # unhandled so its authenticated requested role and exact
@@ -1218,17 +1220,31 @@ class MissionJournalRepository:
                     # the reporting runner is terminal.  ``waiting`` consumes
                     # its own receipt and remains parked until a later material
                     # observation arrives.
-                    handled = (
-                        int(event["sequence"])
-                        if cursor_current and normalized_outcome == "waiting"
-                        else int(item["handled_through"] or 0)
-                    )
-                    connection.execute(
-                        "UPDATE mission_items SET state='ACTIVE',requested_role=?,"
-                        "handled_through=?,version=version+1,updated_at=? "
-                        "WHERE project_id=? AND task_id=?",
-                        (requested_role, handled, timestamp, project, task_id),
-                    )
+                    # A Human hold is established before the reviewer yields.
+                    # The yield is still required for ADR-0008 C3: its caller
+                    # must surrender the exact Capacity lease.  It is terminal
+                    # cleanup, however, not a new remediation handoff.  Consume
+                    # the receipt and preserve HUMAN so Mission Bot cannot turn
+                    # this post-verdict yield into another generation.
+                    if human_held:
+                        connection.execute(
+                            "UPDATE mission_items SET handled_through=?,"
+                            "version=version+1,updated_at=? "
+                            "WHERE project_id=? AND task_id=? AND state='HUMAN'",
+                            (int(event["sequence"]), timestamp, project, task_id),
+                        )
+                    else:
+                        handled = (
+                            int(event["sequence"])
+                            if cursor_current and normalized_outcome == "waiting"
+                            else int(item["handled_through"] or 0)
+                        )
+                        connection.execute(
+                            "UPDATE mission_items SET state='ACTIVE',requested_role=?,"
+                            "handled_through=?,version=version+1,updated_at=? "
+                            "WHERE project_id=? AND task_id=?",
+                            (requested_role, handled, timestamp, project, task_id),
+                        )
                 persisted_payload = dict(event.get("payload") or {})
                 return {
                     "schema": "switchboard.mission_yield.v4",
@@ -1241,7 +1257,7 @@ class MissionJournalRepository:
                         persisted_payload.get("latest_sequence_at_yield") or 0
                     ),
                     "cursor_current": bool(persisted_payload.get("cursor_current")),
-                    "state": "ACTIVE",
+                    "state": "HUMAN" if str(item["state"] or "") == "HUMAN" else "ACTIVE",
                     "pending_state": (
                         "WAITING"
                         if normalized_outcome == "waiting"
