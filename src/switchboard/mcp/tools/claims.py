@@ -204,13 +204,15 @@ def finish_turn(claim_id: str, task_id: str, execution_id: str, generation: int,
 
 
 def record_executed_test_run(test_run_json: str, ctx: Context,
-                             project: str = "maxwell") -> str:
+                             project: str = "maxwell",
+                             agent_id: str = "") -> str:
     """Record one passing executed test run as typed completion evidence (COORD-62).
 
     test_run_json follows switchboard.executed_test_run.record_command.v1: task_id,
     work_session_id, commands (list, min 1), passed and/or exit_code, output_sha256
     (64-hex over the combined run output), optional branch/head_sha cross-checks.
-    completed_at is stamped server-side. One call writes work_session.hygiene AND
+    completed_at is stamped server-side. Shared-token callers must pass agent_id
+    for their live registered runtime. One call writes work_session.hygiene AND
     claim evidence atomically and returns the executed-test gate's verdict, so a
     runner learns immediately whether completion/merge authorization accept it.
     """
@@ -224,7 +226,7 @@ def record_executed_test_run(test_run_json: str, ctx: Context,
         return services.dumps({"error": "test_run_json must be a JSON object"})
     task_id = str(payload.get("task_id") or "").strip()
     binding = services.resolve_write_actor(
-        principal, project=project, task_id=task_id, agent_id="")
+        principal, project=project, task_id=task_id, agent_id=agent_id)
     if not binding.get("ok"):
         return services.dumps(binding)
     result = executed_test_runs_command.execute_mapping(
