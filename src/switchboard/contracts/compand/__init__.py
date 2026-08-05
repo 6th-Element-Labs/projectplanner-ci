@@ -2,6 +2,9 @@
 
 from .v1 import (
     CompandScanDecision,
+    CompandArtifactError,
+    CompandPurgeResponse,
+    CompandHealthResponse,
     CompandScanEvidenceAuthority,
     CompandScanEvidenceBundle,
     CompandSystemSnapshot,
@@ -23,6 +26,9 @@ from .v1 import (
 
 __all__ = [
     "CompandScanDecision",
+    "CompandArtifactError",
+    "CompandPurgeResponse",
+    "CompandHealthResponse",
     "CompandScanEvidenceAuthority",
     "CompandScanEvidenceBundle",
     "CompandSystemSnapshot",

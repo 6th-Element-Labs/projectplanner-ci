@@ -20,6 +20,7 @@ from switchboard.domain.compand import (
     validate_upstream_origin,
 )
 from switchboard.services.compand.settings import CompandGatewaySettings
+from switchboard.storage.repositories.compand import CompandStateRepository
 
 
 def create_app(
@@ -41,6 +42,10 @@ def create_app(
         raise GatewaySecurityError("upstream OpenAI credential must be a string")
     if not isinstance(cfg.frozen_tuple_config_attested, bool):
         raise GatewaySecurityError("frozen tuple configuration attestation must be boolean")
+    if cfg.state_db_path != ":memory:" and not cfg.capability_secret:
+        raise GatewaySecurityError(
+            "persistent Compand state requires COMPAND_CAPABILITY_SECRET"
+        )
     registry = (
         credentials
         if credentials is not None
@@ -58,6 +63,13 @@ def create_app(
         follow_redirects=False,
         trust_env=False,
     )
+    repository = (
+        CompandStateRepository(
+            cfg.state_db_path, capability_secret=cfg.capability_secret
+        )
+        if cfg.mode.value != "passthrough" or cfg.state_db_path != ":memory:"
+        else None
+    )
     runtime = CompandGatewayRuntime(
         settings=cfg,
         credentials=registry,
@@ -65,6 +77,7 @@ def create_app(
         telemetry_sink=telemetry_sink or (lambda _event: None),
         coverage_sink=coverage_sink or (lambda _event: None),
         egress_observer=egress_observer or (lambda _event: None),
+        repository=repository,
     )
 
     @asynccontextmanager
@@ -73,12 +86,14 @@ def create_app(
             yield
         finally:
             await client.aclose()
+            if repository is not None:
+                repository.close()
 
     application = FastAPI(
         title="Compand — OpenAI Responses pilot gateway",
         version="0.1.0",
         description=(
-            "No-transform passthrough and shadow Scan adapter. Caddy remains the edge; "
+            "Passthrough, shadow Scan, and receipt-gated Enforce adapter. Caddy remains the edge; "
             "this service owns neither model routing nor Switchboard lifecycle."
         ),
         lifespan=lifespan,

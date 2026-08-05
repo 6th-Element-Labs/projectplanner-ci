@@ -21,6 +21,10 @@ class CompandGatewaySettings:
     source_version: str = "ADAPTER-39"
     allow_http_loopback: bool = False
     frozen_tuple_config_attested: bool = False
+    state_db_path: str = ":memory:"
+    artifact_retention_seconds: int = 3600
+    session_retention_seconds: int = 86400
+    capability_secret: str = field(default="", repr=False)
 
     @classmethod
     def from_env(cls) -> "CompandGatewaySettings":
@@ -54,7 +58,7 @@ class CompandGatewaySettings:
             mode = GatewayMode(raw_mode)
         except ValueError as exc:
             raise ValueError(
-                "COMPAND_GATEWAY_MODE must be passthrough or scan"
+                "COMPAND_GATEWAY_MODE must be passthrough, scan, or enforce"
             ) from exc
         try:
             max_request_bytes = int(
@@ -64,6 +68,24 @@ class CompandGatewaySettings:
             raise ValueError("COMPAND_MAX_REQUEST_BYTES must be an integer") from exc
         if max_request_bytes <= 0:
             raise ValueError("COMPAND_MAX_REQUEST_BYTES must be positive")
+        try:
+            artifact_retention_seconds = int(
+                os.environ.get("COMPAND_ARTIFACT_RETENTION_SECONDS") or "3600"
+            )
+        except ValueError as exc:
+            raise ValueError(
+                "COMPAND_ARTIFACT_RETENTION_SECONDS must be an integer"
+            ) from exc
+        if artifact_retention_seconds < 0:
+            raise ValueError("COMPAND_ARTIFACT_RETENTION_SECONDS must not be negative")
+        try:
+            session_retention_seconds = int(
+                os.environ.get("COMPAND_SESSION_RETENTION_SECONDS") or "86400"
+            )
+        except ValueError as exc:
+            raise ValueError("COMPAND_SESSION_RETENTION_SECONDS must be an integer") from exc
+        if session_retention_seconds <= 0:
+            raise ValueError("COMPAND_SESSION_RETENTION_SECONDS must be positive")
         return cls(
             upstream_origin=(
                 os.environ.get("COMPAND_UPSTREAM_ORIGIN") or "https://api.openai.com"
@@ -86,4 +108,10 @@ class CompandGatewaySettings:
             .strip()
             .lower()
             in {"1", "true", "yes", "on"},
+            state_db_path=(
+                os.environ.get("COMPAND_STATE_DB_PATH") or ":memory:"
+            ).strip(),
+            artifact_retention_seconds=artifact_retention_seconds,
+            session_retention_seconds=session_retention_seconds,
+            capability_secret=os.environ.get("COMPAND_CAPABILITY_SECRET") or "",
         )

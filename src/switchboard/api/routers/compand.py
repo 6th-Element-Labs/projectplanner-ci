@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import sqlite3
 import time
 import uuid
 from dataclasses import dataclass
@@ -21,7 +23,14 @@ from switchboard.application.commands.compand_gateway import (
     plan_gateway_request,
     upstream_request_headers,
 )
+from switchboard.application.commands.compand_enforce import (
+    CompandRuntimeUnavailable,
+    prepare_compand_request,
+)
 from switchboard.contracts.compand import (
+    CompandArtifactError,
+    CompandHealthResponse,
+    CompandPurgeResponse,
     EgressObservation,
     GatewayCoverageReceiptInput,
     GatewayErrorDetail,
@@ -30,6 +39,7 @@ from switchboard.contracts.compand import (
 )
 from switchboard.domain.compand import ClientCredentialRegistry
 from switchboard.services.compand.settings import CompandGatewaySettings
+from switchboard.storage.repositories.compand import CompandStateRepository
 
 
 TelemetrySink = Callable[[GatewayTelemetry], None]
@@ -49,10 +59,56 @@ class CompandGatewayRuntime:
     telemetry_sink: TelemetrySink = _ignore_event
     coverage_sink: CoverageSink = _ignore_event
     egress_observer: EgressObserver = _ignore_event
+    repository: CompandStateRepository | None = None
 
 
 def create_router(runtime: CompandGatewayRuntime) -> APIRouter:
     router = APIRouter()
+
+    @router.get("/compand/health", response_model=CompandHealthResponse)
+    async def compand_health() -> CompandHealthResponse:
+        return CompandHealthResponse(status="ok", mode=runtime.settings.mode.value)
+
+    @router.get("/compand/v1/artifacts/{capability}")
+    async def recover_artifact(capability: str, request: Request):
+        token = _bearer_from_request(request)
+        authentication = runtime.credentials.authenticate(token)
+        session_id = request.headers.get("x-compand-session-id", "").strip()
+        if not authentication.accepted or not session_id or runtime.repository is None:
+            return JSONResponse(
+                status_code=404,
+                content=CompandArtifactError(error="artifact_not_found").model_dump(
+                    by_alias=True
+                ),
+            )
+        body = runtime.repository.recover_artifact(
+            authentication.credential_id or "", session_id, capability
+        )
+        if body is None:
+            return JSONResponse(
+                status_code=404,
+                content=CompandArtifactError(error="artifact_not_found").model_dump(
+                    by_alias=True
+                ),
+            )
+        return StreamingResponse(iter((body,)), media_type="text/plain; charset=utf-8")
+
+    @router.post("/compand/v1/purge", response_model=CompandPurgeResponse)
+    async def purge_artifacts(request: Request):
+        token = _bearer_from_request(request)
+        authentication = runtime.credentials.authenticate(token)
+        if not authentication.accepted or runtime.repository is None:
+            return JSONResponse(
+                status_code=401,
+                content=CompandArtifactError(error="client_auth_failed").model_dump(
+                    by_alias=True
+                ),
+            )
+        return CompandPurgeResponse(
+            purged=runtime.repository.purge_expired(
+                session_retention_seconds=runtime.settings.session_retention_seconds
+            )
+        )
 
     @router.api_route(
         "/v1/{provider_path:path}",
@@ -125,6 +181,43 @@ def create_router(runtime: CompandGatewayRuntime) -> APIRouter:
                 plan=plan,
             )
 
+        provider_body = envelope.body
+        prepared = None
+        if plan.feature == "responses" and runtime.repository is not None:
+            receipt = _command_receipt(request)
+            session_id = request.headers.get("x-compand-session-id", "").strip()
+            try:
+                runtime.repository.purge_expired(
+                    session_retention_seconds=runtime.settings.session_retention_seconds
+                )
+                prepared = await prepare_compand_request(
+                    mode=plan.mode,
+                    body=envelope.body,
+                    tenant_id=plan.credential_id,
+                    session_id=session_id,
+                    receipt=receipt,
+                    correlation_id=correlation_id,
+                    upstream_origin=runtime.settings.upstream_origin,
+                    upstream_api_key=runtime.settings.upstream_api_key,
+                    http_client=runtime.http_client,
+                    repository=runtime.repository,
+                    retention_seconds=runtime.settings.artifact_retention_seconds,
+                )
+            except (CompandRuntimeUnavailable, sqlite3.Error, OSError):
+                return _rejection_response(
+                    runtime,
+                    envelope,
+                    correlation_id=correlation_id,
+                    started=started,
+                    rejection=GatewayRejection(
+                        503,
+                        "compand_state_unavailable",
+                        "Compand durable state is unavailable; Enforce failed closed.",
+                    ),
+                    plan=plan,
+                )
+            provider_body = prepared.body
+
         egress_classification = "excluded" if plan.feature == "models" else "captured"
         reason_code = (
             "control_endpoint"
@@ -175,13 +268,21 @@ def create_router(runtime: CompandGatewayRuntime) -> APIRouter:
         if envelope.query:
             target += "?" + envelope.query.decode("ascii")
         try:
+            upstream_headers = upstream_request_headers(
+                envelope.headers, runtime.settings.upstream_api_key
+            )
+            if provider_body != envelope.body:
+                upstream_headers = [
+                    (name, value)
+                    for name, value in upstream_headers
+                    if name.lower() != b"content-length"
+                ]
+            upstream_headers.append((b"x-compand-correlation-id", correlation_id.encode()))
             upstream_request = runtime.http_client.build_request(
                 envelope.method,
                 target,
-                headers=upstream_request_headers(
-                    envelope.headers, runtime.settings.upstream_api_key
-                ),
-                content=envelope.body,
+                headers=upstream_headers,
+                content=provider_body,
             )
             upstream_response = await runtime.http_client.send(
                 upstream_request, stream=True
@@ -247,6 +348,13 @@ def create_router(runtime: CompandGatewayRuntime) -> APIRouter:
         response.raw_headers = downstream_response_headers(
             upstream_response.headers.raw
         )
+        if prepared is not None:
+            response.headers["x-compand-outcome"] = prepared.outcome
+            response.headers["x-compand-transformed"] = str(prepared.transformed).lower()
+            if prepared.artifact_sha256:
+                response.headers["x-compand-artifact-sha256"] = prepared.artifact_sha256
+            if prepared.capability:
+                response.headers["x-compand-recovery-capability"] = prepared.capability
         return response
 
     return router
@@ -345,3 +453,22 @@ def _safe_cause(exc: Exception, settings: CompandGatewaySettings) -> str:
         if secret:
             value = value.replace(secret, "[REDACTED]")
     return value[:500]
+
+
+def _bearer_from_request(request: Request) -> str:
+    value = request.headers.get("authorization", "")
+    scheme, separator, token = value.partition(" ")
+    if not separator or scheme.lower() != "bearer" or not token or token != token.strip():
+        return ""
+    return token
+
+
+def _command_receipt(request: Request) -> dict[str, object] | None:
+    value = request.headers.get("x-compand-command-receipt")
+    if not value:
+        return None
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    return decoded if isinstance(decoded, dict) else None

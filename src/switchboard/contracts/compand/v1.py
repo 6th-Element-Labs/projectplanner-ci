@@ -22,7 +22,7 @@ from pydantic import (
 )
 
 
-GatewayMode = Literal["passthrough", "scan"]
+GatewayMode = Literal["passthrough", "scan", "enforce"]
 EgressClassification = Literal["captured", "bypassed", "excluded", "unknown"]
 CoverageStatus = Literal["full", "partial", "control_only", "unsupported", "unknown"]
 ScanDecisionKind = Literal["advance", "low_coverage_hold", "redesign", "stop"]
@@ -96,6 +96,28 @@ class GatewayErrorEnvelope(_FrozenContract):
         default="compand.gateway_error.v1", alias="schema"
     )
     error: GatewayErrorDetail
+
+
+class CompandArtifactError(_FrozenContract):
+    schema_id: Literal["compand.artifact_error.v1"] = Field(
+        default="compand.artifact_error.v1", alias="schema"
+    )
+    error: Literal["artifact_not_found", "client_auth_failed"]
+
+
+class CompandPurgeResponse(_FrozenContract):
+    schema_id: Literal["compand.purge_response.v1"] = Field(
+        default="compand.purge_response.v1", alias="schema"
+    )
+    purged: StrictInt = Field(ge=0)
+
+
+class CompandHealthResponse(_FrozenContract):
+    schema_id: Literal["compand.health_response.v1"] = Field(
+        default="compand.health_response.v1", alias="schema"
+    )
+    status: Literal["ok"] = "ok"
+    mode: GatewayMode
 
 
 class ScanObservation(_FrozenContract):
@@ -673,6 +695,36 @@ class ProviderPriceTable(_FrozenContract):
     cached_input_usd_per_million_tokens: float = Field(ge=0)
     source: str
 
+    @field_validator(
+        "input_usd_per_million_tokens",
+        "cached_input_usd_per_million_tokens",
+        mode="before",
+    )
+    @classmethod
+    def reject_boolean_rate(cls, value: object) -> object:
+        if isinstance(value, bool):
+            raise ValueError("provider price rates must not be booleans")
+        return value
+
+    @model_validator(mode="after")
+    def validate_authoritative_price_source(self) -> "ProviderPriceTable":
+        for field in (
+            "input_usd_per_million_tokens",
+            "cached_input_usd_per_million_tokens",
+        ):
+            value = getattr(self, field)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{field} must be a real numeric rate")
+            if not math.isfinite(float(value)):
+                raise ValueError(f"{field} must be finite")
+        if not isinstance(self.provider, str) or not self.provider.strip():
+            raise ValueError("provider is required")
+        if not isinstance(self.model, str) or not self.model.strip():
+            raise ValueError("model is required")
+        if not isinstance(self.source, str) or not self.source.strip():
+            raise ValueError("price source is required")
+        return self
+
 
 class ProviderTokenCount(_FrozenContract):
     """Provider-authoritative count for one original or candidate payload."""
@@ -718,6 +770,11 @@ class LineRleShadowMeasurement(_FrozenContract):
 
     def validate_structural_primitives(self) -> None:
         """Revalidate the content-free attestation emitted by the trusted builder."""
+
+        if getattr(self, "schema_id", None) != "compand.line_rle_shadow_measurement.v1":
+            raise ValueError("measurement schema is not authoritative")
+        if getattr(self, "technique", None) != "line-rle-v1":
+            raise ValueError("measurement technique is not line-rle-v1")
 
         for field in (
             "task_snapshot_sha256",
@@ -791,6 +848,7 @@ class LineRleShadowMeasurement(_FrozenContract):
         self.validate_structural_primitives()
         _validate_provider_token_count("original_count", self.original_count)
         _validate_provider_token_count("candidate_count", self.candidate_count)
+        _validate_provider_price_table(self.price_table)
         original_cost = _projected_input_cost(self.original_count, self.price_table)
         candidate_cost = _projected_input_cost(self.candidate_count, self.price_table)
         for label, cost in (
@@ -1161,6 +1219,31 @@ def _validate_provider_token_count(label: str, count: ProviderTokenCount) -> Non
         raise ValueError(
             f"{label}.count_call_latency_ms is not a valid non-negative number"
         )
+
+
+def _validate_provider_price_table(price_table: ProviderPriceTable) -> None:
+    """Revalidate authoritative pricing after validation-bypassing copies."""
+
+    for field in ("provider", "model", "source"):
+        value = getattr(price_table, field, None)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"price_table.{field} is required")
+    if getattr(price_table, "currency", None) != "USD":
+        raise ValueError("price_table.currency must be USD")
+    if not isinstance(getattr(price_table, "effective_date", None), date):
+        raise ValueError("price_table.effective_date is invalid")
+    for field in (
+        "input_usd_per_million_tokens",
+        "cached_input_usd_per_million_tokens",
+    ):
+        value = getattr(price_table, field, None)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or value < 0
+        ):
+            raise ValueError(f"price_table.{field} is invalid")
 
 
 def _projected_input_cost(

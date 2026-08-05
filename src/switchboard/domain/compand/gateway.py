@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 class GatewayMode(StrEnum):
     PASSTHROUGH = "passthrough"
     SCAN = "scan"
+    ENFORCE = "enforce"
 
 
 class GatewaySecurityError(ValueError):

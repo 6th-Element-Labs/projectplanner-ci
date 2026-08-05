@@ -1,0 +1,15 @@
+# Optional Compand pilot edge. Keep Caddy as the only public reverse proxy.
+compand.taikunai.com {
+	import security_headers
+	import access_log
+	reverse_proxy 127.0.0.1:8127 {
+		health_uri /compand/health
+		health_interval 5s
+		health_timeout 3s
+		fail_duration 10s
+		transport http {
+			dial_timeout 5s
+			response_header_timeout 300s
+		}
+	}
+}

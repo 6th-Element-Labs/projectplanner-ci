@@ -126,6 +126,9 @@ These documents are evidence and design exploration, not accepted architecture:
 - [`COMPAND-SCAN-EVIDENCE.md`](COMPAND-SCAN-EVIDENCE.md):
   content-free coverage reconciliation, shadow `line-rle-v1` economics, bounded
   decisions, and immutable evidence reproduction for DOGFOOD-32.
+- [`COMPAND-LIVE-RUNTIME.md`](COMPAND-LIVE-RUNTIME.md):
+  executable receipt-gated Scan-to-Enforce runtime, frozen continuation state, scoped
+  recovery, live loopback dogfood, and deployment rollback for ENFORCE-25.
 - [`TOKEN-OPTIMIZER-FEASIBILITY-DEEP-DIVE.md`](TOKEN-OPTIMIZER-FEASIBILITY-DEEP-DIVE.md):
   observed insertion evidence, coverage boundaries, and E1–E5 falsification plan.
 - [`WHY-NOT-FORK-ROUTELLM.md`](WHY-NOT-FORK-ROUTELLM.md):
