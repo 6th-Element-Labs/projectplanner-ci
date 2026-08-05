@@ -615,7 +615,7 @@
                                 <div>
                                     <div class="tk-inbox-breadcrumb"><span id="inbox-project-label">Project</span> / Inbox</div>
                                     <h2 class="page-title mb-1">Inbox</h2>
-                                    <div class="text-secondary">Everything waiting for human review or acknowledgement.</div>
+                                    <div class="text-secondary">Human attention, inbound email, decisions, and delivery risks.</div>
                                 </div>
                                 <div class="dropdown">
                                     <button id="inbox-view-options" class="btn btn-outline-secondary" type="button" data-bs-toggle="dropdown" aria-expanded="false">
@@ -633,6 +633,7 @@
                                 <!-- UI-29: Needs you — the universal attention queue, first and default -->
                                 <li class="nav-item" role="presentation"><a class="nav-link active" data-bs-toggle="tab" href="#tab-needs" role="tab"><i class="ti ti-bell me-1"></i>Needs you <span id="needs-count" class="tk-inbox-tab-count"></span></a></li>
                                 <li class="nav-item" role="presentation"><a class="nav-link" data-bs-toggle="tab" href="#tab-inbox" role="tab"><i class="ti ti-checklist me-1"></i><span class="tk-inbox-desktop-label">Action Queue</span><span class="tk-inbox-mobile-label">Queue</span></a></li>
+                                <li class="nav-item" role="presentation"><a class="nav-link" data-bs-toggle="tab" href="#tab-email-inbox" role="tab"><i class="ti ti-mail me-1"></i>Email <span id="email-inbox-count" class="tk-inbox-tab-count"></span></a></li>
                                 <li class="nav-item" role="presentation"><a class="nav-link" data-bs-toggle="tab" href="#tab-decisions" role="tab"><i class="ti ti-help-circle me-1"></i>Decisions</a></li>
                                 <li class="nav-item" role="presentation"><a class="nav-link" data-bs-toggle="tab" href="#tab-risks" role="tab"><i class="ti ti-alert-triangle me-1"></i>Risks</a></li>
                             </ul>
@@ -678,6 +679,14 @@
                                         </div></div>
                                     </div>
                                     <div id="inbox-content"><span class="spinner-border spinner-border-sm me-2"></span>Loading queue…</div>
+                                </div>
+                                <!-- Email intake history + explicit recovery of fail-closed unrouted mail. -->
+                                <div class="tab-pane" id="tab-email-inbox" role="tabpanel">
+                                    <div class="tk-inbox-view-head">
+                                        <div><div class="d-flex align-items-baseline gap-2"><h3 class="m-0">Email</h3><span id="email-inbox-summary" class="text-secondary small"></span></div>
+                                        <div class="text-secondary small mt-1">See what the project agent processed and recover mail that could not be routed safely.</div></div>
+                                    </div>
+                                    <div id="email-inbox-content"><span class="spinner-border spinner-border-sm me-2"></span>Loading email…</div>
                                 </div>
                                 <!-- Decisions -->
                                 <div class="tab-pane" id="tab-decisions" role="tabpanel">
@@ -1228,7 +1237,7 @@
     <script src="js/scope.js?v=3"></script>
     <script src="js/attention.js?v=4"></script>
     <script src="js/fleet-dock.js?v=5"></script>
-    <script src="app.js?v=90"></script>
+    <script src="app.js?v=91"></script>
     <script src="taikun-ui.js?v=11"></script>
     <script src="saturation-panel.js?v=3"></script>
     <script>

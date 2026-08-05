@@ -26,17 +26,18 @@ INBOX = INDEX[inbox_start:inbox_end]
 
 ok('class="tab-pane tk-inbox-page" id="tab-inbox-hub"' in INDEX,
    "Inbox uses the dedicated clean page surface")
-ok("Everything waiting for human review or acknowledgement." in INBOX,
+ok("Human attention, inbound email, decisions, and delivery risks." in INBOX,
    "approved Inbox heading copy is present")
 ok('id="inbox-view-options"' in INBOX,
    "Inbox owns its View options control")
-ok(INBOX.count('class="nav-link') == 4,
-   "Inbox keeps exactly four primary views")
-for href in ("#tab-needs", "#tab-inbox", "#tab-decisions", "#tab-risks"):
+ok(INBOX.count('class="nav-link') == 5,
+   "Inbox keeps five primary views")
+for href in ("#tab-needs", "#tab-inbox", "#tab-email-inbox", "#tab-decisions", "#tab-risks"):
     ok(f'href="{href}"' in INBOX, f"Inbox view remains wired: {href}")
 for hook in (
     "needs-list", "needs-detail", "needs-search", "needs-source",
-    "needs-state-filter", "inbox-content", "decisions-table", "risks-table",
+    "needs-state-filter", "inbox-content", "email-inbox-content",
+    "decisions-table", "risks-table",
 ):
     ok(f'id="{hook}"' in INBOX, f"existing renderer hook is preserved: {hook}")
 

@@ -32,10 +32,10 @@ ok(report.get("process_build_authorized") is True, "Go authorizes standalone Ing
 ok(report.get("production_cutover_authorized") is False, "production cutover is not authorized")
 ok(report.get("failed_gates") == [], "all independence gates pass")
 checks = report.get("checks") or {}
-ok(checks.get("router_inventory_complete") is True, "all eight Ingest/inbox routes are inventoried")
+ok(checks.get("router_inventory_complete") is True, "all ten Ingest/inbox routes are inventoried")
 ok(checks.get("day_one_surface_exact") is True, "exact two-route day-one surface is locked")
 ok(checks.get("repository_calls_exact") is True, "declared calls match the live router AST")
-ok(checks.get("writer_inventory_complete") is True, "all seven mutation flows are inventoried")
+ok(checks.get("writer_inventory_complete") is True, "all eight mutation flows are inventoried")
 ok(checks.get("project_scope_structural") is True, "all routes bind an explicit project")
 ok(checks.get("project_storage_isolated") is True, "project storage isolation is explicit")
 ok(checks.get("failure_gate_matches_source") is True, "unsafe failure semantics are source-derived")

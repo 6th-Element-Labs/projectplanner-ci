@@ -100,8 +100,8 @@ try:
         page.goto(f"{base}/?project=switchboard#tab-inbox-hub", wait_until="networkidle")
         page.wait_for_selector(".tk-inbox-alert")
 
-        ok(page.locator(".tk-inbox-tabs .nav-link").count() == 4,
-           "desktop keeps the four approved Inbox views")
+        ok(page.locator(".tk-inbox-tabs .nav-link").count() == 5,
+           "desktop keeps the approved Inbox views plus Email recovery")
         list_box = page.locator(".tk-inbox-list-pane").bounding_box()
         detail_box = page.locator(".tk-inbox-detail-pane").bounding_box()
         ok(bool(list_box and detail_box and list_box["x"] < detail_box["x"]),
@@ -116,6 +116,10 @@ try:
         page.locator("#needs-search").fill("")
         page.locator('.tk-inbox-tabs a[href="#tab-inbox"]').click()
         ok(page.locator("#q-search").is_visible(), "Action Queue keeps its live filters")
+        page.locator('.tk-inbox-tabs a[href="#tab-email-inbox"]').click()
+        ok(page.locator("#email-inbox-content").is_visible()
+           and page.locator("text=Project email history").is_visible(),
+           "Email history and quarantine recovery remain reachable")
         page.locator('.tk-inbox-tabs a[href="#tab-decisions"]').click()
         ok(page.locator("#decisions-table").is_visible(), "Decisions remains reachable")
         page.locator('.tk-inbox-tabs a[href="#tab-risks"]').click()

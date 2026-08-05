@@ -58,7 +58,8 @@ def router_inventory(path: Path) -> list[dict[str, Any]]:
             if isinstance(ref, ast.Attribute) and isinstance(ref.value, ast.Name):
                 owner = ref.value
                 if owner.id in {
-                        "store", "inbox_mod", "intake", "attachments", "transcribe"}:
+                        "store", "inbox_mod", "intake", "attachments", "transcribe",
+                        "imap_quarantine"}:
                     calls.add(f"{owner.id}.{ref.attr}")
         rows.append({"method": route[0], "path": route[1], "handler": node.name,
                      "calls": sorted(calls)})
@@ -82,7 +83,7 @@ def project_scope_proof(router_path: Path) -> dict[str, Any]:
                   if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)}
         if "resolve_project" in called:
             bound += 1
-    return {"ok": routes == bound == 8, "routes": routes, "project_bound": bound}
+    return {"ok": routes == bound == 10, "routes": routes, "project_bound": bound}
 
 
 def failure_semantics_proof(inbox_source: str, store_source: str,
@@ -211,7 +212,7 @@ def evaluate(root: Path = ROOT, *, run_probe: bool = True) -> dict[str, Any]:
         "day_one_surface_exact": {(row.get("method"), row.get("path")) for row in declared
                                   if row.get("day_one")} == DAY_ONE,
         "repository_calls_exact": calls_match,
-        "writer_inventory_complete": len(verdict.get("writer_inventory") or []) == 7,
+        "writer_inventory_complete": len(verdict.get("writer_inventory") or []) == 8,
         "project_scope_structural": bool(scope.get("ok")),
         "project_storage_isolated": (verdict.get("project_scope") or {}).get("storage_isolation")
                                     == "one SQLite database per Switchboard project",

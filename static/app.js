@@ -4635,12 +4635,124 @@ const TeepPlan = {
         try {
             const data = await (await fetch('api/inbox')).json();
             this.inboxItems = data.items || [];
-            this._renderInboxBadge(data.pending || 0);
+            this.inboxPending = data.pending || 0;
+            this._renderInboxBadge(this.inboxPending);
             this.renderInbox(this.inboxItems);
+            this.loadEmailInbox();
             if (document.getElementById('exec-content')) this.renderExec();   // refresh the front-page Action Queue box
         } catch (e) {
             const el = document.getElementById('inbox-content');
             if (el) el.innerHTML = '<div class="text-secondary small">Queue unavailable — the plan API is unreachable.</div>';
+            this.loadEmailInbox();
+        }
+    },
+
+    async loadEmailInbox() {
+        const el = document.getElementById('email-inbox-content');
+        if (!el) return;
+        const history = (this.inboxItems || []).filter((item) => this._srcKey(item.source) === 'email');
+        let quarantine = { configured: true, count: 0, items: [], can_manage: true };
+        try {
+            const response = await fetch('api/inbox/quarantine');
+            if (response.status === 403) {
+                quarantine = { configured: true, count: 0, items: [], can_manage: false };
+            } else if (!response.ok) {
+                const problem = await response.json().catch(() => ({}));
+                throw new Error(problem.detail || `HTTP ${response.status}`);
+            } else {
+                quarantine = await response.json();
+                quarantine.can_manage = true;
+            }
+        } catch (error) {
+            quarantine = { configured: false, count: 0, items: [], can_manage: false, error: error.message };
+        }
+        this.emailQuarantine = quarantine;
+        this._renderEmailInbox(history, quarantine);
+    },
+
+    _renderEmailInbox(history, quarantine) {
+        const el = document.getElementById('email-inbox-content');
+        if (!el) return;
+        const items = quarantine.items || [];
+        const projectName = document.getElementById('project-switcher')?.selectedOptions?.[0]?.textContent?.trim()
+            || window.PM_PROJECT || 'this project';
+        const count = Number(quarantine.count || items.length || 0);
+        this._renderInboxBadge(Number(this.inboxPending || 0) + count);
+        const countEl = document.getElementById('email-inbox-count');
+        if (countEl) countEl.textContent = count ? String(count) : '';
+        const summary = document.getElementById('email-inbox-summary');
+        if (summary) summary.textContent = `${count} unrouted · ${history.length} project message${history.length === 1 ? '' : 's'}`;
+
+        let quarantineBody = '';
+        if (quarantine.error) {
+            quarantineBody = `<div class="alert alert-danger py-2 px-3 small mb-0"><i class="ti ti-alert-triangle me-1"></i>Mailbox quarantine unavailable: ${this.esc(quarantine.error)}</div>`;
+        } else if (quarantine.can_manage === false) {
+            quarantineBody = '<div class="text-secondary small py-3">Email history is available below. Mailbox quarantine is visible only to project administrators.</div>';
+        } else if (!quarantine.configured) {
+            quarantineBody = '<div class="text-secondary small py-3">The shared mailbox is not configured on this server.</div>';
+        } else if (!items.length) {
+            quarantineBody = '<div class="text-secondary small py-3">No unrouted email is waiting.</div>';
+        } else {
+            quarantineBody = `<div class="alert alert-warning py-2 px-3 small">
+                <i class="ti ti-shield-lock me-1"></i>These messages were delivered but had no safe project route. Processing runs the existing email agent${quarantine.autonomous ? ', may update the plan, dispatch requested work, and send a reply' : ' and queues its proposed changes'}.
+            </div><div class="card"><div class="table-responsive"><table class="table table-vcenter card-table">
+                <thead><tr><th>Message</th><th>Why it stopped</th><th>Received</th><th class="w-1"></th></tr></thead>
+                <tbody>${items.map((item) => {
+                    const sensitive = !!item.sensitive;
+                    const action = sensitive
+                        ? '<span class="badge bg-orange-lt"><i class="ti ti-lock me-1"></i>Keep quarantined</span>'
+                        : `<button class="btn btn-primary btn-sm text-nowrap" data-process-quarantine="${this.esc(item.token)}">Process in ${this.esc(projectName)}</button>`;
+                    return `<tr>
+                        <td><div class="fw-medium">${this.esc(item.subject || '(no subject)')}</div>
+                            <div class="text-secondary small">${this.esc(item.sender || 'Unknown sender')}</div>
+                            ${sensitive ? '<div class="text-orange small mt-1">Credential-looking subject — never sent to the plan agent.</div>' : ''}</td>
+                        <td><span class="badge bg-secondary-lt">${this.esc((item.reason || 'unrouted').replaceAll('_', ' '))}</span></td>
+                        <td class="text-secondary small">${item.received_at ? this.esc(new Date(item.received_at * 1000).toLocaleString()) : this.esc(item.date || '')}</td>
+                        <td class="text-end">${action}</td>
+                    </tr>`;
+                }).join('')}</tbody></table></div></div>`;
+        }
+
+        const historyRows = history.map((item) => {
+            const tone = item.status === 'pending' ? 'orange' : (item.status === 'dismissed' ? 'secondary' : 'green');
+            const triage = item.triage || {};
+            const reply = triage.reply || {};
+            const replyLabel = reply.sent ? 'reply sent' : (reply.error ? 'reply failed' : 'no reply recorded');
+            return `<tr>
+                <td><div class="fw-medium">${this.esc(item.subject || 'Email')}</div><div class="text-secondary small">${this.esc(item.sender || '')}</div></td>
+                <td><span class="badge bg-${tone}-lt">${this.esc(item.status || 'unknown')}</span></td>
+                <td class="text-secondary small">${this.esc(replyLabel)}</td>
+                <td class="text-secondary small">${item.received_at ? this.esc(new Date(item.received_at * 1000).toLocaleString()) : ''}</td>
+            </tr>`;
+        }).join('') || '<tr><td colspan="4" class="text-secondary text-center py-4">No email has been processed for this project yet.</td></tr>';
+
+        el.innerHTML = `<section class="mb-4">
+            <div class="d-flex align-items-baseline justify-content-between mb-2"><h4 class="m-0">Unrouted mail</h4><span class="text-secondary small">shared mailbox · admin only</span></div>
+            ${quarantineBody}</section>
+            <section><div class="d-flex align-items-baseline justify-content-between mb-2"><h4 class="m-0">Project email history</h4><span class="text-secondary small">${this.esc(projectName)}</span></div>
+            <div class="card"><div class="table-responsive"><table class="table table-vcenter card-table">
+                <thead><tr><th>Message</th><th>Status</th><th>Reply</th><th>Received</th></tr></thead><tbody>${historyRows}</tbody>
+            </table></div></div></section>`;
+        el.querySelectorAll('[data-process-quarantine]').forEach((button) => button.addEventListener('click', () => {
+            this.processQuarantinedEmail(button.getAttribute('data-process-quarantine'), button, projectName);
+        }));
+    },
+
+    async processQuarantinedEmail(token, button, projectName) {
+        if (!window.confirm(`Process this email in ${projectName}?\n\nThis runs the existing email agent. In autonomous mode it may update the plan, dispatch requested work, and send a reply.`)) return;
+        const original = button.innerHTML;
+        button.disabled = true;
+        button.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Processing…';
+        try {
+            const response = await fetch(`api/inbox/quarantine/${encodeURIComponent(token)}/process`, { method: 'POST' });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.detail || `HTTP ${response.status}`);
+            this._queueFlash = result.deduped ? 'Email was already present in this project.' : 'Email processed by the project agent.';
+            await this.initInbox();
+        } catch (error) {
+            button.disabled = false;
+            button.innerHTML = original;
+            window.alert(`Email could not be processed: ${error.message}`);
         }
     },
 

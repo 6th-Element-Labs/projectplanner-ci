@@ -375,6 +375,7 @@ app.include_router(_create_external_effects_router(
 ))
 app.include_router(_create_intake_inbox_router(
     resolve_project=_proj,
+    resolve_principal=_principal,
     sibling_bc_only=_INGEST_HTTP_PRIMARY == "service",
 ))
 app.include_router(_create_digest_notify_router(resolve_project=_proj))

@@ -5,7 +5,7 @@ import asyncio
 import os
 from typing import Callable
 
-from fastapi import APIRouter, Body, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Body, File, Form, HTTPException, Query, Request, UploadFile
 
 import attachments
 import inbox as inbox_mod
@@ -13,9 +13,11 @@ import intake
 import store
 import transcribe
 from switchboard.domain.projects.context import ProjectContext
+from switchboard.integrations import imap_quarantine
 
 
 ProjectResolver = Callable[[str], str]
+PrincipalResolver = Callable[..., dict]
 
 
 def _queue_triage(res, source, subject, project=None):
@@ -37,8 +39,19 @@ def _queue_triage(res, source, subject, project=None):
     return res
 
 
-def create_router(*, resolve_project: ProjectResolver, sibling_bc_only: bool = False) -> APIRouter:
+def create_router(*, resolve_project: ProjectResolver,
+                  resolve_principal: PrincipalResolver | None = None,
+                  sibling_bc_only: bool = False) -> APIRouter:
     router = APIRouter()
+
+    def require_mailbox_operator(request: Request, project: str) -> dict:
+        # Quarantine is shared across projects, so ordinary project-read access is
+        # insufficient.  Only a system administrator may inspect its headers or
+        # explicitly release a message into a project.
+        resolver = resolve_principal
+        if resolver is None:
+            from switchboard.api.deps import resolve_principal as resolver
+        return resolver(request, project, ("write:system",), dev_actor="inbox-quarantine")
 
     if not sibling_bc_only:
         @router.post("/api/intake")
@@ -197,5 +210,44 @@ def create_router(*, resolve_project: ProjectResolver, sibling_bc_only: bool = F
         resolve_project(project)
         import inbox_source
         return await asyncio.to_thread(inbox_source.poll)
+
+    @router.get("/api/inbox/quarantine")
+    async def get_inbox_quarantine(request: Request, project: str = Query(...)):
+        """List header-only metadata for unrouted mail; never expose raw bodies."""
+        project = resolve_project(project)
+        require_mailbox_operator(request, project)
+        try:
+            result = await asyncio.to_thread(imap_quarantine.list_quarantined)
+        except Exception as exc:
+            raise HTTPException(502, f"mailbox quarantine unavailable: {exc}") from exc
+        result["project"] = project
+        result["autonomous"] = (
+            os.environ.get("PM_INBOX_AUTONOMOUS", "1").strip().lower()
+            not in ("0", "false", "no")
+        )
+        return result
+
+    @router.post("/api/inbox/quarantine/{message_token}/process")
+    async def process_inbox_quarantine(request: Request, message_token: str,
+                                       project: str = Query(...)):
+        """Explicitly bind one quarantined message to a project and run legacy intake."""
+        project = resolve_project(project)
+        principal = require_mailbox_operator(request, project)
+        project_context = ProjectContext(project_id=project, source="operator-quarantine-route")
+        try:
+            result = await asyncio.to_thread(
+                imap_quarantine.process_quarantined, message_token, project_context)
+        except imap_quarantine.SensitiveMessageError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(502, f"mailbox recovery failed: {exc}") from exc
+        store.append_activity(
+            "inbox.quarantine_processed", str(principal.get("id") or "Switchboard operator"),
+            {"message_token": message_token, "subject": result["message"].get("subject")},
+            project=project,
+        )
+        return result
 
     return router

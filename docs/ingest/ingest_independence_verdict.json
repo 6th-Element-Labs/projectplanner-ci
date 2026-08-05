@@ -17,7 +17,9 @@
     {"method":"POST","path":"/api/inbox/confirm_all","handler":"confirm_all_inbox","calls":["inbox_mod.apply","store.list_inbox","store.set_inbox_status","store.update_inbox_triage"],"day_one":false,"project_binding":"required query -> resolve_project","effects":["multiple task creates/updates","multiple inbox updates"]},
     {"method":"POST","path":"/api/inbox/{item_id}/dismiss","handler":"dismiss_inbox","calls":["store.get_inbox_item","store.set_inbox_status"],"day_one":false,"project_binding":"required query -> resolve_project","effects":["inbox status update"]},
     {"method":"POST","path":"/api/inbox/simulate","handler":"simulate_inbox","calls":["inbox_mod.process"],"day_one":false,"project_binding":"body override or required query -> resolve_project","effects":["full email ingest/apply/reply/dispatch pipeline","inbox insert"]},
-    {"method":"POST","path":"/api/inbox/poll","handler":"poll_inbox_now","calls":[],"day_one":false,"project_binding":"required query authorizes call; poller independently routes each message","effects":["shared mailbox polling","per-message ingest/apply/reply/dispatch"]}
+    {"method":"POST","path":"/api/inbox/poll","handler":"poll_inbox_now","calls":[],"day_one":false,"project_binding":"required query authorizes call; poller independently routes each message","effects":["shared mailbox polling","per-message ingest/apply/reply/dispatch"]},
+    {"method":"GET","path":"/api/inbox/quarantine","handler":"get_inbox_quarantine","calls":["imap_quarantine.list_quarantined"],"day_one":false,"project_binding":"required query -> resolve_project; write:system operator gate","effects":[]},
+    {"method":"POST","path":"/api/inbox/quarantine/{message_token}/process","handler":"process_inbox_quarantine","calls":["imap_quarantine.SensitiveMessageError","imap_quarantine.process_quarantined","store.append_activity"],"day_one":false,"project_binding":"required query -> resolve_project; write:system operator gate","effects":["explicit project-scoped email ingest/apply/reply/dispatch","inbox insert","mailbox move to processed folder","audit activity"]}
   ],
   "writer_inventory": [
     {"flow":"text intake","entry":"POST /api/intake","ownership":"monolith","idempotency":"none","retry":"client retry can repeat corpus and triage effects","transaction":"no transaction spans corpus append, triage, and optional inbox insert"},
@@ -26,7 +28,8 @@
     {"flow":"bulk confirm","entry":"POST /api/inbox/confirm_all","ownership":"monolith","idempotency":"no batch/revision key","retry":"partial failure/retry can replay a prefix","transaction":"loop of independent task and inbox transactions"},
     {"flow":"dismiss","entry":"POST /api/inbox/{item_id}/dismiss","ownership":"monolith","idempotency":"repeat status assignment is value-idempotent","retry":"safe only while item identity and project remain stable","transaction":"single inbox status update"},
     {"flow":"simulate/email process","entry":"POST /api/inbox/simulate and inbox.process","ownership":"monolith","idempotency":"check-then-insert by source/external_id without database uniqueness","retry":"concurrent or ambiguous retries can duplicate all upstream effects","transaction":"ingest, apply, notify, dispatch, inbox insert, and status update are not atomic"},
-    {"flow":"mailbox poll","entry":"POST /api/inbox/poll and inbox_source.poll","ownership":"monolith","idempotency":"inherits unsafe inbox.process dedupe","retry":"source retry can overlap or replay message processing","transaction":"shared poll plus per-message multi-effect pipeline"}
+    {"flow":"mailbox poll","entry":"POST /api/inbox/poll and inbox_source.poll","ownership":"monolith","idempotency":"inherits unsafe inbox.process dedupe","retry":"source retry can overlap or replay message processing","transaction":"shared poll plus per-message multi-effect pipeline"},
+    {"flow":"quarantine recovery","entry":"POST /api/inbox/quarantine/{message_token}/process","ownership":"monolith","idempotency":"stable message token plus existing project inbox external_id dedupe","retry":"successful or deduped processing moves the source message to the processed folder; failures leave it quarantined","transaction":"project intake effects complete before the recoverable mailbox move and audit append"}
   ],
   "failure_semantics": {
     "safe": true,
@@ -35,7 +38,7 @@
   },
   "project_scope": {
     "explicit_project_required": true,
-    "route_binding":"all eight routes call resolve_project; simulate permits an explicit body override",
+    "route_binding":"all ten routes call resolve_project; simulate permits an explicit body override; quarantine routes also require write:system",
     "storage_isolation":"one SQLite database per Switchboard project",
     "poller_rule":"the caller project authorizes polling, but each mailbox message is routed through the poller's address index",
     "proof":"executable probe writes alpha while beta remains empty under concurrent WAL readers"
@@ -76,7 +79,7 @@
     "passed":true
   },
   "gates": {
-    "G1_route_writer_inventory":{"passed":true,"reason":"All eight routes and seven mutation flows are classified with calls, effects, ownership, idempotency, retry, and transaction semantics."},
+    "G1_route_writer_inventory":{"passed":true,"reason":"All ten routes and eight mutation flows are classified with calls, effects, ownership, idempotency, retry, and transaction semantics."},
     "G2_idempotency_and_retry":{"passed":true,"reason":"Database uniqueness closes source/external races; standalone text intake requires an operation key, serializes first writers, replays success, and durably replays failure without duplicating effects."},
     "G3_project_routing_isolation":{"passed":true,"reason":"Every route resolves project explicitly, storage is per-project, and the executable concurrent probe proves no cross-project writes."},
     "G4_auth_boundary":{"passed":true,"reason":"Standalone IngestAuthPort and shared transport middleware enforce project-scoped read/write authorization."},
