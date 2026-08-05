@@ -1,0 +1,622 @@
+{
+  "baseline_provider_view": {
+    "case_provider_view_hashes": [
+      {
+        "baseline_provider_view_sha256": "b25880108eb112b6b6d9c5e172f5ed39110be78c36c151b8af6c99ae746ab826",
+        "record_id": "terminal_and_progress-golden-golden-positive-sgr-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "4b5cab07d1badf2e23df975d04c9647f7cbe073b54fbbe67a844d92193ff95fc",
+        "record_id": "terminal_and_progress-golden-golden-positive-osc8-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "208e82dfbec5527cf4d2b97c5c0fa2e35fde45a78074a9140b5d4ceab721bcae",
+        "record_id": "terminal_and_progress-golden-golden-positive-carriage_return_spinner-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "c64d683f9c5cc5100bee23a2805425190cdae156ed450a1edd8de6a1dbbb3534",
+        "record_id": "terminal_and_progress-golden-golden-negative-unknown_control-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "6891e23a191fff6b1ce0b949ecca0d9e44823599d3e563914cb479509b79f186",
+        "record_id": "terminal_and_progress-golden-golden-negative-warning_output-v1"
+      }
+    ],
+    "schema": "compand.ces1.provider_view_bundle.v1"
+  },
+  "baseline_provider_view_sha256": "c942c66d66af391f3d75d01189e0ba3a94d5470c39f58690b6c11c78662195db",
+  "case_record_count": 5,
+  "case_records": [
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-terminal_and_progress-golden-golden-positive-sgr-v1",
+              "output": "{\"case_id\": \"sgr\", \"content_kind\": \"terminal_display\", \"known_control_sequence\": true, \"oracle_class\": \"positive\", \"source_byte_count\": 14, \"synthetic_record_id\": \"terminal_and_progress-golden-golden-positive-sgr-v1\", \"terminal_bytes_utf8\": \"\\u001b[32mPASS\\u001b[0m\\n\", \"transform_candidate_byte_counts\": {\"ansi-osc-strip-v1\": 5, \"trailing-noise-trim-v1\": null}, \"transform_candidates_utf8\": {\"ansi-osc-strip-v1\": \"PASS\\n\", \"trailing-noise-trim-v1\": null}}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "b25880108eb112b6b6d9c5e172f5ed39110be78c36c151b8af6c99ae746ab826",
+      "case_id": "sgr",
+      "eligible_techniques": [
+        "ansi-osc-strip-v1"
+      ],
+      "expected_disposition_by_technique": {
+        "ansi-osc-strip-v1": "transform",
+        "line-ending-normalize-v1": "no_material_opportunity",
+        "trailing-noise-trim-v1": "no_material_opportunity"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-terminal_and_progress-golden-golden-positive-sgr-v1",
+                "output": "{\"case_id\": \"sgr\", \"content_kind\": \"terminal_display\", \"known_control_sequence\": true, \"oracle_class\": \"positive\", \"source_byte_count\": 14, \"synthetic_record_id\": \"terminal_and_progress-golden-golden-positive-sgr-v1\", \"terminal_bytes_utf8\": \"\\u001b[32mPASS\\u001b[0m\\n\", \"transform_candidate_byte_counts\": {\"ansi-osc-strip-v1\": 5, \"trailing-noise-trim-v1\": null}, \"transform_candidates_utf8\": {\"ansi-osc-strip-v1\": \"PASS\\n\", \"trailing-noise-trim-v1\": null}}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "case_id": "sgr",
+          "content_kind": "terminal_display",
+          "known_control_sequence": true,
+          "oracle_class": "positive",
+          "source_byte_count": 14,
+          "synthetic_record_id": "terminal_and_progress-golden-golden-positive-sgr-v1",
+          "terminal_bytes_utf8": "\u001b[32mPASS\u001b[0m\n",
+          "transform_candidate_byte_counts": {
+            "ansi-osc-strip-v1": 5,
+            "trailing-noise-trim-v1": null
+          },
+          "transform_candidates_utf8": {
+            "ansi-osc-strip-v1": "PASS\n",
+            "trailing-noise-trim-v1": null
+          }
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-terminal_and_progress",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "b8cb76ced343d10a81f82d9e6e316cffd048eb5e822c1345623d23242eaf004c",
+      "oracle_class": "positive",
+      "record_id": "terminal_and_progress-golden-golden-positive-sgr-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "visible_text_preserved",
+        "warnings_and_integrity_bytes_untouched"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-terminal_and_progress-golden-golden-positive-osc8-v1",
+              "output": "{\"case_id\": \"osc8\", \"content_kind\": \"terminal_display\", \"known_control_sequence\": true, \"oracle_class\": \"positive\", \"source_byte_count\": 48, \"synthetic_record_id\": \"terminal_and_progress-golden-golden-positive-osc8-v1\", \"terminal_bytes_utf8\": \"\\u001b]8;;https://fixture.invalid\\u0007fixture link\\u001b]8;;\\u0007\\n\", \"transform_candidate_byte_counts\": {\"ansi-osc-strip-v1\": 39, \"trailing-noise-trim-v1\": null}, \"transform_candidates_utf8\": {\"ansi-osc-strip-v1\": \"fixture link (https://fixture.invalid)\\n\", \"trailing-noise-trim-v1\": null}}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "4b5cab07d1badf2e23df975d04c9647f7cbe073b54fbbe67a844d92193ff95fc",
+      "case_id": "osc8",
+      "eligible_techniques": [
+        "ansi-osc-strip-v1"
+      ],
+      "expected_disposition_by_technique": {
+        "ansi-osc-strip-v1": "transform",
+        "line-ending-normalize-v1": "no_material_opportunity",
+        "trailing-noise-trim-v1": "no_material_opportunity"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-terminal_and_progress-golden-golden-positive-osc8-v1",
+                "output": "{\"case_id\": \"osc8\", \"content_kind\": \"terminal_display\", \"known_control_sequence\": true, \"oracle_class\": \"positive\", \"source_byte_count\": 48, \"synthetic_record_id\": \"terminal_and_progress-golden-golden-positive-osc8-v1\", \"terminal_bytes_utf8\": \"\\u001b]8;;https://fixture.invalid\\u0007fixture link\\u001b]8;;\\u0007\\n\", \"transform_candidate_byte_counts\": {\"ansi-osc-strip-v1\": 39, \"trailing-noise-trim-v1\": null}, \"transform_candidates_utf8\": {\"ansi-osc-strip-v1\": \"fixture link (https://fixture.invalid)\\n\", \"trailing-noise-trim-v1\": null}}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "case_id": "osc8",
+          "content_kind": "terminal_display",
+          "known_control_sequence": true,
+          "oracle_class": "positive",
+          "source_byte_count": 48,
+          "synthetic_record_id": "terminal_and_progress-golden-golden-positive-osc8-v1",
+          "terminal_bytes_utf8": "\u001b]8;;https://fixture.invalid\u0007fixture link\u001b]8;;\u0007\n",
+          "transform_candidate_byte_counts": {
+            "ansi-osc-strip-v1": 39,
+            "trailing-noise-trim-v1": null
+          },
+          "transform_candidates_utf8": {
+            "ansi-osc-strip-v1": "fixture link (https://fixture.invalid)\n",
+            "trailing-noise-trim-v1": null
+          }
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-terminal_and_progress",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "de0063e6fbd7357d7ed432e7cc742d8950869bbe736bf86501fa6b0d126e204d",
+      "oracle_class": "positive",
+      "record_id": "terminal_and_progress-golden-golden-positive-osc8-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "visible_text_preserved",
+        "warnings_and_integrity_bytes_untouched"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-terminal_and_progress-golden-golden-positive-carriage_return_spinner-v1",
+              "output": "{\"case_id\": \"carriage_return_spinner\", \"content_kind\": \"terminal_display\", \"known_control_sequence\": true, \"oracle_class\": \"positive\", \"source_byte_count\": 18, \"synthetic_record_id\": \"terminal_and_progress-golden-golden-positive-carriage_return_spinner-v1\", \"terminal_bytes_utf8\": \"step 1/2\\rstep 2/2\\n\", \"transform_candidate_byte_counts\": {\"ansi-osc-strip-v1\": null, \"trailing-noise-trim-v1\": 9}, \"transform_candidates_utf8\": {\"ansi-osc-strip-v1\": null, \"trailing-noise-trim-v1\": \"step 2/2\\n\"}}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "208e82dfbec5527cf4d2b97c5c0fa2e35fde45a78074a9140b5d4ceab721bcae",
+      "case_id": "carriage_return_spinner",
+      "eligible_techniques": [
+        "trailing-noise-trim-v1"
+      ],
+      "expected_disposition_by_technique": {
+        "ansi-osc-strip-v1": "no_material_opportunity",
+        "line-ending-normalize-v1": "no_material_opportunity",
+        "trailing-noise-trim-v1": "transform"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-terminal_and_progress-golden-golden-positive-carriage_return_spinner-v1",
+                "output": "{\"case_id\": \"carriage_return_spinner\", \"content_kind\": \"terminal_display\", \"known_control_sequence\": true, \"oracle_class\": \"positive\", \"source_byte_count\": 18, \"synthetic_record_id\": \"terminal_and_progress-golden-golden-positive-carriage_return_spinner-v1\", \"terminal_bytes_utf8\": \"step 1/2\\rstep 2/2\\n\", \"transform_candidate_byte_counts\": {\"ansi-osc-strip-v1\": null, \"trailing-noise-trim-v1\": 9}, \"transform_candidates_utf8\": {\"ansi-osc-strip-v1\": null, \"trailing-noise-trim-v1\": \"step 2/2\\n\"}}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "case_id": "carriage_return_spinner",
+          "content_kind": "terminal_display",
+          "known_control_sequence": true,
+          "oracle_class": "positive",
+          "source_byte_count": 18,
+          "synthetic_record_id": "terminal_and_progress-golden-golden-positive-carriage_return_spinner-v1",
+          "terminal_bytes_utf8": "step 1/2\rstep 2/2\n",
+          "transform_candidate_byte_counts": {
+            "ansi-osc-strip-v1": null,
+            "trailing-noise-trim-v1": 9
+          },
+          "transform_candidates_utf8": {
+            "ansi-osc-strip-v1": null,
+            "trailing-noise-trim-v1": "step 2/2\n"
+          }
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-terminal_and_progress",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "8a56d95aa023514ca6bfd1b1c56b8747c626e117ba68f75a4f9ccb4e837bf66c",
+      "oracle_class": "positive",
+      "record_id": "terminal_and_progress-golden-golden-positive-carriage_return_spinner-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "visible_text_preserved",
+        "warnings_and_integrity_bytes_untouched"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-terminal_and_progress-golden-golden-negative-unknown_control-v1",
+              "output": "{\"case_id\": \"unknown_control\", \"content_kind\": \"terminal_display\", \"known_control_sequence\": false, \"oracle_class\": \"negative\", \"source_byte_count\": 24, \"synthetic_record_id\": \"terminal_and_progress-golden-golden-negative-unknown_control-v1\", \"terminal_bytes_utf8\": \"prefix\\u001b[?9999hsynthetic\\n\", \"transform_candidate_byte_counts\": {\"ansi-osc-strip-v1\": null, \"trailing-noise-trim-v1\": null}, \"transform_candidates_utf8\": {\"ansi-osc-strip-v1\": null, \"trailing-noise-trim-v1\": null}}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "c64d683f9c5cc5100bee23a2805425190cdae156ed450a1edd8de6a1dbbb3534",
+      "case_id": "unknown_control",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "ansi-osc-strip-v1": "detect_corruption",
+        "line-ending-normalize-v1": "detect_corruption",
+        "trailing-noise-trim-v1": "detect_corruption"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-terminal_and_progress-golden-golden-negative-unknown_control-v1",
+                "output": "{\"case_id\": \"unknown_control\", \"content_kind\": \"terminal_display\", \"known_control_sequence\": false, \"oracle_class\": \"negative\", \"source_byte_count\": 24, \"synthetic_record_id\": \"terminal_and_progress-golden-golden-negative-unknown_control-v1\", \"terminal_bytes_utf8\": \"prefix\\u001b[?9999hsynthetic\\n\", \"transform_candidate_byte_counts\": {\"ansi-osc-strip-v1\": null, \"trailing-noise-trim-v1\": null}, \"transform_candidates_utf8\": {\"ansi-osc-strip-v1\": null, \"trailing-noise-trim-v1\": null}}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "case_id": "unknown_control",
+          "content_kind": "terminal_display",
+          "known_control_sequence": false,
+          "oracle_class": "negative",
+          "source_byte_count": 24,
+          "synthetic_record_id": "terminal_and_progress-golden-golden-negative-unknown_control-v1",
+          "terminal_bytes_utf8": "prefix\u001b[?9999hsynthetic\n",
+          "transform_candidate_byte_counts": {
+            "ansi-osc-strip-v1": null,
+            "trailing-noise-trim-v1": null
+          },
+          "transform_candidates_utf8": {
+            "ansi-osc-strip-v1": null,
+            "trailing-noise-trim-v1": null
+          }
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-terminal_and_progress",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "5f0c56bcf89ce9a3da3ce6d7b951c7bfe7a1c2565974d46d0fc20b3eea1c7ca2",
+      "oracle_class": "negative",
+      "record_id": "terminal_and_progress-golden-golden-negative-unknown_control-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "visible_text_preserved",
+        "warnings_and_integrity_bytes_untouched"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-terminal_and_progress-golden-golden-negative-warning_output-v1",
+              "output": "{\"case_id\": \"warning_output\", \"content_kind\": \"diagnostic\", \"known_control_sequence\": true, \"oracle_class\": \"negative\", \"source_byte_count\": 27, \"synthetic_record_id\": \"terminal_and_progress-golden-golden-negative-warning_output-v1\", \"terminal_bytes_utf8\": \"warning: synthetic fixture\\n\", \"transform_candidate_byte_counts\": {\"ansi-osc-strip-v1\": null, \"trailing-noise-trim-v1\": null}, \"transform_candidates_utf8\": {\"ansi-osc-strip-v1\": null, \"trailing-noise-trim-v1\": null}}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "6891e23a191fff6b1ce0b949ecca0d9e44823599d3e563914cb479509b79f186",
+      "case_id": "warning_output",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "ansi-osc-strip-v1": "detect_corruption",
+        "line-ending-normalize-v1": "detect_corruption",
+        "trailing-noise-trim-v1": "detect_corruption"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-terminal_and_progress-golden-golden-negative-warning_output-v1",
+                "output": "{\"case_id\": \"warning_output\", \"content_kind\": \"diagnostic\", \"known_control_sequence\": true, \"oracle_class\": \"negative\", \"source_byte_count\": 27, \"synthetic_record_id\": \"terminal_and_progress-golden-golden-negative-warning_output-v1\", \"terminal_bytes_utf8\": \"warning: synthetic fixture\\n\", \"transform_candidate_byte_counts\": {\"ansi-osc-strip-v1\": null, \"trailing-noise-trim-v1\": null}, \"transform_candidates_utf8\": {\"ansi-osc-strip-v1\": null, \"trailing-noise-trim-v1\": null}}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "case_id": "warning_output",
+          "content_kind": "diagnostic",
+          "known_control_sequence": true,
+          "oracle_class": "negative",
+          "source_byte_count": 27,
+          "synthetic_record_id": "terminal_and_progress-golden-golden-negative-warning_output-v1",
+          "terminal_bytes_utf8": "warning: synthetic fixture\n",
+          "transform_candidate_byte_counts": {
+            "ansi-osc-strip-v1": null,
+            "trailing-noise-trim-v1": null
+          },
+          "transform_candidates_utf8": {
+            "ansi-osc-strip-v1": null,
+            "trailing-noise-trim-v1": null
+          }
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-terminal_and_progress",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "0c3502f590b0e28d02f21c94a3e0205627eaa31f66a16873ef83531dcc944a30",
+      "oracle_class": "negative",
+      "record_id": "terminal_and_progress-golden-golden-negative-warning_output-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "visible_text_preserved",
+        "warnings_and_integrity_bytes_untouched"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    }
+  ],
+  "cases": [
+    "sgr",
+    "osc8",
+    "carriage_return_spinner",
+    "unknown_control",
+    "warning_output"
+  ],
+  "eligible_techniques": [
+    "ansi-osc-strip-v1",
+    "trailing-noise-trim-v1"
+  ],
+  "expected_disposition_by_technique": {
+    "ansi-osc-strip-v1": [
+      "detect_corruption",
+      "no_material_opportunity",
+      "transform"
+    ],
+    "line-ending-normalize-v1": [
+      "detect_corruption",
+      "no_material_opportunity"
+    ],
+    "trailing-noise-trim-v1": [
+      "detect_corruption",
+      "no_material_opportunity",
+      "transform"
+    ]
+  },
+  "expected_outcome": {
+    "by_record_id": {
+      "terminal_and_progress-golden-golden-negative-unknown_control-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "terminal_and_progress-golden-golden-negative-warning_output-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "terminal_and_progress-golden-golden-positive-carriage_return_spinner-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "terminal_and_progress-golden-golden-positive-osc8-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "terminal_and_progress-golden-golden-positive-sgr-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      }
+    },
+    "schema": "compand.ces1.case_outcome_bundle.v1"
+  },
+  "fixture_family": "terminal_and_progress",
+  "fixture_id": "terminal_and_progress-golden-v1",
+  "generator_or_source": {
+    "generator": "scripts/build_compand_phase2_corpus.py",
+    "kind": "sanitized_synthetic",
+    "raw_customer_content": false
+  },
+  "input": {
+    "case_input_hashes": [
+      {
+        "input_sha256": "b8cb76ced343d10a81f82d9e6e316cffd048eb5e822c1345623d23242eaf004c",
+        "record_id": "terminal_and_progress-golden-golden-positive-sgr-v1"
+      },
+      {
+        "input_sha256": "de0063e6fbd7357d7ed432e7cc742d8950869bbe736bf86501fa6b0d126e204d",
+        "record_id": "terminal_and_progress-golden-golden-positive-osc8-v1"
+      },
+      {
+        "input_sha256": "8a56d95aa023514ca6bfd1b1c56b8747c626e117ba68f75a4f9ccb4e837bf66c",
+        "record_id": "terminal_and_progress-golden-golden-positive-carriage_return_spinner-v1"
+      },
+      {
+        "input_sha256": "5f0c56bcf89ce9a3da3ce6d7b951c7bfe7a1c2565974d46d0fc20b3eea1c7ca2",
+        "record_id": "terminal_and_progress-golden-golden-negative-unknown_control-v1"
+      },
+      {
+        "input_sha256": "0c3502f590b0e28d02f21c94a3e0205627eaa31f66a16873ef83531dcc944a30",
+        "record_id": "terminal_and_progress-golden-golden-negative-warning_output-v1"
+      }
+    ],
+    "schema": "compand.ces1.fixture_input_bundle.v1"
+  },
+  "input_sha256": "147c6066f6375b99c53b0d433ef31b3ce4c00f77489be1a61b6e6c28116f0a01",
+  "license": {
+    "reviewed": true,
+    "spdx": "CC0-1.0"
+  },
+  "oracle_classes": [
+    "negative",
+    "positive"
+  ],
+  "partition": "golden",
+  "required_invariants": [
+    "baseline_provider_view_is_byte_unchanged_B0",
+    "baseline_input_and_provider_view_hashes_match",
+    "tenant_principal_session_context_epoch_isolation",
+    "source_bytes_are_never_overwritten",
+    "visible_text_preserved",
+    "warnings_and_integrity_bytes_untouched"
+  ],
+  "revision": 5,
+  "schema": "compand.ces1.fixture.v2",
+  "workload_stratum": "terminal_output"
+}

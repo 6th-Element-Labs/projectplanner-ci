@@ -1,0 +1,280 @@
+{
+  "baseline_provider_view": {
+    "case_provider_view_hashes": [
+      {
+        "baseline_provider_view_sha256": "3afdaf558788424e81ff5b93f51830dfb9fa741b996101e8af46598c7eeb94a7",
+        "record_id": "terminal_and_progress-development-boundary-boundary-source_code_crlf-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "435e04f4a1bf8a8c7f74405a1d7ddb82ef138f29728b73371834d14a30c172a6",
+        "record_id": "terminal_and_progress-development-boundary-boundary-signature_bytes-v1"
+      }
+    ],
+    "schema": "compand.ces1.provider_view_bundle.v1"
+  },
+  "baseline_provider_view_sha256": "35514917abf7f24e7cb5f97dc0249fb8aecb20325c4454cdf78d538245e3ac34",
+  "case_record_count": 2,
+  "case_records": [
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-terminal_and_progress-development-boundary-boundary-source_code_crlf-v1",
+              "output": "{\"case_id\": \"source_code_crlf\", \"content_kind\": \"source_code\", \"known_control_sequence\": true, \"oracle_class\": \"boundary\", \"source_byte_count\": 22, \"synthetic_record_id\": \"terminal_and_progress-development-boundary-boundary-source_code_crlf-v1\", \"terminal_bytes_utf8\": \"value = 1\\r\\nvalue = 2\\r\\n\", \"transform_candidate_byte_counts\": {\"ansi-osc-strip-v1\": null, \"trailing-noise-trim-v1\": null}, \"transform_candidates_utf8\": {\"ansi-osc-strip-v1\": null, \"trailing-noise-trim-v1\": null}}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "3afdaf558788424e81ff5b93f51830dfb9fa741b996101e8af46598c7eeb94a7",
+      "case_id": "source_code_crlf",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "ansi-osc-strip-v1": "decline_ineligible",
+        "line-ending-normalize-v1": "decline_ineligible",
+        "trailing-noise-trim-v1": "decline_ineligible"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-terminal_and_progress-development-boundary-boundary-source_code_crlf-v1",
+                "output": "{\"case_id\": \"source_code_crlf\", \"content_kind\": \"source_code\", \"known_control_sequence\": true, \"oracle_class\": \"boundary\", \"source_byte_count\": 22, \"synthetic_record_id\": \"terminal_and_progress-development-boundary-boundary-source_code_crlf-v1\", \"terminal_bytes_utf8\": \"value = 1\\r\\nvalue = 2\\r\\n\", \"transform_candidate_byte_counts\": {\"ansi-osc-strip-v1\": null, \"trailing-noise-trim-v1\": null}, \"transform_candidates_utf8\": {\"ansi-osc-strip-v1\": null, \"trailing-noise-trim-v1\": null}}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "case_id": "source_code_crlf",
+          "content_kind": "source_code",
+          "known_control_sequence": true,
+          "oracle_class": "boundary",
+          "source_byte_count": 22,
+          "synthetic_record_id": "terminal_and_progress-development-boundary-boundary-source_code_crlf-v1",
+          "terminal_bytes_utf8": "value = 1\r\nvalue = 2\r\n",
+          "transform_candidate_byte_counts": {
+            "ansi-osc-strip-v1": null,
+            "trailing-noise-trim-v1": null
+          },
+          "transform_candidates_utf8": {
+            "ansi-osc-strip-v1": null,
+            "trailing-noise-trim-v1": null
+          }
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-terminal_and_progress",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "e72902e2cfe9dc73f2c10d392586ca05f141f9b6b05747d923f3edf4c6e0f759",
+      "oracle_class": "boundary",
+      "record_id": "terminal_and_progress-development-boundary-boundary-source_code_crlf-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "visible_text_preserved",
+        "warnings_and_integrity_bytes_untouched"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-terminal_and_progress-development-boundary-boundary-signature_bytes-v1",
+              "output": "{\"case_id\": \"signature_bytes\", \"content_kind\": \"integrity_protected\", \"known_control_sequence\": true, \"oracle_class\": \"boundary\", \"source_byte_count\": 29, \"synthetic_record_id\": \"terminal_and_progress-development-boundary-boundary-signature_bytes-v1\", \"terminal_bytes_utf8\": \"signed:fixture-byte-sequence\\n\", \"transform_candidate_byte_counts\": {\"ansi-osc-strip-v1\": null, \"trailing-noise-trim-v1\": null}, \"transform_candidates_utf8\": {\"ansi-osc-strip-v1\": null, \"trailing-noise-trim-v1\": null}}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "435e04f4a1bf8a8c7f74405a1d7ddb82ef138f29728b73371834d14a30c172a6",
+      "case_id": "signature_bytes",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "ansi-osc-strip-v1": "decline_ineligible",
+        "line-ending-normalize-v1": "decline_ineligible",
+        "trailing-noise-trim-v1": "decline_ineligible"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-terminal_and_progress-development-boundary-boundary-signature_bytes-v1",
+                "output": "{\"case_id\": \"signature_bytes\", \"content_kind\": \"integrity_protected\", \"known_control_sequence\": true, \"oracle_class\": \"boundary\", \"source_byte_count\": 29, \"synthetic_record_id\": \"terminal_and_progress-development-boundary-boundary-signature_bytes-v1\", \"terminal_bytes_utf8\": \"signed:fixture-byte-sequence\\n\", \"transform_candidate_byte_counts\": {\"ansi-osc-strip-v1\": null, \"trailing-noise-trim-v1\": null}, \"transform_candidates_utf8\": {\"ansi-osc-strip-v1\": null, \"trailing-noise-trim-v1\": null}}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "case_id": "signature_bytes",
+          "content_kind": "integrity_protected",
+          "known_control_sequence": true,
+          "oracle_class": "boundary",
+          "source_byte_count": 29,
+          "synthetic_record_id": "terminal_and_progress-development-boundary-boundary-signature_bytes-v1",
+          "terminal_bytes_utf8": "signed:fixture-byte-sequence\n",
+          "transform_candidate_byte_counts": {
+            "ansi-osc-strip-v1": null,
+            "trailing-noise-trim-v1": null
+          },
+          "transform_candidates_utf8": {
+            "ansi-osc-strip-v1": null,
+            "trailing-noise-trim-v1": null
+          }
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-terminal_and_progress",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "26bff6c5f87cd01cf381d12eaa3b3b156d2e4dc38dde143d47a8c9396b60803e",
+      "oracle_class": "boundary",
+      "record_id": "terminal_and_progress-development-boundary-boundary-signature_bytes-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "visible_text_preserved",
+        "warnings_and_integrity_bytes_untouched"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    }
+  ],
+  "cases": [
+    "source_code_crlf",
+    "signature_bytes"
+  ],
+  "eligible_techniques": [],
+  "expected_disposition_by_technique": {
+    "ansi-osc-strip-v1": [
+      "decline_ineligible"
+    ],
+    "line-ending-normalize-v1": [
+      "decline_ineligible"
+    ],
+    "trailing-noise-trim-v1": [
+      "decline_ineligible"
+    ]
+  },
+  "expected_outcome": {
+    "by_record_id": {
+      "terminal_and_progress-development-boundary-boundary-signature_bytes-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "terminal_and_progress-development-boundary-boundary-source_code_crlf-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      }
+    },
+    "schema": "compand.ces1.case_outcome_bundle.v1"
+  },
+  "fixture_family": "terminal_and_progress",
+  "fixture_id": "terminal_and_progress-boundary-v1",
+  "generator_or_source": {
+    "generator": "scripts/build_compand_phase2_corpus.py",
+    "kind": "sanitized_synthetic",
+    "raw_customer_content": false
+  },
+  "input": {
+    "case_input_hashes": [
+      {
+        "input_sha256": "e72902e2cfe9dc73f2c10d392586ca05f141f9b6b05747d923f3edf4c6e0f759",
+        "record_id": "terminal_and_progress-development-boundary-boundary-source_code_crlf-v1"
+      },
+      {
+        "input_sha256": "26bff6c5f87cd01cf381d12eaa3b3b156d2e4dc38dde143d47a8c9396b60803e",
+        "record_id": "terminal_and_progress-development-boundary-boundary-signature_bytes-v1"
+      }
+    ],
+    "schema": "compand.ces1.fixture_input_bundle.v1"
+  },
+  "input_sha256": "b440b61fe77dd342dbe7c15fbf9f62d077ceddeff245d092bfa348825a7ef4f5",
+  "license": {
+    "reviewed": true,
+    "spdx": "CC0-1.0"
+  },
+  "oracle_classes": [
+    "boundary"
+  ],
+  "partition": "development",
+  "required_invariants": [
+    "baseline_provider_view_is_byte_unchanged_B0",
+    "baseline_input_and_provider_view_hashes_match",
+    "tenant_principal_session_context_epoch_isolation",
+    "source_bytes_are_never_overwritten",
+    "visible_text_preserved",
+    "warnings_and_integrity_bytes_untouched"
+  ],
+  "revision": 5,
+  "schema": "compand.ces1.fixture.v2",
+  "workload_stratum": "terminal_output"
+}

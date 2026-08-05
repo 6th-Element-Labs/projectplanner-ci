@@ -1,0 +1,1487 @@
+{
+  "baseline_provider_view": {
+    "case_provider_view_hashes": [
+      {
+        "baseline_provider_view_sha256": "4eb85d14a676566e395f74ad3cb9dfe0999e5ce4c697aba242fa666b9c32b80c",
+        "record_id": "protocol_and_isolation-golden-golden-positive-stream_order-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "08fa9c7ac031658ec66752fc2311ad8edeb05e405b2a6192c03223cea9a5e120",
+        "record_id": "protocol_and_isolation-golden-golden-positive-retry_identity-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "36861df07e9153af8fe492ef9955cbf4eff190b174cd5301e222ceebadfebded",
+        "record_id": "protocol_and_isolation-golden-golden-positive-manual_continuation-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "69dd1140aafba1b739ef1bf61e538ab53b98ab6149b235cfe8a5d29f3a055291",
+        "record_id": "protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "56ec4e092980d397fda95a66fe2dfcb885b3ae73aaf816c82d47043e0d467910",
+        "record_id": "protocol_and_isolation-golden-golden-positive-conversation_continuation-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "0611a91a4b1bd6020d0e94bcff9bf0ec1f03d35b25ec9fa702cb89131de49ac5",
+        "record_id": "protocol_and_isolation-golden-golden-negative-cross_tenant-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "62fa0d5c42726836020cad779207c7133ced8f221ee6eafa82932a37c46880b8",
+        "record_id": "protocol_and_isolation-golden-golden-negative-cross_principal-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "f3346798787f9726f95bd3668e9af4d98749cd2ffd86bef971cc7bfe739afd50",
+        "record_id": "protocol_and_isolation-golden-golden-negative-cross_session-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "20bbe18f137b44803546ba85b109faf5e11afd1e92b516e73bc44b4fb1a25047",
+        "record_id": "protocol_and_isolation-golden-golden-negative-unauthorized_artifact-v1"
+      }
+    ],
+    "schema": "compand.ces1.provider_view_bundle.v1"
+  },
+  "baseline_provider_view_sha256": "8667b84abb29ffc51f96ac8c61fa60ae2498d1e228e0ab2b9b95df921ccac6a1",
+  "case_record_count": 9,
+  "case_records": [
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-protocol_and_isolation-golden-golden-positive-stream_order-v1",
+              "output": "{\"artifact_authorized\": true, \"attempts\": [{\"attempt\": 1, \"provider_dispatched\": true, \"request_identity\": \"protocol_and_isolation-golden-golden-positive-stream_order-v1\", \"usage_recorded\": true}], \"authorized_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"case_id\": \"stream_order\", \"continuation_mode\": null, \"conversation_id\": null, \"frames\": [\"response.created\", \"response.output_text.delta\", \"response.completed\"], \"frozen_source_path\": null, \"oracle_class\": \"positive\", \"passthrough_required\": false, \"previous_response_id\": null, \"provider_response_body_byte_count\": 423, \"provider_response_body_sha256\": \"cbc9c0371cfe9b8fa7f75160ae56129ceae3b46b463c48fa38b0bbf9007d148e\", \"provider_response_body_utf8\": \"event: response.created\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-stream_order-v1\\\",\\\"type\\\":\\\"response.created\\\"}\\n\\nevent: response.output_text.delta\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-stream_order-v1\\\",\\\"type\\\":\\\"response.output_text.delta\\\"}\\n\\nevent: response.completed\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-stream_order-v1\\\",\\\"type\\\":\\\"response.completed\\\"}\\n\\n\", \"requested_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"sse_frame_byte_counts\": [133, 153, 137], \"sse_frame_sha256s\": [\"8138215919a6f30002587196988bd178a4701e11402ba33a40da787442998c84\", \"fe11b9e044f76379d47de79694fe467ad433a6f35eaa5dfac13a7547b3e9b004\", \"9aa89df9d25e3a6963dd9b211bbc42cced8d0c6eb7667f5b53640ce0bc4b4345\"], \"sse_frames_utf8\": [\"event: response.created\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-stream_order-v1\\\",\\\"type\\\":\\\"response.created\\\"}\\n\\n\", \"event: response.output_text.delta\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-stream_order-v1\\\",\\\"type\\\":\\\"response.output_text.delta\\\"}\\n\\n\", \"event: response.completed\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-stream_order-v1\\\",\\\"type\\\":\\\"response.completed\\\"}\\n\\n\"], \"status\": 200, \"stream_cancelled\": false, \"synthetic_record_id\": \"protocol_and_isolation-golden-golden-positive-stream_order-v1\", \"terminal_event_present\": true, \"usage_present\": true}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": true
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "4eb85d14a676566e395f74ad3cb9dfe0999e5ce4c697aba242fa666b9c32b80c",
+      "case_id": "stream_order",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "ansi-osc-strip-v1": "no_material_opportunity",
+        "command-aware-projection-v1": "no_material_opportunity",
+        "delta-reread-v1": "no_material_opportunity",
+        "exact-duplicate-reference-v1": "no_material_opportunity",
+        "json-minify-v1": "no_material_opportunity",
+        "line-ending-normalize-v1": "no_material_opportunity",
+        "line-rle-v1": "no_material_opportunity",
+        "parallel-overlap-dedup-v1": "no_material_opportunity",
+        "prefix-cache-shaping-v1": "no_material_opportunity",
+        "structured-data-codec-v1": "no_material_opportunity",
+        "subresult-chunk-dedup-v1": "no_material_opportunity",
+        "successful-check-projection-v1": "no_material_opportunity",
+        "trailing-noise-trim-v1": "no_material_opportunity",
+        "unchanged-file-identity-v1": "no_material_opportunity"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-protocol_and_isolation-golden-golden-positive-stream_order-v1",
+                "output": "{\"artifact_authorized\": true, \"attempts\": [{\"attempt\": 1, \"provider_dispatched\": true, \"request_identity\": \"protocol_and_isolation-golden-golden-positive-stream_order-v1\", \"usage_recorded\": true}], \"authorized_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"case_id\": \"stream_order\", \"continuation_mode\": null, \"conversation_id\": null, \"frames\": [\"response.created\", \"response.output_text.delta\", \"response.completed\"], \"frozen_source_path\": null, \"oracle_class\": \"positive\", \"passthrough_required\": false, \"previous_response_id\": null, \"provider_response_body_byte_count\": 423, \"provider_response_body_sha256\": \"cbc9c0371cfe9b8fa7f75160ae56129ceae3b46b463c48fa38b0bbf9007d148e\", \"provider_response_body_utf8\": \"event: response.created\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-stream_order-v1\\\",\\\"type\\\":\\\"response.created\\\"}\\n\\nevent: response.output_text.delta\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-stream_order-v1\\\",\\\"type\\\":\\\"response.output_text.delta\\\"}\\n\\nevent: response.completed\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-stream_order-v1\\\",\\\"type\\\":\\\"response.completed\\\"}\\n\\n\", \"requested_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"sse_frame_byte_counts\": [133, 153, 137], \"sse_frame_sha256s\": [\"8138215919a6f30002587196988bd178a4701e11402ba33a40da787442998c84\", \"fe11b9e044f76379d47de79694fe467ad433a6f35eaa5dfac13a7547b3e9b004\", \"9aa89df9d25e3a6963dd9b211bbc42cced8d0c6eb7667f5b53640ce0bc4b4345\"], \"sse_frames_utf8\": [\"event: response.created\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-stream_order-v1\\\",\\\"type\\\":\\\"response.created\\\"}\\n\\n\", \"event: response.output_text.delta\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-stream_order-v1\\\",\\\"type\\\":\\\"response.output_text.delta\\\"}\\n\\n\", \"event: response.completed\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-stream_order-v1\\\",\\\"type\\\":\\\"response.completed\\\"}\\n\\n\"], \"status\": 200, \"stream_cancelled\": false, \"synthetic_record_id\": \"protocol_and_isolation-golden-golden-positive-stream_order-v1\", \"terminal_event_present\": true, \"usage_present\": true}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": true
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "artifact_authorized": true,
+          "attempts": [
+            {
+              "attempt": 1,
+              "provider_dispatched": true,
+              "request_identity": "protocol_and_isolation-golden-golden-positive-stream_order-v1",
+              "usage_recorded": true
+            }
+          ],
+          "authorized_scope": {
+            "principal": "fixture-principal-a",
+            "session": "fixture-session-protocol",
+            "tenant": "fixture-tenant-a"
+          },
+          "case_id": "stream_order",
+          "continuation_mode": null,
+          "conversation_id": null,
+          "frames": [
+            "response.created",
+            "response.output_text.delta",
+            "response.completed"
+          ],
+          "frozen_source_path": null,
+          "oracle_class": "positive",
+          "passthrough_required": false,
+          "previous_response_id": null,
+          "provider_response_body_byte_count": 423,
+          "provider_response_body_sha256": "cbc9c0371cfe9b8fa7f75160ae56129ceae3b46b463c48fa38b0bbf9007d148e",
+          "provider_response_body_utf8": "event: response.created\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-stream_order-v1\",\"type\":\"response.created\"}\n\nevent: response.output_text.delta\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-stream_order-v1\",\"type\":\"response.output_text.delta\"}\n\nevent: response.completed\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-stream_order-v1\",\"type\":\"response.completed\"}\n\n",
+          "requested_scope": {
+            "principal": "fixture-principal-a",
+            "session": "fixture-session-protocol",
+            "tenant": "fixture-tenant-a"
+          },
+          "sse_frame_byte_counts": [
+            133,
+            153,
+            137
+          ],
+          "sse_frame_sha256s": [
+            "8138215919a6f30002587196988bd178a4701e11402ba33a40da787442998c84",
+            "fe11b9e044f76379d47de79694fe467ad433a6f35eaa5dfac13a7547b3e9b004",
+            "9aa89df9d25e3a6963dd9b211bbc42cced8d0c6eb7667f5b53640ce0bc4b4345"
+          ],
+          "sse_frames_utf8": [
+            "event: response.created\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-stream_order-v1\",\"type\":\"response.created\"}\n\n",
+            "event: response.output_text.delta\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-stream_order-v1\",\"type\":\"response.output_text.delta\"}\n\n",
+            "event: response.completed\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-stream_order-v1\",\"type\":\"response.completed\"}\n\n"
+          ],
+          "status": 200,
+          "stream_cancelled": false,
+          "synthetic_record_id": "protocol_and_isolation-golden-golden-positive-stream_order-v1",
+          "terminal_event_present": true,
+          "usage_present": true
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-protocol",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "2108dbcb422f332b33eab796041d9846e8805ea5bbb74fa77902e41ba0a3f9db",
+      "oracle_class": "positive",
+      "record_id": "protocol_and_isolation-golden-golden-positive-stream_order-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "sse_order_and_partial_terminal_state",
+        "authorization_scope_exact"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-protocol_and_isolation-golden-golden-positive-retry_identity-v1",
+              "output": "{\"artifact_authorized\": true, \"attempts\": [{\"attempt\": 1, \"provider_dispatched\": false, \"request_identity\": \"retry-fixture-1\", \"usage_recorded\": false}, {\"attempt\": 2, \"provider_dispatched\": true, \"request_identity\": \"retry-fixture-1\", \"usage_recorded\": true}], \"authorized_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"case_id\": \"retry_identity\", \"continuation_mode\": null, \"conversation_id\": null, \"frames\": [\"response.created\", \"response.output_text.delta\", \"response.completed\"], \"frozen_source_path\": null, \"oracle_class\": \"positive\", \"passthrough_required\": false, \"previous_response_id\": null, \"provider_response_body_byte_count\": 429, \"provider_response_body_sha256\": \"8b742257a8f47118900f35e75138d6e4754cff3d605313d2b0507f00f329aee8\", \"provider_response_body_utf8\": \"event: response.created\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-retry_identity-v1\\\",\\\"type\\\":\\\"response.created\\\"}\\n\\nevent: response.output_text.delta\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-retry_identity-v1\\\",\\\"type\\\":\\\"response.output_text.delta\\\"}\\n\\nevent: response.completed\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-retry_identity-v1\\\",\\\"type\\\":\\\"response.completed\\\"}\\n\\n\", \"requested_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"sse_frame_byte_counts\": [135, 155, 139], \"sse_frame_sha256s\": [\"a53b366377ec6e28d3bbaefe103aab2304d538fd07d25f9943f23b7820b04909\", \"cc4789f6f2158666729078b74a8e31cc8da1036579304362a43b0af86225e290\", \"886cc011eb895845376b61fd36cda03dc9d7273f78ab45aefb90eac992fc20db\"], \"sse_frames_utf8\": [\"event: response.created\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-retry_identity-v1\\\",\\\"type\\\":\\\"response.created\\\"}\\n\\n\", \"event: response.output_text.delta\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-retry_identity-v1\\\",\\\"type\\\":\\\"response.output_text.delta\\\"}\\n\\n\", \"event: response.completed\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-retry_identity-v1\\\",\\\"type\\\":\\\"response.completed\\\"}\\n\\n\"], \"status\": 200, \"stream_cancelled\": false, \"synthetic_record_id\": \"protocol_and_isolation-golden-golden-positive-retry_identity-v1\", \"terminal_event_present\": true, \"usage_present\": true}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": true
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "08fa9c7ac031658ec66752fc2311ad8edeb05e405b2a6192c03223cea9a5e120",
+      "case_id": "retry_identity",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "ansi-osc-strip-v1": "no_material_opportunity",
+        "command-aware-projection-v1": "no_material_opportunity",
+        "delta-reread-v1": "no_material_opportunity",
+        "exact-duplicate-reference-v1": "no_material_opportunity",
+        "json-minify-v1": "no_material_opportunity",
+        "line-ending-normalize-v1": "no_material_opportunity",
+        "line-rle-v1": "no_material_opportunity",
+        "parallel-overlap-dedup-v1": "no_material_opportunity",
+        "prefix-cache-shaping-v1": "no_material_opportunity",
+        "structured-data-codec-v1": "no_material_opportunity",
+        "subresult-chunk-dedup-v1": "no_material_opportunity",
+        "successful-check-projection-v1": "no_material_opportunity",
+        "trailing-noise-trim-v1": "no_material_opportunity",
+        "unchanged-file-identity-v1": "no_material_opportunity"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "request_identity_preserved": true,
+        "retry_allowed": true,
+        "retry_limit": 1,
+        "status": "verified_completed_after_infrastructure_retry",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-protocol_and_isolation-golden-golden-positive-retry_identity-v1",
+                "output": "{\"artifact_authorized\": true, \"attempts\": [{\"attempt\": 1, \"provider_dispatched\": false, \"request_identity\": \"retry-fixture-1\", \"usage_recorded\": false}, {\"attempt\": 2, \"provider_dispatched\": true, \"request_identity\": \"retry-fixture-1\", \"usage_recorded\": true}], \"authorized_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"case_id\": \"retry_identity\", \"continuation_mode\": null, \"conversation_id\": null, \"frames\": [\"response.created\", \"response.output_text.delta\", \"response.completed\"], \"frozen_source_path\": null, \"oracle_class\": \"positive\", \"passthrough_required\": false, \"previous_response_id\": null, \"provider_response_body_byte_count\": 429, \"provider_response_body_sha256\": \"8b742257a8f47118900f35e75138d6e4754cff3d605313d2b0507f00f329aee8\", \"provider_response_body_utf8\": \"event: response.created\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-retry_identity-v1\\\",\\\"type\\\":\\\"response.created\\\"}\\n\\nevent: response.output_text.delta\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-retry_identity-v1\\\",\\\"type\\\":\\\"response.output_text.delta\\\"}\\n\\nevent: response.completed\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-retry_identity-v1\\\",\\\"type\\\":\\\"response.completed\\\"}\\n\\n\", \"requested_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"sse_frame_byte_counts\": [135, 155, 139], \"sse_frame_sha256s\": [\"a53b366377ec6e28d3bbaefe103aab2304d538fd07d25f9943f23b7820b04909\", \"cc4789f6f2158666729078b74a8e31cc8da1036579304362a43b0af86225e290\", \"886cc011eb895845376b61fd36cda03dc9d7273f78ab45aefb90eac992fc20db\"], \"sse_frames_utf8\": [\"event: response.created\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-retry_identity-v1\\\",\\\"type\\\":\\\"response.created\\\"}\\n\\n\", \"event: response.output_text.delta\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-retry_identity-v1\\\",\\\"type\\\":\\\"response.output_text.delta\\\"}\\n\\n\", \"event: response.completed\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-retry_identity-v1\\\",\\\"type\\\":\\\"response.completed\\\"}\\n\\n\"], \"status\": 200, \"stream_cancelled\": false, \"synthetic_record_id\": \"protocol_and_isolation-golden-golden-positive-retry_identity-v1\", \"terminal_event_present\": true, \"usage_present\": true}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": true
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "artifact_authorized": true,
+          "attempts": [
+            {
+              "attempt": 1,
+              "provider_dispatched": false,
+              "request_identity": "retry-fixture-1",
+              "usage_recorded": false
+            },
+            {
+              "attempt": 2,
+              "provider_dispatched": true,
+              "request_identity": "retry-fixture-1",
+              "usage_recorded": true
+            }
+          ],
+          "authorized_scope": {
+            "principal": "fixture-principal-a",
+            "session": "fixture-session-protocol",
+            "tenant": "fixture-tenant-a"
+          },
+          "case_id": "retry_identity",
+          "continuation_mode": null,
+          "conversation_id": null,
+          "frames": [
+            "response.created",
+            "response.output_text.delta",
+            "response.completed"
+          ],
+          "frozen_source_path": null,
+          "oracle_class": "positive",
+          "passthrough_required": false,
+          "previous_response_id": null,
+          "provider_response_body_byte_count": 429,
+          "provider_response_body_sha256": "8b742257a8f47118900f35e75138d6e4754cff3d605313d2b0507f00f329aee8",
+          "provider_response_body_utf8": "event: response.created\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-retry_identity-v1\",\"type\":\"response.created\"}\n\nevent: response.output_text.delta\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-retry_identity-v1\",\"type\":\"response.output_text.delta\"}\n\nevent: response.completed\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-retry_identity-v1\",\"type\":\"response.completed\"}\n\n",
+          "requested_scope": {
+            "principal": "fixture-principal-a",
+            "session": "fixture-session-protocol",
+            "tenant": "fixture-tenant-a"
+          },
+          "sse_frame_byte_counts": [
+            135,
+            155,
+            139
+          ],
+          "sse_frame_sha256s": [
+            "a53b366377ec6e28d3bbaefe103aab2304d538fd07d25f9943f23b7820b04909",
+            "cc4789f6f2158666729078b74a8e31cc8da1036579304362a43b0af86225e290",
+            "886cc011eb895845376b61fd36cda03dc9d7273f78ab45aefb90eac992fc20db"
+          ],
+          "sse_frames_utf8": [
+            "event: response.created\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-retry_identity-v1\",\"type\":\"response.created\"}\n\n",
+            "event: response.output_text.delta\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-retry_identity-v1\",\"type\":\"response.output_text.delta\"}\n\n",
+            "event: response.completed\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-retry_identity-v1\",\"type\":\"response.completed\"}\n\n"
+          ],
+          "status": 200,
+          "stream_cancelled": false,
+          "synthetic_record_id": "protocol_and_isolation-golden-golden-positive-retry_identity-v1",
+          "terminal_event_present": true,
+          "usage_present": true
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-protocol",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "58568f3e558f28d86e5d3102cccb19fca38368a8b8bc1f50f0e0458714dc6e9a",
+      "oracle_class": "positive",
+      "record_id": "protocol_and_isolation-golden-golden-positive-retry_identity-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "sse_order_and_partial_terminal_state",
+        "authorization_scope_exact"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-protocol_and_isolation-golden-golden-positive-manual_continuation-v1",
+              "output": "{\"artifact_authorized\": true, \"attempts\": [{\"attempt\": 1, \"provider_dispatched\": true, \"request_identity\": \"protocol_and_isolation-golden-golden-positive-manual_continuation-v1\", \"usage_recorded\": true}], \"authorized_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"case_id\": \"manual_continuation\", \"continuation_mode\": \"manual_replay\", \"conversation_id\": null, \"frames\": [\"response.created\", \"response.output_text.delta\", \"response.completed\"], \"frozen_source_path\": null, \"oracle_class\": \"positive\", \"passthrough_required\": false, \"previous_response_id\": null, \"provider_response_body_byte_count\": 444, \"provider_response_body_sha256\": \"c1219c0cd961429ad895c07be27d46db24dceaa00800be43e70ebdd1b9f841cc\", \"provider_response_body_utf8\": \"event: response.created\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-manual_continuation-v1\\\",\\\"type\\\":\\\"response.created\\\"}\\n\\nevent: response.output_text.delta\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-manual_continuation-v1\\\",\\\"type\\\":\\\"response.output_text.delta\\\"}\\n\\nevent: response.completed\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-manual_continuation-v1\\\",\\\"type\\\":\\\"response.completed\\\"}\\n\\n\", \"requested_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"sse_frame_byte_counts\": [140, 160, 144], \"sse_frame_sha256s\": [\"0a50e732a1dee9098b450f81a7ccb6cb6f55d6a3875ba61c66b99cc6cb989f38\", \"8e5fc9c4a2ff57dee3aa7a0ba7572a13f81e34b67f4b4623471b73d92170f5f6\", \"1c85bae31e50b23e63eea2ca13759034dd39256adcd39bb5cacfe619bbcefe0a\"], \"sse_frames_utf8\": [\"event: response.created\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-manual_continuation-v1\\\",\\\"type\\\":\\\"response.created\\\"}\\n\\n\", \"event: response.output_text.delta\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-manual_continuation-v1\\\",\\\"type\\\":\\\"response.output_text.delta\\\"}\\n\\n\", \"event: response.completed\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-manual_continuation-v1\\\",\\\"type\\\":\\\"response.completed\\\"}\\n\\n\"], \"status\": 200, \"stream_cancelled\": false, \"synthetic_record_id\": \"protocol_and_isolation-golden-golden-positive-manual_continuation-v1\", \"terminal_event_present\": true, \"usage_present\": true}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": true
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "36861df07e9153af8fe492ef9955cbf4eff190b174cd5301e222ceebadfebded",
+      "case_id": "manual_continuation",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "ansi-osc-strip-v1": "no_material_opportunity",
+        "command-aware-projection-v1": "no_material_opportunity",
+        "delta-reread-v1": "no_material_opportunity",
+        "exact-duplicate-reference-v1": "no_material_opportunity",
+        "json-minify-v1": "no_material_opportunity",
+        "line-ending-normalize-v1": "no_material_opportunity",
+        "line-rle-v1": "no_material_opportunity",
+        "parallel-overlap-dedup-v1": "no_material_opportunity",
+        "prefix-cache-shaping-v1": "no_material_opportunity",
+        "structured-data-codec-v1": "no_material_opportunity",
+        "subresult-chunk-dedup-v1": "no_material_opportunity",
+        "successful-check-projection-v1": "no_material_opportunity",
+        "trailing-noise-trim-v1": "no_material_opportunity",
+        "unchanged-file-identity-v1": "no_material_opportunity"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-protocol_and_isolation-golden-golden-positive-manual_continuation-v1",
+                "output": "{\"artifact_authorized\": true, \"attempts\": [{\"attempt\": 1, \"provider_dispatched\": true, \"request_identity\": \"protocol_and_isolation-golden-golden-positive-manual_continuation-v1\", \"usage_recorded\": true}], \"authorized_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"case_id\": \"manual_continuation\", \"continuation_mode\": \"manual_replay\", \"conversation_id\": null, \"frames\": [\"response.created\", \"response.output_text.delta\", \"response.completed\"], \"frozen_source_path\": null, \"oracle_class\": \"positive\", \"passthrough_required\": false, \"previous_response_id\": null, \"provider_response_body_byte_count\": 444, \"provider_response_body_sha256\": \"c1219c0cd961429ad895c07be27d46db24dceaa00800be43e70ebdd1b9f841cc\", \"provider_response_body_utf8\": \"event: response.created\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-manual_continuation-v1\\\",\\\"type\\\":\\\"response.created\\\"}\\n\\nevent: response.output_text.delta\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-manual_continuation-v1\\\",\\\"type\\\":\\\"response.output_text.delta\\\"}\\n\\nevent: response.completed\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-manual_continuation-v1\\\",\\\"type\\\":\\\"response.completed\\\"}\\n\\n\", \"requested_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"sse_frame_byte_counts\": [140, 160, 144], \"sse_frame_sha256s\": [\"0a50e732a1dee9098b450f81a7ccb6cb6f55d6a3875ba61c66b99cc6cb989f38\", \"8e5fc9c4a2ff57dee3aa7a0ba7572a13f81e34b67f4b4623471b73d92170f5f6\", \"1c85bae31e50b23e63eea2ca13759034dd39256adcd39bb5cacfe619bbcefe0a\"], \"sse_frames_utf8\": [\"event: response.created\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-manual_continuation-v1\\\",\\\"type\\\":\\\"response.created\\\"}\\n\\n\", \"event: response.output_text.delta\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-manual_continuation-v1\\\",\\\"type\\\":\\\"response.output_text.delta\\\"}\\n\\n\", \"event: response.completed\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-manual_continuation-v1\\\",\\\"type\\\":\\\"response.completed\\\"}\\n\\n\"], \"status\": 200, \"stream_cancelled\": false, \"synthetic_record_id\": \"protocol_and_isolation-golden-golden-positive-manual_continuation-v1\", \"terminal_event_present\": true, \"usage_present\": true}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": true
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "artifact_authorized": true,
+          "attempts": [
+            {
+              "attempt": 1,
+              "provider_dispatched": true,
+              "request_identity": "protocol_and_isolation-golden-golden-positive-manual_continuation-v1",
+              "usage_recorded": true
+            }
+          ],
+          "authorized_scope": {
+            "principal": "fixture-principal-a",
+            "session": "fixture-session-protocol",
+            "tenant": "fixture-tenant-a"
+          },
+          "case_id": "manual_continuation",
+          "continuation_mode": "manual_replay",
+          "conversation_id": null,
+          "frames": [
+            "response.created",
+            "response.output_text.delta",
+            "response.completed"
+          ],
+          "frozen_source_path": null,
+          "oracle_class": "positive",
+          "passthrough_required": false,
+          "previous_response_id": null,
+          "provider_response_body_byte_count": 444,
+          "provider_response_body_sha256": "c1219c0cd961429ad895c07be27d46db24dceaa00800be43e70ebdd1b9f841cc",
+          "provider_response_body_utf8": "event: response.created\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-manual_continuation-v1\",\"type\":\"response.created\"}\n\nevent: response.output_text.delta\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-manual_continuation-v1\",\"type\":\"response.output_text.delta\"}\n\nevent: response.completed\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-manual_continuation-v1\",\"type\":\"response.completed\"}\n\n",
+          "requested_scope": {
+            "principal": "fixture-principal-a",
+            "session": "fixture-session-protocol",
+            "tenant": "fixture-tenant-a"
+          },
+          "sse_frame_byte_counts": [
+            140,
+            160,
+            144
+          ],
+          "sse_frame_sha256s": [
+            "0a50e732a1dee9098b450f81a7ccb6cb6f55d6a3875ba61c66b99cc6cb989f38",
+            "8e5fc9c4a2ff57dee3aa7a0ba7572a13f81e34b67f4b4623471b73d92170f5f6",
+            "1c85bae31e50b23e63eea2ca13759034dd39256adcd39bb5cacfe619bbcefe0a"
+          ],
+          "sse_frames_utf8": [
+            "event: response.created\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-manual_continuation-v1\",\"type\":\"response.created\"}\n\n",
+            "event: response.output_text.delta\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-manual_continuation-v1\",\"type\":\"response.output_text.delta\"}\n\n",
+            "event: response.completed\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-manual_continuation-v1\",\"type\":\"response.completed\"}\n\n"
+          ],
+          "status": 200,
+          "stream_cancelled": false,
+          "synthetic_record_id": "protocol_and_isolation-golden-golden-positive-manual_continuation-v1",
+          "terminal_event_present": true,
+          "usage_present": true
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-protocol",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "19961a2557ea517f17dcf0f955cd593b77feafcf6cdc47685a750d45101b7708",
+      "oracle_class": "positive",
+      "record_id": "protocol_and_isolation-golden-golden-positive-manual_continuation-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "sse_order_and_partial_terminal_state",
+        "authorization_scope_exact"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1",
+              "output": "{\"artifact_authorized\": true, \"attempts\": [{\"attempt\": 1, \"provider_dispatched\": true, \"request_identity\": \"protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1\", \"usage_recorded\": true}], \"authorized_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"case_id\": \"previous_response_continuation\", \"continuation_mode\": \"previous_response_id\", \"conversation_id\": null, \"frames\": [\"response.created\", \"response.output_text.delta\", \"response.completed\"], \"frozen_source_path\": null, \"oracle_class\": \"positive\", \"passthrough_required\": false, \"previous_response_id\": \"resp_fixture_previous\", \"provider_response_body_byte_count\": 477, \"provider_response_body_sha256\": \"42a8d60a936fcfe38789cc6b749986c6c066564788bbf80d4b873a664ad85bc5\", \"provider_response_body_utf8\": \"event: response.created\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1\\\",\\\"type\\\":\\\"response.created\\\"}\\n\\nevent: response.output_text.delta\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1\\\",\\\"type\\\":\\\"response.output_text.delta\\\"}\\n\\nevent: response.completed\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1\\\",\\\"type\\\":\\\"response.completed\\\"}\\n\\n\", \"requested_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"sse_frame_byte_counts\": [151, 171, 155], \"sse_frame_sha256s\": [\"38cfe632903951430b599f4badfc7ea0a4e2fc69e86a5029e7320da7a9608608\", \"05e8897afa703590fe28d25c1a795f3e60118cbb86c40979e9e731c86f5483fb\", \"7017313c7bd2468941b1f4bb29bf350ac96917158c8426a0ab4edb1186ceb839\"], \"sse_frames_utf8\": [\"event: response.created\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1\\\",\\\"type\\\":\\\"response.created\\\"}\\n\\n\", \"event: response.output_text.delta\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1\\\",\\\"type\\\":\\\"response.output_text.delta\\\"}\\n\\n\", \"event: response.completed\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1\\\",\\\"type\\\":\\\"response.completed\\\"}\\n\\n\"], \"status\": 200, \"stream_cancelled\": false, \"synthetic_record_id\": \"protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1\", \"terminal_event_present\": true, \"usage_present\": true}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": true
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "69dd1140aafba1b739ef1bf61e538ab53b98ab6149b235cfe8a5d29f3a055291",
+      "case_id": "previous_response_continuation",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "ansi-osc-strip-v1": "no_material_opportunity",
+        "command-aware-projection-v1": "no_material_opportunity",
+        "delta-reread-v1": "no_material_opportunity",
+        "exact-duplicate-reference-v1": "no_material_opportunity",
+        "json-minify-v1": "no_material_opportunity",
+        "line-ending-normalize-v1": "no_material_opportunity",
+        "line-rle-v1": "no_material_opportunity",
+        "parallel-overlap-dedup-v1": "no_material_opportunity",
+        "prefix-cache-shaping-v1": "no_material_opportunity",
+        "structured-data-codec-v1": "no_material_opportunity",
+        "subresult-chunk-dedup-v1": "no_material_opportunity",
+        "successful-check-projection-v1": "no_material_opportunity",
+        "trailing-noise-trim-v1": "no_material_opportunity",
+        "unchanged-file-identity-v1": "no_material_opportunity"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1",
+                "output": "{\"artifact_authorized\": true, \"attempts\": [{\"attempt\": 1, \"provider_dispatched\": true, \"request_identity\": \"protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1\", \"usage_recorded\": true}], \"authorized_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"case_id\": \"previous_response_continuation\", \"continuation_mode\": \"previous_response_id\", \"conversation_id\": null, \"frames\": [\"response.created\", \"response.output_text.delta\", \"response.completed\"], \"frozen_source_path\": null, \"oracle_class\": \"positive\", \"passthrough_required\": false, \"previous_response_id\": \"resp_fixture_previous\", \"provider_response_body_byte_count\": 477, \"provider_response_body_sha256\": \"42a8d60a936fcfe38789cc6b749986c6c066564788bbf80d4b873a664ad85bc5\", \"provider_response_body_utf8\": \"event: response.created\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1\\\",\\\"type\\\":\\\"response.created\\\"}\\n\\nevent: response.output_text.delta\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1\\\",\\\"type\\\":\\\"response.output_text.delta\\\"}\\n\\nevent: response.completed\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1\\\",\\\"type\\\":\\\"response.completed\\\"}\\n\\n\", \"requested_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"sse_frame_byte_counts\": [151, 171, 155], \"sse_frame_sha256s\": [\"38cfe632903951430b599f4badfc7ea0a4e2fc69e86a5029e7320da7a9608608\", \"05e8897afa703590fe28d25c1a795f3e60118cbb86c40979e9e731c86f5483fb\", \"7017313c7bd2468941b1f4bb29bf350ac96917158c8426a0ab4edb1186ceb839\"], \"sse_frames_utf8\": [\"event: response.created\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1\\\",\\\"type\\\":\\\"response.created\\\"}\\n\\n\", \"event: response.output_text.delta\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1\\\",\\\"type\\\":\\\"response.output_text.delta\\\"}\\n\\n\", \"event: response.completed\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1\\\",\\\"type\\\":\\\"response.completed\\\"}\\n\\n\"], \"status\": 200, \"stream_cancelled\": false, \"synthetic_record_id\": \"protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1\", \"terminal_event_present\": true, \"usage_present\": true}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": true
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "artifact_authorized": true,
+          "attempts": [
+            {
+              "attempt": 1,
+              "provider_dispatched": true,
+              "request_identity": "protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1",
+              "usage_recorded": true
+            }
+          ],
+          "authorized_scope": {
+            "principal": "fixture-principal-a",
+            "session": "fixture-session-protocol",
+            "tenant": "fixture-tenant-a"
+          },
+          "case_id": "previous_response_continuation",
+          "continuation_mode": "previous_response_id",
+          "conversation_id": null,
+          "frames": [
+            "response.created",
+            "response.output_text.delta",
+            "response.completed"
+          ],
+          "frozen_source_path": null,
+          "oracle_class": "positive",
+          "passthrough_required": false,
+          "previous_response_id": "resp_fixture_previous",
+          "provider_response_body_byte_count": 477,
+          "provider_response_body_sha256": "42a8d60a936fcfe38789cc6b749986c6c066564788bbf80d4b873a664ad85bc5",
+          "provider_response_body_utf8": "event: response.created\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1\",\"type\":\"response.created\"}\n\nevent: response.output_text.delta\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1\",\"type\":\"response.output_text.delta\"}\n\nevent: response.completed\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1\",\"type\":\"response.completed\"}\n\n",
+          "requested_scope": {
+            "principal": "fixture-principal-a",
+            "session": "fixture-session-protocol",
+            "tenant": "fixture-tenant-a"
+          },
+          "sse_frame_byte_counts": [
+            151,
+            171,
+            155
+          ],
+          "sse_frame_sha256s": [
+            "38cfe632903951430b599f4badfc7ea0a4e2fc69e86a5029e7320da7a9608608",
+            "05e8897afa703590fe28d25c1a795f3e60118cbb86c40979e9e731c86f5483fb",
+            "7017313c7bd2468941b1f4bb29bf350ac96917158c8426a0ab4edb1186ceb839"
+          ],
+          "sse_frames_utf8": [
+            "event: response.created\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1\",\"type\":\"response.created\"}\n\n",
+            "event: response.output_text.delta\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1\",\"type\":\"response.output_text.delta\"}\n\n",
+            "event: response.completed\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1\",\"type\":\"response.completed\"}\n\n"
+          ],
+          "status": 200,
+          "stream_cancelled": false,
+          "synthetic_record_id": "protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1",
+          "terminal_event_present": true,
+          "usage_present": true
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-protocol",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "a48c5810cfd0c575fddc62128bf8bef062a7f55af06e6980f3fc34a119475378",
+      "oracle_class": "positive",
+      "record_id": "protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "sse_order_and_partial_terminal_state",
+        "authorization_scope_exact"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-protocol_and_isolation-golden-golden-positive-conversation_continuation-v1",
+              "output": "{\"artifact_authorized\": true, \"attempts\": [{\"attempt\": 1, \"provider_dispatched\": true, \"request_identity\": \"protocol_and_isolation-golden-golden-positive-conversation_continuation-v1\", \"usage_recorded\": true}], \"authorized_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"case_id\": \"conversation_continuation\", \"continuation_mode\": \"conversation_id\", \"conversation_id\": \"conv_fixture\", \"frames\": [\"response.created\", \"response.output_text.delta\", \"response.completed\"], \"frozen_source_path\": null, \"oracle_class\": \"positive\", \"passthrough_required\": false, \"previous_response_id\": null, \"provider_response_body_byte_count\": 462, \"provider_response_body_sha256\": \"19f9305ab5fe0f14bee8561ff715a92177b551b0a03517957daa119fdc145939\", \"provider_response_body_utf8\": \"event: response.created\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-conversation_continuation-v1\\\",\\\"type\\\":\\\"response.created\\\"}\\n\\nevent: response.output_text.delta\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-conversation_continuation-v1\\\",\\\"type\\\":\\\"response.output_text.delta\\\"}\\n\\nevent: response.completed\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-conversation_continuation-v1\\\",\\\"type\\\":\\\"response.completed\\\"}\\n\\n\", \"requested_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"sse_frame_byte_counts\": [146, 166, 150], \"sse_frame_sha256s\": [\"4754d45d96d8cc3bd2cef7ca4430fe706eddaf2301d8acd250f1fb77d7b8581f\", \"364da473985b1e858e6cbb2f270093e9438e65d4db87c4d3f01ab87f399d1a77\", \"15b0e28344dcd385fd9d73c600d2e239c150249e7957b89224860d993cd9b365\"], \"sse_frames_utf8\": [\"event: response.created\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-conversation_continuation-v1\\\",\\\"type\\\":\\\"response.created\\\"}\\n\\n\", \"event: response.output_text.delta\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-conversation_continuation-v1\\\",\\\"type\\\":\\\"response.output_text.delta\\\"}\\n\\n\", \"event: response.completed\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-conversation_continuation-v1\\\",\\\"type\\\":\\\"response.completed\\\"}\\n\\n\"], \"status\": 200, \"stream_cancelled\": false, \"synthetic_record_id\": \"protocol_and_isolation-golden-golden-positive-conversation_continuation-v1\", \"terminal_event_present\": true, \"usage_present\": true}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": true
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "56ec4e092980d397fda95a66fe2dfcb885b3ae73aaf816c82d47043e0d467910",
+      "case_id": "conversation_continuation",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "ansi-osc-strip-v1": "no_material_opportunity",
+        "command-aware-projection-v1": "no_material_opportunity",
+        "delta-reread-v1": "no_material_opportunity",
+        "exact-duplicate-reference-v1": "no_material_opportunity",
+        "json-minify-v1": "no_material_opportunity",
+        "line-ending-normalize-v1": "no_material_opportunity",
+        "line-rle-v1": "no_material_opportunity",
+        "parallel-overlap-dedup-v1": "no_material_opportunity",
+        "prefix-cache-shaping-v1": "no_material_opportunity",
+        "structured-data-codec-v1": "no_material_opportunity",
+        "subresult-chunk-dedup-v1": "no_material_opportunity",
+        "successful-check-projection-v1": "no_material_opportunity",
+        "trailing-noise-trim-v1": "no_material_opportunity",
+        "unchanged-file-identity-v1": "no_material_opportunity"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-protocol_and_isolation-golden-golden-positive-conversation_continuation-v1",
+                "output": "{\"artifact_authorized\": true, \"attempts\": [{\"attempt\": 1, \"provider_dispatched\": true, \"request_identity\": \"protocol_and_isolation-golden-golden-positive-conversation_continuation-v1\", \"usage_recorded\": true}], \"authorized_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"case_id\": \"conversation_continuation\", \"continuation_mode\": \"conversation_id\", \"conversation_id\": \"conv_fixture\", \"frames\": [\"response.created\", \"response.output_text.delta\", \"response.completed\"], \"frozen_source_path\": null, \"oracle_class\": \"positive\", \"passthrough_required\": false, \"previous_response_id\": null, \"provider_response_body_byte_count\": 462, \"provider_response_body_sha256\": \"19f9305ab5fe0f14bee8561ff715a92177b551b0a03517957daa119fdc145939\", \"provider_response_body_utf8\": \"event: response.created\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-conversation_continuation-v1\\\",\\\"type\\\":\\\"response.created\\\"}\\n\\nevent: response.output_text.delta\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-conversation_continuation-v1\\\",\\\"type\\\":\\\"response.output_text.delta\\\"}\\n\\nevent: response.completed\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-conversation_continuation-v1\\\",\\\"type\\\":\\\"response.completed\\\"}\\n\\n\", \"requested_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"sse_frame_byte_counts\": [146, 166, 150], \"sse_frame_sha256s\": [\"4754d45d96d8cc3bd2cef7ca4430fe706eddaf2301d8acd250f1fb77d7b8581f\", \"364da473985b1e858e6cbb2f270093e9438e65d4db87c4d3f01ab87f399d1a77\", \"15b0e28344dcd385fd9d73c600d2e239c150249e7957b89224860d993cd9b365\"], \"sse_frames_utf8\": [\"event: response.created\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-conversation_continuation-v1\\\",\\\"type\\\":\\\"response.created\\\"}\\n\\n\", \"event: response.output_text.delta\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-conversation_continuation-v1\\\",\\\"type\\\":\\\"response.output_text.delta\\\"}\\n\\n\", \"event: response.completed\\ndata: {\\\"fixture\\\":\\\"protocol_and_isolation-golden-golden-positive-conversation_continuation-v1\\\",\\\"type\\\":\\\"response.completed\\\"}\\n\\n\"], \"status\": 200, \"stream_cancelled\": false, \"synthetic_record_id\": \"protocol_and_isolation-golden-golden-positive-conversation_continuation-v1\", \"terminal_event_present\": true, \"usage_present\": true}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": true
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "artifact_authorized": true,
+          "attempts": [
+            {
+              "attempt": 1,
+              "provider_dispatched": true,
+              "request_identity": "protocol_and_isolation-golden-golden-positive-conversation_continuation-v1",
+              "usage_recorded": true
+            }
+          ],
+          "authorized_scope": {
+            "principal": "fixture-principal-a",
+            "session": "fixture-session-protocol",
+            "tenant": "fixture-tenant-a"
+          },
+          "case_id": "conversation_continuation",
+          "continuation_mode": "conversation_id",
+          "conversation_id": "conv_fixture",
+          "frames": [
+            "response.created",
+            "response.output_text.delta",
+            "response.completed"
+          ],
+          "frozen_source_path": null,
+          "oracle_class": "positive",
+          "passthrough_required": false,
+          "previous_response_id": null,
+          "provider_response_body_byte_count": 462,
+          "provider_response_body_sha256": "19f9305ab5fe0f14bee8561ff715a92177b551b0a03517957daa119fdc145939",
+          "provider_response_body_utf8": "event: response.created\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-conversation_continuation-v1\",\"type\":\"response.created\"}\n\nevent: response.output_text.delta\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-conversation_continuation-v1\",\"type\":\"response.output_text.delta\"}\n\nevent: response.completed\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-conversation_continuation-v1\",\"type\":\"response.completed\"}\n\n",
+          "requested_scope": {
+            "principal": "fixture-principal-a",
+            "session": "fixture-session-protocol",
+            "tenant": "fixture-tenant-a"
+          },
+          "sse_frame_byte_counts": [
+            146,
+            166,
+            150
+          ],
+          "sse_frame_sha256s": [
+            "4754d45d96d8cc3bd2cef7ca4430fe706eddaf2301d8acd250f1fb77d7b8581f",
+            "364da473985b1e858e6cbb2f270093e9438e65d4db87c4d3f01ab87f399d1a77",
+            "15b0e28344dcd385fd9d73c600d2e239c150249e7957b89224860d993cd9b365"
+          ],
+          "sse_frames_utf8": [
+            "event: response.created\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-conversation_continuation-v1\",\"type\":\"response.created\"}\n\n",
+            "event: response.output_text.delta\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-conversation_continuation-v1\",\"type\":\"response.output_text.delta\"}\n\n",
+            "event: response.completed\ndata: {\"fixture\":\"protocol_and_isolation-golden-golden-positive-conversation_continuation-v1\",\"type\":\"response.completed\"}\n\n"
+          ],
+          "status": 200,
+          "stream_cancelled": false,
+          "synthetic_record_id": "protocol_and_isolation-golden-golden-positive-conversation_continuation-v1",
+          "terminal_event_present": true,
+          "usage_present": true
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-protocol",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "a690aa270fe3d50be380fdbaf06d96728f02e10e2b1ddfb46b2f8803c6cfc623",
+      "oracle_class": "positive",
+      "record_id": "protocol_and_isolation-golden-golden-positive-conversation_continuation-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "sse_order_and_partial_terminal_state",
+        "authorization_scope_exact"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-protocol_and_isolation-golden-golden-negative-cross_tenant-v1",
+              "output": "{\"artifact_authorized\": true, \"attempts\": [{\"attempt\": 1, \"provider_dispatched\": false, \"request_identity\": \"protocol_and_isolation-golden-golden-negative-cross_tenant-v1\", \"usage_recorded\": false}], \"authorized_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"case_id\": \"cross_tenant\", \"continuation_mode\": null, \"conversation_id\": null, \"frames\": [], \"frozen_source_path\": null, \"oracle_class\": \"negative\", \"passthrough_required\": false, \"previous_response_id\": null, \"provider_response_body_byte_count\": 0, \"provider_response_body_sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\", \"provider_response_body_utf8\": \"\", \"requested_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-b\"}, \"sse_frame_byte_counts\": [], \"sse_frame_sha256s\": [], \"sse_frames_utf8\": [], \"status\": 403, \"stream_cancelled\": false, \"synthetic_record_id\": \"protocol_and_isolation-golden-golden-negative-cross_tenant-v1\", \"terminal_event_present\": false, \"usage_present\": false}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": true
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "0611a91a4b1bd6020d0e94bcff9bf0ec1f03d35b25ec9fa702cb89131de49ac5",
+      "case_id": "cross_tenant",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "ansi-osc-strip-v1": "reject_cross_scope_access",
+        "command-aware-projection-v1": "reject_cross_scope_access",
+        "delta-reread-v1": "reject_cross_scope_access",
+        "exact-duplicate-reference-v1": "reject_cross_scope_access",
+        "json-minify-v1": "reject_cross_scope_access",
+        "line-ending-normalize-v1": "reject_cross_scope_access",
+        "line-rle-v1": "reject_cross_scope_access",
+        "parallel-overlap-dedup-v1": "reject_cross_scope_access",
+        "prefix-cache-shaping-v1": "reject_cross_scope_access",
+        "structured-data-codec-v1": "reject_cross_scope_access",
+        "subresult-chunk-dedup-v1": "reject_cross_scope_access",
+        "successful-check-projection-v1": "reject_cross_scope_access",
+        "trailing-noise-trim-v1": "reject_cross_scope_access",
+        "unchanged-file-identity-v1": "reject_cross_scope_access"
+      },
+      "expected_outcome": {
+        "provider_status": 403,
+        "retry_allowed": false,
+        "status": "authorization_rejected",
+        "verified_task_success": false
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-protocol_and_isolation-golden-golden-negative-cross_tenant-v1",
+                "output": "{\"artifact_authorized\": true, \"attempts\": [{\"attempt\": 1, \"provider_dispatched\": false, \"request_identity\": \"protocol_and_isolation-golden-golden-negative-cross_tenant-v1\", \"usage_recorded\": false}], \"authorized_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"case_id\": \"cross_tenant\", \"continuation_mode\": null, \"conversation_id\": null, \"frames\": [], \"frozen_source_path\": null, \"oracle_class\": \"negative\", \"passthrough_required\": false, \"previous_response_id\": null, \"provider_response_body_byte_count\": 0, \"provider_response_body_sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\", \"provider_response_body_utf8\": \"\", \"requested_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-b\"}, \"sse_frame_byte_counts\": [], \"sse_frame_sha256s\": [], \"sse_frames_utf8\": [], \"status\": 403, \"stream_cancelled\": false, \"synthetic_record_id\": \"protocol_and_isolation-golden-golden-negative-cross_tenant-v1\", \"terminal_event_present\": false, \"usage_present\": false}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": true
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "artifact_authorized": true,
+          "attempts": [
+            {
+              "attempt": 1,
+              "provider_dispatched": false,
+              "request_identity": "protocol_and_isolation-golden-golden-negative-cross_tenant-v1",
+              "usage_recorded": false
+            }
+          ],
+          "authorized_scope": {
+            "principal": "fixture-principal-a",
+            "session": "fixture-session-protocol",
+            "tenant": "fixture-tenant-a"
+          },
+          "case_id": "cross_tenant",
+          "continuation_mode": null,
+          "conversation_id": null,
+          "frames": [],
+          "frozen_source_path": null,
+          "oracle_class": "negative",
+          "passthrough_required": false,
+          "previous_response_id": null,
+          "provider_response_body_byte_count": 0,
+          "provider_response_body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "provider_response_body_utf8": "",
+          "requested_scope": {
+            "principal": "fixture-principal-a",
+            "session": "fixture-session-protocol",
+            "tenant": "fixture-tenant-b"
+          },
+          "sse_frame_byte_counts": [],
+          "sse_frame_sha256s": [],
+          "sse_frames_utf8": [],
+          "status": 403,
+          "stream_cancelled": false,
+          "synthetic_record_id": "protocol_and_isolation-golden-golden-negative-cross_tenant-v1",
+          "terminal_event_present": false,
+          "usage_present": false
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-protocol",
+          "tenant": "fixture-tenant-b"
+        }
+      },
+      "input_sha256": "6221a371cf9a2bea929db664fb743ce5db53ca9ec0194f1a6766feb3d73ae5dc",
+      "oracle_class": "negative",
+      "record_id": "protocol_and_isolation-golden-golden-negative-cross_tenant-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "sse_order_and_partial_terminal_state",
+        "authorization_scope_exact"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-protocol_and_isolation-golden-golden-negative-cross_principal-v1",
+              "output": "{\"artifact_authorized\": true, \"attempts\": [{\"attempt\": 1, \"provider_dispatched\": false, \"request_identity\": \"protocol_and_isolation-golden-golden-negative-cross_principal-v1\", \"usage_recorded\": false}], \"authorized_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"case_id\": \"cross_principal\", \"continuation_mode\": null, \"conversation_id\": null, \"frames\": [], \"frozen_source_path\": null, \"oracle_class\": \"negative\", \"passthrough_required\": false, \"previous_response_id\": null, \"provider_response_body_byte_count\": 0, \"provider_response_body_sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\", \"provider_response_body_utf8\": \"\", \"requested_scope\": {\"principal\": \"fixture-principal-b\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"sse_frame_byte_counts\": [], \"sse_frame_sha256s\": [], \"sse_frames_utf8\": [], \"status\": 403, \"stream_cancelled\": false, \"synthetic_record_id\": \"protocol_and_isolation-golden-golden-negative-cross_principal-v1\", \"terminal_event_present\": false, \"usage_present\": false}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": true
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "62fa0d5c42726836020cad779207c7133ced8f221ee6eafa82932a37c46880b8",
+      "case_id": "cross_principal",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "ansi-osc-strip-v1": "reject_cross_scope_access",
+        "command-aware-projection-v1": "reject_cross_scope_access",
+        "delta-reread-v1": "reject_cross_scope_access",
+        "exact-duplicate-reference-v1": "reject_cross_scope_access",
+        "json-minify-v1": "reject_cross_scope_access",
+        "line-ending-normalize-v1": "reject_cross_scope_access",
+        "line-rle-v1": "reject_cross_scope_access",
+        "parallel-overlap-dedup-v1": "reject_cross_scope_access",
+        "prefix-cache-shaping-v1": "reject_cross_scope_access",
+        "structured-data-codec-v1": "reject_cross_scope_access",
+        "subresult-chunk-dedup-v1": "reject_cross_scope_access",
+        "successful-check-projection-v1": "reject_cross_scope_access",
+        "trailing-noise-trim-v1": "reject_cross_scope_access",
+        "unchanged-file-identity-v1": "reject_cross_scope_access"
+      },
+      "expected_outcome": {
+        "provider_status": 403,
+        "retry_allowed": false,
+        "status": "authorization_rejected",
+        "verified_task_success": false
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-protocol_and_isolation-golden-golden-negative-cross_principal-v1",
+                "output": "{\"artifact_authorized\": true, \"attempts\": [{\"attempt\": 1, \"provider_dispatched\": false, \"request_identity\": \"protocol_and_isolation-golden-golden-negative-cross_principal-v1\", \"usage_recorded\": false}], \"authorized_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"case_id\": \"cross_principal\", \"continuation_mode\": null, \"conversation_id\": null, \"frames\": [], \"frozen_source_path\": null, \"oracle_class\": \"negative\", \"passthrough_required\": false, \"previous_response_id\": null, \"provider_response_body_byte_count\": 0, \"provider_response_body_sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\", \"provider_response_body_utf8\": \"\", \"requested_scope\": {\"principal\": \"fixture-principal-b\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"sse_frame_byte_counts\": [], \"sse_frame_sha256s\": [], \"sse_frames_utf8\": [], \"status\": 403, \"stream_cancelled\": false, \"synthetic_record_id\": \"protocol_and_isolation-golden-golden-negative-cross_principal-v1\", \"terminal_event_present\": false, \"usage_present\": false}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": true
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "artifact_authorized": true,
+          "attempts": [
+            {
+              "attempt": 1,
+              "provider_dispatched": false,
+              "request_identity": "protocol_and_isolation-golden-golden-negative-cross_principal-v1",
+              "usage_recorded": false
+            }
+          ],
+          "authorized_scope": {
+            "principal": "fixture-principal-a",
+            "session": "fixture-session-protocol",
+            "tenant": "fixture-tenant-a"
+          },
+          "case_id": "cross_principal",
+          "continuation_mode": null,
+          "conversation_id": null,
+          "frames": [],
+          "frozen_source_path": null,
+          "oracle_class": "negative",
+          "passthrough_required": false,
+          "previous_response_id": null,
+          "provider_response_body_byte_count": 0,
+          "provider_response_body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "provider_response_body_utf8": "",
+          "requested_scope": {
+            "principal": "fixture-principal-b",
+            "session": "fixture-session-protocol",
+            "tenant": "fixture-tenant-a"
+          },
+          "sse_frame_byte_counts": [],
+          "sse_frame_sha256s": [],
+          "sse_frames_utf8": [],
+          "status": 403,
+          "stream_cancelled": false,
+          "synthetic_record_id": "protocol_and_isolation-golden-golden-negative-cross_principal-v1",
+          "terminal_event_present": false,
+          "usage_present": false
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-b",
+          "session": "fixture-session-protocol",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "ec971b055c73706013f59fcd389f4b567042098d4c2a2ed82424ec51bb318f11",
+      "oracle_class": "negative",
+      "record_id": "protocol_and_isolation-golden-golden-negative-cross_principal-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "sse_order_and_partial_terminal_state",
+        "authorization_scope_exact"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-protocol_and_isolation-golden-golden-negative-cross_session-v1",
+              "output": "{\"artifact_authorized\": true, \"attempts\": [{\"attempt\": 1, \"provider_dispatched\": false, \"request_identity\": \"protocol_and_isolation-golden-golden-negative-cross_session-v1\", \"usage_recorded\": false}], \"authorized_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"case_id\": \"cross_session\", \"continuation_mode\": null, \"conversation_id\": null, \"frames\": [], \"frozen_source_path\": null, \"oracle_class\": \"negative\", \"passthrough_required\": false, \"previous_response_id\": null, \"provider_response_body_byte_count\": 0, \"provider_response_body_sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\", \"provider_response_body_utf8\": \"\", \"requested_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-b\", \"tenant\": \"fixture-tenant-a\"}, \"sse_frame_byte_counts\": [], \"sse_frame_sha256s\": [], \"sse_frames_utf8\": [], \"status\": 403, \"stream_cancelled\": false, \"synthetic_record_id\": \"protocol_and_isolation-golden-golden-negative-cross_session-v1\", \"terminal_event_present\": false, \"usage_present\": false}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": true
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "f3346798787f9726f95bd3668e9af4d98749cd2ffd86bef971cc7bfe739afd50",
+      "case_id": "cross_session",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "ansi-osc-strip-v1": "reject_cross_scope_access",
+        "command-aware-projection-v1": "reject_cross_scope_access",
+        "delta-reread-v1": "reject_cross_scope_access",
+        "exact-duplicate-reference-v1": "reject_cross_scope_access",
+        "json-minify-v1": "reject_cross_scope_access",
+        "line-ending-normalize-v1": "reject_cross_scope_access",
+        "line-rle-v1": "reject_cross_scope_access",
+        "parallel-overlap-dedup-v1": "reject_cross_scope_access",
+        "prefix-cache-shaping-v1": "reject_cross_scope_access",
+        "structured-data-codec-v1": "reject_cross_scope_access",
+        "subresult-chunk-dedup-v1": "reject_cross_scope_access",
+        "successful-check-projection-v1": "reject_cross_scope_access",
+        "trailing-noise-trim-v1": "reject_cross_scope_access",
+        "unchanged-file-identity-v1": "reject_cross_scope_access"
+      },
+      "expected_outcome": {
+        "provider_status": 403,
+        "retry_allowed": false,
+        "status": "authorization_rejected",
+        "verified_task_success": false
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-protocol_and_isolation-golden-golden-negative-cross_session-v1",
+                "output": "{\"artifact_authorized\": true, \"attempts\": [{\"attempt\": 1, \"provider_dispatched\": false, \"request_identity\": \"protocol_and_isolation-golden-golden-negative-cross_session-v1\", \"usage_recorded\": false}], \"authorized_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"case_id\": \"cross_session\", \"continuation_mode\": null, \"conversation_id\": null, \"frames\": [], \"frozen_source_path\": null, \"oracle_class\": \"negative\", \"passthrough_required\": false, \"previous_response_id\": null, \"provider_response_body_byte_count\": 0, \"provider_response_body_sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\", \"provider_response_body_utf8\": \"\", \"requested_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-b\", \"tenant\": \"fixture-tenant-a\"}, \"sse_frame_byte_counts\": [], \"sse_frame_sha256s\": [], \"sse_frames_utf8\": [], \"status\": 403, \"stream_cancelled\": false, \"synthetic_record_id\": \"protocol_and_isolation-golden-golden-negative-cross_session-v1\", \"terminal_event_present\": false, \"usage_present\": false}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": true
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "artifact_authorized": true,
+          "attempts": [
+            {
+              "attempt": 1,
+              "provider_dispatched": false,
+              "request_identity": "protocol_and_isolation-golden-golden-negative-cross_session-v1",
+              "usage_recorded": false
+            }
+          ],
+          "authorized_scope": {
+            "principal": "fixture-principal-a",
+            "session": "fixture-session-protocol",
+            "tenant": "fixture-tenant-a"
+          },
+          "case_id": "cross_session",
+          "continuation_mode": null,
+          "conversation_id": null,
+          "frames": [],
+          "frozen_source_path": null,
+          "oracle_class": "negative",
+          "passthrough_required": false,
+          "previous_response_id": null,
+          "provider_response_body_byte_count": 0,
+          "provider_response_body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "provider_response_body_utf8": "",
+          "requested_scope": {
+            "principal": "fixture-principal-a",
+            "session": "fixture-session-b",
+            "tenant": "fixture-tenant-a"
+          },
+          "sse_frame_byte_counts": [],
+          "sse_frame_sha256s": [],
+          "sse_frames_utf8": [],
+          "status": 403,
+          "stream_cancelled": false,
+          "synthetic_record_id": "protocol_and_isolation-golden-golden-negative-cross_session-v1",
+          "terminal_event_present": false,
+          "usage_present": false
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-b",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "3cdde8a2c3b669c837b9a6bb93bfc6f4834af523c7599832fe953173d187db28",
+      "oracle_class": "negative",
+      "record_id": "protocol_and_isolation-golden-golden-negative-cross_session-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "sse_order_and_partial_terminal_state",
+        "authorization_scope_exact"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-protocol_and_isolation-golden-golden-negative-unauthorized_artifact-v1",
+              "output": "{\"artifact_authorized\": false, \"attempts\": [{\"attempt\": 1, \"provider_dispatched\": false, \"request_identity\": \"protocol_and_isolation-golden-golden-negative-unauthorized_artifact-v1\", \"usage_recorded\": false}], \"authorized_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"case_id\": \"unauthorized_artifact\", \"continuation_mode\": null, \"conversation_id\": null, \"frames\": [], \"frozen_source_path\": null, \"oracle_class\": \"negative\", \"passthrough_required\": false, \"previous_response_id\": null, \"provider_response_body_byte_count\": 0, \"provider_response_body_sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\", \"provider_response_body_utf8\": \"\", \"requested_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"sse_frame_byte_counts\": [], \"sse_frame_sha256s\": [], \"sse_frames_utf8\": [], \"status\": 403, \"stream_cancelled\": false, \"synthetic_record_id\": \"protocol_and_isolation-golden-golden-negative-unauthorized_artifact-v1\", \"terminal_event_present\": false, \"usage_present\": false}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": true
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "20bbe18f137b44803546ba85b109faf5e11afd1e92b516e73bc44b4fb1a25047",
+      "case_id": "unauthorized_artifact",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "ansi-osc-strip-v1": "reject_cross_scope_access",
+        "command-aware-projection-v1": "reject_cross_scope_access",
+        "delta-reread-v1": "reject_cross_scope_access",
+        "exact-duplicate-reference-v1": "reject_cross_scope_access",
+        "json-minify-v1": "reject_cross_scope_access",
+        "line-ending-normalize-v1": "reject_cross_scope_access",
+        "line-rle-v1": "reject_cross_scope_access",
+        "parallel-overlap-dedup-v1": "reject_cross_scope_access",
+        "prefix-cache-shaping-v1": "reject_cross_scope_access",
+        "structured-data-codec-v1": "reject_cross_scope_access",
+        "subresult-chunk-dedup-v1": "reject_cross_scope_access",
+        "successful-check-projection-v1": "reject_cross_scope_access",
+        "trailing-noise-trim-v1": "reject_cross_scope_access",
+        "unchanged-file-identity-v1": "reject_cross_scope_access"
+      },
+      "expected_outcome": {
+        "provider_status": 403,
+        "retry_allowed": false,
+        "status": "authorization_rejected",
+        "verified_task_success": false
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-protocol_and_isolation-golden-golden-negative-unauthorized_artifact-v1",
+                "output": "{\"artifact_authorized\": false, \"attempts\": [{\"attempt\": 1, \"provider_dispatched\": false, \"request_identity\": \"protocol_and_isolation-golden-golden-negative-unauthorized_artifact-v1\", \"usage_recorded\": false}], \"authorized_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"case_id\": \"unauthorized_artifact\", \"continuation_mode\": null, \"conversation_id\": null, \"frames\": [], \"frozen_source_path\": null, \"oracle_class\": \"negative\", \"passthrough_required\": false, \"previous_response_id\": null, \"provider_response_body_byte_count\": 0, \"provider_response_body_sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\", \"provider_response_body_utf8\": \"\", \"requested_scope\": {\"principal\": \"fixture-principal-a\", \"session\": \"fixture-session-protocol\", \"tenant\": \"fixture-tenant-a\"}, \"sse_frame_byte_counts\": [], \"sse_frame_sha256s\": [], \"sse_frames_utf8\": [], \"status\": 403, \"stream_cancelled\": false, \"synthetic_record_id\": \"protocol_and_isolation-golden-golden-negative-unauthorized_artifact-v1\", \"terminal_event_present\": false, \"usage_present\": false}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": true
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "artifact_authorized": false,
+          "attempts": [
+            {
+              "attempt": 1,
+              "provider_dispatched": false,
+              "request_identity": "protocol_and_isolation-golden-golden-negative-unauthorized_artifact-v1",
+              "usage_recorded": false
+            }
+          ],
+          "authorized_scope": {
+            "principal": "fixture-principal-a",
+            "session": "fixture-session-protocol",
+            "tenant": "fixture-tenant-a"
+          },
+          "case_id": "unauthorized_artifact",
+          "continuation_mode": null,
+          "conversation_id": null,
+          "frames": [],
+          "frozen_source_path": null,
+          "oracle_class": "negative",
+          "passthrough_required": false,
+          "previous_response_id": null,
+          "provider_response_body_byte_count": 0,
+          "provider_response_body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "provider_response_body_utf8": "",
+          "requested_scope": {
+            "principal": "fixture-principal-a",
+            "session": "fixture-session-protocol",
+            "tenant": "fixture-tenant-a"
+          },
+          "sse_frame_byte_counts": [],
+          "sse_frame_sha256s": [],
+          "sse_frames_utf8": [],
+          "status": 403,
+          "stream_cancelled": false,
+          "synthetic_record_id": "protocol_and_isolation-golden-golden-negative-unauthorized_artifact-v1",
+          "terminal_event_present": false,
+          "usage_present": false
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-protocol",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "fa533745bcf644a3320f151d47bdff3bf74a4bfdbe549d79e63c1dafbe17dbd1",
+      "oracle_class": "negative",
+      "record_id": "protocol_and_isolation-golden-golden-negative-unauthorized_artifact-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "sse_order_and_partial_terminal_state",
+        "authorization_scope_exact"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    }
+  ],
+  "cases": [
+    "stream_order",
+    "retry_identity",
+    "manual_continuation",
+    "previous_response_continuation",
+    "conversation_continuation",
+    "cross_tenant",
+    "cross_principal",
+    "cross_session",
+    "unauthorized_artifact"
+  ],
+  "eligible_techniques": [],
+  "expected_disposition_by_technique": {
+    "ansi-osc-strip-v1": [
+      "no_material_opportunity",
+      "reject_cross_scope_access"
+    ],
+    "command-aware-projection-v1": [
+      "no_material_opportunity",
+      "reject_cross_scope_access"
+    ],
+    "delta-reread-v1": [
+      "no_material_opportunity",
+      "reject_cross_scope_access"
+    ],
+    "exact-duplicate-reference-v1": [
+      "no_material_opportunity",
+      "reject_cross_scope_access"
+    ],
+    "json-minify-v1": [
+      "no_material_opportunity",
+      "reject_cross_scope_access"
+    ],
+    "line-ending-normalize-v1": [
+      "no_material_opportunity",
+      "reject_cross_scope_access"
+    ],
+    "line-rle-v1": [
+      "no_material_opportunity",
+      "reject_cross_scope_access"
+    ],
+    "parallel-overlap-dedup-v1": [
+      "no_material_opportunity",
+      "reject_cross_scope_access"
+    ],
+    "prefix-cache-shaping-v1": [
+      "no_material_opportunity",
+      "reject_cross_scope_access"
+    ],
+    "structured-data-codec-v1": [
+      "no_material_opportunity",
+      "reject_cross_scope_access"
+    ],
+    "subresult-chunk-dedup-v1": [
+      "no_material_opportunity",
+      "reject_cross_scope_access"
+    ],
+    "successful-check-projection-v1": [
+      "no_material_opportunity",
+      "reject_cross_scope_access"
+    ],
+    "trailing-noise-trim-v1": [
+      "no_material_opportunity",
+      "reject_cross_scope_access"
+    ],
+    "unchanged-file-identity-v1": [
+      "no_material_opportunity",
+      "reject_cross_scope_access"
+    ]
+  },
+  "expected_outcome": {
+    "by_record_id": {
+      "protocol_and_isolation-golden-golden-negative-cross_principal-v1": {
+        "provider_status": 403,
+        "retry_allowed": false,
+        "status": "authorization_rejected",
+        "verified_task_success": false
+      },
+      "protocol_and_isolation-golden-golden-negative-cross_session-v1": {
+        "provider_status": 403,
+        "retry_allowed": false,
+        "status": "authorization_rejected",
+        "verified_task_success": false
+      },
+      "protocol_and_isolation-golden-golden-negative-cross_tenant-v1": {
+        "provider_status": 403,
+        "retry_allowed": false,
+        "status": "authorization_rejected",
+        "verified_task_success": false
+      },
+      "protocol_and_isolation-golden-golden-negative-unauthorized_artifact-v1": {
+        "provider_status": 403,
+        "retry_allowed": false,
+        "status": "authorization_rejected",
+        "verified_task_success": false
+      },
+      "protocol_and_isolation-golden-golden-positive-conversation_continuation-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "protocol_and_isolation-golden-golden-positive-manual_continuation-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "protocol_and_isolation-golden-golden-positive-retry_identity-v1": {
+        "provider_status": 200,
+        "request_identity_preserved": true,
+        "retry_allowed": true,
+        "retry_limit": 1,
+        "status": "verified_completed_after_infrastructure_retry",
+        "verified_task_success": true
+      },
+      "protocol_and_isolation-golden-golden-positive-stream_order-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      }
+    },
+    "schema": "compand.ces1.case_outcome_bundle.v1"
+  },
+  "fixture_family": "protocol_and_isolation",
+  "fixture_id": "protocol_and_isolation-golden-v1",
+  "generator_or_source": {
+    "generator": "scripts/build_compand_phase2_corpus.py",
+    "kind": "sanitized_synthetic",
+    "raw_customer_content": false
+  },
+  "input": {
+    "case_input_hashes": [
+      {
+        "input_sha256": "2108dbcb422f332b33eab796041d9846e8805ea5bbb74fa77902e41ba0a3f9db",
+        "record_id": "protocol_and_isolation-golden-golden-positive-stream_order-v1"
+      },
+      {
+        "input_sha256": "58568f3e558f28d86e5d3102cccb19fca38368a8b8bc1f50f0e0458714dc6e9a",
+        "record_id": "protocol_and_isolation-golden-golden-positive-retry_identity-v1"
+      },
+      {
+        "input_sha256": "19961a2557ea517f17dcf0f955cd593b77feafcf6cdc47685a750d45101b7708",
+        "record_id": "protocol_and_isolation-golden-golden-positive-manual_continuation-v1"
+      },
+      {
+        "input_sha256": "a48c5810cfd0c575fddc62128bf8bef062a7f55af06e6980f3fc34a119475378",
+        "record_id": "protocol_and_isolation-golden-golden-positive-previous_response_continuation-v1"
+      },
+      {
+        "input_sha256": "a690aa270fe3d50be380fdbaf06d96728f02e10e2b1ddfb46b2f8803c6cfc623",
+        "record_id": "protocol_and_isolation-golden-golden-positive-conversation_continuation-v1"
+      },
+      {
+        "input_sha256": "6221a371cf9a2bea929db664fb743ce5db53ca9ec0194f1a6766feb3d73ae5dc",
+        "record_id": "protocol_and_isolation-golden-golden-negative-cross_tenant-v1"
+      },
+      {
+        "input_sha256": "ec971b055c73706013f59fcd389f4b567042098d4c2a2ed82424ec51bb318f11",
+        "record_id": "protocol_and_isolation-golden-golden-negative-cross_principal-v1"
+      },
+      {
+        "input_sha256": "3cdde8a2c3b669c837b9a6bb93bfc6f4834af523c7599832fe953173d187db28",
+        "record_id": "protocol_and_isolation-golden-golden-negative-cross_session-v1"
+      },
+      {
+        "input_sha256": "fa533745bcf644a3320f151d47bdff3bf74a4bfdbe549d79e63c1dafbe17dbd1",
+        "record_id": "protocol_and_isolation-golden-golden-negative-unauthorized_artifact-v1"
+      }
+    ],
+    "schema": "compand.ces1.fixture_input_bundle.v1"
+  },
+  "input_sha256": "afa6d121648c78980f431bbffe207bb0308f0ed468f8b213c0f58376e5981fcd",
+  "license": {
+    "reviewed": true,
+    "spdx": "CC0-1.0"
+  },
+  "oracle_classes": [
+    "negative",
+    "positive"
+  ],
+  "partition": "golden",
+  "required_invariants": [
+    "baseline_provider_view_is_byte_unchanged_B0",
+    "baseline_input_and_provider_view_hashes_match",
+    "tenant_principal_session_context_epoch_isolation",
+    "source_bytes_are_never_overwritten",
+    "sse_order_and_partial_terminal_state",
+    "authorization_scope_exact"
+  ],
+  "revision": 5,
+  "schema": "compand.ces1.fixture.v2",
+  "workload_stratum": "responses_protocol"
+}

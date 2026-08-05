@@ -263,7 +263,15 @@ class Docs8CompandPhase2ContractTest(unittest.TestCase):
 
     def test_corpus_and_system_cards_do_not_pretend_to_be_ready(self) -> None:
         self.assertFalse(self.corpus["materialization"]["confirmatory_ready"])
-        self.assertIsNone(self.corpus["materialization"]["corpus_root_sha256"])
+        self.assertRegex(
+            self.corpus["materialization"]["corpus_root_sha256"],
+            r"^[a-f0-9]{64}$",
+        )
+        self.assertGreater(self.corpus["materialization"]["visible_fixture_count"], 0)
+        self.assertEqual(
+            self.corpus["materialization"]["hidden_holdout_fixture_count"], 0
+        )
+        self.assertTrue(self.corpus["materialization"]["blocking_reasons"])
         self.assertAlmostEqual(
             sum(part["target_fraction"] for part in self.corpus["partitions"]), 1.0
         )

@@ -19,9 +19,12 @@ Local compression and projected savings remain diagnostics.
 
 This freeze authorizes implementation, corpus construction, shadow replay, grading, and
 paired development tests. It does not authorize production promotion or confirmatory
-traffic yet. Confirmatory traffic remains blocked until the corpus hashes, final provider,
-model and price snapshot, Phase 1-informed variance input, calculated sample size, and six
-live Switchboard KPI row bindings are frozen in a versioned successor manifest.
+traffic yet. QA-56 materializes and hashes the sanitized development and golden partitions,
+while the hidden-holdout plan intentionally exposes no payload or oracle to plugin authors.
+Confirmatory traffic remains blocked until the independent QA-58 custodian attests the
+encrypted holdout payload commitments, and until the final provider, model and price
+snapshot, Phase 1-informed variance input, calculated sample size, and six live Switchboard
+KPI row bindings are frozen in a versioned successor manifest.
 
 CodexZero is prior art and an adversarial-fixture source only. Its reported correctness,
 savings, and cumulative effects are not Compand evidence. Host and cloud effects are never

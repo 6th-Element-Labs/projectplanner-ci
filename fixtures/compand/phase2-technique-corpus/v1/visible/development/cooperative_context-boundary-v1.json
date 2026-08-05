@@ -1,0 +1,398 @@
+{
+  "baseline_provider_view": {
+    "case_provider_view_hashes": [
+      {
+        "baseline_provider_view_sha256": "e93408ea342d4a1698bb4c93555433463bb189657ff3752c1a111b605e4e3fda",
+        "record_id": "cooperative_context-development-boundary-boundary-no_cloud_seam-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "87852edc9e5bcb006a2adba264215ee09250157bd0d03cb827e7739197c171a1",
+        "record_id": "cooperative_context-development-boundary-boundary-tool_discovery_needed-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "d8b753f4eecb17152ed8e151a153f2d8d972ce2680713668da4526839303467e",
+        "record_id": "cooperative_context-development-boundary-boundary-no_op_poll-v1"
+      }
+    ],
+    "schema": "compand.ces1.provider_view_bundle.v1"
+  },
+  "baseline_provider_view_sha256": "022b83830bb50053a793ee7cee349cead46e4153e4f69edbace2a1b72adf33ba",
+  "case_record_count": 3,
+  "case_records": [
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-cooperative_context-development-boundary-boundary-no_cloud_seam-v1",
+              "output": "{\"batch_order_frozen\": false, \"candidate_count\": 1, \"case_id\": \"no_cloud_seam\", \"context_epoch\": null, \"events\": [\"tool_a.started\", \"tool_a.completed\", \"tool_b.started\", \"tool_b.completed\"], \"expand_artifact_available\": false, \"oracle_class\": \"boundary\", \"synthetic_record_id\": \"cooperative_context-development-boundary-boundary-no_cloud_seam-v1\", \"tool_search_available\": true}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "e93408ea342d4a1698bb4c93555433463bb189657ff3752c1a111b605e4e3fda",
+      "case_id": "no_cloud_seam",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "agent-memory-summary-v1": "decline_ineligible",
+        "code-action-batching-v1": "decline_ineligible",
+        "context-paging-v1": "decline_ineligible",
+        "schema-deferral-v1": "decline_ineligible",
+        "turn-elimination-v1": "no_material_opportunity"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-cooperative_context-development-boundary-boundary-no_cloud_seam-v1",
+                "output": "{\"batch_order_frozen\": false, \"candidate_count\": 1, \"case_id\": \"no_cloud_seam\", \"context_epoch\": null, \"events\": [\"tool_a.started\", \"tool_a.completed\", \"tool_b.started\", \"tool_b.completed\"], \"expand_artifact_available\": false, \"oracle_class\": \"boundary\", \"synthetic_record_id\": \"cooperative_context-development-boundary-boundary-no_cloud_seam-v1\", \"tool_search_available\": true}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "batch_order_frozen": false,
+          "candidate_count": 1,
+          "case_id": "no_cloud_seam",
+          "context_epoch": null,
+          "events": [
+            "tool_a.started",
+            "tool_a.completed",
+            "tool_b.started",
+            "tool_b.completed"
+          ],
+          "expand_artifact_available": false,
+          "oracle_class": "boundary",
+          "synthetic_record_id": "cooperative_context-development-boundary-boundary-no_cloud_seam-v1",
+          "tool_search_available": true
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-cooperative_context",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "70dd17a1269381e476e8c3643d45e90ddffb8408cd99c6d8aaa6e86c01eefbe2",
+      "oracle_class": "boundary",
+      "record_id": "cooperative_context-development-boundary-boundary-no_cloud_seam-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "cooperative_seam_required",
+        "tool_event_order_preserved"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-cooperative_context-development-boundary-boundary-tool_discovery_needed-v1",
+              "output": "{\"batch_order_frozen\": false, \"candidate_count\": 1, \"case_id\": \"tool_discovery_needed\", \"context_epoch\": \"fixture-epoch-1\", \"events\": [\"tool_a.started\", \"tool_a.completed\", \"tool_b.started\", \"tool_b.completed\"], \"expand_artifact_available\": true, \"oracle_class\": \"boundary\", \"synthetic_record_id\": \"cooperative_context-development-boundary-boundary-tool_discovery_needed-v1\", \"tool_search_available\": false}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "87852edc9e5bcb006a2adba264215ee09250157bd0d03cb827e7739197c171a1",
+      "case_id": "tool_discovery_needed",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "agent-memory-summary-v1": "decline_ineligible",
+        "code-action-batching-v1": "decline_ineligible",
+        "context-paging-v1": "decline_ineligible",
+        "schema-deferral-v1": "decline_ineligible",
+        "turn-elimination-v1": "no_material_opportunity"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-cooperative_context-development-boundary-boundary-tool_discovery_needed-v1",
+                "output": "{\"batch_order_frozen\": false, \"candidate_count\": 1, \"case_id\": \"tool_discovery_needed\", \"context_epoch\": \"fixture-epoch-1\", \"events\": [\"tool_a.started\", \"tool_a.completed\", \"tool_b.started\", \"tool_b.completed\"], \"expand_artifact_available\": true, \"oracle_class\": \"boundary\", \"synthetic_record_id\": \"cooperative_context-development-boundary-boundary-tool_discovery_needed-v1\", \"tool_search_available\": false}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "batch_order_frozen": false,
+          "candidate_count": 1,
+          "case_id": "tool_discovery_needed",
+          "context_epoch": "fixture-epoch-1",
+          "events": [
+            "tool_a.started",
+            "tool_a.completed",
+            "tool_b.started",
+            "tool_b.completed"
+          ],
+          "expand_artifact_available": true,
+          "oracle_class": "boundary",
+          "synthetic_record_id": "cooperative_context-development-boundary-boundary-tool_discovery_needed-v1",
+          "tool_search_available": false
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-cooperative_context",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "9a29a738ca97ee8beb87b2847f25c1753509cccca974591195fcffd43f9fa7b3",
+      "oracle_class": "boundary",
+      "record_id": "cooperative_context-development-boundary-boundary-tool_discovery_needed-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "cooperative_seam_required",
+        "tool_event_order_preserved"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-cooperative_context-development-boundary-boundary-no_op_poll-v1",
+              "output": "{\"batch_order_frozen\": false, \"candidate_count\": 0, \"case_id\": \"no_op_poll\", \"context_epoch\": \"fixture-epoch-1\", \"events\": [\"tool_a.started\", \"tool_a.completed\", \"tool_b.started\", \"tool_b.completed\"], \"expand_artifact_available\": true, \"oracle_class\": \"boundary\", \"synthetic_record_id\": \"cooperative_context-development-boundary-boundary-no_op_poll-v1\", \"tool_search_available\": true}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "d8b753f4eecb17152ed8e151a153f2d8d972ce2680713668da4526839303467e",
+      "case_id": "no_op_poll",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "agent-memory-summary-v1": "decline_ineligible",
+        "code-action-batching-v1": "decline_ineligible",
+        "context-paging-v1": "decline_ineligible",
+        "schema-deferral-v1": "decline_ineligible",
+        "turn-elimination-v1": "no_material_opportunity"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-cooperative_context-development-boundary-boundary-no_op_poll-v1",
+                "output": "{\"batch_order_frozen\": false, \"candidate_count\": 0, \"case_id\": \"no_op_poll\", \"context_epoch\": \"fixture-epoch-1\", \"events\": [\"tool_a.started\", \"tool_a.completed\", \"tool_b.started\", \"tool_b.completed\"], \"expand_artifact_available\": true, \"oracle_class\": \"boundary\", \"synthetic_record_id\": \"cooperative_context-development-boundary-boundary-no_op_poll-v1\", \"tool_search_available\": true}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "batch_order_frozen": false,
+          "candidate_count": 0,
+          "case_id": "no_op_poll",
+          "context_epoch": "fixture-epoch-1",
+          "events": [
+            "tool_a.started",
+            "tool_a.completed",
+            "tool_b.started",
+            "tool_b.completed"
+          ],
+          "expand_artifact_available": true,
+          "oracle_class": "boundary",
+          "synthetic_record_id": "cooperative_context-development-boundary-boundary-no_op_poll-v1",
+          "tool_search_available": true
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-cooperative_context",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "c5021a8d9fc3f6149409c433867c66f59c3ba1b62e836b69132c05528d0fbdf7",
+      "oracle_class": "boundary",
+      "record_id": "cooperative_context-development-boundary-boundary-no_op_poll-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "cooperative_seam_required",
+        "tool_event_order_preserved"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    }
+  ],
+  "cases": [
+    "no_cloud_seam",
+    "tool_discovery_needed",
+    "no_op_poll"
+  ],
+  "eligible_techniques": [],
+  "expected_disposition_by_technique": {
+    "agent-memory-summary-v1": [
+      "decline_ineligible"
+    ],
+    "code-action-batching-v1": [
+      "decline_ineligible"
+    ],
+    "context-paging-v1": [
+      "decline_ineligible"
+    ],
+    "schema-deferral-v1": [
+      "decline_ineligible"
+    ],
+    "turn-elimination-v1": [
+      "no_material_opportunity"
+    ]
+  },
+  "expected_outcome": {
+    "by_record_id": {
+      "cooperative_context-development-boundary-boundary-no_cloud_seam-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "cooperative_context-development-boundary-boundary-no_op_poll-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "cooperative_context-development-boundary-boundary-tool_discovery_needed-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      }
+    },
+    "schema": "compand.ces1.case_outcome_bundle.v1"
+  },
+  "fixture_family": "cooperative_context",
+  "fixture_id": "cooperative_context-boundary-v1",
+  "generator_or_source": {
+    "generator": "scripts/build_compand_phase2_corpus.py",
+    "kind": "sanitized_synthetic",
+    "raw_customer_content": false
+  },
+  "input": {
+    "case_input_hashes": [
+      {
+        "input_sha256": "70dd17a1269381e476e8c3643d45e90ddffb8408cd99c6d8aaa6e86c01eefbe2",
+        "record_id": "cooperative_context-development-boundary-boundary-no_cloud_seam-v1"
+      },
+      {
+        "input_sha256": "9a29a738ca97ee8beb87b2847f25c1753509cccca974591195fcffd43f9fa7b3",
+        "record_id": "cooperative_context-development-boundary-boundary-tool_discovery_needed-v1"
+      },
+      {
+        "input_sha256": "c5021a8d9fc3f6149409c433867c66f59c3ba1b62e836b69132c05528d0fbdf7",
+        "record_id": "cooperative_context-development-boundary-boundary-no_op_poll-v1"
+      }
+    ],
+    "schema": "compand.ces1.fixture_input_bundle.v1"
+  },
+  "input_sha256": "afeb00f744e50c860431b0c64d52f18d52df3ad6095829a87e654a1cbfa3c07d",
+  "license": {
+    "reviewed": true,
+    "spdx": "CC0-1.0"
+  },
+  "oracle_classes": [
+    "boundary"
+  ],
+  "partition": "development",
+  "required_invariants": [
+    "baseline_provider_view_is_byte_unchanged_B0",
+    "baseline_input_and_provider_view_hashes_match",
+    "tenant_principal_session_context_epoch_isolation",
+    "source_bytes_are_never_overwritten",
+    "cooperative_seam_required",
+    "tool_event_order_preserved"
+  ],
+  "revision": 5,
+  "schema": "compand.ces1.fixture.v2",
+  "workload_stratum": "cooperative_agent_context"
+}

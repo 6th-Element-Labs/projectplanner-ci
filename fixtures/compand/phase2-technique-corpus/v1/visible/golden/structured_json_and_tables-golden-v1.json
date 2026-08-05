@@ -1,0 +1,1204 @@
+{
+  "baseline_provider_view": {
+    "case_provider_view_hashes": [
+      {
+        "baseline_provider_view_sha256": "9328e276bd655565e55ab968f75af9149acad1f2e707a3f3a68cdd66bb39843f",
+        "record_id": "structured_json_and_tables-golden-golden-positive-ordered_rows-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "a33175c0daae9f185a0353fd9e3a6d809e47b63f4f82f327cee5a313f4270b59",
+        "record_id": "structured_json_and_tables-golden-golden-positive-nulls-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "c29e682ee5eb41aaecf4ba8e1e81182dbe4fdcd975e28dd708bf8d53e9a5df53",
+        "record_id": "structured_json_and_tables-golden-golden-positive-numeric_vs_string-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "a29c3c61ab65bb7f9861367fc7a1da3205dfe0815b53d9afd2fdedcb2364a5f9",
+        "record_id": "structured_json_and_tables-golden-golden-negative-invalid_json-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "8a3c1ba03b3d3918eb60391741b49f12e3f1292f098f4f7f61334d5ff393fefa",
+        "record_id": "structured_json_and_tables-golden-golden-negative-changed_order_mutant-v1"
+      }
+    ],
+    "schema": "compand.ces1.provider_view_bundle.v1"
+  },
+  "baseline_provider_view_sha256": "5379226b7c80ae7da3eca92345c6862cc785b759314caac6fb92182d1f12c349",
+  "case_record_count": 5,
+  "case_records": [
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-structured_json_and_tables-golden-golden-positive-ordered_rows-v1",
+              "output": "{\"case_id\": \"ordered_rows\", \"json_minified_candidate_byte_count\": 826, \"json_minified_candidate_utf8\": \"[{\\\"row\\\":1,\\\"value\\\":1,\\\"code\\\":\\\"001\\\"},{\\\"row\\\":2,\\\"value\\\":2,\\\"code\\\":\\\"2\\\"},{\\\"row\\\":3,\\\"value\\\":null,\\\"code\\\":\\\"003\\\"},{\\\"row\\\":4,\\\"value\\\":4,\\\"code\\\":\\\"4\\\"},{\\\"row\\\":5,\\\"value\\\":5,\\\"code\\\":\\\"005\\\"},{\\\"row\\\":6,\\\"value\\\":null,\\\"code\\\":\\\"6\\\"},{\\\"row\\\":7,\\\"value\\\":7,\\\"code\\\":\\\"007\\\"},{\\\"row\\\":8,\\\"value\\\":8,\\\"code\\\":\\\"8\\\"},{\\\"row\\\":9,\\\"value\\\":null,\\\"code\\\":\\\"009\\\"},{\\\"row\\\":10,\\\"value\\\":10,\\\"code\\\":\\\"10\\\"},{\\\"row\\\":11,\\\"value\\\":11,\\\"code\\\":\\\"011\\\"},{\\\"row\\\":12,\\\"value\\\":null,\\\"code\\\":\\\"12\\\"},{\\\"row\\\":13,\\\"value\\\":13,\\\"code\\\":\\\"013\\\"},{\\\"row\\\":14,\\\"value\\\":14,\\\"code\\\":\\\"14\\\"},{\\\"row\\\":15,\\\"value\\\":null,\\\"code\\\":\\\"015\\\"},{\\\"row\\\":16,\\\"value\\\":16,\\\"code\\\":\\\"16\\\"},{\\\"row\\\":17,\\\"value\\\":17,\\\"code\\\":\\\"017\\\"},{\\\"row\\\":18,\\\"value\\\":null,\\\"code\\\":\\\"18\\\"},{\\\"row\\\":19,\\\"value\\\":19,\\\"code\\\":\\\"019\\\"},{\\\"row\\\":20,\\\"value\\\":20,\\\"code\\\":\\\"20\\\"},{\\\"row\\\":21,\\\"value\\\":null,\\\"code\\\":\\\"021\\\"},{\\\"row\\\":22,\\\"value\\\":22,\\\"code\\\":\\\"22\\\"},{\\\"row\\\":23,\\\"value\\\":23,\\\"code\\\":\\\"023\\\"},{\\\"row\\\":24,\\\"value\\\":null,\\\"code\\\":\\\"24\\\"}]\", \"oracle_class\": \"positive\", \"raw_json\": null, \"required_semantics\": \"row_order_preserved\", \"source_json_byte_count\": 1404, \"source_json_utf8\": \"[\\n  {\\n    \\\"row\\\": 1,\\n    \\\"value\\\": 1,\\n    \\\"code\\\": \\\"001\\\"\\n  },\\n  {\\n    \\\"row\\\": 2,\\n    \\\"value\\\": 2,\\n    \\\"code\\\": \\\"2\\\"\\n  },\\n  {\\n    \\\"row\\\": 3,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"003\\\"\\n  },\\n  {\\n    \\\"row\\\": 4,\\n    \\\"value\\\": 4,\\n    \\\"code\\\": \\\"4\\\"\\n  },\\n  {\\n    \\\"row\\\": 5,\\n    \\\"value\\\": 5,\\n    \\\"code\\\": \\\"005\\\"\\n  },\\n  {\\n    \\\"row\\\": 6,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"6\\\"\\n  },\\n  {\\n    \\\"row\\\": 7,\\n    \\\"value\\\": 7,\\n    \\\"code\\\": \\\"007\\\"\\n  },\\n  {\\n    \\\"row\\\": 8,\\n    \\\"value\\\": 8,\\n    \\\"code\\\": \\\"8\\\"\\n  },\\n  {\\n    \\\"row\\\": 9,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"009\\\"\\n  },\\n  {\\n    \\\"row\\\": 10,\\n    \\\"value\\\": 10,\\n    \\\"code\\\": \\\"10\\\"\\n  },\\n  {\\n    \\\"row\\\": 11,\\n    \\\"value\\\": 11,\\n    \\\"code\\\": \\\"011\\\"\\n  },\\n  {\\n    \\\"row\\\": 12,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"12\\\"\\n  },\\n  {\\n    \\\"row\\\": 13,\\n    \\\"value\\\": 13,\\n    \\\"code\\\": \\\"013\\\"\\n  },\\n  {\\n    \\\"row\\\": 14,\\n    \\\"value\\\": 14,\\n    \\\"code\\\": \\\"14\\\"\\n  },\\n  {\\n    \\\"row\\\": 15,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"015\\\"\\n  },\\n  {\\n    \\\"row\\\": 16,\\n    \\\"value\\\": 16,\\n    \\\"code\\\": \\\"16\\\"\\n  },\\n  {\\n    \\\"row\\\": 17,\\n    \\\"value\\\": 17,\\n    \\\"code\\\": \\\"017\\\"\\n  },\\n  {\\n    \\\"row\\\": 18,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"18\\\"\\n  },\\n  {\\n    \\\"row\\\": 19,\\n    \\\"value\\\": 19,\\n    \\\"code\\\": \\\"019\\\"\\n  },\\n  {\\n    \\\"row\\\": 20,\\n    \\\"value\\\": 20,\\n    \\\"code\\\": \\\"20\\\"\\n  },\\n  {\\n    \\\"row\\\": 21,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"021\\\"\\n  },\\n  {\\n    \\\"row\\\": 22,\\n    \\\"value\\\": 22,\\n    \\\"code\\\": \\\"22\\\"\\n  },\\n  {\\n    \\\"row\\\": 23,\\n    \\\"value\\\": 23,\\n    \\\"code\\\": \\\"023\\\"\\n  },\\n  {\\n    \\\"row\\\": 24,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"24\\\"\\n  }\\n]\\n\", \"structured_codec_candidate_byte_count\": 393, \"structured_codec_candidate_utf8\": \"{\\\"columns\\\":[\\\"row\\\",\\\"value\\\",\\\"code\\\"],\\\"rows\\\":[[1,1,\\\"001\\\"],[2,2,\\\"2\\\"],[3,null,\\\"003\\\"],[4,4,\\\"4\\\"],[5,5,\\\"005\\\"],[6,null,\\\"6\\\"],[7,7,\\\"007\\\"],[8,8,\\\"8\\\"],[9,null,\\\"009\\\"],[10,10,\\\"10\\\"],[11,11,\\\"011\\\"],[12,null,\\\"12\\\"],[13,13,\\\"013\\\"],[14,14,\\\"14\\\"],[15,null,\\\"015\\\"],[16,16,\\\"16\\\"],[17,17,\\\"017\\\"],[18,null,\\\"18\\\"],[19,19,\\\"019\\\"],[20,20,\\\"20\\\"],[21,null,\\\"021\\\"],[22,22,\\\"22\\\"],[23,23,\\\"023\\\"],[24,null,\\\"24\\\"]],\\\"version\\\":\\\"ordered-table-v1\\\"}\", \"synthetic_record_id\": \"structured_json_and_tables-golden-golden-positive-ordered_rows-v1\", \"typed_json\": [{\"code\": \"001\", \"row\": 1, \"value\": 1}, {\"code\": \"2\", \"row\": 2, \"value\": 2}, {\"code\": \"003\", \"row\": 3, \"value\": null}, {\"code\": \"4\", \"row\": 4, \"value\": 4}, {\"code\": \"005\", \"row\": 5, \"value\": 5}, {\"code\": \"6\", \"row\": 6, \"value\": null}, {\"code\": \"007\", \"row\": 7, \"value\": 7}, {\"code\": \"8\", \"row\": 8, \"value\": 8}, {\"code\": \"009\", \"row\": 9, \"value\": null}, {\"code\": \"10\", \"row\": 10, \"value\": 10}, {\"code\": \"011\", \"row\": 11, \"value\": 11}, {\"code\": \"12\", \"row\": 12, \"value\": null}, {\"code\": \"013\", \"row\": 13, \"value\": 13}, {\"code\": \"14\", \"row\": 14, \"value\": 14}, {\"code\": \"015\", \"row\": 15, \"value\": null}, {\"code\": \"16\", \"row\": 16, \"value\": 16}, {\"code\": \"017\", \"row\": 17, \"value\": 17}, {\"code\": \"18\", \"row\": 18, \"value\": null}, {\"code\": \"019\", \"row\": 19, \"value\": 19}, {\"code\": \"20\", \"row\": 20, \"value\": 20}, {\"code\": \"021\", \"row\": 21, \"value\": null}, {\"code\": \"22\", \"row\": 22, \"value\": 22}, {\"code\": \"023\", \"row\": 23, \"value\": 23}, {\"code\": \"24\", \"row\": 24, \"value\": null}]}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "9328e276bd655565e55ab968f75af9149acad1f2e707a3f3a68cdd66bb39843f",
+      "case_id": "ordered_rows",
+      "eligible_techniques": [
+        "json-minify-v1",
+        "structured-data-codec-v1"
+      ],
+      "expected_disposition_by_technique": {
+        "json-minify-v1": "transform",
+        "structured-data-codec-v1": "transform"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-structured_json_and_tables-golden-golden-positive-ordered_rows-v1",
+                "output": "{\"case_id\": \"ordered_rows\", \"json_minified_candidate_byte_count\": 826, \"json_minified_candidate_utf8\": \"[{\\\"row\\\":1,\\\"value\\\":1,\\\"code\\\":\\\"001\\\"},{\\\"row\\\":2,\\\"value\\\":2,\\\"code\\\":\\\"2\\\"},{\\\"row\\\":3,\\\"value\\\":null,\\\"code\\\":\\\"003\\\"},{\\\"row\\\":4,\\\"value\\\":4,\\\"code\\\":\\\"4\\\"},{\\\"row\\\":5,\\\"value\\\":5,\\\"code\\\":\\\"005\\\"},{\\\"row\\\":6,\\\"value\\\":null,\\\"code\\\":\\\"6\\\"},{\\\"row\\\":7,\\\"value\\\":7,\\\"code\\\":\\\"007\\\"},{\\\"row\\\":8,\\\"value\\\":8,\\\"code\\\":\\\"8\\\"},{\\\"row\\\":9,\\\"value\\\":null,\\\"code\\\":\\\"009\\\"},{\\\"row\\\":10,\\\"value\\\":10,\\\"code\\\":\\\"10\\\"},{\\\"row\\\":11,\\\"value\\\":11,\\\"code\\\":\\\"011\\\"},{\\\"row\\\":12,\\\"value\\\":null,\\\"code\\\":\\\"12\\\"},{\\\"row\\\":13,\\\"value\\\":13,\\\"code\\\":\\\"013\\\"},{\\\"row\\\":14,\\\"value\\\":14,\\\"code\\\":\\\"14\\\"},{\\\"row\\\":15,\\\"value\\\":null,\\\"code\\\":\\\"015\\\"},{\\\"row\\\":16,\\\"value\\\":16,\\\"code\\\":\\\"16\\\"},{\\\"row\\\":17,\\\"value\\\":17,\\\"code\\\":\\\"017\\\"},{\\\"row\\\":18,\\\"value\\\":null,\\\"code\\\":\\\"18\\\"},{\\\"row\\\":19,\\\"value\\\":19,\\\"code\\\":\\\"019\\\"},{\\\"row\\\":20,\\\"value\\\":20,\\\"code\\\":\\\"20\\\"},{\\\"row\\\":21,\\\"value\\\":null,\\\"code\\\":\\\"021\\\"},{\\\"row\\\":22,\\\"value\\\":22,\\\"code\\\":\\\"22\\\"},{\\\"row\\\":23,\\\"value\\\":23,\\\"code\\\":\\\"023\\\"},{\\\"row\\\":24,\\\"value\\\":null,\\\"code\\\":\\\"24\\\"}]\", \"oracle_class\": \"positive\", \"raw_json\": null, \"required_semantics\": \"row_order_preserved\", \"source_json_byte_count\": 1404, \"source_json_utf8\": \"[\\n  {\\n    \\\"row\\\": 1,\\n    \\\"value\\\": 1,\\n    \\\"code\\\": \\\"001\\\"\\n  },\\n  {\\n    \\\"row\\\": 2,\\n    \\\"value\\\": 2,\\n    \\\"code\\\": \\\"2\\\"\\n  },\\n  {\\n    \\\"row\\\": 3,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"003\\\"\\n  },\\n  {\\n    \\\"row\\\": 4,\\n    \\\"value\\\": 4,\\n    \\\"code\\\": \\\"4\\\"\\n  },\\n  {\\n    \\\"row\\\": 5,\\n    \\\"value\\\": 5,\\n    \\\"code\\\": \\\"005\\\"\\n  },\\n  {\\n    \\\"row\\\": 6,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"6\\\"\\n  },\\n  {\\n    \\\"row\\\": 7,\\n    \\\"value\\\": 7,\\n    \\\"code\\\": \\\"007\\\"\\n  },\\n  {\\n    \\\"row\\\": 8,\\n    \\\"value\\\": 8,\\n    \\\"code\\\": \\\"8\\\"\\n  },\\n  {\\n    \\\"row\\\": 9,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"009\\\"\\n  },\\n  {\\n    \\\"row\\\": 10,\\n    \\\"value\\\": 10,\\n    \\\"code\\\": \\\"10\\\"\\n  },\\n  {\\n    \\\"row\\\": 11,\\n    \\\"value\\\": 11,\\n    \\\"code\\\": \\\"011\\\"\\n  },\\n  {\\n    \\\"row\\\": 12,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"12\\\"\\n  },\\n  {\\n    \\\"row\\\": 13,\\n    \\\"value\\\": 13,\\n    \\\"code\\\": \\\"013\\\"\\n  },\\n  {\\n    \\\"row\\\": 14,\\n    \\\"value\\\": 14,\\n    \\\"code\\\": \\\"14\\\"\\n  },\\n  {\\n    \\\"row\\\": 15,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"015\\\"\\n  },\\n  {\\n    \\\"row\\\": 16,\\n    \\\"value\\\": 16,\\n    \\\"code\\\": \\\"16\\\"\\n  },\\n  {\\n    \\\"row\\\": 17,\\n    \\\"value\\\": 17,\\n    \\\"code\\\": \\\"017\\\"\\n  },\\n  {\\n    \\\"row\\\": 18,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"18\\\"\\n  },\\n  {\\n    \\\"row\\\": 19,\\n    \\\"value\\\": 19,\\n    \\\"code\\\": \\\"019\\\"\\n  },\\n  {\\n    \\\"row\\\": 20,\\n    \\\"value\\\": 20,\\n    \\\"code\\\": \\\"20\\\"\\n  },\\n  {\\n    \\\"row\\\": 21,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"021\\\"\\n  },\\n  {\\n    \\\"row\\\": 22,\\n    \\\"value\\\": 22,\\n    \\\"code\\\": \\\"22\\\"\\n  },\\n  {\\n    \\\"row\\\": 23,\\n    \\\"value\\\": 23,\\n    \\\"code\\\": \\\"023\\\"\\n  },\\n  {\\n    \\\"row\\\": 24,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"24\\\"\\n  }\\n]\\n\", \"structured_codec_candidate_byte_count\": 393, \"structured_codec_candidate_utf8\": \"{\\\"columns\\\":[\\\"row\\\",\\\"value\\\",\\\"code\\\"],\\\"rows\\\":[[1,1,\\\"001\\\"],[2,2,\\\"2\\\"],[3,null,\\\"003\\\"],[4,4,\\\"4\\\"],[5,5,\\\"005\\\"],[6,null,\\\"6\\\"],[7,7,\\\"007\\\"],[8,8,\\\"8\\\"],[9,null,\\\"009\\\"],[10,10,\\\"10\\\"],[11,11,\\\"011\\\"],[12,null,\\\"12\\\"],[13,13,\\\"013\\\"],[14,14,\\\"14\\\"],[15,null,\\\"015\\\"],[16,16,\\\"16\\\"],[17,17,\\\"017\\\"],[18,null,\\\"18\\\"],[19,19,\\\"019\\\"],[20,20,\\\"20\\\"],[21,null,\\\"021\\\"],[22,22,\\\"22\\\"],[23,23,\\\"023\\\"],[24,null,\\\"24\\\"]],\\\"version\\\":\\\"ordered-table-v1\\\"}\", \"synthetic_record_id\": \"structured_json_and_tables-golden-golden-positive-ordered_rows-v1\", \"typed_json\": [{\"code\": \"001\", \"row\": 1, \"value\": 1}, {\"code\": \"2\", \"row\": 2, \"value\": 2}, {\"code\": \"003\", \"row\": 3, \"value\": null}, {\"code\": \"4\", \"row\": 4, \"value\": 4}, {\"code\": \"005\", \"row\": 5, \"value\": 5}, {\"code\": \"6\", \"row\": 6, \"value\": null}, {\"code\": \"007\", \"row\": 7, \"value\": 7}, {\"code\": \"8\", \"row\": 8, \"value\": 8}, {\"code\": \"009\", \"row\": 9, \"value\": null}, {\"code\": \"10\", \"row\": 10, \"value\": 10}, {\"code\": \"011\", \"row\": 11, \"value\": 11}, {\"code\": \"12\", \"row\": 12, \"value\": null}, {\"code\": \"013\", \"row\": 13, \"value\": 13}, {\"code\": \"14\", \"row\": 14, \"value\": 14}, {\"code\": \"015\", \"row\": 15, \"value\": null}, {\"code\": \"16\", \"row\": 16, \"value\": 16}, {\"code\": \"017\", \"row\": 17, \"value\": 17}, {\"code\": \"18\", \"row\": 18, \"value\": null}, {\"code\": \"019\", \"row\": 19, \"value\": 19}, {\"code\": \"20\", \"row\": 20, \"value\": 20}, {\"code\": \"021\", \"row\": 21, \"value\": null}, {\"code\": \"22\", \"row\": 22, \"value\": 22}, {\"code\": \"023\", \"row\": 23, \"value\": 23}, {\"code\": \"24\", \"row\": 24, \"value\": null}]}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "case_id": "ordered_rows",
+          "json_minified_candidate_byte_count": 826,
+          "json_minified_candidate_utf8": "[{\"row\":1,\"value\":1,\"code\":\"001\"},{\"row\":2,\"value\":2,\"code\":\"2\"},{\"row\":3,\"value\":null,\"code\":\"003\"},{\"row\":4,\"value\":4,\"code\":\"4\"},{\"row\":5,\"value\":5,\"code\":\"005\"},{\"row\":6,\"value\":null,\"code\":\"6\"},{\"row\":7,\"value\":7,\"code\":\"007\"},{\"row\":8,\"value\":8,\"code\":\"8\"},{\"row\":9,\"value\":null,\"code\":\"009\"},{\"row\":10,\"value\":10,\"code\":\"10\"},{\"row\":11,\"value\":11,\"code\":\"011\"},{\"row\":12,\"value\":null,\"code\":\"12\"},{\"row\":13,\"value\":13,\"code\":\"013\"},{\"row\":14,\"value\":14,\"code\":\"14\"},{\"row\":15,\"value\":null,\"code\":\"015\"},{\"row\":16,\"value\":16,\"code\":\"16\"},{\"row\":17,\"value\":17,\"code\":\"017\"},{\"row\":18,\"value\":null,\"code\":\"18\"},{\"row\":19,\"value\":19,\"code\":\"019\"},{\"row\":20,\"value\":20,\"code\":\"20\"},{\"row\":21,\"value\":null,\"code\":\"021\"},{\"row\":22,\"value\":22,\"code\":\"22\"},{\"row\":23,\"value\":23,\"code\":\"023\"},{\"row\":24,\"value\":null,\"code\":\"24\"}]",
+          "oracle_class": "positive",
+          "raw_json": null,
+          "required_semantics": "row_order_preserved",
+          "source_json_byte_count": 1404,
+          "source_json_utf8": "[\n  {\n    \"row\": 1,\n    \"value\": 1,\n    \"code\": \"001\"\n  },\n  {\n    \"row\": 2,\n    \"value\": 2,\n    \"code\": \"2\"\n  },\n  {\n    \"row\": 3,\n    \"value\": null,\n    \"code\": \"003\"\n  },\n  {\n    \"row\": 4,\n    \"value\": 4,\n    \"code\": \"4\"\n  },\n  {\n    \"row\": 5,\n    \"value\": 5,\n    \"code\": \"005\"\n  },\n  {\n    \"row\": 6,\n    \"value\": null,\n    \"code\": \"6\"\n  },\n  {\n    \"row\": 7,\n    \"value\": 7,\n    \"code\": \"007\"\n  },\n  {\n    \"row\": 8,\n    \"value\": 8,\n    \"code\": \"8\"\n  },\n  {\n    \"row\": 9,\n    \"value\": null,\n    \"code\": \"009\"\n  },\n  {\n    \"row\": 10,\n    \"value\": 10,\n    \"code\": \"10\"\n  },\n  {\n    \"row\": 11,\n    \"value\": 11,\n    \"code\": \"011\"\n  },\n  {\n    \"row\": 12,\n    \"value\": null,\n    \"code\": \"12\"\n  },\n  {\n    \"row\": 13,\n    \"value\": 13,\n    \"code\": \"013\"\n  },\n  {\n    \"row\": 14,\n    \"value\": 14,\n    \"code\": \"14\"\n  },\n  {\n    \"row\": 15,\n    \"value\": null,\n    \"code\": \"015\"\n  },\n  {\n    \"row\": 16,\n    \"value\": 16,\n    \"code\": \"16\"\n  },\n  {\n    \"row\": 17,\n    \"value\": 17,\n    \"code\": \"017\"\n  },\n  {\n    \"row\": 18,\n    \"value\": null,\n    \"code\": \"18\"\n  },\n  {\n    \"row\": 19,\n    \"value\": 19,\n    \"code\": \"019\"\n  },\n  {\n    \"row\": 20,\n    \"value\": 20,\n    \"code\": \"20\"\n  },\n  {\n    \"row\": 21,\n    \"value\": null,\n    \"code\": \"021\"\n  },\n  {\n    \"row\": 22,\n    \"value\": 22,\n    \"code\": \"22\"\n  },\n  {\n    \"row\": 23,\n    \"value\": 23,\n    \"code\": \"023\"\n  },\n  {\n    \"row\": 24,\n    \"value\": null,\n    \"code\": \"24\"\n  }\n]\n",
+          "structured_codec_candidate_byte_count": 393,
+          "structured_codec_candidate_utf8": "{\"columns\":[\"row\",\"value\",\"code\"],\"rows\":[[1,1,\"001\"],[2,2,\"2\"],[3,null,\"003\"],[4,4,\"4\"],[5,5,\"005\"],[6,null,\"6\"],[7,7,\"007\"],[8,8,\"8\"],[9,null,\"009\"],[10,10,\"10\"],[11,11,\"011\"],[12,null,\"12\"],[13,13,\"013\"],[14,14,\"14\"],[15,null,\"015\"],[16,16,\"16\"],[17,17,\"017\"],[18,null,\"18\"],[19,19,\"019\"],[20,20,\"20\"],[21,null,\"021\"],[22,22,\"22\"],[23,23,\"023\"],[24,null,\"24\"]],\"version\":\"ordered-table-v1\"}",
+          "synthetic_record_id": "structured_json_and_tables-golden-golden-positive-ordered_rows-v1",
+          "typed_json": [
+            {
+              "code": "001",
+              "row": 1,
+              "value": 1
+            },
+            {
+              "code": "2",
+              "row": 2,
+              "value": 2
+            },
+            {
+              "code": "003",
+              "row": 3,
+              "value": null
+            },
+            {
+              "code": "4",
+              "row": 4,
+              "value": 4
+            },
+            {
+              "code": "005",
+              "row": 5,
+              "value": 5
+            },
+            {
+              "code": "6",
+              "row": 6,
+              "value": null
+            },
+            {
+              "code": "007",
+              "row": 7,
+              "value": 7
+            },
+            {
+              "code": "8",
+              "row": 8,
+              "value": 8
+            },
+            {
+              "code": "009",
+              "row": 9,
+              "value": null
+            },
+            {
+              "code": "10",
+              "row": 10,
+              "value": 10
+            },
+            {
+              "code": "011",
+              "row": 11,
+              "value": 11
+            },
+            {
+              "code": "12",
+              "row": 12,
+              "value": null
+            },
+            {
+              "code": "013",
+              "row": 13,
+              "value": 13
+            },
+            {
+              "code": "14",
+              "row": 14,
+              "value": 14
+            },
+            {
+              "code": "015",
+              "row": 15,
+              "value": null
+            },
+            {
+              "code": "16",
+              "row": 16,
+              "value": 16
+            },
+            {
+              "code": "017",
+              "row": 17,
+              "value": 17
+            },
+            {
+              "code": "18",
+              "row": 18,
+              "value": null
+            },
+            {
+              "code": "019",
+              "row": 19,
+              "value": 19
+            },
+            {
+              "code": "20",
+              "row": 20,
+              "value": 20
+            },
+            {
+              "code": "021",
+              "row": 21,
+              "value": null
+            },
+            {
+              "code": "22",
+              "row": 22,
+              "value": 22
+            },
+            {
+              "code": "023",
+              "row": 23,
+              "value": 23
+            },
+            {
+              "code": "24",
+              "row": 24,
+              "value": null
+            }
+          ]
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-structured_json_and_tables",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "b2d0adfa621f600021d99f32e1c3856dc3c3003a637931efaf193a87ec1b6715",
+      "oracle_class": "positive",
+      "record_id": "structured_json_and_tables-golden-golden-positive-ordered_rows-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "preserve_scalar_types",
+        "preserve_key_row_and_column_order"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-structured_json_and_tables-golden-golden-positive-nulls-v1",
+              "output": "{\"case_id\": \"nulls\", \"json_minified_candidate_byte_count\": 826, \"json_minified_candidate_utf8\": \"[{\\\"row\\\":1,\\\"value\\\":1,\\\"code\\\":\\\"001\\\"},{\\\"row\\\":2,\\\"value\\\":2,\\\"code\\\":\\\"2\\\"},{\\\"row\\\":3,\\\"value\\\":null,\\\"code\\\":\\\"003\\\"},{\\\"row\\\":4,\\\"value\\\":4,\\\"code\\\":\\\"4\\\"},{\\\"row\\\":5,\\\"value\\\":5,\\\"code\\\":\\\"005\\\"},{\\\"row\\\":6,\\\"value\\\":null,\\\"code\\\":\\\"6\\\"},{\\\"row\\\":7,\\\"value\\\":7,\\\"code\\\":\\\"007\\\"},{\\\"row\\\":8,\\\"value\\\":8,\\\"code\\\":\\\"8\\\"},{\\\"row\\\":9,\\\"value\\\":null,\\\"code\\\":\\\"009\\\"},{\\\"row\\\":10,\\\"value\\\":10,\\\"code\\\":\\\"10\\\"},{\\\"row\\\":11,\\\"value\\\":11,\\\"code\\\":\\\"011\\\"},{\\\"row\\\":12,\\\"value\\\":null,\\\"code\\\":\\\"12\\\"},{\\\"row\\\":13,\\\"value\\\":13,\\\"code\\\":\\\"013\\\"},{\\\"row\\\":14,\\\"value\\\":14,\\\"code\\\":\\\"14\\\"},{\\\"row\\\":15,\\\"value\\\":null,\\\"code\\\":\\\"015\\\"},{\\\"row\\\":16,\\\"value\\\":16,\\\"code\\\":\\\"16\\\"},{\\\"row\\\":17,\\\"value\\\":17,\\\"code\\\":\\\"017\\\"},{\\\"row\\\":18,\\\"value\\\":null,\\\"code\\\":\\\"18\\\"},{\\\"row\\\":19,\\\"value\\\":19,\\\"code\\\":\\\"019\\\"},{\\\"row\\\":20,\\\"value\\\":20,\\\"code\\\":\\\"20\\\"},{\\\"row\\\":21,\\\"value\\\":null,\\\"code\\\":\\\"021\\\"},{\\\"row\\\":22,\\\"value\\\":22,\\\"code\\\":\\\"22\\\"},{\\\"row\\\":23,\\\"value\\\":23,\\\"code\\\":\\\"023\\\"},{\\\"row\\\":24,\\\"value\\\":null,\\\"code\\\":\\\"24\\\"}]\", \"oracle_class\": \"positive\", \"raw_json\": null, \"required_semantics\": \"null_distinct_from_missing\", \"source_json_byte_count\": 1404, \"source_json_utf8\": \"[\\n  {\\n    \\\"row\\\": 1,\\n    \\\"value\\\": 1,\\n    \\\"code\\\": \\\"001\\\"\\n  },\\n  {\\n    \\\"row\\\": 2,\\n    \\\"value\\\": 2,\\n    \\\"code\\\": \\\"2\\\"\\n  },\\n  {\\n    \\\"row\\\": 3,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"003\\\"\\n  },\\n  {\\n    \\\"row\\\": 4,\\n    \\\"value\\\": 4,\\n    \\\"code\\\": \\\"4\\\"\\n  },\\n  {\\n    \\\"row\\\": 5,\\n    \\\"value\\\": 5,\\n    \\\"code\\\": \\\"005\\\"\\n  },\\n  {\\n    \\\"row\\\": 6,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"6\\\"\\n  },\\n  {\\n    \\\"row\\\": 7,\\n    \\\"value\\\": 7,\\n    \\\"code\\\": \\\"007\\\"\\n  },\\n  {\\n    \\\"row\\\": 8,\\n    \\\"value\\\": 8,\\n    \\\"code\\\": \\\"8\\\"\\n  },\\n  {\\n    \\\"row\\\": 9,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"009\\\"\\n  },\\n  {\\n    \\\"row\\\": 10,\\n    \\\"value\\\": 10,\\n    \\\"code\\\": \\\"10\\\"\\n  },\\n  {\\n    \\\"row\\\": 11,\\n    \\\"value\\\": 11,\\n    \\\"code\\\": \\\"011\\\"\\n  },\\n  {\\n    \\\"row\\\": 12,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"12\\\"\\n  },\\n  {\\n    \\\"row\\\": 13,\\n    \\\"value\\\": 13,\\n    \\\"code\\\": \\\"013\\\"\\n  },\\n  {\\n    \\\"row\\\": 14,\\n    \\\"value\\\": 14,\\n    \\\"code\\\": \\\"14\\\"\\n  },\\n  {\\n    \\\"row\\\": 15,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"015\\\"\\n  },\\n  {\\n    \\\"row\\\": 16,\\n    \\\"value\\\": 16,\\n    \\\"code\\\": \\\"16\\\"\\n  },\\n  {\\n    \\\"row\\\": 17,\\n    \\\"value\\\": 17,\\n    \\\"code\\\": \\\"017\\\"\\n  },\\n  {\\n    \\\"row\\\": 18,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"18\\\"\\n  },\\n  {\\n    \\\"row\\\": 19,\\n    \\\"value\\\": 19,\\n    \\\"code\\\": \\\"019\\\"\\n  },\\n  {\\n    \\\"row\\\": 20,\\n    \\\"value\\\": 20,\\n    \\\"code\\\": \\\"20\\\"\\n  },\\n  {\\n    \\\"row\\\": 21,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"021\\\"\\n  },\\n  {\\n    \\\"row\\\": 22,\\n    \\\"value\\\": 22,\\n    \\\"code\\\": \\\"22\\\"\\n  },\\n  {\\n    \\\"row\\\": 23,\\n    \\\"value\\\": 23,\\n    \\\"code\\\": \\\"023\\\"\\n  },\\n  {\\n    \\\"row\\\": 24,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"24\\\"\\n  }\\n]\\n\", \"structured_codec_candidate_byte_count\": 393, \"structured_codec_candidate_utf8\": \"{\\\"columns\\\":[\\\"row\\\",\\\"value\\\",\\\"code\\\"],\\\"rows\\\":[[1,1,\\\"001\\\"],[2,2,\\\"2\\\"],[3,null,\\\"003\\\"],[4,4,\\\"4\\\"],[5,5,\\\"005\\\"],[6,null,\\\"6\\\"],[7,7,\\\"007\\\"],[8,8,\\\"8\\\"],[9,null,\\\"009\\\"],[10,10,\\\"10\\\"],[11,11,\\\"011\\\"],[12,null,\\\"12\\\"],[13,13,\\\"013\\\"],[14,14,\\\"14\\\"],[15,null,\\\"015\\\"],[16,16,\\\"16\\\"],[17,17,\\\"017\\\"],[18,null,\\\"18\\\"],[19,19,\\\"019\\\"],[20,20,\\\"20\\\"],[21,null,\\\"021\\\"],[22,22,\\\"22\\\"],[23,23,\\\"023\\\"],[24,null,\\\"24\\\"]],\\\"version\\\":\\\"ordered-table-v1\\\"}\", \"synthetic_record_id\": \"structured_json_and_tables-golden-golden-positive-nulls-v1\", \"typed_json\": [{\"code\": \"001\", \"row\": 1, \"value\": 1}, {\"code\": \"2\", \"row\": 2, \"value\": 2}, {\"code\": \"003\", \"row\": 3, \"value\": null}, {\"code\": \"4\", \"row\": 4, \"value\": 4}, {\"code\": \"005\", \"row\": 5, \"value\": 5}, {\"code\": \"6\", \"row\": 6, \"value\": null}, {\"code\": \"007\", \"row\": 7, \"value\": 7}, {\"code\": \"8\", \"row\": 8, \"value\": 8}, {\"code\": \"009\", \"row\": 9, \"value\": null}, {\"code\": \"10\", \"row\": 10, \"value\": 10}, {\"code\": \"011\", \"row\": 11, \"value\": 11}, {\"code\": \"12\", \"row\": 12, \"value\": null}, {\"code\": \"013\", \"row\": 13, \"value\": 13}, {\"code\": \"14\", \"row\": 14, \"value\": 14}, {\"code\": \"015\", \"row\": 15, \"value\": null}, {\"code\": \"16\", \"row\": 16, \"value\": 16}, {\"code\": \"017\", \"row\": 17, \"value\": 17}, {\"code\": \"18\", \"row\": 18, \"value\": null}, {\"code\": \"019\", \"row\": 19, \"value\": 19}, {\"code\": \"20\", \"row\": 20, \"value\": 20}, {\"code\": \"021\", \"row\": 21, \"value\": null}, {\"code\": \"22\", \"row\": 22, \"value\": 22}, {\"code\": \"023\", \"row\": 23, \"value\": 23}, {\"code\": \"24\", \"row\": 24, \"value\": null}]}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "a33175c0daae9f185a0353fd9e3a6d809e47b63f4f82f327cee5a313f4270b59",
+      "case_id": "nulls",
+      "eligible_techniques": [
+        "json-minify-v1",
+        "structured-data-codec-v1"
+      ],
+      "expected_disposition_by_technique": {
+        "json-minify-v1": "transform",
+        "structured-data-codec-v1": "transform"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-structured_json_and_tables-golden-golden-positive-nulls-v1",
+                "output": "{\"case_id\": \"nulls\", \"json_minified_candidate_byte_count\": 826, \"json_minified_candidate_utf8\": \"[{\\\"row\\\":1,\\\"value\\\":1,\\\"code\\\":\\\"001\\\"},{\\\"row\\\":2,\\\"value\\\":2,\\\"code\\\":\\\"2\\\"},{\\\"row\\\":3,\\\"value\\\":null,\\\"code\\\":\\\"003\\\"},{\\\"row\\\":4,\\\"value\\\":4,\\\"code\\\":\\\"4\\\"},{\\\"row\\\":5,\\\"value\\\":5,\\\"code\\\":\\\"005\\\"},{\\\"row\\\":6,\\\"value\\\":null,\\\"code\\\":\\\"6\\\"},{\\\"row\\\":7,\\\"value\\\":7,\\\"code\\\":\\\"007\\\"},{\\\"row\\\":8,\\\"value\\\":8,\\\"code\\\":\\\"8\\\"},{\\\"row\\\":9,\\\"value\\\":null,\\\"code\\\":\\\"009\\\"},{\\\"row\\\":10,\\\"value\\\":10,\\\"code\\\":\\\"10\\\"},{\\\"row\\\":11,\\\"value\\\":11,\\\"code\\\":\\\"011\\\"},{\\\"row\\\":12,\\\"value\\\":null,\\\"code\\\":\\\"12\\\"},{\\\"row\\\":13,\\\"value\\\":13,\\\"code\\\":\\\"013\\\"},{\\\"row\\\":14,\\\"value\\\":14,\\\"code\\\":\\\"14\\\"},{\\\"row\\\":15,\\\"value\\\":null,\\\"code\\\":\\\"015\\\"},{\\\"row\\\":16,\\\"value\\\":16,\\\"code\\\":\\\"16\\\"},{\\\"row\\\":17,\\\"value\\\":17,\\\"code\\\":\\\"017\\\"},{\\\"row\\\":18,\\\"value\\\":null,\\\"code\\\":\\\"18\\\"},{\\\"row\\\":19,\\\"value\\\":19,\\\"code\\\":\\\"019\\\"},{\\\"row\\\":20,\\\"value\\\":20,\\\"code\\\":\\\"20\\\"},{\\\"row\\\":21,\\\"value\\\":null,\\\"code\\\":\\\"021\\\"},{\\\"row\\\":22,\\\"value\\\":22,\\\"code\\\":\\\"22\\\"},{\\\"row\\\":23,\\\"value\\\":23,\\\"code\\\":\\\"023\\\"},{\\\"row\\\":24,\\\"value\\\":null,\\\"code\\\":\\\"24\\\"}]\", \"oracle_class\": \"positive\", \"raw_json\": null, \"required_semantics\": \"null_distinct_from_missing\", \"source_json_byte_count\": 1404, \"source_json_utf8\": \"[\\n  {\\n    \\\"row\\\": 1,\\n    \\\"value\\\": 1,\\n    \\\"code\\\": \\\"001\\\"\\n  },\\n  {\\n    \\\"row\\\": 2,\\n    \\\"value\\\": 2,\\n    \\\"code\\\": \\\"2\\\"\\n  },\\n  {\\n    \\\"row\\\": 3,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"003\\\"\\n  },\\n  {\\n    \\\"row\\\": 4,\\n    \\\"value\\\": 4,\\n    \\\"code\\\": \\\"4\\\"\\n  },\\n  {\\n    \\\"row\\\": 5,\\n    \\\"value\\\": 5,\\n    \\\"code\\\": \\\"005\\\"\\n  },\\n  {\\n    \\\"row\\\": 6,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"6\\\"\\n  },\\n  {\\n    \\\"row\\\": 7,\\n    \\\"value\\\": 7,\\n    \\\"code\\\": \\\"007\\\"\\n  },\\n  {\\n    \\\"row\\\": 8,\\n    \\\"value\\\": 8,\\n    \\\"code\\\": \\\"8\\\"\\n  },\\n  {\\n    \\\"row\\\": 9,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"009\\\"\\n  },\\n  {\\n    \\\"row\\\": 10,\\n    \\\"value\\\": 10,\\n    \\\"code\\\": \\\"10\\\"\\n  },\\n  {\\n    \\\"row\\\": 11,\\n    \\\"value\\\": 11,\\n    \\\"code\\\": \\\"011\\\"\\n  },\\n  {\\n    \\\"row\\\": 12,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"12\\\"\\n  },\\n  {\\n    \\\"row\\\": 13,\\n    \\\"value\\\": 13,\\n    \\\"code\\\": \\\"013\\\"\\n  },\\n  {\\n    \\\"row\\\": 14,\\n    \\\"value\\\": 14,\\n    \\\"code\\\": \\\"14\\\"\\n  },\\n  {\\n    \\\"row\\\": 15,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"015\\\"\\n  },\\n  {\\n    \\\"row\\\": 16,\\n    \\\"value\\\": 16,\\n    \\\"code\\\": \\\"16\\\"\\n  },\\n  {\\n    \\\"row\\\": 17,\\n    \\\"value\\\": 17,\\n    \\\"code\\\": \\\"017\\\"\\n  },\\n  {\\n    \\\"row\\\": 18,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"18\\\"\\n  },\\n  {\\n    \\\"row\\\": 19,\\n    \\\"value\\\": 19,\\n    \\\"code\\\": \\\"019\\\"\\n  },\\n  {\\n    \\\"row\\\": 20,\\n    \\\"value\\\": 20,\\n    \\\"code\\\": \\\"20\\\"\\n  },\\n  {\\n    \\\"row\\\": 21,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"021\\\"\\n  },\\n  {\\n    \\\"row\\\": 22,\\n    \\\"value\\\": 22,\\n    \\\"code\\\": \\\"22\\\"\\n  },\\n  {\\n    \\\"row\\\": 23,\\n    \\\"value\\\": 23,\\n    \\\"code\\\": \\\"023\\\"\\n  },\\n  {\\n    \\\"row\\\": 24,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"24\\\"\\n  }\\n]\\n\", \"structured_codec_candidate_byte_count\": 393, \"structured_codec_candidate_utf8\": \"{\\\"columns\\\":[\\\"row\\\",\\\"value\\\",\\\"code\\\"],\\\"rows\\\":[[1,1,\\\"001\\\"],[2,2,\\\"2\\\"],[3,null,\\\"003\\\"],[4,4,\\\"4\\\"],[5,5,\\\"005\\\"],[6,null,\\\"6\\\"],[7,7,\\\"007\\\"],[8,8,\\\"8\\\"],[9,null,\\\"009\\\"],[10,10,\\\"10\\\"],[11,11,\\\"011\\\"],[12,null,\\\"12\\\"],[13,13,\\\"013\\\"],[14,14,\\\"14\\\"],[15,null,\\\"015\\\"],[16,16,\\\"16\\\"],[17,17,\\\"017\\\"],[18,null,\\\"18\\\"],[19,19,\\\"019\\\"],[20,20,\\\"20\\\"],[21,null,\\\"021\\\"],[22,22,\\\"22\\\"],[23,23,\\\"023\\\"],[24,null,\\\"24\\\"]],\\\"version\\\":\\\"ordered-table-v1\\\"}\", \"synthetic_record_id\": \"structured_json_and_tables-golden-golden-positive-nulls-v1\", \"typed_json\": [{\"code\": \"001\", \"row\": 1, \"value\": 1}, {\"code\": \"2\", \"row\": 2, \"value\": 2}, {\"code\": \"003\", \"row\": 3, \"value\": null}, {\"code\": \"4\", \"row\": 4, \"value\": 4}, {\"code\": \"005\", \"row\": 5, \"value\": 5}, {\"code\": \"6\", \"row\": 6, \"value\": null}, {\"code\": \"007\", \"row\": 7, \"value\": 7}, {\"code\": \"8\", \"row\": 8, \"value\": 8}, {\"code\": \"009\", \"row\": 9, \"value\": null}, {\"code\": \"10\", \"row\": 10, \"value\": 10}, {\"code\": \"011\", \"row\": 11, \"value\": 11}, {\"code\": \"12\", \"row\": 12, \"value\": null}, {\"code\": \"013\", \"row\": 13, \"value\": 13}, {\"code\": \"14\", \"row\": 14, \"value\": 14}, {\"code\": \"015\", \"row\": 15, \"value\": null}, {\"code\": \"16\", \"row\": 16, \"value\": 16}, {\"code\": \"017\", \"row\": 17, \"value\": 17}, {\"code\": \"18\", \"row\": 18, \"value\": null}, {\"code\": \"019\", \"row\": 19, \"value\": 19}, {\"code\": \"20\", \"row\": 20, \"value\": 20}, {\"code\": \"021\", \"row\": 21, \"value\": null}, {\"code\": \"22\", \"row\": 22, \"value\": 22}, {\"code\": \"023\", \"row\": 23, \"value\": 23}, {\"code\": \"24\", \"row\": 24, \"value\": null}]}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "case_id": "nulls",
+          "json_minified_candidate_byte_count": 826,
+          "json_minified_candidate_utf8": "[{\"row\":1,\"value\":1,\"code\":\"001\"},{\"row\":2,\"value\":2,\"code\":\"2\"},{\"row\":3,\"value\":null,\"code\":\"003\"},{\"row\":4,\"value\":4,\"code\":\"4\"},{\"row\":5,\"value\":5,\"code\":\"005\"},{\"row\":6,\"value\":null,\"code\":\"6\"},{\"row\":7,\"value\":7,\"code\":\"007\"},{\"row\":8,\"value\":8,\"code\":\"8\"},{\"row\":9,\"value\":null,\"code\":\"009\"},{\"row\":10,\"value\":10,\"code\":\"10\"},{\"row\":11,\"value\":11,\"code\":\"011\"},{\"row\":12,\"value\":null,\"code\":\"12\"},{\"row\":13,\"value\":13,\"code\":\"013\"},{\"row\":14,\"value\":14,\"code\":\"14\"},{\"row\":15,\"value\":null,\"code\":\"015\"},{\"row\":16,\"value\":16,\"code\":\"16\"},{\"row\":17,\"value\":17,\"code\":\"017\"},{\"row\":18,\"value\":null,\"code\":\"18\"},{\"row\":19,\"value\":19,\"code\":\"019\"},{\"row\":20,\"value\":20,\"code\":\"20\"},{\"row\":21,\"value\":null,\"code\":\"021\"},{\"row\":22,\"value\":22,\"code\":\"22\"},{\"row\":23,\"value\":23,\"code\":\"023\"},{\"row\":24,\"value\":null,\"code\":\"24\"}]",
+          "oracle_class": "positive",
+          "raw_json": null,
+          "required_semantics": "null_distinct_from_missing",
+          "source_json_byte_count": 1404,
+          "source_json_utf8": "[\n  {\n    \"row\": 1,\n    \"value\": 1,\n    \"code\": \"001\"\n  },\n  {\n    \"row\": 2,\n    \"value\": 2,\n    \"code\": \"2\"\n  },\n  {\n    \"row\": 3,\n    \"value\": null,\n    \"code\": \"003\"\n  },\n  {\n    \"row\": 4,\n    \"value\": 4,\n    \"code\": \"4\"\n  },\n  {\n    \"row\": 5,\n    \"value\": 5,\n    \"code\": \"005\"\n  },\n  {\n    \"row\": 6,\n    \"value\": null,\n    \"code\": \"6\"\n  },\n  {\n    \"row\": 7,\n    \"value\": 7,\n    \"code\": \"007\"\n  },\n  {\n    \"row\": 8,\n    \"value\": 8,\n    \"code\": \"8\"\n  },\n  {\n    \"row\": 9,\n    \"value\": null,\n    \"code\": \"009\"\n  },\n  {\n    \"row\": 10,\n    \"value\": 10,\n    \"code\": \"10\"\n  },\n  {\n    \"row\": 11,\n    \"value\": 11,\n    \"code\": \"011\"\n  },\n  {\n    \"row\": 12,\n    \"value\": null,\n    \"code\": \"12\"\n  },\n  {\n    \"row\": 13,\n    \"value\": 13,\n    \"code\": \"013\"\n  },\n  {\n    \"row\": 14,\n    \"value\": 14,\n    \"code\": \"14\"\n  },\n  {\n    \"row\": 15,\n    \"value\": null,\n    \"code\": \"015\"\n  },\n  {\n    \"row\": 16,\n    \"value\": 16,\n    \"code\": \"16\"\n  },\n  {\n    \"row\": 17,\n    \"value\": 17,\n    \"code\": \"017\"\n  },\n  {\n    \"row\": 18,\n    \"value\": null,\n    \"code\": \"18\"\n  },\n  {\n    \"row\": 19,\n    \"value\": 19,\n    \"code\": \"019\"\n  },\n  {\n    \"row\": 20,\n    \"value\": 20,\n    \"code\": \"20\"\n  },\n  {\n    \"row\": 21,\n    \"value\": null,\n    \"code\": \"021\"\n  },\n  {\n    \"row\": 22,\n    \"value\": 22,\n    \"code\": \"22\"\n  },\n  {\n    \"row\": 23,\n    \"value\": 23,\n    \"code\": \"023\"\n  },\n  {\n    \"row\": 24,\n    \"value\": null,\n    \"code\": \"24\"\n  }\n]\n",
+          "structured_codec_candidate_byte_count": 393,
+          "structured_codec_candidate_utf8": "{\"columns\":[\"row\",\"value\",\"code\"],\"rows\":[[1,1,\"001\"],[2,2,\"2\"],[3,null,\"003\"],[4,4,\"4\"],[5,5,\"005\"],[6,null,\"6\"],[7,7,\"007\"],[8,8,\"8\"],[9,null,\"009\"],[10,10,\"10\"],[11,11,\"011\"],[12,null,\"12\"],[13,13,\"013\"],[14,14,\"14\"],[15,null,\"015\"],[16,16,\"16\"],[17,17,\"017\"],[18,null,\"18\"],[19,19,\"019\"],[20,20,\"20\"],[21,null,\"021\"],[22,22,\"22\"],[23,23,\"023\"],[24,null,\"24\"]],\"version\":\"ordered-table-v1\"}",
+          "synthetic_record_id": "structured_json_and_tables-golden-golden-positive-nulls-v1",
+          "typed_json": [
+            {
+              "code": "001",
+              "row": 1,
+              "value": 1
+            },
+            {
+              "code": "2",
+              "row": 2,
+              "value": 2
+            },
+            {
+              "code": "003",
+              "row": 3,
+              "value": null
+            },
+            {
+              "code": "4",
+              "row": 4,
+              "value": 4
+            },
+            {
+              "code": "005",
+              "row": 5,
+              "value": 5
+            },
+            {
+              "code": "6",
+              "row": 6,
+              "value": null
+            },
+            {
+              "code": "007",
+              "row": 7,
+              "value": 7
+            },
+            {
+              "code": "8",
+              "row": 8,
+              "value": 8
+            },
+            {
+              "code": "009",
+              "row": 9,
+              "value": null
+            },
+            {
+              "code": "10",
+              "row": 10,
+              "value": 10
+            },
+            {
+              "code": "011",
+              "row": 11,
+              "value": 11
+            },
+            {
+              "code": "12",
+              "row": 12,
+              "value": null
+            },
+            {
+              "code": "013",
+              "row": 13,
+              "value": 13
+            },
+            {
+              "code": "14",
+              "row": 14,
+              "value": 14
+            },
+            {
+              "code": "015",
+              "row": 15,
+              "value": null
+            },
+            {
+              "code": "16",
+              "row": 16,
+              "value": 16
+            },
+            {
+              "code": "017",
+              "row": 17,
+              "value": 17
+            },
+            {
+              "code": "18",
+              "row": 18,
+              "value": null
+            },
+            {
+              "code": "019",
+              "row": 19,
+              "value": 19
+            },
+            {
+              "code": "20",
+              "row": 20,
+              "value": 20
+            },
+            {
+              "code": "021",
+              "row": 21,
+              "value": null
+            },
+            {
+              "code": "22",
+              "row": 22,
+              "value": 22
+            },
+            {
+              "code": "023",
+              "row": 23,
+              "value": 23
+            },
+            {
+              "code": "24",
+              "row": 24,
+              "value": null
+            }
+          ]
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-structured_json_and_tables",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "a4b570913f71e985d9852cec85666d32c480f918f6b262b342958bd46c04beae",
+      "oracle_class": "positive",
+      "record_id": "structured_json_and_tables-golden-golden-positive-nulls-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "preserve_scalar_types",
+        "preserve_key_row_and_column_order"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-structured_json_and_tables-golden-golden-positive-numeric_vs_string-v1",
+              "output": "{\"case_id\": \"numeric_vs_string\", \"json_minified_candidate_byte_count\": 826, \"json_minified_candidate_utf8\": \"[{\\\"row\\\":1,\\\"value\\\":1,\\\"code\\\":\\\"001\\\"},{\\\"row\\\":2,\\\"value\\\":2,\\\"code\\\":\\\"2\\\"},{\\\"row\\\":3,\\\"value\\\":null,\\\"code\\\":\\\"003\\\"},{\\\"row\\\":4,\\\"value\\\":4,\\\"code\\\":\\\"4\\\"},{\\\"row\\\":5,\\\"value\\\":5,\\\"code\\\":\\\"005\\\"},{\\\"row\\\":6,\\\"value\\\":null,\\\"code\\\":\\\"6\\\"},{\\\"row\\\":7,\\\"value\\\":7,\\\"code\\\":\\\"007\\\"},{\\\"row\\\":8,\\\"value\\\":8,\\\"code\\\":\\\"8\\\"},{\\\"row\\\":9,\\\"value\\\":null,\\\"code\\\":\\\"009\\\"},{\\\"row\\\":10,\\\"value\\\":10,\\\"code\\\":\\\"10\\\"},{\\\"row\\\":11,\\\"value\\\":11,\\\"code\\\":\\\"011\\\"},{\\\"row\\\":12,\\\"value\\\":null,\\\"code\\\":\\\"12\\\"},{\\\"row\\\":13,\\\"value\\\":13,\\\"code\\\":\\\"013\\\"},{\\\"row\\\":14,\\\"value\\\":14,\\\"code\\\":\\\"14\\\"},{\\\"row\\\":15,\\\"value\\\":null,\\\"code\\\":\\\"015\\\"},{\\\"row\\\":16,\\\"value\\\":16,\\\"code\\\":\\\"16\\\"},{\\\"row\\\":17,\\\"value\\\":17,\\\"code\\\":\\\"017\\\"},{\\\"row\\\":18,\\\"value\\\":null,\\\"code\\\":\\\"18\\\"},{\\\"row\\\":19,\\\"value\\\":19,\\\"code\\\":\\\"019\\\"},{\\\"row\\\":20,\\\"value\\\":20,\\\"code\\\":\\\"20\\\"},{\\\"row\\\":21,\\\"value\\\":null,\\\"code\\\":\\\"021\\\"},{\\\"row\\\":22,\\\"value\\\":22,\\\"code\\\":\\\"22\\\"},{\\\"row\\\":23,\\\"value\\\":23,\\\"code\\\":\\\"023\\\"},{\\\"row\\\":24,\\\"value\\\":null,\\\"code\\\":\\\"24\\\"}]\", \"oracle_class\": \"positive\", \"raw_json\": null, \"required_semantics\": \"numeric_and_string_types_distinct\", \"source_json_byte_count\": 1404, \"source_json_utf8\": \"[\\n  {\\n    \\\"row\\\": 1,\\n    \\\"value\\\": 1,\\n    \\\"code\\\": \\\"001\\\"\\n  },\\n  {\\n    \\\"row\\\": 2,\\n    \\\"value\\\": 2,\\n    \\\"code\\\": \\\"2\\\"\\n  },\\n  {\\n    \\\"row\\\": 3,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"003\\\"\\n  },\\n  {\\n    \\\"row\\\": 4,\\n    \\\"value\\\": 4,\\n    \\\"code\\\": \\\"4\\\"\\n  },\\n  {\\n    \\\"row\\\": 5,\\n    \\\"value\\\": 5,\\n    \\\"code\\\": \\\"005\\\"\\n  },\\n  {\\n    \\\"row\\\": 6,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"6\\\"\\n  },\\n  {\\n    \\\"row\\\": 7,\\n    \\\"value\\\": 7,\\n    \\\"code\\\": \\\"007\\\"\\n  },\\n  {\\n    \\\"row\\\": 8,\\n    \\\"value\\\": 8,\\n    \\\"code\\\": \\\"8\\\"\\n  },\\n  {\\n    \\\"row\\\": 9,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"009\\\"\\n  },\\n  {\\n    \\\"row\\\": 10,\\n    \\\"value\\\": 10,\\n    \\\"code\\\": \\\"10\\\"\\n  },\\n  {\\n    \\\"row\\\": 11,\\n    \\\"value\\\": 11,\\n    \\\"code\\\": \\\"011\\\"\\n  },\\n  {\\n    \\\"row\\\": 12,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"12\\\"\\n  },\\n  {\\n    \\\"row\\\": 13,\\n    \\\"value\\\": 13,\\n    \\\"code\\\": \\\"013\\\"\\n  },\\n  {\\n    \\\"row\\\": 14,\\n    \\\"value\\\": 14,\\n    \\\"code\\\": \\\"14\\\"\\n  },\\n  {\\n    \\\"row\\\": 15,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"015\\\"\\n  },\\n  {\\n    \\\"row\\\": 16,\\n    \\\"value\\\": 16,\\n    \\\"code\\\": \\\"16\\\"\\n  },\\n  {\\n    \\\"row\\\": 17,\\n    \\\"value\\\": 17,\\n    \\\"code\\\": \\\"017\\\"\\n  },\\n  {\\n    \\\"row\\\": 18,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"18\\\"\\n  },\\n  {\\n    \\\"row\\\": 19,\\n    \\\"value\\\": 19,\\n    \\\"code\\\": \\\"019\\\"\\n  },\\n  {\\n    \\\"row\\\": 20,\\n    \\\"value\\\": 20,\\n    \\\"code\\\": \\\"20\\\"\\n  },\\n  {\\n    \\\"row\\\": 21,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"021\\\"\\n  },\\n  {\\n    \\\"row\\\": 22,\\n    \\\"value\\\": 22,\\n    \\\"code\\\": \\\"22\\\"\\n  },\\n  {\\n    \\\"row\\\": 23,\\n    \\\"value\\\": 23,\\n    \\\"code\\\": \\\"023\\\"\\n  },\\n  {\\n    \\\"row\\\": 24,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"24\\\"\\n  }\\n]\\n\", \"structured_codec_candidate_byte_count\": 393, \"structured_codec_candidate_utf8\": \"{\\\"columns\\\":[\\\"row\\\",\\\"value\\\",\\\"code\\\"],\\\"rows\\\":[[1,1,\\\"001\\\"],[2,2,\\\"2\\\"],[3,null,\\\"003\\\"],[4,4,\\\"4\\\"],[5,5,\\\"005\\\"],[6,null,\\\"6\\\"],[7,7,\\\"007\\\"],[8,8,\\\"8\\\"],[9,null,\\\"009\\\"],[10,10,\\\"10\\\"],[11,11,\\\"011\\\"],[12,null,\\\"12\\\"],[13,13,\\\"013\\\"],[14,14,\\\"14\\\"],[15,null,\\\"015\\\"],[16,16,\\\"16\\\"],[17,17,\\\"017\\\"],[18,null,\\\"18\\\"],[19,19,\\\"019\\\"],[20,20,\\\"20\\\"],[21,null,\\\"021\\\"],[22,22,\\\"22\\\"],[23,23,\\\"023\\\"],[24,null,\\\"24\\\"]],\\\"version\\\":\\\"ordered-table-v1\\\"}\", \"synthetic_record_id\": \"structured_json_and_tables-golden-golden-positive-numeric_vs_string-v1\", \"typed_json\": [{\"code\": \"001\", \"row\": 1, \"value\": 1}, {\"code\": \"2\", \"row\": 2, \"value\": 2}, {\"code\": \"003\", \"row\": 3, \"value\": null}, {\"code\": \"4\", \"row\": 4, \"value\": 4}, {\"code\": \"005\", \"row\": 5, \"value\": 5}, {\"code\": \"6\", \"row\": 6, \"value\": null}, {\"code\": \"007\", \"row\": 7, \"value\": 7}, {\"code\": \"8\", \"row\": 8, \"value\": 8}, {\"code\": \"009\", \"row\": 9, \"value\": null}, {\"code\": \"10\", \"row\": 10, \"value\": 10}, {\"code\": \"011\", \"row\": 11, \"value\": 11}, {\"code\": \"12\", \"row\": 12, \"value\": null}, {\"code\": \"013\", \"row\": 13, \"value\": 13}, {\"code\": \"14\", \"row\": 14, \"value\": 14}, {\"code\": \"015\", \"row\": 15, \"value\": null}, {\"code\": \"16\", \"row\": 16, \"value\": 16}, {\"code\": \"017\", \"row\": 17, \"value\": 17}, {\"code\": \"18\", \"row\": 18, \"value\": null}, {\"code\": \"019\", \"row\": 19, \"value\": 19}, {\"code\": \"20\", \"row\": 20, \"value\": 20}, {\"code\": \"021\", \"row\": 21, \"value\": null}, {\"code\": \"22\", \"row\": 22, \"value\": 22}, {\"code\": \"023\", \"row\": 23, \"value\": 23}, {\"code\": \"24\", \"row\": 24, \"value\": null}]}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "c29e682ee5eb41aaecf4ba8e1e81182dbe4fdcd975e28dd708bf8d53e9a5df53",
+      "case_id": "numeric_vs_string",
+      "eligible_techniques": [
+        "json-minify-v1",
+        "structured-data-codec-v1"
+      ],
+      "expected_disposition_by_technique": {
+        "json-minify-v1": "transform",
+        "structured-data-codec-v1": "transform"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-structured_json_and_tables-golden-golden-positive-numeric_vs_string-v1",
+                "output": "{\"case_id\": \"numeric_vs_string\", \"json_minified_candidate_byte_count\": 826, \"json_minified_candidate_utf8\": \"[{\\\"row\\\":1,\\\"value\\\":1,\\\"code\\\":\\\"001\\\"},{\\\"row\\\":2,\\\"value\\\":2,\\\"code\\\":\\\"2\\\"},{\\\"row\\\":3,\\\"value\\\":null,\\\"code\\\":\\\"003\\\"},{\\\"row\\\":4,\\\"value\\\":4,\\\"code\\\":\\\"4\\\"},{\\\"row\\\":5,\\\"value\\\":5,\\\"code\\\":\\\"005\\\"},{\\\"row\\\":6,\\\"value\\\":null,\\\"code\\\":\\\"6\\\"},{\\\"row\\\":7,\\\"value\\\":7,\\\"code\\\":\\\"007\\\"},{\\\"row\\\":8,\\\"value\\\":8,\\\"code\\\":\\\"8\\\"},{\\\"row\\\":9,\\\"value\\\":null,\\\"code\\\":\\\"009\\\"},{\\\"row\\\":10,\\\"value\\\":10,\\\"code\\\":\\\"10\\\"},{\\\"row\\\":11,\\\"value\\\":11,\\\"code\\\":\\\"011\\\"},{\\\"row\\\":12,\\\"value\\\":null,\\\"code\\\":\\\"12\\\"},{\\\"row\\\":13,\\\"value\\\":13,\\\"code\\\":\\\"013\\\"},{\\\"row\\\":14,\\\"value\\\":14,\\\"code\\\":\\\"14\\\"},{\\\"row\\\":15,\\\"value\\\":null,\\\"code\\\":\\\"015\\\"},{\\\"row\\\":16,\\\"value\\\":16,\\\"code\\\":\\\"16\\\"},{\\\"row\\\":17,\\\"value\\\":17,\\\"code\\\":\\\"017\\\"},{\\\"row\\\":18,\\\"value\\\":null,\\\"code\\\":\\\"18\\\"},{\\\"row\\\":19,\\\"value\\\":19,\\\"code\\\":\\\"019\\\"},{\\\"row\\\":20,\\\"value\\\":20,\\\"code\\\":\\\"20\\\"},{\\\"row\\\":21,\\\"value\\\":null,\\\"code\\\":\\\"021\\\"},{\\\"row\\\":22,\\\"value\\\":22,\\\"code\\\":\\\"22\\\"},{\\\"row\\\":23,\\\"value\\\":23,\\\"code\\\":\\\"023\\\"},{\\\"row\\\":24,\\\"value\\\":null,\\\"code\\\":\\\"24\\\"}]\", \"oracle_class\": \"positive\", \"raw_json\": null, \"required_semantics\": \"numeric_and_string_types_distinct\", \"source_json_byte_count\": 1404, \"source_json_utf8\": \"[\\n  {\\n    \\\"row\\\": 1,\\n    \\\"value\\\": 1,\\n    \\\"code\\\": \\\"001\\\"\\n  },\\n  {\\n    \\\"row\\\": 2,\\n    \\\"value\\\": 2,\\n    \\\"code\\\": \\\"2\\\"\\n  },\\n  {\\n    \\\"row\\\": 3,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"003\\\"\\n  },\\n  {\\n    \\\"row\\\": 4,\\n    \\\"value\\\": 4,\\n    \\\"code\\\": \\\"4\\\"\\n  },\\n  {\\n    \\\"row\\\": 5,\\n    \\\"value\\\": 5,\\n    \\\"code\\\": \\\"005\\\"\\n  },\\n  {\\n    \\\"row\\\": 6,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"6\\\"\\n  },\\n  {\\n    \\\"row\\\": 7,\\n    \\\"value\\\": 7,\\n    \\\"code\\\": \\\"007\\\"\\n  },\\n  {\\n    \\\"row\\\": 8,\\n    \\\"value\\\": 8,\\n    \\\"code\\\": \\\"8\\\"\\n  },\\n  {\\n    \\\"row\\\": 9,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"009\\\"\\n  },\\n  {\\n    \\\"row\\\": 10,\\n    \\\"value\\\": 10,\\n    \\\"code\\\": \\\"10\\\"\\n  },\\n  {\\n    \\\"row\\\": 11,\\n    \\\"value\\\": 11,\\n    \\\"code\\\": \\\"011\\\"\\n  },\\n  {\\n    \\\"row\\\": 12,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"12\\\"\\n  },\\n  {\\n    \\\"row\\\": 13,\\n    \\\"value\\\": 13,\\n    \\\"code\\\": \\\"013\\\"\\n  },\\n  {\\n    \\\"row\\\": 14,\\n    \\\"value\\\": 14,\\n    \\\"code\\\": \\\"14\\\"\\n  },\\n  {\\n    \\\"row\\\": 15,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"015\\\"\\n  },\\n  {\\n    \\\"row\\\": 16,\\n    \\\"value\\\": 16,\\n    \\\"code\\\": \\\"16\\\"\\n  },\\n  {\\n    \\\"row\\\": 17,\\n    \\\"value\\\": 17,\\n    \\\"code\\\": \\\"017\\\"\\n  },\\n  {\\n    \\\"row\\\": 18,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"18\\\"\\n  },\\n  {\\n    \\\"row\\\": 19,\\n    \\\"value\\\": 19,\\n    \\\"code\\\": \\\"019\\\"\\n  },\\n  {\\n    \\\"row\\\": 20,\\n    \\\"value\\\": 20,\\n    \\\"code\\\": \\\"20\\\"\\n  },\\n  {\\n    \\\"row\\\": 21,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"021\\\"\\n  },\\n  {\\n    \\\"row\\\": 22,\\n    \\\"value\\\": 22,\\n    \\\"code\\\": \\\"22\\\"\\n  },\\n  {\\n    \\\"row\\\": 23,\\n    \\\"value\\\": 23,\\n    \\\"code\\\": \\\"023\\\"\\n  },\\n  {\\n    \\\"row\\\": 24,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"24\\\"\\n  }\\n]\\n\", \"structured_codec_candidate_byte_count\": 393, \"structured_codec_candidate_utf8\": \"{\\\"columns\\\":[\\\"row\\\",\\\"value\\\",\\\"code\\\"],\\\"rows\\\":[[1,1,\\\"001\\\"],[2,2,\\\"2\\\"],[3,null,\\\"003\\\"],[4,4,\\\"4\\\"],[5,5,\\\"005\\\"],[6,null,\\\"6\\\"],[7,7,\\\"007\\\"],[8,8,\\\"8\\\"],[9,null,\\\"009\\\"],[10,10,\\\"10\\\"],[11,11,\\\"011\\\"],[12,null,\\\"12\\\"],[13,13,\\\"013\\\"],[14,14,\\\"14\\\"],[15,null,\\\"015\\\"],[16,16,\\\"16\\\"],[17,17,\\\"017\\\"],[18,null,\\\"18\\\"],[19,19,\\\"019\\\"],[20,20,\\\"20\\\"],[21,null,\\\"021\\\"],[22,22,\\\"22\\\"],[23,23,\\\"023\\\"],[24,null,\\\"24\\\"]],\\\"version\\\":\\\"ordered-table-v1\\\"}\", \"synthetic_record_id\": \"structured_json_and_tables-golden-golden-positive-numeric_vs_string-v1\", \"typed_json\": [{\"code\": \"001\", \"row\": 1, \"value\": 1}, {\"code\": \"2\", \"row\": 2, \"value\": 2}, {\"code\": \"003\", \"row\": 3, \"value\": null}, {\"code\": \"4\", \"row\": 4, \"value\": 4}, {\"code\": \"005\", \"row\": 5, \"value\": 5}, {\"code\": \"6\", \"row\": 6, \"value\": null}, {\"code\": \"007\", \"row\": 7, \"value\": 7}, {\"code\": \"8\", \"row\": 8, \"value\": 8}, {\"code\": \"009\", \"row\": 9, \"value\": null}, {\"code\": \"10\", \"row\": 10, \"value\": 10}, {\"code\": \"011\", \"row\": 11, \"value\": 11}, {\"code\": \"12\", \"row\": 12, \"value\": null}, {\"code\": \"013\", \"row\": 13, \"value\": 13}, {\"code\": \"14\", \"row\": 14, \"value\": 14}, {\"code\": \"015\", \"row\": 15, \"value\": null}, {\"code\": \"16\", \"row\": 16, \"value\": 16}, {\"code\": \"017\", \"row\": 17, \"value\": 17}, {\"code\": \"18\", \"row\": 18, \"value\": null}, {\"code\": \"019\", \"row\": 19, \"value\": 19}, {\"code\": \"20\", \"row\": 20, \"value\": 20}, {\"code\": \"021\", \"row\": 21, \"value\": null}, {\"code\": \"22\", \"row\": 22, \"value\": 22}, {\"code\": \"023\", \"row\": 23, \"value\": 23}, {\"code\": \"24\", \"row\": 24, \"value\": null}]}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "case_id": "numeric_vs_string",
+          "json_minified_candidate_byte_count": 826,
+          "json_minified_candidate_utf8": "[{\"row\":1,\"value\":1,\"code\":\"001\"},{\"row\":2,\"value\":2,\"code\":\"2\"},{\"row\":3,\"value\":null,\"code\":\"003\"},{\"row\":4,\"value\":4,\"code\":\"4\"},{\"row\":5,\"value\":5,\"code\":\"005\"},{\"row\":6,\"value\":null,\"code\":\"6\"},{\"row\":7,\"value\":7,\"code\":\"007\"},{\"row\":8,\"value\":8,\"code\":\"8\"},{\"row\":9,\"value\":null,\"code\":\"009\"},{\"row\":10,\"value\":10,\"code\":\"10\"},{\"row\":11,\"value\":11,\"code\":\"011\"},{\"row\":12,\"value\":null,\"code\":\"12\"},{\"row\":13,\"value\":13,\"code\":\"013\"},{\"row\":14,\"value\":14,\"code\":\"14\"},{\"row\":15,\"value\":null,\"code\":\"015\"},{\"row\":16,\"value\":16,\"code\":\"16\"},{\"row\":17,\"value\":17,\"code\":\"017\"},{\"row\":18,\"value\":null,\"code\":\"18\"},{\"row\":19,\"value\":19,\"code\":\"019\"},{\"row\":20,\"value\":20,\"code\":\"20\"},{\"row\":21,\"value\":null,\"code\":\"021\"},{\"row\":22,\"value\":22,\"code\":\"22\"},{\"row\":23,\"value\":23,\"code\":\"023\"},{\"row\":24,\"value\":null,\"code\":\"24\"}]",
+          "oracle_class": "positive",
+          "raw_json": null,
+          "required_semantics": "numeric_and_string_types_distinct",
+          "source_json_byte_count": 1404,
+          "source_json_utf8": "[\n  {\n    \"row\": 1,\n    \"value\": 1,\n    \"code\": \"001\"\n  },\n  {\n    \"row\": 2,\n    \"value\": 2,\n    \"code\": \"2\"\n  },\n  {\n    \"row\": 3,\n    \"value\": null,\n    \"code\": \"003\"\n  },\n  {\n    \"row\": 4,\n    \"value\": 4,\n    \"code\": \"4\"\n  },\n  {\n    \"row\": 5,\n    \"value\": 5,\n    \"code\": \"005\"\n  },\n  {\n    \"row\": 6,\n    \"value\": null,\n    \"code\": \"6\"\n  },\n  {\n    \"row\": 7,\n    \"value\": 7,\n    \"code\": \"007\"\n  },\n  {\n    \"row\": 8,\n    \"value\": 8,\n    \"code\": \"8\"\n  },\n  {\n    \"row\": 9,\n    \"value\": null,\n    \"code\": \"009\"\n  },\n  {\n    \"row\": 10,\n    \"value\": 10,\n    \"code\": \"10\"\n  },\n  {\n    \"row\": 11,\n    \"value\": 11,\n    \"code\": \"011\"\n  },\n  {\n    \"row\": 12,\n    \"value\": null,\n    \"code\": \"12\"\n  },\n  {\n    \"row\": 13,\n    \"value\": 13,\n    \"code\": \"013\"\n  },\n  {\n    \"row\": 14,\n    \"value\": 14,\n    \"code\": \"14\"\n  },\n  {\n    \"row\": 15,\n    \"value\": null,\n    \"code\": \"015\"\n  },\n  {\n    \"row\": 16,\n    \"value\": 16,\n    \"code\": \"16\"\n  },\n  {\n    \"row\": 17,\n    \"value\": 17,\n    \"code\": \"017\"\n  },\n  {\n    \"row\": 18,\n    \"value\": null,\n    \"code\": \"18\"\n  },\n  {\n    \"row\": 19,\n    \"value\": 19,\n    \"code\": \"019\"\n  },\n  {\n    \"row\": 20,\n    \"value\": 20,\n    \"code\": \"20\"\n  },\n  {\n    \"row\": 21,\n    \"value\": null,\n    \"code\": \"021\"\n  },\n  {\n    \"row\": 22,\n    \"value\": 22,\n    \"code\": \"22\"\n  },\n  {\n    \"row\": 23,\n    \"value\": 23,\n    \"code\": \"023\"\n  },\n  {\n    \"row\": 24,\n    \"value\": null,\n    \"code\": \"24\"\n  }\n]\n",
+          "structured_codec_candidate_byte_count": 393,
+          "structured_codec_candidate_utf8": "{\"columns\":[\"row\",\"value\",\"code\"],\"rows\":[[1,1,\"001\"],[2,2,\"2\"],[3,null,\"003\"],[4,4,\"4\"],[5,5,\"005\"],[6,null,\"6\"],[7,7,\"007\"],[8,8,\"8\"],[9,null,\"009\"],[10,10,\"10\"],[11,11,\"011\"],[12,null,\"12\"],[13,13,\"013\"],[14,14,\"14\"],[15,null,\"015\"],[16,16,\"16\"],[17,17,\"017\"],[18,null,\"18\"],[19,19,\"019\"],[20,20,\"20\"],[21,null,\"021\"],[22,22,\"22\"],[23,23,\"023\"],[24,null,\"24\"]],\"version\":\"ordered-table-v1\"}",
+          "synthetic_record_id": "structured_json_and_tables-golden-golden-positive-numeric_vs_string-v1",
+          "typed_json": [
+            {
+              "code": "001",
+              "row": 1,
+              "value": 1
+            },
+            {
+              "code": "2",
+              "row": 2,
+              "value": 2
+            },
+            {
+              "code": "003",
+              "row": 3,
+              "value": null
+            },
+            {
+              "code": "4",
+              "row": 4,
+              "value": 4
+            },
+            {
+              "code": "005",
+              "row": 5,
+              "value": 5
+            },
+            {
+              "code": "6",
+              "row": 6,
+              "value": null
+            },
+            {
+              "code": "007",
+              "row": 7,
+              "value": 7
+            },
+            {
+              "code": "8",
+              "row": 8,
+              "value": 8
+            },
+            {
+              "code": "009",
+              "row": 9,
+              "value": null
+            },
+            {
+              "code": "10",
+              "row": 10,
+              "value": 10
+            },
+            {
+              "code": "011",
+              "row": 11,
+              "value": 11
+            },
+            {
+              "code": "12",
+              "row": 12,
+              "value": null
+            },
+            {
+              "code": "013",
+              "row": 13,
+              "value": 13
+            },
+            {
+              "code": "14",
+              "row": 14,
+              "value": 14
+            },
+            {
+              "code": "015",
+              "row": 15,
+              "value": null
+            },
+            {
+              "code": "16",
+              "row": 16,
+              "value": 16
+            },
+            {
+              "code": "017",
+              "row": 17,
+              "value": 17
+            },
+            {
+              "code": "18",
+              "row": 18,
+              "value": null
+            },
+            {
+              "code": "019",
+              "row": 19,
+              "value": 19
+            },
+            {
+              "code": "20",
+              "row": 20,
+              "value": 20
+            },
+            {
+              "code": "021",
+              "row": 21,
+              "value": null
+            },
+            {
+              "code": "22",
+              "row": 22,
+              "value": 22
+            },
+            {
+              "code": "023",
+              "row": 23,
+              "value": 23
+            },
+            {
+              "code": "24",
+              "row": 24,
+              "value": null
+            }
+          ]
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-structured_json_and_tables",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "87254242fb64f17eae06ba5cd88457ca8f5129e8dc292db3e3293fa48ace1d72",
+      "oracle_class": "positive",
+      "record_id": "structured_json_and_tables-golden-golden-positive-numeric_vs_string-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "preserve_scalar_types",
+        "preserve_key_row_and_column_order"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-structured_json_and_tables-golden-golden-negative-invalid_json-v1",
+              "output": "{\"case_id\": \"invalid_json\", \"json_minified_candidate_byte_count\": 826, \"json_minified_candidate_utf8\": \"[{\\\"row\\\":1,\\\"value\\\":1,\\\"code\\\":\\\"001\\\"},{\\\"row\\\":2,\\\"value\\\":2,\\\"code\\\":\\\"2\\\"},{\\\"row\\\":3,\\\"value\\\":null,\\\"code\\\":\\\"003\\\"},{\\\"row\\\":4,\\\"value\\\":4,\\\"code\\\":\\\"4\\\"},{\\\"row\\\":5,\\\"value\\\":5,\\\"code\\\":\\\"005\\\"},{\\\"row\\\":6,\\\"value\\\":null,\\\"code\\\":\\\"6\\\"},{\\\"row\\\":7,\\\"value\\\":7,\\\"code\\\":\\\"007\\\"},{\\\"row\\\":8,\\\"value\\\":8,\\\"code\\\":\\\"8\\\"},{\\\"row\\\":9,\\\"value\\\":null,\\\"code\\\":\\\"009\\\"},{\\\"row\\\":10,\\\"value\\\":10,\\\"code\\\":\\\"10\\\"},{\\\"row\\\":11,\\\"value\\\":11,\\\"code\\\":\\\"011\\\"},{\\\"row\\\":12,\\\"value\\\":null,\\\"code\\\":\\\"12\\\"},{\\\"row\\\":13,\\\"value\\\":13,\\\"code\\\":\\\"013\\\"},{\\\"row\\\":14,\\\"value\\\":14,\\\"code\\\":\\\"14\\\"},{\\\"row\\\":15,\\\"value\\\":null,\\\"code\\\":\\\"015\\\"},{\\\"row\\\":16,\\\"value\\\":16,\\\"code\\\":\\\"16\\\"},{\\\"row\\\":17,\\\"value\\\":17,\\\"code\\\":\\\"017\\\"},{\\\"row\\\":18,\\\"value\\\":null,\\\"code\\\":\\\"18\\\"},{\\\"row\\\":19,\\\"value\\\":19,\\\"code\\\":\\\"019\\\"},{\\\"row\\\":20,\\\"value\\\":20,\\\"code\\\":\\\"20\\\"},{\\\"row\\\":21,\\\"value\\\":null,\\\"code\\\":\\\"021\\\"},{\\\"row\\\":22,\\\"value\\\":22,\\\"code\\\":\\\"22\\\"},{\\\"row\\\":23,\\\"value\\\":23,\\\"code\\\":\\\"023\\\"},{\\\"row\\\":24,\\\"value\\\":null,\\\"code\\\":\\\"24\\\"}]\", \"oracle_class\": \"negative\", \"raw_json\": \"{\\\"row\\\":\", \"required_semantics\": \"detect_invalid_json\", \"source_json_byte_count\": 1404, \"source_json_utf8\": \"[\\n  {\\n    \\\"row\\\": 1,\\n    \\\"value\\\": 1,\\n    \\\"code\\\": \\\"001\\\"\\n  },\\n  {\\n    \\\"row\\\": 2,\\n    \\\"value\\\": 2,\\n    \\\"code\\\": \\\"2\\\"\\n  },\\n  {\\n    \\\"row\\\": 3,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"003\\\"\\n  },\\n  {\\n    \\\"row\\\": 4,\\n    \\\"value\\\": 4,\\n    \\\"code\\\": \\\"4\\\"\\n  },\\n  {\\n    \\\"row\\\": 5,\\n    \\\"value\\\": 5,\\n    \\\"code\\\": \\\"005\\\"\\n  },\\n  {\\n    \\\"row\\\": 6,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"6\\\"\\n  },\\n  {\\n    \\\"row\\\": 7,\\n    \\\"value\\\": 7,\\n    \\\"code\\\": \\\"007\\\"\\n  },\\n  {\\n    \\\"row\\\": 8,\\n    \\\"value\\\": 8,\\n    \\\"code\\\": \\\"8\\\"\\n  },\\n  {\\n    \\\"row\\\": 9,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"009\\\"\\n  },\\n  {\\n    \\\"row\\\": 10,\\n    \\\"value\\\": 10,\\n    \\\"code\\\": \\\"10\\\"\\n  },\\n  {\\n    \\\"row\\\": 11,\\n    \\\"value\\\": 11,\\n    \\\"code\\\": \\\"011\\\"\\n  },\\n  {\\n    \\\"row\\\": 12,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"12\\\"\\n  },\\n  {\\n    \\\"row\\\": 13,\\n    \\\"value\\\": 13,\\n    \\\"code\\\": \\\"013\\\"\\n  },\\n  {\\n    \\\"row\\\": 14,\\n    \\\"value\\\": 14,\\n    \\\"code\\\": \\\"14\\\"\\n  },\\n  {\\n    \\\"row\\\": 15,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"015\\\"\\n  },\\n  {\\n    \\\"row\\\": 16,\\n    \\\"value\\\": 16,\\n    \\\"code\\\": \\\"16\\\"\\n  },\\n  {\\n    \\\"row\\\": 17,\\n    \\\"value\\\": 17,\\n    \\\"code\\\": \\\"017\\\"\\n  },\\n  {\\n    \\\"row\\\": 18,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"18\\\"\\n  },\\n  {\\n    \\\"row\\\": 19,\\n    \\\"value\\\": 19,\\n    \\\"code\\\": \\\"019\\\"\\n  },\\n  {\\n    \\\"row\\\": 20,\\n    \\\"value\\\": 20,\\n    \\\"code\\\": \\\"20\\\"\\n  },\\n  {\\n    \\\"row\\\": 21,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"021\\\"\\n  },\\n  {\\n    \\\"row\\\": 22,\\n    \\\"value\\\": 22,\\n    \\\"code\\\": \\\"22\\\"\\n  },\\n  {\\n    \\\"row\\\": 23,\\n    \\\"value\\\": 23,\\n    \\\"code\\\": \\\"023\\\"\\n  },\\n  {\\n    \\\"row\\\": 24,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"24\\\"\\n  }\\n]\\n\", \"structured_codec_candidate_byte_count\": 393, \"structured_codec_candidate_utf8\": \"{\\\"columns\\\":[\\\"row\\\",\\\"value\\\",\\\"code\\\"],\\\"rows\\\":[[1,1,\\\"001\\\"],[2,2,\\\"2\\\"],[3,null,\\\"003\\\"],[4,4,\\\"4\\\"],[5,5,\\\"005\\\"],[6,null,\\\"6\\\"],[7,7,\\\"007\\\"],[8,8,\\\"8\\\"],[9,null,\\\"009\\\"],[10,10,\\\"10\\\"],[11,11,\\\"011\\\"],[12,null,\\\"12\\\"],[13,13,\\\"013\\\"],[14,14,\\\"14\\\"],[15,null,\\\"015\\\"],[16,16,\\\"16\\\"],[17,17,\\\"017\\\"],[18,null,\\\"18\\\"],[19,19,\\\"019\\\"],[20,20,\\\"20\\\"],[21,null,\\\"021\\\"],[22,22,\\\"22\\\"],[23,23,\\\"023\\\"],[24,null,\\\"24\\\"]],\\\"version\\\":\\\"ordered-table-v1\\\"}\", \"synthetic_record_id\": \"structured_json_and_tables-golden-golden-negative-invalid_json-v1\", \"typed_json\": [{\"code\": \"001\", \"row\": 1, \"value\": 1}, {\"code\": \"2\", \"row\": 2, \"value\": 2}, {\"code\": \"003\", \"row\": 3, \"value\": null}, {\"code\": \"4\", \"row\": 4, \"value\": 4}, {\"code\": \"005\", \"row\": 5, \"value\": 5}, {\"code\": \"6\", \"row\": 6, \"value\": null}, {\"code\": \"007\", \"row\": 7, \"value\": 7}, {\"code\": \"8\", \"row\": 8, \"value\": 8}, {\"code\": \"009\", \"row\": 9, \"value\": null}, {\"code\": \"10\", \"row\": 10, \"value\": 10}, {\"code\": \"011\", \"row\": 11, \"value\": 11}, {\"code\": \"12\", \"row\": 12, \"value\": null}, {\"code\": \"013\", \"row\": 13, \"value\": 13}, {\"code\": \"14\", \"row\": 14, \"value\": 14}, {\"code\": \"015\", \"row\": 15, \"value\": null}, {\"code\": \"16\", \"row\": 16, \"value\": 16}, {\"code\": \"017\", \"row\": 17, \"value\": 17}, {\"code\": \"18\", \"row\": 18, \"value\": null}, {\"code\": \"019\", \"row\": 19, \"value\": 19}, {\"code\": \"20\", \"row\": 20, \"value\": 20}, {\"code\": \"021\", \"row\": 21, \"value\": null}, {\"code\": \"22\", \"row\": 22, \"value\": 22}, {\"code\": \"023\", \"row\": 23, \"value\": 23}, {\"code\": \"24\", \"row\": 24, \"value\": null}]}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "a29c3c61ab65bb7f9861367fc7a1da3205dfe0815b53d9afd2fdedcb2364a5f9",
+      "case_id": "invalid_json",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "json-minify-v1": "detect_corruption",
+        "structured-data-codec-v1": "detect_corruption"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-structured_json_and_tables-golden-golden-negative-invalid_json-v1",
+                "output": "{\"case_id\": \"invalid_json\", \"json_minified_candidate_byte_count\": 826, \"json_minified_candidate_utf8\": \"[{\\\"row\\\":1,\\\"value\\\":1,\\\"code\\\":\\\"001\\\"},{\\\"row\\\":2,\\\"value\\\":2,\\\"code\\\":\\\"2\\\"},{\\\"row\\\":3,\\\"value\\\":null,\\\"code\\\":\\\"003\\\"},{\\\"row\\\":4,\\\"value\\\":4,\\\"code\\\":\\\"4\\\"},{\\\"row\\\":5,\\\"value\\\":5,\\\"code\\\":\\\"005\\\"},{\\\"row\\\":6,\\\"value\\\":null,\\\"code\\\":\\\"6\\\"},{\\\"row\\\":7,\\\"value\\\":7,\\\"code\\\":\\\"007\\\"},{\\\"row\\\":8,\\\"value\\\":8,\\\"code\\\":\\\"8\\\"},{\\\"row\\\":9,\\\"value\\\":null,\\\"code\\\":\\\"009\\\"},{\\\"row\\\":10,\\\"value\\\":10,\\\"code\\\":\\\"10\\\"},{\\\"row\\\":11,\\\"value\\\":11,\\\"code\\\":\\\"011\\\"},{\\\"row\\\":12,\\\"value\\\":null,\\\"code\\\":\\\"12\\\"},{\\\"row\\\":13,\\\"value\\\":13,\\\"code\\\":\\\"013\\\"},{\\\"row\\\":14,\\\"value\\\":14,\\\"code\\\":\\\"14\\\"},{\\\"row\\\":15,\\\"value\\\":null,\\\"code\\\":\\\"015\\\"},{\\\"row\\\":16,\\\"value\\\":16,\\\"code\\\":\\\"16\\\"},{\\\"row\\\":17,\\\"value\\\":17,\\\"code\\\":\\\"017\\\"},{\\\"row\\\":18,\\\"value\\\":null,\\\"code\\\":\\\"18\\\"},{\\\"row\\\":19,\\\"value\\\":19,\\\"code\\\":\\\"019\\\"},{\\\"row\\\":20,\\\"value\\\":20,\\\"code\\\":\\\"20\\\"},{\\\"row\\\":21,\\\"value\\\":null,\\\"code\\\":\\\"021\\\"},{\\\"row\\\":22,\\\"value\\\":22,\\\"code\\\":\\\"22\\\"},{\\\"row\\\":23,\\\"value\\\":23,\\\"code\\\":\\\"023\\\"},{\\\"row\\\":24,\\\"value\\\":null,\\\"code\\\":\\\"24\\\"}]\", \"oracle_class\": \"negative\", \"raw_json\": \"{\\\"row\\\":\", \"required_semantics\": \"detect_invalid_json\", \"source_json_byte_count\": 1404, \"source_json_utf8\": \"[\\n  {\\n    \\\"row\\\": 1,\\n    \\\"value\\\": 1,\\n    \\\"code\\\": \\\"001\\\"\\n  },\\n  {\\n    \\\"row\\\": 2,\\n    \\\"value\\\": 2,\\n    \\\"code\\\": \\\"2\\\"\\n  },\\n  {\\n    \\\"row\\\": 3,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"003\\\"\\n  },\\n  {\\n    \\\"row\\\": 4,\\n    \\\"value\\\": 4,\\n    \\\"code\\\": \\\"4\\\"\\n  },\\n  {\\n    \\\"row\\\": 5,\\n    \\\"value\\\": 5,\\n    \\\"code\\\": \\\"005\\\"\\n  },\\n  {\\n    \\\"row\\\": 6,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"6\\\"\\n  },\\n  {\\n    \\\"row\\\": 7,\\n    \\\"value\\\": 7,\\n    \\\"code\\\": \\\"007\\\"\\n  },\\n  {\\n    \\\"row\\\": 8,\\n    \\\"value\\\": 8,\\n    \\\"code\\\": \\\"8\\\"\\n  },\\n  {\\n    \\\"row\\\": 9,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"009\\\"\\n  },\\n  {\\n    \\\"row\\\": 10,\\n    \\\"value\\\": 10,\\n    \\\"code\\\": \\\"10\\\"\\n  },\\n  {\\n    \\\"row\\\": 11,\\n    \\\"value\\\": 11,\\n    \\\"code\\\": \\\"011\\\"\\n  },\\n  {\\n    \\\"row\\\": 12,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"12\\\"\\n  },\\n  {\\n    \\\"row\\\": 13,\\n    \\\"value\\\": 13,\\n    \\\"code\\\": \\\"013\\\"\\n  },\\n  {\\n    \\\"row\\\": 14,\\n    \\\"value\\\": 14,\\n    \\\"code\\\": \\\"14\\\"\\n  },\\n  {\\n    \\\"row\\\": 15,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"015\\\"\\n  },\\n  {\\n    \\\"row\\\": 16,\\n    \\\"value\\\": 16,\\n    \\\"code\\\": \\\"16\\\"\\n  },\\n  {\\n    \\\"row\\\": 17,\\n    \\\"value\\\": 17,\\n    \\\"code\\\": \\\"017\\\"\\n  },\\n  {\\n    \\\"row\\\": 18,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"18\\\"\\n  },\\n  {\\n    \\\"row\\\": 19,\\n    \\\"value\\\": 19,\\n    \\\"code\\\": \\\"019\\\"\\n  },\\n  {\\n    \\\"row\\\": 20,\\n    \\\"value\\\": 20,\\n    \\\"code\\\": \\\"20\\\"\\n  },\\n  {\\n    \\\"row\\\": 21,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"021\\\"\\n  },\\n  {\\n    \\\"row\\\": 22,\\n    \\\"value\\\": 22,\\n    \\\"code\\\": \\\"22\\\"\\n  },\\n  {\\n    \\\"row\\\": 23,\\n    \\\"value\\\": 23,\\n    \\\"code\\\": \\\"023\\\"\\n  },\\n  {\\n    \\\"row\\\": 24,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"24\\\"\\n  }\\n]\\n\", \"structured_codec_candidate_byte_count\": 393, \"structured_codec_candidate_utf8\": \"{\\\"columns\\\":[\\\"row\\\",\\\"value\\\",\\\"code\\\"],\\\"rows\\\":[[1,1,\\\"001\\\"],[2,2,\\\"2\\\"],[3,null,\\\"003\\\"],[4,4,\\\"4\\\"],[5,5,\\\"005\\\"],[6,null,\\\"6\\\"],[7,7,\\\"007\\\"],[8,8,\\\"8\\\"],[9,null,\\\"009\\\"],[10,10,\\\"10\\\"],[11,11,\\\"011\\\"],[12,null,\\\"12\\\"],[13,13,\\\"013\\\"],[14,14,\\\"14\\\"],[15,null,\\\"015\\\"],[16,16,\\\"16\\\"],[17,17,\\\"017\\\"],[18,null,\\\"18\\\"],[19,19,\\\"019\\\"],[20,20,\\\"20\\\"],[21,null,\\\"021\\\"],[22,22,\\\"22\\\"],[23,23,\\\"023\\\"],[24,null,\\\"24\\\"]],\\\"version\\\":\\\"ordered-table-v1\\\"}\", \"synthetic_record_id\": \"structured_json_and_tables-golden-golden-negative-invalid_json-v1\", \"typed_json\": [{\"code\": \"001\", \"row\": 1, \"value\": 1}, {\"code\": \"2\", \"row\": 2, \"value\": 2}, {\"code\": \"003\", \"row\": 3, \"value\": null}, {\"code\": \"4\", \"row\": 4, \"value\": 4}, {\"code\": \"005\", \"row\": 5, \"value\": 5}, {\"code\": \"6\", \"row\": 6, \"value\": null}, {\"code\": \"007\", \"row\": 7, \"value\": 7}, {\"code\": \"8\", \"row\": 8, \"value\": 8}, {\"code\": \"009\", \"row\": 9, \"value\": null}, {\"code\": \"10\", \"row\": 10, \"value\": 10}, {\"code\": \"011\", \"row\": 11, \"value\": 11}, {\"code\": \"12\", \"row\": 12, \"value\": null}, {\"code\": \"013\", \"row\": 13, \"value\": 13}, {\"code\": \"14\", \"row\": 14, \"value\": 14}, {\"code\": \"015\", \"row\": 15, \"value\": null}, {\"code\": \"16\", \"row\": 16, \"value\": 16}, {\"code\": \"017\", \"row\": 17, \"value\": 17}, {\"code\": \"18\", \"row\": 18, \"value\": null}, {\"code\": \"019\", \"row\": 19, \"value\": 19}, {\"code\": \"20\", \"row\": 20, \"value\": 20}, {\"code\": \"021\", \"row\": 21, \"value\": null}, {\"code\": \"22\", \"row\": 22, \"value\": 22}, {\"code\": \"023\", \"row\": 23, \"value\": 23}, {\"code\": \"24\", \"row\": 24, \"value\": null}]}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "case_id": "invalid_json",
+          "json_minified_candidate_byte_count": 826,
+          "json_minified_candidate_utf8": "[{\"row\":1,\"value\":1,\"code\":\"001\"},{\"row\":2,\"value\":2,\"code\":\"2\"},{\"row\":3,\"value\":null,\"code\":\"003\"},{\"row\":4,\"value\":4,\"code\":\"4\"},{\"row\":5,\"value\":5,\"code\":\"005\"},{\"row\":6,\"value\":null,\"code\":\"6\"},{\"row\":7,\"value\":7,\"code\":\"007\"},{\"row\":8,\"value\":8,\"code\":\"8\"},{\"row\":9,\"value\":null,\"code\":\"009\"},{\"row\":10,\"value\":10,\"code\":\"10\"},{\"row\":11,\"value\":11,\"code\":\"011\"},{\"row\":12,\"value\":null,\"code\":\"12\"},{\"row\":13,\"value\":13,\"code\":\"013\"},{\"row\":14,\"value\":14,\"code\":\"14\"},{\"row\":15,\"value\":null,\"code\":\"015\"},{\"row\":16,\"value\":16,\"code\":\"16\"},{\"row\":17,\"value\":17,\"code\":\"017\"},{\"row\":18,\"value\":null,\"code\":\"18\"},{\"row\":19,\"value\":19,\"code\":\"019\"},{\"row\":20,\"value\":20,\"code\":\"20\"},{\"row\":21,\"value\":null,\"code\":\"021\"},{\"row\":22,\"value\":22,\"code\":\"22\"},{\"row\":23,\"value\":23,\"code\":\"023\"},{\"row\":24,\"value\":null,\"code\":\"24\"}]",
+          "oracle_class": "negative",
+          "raw_json": "{\"row\":",
+          "required_semantics": "detect_invalid_json",
+          "source_json_byte_count": 1404,
+          "source_json_utf8": "[\n  {\n    \"row\": 1,\n    \"value\": 1,\n    \"code\": \"001\"\n  },\n  {\n    \"row\": 2,\n    \"value\": 2,\n    \"code\": \"2\"\n  },\n  {\n    \"row\": 3,\n    \"value\": null,\n    \"code\": \"003\"\n  },\n  {\n    \"row\": 4,\n    \"value\": 4,\n    \"code\": \"4\"\n  },\n  {\n    \"row\": 5,\n    \"value\": 5,\n    \"code\": \"005\"\n  },\n  {\n    \"row\": 6,\n    \"value\": null,\n    \"code\": \"6\"\n  },\n  {\n    \"row\": 7,\n    \"value\": 7,\n    \"code\": \"007\"\n  },\n  {\n    \"row\": 8,\n    \"value\": 8,\n    \"code\": \"8\"\n  },\n  {\n    \"row\": 9,\n    \"value\": null,\n    \"code\": \"009\"\n  },\n  {\n    \"row\": 10,\n    \"value\": 10,\n    \"code\": \"10\"\n  },\n  {\n    \"row\": 11,\n    \"value\": 11,\n    \"code\": \"011\"\n  },\n  {\n    \"row\": 12,\n    \"value\": null,\n    \"code\": \"12\"\n  },\n  {\n    \"row\": 13,\n    \"value\": 13,\n    \"code\": \"013\"\n  },\n  {\n    \"row\": 14,\n    \"value\": 14,\n    \"code\": \"14\"\n  },\n  {\n    \"row\": 15,\n    \"value\": null,\n    \"code\": \"015\"\n  },\n  {\n    \"row\": 16,\n    \"value\": 16,\n    \"code\": \"16\"\n  },\n  {\n    \"row\": 17,\n    \"value\": 17,\n    \"code\": \"017\"\n  },\n  {\n    \"row\": 18,\n    \"value\": null,\n    \"code\": \"18\"\n  },\n  {\n    \"row\": 19,\n    \"value\": 19,\n    \"code\": \"019\"\n  },\n  {\n    \"row\": 20,\n    \"value\": 20,\n    \"code\": \"20\"\n  },\n  {\n    \"row\": 21,\n    \"value\": null,\n    \"code\": \"021\"\n  },\n  {\n    \"row\": 22,\n    \"value\": 22,\n    \"code\": \"22\"\n  },\n  {\n    \"row\": 23,\n    \"value\": 23,\n    \"code\": \"023\"\n  },\n  {\n    \"row\": 24,\n    \"value\": null,\n    \"code\": \"24\"\n  }\n]\n",
+          "structured_codec_candidate_byte_count": 393,
+          "structured_codec_candidate_utf8": "{\"columns\":[\"row\",\"value\",\"code\"],\"rows\":[[1,1,\"001\"],[2,2,\"2\"],[3,null,\"003\"],[4,4,\"4\"],[5,5,\"005\"],[6,null,\"6\"],[7,7,\"007\"],[8,8,\"8\"],[9,null,\"009\"],[10,10,\"10\"],[11,11,\"011\"],[12,null,\"12\"],[13,13,\"013\"],[14,14,\"14\"],[15,null,\"015\"],[16,16,\"16\"],[17,17,\"017\"],[18,null,\"18\"],[19,19,\"019\"],[20,20,\"20\"],[21,null,\"021\"],[22,22,\"22\"],[23,23,\"023\"],[24,null,\"24\"]],\"version\":\"ordered-table-v1\"}",
+          "synthetic_record_id": "structured_json_and_tables-golden-golden-negative-invalid_json-v1",
+          "typed_json": [
+            {
+              "code": "001",
+              "row": 1,
+              "value": 1
+            },
+            {
+              "code": "2",
+              "row": 2,
+              "value": 2
+            },
+            {
+              "code": "003",
+              "row": 3,
+              "value": null
+            },
+            {
+              "code": "4",
+              "row": 4,
+              "value": 4
+            },
+            {
+              "code": "005",
+              "row": 5,
+              "value": 5
+            },
+            {
+              "code": "6",
+              "row": 6,
+              "value": null
+            },
+            {
+              "code": "007",
+              "row": 7,
+              "value": 7
+            },
+            {
+              "code": "8",
+              "row": 8,
+              "value": 8
+            },
+            {
+              "code": "009",
+              "row": 9,
+              "value": null
+            },
+            {
+              "code": "10",
+              "row": 10,
+              "value": 10
+            },
+            {
+              "code": "011",
+              "row": 11,
+              "value": 11
+            },
+            {
+              "code": "12",
+              "row": 12,
+              "value": null
+            },
+            {
+              "code": "013",
+              "row": 13,
+              "value": 13
+            },
+            {
+              "code": "14",
+              "row": 14,
+              "value": 14
+            },
+            {
+              "code": "015",
+              "row": 15,
+              "value": null
+            },
+            {
+              "code": "16",
+              "row": 16,
+              "value": 16
+            },
+            {
+              "code": "017",
+              "row": 17,
+              "value": 17
+            },
+            {
+              "code": "18",
+              "row": 18,
+              "value": null
+            },
+            {
+              "code": "019",
+              "row": 19,
+              "value": 19
+            },
+            {
+              "code": "20",
+              "row": 20,
+              "value": 20
+            },
+            {
+              "code": "021",
+              "row": 21,
+              "value": null
+            },
+            {
+              "code": "22",
+              "row": 22,
+              "value": 22
+            },
+            {
+              "code": "023",
+              "row": 23,
+              "value": 23
+            },
+            {
+              "code": "24",
+              "row": 24,
+              "value": null
+            }
+          ]
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-structured_json_and_tables",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "a9ea29bfeebd779aa18b44600219679aff4393cb726bc0a33f8b190c94084f14",
+      "oracle_class": "negative",
+      "record_id": "structured_json_and_tables-golden-golden-negative-invalid_json-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "preserve_scalar_types",
+        "preserve_key_row_and_column_order"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-structured_json_and_tables-golden-golden-negative-changed_order_mutant-v1",
+              "output": "{\"case_id\": \"changed_order_mutant\", \"json_minified_candidate_byte_count\": 826, \"json_minified_candidate_utf8\": \"[{\\\"row\\\":1,\\\"value\\\":1,\\\"code\\\":\\\"001\\\"},{\\\"row\\\":2,\\\"value\\\":2,\\\"code\\\":\\\"2\\\"},{\\\"row\\\":3,\\\"value\\\":null,\\\"code\\\":\\\"003\\\"},{\\\"row\\\":4,\\\"value\\\":4,\\\"code\\\":\\\"4\\\"},{\\\"row\\\":5,\\\"value\\\":5,\\\"code\\\":\\\"005\\\"},{\\\"row\\\":6,\\\"value\\\":null,\\\"code\\\":\\\"6\\\"},{\\\"row\\\":7,\\\"value\\\":7,\\\"code\\\":\\\"007\\\"},{\\\"row\\\":8,\\\"value\\\":8,\\\"code\\\":\\\"8\\\"},{\\\"row\\\":9,\\\"value\\\":null,\\\"code\\\":\\\"009\\\"},{\\\"row\\\":10,\\\"value\\\":10,\\\"code\\\":\\\"10\\\"},{\\\"row\\\":11,\\\"value\\\":11,\\\"code\\\":\\\"011\\\"},{\\\"row\\\":12,\\\"value\\\":null,\\\"code\\\":\\\"12\\\"},{\\\"row\\\":13,\\\"value\\\":13,\\\"code\\\":\\\"013\\\"},{\\\"row\\\":14,\\\"value\\\":14,\\\"code\\\":\\\"14\\\"},{\\\"row\\\":15,\\\"value\\\":null,\\\"code\\\":\\\"015\\\"},{\\\"row\\\":16,\\\"value\\\":16,\\\"code\\\":\\\"16\\\"},{\\\"row\\\":17,\\\"value\\\":17,\\\"code\\\":\\\"017\\\"},{\\\"row\\\":18,\\\"value\\\":null,\\\"code\\\":\\\"18\\\"},{\\\"row\\\":19,\\\"value\\\":19,\\\"code\\\":\\\"019\\\"},{\\\"row\\\":20,\\\"value\\\":20,\\\"code\\\":\\\"20\\\"},{\\\"row\\\":21,\\\"value\\\":null,\\\"code\\\":\\\"021\\\"},{\\\"row\\\":22,\\\"value\\\":22,\\\"code\\\":\\\"22\\\"},{\\\"row\\\":23,\\\"value\\\":23,\\\"code\\\":\\\"023\\\"},{\\\"row\\\":24,\\\"value\\\":null,\\\"code\\\":\\\"24\\\"}]\", \"oracle_class\": \"negative\", \"raw_json\": \"{\\\"columns\\\":[\\\"b\\\",\\\"a\\\"]}\", \"required_semantics\": \"detect_changed_order\", \"source_json_byte_count\": 1404, \"source_json_utf8\": \"[\\n  {\\n    \\\"row\\\": 1,\\n    \\\"value\\\": 1,\\n    \\\"code\\\": \\\"001\\\"\\n  },\\n  {\\n    \\\"row\\\": 2,\\n    \\\"value\\\": 2,\\n    \\\"code\\\": \\\"2\\\"\\n  },\\n  {\\n    \\\"row\\\": 3,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"003\\\"\\n  },\\n  {\\n    \\\"row\\\": 4,\\n    \\\"value\\\": 4,\\n    \\\"code\\\": \\\"4\\\"\\n  },\\n  {\\n    \\\"row\\\": 5,\\n    \\\"value\\\": 5,\\n    \\\"code\\\": \\\"005\\\"\\n  },\\n  {\\n    \\\"row\\\": 6,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"6\\\"\\n  },\\n  {\\n    \\\"row\\\": 7,\\n    \\\"value\\\": 7,\\n    \\\"code\\\": \\\"007\\\"\\n  },\\n  {\\n    \\\"row\\\": 8,\\n    \\\"value\\\": 8,\\n    \\\"code\\\": \\\"8\\\"\\n  },\\n  {\\n    \\\"row\\\": 9,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"009\\\"\\n  },\\n  {\\n    \\\"row\\\": 10,\\n    \\\"value\\\": 10,\\n    \\\"code\\\": \\\"10\\\"\\n  },\\n  {\\n    \\\"row\\\": 11,\\n    \\\"value\\\": 11,\\n    \\\"code\\\": \\\"011\\\"\\n  },\\n  {\\n    \\\"row\\\": 12,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"12\\\"\\n  },\\n  {\\n    \\\"row\\\": 13,\\n    \\\"value\\\": 13,\\n    \\\"code\\\": \\\"013\\\"\\n  },\\n  {\\n    \\\"row\\\": 14,\\n    \\\"value\\\": 14,\\n    \\\"code\\\": \\\"14\\\"\\n  },\\n  {\\n    \\\"row\\\": 15,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"015\\\"\\n  },\\n  {\\n    \\\"row\\\": 16,\\n    \\\"value\\\": 16,\\n    \\\"code\\\": \\\"16\\\"\\n  },\\n  {\\n    \\\"row\\\": 17,\\n    \\\"value\\\": 17,\\n    \\\"code\\\": \\\"017\\\"\\n  },\\n  {\\n    \\\"row\\\": 18,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"18\\\"\\n  },\\n  {\\n    \\\"row\\\": 19,\\n    \\\"value\\\": 19,\\n    \\\"code\\\": \\\"019\\\"\\n  },\\n  {\\n    \\\"row\\\": 20,\\n    \\\"value\\\": 20,\\n    \\\"code\\\": \\\"20\\\"\\n  },\\n  {\\n    \\\"row\\\": 21,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"021\\\"\\n  },\\n  {\\n    \\\"row\\\": 22,\\n    \\\"value\\\": 22,\\n    \\\"code\\\": \\\"22\\\"\\n  },\\n  {\\n    \\\"row\\\": 23,\\n    \\\"value\\\": 23,\\n    \\\"code\\\": \\\"023\\\"\\n  },\\n  {\\n    \\\"row\\\": 24,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"24\\\"\\n  }\\n]\\n\", \"structured_codec_candidate_byte_count\": 393, \"structured_codec_candidate_utf8\": \"{\\\"columns\\\":[\\\"row\\\",\\\"value\\\",\\\"code\\\"],\\\"rows\\\":[[1,1,\\\"001\\\"],[2,2,\\\"2\\\"],[3,null,\\\"003\\\"],[4,4,\\\"4\\\"],[5,5,\\\"005\\\"],[6,null,\\\"6\\\"],[7,7,\\\"007\\\"],[8,8,\\\"8\\\"],[9,null,\\\"009\\\"],[10,10,\\\"10\\\"],[11,11,\\\"011\\\"],[12,null,\\\"12\\\"],[13,13,\\\"013\\\"],[14,14,\\\"14\\\"],[15,null,\\\"015\\\"],[16,16,\\\"16\\\"],[17,17,\\\"017\\\"],[18,null,\\\"18\\\"],[19,19,\\\"019\\\"],[20,20,\\\"20\\\"],[21,null,\\\"021\\\"],[22,22,\\\"22\\\"],[23,23,\\\"023\\\"],[24,null,\\\"24\\\"]],\\\"version\\\":\\\"ordered-table-v1\\\"}\", \"synthetic_record_id\": \"structured_json_and_tables-golden-golden-negative-changed_order_mutant-v1\", \"typed_json\": [{\"code\": \"001\", \"row\": 1, \"value\": 1}, {\"code\": \"2\", \"row\": 2, \"value\": 2}, {\"code\": \"003\", \"row\": 3, \"value\": null}, {\"code\": \"4\", \"row\": 4, \"value\": 4}, {\"code\": \"005\", \"row\": 5, \"value\": 5}, {\"code\": \"6\", \"row\": 6, \"value\": null}, {\"code\": \"007\", \"row\": 7, \"value\": 7}, {\"code\": \"8\", \"row\": 8, \"value\": 8}, {\"code\": \"009\", \"row\": 9, \"value\": null}, {\"code\": \"10\", \"row\": 10, \"value\": 10}, {\"code\": \"011\", \"row\": 11, \"value\": 11}, {\"code\": \"12\", \"row\": 12, \"value\": null}, {\"code\": \"013\", \"row\": 13, \"value\": 13}, {\"code\": \"14\", \"row\": 14, \"value\": 14}, {\"code\": \"015\", \"row\": 15, \"value\": null}, {\"code\": \"16\", \"row\": 16, \"value\": 16}, {\"code\": \"017\", \"row\": 17, \"value\": 17}, {\"code\": \"18\", \"row\": 18, \"value\": null}, {\"code\": \"019\", \"row\": 19, \"value\": 19}, {\"code\": \"20\", \"row\": 20, \"value\": 20}, {\"code\": \"021\", \"row\": 21, \"value\": null}, {\"code\": \"22\", \"row\": 22, \"value\": 22}, {\"code\": \"023\", \"row\": 23, \"value\": 23}, {\"code\": \"24\", \"row\": 24, \"value\": null}]}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "8a3c1ba03b3d3918eb60391741b49f12e3f1292f098f4f7f61334d5ff393fefa",
+      "case_id": "changed_order_mutant",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "json-minify-v1": "detect_corruption",
+        "structured-data-codec-v1": "detect_corruption"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-structured_json_and_tables-golden-golden-negative-changed_order_mutant-v1",
+                "output": "{\"case_id\": \"changed_order_mutant\", \"json_minified_candidate_byte_count\": 826, \"json_minified_candidate_utf8\": \"[{\\\"row\\\":1,\\\"value\\\":1,\\\"code\\\":\\\"001\\\"},{\\\"row\\\":2,\\\"value\\\":2,\\\"code\\\":\\\"2\\\"},{\\\"row\\\":3,\\\"value\\\":null,\\\"code\\\":\\\"003\\\"},{\\\"row\\\":4,\\\"value\\\":4,\\\"code\\\":\\\"4\\\"},{\\\"row\\\":5,\\\"value\\\":5,\\\"code\\\":\\\"005\\\"},{\\\"row\\\":6,\\\"value\\\":null,\\\"code\\\":\\\"6\\\"},{\\\"row\\\":7,\\\"value\\\":7,\\\"code\\\":\\\"007\\\"},{\\\"row\\\":8,\\\"value\\\":8,\\\"code\\\":\\\"8\\\"},{\\\"row\\\":9,\\\"value\\\":null,\\\"code\\\":\\\"009\\\"},{\\\"row\\\":10,\\\"value\\\":10,\\\"code\\\":\\\"10\\\"},{\\\"row\\\":11,\\\"value\\\":11,\\\"code\\\":\\\"011\\\"},{\\\"row\\\":12,\\\"value\\\":null,\\\"code\\\":\\\"12\\\"},{\\\"row\\\":13,\\\"value\\\":13,\\\"code\\\":\\\"013\\\"},{\\\"row\\\":14,\\\"value\\\":14,\\\"code\\\":\\\"14\\\"},{\\\"row\\\":15,\\\"value\\\":null,\\\"code\\\":\\\"015\\\"},{\\\"row\\\":16,\\\"value\\\":16,\\\"code\\\":\\\"16\\\"},{\\\"row\\\":17,\\\"value\\\":17,\\\"code\\\":\\\"017\\\"},{\\\"row\\\":18,\\\"value\\\":null,\\\"code\\\":\\\"18\\\"},{\\\"row\\\":19,\\\"value\\\":19,\\\"code\\\":\\\"019\\\"},{\\\"row\\\":20,\\\"value\\\":20,\\\"code\\\":\\\"20\\\"},{\\\"row\\\":21,\\\"value\\\":null,\\\"code\\\":\\\"021\\\"},{\\\"row\\\":22,\\\"value\\\":22,\\\"code\\\":\\\"22\\\"},{\\\"row\\\":23,\\\"value\\\":23,\\\"code\\\":\\\"023\\\"},{\\\"row\\\":24,\\\"value\\\":null,\\\"code\\\":\\\"24\\\"}]\", \"oracle_class\": \"negative\", \"raw_json\": \"{\\\"columns\\\":[\\\"b\\\",\\\"a\\\"]}\", \"required_semantics\": \"detect_changed_order\", \"source_json_byte_count\": 1404, \"source_json_utf8\": \"[\\n  {\\n    \\\"row\\\": 1,\\n    \\\"value\\\": 1,\\n    \\\"code\\\": \\\"001\\\"\\n  },\\n  {\\n    \\\"row\\\": 2,\\n    \\\"value\\\": 2,\\n    \\\"code\\\": \\\"2\\\"\\n  },\\n  {\\n    \\\"row\\\": 3,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"003\\\"\\n  },\\n  {\\n    \\\"row\\\": 4,\\n    \\\"value\\\": 4,\\n    \\\"code\\\": \\\"4\\\"\\n  },\\n  {\\n    \\\"row\\\": 5,\\n    \\\"value\\\": 5,\\n    \\\"code\\\": \\\"005\\\"\\n  },\\n  {\\n    \\\"row\\\": 6,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"6\\\"\\n  },\\n  {\\n    \\\"row\\\": 7,\\n    \\\"value\\\": 7,\\n    \\\"code\\\": \\\"007\\\"\\n  },\\n  {\\n    \\\"row\\\": 8,\\n    \\\"value\\\": 8,\\n    \\\"code\\\": \\\"8\\\"\\n  },\\n  {\\n    \\\"row\\\": 9,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"009\\\"\\n  },\\n  {\\n    \\\"row\\\": 10,\\n    \\\"value\\\": 10,\\n    \\\"code\\\": \\\"10\\\"\\n  },\\n  {\\n    \\\"row\\\": 11,\\n    \\\"value\\\": 11,\\n    \\\"code\\\": \\\"011\\\"\\n  },\\n  {\\n    \\\"row\\\": 12,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"12\\\"\\n  },\\n  {\\n    \\\"row\\\": 13,\\n    \\\"value\\\": 13,\\n    \\\"code\\\": \\\"013\\\"\\n  },\\n  {\\n    \\\"row\\\": 14,\\n    \\\"value\\\": 14,\\n    \\\"code\\\": \\\"14\\\"\\n  },\\n  {\\n    \\\"row\\\": 15,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"015\\\"\\n  },\\n  {\\n    \\\"row\\\": 16,\\n    \\\"value\\\": 16,\\n    \\\"code\\\": \\\"16\\\"\\n  },\\n  {\\n    \\\"row\\\": 17,\\n    \\\"value\\\": 17,\\n    \\\"code\\\": \\\"017\\\"\\n  },\\n  {\\n    \\\"row\\\": 18,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"18\\\"\\n  },\\n  {\\n    \\\"row\\\": 19,\\n    \\\"value\\\": 19,\\n    \\\"code\\\": \\\"019\\\"\\n  },\\n  {\\n    \\\"row\\\": 20,\\n    \\\"value\\\": 20,\\n    \\\"code\\\": \\\"20\\\"\\n  },\\n  {\\n    \\\"row\\\": 21,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"021\\\"\\n  },\\n  {\\n    \\\"row\\\": 22,\\n    \\\"value\\\": 22,\\n    \\\"code\\\": \\\"22\\\"\\n  },\\n  {\\n    \\\"row\\\": 23,\\n    \\\"value\\\": 23,\\n    \\\"code\\\": \\\"023\\\"\\n  },\\n  {\\n    \\\"row\\\": 24,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"24\\\"\\n  }\\n]\\n\", \"structured_codec_candidate_byte_count\": 393, \"structured_codec_candidate_utf8\": \"{\\\"columns\\\":[\\\"row\\\",\\\"value\\\",\\\"code\\\"],\\\"rows\\\":[[1,1,\\\"001\\\"],[2,2,\\\"2\\\"],[3,null,\\\"003\\\"],[4,4,\\\"4\\\"],[5,5,\\\"005\\\"],[6,null,\\\"6\\\"],[7,7,\\\"007\\\"],[8,8,\\\"8\\\"],[9,null,\\\"009\\\"],[10,10,\\\"10\\\"],[11,11,\\\"011\\\"],[12,null,\\\"12\\\"],[13,13,\\\"013\\\"],[14,14,\\\"14\\\"],[15,null,\\\"015\\\"],[16,16,\\\"16\\\"],[17,17,\\\"017\\\"],[18,null,\\\"18\\\"],[19,19,\\\"019\\\"],[20,20,\\\"20\\\"],[21,null,\\\"021\\\"],[22,22,\\\"22\\\"],[23,23,\\\"023\\\"],[24,null,\\\"24\\\"]],\\\"version\\\":\\\"ordered-table-v1\\\"}\", \"synthetic_record_id\": \"structured_json_and_tables-golden-golden-negative-changed_order_mutant-v1\", \"typed_json\": [{\"code\": \"001\", \"row\": 1, \"value\": 1}, {\"code\": \"2\", \"row\": 2, \"value\": 2}, {\"code\": \"003\", \"row\": 3, \"value\": null}, {\"code\": \"4\", \"row\": 4, \"value\": 4}, {\"code\": \"005\", \"row\": 5, \"value\": 5}, {\"code\": \"6\", \"row\": 6, \"value\": null}, {\"code\": \"007\", \"row\": 7, \"value\": 7}, {\"code\": \"8\", \"row\": 8, \"value\": 8}, {\"code\": \"009\", \"row\": 9, \"value\": null}, {\"code\": \"10\", \"row\": 10, \"value\": 10}, {\"code\": \"011\", \"row\": 11, \"value\": 11}, {\"code\": \"12\", \"row\": 12, \"value\": null}, {\"code\": \"013\", \"row\": 13, \"value\": 13}, {\"code\": \"14\", \"row\": 14, \"value\": 14}, {\"code\": \"015\", \"row\": 15, \"value\": null}, {\"code\": \"16\", \"row\": 16, \"value\": 16}, {\"code\": \"017\", \"row\": 17, \"value\": 17}, {\"code\": \"18\", \"row\": 18, \"value\": null}, {\"code\": \"019\", \"row\": 19, \"value\": 19}, {\"code\": \"20\", \"row\": 20, \"value\": 20}, {\"code\": \"021\", \"row\": 21, \"value\": null}, {\"code\": \"22\", \"row\": 22, \"value\": 22}, {\"code\": \"023\", \"row\": 23, \"value\": 23}, {\"code\": \"24\", \"row\": 24, \"value\": null}]}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "case_id": "changed_order_mutant",
+          "json_minified_candidate_byte_count": 826,
+          "json_minified_candidate_utf8": "[{\"row\":1,\"value\":1,\"code\":\"001\"},{\"row\":2,\"value\":2,\"code\":\"2\"},{\"row\":3,\"value\":null,\"code\":\"003\"},{\"row\":4,\"value\":4,\"code\":\"4\"},{\"row\":5,\"value\":5,\"code\":\"005\"},{\"row\":6,\"value\":null,\"code\":\"6\"},{\"row\":7,\"value\":7,\"code\":\"007\"},{\"row\":8,\"value\":8,\"code\":\"8\"},{\"row\":9,\"value\":null,\"code\":\"009\"},{\"row\":10,\"value\":10,\"code\":\"10\"},{\"row\":11,\"value\":11,\"code\":\"011\"},{\"row\":12,\"value\":null,\"code\":\"12\"},{\"row\":13,\"value\":13,\"code\":\"013\"},{\"row\":14,\"value\":14,\"code\":\"14\"},{\"row\":15,\"value\":null,\"code\":\"015\"},{\"row\":16,\"value\":16,\"code\":\"16\"},{\"row\":17,\"value\":17,\"code\":\"017\"},{\"row\":18,\"value\":null,\"code\":\"18\"},{\"row\":19,\"value\":19,\"code\":\"019\"},{\"row\":20,\"value\":20,\"code\":\"20\"},{\"row\":21,\"value\":null,\"code\":\"021\"},{\"row\":22,\"value\":22,\"code\":\"22\"},{\"row\":23,\"value\":23,\"code\":\"023\"},{\"row\":24,\"value\":null,\"code\":\"24\"}]",
+          "oracle_class": "negative",
+          "raw_json": "{\"columns\":[\"b\",\"a\"]}",
+          "required_semantics": "detect_changed_order",
+          "source_json_byte_count": 1404,
+          "source_json_utf8": "[\n  {\n    \"row\": 1,\n    \"value\": 1,\n    \"code\": \"001\"\n  },\n  {\n    \"row\": 2,\n    \"value\": 2,\n    \"code\": \"2\"\n  },\n  {\n    \"row\": 3,\n    \"value\": null,\n    \"code\": \"003\"\n  },\n  {\n    \"row\": 4,\n    \"value\": 4,\n    \"code\": \"4\"\n  },\n  {\n    \"row\": 5,\n    \"value\": 5,\n    \"code\": \"005\"\n  },\n  {\n    \"row\": 6,\n    \"value\": null,\n    \"code\": \"6\"\n  },\n  {\n    \"row\": 7,\n    \"value\": 7,\n    \"code\": \"007\"\n  },\n  {\n    \"row\": 8,\n    \"value\": 8,\n    \"code\": \"8\"\n  },\n  {\n    \"row\": 9,\n    \"value\": null,\n    \"code\": \"009\"\n  },\n  {\n    \"row\": 10,\n    \"value\": 10,\n    \"code\": \"10\"\n  },\n  {\n    \"row\": 11,\n    \"value\": 11,\n    \"code\": \"011\"\n  },\n  {\n    \"row\": 12,\n    \"value\": null,\n    \"code\": \"12\"\n  },\n  {\n    \"row\": 13,\n    \"value\": 13,\n    \"code\": \"013\"\n  },\n  {\n    \"row\": 14,\n    \"value\": 14,\n    \"code\": \"14\"\n  },\n  {\n    \"row\": 15,\n    \"value\": null,\n    \"code\": \"015\"\n  },\n  {\n    \"row\": 16,\n    \"value\": 16,\n    \"code\": \"16\"\n  },\n  {\n    \"row\": 17,\n    \"value\": 17,\n    \"code\": \"017\"\n  },\n  {\n    \"row\": 18,\n    \"value\": null,\n    \"code\": \"18\"\n  },\n  {\n    \"row\": 19,\n    \"value\": 19,\n    \"code\": \"019\"\n  },\n  {\n    \"row\": 20,\n    \"value\": 20,\n    \"code\": \"20\"\n  },\n  {\n    \"row\": 21,\n    \"value\": null,\n    \"code\": \"021\"\n  },\n  {\n    \"row\": 22,\n    \"value\": 22,\n    \"code\": \"22\"\n  },\n  {\n    \"row\": 23,\n    \"value\": 23,\n    \"code\": \"023\"\n  },\n  {\n    \"row\": 24,\n    \"value\": null,\n    \"code\": \"24\"\n  }\n]\n",
+          "structured_codec_candidate_byte_count": 393,
+          "structured_codec_candidate_utf8": "{\"columns\":[\"row\",\"value\",\"code\"],\"rows\":[[1,1,\"001\"],[2,2,\"2\"],[3,null,\"003\"],[4,4,\"4\"],[5,5,\"005\"],[6,null,\"6\"],[7,7,\"007\"],[8,8,\"8\"],[9,null,\"009\"],[10,10,\"10\"],[11,11,\"011\"],[12,null,\"12\"],[13,13,\"013\"],[14,14,\"14\"],[15,null,\"015\"],[16,16,\"16\"],[17,17,\"017\"],[18,null,\"18\"],[19,19,\"019\"],[20,20,\"20\"],[21,null,\"021\"],[22,22,\"22\"],[23,23,\"023\"],[24,null,\"24\"]],\"version\":\"ordered-table-v1\"}",
+          "synthetic_record_id": "structured_json_and_tables-golden-golden-negative-changed_order_mutant-v1",
+          "typed_json": [
+            {
+              "code": "001",
+              "row": 1,
+              "value": 1
+            },
+            {
+              "code": "2",
+              "row": 2,
+              "value": 2
+            },
+            {
+              "code": "003",
+              "row": 3,
+              "value": null
+            },
+            {
+              "code": "4",
+              "row": 4,
+              "value": 4
+            },
+            {
+              "code": "005",
+              "row": 5,
+              "value": 5
+            },
+            {
+              "code": "6",
+              "row": 6,
+              "value": null
+            },
+            {
+              "code": "007",
+              "row": 7,
+              "value": 7
+            },
+            {
+              "code": "8",
+              "row": 8,
+              "value": 8
+            },
+            {
+              "code": "009",
+              "row": 9,
+              "value": null
+            },
+            {
+              "code": "10",
+              "row": 10,
+              "value": 10
+            },
+            {
+              "code": "011",
+              "row": 11,
+              "value": 11
+            },
+            {
+              "code": "12",
+              "row": 12,
+              "value": null
+            },
+            {
+              "code": "013",
+              "row": 13,
+              "value": 13
+            },
+            {
+              "code": "14",
+              "row": 14,
+              "value": 14
+            },
+            {
+              "code": "015",
+              "row": 15,
+              "value": null
+            },
+            {
+              "code": "16",
+              "row": 16,
+              "value": 16
+            },
+            {
+              "code": "017",
+              "row": 17,
+              "value": 17
+            },
+            {
+              "code": "18",
+              "row": 18,
+              "value": null
+            },
+            {
+              "code": "019",
+              "row": 19,
+              "value": 19
+            },
+            {
+              "code": "20",
+              "row": 20,
+              "value": 20
+            },
+            {
+              "code": "021",
+              "row": 21,
+              "value": null
+            },
+            {
+              "code": "22",
+              "row": 22,
+              "value": 22
+            },
+            {
+              "code": "023",
+              "row": 23,
+              "value": 23
+            },
+            {
+              "code": "24",
+              "row": 24,
+              "value": null
+            }
+          ]
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-structured_json_and_tables",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "f2ea4a3de03e4bc941aa7c8f7a7e703bdd9587012c077f0593d63c75f249ac89",
+      "oracle_class": "negative",
+      "record_id": "structured_json_and_tables-golden-golden-negative-changed_order_mutant-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "preserve_scalar_types",
+        "preserve_key_row_and_column_order"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    }
+  ],
+  "cases": [
+    "ordered_rows",
+    "nulls",
+    "numeric_vs_string",
+    "invalid_json",
+    "changed_order_mutant"
+  ],
+  "eligible_techniques": [
+    "json-minify-v1",
+    "structured-data-codec-v1"
+  ],
+  "expected_disposition_by_technique": {
+    "json-minify-v1": [
+      "detect_corruption",
+      "transform"
+    ],
+    "structured-data-codec-v1": [
+      "detect_corruption",
+      "transform"
+    ]
+  },
+  "expected_outcome": {
+    "by_record_id": {
+      "structured_json_and_tables-golden-golden-negative-changed_order_mutant-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "structured_json_and_tables-golden-golden-negative-invalid_json-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "structured_json_and_tables-golden-golden-positive-nulls-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "structured_json_and_tables-golden-golden-positive-numeric_vs_string-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "structured_json_and_tables-golden-golden-positive-ordered_rows-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      }
+    },
+    "schema": "compand.ces1.case_outcome_bundle.v1"
+  },
+  "fixture_family": "structured_json_and_tables",
+  "fixture_id": "structured_json_and_tables-golden-v1",
+  "generator_or_source": {
+    "generator": "scripts/build_compand_phase2_corpus.py",
+    "kind": "sanitized_synthetic",
+    "raw_customer_content": false
+  },
+  "input": {
+    "case_input_hashes": [
+      {
+        "input_sha256": "b2d0adfa621f600021d99f32e1c3856dc3c3003a637931efaf193a87ec1b6715",
+        "record_id": "structured_json_and_tables-golden-golden-positive-ordered_rows-v1"
+      },
+      {
+        "input_sha256": "a4b570913f71e985d9852cec85666d32c480f918f6b262b342958bd46c04beae",
+        "record_id": "structured_json_and_tables-golden-golden-positive-nulls-v1"
+      },
+      {
+        "input_sha256": "87254242fb64f17eae06ba5cd88457ca8f5129e8dc292db3e3293fa48ace1d72",
+        "record_id": "structured_json_and_tables-golden-golden-positive-numeric_vs_string-v1"
+      },
+      {
+        "input_sha256": "a9ea29bfeebd779aa18b44600219679aff4393cb726bc0a33f8b190c94084f14",
+        "record_id": "structured_json_and_tables-golden-golden-negative-invalid_json-v1"
+      },
+      {
+        "input_sha256": "f2ea4a3de03e4bc941aa7c8f7a7e703bdd9587012c077f0593d63c75f249ac89",
+        "record_id": "structured_json_and_tables-golden-golden-negative-changed_order_mutant-v1"
+      }
+    ],
+    "schema": "compand.ces1.fixture_input_bundle.v1"
+  },
+  "input_sha256": "0db888a2d0338bf4874669527ac561318c617a4e53d1e15f50e4b36c8f9c1d6f",
+  "license": {
+    "reviewed": true,
+    "spdx": "CC0-1.0"
+  },
+  "oracle_classes": [
+    "negative",
+    "positive"
+  ],
+  "partition": "golden",
+  "required_invariants": [
+    "baseline_provider_view_is_byte_unchanged_B0",
+    "baseline_input_and_provider_view_hashes_match",
+    "tenant_principal_session_context_epoch_isolation",
+    "source_bytes_are_never_overwritten",
+    "preserve_scalar_types",
+    "preserve_key_row_and_column_order"
+  ],
+  "revision": 5,
+  "schema": "compand.ces1.fixture.v2",
+  "workload_stratum": "typed_structured_output"
+}

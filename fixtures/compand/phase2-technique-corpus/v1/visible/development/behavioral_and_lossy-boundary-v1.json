@@ -1,0 +1,287 @@
+{
+  "baseline_provider_view": {
+    "case_provider_view_hashes": [
+      {
+        "baseline_provider_view_sha256": "b3e595e52877497a0caa0e2af9daad6a0c26a34ea4e5eb850a0baaf8b9174204",
+        "record_id": "behavioral_and_lossy-development-boundary-boundary-near_match_code_prompt-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "2bc281d61ee3a23f909123d7ebbea27b693d0ded5a96de8ebcdff0bb2279c0b2",
+        "record_id": "behavioral_and_lossy-development-boundary-boundary-visual_small_detail-v1"
+      }
+    ],
+    "schema": "compand.ces1.provider_view_bundle.v1"
+  },
+  "baseline_provider_view_sha256": "b8272281465e10717b5bcf4eaad4ff504e0ba423a33efde8e1b53b1f7657ee88",
+  "case_record_count": 2,
+  "case_records": [
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-behavioral_and_lossy-development-boundary-boundary-near_match_code_prompt-v1",
+              "output": "{\"case_id\": \"near_match_code_prompt\", \"image_descriptor\": \"generated 8x8 checkerboard with one marked corner\", \"near_match\": true, \"oracle_class\": \"boundary\", \"owner\": \"user_fixture\", \"required_detail\": \"Preserve the exact synthetic line number 17.\", \"required_detail_present\": true, \"single_line_changed\": false, \"small_visual_detail_required\": false, \"synthetic_record_id\": \"behavioral_and_lossy-development-boundary-boundary-near_match_code_prompt-v1\", \"text\": \"Synthetic guidance: avoid repeating already-visible fixture output.\"}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "b3e595e52877497a0caa0e2af9daad6a0c26a34ea4e5eb850a0baaf8b9174204",
+      "case_id": "near_match_code_prompt",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "injected-efficiency-instructions-v1": "decline_ineligible",
+        "injected-text-hard-compression-v1": "decline_ineligible",
+        "lean-prompt-v1": "decline_ineligible",
+        "output-shaping-v1": "decline_ineligible",
+        "semantic-cache-v1": "decline_ineligible",
+        "vision-budget-v1": "decline_ineligible"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-behavioral_and_lossy-development-boundary-boundary-near_match_code_prompt-v1",
+                "output": "{\"case_id\": \"near_match_code_prompt\", \"image_descriptor\": \"generated 8x8 checkerboard with one marked corner\", \"near_match\": true, \"oracle_class\": \"boundary\", \"owner\": \"user_fixture\", \"required_detail\": \"Preserve the exact synthetic line number 17.\", \"required_detail_present\": true, \"single_line_changed\": false, \"small_visual_detail_required\": false, \"synthetic_record_id\": \"behavioral_and_lossy-development-boundary-boundary-near_match_code_prompt-v1\", \"text\": \"Synthetic guidance: avoid repeating already-visible fixture output.\"}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "case_id": "near_match_code_prompt",
+          "image_descriptor": "generated 8x8 checkerboard with one marked corner",
+          "near_match": true,
+          "oracle_class": "boundary",
+          "owner": "user_fixture",
+          "required_detail": "Preserve the exact synthetic line number 17.",
+          "required_detail_present": true,
+          "single_line_changed": false,
+          "small_visual_detail_required": false,
+          "synthetic_record_id": "behavioral_and_lossy-development-boundary-boundary-near_match_code_prompt-v1",
+          "text": "Synthetic guidance: avoid repeating already-visible fixture output."
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-behavioral_and_lossy",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "230a82c96b042dc8eed1be671d6f345f1471a585086fa6b8f02eb2122df35936",
+      "oracle_class": "boundary",
+      "record_id": "behavioral_and_lossy-development-boundary-boundary-near_match_code_prompt-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "user_code_and_diagnostics_never_lossily_rewritten",
+        "paired_outcome_required"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-behavioral_and_lossy-development-boundary-boundary-visual_small_detail-v1",
+              "output": "{\"case_id\": \"visual_small_detail\", \"image_descriptor\": \"generated 8x8 checkerboard with one marked corner\", \"near_match\": false, \"oracle_class\": \"boundary\", \"owner\": \"user_fixture\", \"required_detail\": \"Preserve the exact synthetic line number 17.\", \"required_detail_present\": true, \"single_line_changed\": false, \"small_visual_detail_required\": true, \"synthetic_record_id\": \"behavioral_and_lossy-development-boundary-boundary-visual_small_detail-v1\", \"text\": \"Synthetic guidance: avoid repeating already-visible fixture output.\"}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "2bc281d61ee3a23f909123d7ebbea27b693d0ded5a96de8ebcdff0bb2279c0b2",
+      "case_id": "visual_small_detail",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "injected-efficiency-instructions-v1": "decline_ineligible",
+        "injected-text-hard-compression-v1": "decline_ineligible",
+        "lean-prompt-v1": "decline_ineligible",
+        "output-shaping-v1": "decline_ineligible",
+        "semantic-cache-v1": "decline_ineligible",
+        "vision-budget-v1": "decline_ineligible"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-behavioral_and_lossy-development-boundary-boundary-visual_small_detail-v1",
+                "output": "{\"case_id\": \"visual_small_detail\", \"image_descriptor\": \"generated 8x8 checkerboard with one marked corner\", \"near_match\": false, \"oracle_class\": \"boundary\", \"owner\": \"user_fixture\", \"required_detail\": \"Preserve the exact synthetic line number 17.\", \"required_detail_present\": true, \"single_line_changed\": false, \"small_visual_detail_required\": true, \"synthetic_record_id\": \"behavioral_and_lossy-development-boundary-boundary-visual_small_detail-v1\", \"text\": \"Synthetic guidance: avoid repeating already-visible fixture output.\"}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "case_id": "visual_small_detail",
+          "image_descriptor": "generated 8x8 checkerboard with one marked corner",
+          "near_match": false,
+          "oracle_class": "boundary",
+          "owner": "user_fixture",
+          "required_detail": "Preserve the exact synthetic line number 17.",
+          "required_detail_present": true,
+          "single_line_changed": false,
+          "small_visual_detail_required": true,
+          "synthetic_record_id": "behavioral_and_lossy-development-boundary-boundary-visual_small_detail-v1",
+          "text": "Synthetic guidance: avoid repeating already-visible fixture output."
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-behavioral_and_lossy",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "2e71476056eceec8bdcf8b18d8b1e7e36da9f6274157d8e43460dd8bd2ad9900",
+      "oracle_class": "boundary",
+      "record_id": "behavioral_and_lossy-development-boundary-boundary-visual_small_detail-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "user_code_and_diagnostics_never_lossily_rewritten",
+        "paired_outcome_required"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    }
+  ],
+  "cases": [
+    "near_match_code_prompt",
+    "visual_small_detail"
+  ],
+  "eligible_techniques": [],
+  "expected_disposition_by_technique": {
+    "injected-efficiency-instructions-v1": [
+      "decline_ineligible"
+    ],
+    "injected-text-hard-compression-v1": [
+      "decline_ineligible"
+    ],
+    "lean-prompt-v1": [
+      "decline_ineligible"
+    ],
+    "output-shaping-v1": [
+      "decline_ineligible"
+    ],
+    "semantic-cache-v1": [
+      "decline_ineligible"
+    ],
+    "vision-budget-v1": [
+      "decline_ineligible"
+    ]
+  },
+  "expected_outcome": {
+    "by_record_id": {
+      "behavioral_and_lossy-development-boundary-boundary-near_match_code_prompt-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "behavioral_and_lossy-development-boundary-boundary-visual_small_detail-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      }
+    },
+    "schema": "compand.ces1.case_outcome_bundle.v1"
+  },
+  "fixture_family": "behavioral_and_lossy",
+  "fixture_id": "behavioral_and_lossy-boundary-v1",
+  "generator_or_source": {
+    "generator": "scripts/build_compand_phase2_corpus.py",
+    "kind": "sanitized_synthetic",
+    "raw_customer_content": false
+  },
+  "input": {
+    "case_input_hashes": [
+      {
+        "input_sha256": "230a82c96b042dc8eed1be671d6f345f1471a585086fa6b8f02eb2122df35936",
+        "record_id": "behavioral_and_lossy-development-boundary-boundary-near_match_code_prompt-v1"
+      },
+      {
+        "input_sha256": "2e71476056eceec8bdcf8b18d8b1e7e36da9f6274157d8e43460dd8bd2ad9900",
+        "record_id": "behavioral_and_lossy-development-boundary-boundary-visual_small_detail-v1"
+      }
+    ],
+    "schema": "compand.ces1.fixture_input_bundle.v1"
+  },
+  "input_sha256": "d4028d94b69c43239dc96a05828d49c51f7949572d6100dcc7351590957e04ad",
+  "license": {
+    "reviewed": true,
+    "spdx": "CC0-1.0"
+  },
+  "oracle_classes": [
+    "boundary"
+  ],
+  "partition": "development",
+  "required_invariants": [
+    "baseline_provider_view_is_byte_unchanged_B0",
+    "baseline_input_and_provider_view_hashes_match",
+    "tenant_principal_session_context_epoch_isolation",
+    "source_bytes_are_never_overwritten",
+    "user_code_and_diagnostics_never_lossily_rewritten",
+    "paired_outcome_required"
+  ],
+  "revision": 5,
+  "schema": "compand.ces1.fixture.v2",
+  "workload_stratum": "behavioral_candidate"
+}

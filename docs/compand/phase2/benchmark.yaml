@@ -18,7 +18,7 @@ scope:
   confirmatory_traffic_allowed: false
   confirmatory_blockers:
     - phase1_task_level_variance_not_available
-    - corpus_content_hashes_not_materialized
+    - hidden_holdout_payload_and_custody_commitments_not_attested
     - final_provider_model_price_snapshot_not_frozen
     - live_switchboard_kpi_rows_not_linked
 

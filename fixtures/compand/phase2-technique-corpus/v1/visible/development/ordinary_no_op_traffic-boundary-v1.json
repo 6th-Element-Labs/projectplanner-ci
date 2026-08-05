@@ -1,0 +1,350 @@
+{
+  "baseline_provider_view": {
+    "case_provider_view_hashes": [
+      {
+        "baseline_provider_view_sha256": "0e23da07f17e394026b9340b7409ac28214c6873d630485a79fdc896dd013cb5",
+        "record_id": "ordinary_no_op_traffic-development-boundary-boundary-candidate_not_smaller-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "02e04a25b76e80abc2707109f6c4742efcbd1ff1410c8f2b9a475f94f14a1f59",
+        "record_id": "ordinary_no_op_traffic-development-boundary-boundary-candidate_cache_harm-v1"
+      }
+    ],
+    "schema": "compand.ces1.provider_view_bundle.v1"
+  },
+  "baseline_provider_view_sha256": "0861530bd2cb623b158450d5318b305770d2b70fdf49d0468cdd7e51a5f445c9",
+  "case_record_count": 2,
+  "case_records": [
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-ordinary_no_op_traffic-development-boundary-boundary-candidate_not_smaller-v1",
+              "output": "{\"candidate_cache_harm\": false, \"candidate_count\": 1, \"candidate_smaller\": false, \"case_id\": \"candidate_not_smaller\", \"dialect\": \"responses-fixture-v1\", \"oracle_class\": \"boundary\", \"retention\": \"session\", \"synthetic_record_id\": \"ordinary_no_op_traffic-development-boundary-boundary-candidate_not_smaller-v1\"}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "0e23da07f17e394026b9340b7409ac28214c6873d630485a79fdc896dd013cb5",
+      "case_id": "candidate_not_smaller",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "ansi-osc-strip-v1": "decline_framing_overhead",
+        "command-aware-projection-v1": "decline_framing_overhead",
+        "delta-reread-v1": "decline_framing_overhead",
+        "exact-duplicate-reference-v1": "decline_framing_overhead",
+        "json-minify-v1": "decline_framing_overhead",
+        "learned-soft-compression-v1": "decline_ineligible",
+        "line-ending-normalize-v1": "decline_framing_overhead",
+        "line-rle-v1": "decline_framing_overhead",
+        "parallel-overlap-dedup-v1": "decline_framing_overhead",
+        "prefix-cache-shaping-v1": "decline_framing_overhead",
+        "routing-context-profile-v1": "decline_ineligible",
+        "speculative-decoding-v1": "no_material_opportunity",
+        "structured-data-codec-v1": "decline_framing_overhead",
+        "subresult-chunk-dedup-v1": "decline_framing_overhead",
+        "successful-check-projection-v1": "decline_framing_overhead",
+        "trailing-noise-trim-v1": "decline_framing_overhead",
+        "unchanged-file-identity-v1": "decline_framing_overhead"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-ordinary_no_op_traffic-development-boundary-boundary-candidate_not_smaller-v1",
+                "output": "{\"candidate_cache_harm\": false, \"candidate_count\": 1, \"candidate_smaller\": false, \"case_id\": \"candidate_not_smaller\", \"dialect\": \"responses-fixture-v1\", \"oracle_class\": \"boundary\", \"retention\": \"session\", \"synthetic_record_id\": \"ordinary_no_op_traffic-development-boundary-boundary-candidate_not_smaller-v1\"}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "candidate_cache_harm": false,
+          "candidate_count": 1,
+          "candidate_smaller": false,
+          "case_id": "candidate_not_smaller",
+          "dialect": "responses-fixture-v1",
+          "oracle_class": "boundary",
+          "retention": "session",
+          "synthetic_record_id": "ordinary_no_op_traffic-development-boundary-boundary-candidate_not_smaller-v1"
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-ordinary_no_op_traffic",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "c5435ec62b243416b426b7511aa29e90be7eb0845136dd881fbfa6f20f83ac9f",
+      "oracle_class": "boundary",
+      "record_id": "ordinary_no_op_traffic-development-boundary-boundary-candidate_not_smaller-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "ordinary_traffic_byte_unchanged",
+        "zero_retention_disables_recovery"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-ordinary_no_op_traffic-development-boundary-boundary-candidate_cache_harm-v1",
+              "output": "{\"candidate_cache_harm\": true, \"candidate_count\": 1, \"candidate_smaller\": true, \"case_id\": \"candidate_cache_harm\", \"dialect\": \"responses-fixture-v1\", \"oracle_class\": \"boundary\", \"retention\": \"session\", \"synthetic_record_id\": \"ordinary_no_op_traffic-development-boundary-boundary-candidate_cache_harm-v1\"}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "02e04a25b76e80abc2707109f6c4742efcbd1ff1410c8f2b9a475f94f14a1f59",
+      "case_id": "candidate_cache_harm",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "ansi-osc-strip-v1": "decline_cache_harm",
+        "command-aware-projection-v1": "decline_cache_harm",
+        "delta-reread-v1": "decline_cache_harm",
+        "exact-duplicate-reference-v1": "decline_cache_harm",
+        "json-minify-v1": "decline_cache_harm",
+        "learned-soft-compression-v1": "decline_ineligible",
+        "line-ending-normalize-v1": "decline_cache_harm",
+        "line-rle-v1": "decline_cache_harm",
+        "parallel-overlap-dedup-v1": "decline_cache_harm",
+        "prefix-cache-shaping-v1": "decline_cache_harm",
+        "routing-context-profile-v1": "decline_ineligible",
+        "speculative-decoding-v1": "no_material_opportunity",
+        "structured-data-codec-v1": "decline_cache_harm",
+        "subresult-chunk-dedup-v1": "decline_cache_harm",
+        "successful-check-projection-v1": "decline_cache_harm",
+        "trailing-noise-trim-v1": "decline_cache_harm",
+        "unchanged-file-identity-v1": "decline_cache_harm"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-ordinary_no_op_traffic-development-boundary-boundary-candidate_cache_harm-v1",
+                "output": "{\"candidate_cache_harm\": true, \"candidate_count\": 1, \"candidate_smaller\": true, \"case_id\": \"candidate_cache_harm\", \"dialect\": \"responses-fixture-v1\", \"oracle_class\": \"boundary\", \"retention\": \"session\", \"synthetic_record_id\": \"ordinary_no_op_traffic-development-boundary-boundary-candidate_cache_harm-v1\"}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "candidate_cache_harm": true,
+          "candidate_count": 1,
+          "candidate_smaller": true,
+          "case_id": "candidate_cache_harm",
+          "dialect": "responses-fixture-v1",
+          "oracle_class": "boundary",
+          "retention": "session",
+          "synthetic_record_id": "ordinary_no_op_traffic-development-boundary-boundary-candidate_cache_harm-v1"
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-ordinary_no_op_traffic",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "8049b107b166a9397b76477fa0aa9d2d332350479ac32f1b71a63721853fc727",
+      "oracle_class": "boundary",
+      "record_id": "ordinary_no_op_traffic-development-boundary-boundary-candidate_cache_harm-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "ordinary_traffic_byte_unchanged",
+        "zero_retention_disables_recovery"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    }
+  ],
+  "cases": [
+    "candidate_not_smaller",
+    "candidate_cache_harm"
+  ],
+  "eligible_techniques": [],
+  "expected_disposition_by_technique": {
+    "ansi-osc-strip-v1": [
+      "decline_cache_harm",
+      "decline_framing_overhead"
+    ],
+    "command-aware-projection-v1": [
+      "decline_cache_harm",
+      "decline_framing_overhead"
+    ],
+    "delta-reread-v1": [
+      "decline_cache_harm",
+      "decline_framing_overhead"
+    ],
+    "exact-duplicate-reference-v1": [
+      "decline_cache_harm",
+      "decline_framing_overhead"
+    ],
+    "json-minify-v1": [
+      "decline_cache_harm",
+      "decline_framing_overhead"
+    ],
+    "learned-soft-compression-v1": [
+      "decline_ineligible"
+    ],
+    "line-ending-normalize-v1": [
+      "decline_cache_harm",
+      "decline_framing_overhead"
+    ],
+    "line-rle-v1": [
+      "decline_cache_harm",
+      "decline_framing_overhead"
+    ],
+    "parallel-overlap-dedup-v1": [
+      "decline_cache_harm",
+      "decline_framing_overhead"
+    ],
+    "prefix-cache-shaping-v1": [
+      "decline_cache_harm",
+      "decline_framing_overhead"
+    ],
+    "routing-context-profile-v1": [
+      "decline_ineligible"
+    ],
+    "speculative-decoding-v1": [
+      "no_material_opportunity"
+    ],
+    "structured-data-codec-v1": [
+      "decline_cache_harm",
+      "decline_framing_overhead"
+    ],
+    "subresult-chunk-dedup-v1": [
+      "decline_cache_harm",
+      "decline_framing_overhead"
+    ],
+    "successful-check-projection-v1": [
+      "decline_cache_harm",
+      "decline_framing_overhead"
+    ],
+    "trailing-noise-trim-v1": [
+      "decline_cache_harm",
+      "decline_framing_overhead"
+    ],
+    "unchanged-file-identity-v1": [
+      "decline_cache_harm",
+      "decline_framing_overhead"
+    ]
+  },
+  "expected_outcome": {
+    "by_record_id": {
+      "ordinary_no_op_traffic-development-boundary-boundary-candidate_cache_harm-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "ordinary_no_op_traffic-development-boundary-boundary-candidate_not_smaller-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      }
+    },
+    "schema": "compand.ces1.case_outcome_bundle.v1"
+  },
+  "fixture_family": "ordinary_no_op_traffic",
+  "fixture_id": "ordinary_no_op_traffic-boundary-v1",
+  "generator_or_source": {
+    "generator": "scripts/build_compand_phase2_corpus.py",
+    "kind": "sanitized_synthetic",
+    "raw_customer_content": false
+  },
+  "input": {
+    "case_input_hashes": [
+      {
+        "input_sha256": "c5435ec62b243416b426b7511aa29e90be7eb0845136dd881fbfa6f20f83ac9f",
+        "record_id": "ordinary_no_op_traffic-development-boundary-boundary-candidate_not_smaller-v1"
+      },
+      {
+        "input_sha256": "8049b107b166a9397b76477fa0aa9d2d332350479ac32f1b71a63721853fc727",
+        "record_id": "ordinary_no_op_traffic-development-boundary-boundary-candidate_cache_harm-v1"
+      }
+    ],
+    "schema": "compand.ces1.fixture_input_bundle.v1"
+  },
+  "input_sha256": "dbd200847c152473fedc86fd3cc1e9dd91abf3165ca58b96356a9923d19de7ed",
+  "license": {
+    "reviewed": true,
+    "spdx": "CC0-1.0"
+  },
+  "oracle_classes": [
+    "boundary"
+  ],
+  "partition": "development",
+  "required_invariants": [
+    "baseline_provider_view_is_byte_unchanged_B0",
+    "baseline_input_and_provider_view_hashes_match",
+    "tenant_principal_session_context_epoch_isolation",
+    "source_bytes_are_never_overwritten",
+    "ordinary_traffic_byte_unchanged",
+    "zero_retention_disables_recovery"
+  ],
+  "revision": 5,
+  "schema": "compand.ces1.fixture.v2",
+  "workload_stratum": "ordinary_request"
+}

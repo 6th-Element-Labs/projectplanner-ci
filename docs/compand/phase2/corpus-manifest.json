@@ -1,57 +1,52 @@
 {
-  "schema": "compand.ces1.corpus_manifest.v1",
-  "corpus_id": "compand-phase2-technique-corpus",
-  "version": "1.0.0-contract",
-  "status": "contract_only_not_materialized",
-  "frozen_at": "2026-08-04",
-  "authority": ["ADR-0026/Compand-evidence", "CES-1", "DOCS-8", "QA-56"],
+  "authority": [
+    "ADR-0026/Compand-evidence",
+    "CES-1",
+    "DOCS-8",
+    "QA-56"
+  ],
   "content_policy": {
-    "raw_customer_content_allowed": false,
-    "sources": ["sanitized_synthetic", "license_reviewed_open_fixture", "generated_protocol_fixture"],
-    "immutable_after_partition": true,
-    "content_addressing": "sha256",
     "contamination_check_required": true,
-    "license_record_required": true
-  },
-  "materialization": {
-    "corpus_root_sha256": null,
-    "manifest_sha256": null,
-    "fixture_count": 0,
-    "confirmatory_ready": false,
-    "blocking_reasons": [
-      "fixture_files_not_yet_created_by_QA-56",
-      "partition_hashes_not_yet_frozen",
-      "hidden_holdout_custodian_not_yet_attested"
+    "content_addressing": "sha256",
+    "immutable_after_partition": true,
+    "license_record_required": true,
+    "raw_customer_content_allowed": false,
+    "sources": [
+      "sanitized_synthetic",
+      "license_reviewed_open_fixture",
+      "generated_protocol_fixture"
     ]
   },
-  "partitions": [
-    {
-      "id": "development",
-      "purpose": "plugin implementation and parser debugging",
-      "target_fraction": 0.50,
-      "developer_visible": true,
-      "grader_visible": true,
-      "root_sha256": null
-    },
-    {
-      "id": "golden",
-      "purpose": "frozen positive and negative transform oracles",
-      "target_fraction": 0.25,
-      "developer_visible": true,
-      "grader_visible": true,
-      "root_sha256": null
-    },
-    {
-      "id": "hidden_holdout",
-      "purpose": "grader certification and generalization check",
-      "target_fraction": 0.25,
-      "developer_visible": false,
-      "grader_visible": true,
-      "root_sha256": null,
-      "custody": "independent_QA-58_holdout_custodian"
-    }
-  ],
+  "corpus_id": "compand-phase2-technique-corpus",
   "fixture_contract": {
+    "allowed_dispositions": [
+      "transform",
+      "decline_framing_overhead",
+      "decline_cache_harm",
+      "decline_ineligible",
+      "fail_recovery",
+      "detect_corruption",
+      "reject_cross_scope_access",
+      "no_material_opportunity"
+    ],
+    "case_record_contract": {
+      "authority": "case_records are authoritative; fixture-level fields are bundle summaries",
+      "required_fields": [
+        "record_id",
+        "case_id",
+        "oracle_class",
+        "input_sha256",
+        "baseline_provider_view_sha256",
+        "expected_outcome",
+        "eligible_techniques",
+        "expected_disposition_by_technique",
+        "required_invariants",
+        "input",
+        "baseline_provider_view"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    "fixture_schema": "compand.ces1.fixture.v2",
     "required_fields": [
       "fixture_id",
       "revision",
@@ -64,82 +59,214 @@
       "expected_disposition_by_technique",
       "required_invariants",
       "license",
-      "generator_or_source"
-    ],
-    "allowed_dispositions": [
-      "transform",
-      "decline_framing_overhead",
-      "decline_cache_harm",
-      "decline_ineligible",
-      "fail_recovery",
-      "detect_corruption",
-      "reject_cross_scope_access",
-      "no_material_opportunity"
+      "generator_or_source",
+      "case_record_count",
+      "case_records"
     ]
   },
   "fixture_families": [
     {
+      "covers": [
+        "line-rle-v1",
+        "framing_overhead",
+        "off_by_one_repeat_mutants"
+      ],
       "id": "repeated_lines",
-      "covers": ["line-rle-v1", "framing_overhead", "off_by_one_repeat_mutants"],
-      "required_cases": ["positive_run", "single_line", "mixed_endings", "warning_output", "count_not_smaller"]
+      "required_cases": [
+        "positive_run",
+        "single_line",
+        "mixed_endings",
+        "warning_output",
+        "count_not_smaller"
+      ]
     },
     {
+      "covers": [
+        "exact-duplicate-reference-v1",
+        "subresult-chunk-dedup-v1",
+        "parallel-overlap-dedup-v1"
+      ],
       "id": "exact_and_partial_overlap",
-      "covers": ["exact-duplicate-reference-v1", "subresult-chunk-dedup-v1", "parallel-overlap-dedup-v1"],
-      "required_cases": ["exact_visible_source", "missing_source", "evicted_source", "cross_session_hash", "below_70_percent_overlap"]
+      "required_cases": [
+        "exact_visible_source",
+        "missing_source",
+        "evicted_source",
+        "cross_session_hash",
+        "below_70_percent_overlap"
+      ]
     },
     {
+      "covers": [
+        "json-minify-v1",
+        "structured-data-codec-v1"
+      ],
       "id": "structured_json_and_tables",
-      "covers": ["json-minify-v1", "structured-data-codec-v1"],
-      "required_cases": ["ordered_rows", "nulls", "numeric_vs_string", "duplicate_keys", "heterogeneous_rows", "invalid_json"]
+      "required_cases": [
+        "ordered_rows",
+        "nulls",
+        "numeric_vs_string",
+        "duplicate_keys",
+        "heterogeneous_rows",
+        "invalid_json"
+      ]
     },
     {
+      "covers": [
+        "ansi-osc-strip-v1",
+        "line-ending-normalize-v1",
+        "trailing-noise-trim-v1"
+      ],
       "id": "terminal_and_progress",
-      "covers": ["ansi-osc-strip-v1", "line-ending-normalize-v1", "trailing-noise-trim-v1"],
-      "required_cases": ["sgr", "osc8", "carriage_return_spinner", "source_code_crlf", "signature_bytes", "unknown_control"]
+      "required_cases": [
+        "sgr",
+        "osc8",
+        "carriage_return_spinner",
+        "source_code_crlf",
+        "signature_bytes",
+        "unknown_control"
+      ]
     },
     {
+      "covers": [
+        "unchanged-file-identity-v1",
+        "delta-reread-v1"
+      ],
       "id": "file_rereads_and_diffs",
-      "covers": ["unchanged-file-identity-v1", "delta-reread-v1"],
-      "required_cases": ["unchanged", "small_edit", "high_churn", "binary", "stale_base", "edited_history_fork"]
+      "required_cases": [
+        "unchanged",
+        "small_edit",
+        "high_churn",
+        "binary",
+        "stale_base",
+        "edited_history_fork"
+      ]
     },
     {
+      "covers": [
+        "command-aware-projection-v1",
+        "successful-check-projection-v1"
+      ],
       "id": "commands_checks_and_logs",
-      "covers": ["command-aware-projection-v1", "successful-check-projection-v1"],
-      "required_cases": ["successful_long_check", "failed_check", "warning_on_success", "unknown_version", "truncated", "oversized", "ambiguous_exit_status"]
+      "required_cases": [
+        "successful_long_check",
+        "test_output",
+        "build_output",
+        "failed_check",
+        "warning_on_success",
+        "git_status",
+        "git_diff",
+        "log_output",
+        "unknown_version",
+        "truncated",
+        "oversized",
+        "ambiguous_exit_status"
+      ]
     },
     {
+      "covers": [
+        "prefix-cache-shaping-v1",
+        "provider-kv-reuse-v1",
+        "transport-gzip-v1"
+      ],
       "id": "cache_sensitive_prefixes",
-      "covers": ["prefix-cache-shaping-v1"],
-      "required_cases": ["cold", "warm_same_prefix", "warm_changed_suffix", "expired", "smaller_but_more_expensive", "missing_cache_fields"]
+      "required_cases": [
+        "cold",
+        "warm_same_prefix",
+        "warm_changed_suffix",
+        "expired",
+        "smaller_but_more_expensive",
+        "missing_cache_fields"
+      ]
     },
     {
+      "covers": [
+        "context-paging-v1",
+        "schema-deferral-v1",
+        "turn-elimination-v1",
+        "agent-memory-summary-v1",
+        "code-action-batching-v1"
+      ],
       "id": "cooperative_context",
-      "covers": ["context-paging-v1", "schema-deferral-v1", "turn-elimination-v1", "agent-memory-summary-v1"],
-      "required_cases": ["no_cloud_seam", "certified_context_epoch", "failed_expansion", "tool_discovery_needed", "no_op_poll", "ordered_batch"]
+      "required_cases": [
+        "no_cloud_seam",
+        "certified_context_epoch",
+        "failed_expansion",
+        "tool_discovery_needed",
+        "no_op_poll",
+        "ordered_batch"
+      ]
     },
     {
+      "covers": [
+        "semantic-cache-v1",
+        "injected-efficiency-instructions-v1",
+        "injected-text-hard-compression-v1",
+        "output-shaping-v1",
+        "vision-budget-v1",
+        "lean-prompt-v1"
+      ],
       "id": "behavioral_and_lossy",
-      "covers": ["semantic-cache-v1", "injected-efficiency-instructions-v1", "injected-text-hard-compression-v1", "output-shaping-v1", "vision-budget-v1"],
-      "required_cases": ["near_match_code_prompt", "changed_single_line", "own_text_only", "required_detail_truncated", "visual_small_detail"]
+      "required_cases": [
+        "near_match_code_prompt",
+        "changed_single_line",
+        "own_text_only",
+        "required_detail_truncated",
+        "visual_small_detail"
+      ]
     },
     {
+      "covers": [
+        "all_enforceable_techniques"
+      ],
       "id": "protocol_and_isolation",
-      "covers": ["all_enforceable_techniques"],
-      "required_cases": ["stream_order", "cancelled_stream", "retry_identity", "401", "429", "500", "cross_tenant", "cross_principal", "cross_session", "unauthorized_artifact"]
+      "required_cases": [
+        "stream_order",
+        "manual_continuation",
+        "previous_response_continuation",
+        "conversation_continuation",
+        "cancelled_stream",
+        "retry_identity",
+        "401",
+        "429",
+        "500",
+        "cross_tenant",
+        "cross_principal",
+        "cross_session",
+        "unauthorized_artifact"
+      ]
     },
     {
+      "covers": [
+        "all_enforceable_techniques",
+        "routing-context-profile-v1",
+        "learned-soft-compression-v1",
+        "speculative-decoding-v1"
+      ],
       "id": "ordinary_no_op_traffic",
-      "covers": ["all_enforceable_techniques"],
-      "required_cases": ["no_candidate", "candidate_not_smaller", "candidate_cache_harm", "unknown_dialect", "zero_retention"]
+      "required_cases": [
+        "no_candidate",
+        "candidate_not_smaller",
+        "candidate_cache_harm",
+        "unknown_dialect",
+        "zero_retention"
+      ]
     }
   ],
-  "task_outcomes": {
-    "oracle_version": "pending_QA-56",
-    "baseline_outcome_hash": null,
-    "quality_metric": "verified_task_success",
-    "noninferiority_margin_absolute": -0.05,
-    "blinded_evaluator_required": true
+  "frozen_at": "2026-08-04",
+  "materialization": {
+    "baseline_task_outcome_sha256": "5e7518497604cca702678b0f68b64502c3814bd5669442ff91ebdaaa38bff02a",
+    "blocking_reasons": [
+      "hidden_holdout_payload_commitments_not_yet_attested_by_QA-58_custodian"
+    ],
+    "confirmatory_ready": false,
+    "corpus_root_sha256": "f379ddae3ae858faff7284d94a7d5ebdeeba691292672fe4eefb196336355ab2",
+    "fixture_count": 33,
+    "hidden_holdout_fixture_count": 0,
+    "hidden_holdout_reservation_count": 11,
+    "manifest_hash_rule": "sha256 of canonical JSON with materialization.manifest_sha256 set to null",
+    "manifest_sha256": "90ca6980403b24fa2ef584697edb6d6125d3fa655f1590aafa9dfa9711df8f5b",
+    "visible_case_record_count": 103,
+    "visible_fixture_count": 33
   },
   "mutation_families_required": [
     "wrong_repeat_count",
@@ -153,5 +280,51 @@
     "incorrect_aggregate",
     "omitted_failure",
     "stale_or_altered_evidence"
-  ]
+  ],
+  "partitions": [
+    {
+      "case_record_count": 53,
+      "developer_visible": true,
+      "fixture_count": 22,
+      "grader_visible": true,
+      "id": "development",
+      "purpose": "plugin implementation and parser debugging",
+      "root_sha256": "d4623dcbcaaa51c099631a3f8634bcd5ab6e4d3d342b6c7083e9a15f2d3cc27e",
+      "target_fraction": 0.5
+    },
+    {
+      "case_record_count": 50,
+      "developer_visible": true,
+      "fixture_count": 11,
+      "grader_visible": true,
+      "id": "golden",
+      "purpose": "frozen positive and negative transform oracles",
+      "root_sha256": "151568abb7af126784d5ebc136c3b176be6d6607f12fb2e5e158e07fdbda5462",
+      "target_fraction": 0.25
+    },
+    {
+      "case_record_count": 0,
+      "custody": "independent_QA-58_holdout_custodian",
+      "custody_status": "pending_independent_attestation",
+      "developer_visible": false,
+      "fixture_count": 0,
+      "grader_visible": true,
+      "id": "hidden_holdout",
+      "plan_sha256": "597364f011d86ccbba1f566b4e7a74a6d9796fcc5736bd21abcdb097427d7299",
+      "purpose": "grader certification and generalization check",
+      "reservation_count": 11,
+      "root_sha256": null,
+      "target_fraction": 0.25
+    }
+  ],
+  "schema": "compand.ces1.corpus_manifest.v1",
+  "status": "visible_materialized_hidden_reserved",
+  "task_outcomes": {
+    "baseline_outcome_hash": "5e7518497604cca702678b0f68b64502c3814bd5669442ff91ebdaaa38bff02a",
+    "blinded_evaluator_required": true,
+    "noninferiority_margin_absolute": -0.05,
+    "oracle_version": "qa56-baseline-oracle-v1",
+    "quality_metric": "verified_task_success"
+  },
+  "version": "1.0.4-qa56"
 }

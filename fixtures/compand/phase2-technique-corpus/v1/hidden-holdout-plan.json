@@ -1,0 +1,128 @@
+{
+  "attested": false,
+  "custodian": "independent_QA-58_holdout_custodian",
+  "developer_visible": false,
+  "payloads_in_repository": false,
+  "required_commitments": [
+    "input_sha256",
+    "baseline_provider_view_sha256",
+    "expected_oracle_sha256",
+    "encrypted_bundle_sha256",
+    "custodian_attestation"
+  ],
+  "reservations": [
+    {
+      "case_count_minimum": 1,
+      "contamination_check_required": true,
+      "fixture_family": "repeated_lines",
+      "generator_version": "1.0.4-qa56",
+      "license_required": true,
+      "partition": "hidden_holdout",
+      "reservation_id": "hidden-repeated_lines-slot-v1",
+      "workload_stratum": "command_output"
+    },
+    {
+      "case_count_minimum": 1,
+      "contamination_check_required": true,
+      "fixture_family": "exact_and_partial_overlap",
+      "generator_version": "1.0.4-qa56",
+      "license_required": true,
+      "partition": "hidden_holdout",
+      "reservation_id": "hidden-exact_and_partial_overlap-slot-v1",
+      "workload_stratum": "parallel_tool_output"
+    },
+    {
+      "case_count_minimum": 1,
+      "contamination_check_required": true,
+      "fixture_family": "structured_json_and_tables",
+      "generator_version": "1.0.4-qa56",
+      "license_required": true,
+      "partition": "hidden_holdout",
+      "reservation_id": "hidden-structured_json_and_tables-slot-v1",
+      "workload_stratum": "typed_structured_output"
+    },
+    {
+      "case_count_minimum": 1,
+      "contamination_check_required": true,
+      "fixture_family": "terminal_and_progress",
+      "generator_version": "1.0.4-qa56",
+      "license_required": true,
+      "partition": "hidden_holdout",
+      "reservation_id": "hidden-terminal_and_progress-slot-v1",
+      "workload_stratum": "terminal_output"
+    },
+    {
+      "case_count_minimum": 1,
+      "contamination_check_required": true,
+      "fixture_family": "file_rereads_and_diffs",
+      "generator_version": "1.0.4-qa56",
+      "license_required": true,
+      "partition": "hidden_holdout",
+      "reservation_id": "hidden-file_rereads_and_diffs-slot-v1",
+      "workload_stratum": "file_tool_output"
+    },
+    {
+      "case_count_minimum": 1,
+      "contamination_check_required": true,
+      "fixture_family": "commands_checks_and_logs",
+      "generator_version": "1.0.4-qa56",
+      "license_required": true,
+      "partition": "hidden_holdout",
+      "reservation_id": "hidden-commands_checks_and_logs-slot-v1",
+      "workload_stratum": "check_output"
+    },
+    {
+      "case_count_minimum": 1,
+      "contamination_check_required": true,
+      "fixture_family": "cache_sensitive_prefixes",
+      "generator_version": "1.0.4-qa56",
+      "license_required": true,
+      "partition": "hidden_holdout",
+      "reservation_id": "hidden-cache_sensitive_prefixes-slot-v1",
+      "workload_stratum": "cache_conditioned_request"
+    },
+    {
+      "case_count_minimum": 1,
+      "contamination_check_required": true,
+      "fixture_family": "cooperative_context",
+      "generator_version": "1.0.4-qa56",
+      "license_required": true,
+      "partition": "hidden_holdout",
+      "reservation_id": "hidden-cooperative_context-slot-v1",
+      "workload_stratum": "cooperative_agent_context"
+    },
+    {
+      "case_count_minimum": 1,
+      "contamination_check_required": true,
+      "fixture_family": "behavioral_and_lossy",
+      "generator_version": "1.0.4-qa56",
+      "license_required": true,
+      "partition": "hidden_holdout",
+      "reservation_id": "hidden-behavioral_and_lossy-slot-v1",
+      "workload_stratum": "behavioral_candidate"
+    },
+    {
+      "case_count_minimum": 1,
+      "contamination_check_required": true,
+      "fixture_family": "protocol_and_isolation",
+      "generator_version": "1.0.4-qa56",
+      "license_required": true,
+      "partition": "hidden_holdout",
+      "reservation_id": "hidden-protocol_and_isolation-slot-v1",
+      "workload_stratum": "responses_protocol"
+    },
+    {
+      "case_count_minimum": 1,
+      "contamination_check_required": true,
+      "fixture_family": "ordinary_no_op_traffic",
+      "generator_version": "1.0.4-qa56",
+      "license_required": true,
+      "partition": "hidden_holdout",
+      "reservation_id": "hidden-ordinary_no_op_traffic-slot-v1",
+      "workload_stratum": "ordinary_request"
+    }
+  ],
+  "schema": "compand.ces1.hidden_holdout_plan.v1",
+  "status": "reserved_pending_independent_custody",
+  "version": "1.0.4-qa56"
+}

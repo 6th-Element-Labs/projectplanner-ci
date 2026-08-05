@@ -1,0 +1,467 @@
+{
+  "baseline_provider_view": {
+    "case_provider_view_hashes": [
+      {
+        "baseline_provider_view_sha256": "ffff05c5c3ce7270e50798e20cb1739fcc5fb3715a4f1a2d8fb2ddb58036db67",
+        "record_id": "ordinary_no_op_traffic-golden-golden-positive-no_candidate-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "d1e1778a78ec39e9a6ab6b9ea1f9c133034a96b283f3db0a876f48e8897e47ad",
+        "record_id": "ordinary_no_op_traffic-golden-golden-negative-unknown_dialect-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "ad038268f3b9c7f08b1ca6b7138f2af987b3b6a2fd666276ba5c046188489869",
+        "record_id": "ordinary_no_op_traffic-golden-golden-negative-zero_retention-v1"
+      }
+    ],
+    "schema": "compand.ces1.provider_view_bundle.v1"
+  },
+  "baseline_provider_view_sha256": "4954e1ad872a4ccf710206db96f696abf375cfb754ba3c231410a04cc16b02de",
+  "case_record_count": 3,
+  "case_records": [
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-ordinary_no_op_traffic-golden-golden-positive-no_candidate-v1",
+              "output": "{\"candidate_cache_harm\": false, \"candidate_count\": 0, \"candidate_smaller\": false, \"case_id\": \"no_candidate\", \"dialect\": \"responses-fixture-v1\", \"oracle_class\": \"positive\", \"retention\": \"session\", \"synthetic_record_id\": \"ordinary_no_op_traffic-golden-golden-positive-no_candidate-v1\"}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "ffff05c5c3ce7270e50798e20cb1739fcc5fb3715a4f1a2d8fb2ddb58036db67",
+      "case_id": "no_candidate",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "ansi-osc-strip-v1": "no_material_opportunity",
+        "command-aware-projection-v1": "no_material_opportunity",
+        "delta-reread-v1": "no_material_opportunity",
+        "exact-duplicate-reference-v1": "no_material_opportunity",
+        "json-minify-v1": "no_material_opportunity",
+        "learned-soft-compression-v1": "decline_ineligible",
+        "line-ending-normalize-v1": "no_material_opportunity",
+        "line-rle-v1": "no_material_opportunity",
+        "parallel-overlap-dedup-v1": "no_material_opportunity",
+        "prefix-cache-shaping-v1": "no_material_opportunity",
+        "routing-context-profile-v1": "decline_ineligible",
+        "speculative-decoding-v1": "no_material_opportunity",
+        "structured-data-codec-v1": "no_material_opportunity",
+        "subresult-chunk-dedup-v1": "no_material_opportunity",
+        "successful-check-projection-v1": "no_material_opportunity",
+        "trailing-noise-trim-v1": "no_material_opportunity",
+        "unchanged-file-identity-v1": "no_material_opportunity"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-ordinary_no_op_traffic-golden-golden-positive-no_candidate-v1",
+                "output": "{\"candidate_cache_harm\": false, \"candidate_count\": 0, \"candidate_smaller\": false, \"case_id\": \"no_candidate\", \"dialect\": \"responses-fixture-v1\", \"oracle_class\": \"positive\", \"retention\": \"session\", \"synthetic_record_id\": \"ordinary_no_op_traffic-golden-golden-positive-no_candidate-v1\"}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "candidate_cache_harm": false,
+          "candidate_count": 0,
+          "candidate_smaller": false,
+          "case_id": "no_candidate",
+          "dialect": "responses-fixture-v1",
+          "oracle_class": "positive",
+          "retention": "session",
+          "synthetic_record_id": "ordinary_no_op_traffic-golden-golden-positive-no_candidate-v1"
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-ordinary_no_op_traffic",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "2d15e122cb3a9c90f6fa6954b66d03deabfa1c254d4ba595705b32677db5bb56",
+      "oracle_class": "positive",
+      "record_id": "ordinary_no_op_traffic-golden-golden-positive-no_candidate-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "ordinary_traffic_byte_unchanged",
+        "zero_retention_disables_recovery"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-ordinary_no_op_traffic-golden-golden-negative-unknown_dialect-v1",
+              "output": "{\"candidate_cache_harm\": false, \"candidate_count\": 1, \"candidate_smaller\": false, \"case_id\": \"unknown_dialect\", \"dialect\": \"unknown-fixture-v9\", \"oracle_class\": \"negative\", \"retention\": \"session\", \"synthetic_record_id\": \"ordinary_no_op_traffic-golden-golden-negative-unknown_dialect-v1\"}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "d1e1778a78ec39e9a6ab6b9ea1f9c133034a96b283f3db0a876f48e8897e47ad",
+      "case_id": "unknown_dialect",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "ansi-osc-strip-v1": "decline_ineligible",
+        "command-aware-projection-v1": "decline_ineligible",
+        "delta-reread-v1": "decline_ineligible",
+        "exact-duplicate-reference-v1": "decline_ineligible",
+        "json-minify-v1": "decline_ineligible",
+        "learned-soft-compression-v1": "decline_ineligible",
+        "line-ending-normalize-v1": "decline_ineligible",
+        "line-rle-v1": "decline_ineligible",
+        "parallel-overlap-dedup-v1": "decline_ineligible",
+        "prefix-cache-shaping-v1": "decline_ineligible",
+        "routing-context-profile-v1": "decline_ineligible",
+        "speculative-decoding-v1": "no_material_opportunity",
+        "structured-data-codec-v1": "decline_ineligible",
+        "subresult-chunk-dedup-v1": "decline_ineligible",
+        "successful-check-projection-v1": "decline_ineligible",
+        "trailing-noise-trim-v1": "decline_ineligible",
+        "unchanged-file-identity-v1": "decline_ineligible"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-ordinary_no_op_traffic-golden-golden-negative-unknown_dialect-v1",
+                "output": "{\"candidate_cache_harm\": false, \"candidate_count\": 1, \"candidate_smaller\": false, \"case_id\": \"unknown_dialect\", \"dialect\": \"unknown-fixture-v9\", \"oracle_class\": \"negative\", \"retention\": \"session\", \"synthetic_record_id\": \"ordinary_no_op_traffic-golden-golden-negative-unknown_dialect-v1\"}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "candidate_cache_harm": false,
+          "candidate_count": 1,
+          "candidate_smaller": false,
+          "case_id": "unknown_dialect",
+          "dialect": "unknown-fixture-v9",
+          "oracle_class": "negative",
+          "retention": "session",
+          "synthetic_record_id": "ordinary_no_op_traffic-golden-golden-negative-unknown_dialect-v1"
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-ordinary_no_op_traffic",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "d22ff8ac7456353322ab47d2262db6d7e79e16bdd3e95031e21e62a3d82b4a6f",
+      "oracle_class": "negative",
+      "record_id": "ordinary_no_op_traffic-golden-golden-negative-unknown_dialect-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "ordinary_traffic_byte_unchanged",
+        "zero_retention_disables_recovery"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-ordinary_no_op_traffic-golden-golden-negative-zero_retention-v1",
+              "output": "{\"candidate_cache_harm\": false, \"candidate_count\": 0, \"candidate_smaller\": false, \"case_id\": \"zero_retention\", \"dialect\": \"responses-fixture-v1\", \"oracle_class\": \"negative\", \"retention\": \"zero\", \"synthetic_record_id\": \"ordinary_no_op_traffic-golden-golden-negative-zero_retention-v1\"}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "ad038268f3b9c7f08b1ca6b7138f2af987b3b6a2fd666276ba5c046188489869",
+      "case_id": "zero_retention",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "ansi-osc-strip-v1": "decline_ineligible",
+        "command-aware-projection-v1": "decline_ineligible",
+        "delta-reread-v1": "decline_ineligible",
+        "exact-duplicate-reference-v1": "decline_ineligible",
+        "json-minify-v1": "decline_ineligible",
+        "learned-soft-compression-v1": "decline_ineligible",
+        "line-ending-normalize-v1": "decline_ineligible",
+        "line-rle-v1": "decline_ineligible",
+        "parallel-overlap-dedup-v1": "decline_ineligible",
+        "prefix-cache-shaping-v1": "decline_ineligible",
+        "routing-context-profile-v1": "decline_ineligible",
+        "speculative-decoding-v1": "no_material_opportunity",
+        "structured-data-codec-v1": "decline_ineligible",
+        "subresult-chunk-dedup-v1": "decline_ineligible",
+        "successful-check-projection-v1": "decline_ineligible",
+        "trailing-noise-trim-v1": "decline_ineligible",
+        "unchanged-file-identity-v1": "decline_ineligible"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-ordinary_no_op_traffic-golden-golden-negative-zero_retention-v1",
+                "output": "{\"candidate_cache_harm\": false, \"candidate_count\": 0, \"candidate_smaller\": false, \"case_id\": \"zero_retention\", \"dialect\": \"responses-fixture-v1\", \"oracle_class\": \"negative\", \"retention\": \"zero\", \"synthetic_record_id\": \"ordinary_no_op_traffic-golden-golden-negative-zero_retention-v1\"}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "candidate_cache_harm": false,
+          "candidate_count": 0,
+          "candidate_smaller": false,
+          "case_id": "zero_retention",
+          "dialect": "responses-fixture-v1",
+          "oracle_class": "negative",
+          "retention": "zero",
+          "synthetic_record_id": "ordinary_no_op_traffic-golden-golden-negative-zero_retention-v1"
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-ordinary_no_op_traffic",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "dab08ed947869d06704ecd41fdb906a15fa26bd6d0589b346cb4339e7f8c94e8",
+      "oracle_class": "negative",
+      "record_id": "ordinary_no_op_traffic-golden-golden-negative-zero_retention-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "ordinary_traffic_byte_unchanged",
+        "zero_retention_disables_recovery"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    }
+  ],
+  "cases": [
+    "no_candidate",
+    "unknown_dialect",
+    "zero_retention"
+  ],
+  "eligible_techniques": [],
+  "expected_disposition_by_technique": {
+    "ansi-osc-strip-v1": [
+      "decline_ineligible",
+      "no_material_opportunity"
+    ],
+    "command-aware-projection-v1": [
+      "decline_ineligible",
+      "no_material_opportunity"
+    ],
+    "delta-reread-v1": [
+      "decline_ineligible",
+      "no_material_opportunity"
+    ],
+    "exact-duplicate-reference-v1": [
+      "decline_ineligible",
+      "no_material_opportunity"
+    ],
+    "json-minify-v1": [
+      "decline_ineligible",
+      "no_material_opportunity"
+    ],
+    "learned-soft-compression-v1": [
+      "decline_ineligible"
+    ],
+    "line-ending-normalize-v1": [
+      "decline_ineligible",
+      "no_material_opportunity"
+    ],
+    "line-rle-v1": [
+      "decline_ineligible",
+      "no_material_opportunity"
+    ],
+    "parallel-overlap-dedup-v1": [
+      "decline_ineligible",
+      "no_material_opportunity"
+    ],
+    "prefix-cache-shaping-v1": [
+      "decline_ineligible",
+      "no_material_opportunity"
+    ],
+    "routing-context-profile-v1": [
+      "decline_ineligible"
+    ],
+    "speculative-decoding-v1": [
+      "no_material_opportunity"
+    ],
+    "structured-data-codec-v1": [
+      "decline_ineligible",
+      "no_material_opportunity"
+    ],
+    "subresult-chunk-dedup-v1": [
+      "decline_ineligible",
+      "no_material_opportunity"
+    ],
+    "successful-check-projection-v1": [
+      "decline_ineligible",
+      "no_material_opportunity"
+    ],
+    "trailing-noise-trim-v1": [
+      "decline_ineligible",
+      "no_material_opportunity"
+    ],
+    "unchanged-file-identity-v1": [
+      "decline_ineligible",
+      "no_material_opportunity"
+    ]
+  },
+  "expected_outcome": {
+    "by_record_id": {
+      "ordinary_no_op_traffic-golden-golden-negative-unknown_dialect-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "ordinary_no_op_traffic-golden-golden-negative-zero_retention-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "ordinary_no_op_traffic-golden-golden-positive-no_candidate-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      }
+    },
+    "schema": "compand.ces1.case_outcome_bundle.v1"
+  },
+  "fixture_family": "ordinary_no_op_traffic",
+  "fixture_id": "ordinary_no_op_traffic-golden-v1",
+  "generator_or_source": {
+    "generator": "scripts/build_compand_phase2_corpus.py",
+    "kind": "sanitized_synthetic",
+    "raw_customer_content": false
+  },
+  "input": {
+    "case_input_hashes": [
+      {
+        "input_sha256": "2d15e122cb3a9c90f6fa6954b66d03deabfa1c254d4ba595705b32677db5bb56",
+        "record_id": "ordinary_no_op_traffic-golden-golden-positive-no_candidate-v1"
+      },
+      {
+        "input_sha256": "d22ff8ac7456353322ab47d2262db6d7e79e16bdd3e95031e21e62a3d82b4a6f",
+        "record_id": "ordinary_no_op_traffic-golden-golden-negative-unknown_dialect-v1"
+      },
+      {
+        "input_sha256": "dab08ed947869d06704ecd41fdb906a15fa26bd6d0589b346cb4339e7f8c94e8",
+        "record_id": "ordinary_no_op_traffic-golden-golden-negative-zero_retention-v1"
+      }
+    ],
+    "schema": "compand.ces1.fixture_input_bundle.v1"
+  },
+  "input_sha256": "0e49fa635df9ae3668cd8a1f0397a2de20b678121c6a03157d207c2ec1117cd8",
+  "license": {
+    "reviewed": true,
+    "spdx": "CC0-1.0"
+  },
+  "oracle_classes": [
+    "negative",
+    "positive"
+  ],
+  "partition": "golden",
+  "required_invariants": [
+    "baseline_provider_view_is_byte_unchanged_B0",
+    "baseline_input_and_provider_view_hashes_match",
+    "tenant_principal_session_context_epoch_isolation",
+    "source_bytes_are_never_overwritten",
+    "ordinary_traffic_byte_unchanged",
+    "zero_retention_disables_recovery"
+  ],
+  "revision": 5,
+  "schema": "compand.ces1.fixture.v2",
+  "workload_stratum": "ordinary_request"
+}

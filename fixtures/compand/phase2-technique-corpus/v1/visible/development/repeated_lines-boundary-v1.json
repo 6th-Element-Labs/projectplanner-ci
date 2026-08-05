@@ -1,0 +1,262 @@
+{
+  "baseline_provider_view": {
+    "case_provider_view_hashes": [
+      {
+        "baseline_provider_view_sha256": "c7f8baf47bd2aee7f9de540c3024f0b5ea66d815352f3ea582b81a19740e3d54",
+        "record_id": "repeated_lines-development-boundary-boundary-single_line-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "573949204624b573c6893f6262b9b26508b68be58ef5afcd6cd82912d8cde2a1",
+        "record_id": "repeated_lines-development-boundary-boundary-count_not_smaller-v1"
+      }
+    ],
+    "schema": "compand.ces1.provider_view_bundle.v1"
+  },
+  "baseline_provider_view_sha256": "1936b4763d3afd24df536a0586043f013b21ef4d850f2e4e09a106875b496c48",
+  "case_record_count": 2,
+  "case_records": [
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-repeated_lines-development-boundary-boundary-single_line-v1",
+              "output": "{\"actual_repeat_count\": 1, \"case_id\": \"single_line\", \"declared_repeat_count\": null, \"oracle_class\": \"boundary\", \"output\": \"compile ok\\n\", \"rle_candidate_byte_count\": 33, \"rle_candidate_utf8\": \"{\\\"count\\\":1,\\\"line\\\":\\\"compile ok\\\\n\\\"}\", \"source_byte_count\": 11, \"source_sha256\": \"5c9589f211a4ef7a888d9f8c86741199c97d47253e5da722f1e20fc562842800\", \"synthetic_record_id\": \"repeated_lines-development-boundary-boundary-single_line-v1\", \"typed_exit_status\": 0}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "c7f8baf47bd2aee7f9de540c3024f0b5ea66d815352f3ea582b81a19740e3d54",
+      "case_id": "single_line",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "line-rle-v1": "decline_framing_overhead"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-repeated_lines-development-boundary-boundary-single_line-v1",
+                "output": "{\"actual_repeat_count\": 1, \"case_id\": \"single_line\", \"declared_repeat_count\": null, \"oracle_class\": \"boundary\", \"output\": \"compile ok\\n\", \"rle_candidate_byte_count\": 33, \"rle_candidate_utf8\": \"{\\\"count\\\":1,\\\"line\\\":\\\"compile ok\\\\n\\\"}\", \"source_byte_count\": 11, \"source_sha256\": \"5c9589f211a4ef7a888d9f8c86741199c97d47253e5da722f1e20fc562842800\", \"synthetic_record_id\": \"repeated_lines-development-boundary-boundary-single_line-v1\", \"typed_exit_status\": 0}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "actual_repeat_count": 1,
+          "case_id": "single_line",
+          "declared_repeat_count": null,
+          "oracle_class": "boundary",
+          "output": "compile ok\n",
+          "rle_candidate_byte_count": 33,
+          "rle_candidate_utf8": "{\"count\":1,\"line\":\"compile ok\\n\"}",
+          "source_byte_count": 11,
+          "source_sha256": "5c9589f211a4ef7a888d9f8c86741199c97d47253e5da722f1e20fc562842800",
+          "synthetic_record_id": "repeated_lines-development-boundary-boundary-single_line-v1",
+          "typed_exit_status": 0
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-repeated_lines",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "769e08129c16d06702d8a5acf4aefa79cf0e37ed27e828a6f4e9906fa31c4b52",
+      "oracle_class": "boundary",
+      "record_id": "repeated_lines-development-boundary-boundary-single_line-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "consecutive_complete_lines_only",
+        "exact_decode_and_sha256"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-repeated_lines-development-boundary-boundary-count_not_smaller-v1",
+              "output": "{\"actual_repeat_count\": 2, \"case_id\": \"count_not_smaller\", \"declared_repeat_count\": null, \"oracle_class\": \"boundary\", \"output\": \"compile ok\\ncompile ok\\n\", \"rle_candidate_byte_count\": 33, \"rle_candidate_utf8\": \"{\\\"count\\\":2,\\\"line\\\":\\\"compile ok\\\\n\\\"}\", \"source_byte_count\": 22, \"source_sha256\": \"df2f77fc9827e942f529f44e187096b633147b05d9b06a3affeb9a203d4469fc\", \"synthetic_record_id\": \"repeated_lines-development-boundary-boundary-count_not_smaller-v1\", \"typed_exit_status\": 0}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "573949204624b573c6893f6262b9b26508b68be58ef5afcd6cd82912d8cde2a1",
+      "case_id": "count_not_smaller",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "line-rle-v1": "decline_framing_overhead"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-repeated_lines-development-boundary-boundary-count_not_smaller-v1",
+                "output": "{\"actual_repeat_count\": 2, \"case_id\": \"count_not_smaller\", \"declared_repeat_count\": null, \"oracle_class\": \"boundary\", \"output\": \"compile ok\\ncompile ok\\n\", \"rle_candidate_byte_count\": 33, \"rle_candidate_utf8\": \"{\\\"count\\\":2,\\\"line\\\":\\\"compile ok\\\\n\\\"}\", \"source_byte_count\": 22, \"source_sha256\": \"df2f77fc9827e942f529f44e187096b633147b05d9b06a3affeb9a203d4469fc\", \"synthetic_record_id\": \"repeated_lines-development-boundary-boundary-count_not_smaller-v1\", \"typed_exit_status\": 0}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "actual_repeat_count": 2,
+          "case_id": "count_not_smaller",
+          "declared_repeat_count": null,
+          "oracle_class": "boundary",
+          "output": "compile ok\ncompile ok\n",
+          "rle_candidate_byte_count": 33,
+          "rle_candidate_utf8": "{\"count\":2,\"line\":\"compile ok\\n\"}",
+          "source_byte_count": 22,
+          "source_sha256": "df2f77fc9827e942f529f44e187096b633147b05d9b06a3affeb9a203d4469fc",
+          "synthetic_record_id": "repeated_lines-development-boundary-boundary-count_not_smaller-v1",
+          "typed_exit_status": 0
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-repeated_lines",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "38416f119b383c3dfb5c441d96d133b30c24d729094e2f4dd8a1aeda4dd681cf",
+      "oracle_class": "boundary",
+      "record_id": "repeated_lines-development-boundary-boundary-count_not_smaller-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "consecutive_complete_lines_only",
+        "exact_decode_and_sha256"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    }
+  ],
+  "cases": [
+    "single_line",
+    "count_not_smaller"
+  ],
+  "eligible_techniques": [],
+  "expected_disposition_by_technique": {
+    "line-rle-v1": [
+      "decline_framing_overhead"
+    ]
+  },
+  "expected_outcome": {
+    "by_record_id": {
+      "repeated_lines-development-boundary-boundary-count_not_smaller-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "repeated_lines-development-boundary-boundary-single_line-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      }
+    },
+    "schema": "compand.ces1.case_outcome_bundle.v1"
+  },
+  "fixture_family": "repeated_lines",
+  "fixture_id": "repeated_lines-boundary-v1",
+  "generator_or_source": {
+    "generator": "scripts/build_compand_phase2_corpus.py",
+    "kind": "sanitized_synthetic",
+    "raw_customer_content": false
+  },
+  "input": {
+    "case_input_hashes": [
+      {
+        "input_sha256": "769e08129c16d06702d8a5acf4aefa79cf0e37ed27e828a6f4e9906fa31c4b52",
+        "record_id": "repeated_lines-development-boundary-boundary-single_line-v1"
+      },
+      {
+        "input_sha256": "38416f119b383c3dfb5c441d96d133b30c24d729094e2f4dd8a1aeda4dd681cf",
+        "record_id": "repeated_lines-development-boundary-boundary-count_not_smaller-v1"
+      }
+    ],
+    "schema": "compand.ces1.fixture_input_bundle.v1"
+  },
+  "input_sha256": "3aa7a3f333c4559ef34db699cb258ff6688761607dfbf5123895f7df51121f3e",
+  "license": {
+    "reviewed": true,
+    "spdx": "CC0-1.0"
+  },
+  "oracle_classes": [
+    "boundary"
+  ],
+  "partition": "development",
+  "required_invariants": [
+    "baseline_provider_view_is_byte_unchanged_B0",
+    "baseline_input_and_provider_view_hashes_match",
+    "tenant_principal_session_context_epoch_isolation",
+    "source_bytes_are_never_overwritten",
+    "consecutive_complete_lines_only",
+    "exact_decode_and_sha256"
+  ],
+  "revision": 5,
+  "schema": "compand.ces1.fixture.v2",
+  "workload_stratum": "command_output"
+}

@@ -1,0 +1,474 @@
+{
+  "baseline_provider_view": {
+    "case_provider_view_hashes": [
+      {
+        "baseline_provider_view_sha256": "1d7e9ed5b7924bd22595ac2b40cb519f4a6bc3aa5a2b6bba05000e71f36b93b5",
+        "record_id": "repeated_lines-golden-golden-positive-positive_run-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "9e0ea9b38dd1700b49cb09976823bd790985ac09aa9c2c3046930508ff837ead",
+        "record_id": "repeated_lines-golden-golden-negative-mixed_endings-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "74548e1782e903cda4799bdfc4af2195cee49d3b40de77bc25872306ed86c482",
+        "record_id": "repeated_lines-golden-golden-negative-warning_output-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "1e67f99f2fe91e87e3499c20f1f65e4d45e60b9140cfc53a948bd9d99b7c48ef",
+        "record_id": "repeated_lines-golden-golden-negative-off_by_one_repeat_mutant-v1"
+      }
+    ],
+    "schema": "compand.ces1.provider_view_bundle.v1"
+  },
+  "baseline_provider_view_sha256": "6b553c160d5711b97318f87eda9c63c9f524c3cf8b784ab450b65a6040b7b0f3",
+  "case_record_count": 4,
+  "case_records": [
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-repeated_lines-golden-golden-positive-positive_run-v1",
+              "output": "{\"actual_repeat_count\": 12, \"case_id\": \"positive_run\", \"declared_repeat_count\": null, \"oracle_class\": \"positive\", \"output\": \"compile ok\\ncompile ok\\ncompile ok\\ncompile ok\\ncompile ok\\ncompile ok\\ncompile ok\\ncompile ok\\ncompile ok\\ncompile ok\\ncompile ok\\ncompile ok\\n\", \"rle_candidate_byte_count\": 34, \"rle_candidate_utf8\": \"{\\\"count\\\":12,\\\"line\\\":\\\"compile ok\\\\n\\\"}\", \"source_byte_count\": 132, \"source_sha256\": \"7ba658f7e4142269397eef22c0a9b7226d3f3bb7c6e35f1a00ddd9dd93884173\", \"synthetic_record_id\": \"repeated_lines-golden-golden-positive-positive_run-v1\", \"typed_exit_status\": 0}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "1d7e9ed5b7924bd22595ac2b40cb519f4a6bc3aa5a2b6bba05000e71f36b93b5",
+      "case_id": "positive_run",
+      "eligible_techniques": [
+        "line-rle-v1"
+      ],
+      "expected_disposition_by_technique": {
+        "line-rle-v1": "transform"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-repeated_lines-golden-golden-positive-positive_run-v1",
+                "output": "{\"actual_repeat_count\": 12, \"case_id\": \"positive_run\", \"declared_repeat_count\": null, \"oracle_class\": \"positive\", \"output\": \"compile ok\\ncompile ok\\ncompile ok\\ncompile ok\\ncompile ok\\ncompile ok\\ncompile ok\\ncompile ok\\ncompile ok\\ncompile ok\\ncompile ok\\ncompile ok\\n\", \"rle_candidate_byte_count\": 34, \"rle_candidate_utf8\": \"{\\\"count\\\":12,\\\"line\\\":\\\"compile ok\\\\n\\\"}\", \"source_byte_count\": 132, \"source_sha256\": \"7ba658f7e4142269397eef22c0a9b7226d3f3bb7c6e35f1a00ddd9dd93884173\", \"synthetic_record_id\": \"repeated_lines-golden-golden-positive-positive_run-v1\", \"typed_exit_status\": 0}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "actual_repeat_count": 12,
+          "case_id": "positive_run",
+          "declared_repeat_count": null,
+          "oracle_class": "positive",
+          "output": "compile ok\ncompile ok\ncompile ok\ncompile ok\ncompile ok\ncompile ok\ncompile ok\ncompile ok\ncompile ok\ncompile ok\ncompile ok\ncompile ok\n",
+          "rle_candidate_byte_count": 34,
+          "rle_candidate_utf8": "{\"count\":12,\"line\":\"compile ok\\n\"}",
+          "source_byte_count": 132,
+          "source_sha256": "7ba658f7e4142269397eef22c0a9b7226d3f3bb7c6e35f1a00ddd9dd93884173",
+          "synthetic_record_id": "repeated_lines-golden-golden-positive-positive_run-v1",
+          "typed_exit_status": 0
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-repeated_lines",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "711db89484aa0188e446374f6eb8d96b5afd0eecd30e757d2d51e8bddde686d9",
+      "oracle_class": "positive",
+      "record_id": "repeated_lines-golden-golden-positive-positive_run-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "consecutive_complete_lines_only",
+        "exact_decode_and_sha256"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-repeated_lines-golden-golden-negative-mixed_endings-v1",
+              "output": "{\"actual_repeat_count\": 1, \"case_id\": \"mixed_endings\", \"declared_repeat_count\": null, \"oracle_class\": \"negative\", \"output\": \"compile ok\\r\\ncompile ok\\n\", \"rle_candidate_byte_count\": 33, \"rle_candidate_utf8\": \"{\\\"count\\\":1,\\\"line\\\":\\\"compile ok\\\\n\\\"}\", \"source_byte_count\": 23, \"source_sha256\": \"857d9f77058b97acdf9d0d8ab6230719d19d31fb954f87cc5a0940b715537af4\", \"synthetic_record_id\": \"repeated_lines-golden-golden-negative-mixed_endings-v1\", \"typed_exit_status\": 0}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "9e0ea9b38dd1700b49cb09976823bd790985ac09aa9c2c3046930508ff837ead",
+      "case_id": "mixed_endings",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "line-rle-v1": "detect_corruption"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-repeated_lines-golden-golden-negative-mixed_endings-v1",
+                "output": "{\"actual_repeat_count\": 1, \"case_id\": \"mixed_endings\", \"declared_repeat_count\": null, \"oracle_class\": \"negative\", \"output\": \"compile ok\\r\\ncompile ok\\n\", \"rle_candidate_byte_count\": 33, \"rle_candidate_utf8\": \"{\\\"count\\\":1,\\\"line\\\":\\\"compile ok\\\\n\\\"}\", \"source_byte_count\": 23, \"source_sha256\": \"857d9f77058b97acdf9d0d8ab6230719d19d31fb954f87cc5a0940b715537af4\", \"synthetic_record_id\": \"repeated_lines-golden-golden-negative-mixed_endings-v1\", \"typed_exit_status\": 0}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "actual_repeat_count": 1,
+          "case_id": "mixed_endings",
+          "declared_repeat_count": null,
+          "oracle_class": "negative",
+          "output": "compile ok\r\ncompile ok\n",
+          "rle_candidate_byte_count": 33,
+          "rle_candidate_utf8": "{\"count\":1,\"line\":\"compile ok\\n\"}",
+          "source_byte_count": 23,
+          "source_sha256": "857d9f77058b97acdf9d0d8ab6230719d19d31fb954f87cc5a0940b715537af4",
+          "synthetic_record_id": "repeated_lines-golden-golden-negative-mixed_endings-v1",
+          "typed_exit_status": 0
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-repeated_lines",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "f1ac062d017b7f5272c3bb9f59de0f810ade33e98e3e367fc79b691108b85f4a",
+      "oracle_class": "negative",
+      "record_id": "repeated_lines-golden-golden-negative-mixed_endings-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "consecutive_complete_lines_only",
+        "exact_decode_and_sha256"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-repeated_lines-golden-golden-negative-warning_output-v1",
+              "output": "{\"actual_repeat_count\": 0, \"case_id\": \"warning_output\", \"declared_repeat_count\": null, \"oracle_class\": \"negative\", \"output\": \"warning: synthetic fixture\\nwarning: synthetic fixture\\nwarning: synthetic fixture\\n\", \"rle_candidate_byte_count\": 33, \"rle_candidate_utf8\": \"{\\\"count\\\":0,\\\"line\\\":\\\"compile ok\\\\n\\\"}\", \"source_byte_count\": 81, \"source_sha256\": \"a7c76d7fd426427d6374516145e3230ff9f05839a887508dca1194bfb180b1ce\", \"synthetic_record_id\": \"repeated_lines-golden-golden-negative-warning_output-v1\", \"typed_exit_status\": 0}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "74548e1782e903cda4799bdfc4af2195cee49d3b40de77bc25872306ed86c482",
+      "case_id": "warning_output",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "line-rle-v1": "detect_corruption"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-repeated_lines-golden-golden-negative-warning_output-v1",
+                "output": "{\"actual_repeat_count\": 0, \"case_id\": \"warning_output\", \"declared_repeat_count\": null, \"oracle_class\": \"negative\", \"output\": \"warning: synthetic fixture\\nwarning: synthetic fixture\\nwarning: synthetic fixture\\n\", \"rle_candidate_byte_count\": 33, \"rle_candidate_utf8\": \"{\\\"count\\\":0,\\\"line\\\":\\\"compile ok\\\\n\\\"}\", \"source_byte_count\": 81, \"source_sha256\": \"a7c76d7fd426427d6374516145e3230ff9f05839a887508dca1194bfb180b1ce\", \"synthetic_record_id\": \"repeated_lines-golden-golden-negative-warning_output-v1\", \"typed_exit_status\": 0}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "actual_repeat_count": 0,
+          "case_id": "warning_output",
+          "declared_repeat_count": null,
+          "oracle_class": "negative",
+          "output": "warning: synthetic fixture\nwarning: synthetic fixture\nwarning: synthetic fixture\n",
+          "rle_candidate_byte_count": 33,
+          "rle_candidate_utf8": "{\"count\":0,\"line\":\"compile ok\\n\"}",
+          "source_byte_count": 81,
+          "source_sha256": "a7c76d7fd426427d6374516145e3230ff9f05839a887508dca1194bfb180b1ce",
+          "synthetic_record_id": "repeated_lines-golden-golden-negative-warning_output-v1",
+          "typed_exit_status": 0
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-repeated_lines",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "62374b1830a30360bc4216f3ca19363552f9f2adf027c294ef44c35114eda8c5",
+      "oracle_class": "negative",
+      "record_id": "repeated_lines-golden-golden-negative-warning_output-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "consecutive_complete_lines_only",
+        "exact_decode_and_sha256"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-repeated_lines-golden-golden-negative-off_by_one_repeat_mutant-v1",
+              "output": "{\"actual_repeat_count\": 4, \"case_id\": \"off_by_one_repeat_mutant\", \"declared_repeat_count\": 5, \"oracle_class\": \"negative\", \"output\": \"compile ok\\ncompile ok\\ncompile ok\\ncompile ok\\n\", \"rle_candidate_byte_count\": 33, \"rle_candidate_utf8\": \"{\\\"count\\\":4,\\\"line\\\":\\\"compile ok\\\\n\\\"}\", \"source_byte_count\": 44, \"source_sha256\": \"2fc7d35ee4e84a92540bf8d048031856882d449fe6aabfe3ebf1deb7c910173b\", \"synthetic_record_id\": \"repeated_lines-golden-golden-negative-off_by_one_repeat_mutant-v1\", \"typed_exit_status\": 0}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "1e67f99f2fe91e87e3499c20f1f65e4d45e60b9140cfc53a948bd9d99b7c48ef",
+      "case_id": "off_by_one_repeat_mutant",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "line-rle-v1": "detect_corruption"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-repeated_lines-golden-golden-negative-off_by_one_repeat_mutant-v1",
+                "output": "{\"actual_repeat_count\": 4, \"case_id\": \"off_by_one_repeat_mutant\", \"declared_repeat_count\": 5, \"oracle_class\": \"negative\", \"output\": \"compile ok\\ncompile ok\\ncompile ok\\ncompile ok\\n\", \"rle_candidate_byte_count\": 33, \"rle_candidate_utf8\": \"{\\\"count\\\":4,\\\"line\\\":\\\"compile ok\\\\n\\\"}\", \"source_byte_count\": 44, \"source_sha256\": \"2fc7d35ee4e84a92540bf8d048031856882d449fe6aabfe3ebf1deb7c910173b\", \"synthetic_record_id\": \"repeated_lines-golden-golden-negative-off_by_one_repeat_mutant-v1\", \"typed_exit_status\": 0}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "actual_repeat_count": 4,
+          "case_id": "off_by_one_repeat_mutant",
+          "declared_repeat_count": 5,
+          "oracle_class": "negative",
+          "output": "compile ok\ncompile ok\ncompile ok\ncompile ok\n",
+          "rle_candidate_byte_count": 33,
+          "rle_candidate_utf8": "{\"count\":4,\"line\":\"compile ok\\n\"}",
+          "source_byte_count": 44,
+          "source_sha256": "2fc7d35ee4e84a92540bf8d048031856882d449fe6aabfe3ebf1deb7c910173b",
+          "synthetic_record_id": "repeated_lines-golden-golden-negative-off_by_one_repeat_mutant-v1",
+          "typed_exit_status": 0
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-repeated_lines",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "6f738a9e1b635be8674963bf5c43ef9bc146d924107ba6132ab4e91abd4ad211",
+      "oracle_class": "negative",
+      "record_id": "repeated_lines-golden-golden-negative-off_by_one_repeat_mutant-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "consecutive_complete_lines_only",
+        "exact_decode_and_sha256"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    }
+  ],
+  "cases": [
+    "positive_run",
+    "mixed_endings",
+    "warning_output",
+    "off_by_one_repeat_mutant"
+  ],
+  "eligible_techniques": [
+    "line-rle-v1"
+  ],
+  "expected_disposition_by_technique": {
+    "line-rle-v1": [
+      "detect_corruption",
+      "transform"
+    ]
+  },
+  "expected_outcome": {
+    "by_record_id": {
+      "repeated_lines-golden-golden-negative-mixed_endings-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "repeated_lines-golden-golden-negative-off_by_one_repeat_mutant-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "repeated_lines-golden-golden-negative-warning_output-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "repeated_lines-golden-golden-positive-positive_run-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      }
+    },
+    "schema": "compand.ces1.case_outcome_bundle.v1"
+  },
+  "fixture_family": "repeated_lines",
+  "fixture_id": "repeated_lines-golden-v1",
+  "generator_or_source": {
+    "generator": "scripts/build_compand_phase2_corpus.py",
+    "kind": "sanitized_synthetic",
+    "raw_customer_content": false
+  },
+  "input": {
+    "case_input_hashes": [
+      {
+        "input_sha256": "711db89484aa0188e446374f6eb8d96b5afd0eecd30e757d2d51e8bddde686d9",
+        "record_id": "repeated_lines-golden-golden-positive-positive_run-v1"
+      },
+      {
+        "input_sha256": "f1ac062d017b7f5272c3bb9f59de0f810ade33e98e3e367fc79b691108b85f4a",
+        "record_id": "repeated_lines-golden-golden-negative-mixed_endings-v1"
+      },
+      {
+        "input_sha256": "62374b1830a30360bc4216f3ca19363552f9f2adf027c294ef44c35114eda8c5",
+        "record_id": "repeated_lines-golden-golden-negative-warning_output-v1"
+      },
+      {
+        "input_sha256": "6f738a9e1b635be8674963bf5c43ef9bc146d924107ba6132ab4e91abd4ad211",
+        "record_id": "repeated_lines-golden-golden-negative-off_by_one_repeat_mutant-v1"
+      }
+    ],
+    "schema": "compand.ces1.fixture_input_bundle.v1"
+  },
+  "input_sha256": "1e32d102f285f02fdc3a4fd0f49d64ce66ab6713d7d950d96e4c31d788670c21",
+  "license": {
+    "reviewed": true,
+    "spdx": "CC0-1.0"
+  },
+  "oracle_classes": [
+    "negative",
+    "positive"
+  ],
+  "partition": "golden",
+  "required_invariants": [
+    "baseline_provider_view_is_byte_unchanged_B0",
+    "baseline_input_and_provider_view_hashes_match",
+    "tenant_principal_session_context_epoch_isolation",
+    "source_bytes_are_never_overwritten",
+    "consecutive_complete_lines_only",
+    "exact_decode_and_sha256"
+  ],
+  "revision": 5,
+  "schema": "compand.ces1.fixture.v2",
+  "workload_stratum": "command_output"
+}

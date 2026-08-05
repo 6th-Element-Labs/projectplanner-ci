@@ -1,0 +1,1131 @@
+{
+  "baseline_provider_view": {
+    "case_provider_view_hashes": [
+      {
+        "baseline_provider_view_sha256": "23faccd4e6d48f6deaca381d5c6374501f26d0abe3fc595f140ff8ffdb9f84b3",
+        "record_id": "commands_checks_and_logs-development-boundary-boundary-failed_check-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "32567361a37dccdf50b8c5c9cada6c19316d67a709a509ca52e0fb7500b34f42",
+        "record_id": "commands_checks_and_logs-development-boundary-boundary-warning_on_success-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "d7766fb04281ed2b6e5c7967052c5b1aa065ccf0324042c6bd12cf780b1ff406",
+        "record_id": "commands_checks_and_logs-development-boundary-boundary-ambiguous_exit_status-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "ed752f85c9c6784aa8064c2fc5fd7aeac41d05529ba7770b2d44af8d0486a229",
+        "record_id": "commands_checks_and_logs-development-boundary-boundary-git_status-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "e4ee5775d7a762b4ddc1bbf7fba9d9a89199cbae78963f8ea624cc08b5d3df32",
+        "record_id": "commands_checks_and_logs-development-boundary-boundary-git_diff-v1"
+      }
+    ],
+    "schema": "compand.ces1.provider_view_bundle.v1"
+  },
+  "baseline_provider_view_sha256": "902ba7ccbb6cbd0552681b78144a88d33a0495af72bf93ff9f0bb65f70957399",
+  "case_record_count": 5,
+  "case_records": [
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-commands_checks_and_logs-development-boundary-boundary-failed_check-v1",
+              "output": "case_000: passed\ncase_001: passed\ncase_002: passed\ncase_003: passed\ncase_004: passed\ncase_005: passed\ncase_006: passed\ncase_007: passed\ncase_008: passed\ncase_009: passed\ncase_010: passed\ncase_011: passed\ncase_012: passed\ncase_013: passed\ncase_014: passed\ncase_015: passed\ncase_016: passed\ncase_017: passed\ncase_018: passed\ncase_019: passed\ncase_020: passed\ncase_021: passed\ncase_022: passed\ncase_023: passed\ncase_024: passed\ncase_025: passed\ncase_026: passed\ncase_027: passed\ncase_028: passed\ncase_029: passed\ncase_030: passed\ncase_031: passed\ncase_032: passed\ncase_033: passed\ncase_034: passed\ncase_035: passed\ncase_036: passed\ncase_037: passed\ncase_038: passed\ncase_039: passed\ncase_040: passed\ncase_041: passed\ncase_042: passed\ncase_043: passed\ncase_044: passed\ncase_045: passed\ncase_046: passed\ncase_047: passed\ncase_048: passed\ncase_049: passed\ncase_050: passed\ncase_051: passed\ncase_052: passed\ncase_053: passed\ncase_054: passed\ncase_055: passed\ncase_056: passed\ncase_057: passed\ncase_058: passed\ncase_059: passed\ncase_060: passed\ncase_061: passed\ncase_062: passed\ncase_063: passed\ncase_064: passed\ncase_065: passed\ncase_066: passed\ncase_067: passed\ncase_068: passed\ncase_069: passed\ncase_070: passed\ncase_071: passed\ncase_072: passed\ncase_073: passed\ncase_074: passed\ncase_075: passed\ncase_076: passed\ncase_077: passed\ncase_078: passed\ncase_079: passed\ncase_080: passed\ncase_081: passed\ncase_082: passed\ncase_083: passed\nfailure: synthetic assertion\n",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "23faccd4e6d48f6deaca381d5c6374501f26d0abe3fc595f140ff8ffdb9f84b3",
+      "case_id": "failed_check",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "command-aware-projection-v1": "decline_ineligible",
+        "successful-check-projection-v1": "decline_ineligible"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-commands_checks_and_logs-development-boundary-boundary-failed_check-v1",
+                "output": "case_000: passed\ncase_001: passed\ncase_002: passed\ncase_003: passed\ncase_004: passed\ncase_005: passed\ncase_006: passed\ncase_007: passed\ncase_008: passed\ncase_009: passed\ncase_010: passed\ncase_011: passed\ncase_012: passed\ncase_013: passed\ncase_014: passed\ncase_015: passed\ncase_016: passed\ncase_017: passed\ncase_018: passed\ncase_019: passed\ncase_020: passed\ncase_021: passed\ncase_022: passed\ncase_023: passed\ncase_024: passed\ncase_025: passed\ncase_026: passed\ncase_027: passed\ncase_028: passed\ncase_029: passed\ncase_030: passed\ncase_031: passed\ncase_032: passed\ncase_033: passed\ncase_034: passed\ncase_035: passed\ncase_036: passed\ncase_037: passed\ncase_038: passed\ncase_039: passed\ncase_040: passed\ncase_041: passed\ncase_042: passed\ncase_043: passed\ncase_044: passed\ncase_045: passed\ncase_046: passed\ncase_047: passed\ncase_048: passed\ncase_049: passed\ncase_050: passed\ncase_051: passed\ncase_052: passed\ncase_053: passed\ncase_054: passed\ncase_055: passed\ncase_056: passed\ncase_057: passed\ncase_058: passed\ncase_059: passed\ncase_060: passed\ncase_061: passed\ncase_062: passed\ncase_063: passed\ncase_064: passed\ncase_065: passed\ncase_066: passed\ncase_067: passed\ncase_068: passed\ncase_069: passed\ncase_070: passed\ncase_071: passed\ncase_072: passed\ncase_073: passed\ncase_074: passed\ncase_075: passed\ncase_076: passed\ncase_077: passed\ncase_078: passed\ncase_079: passed\ncase_080: passed\ncase_081: passed\ncase_082: passed\ncase_083: passed\nfailure: synthetic assertion\n",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "artifact_expansion_utf8": null,
+          "case_id": "failed_check",
+          "command": "python3 -m unittest synthetic_fixture_test",
+          "exit_status": 1,
+          "lines": [
+            "case_000: passed",
+            "case_001: passed",
+            "case_002: passed",
+            "case_003: passed",
+            "case_004: passed",
+            "case_005: passed",
+            "case_006: passed",
+            "case_007: passed",
+            "case_008: passed",
+            "case_009: passed",
+            "case_010: passed",
+            "case_011: passed",
+            "case_012: passed",
+            "case_013: passed",
+            "case_014: passed",
+            "case_015: passed",
+            "case_016: passed",
+            "case_017: passed",
+            "case_018: passed",
+            "case_019: passed",
+            "case_020: passed",
+            "case_021: passed",
+            "case_022: passed",
+            "case_023: passed",
+            "case_024: passed",
+            "case_025: passed",
+            "case_026: passed",
+            "case_027: passed",
+            "case_028: passed",
+            "case_029: passed",
+            "case_030: passed",
+            "case_031: passed",
+            "case_032: passed",
+            "case_033: passed",
+            "case_034: passed",
+            "case_035: passed",
+            "case_036: passed",
+            "case_037: passed",
+            "case_038: passed",
+            "case_039: passed",
+            "case_040: passed",
+            "case_041: passed",
+            "case_042: passed",
+            "case_043: passed",
+            "case_044: passed",
+            "case_045: passed",
+            "case_046: passed",
+            "case_047: passed",
+            "case_048: passed",
+            "case_049: passed",
+            "case_050: passed",
+            "case_051: passed",
+            "case_052: passed",
+            "case_053: passed",
+            "case_054: passed",
+            "case_055: passed",
+            "case_056: passed",
+            "case_057: passed",
+            "case_058: passed",
+            "case_059: passed",
+            "case_060: passed",
+            "case_061: passed",
+            "case_062: passed",
+            "case_063: passed",
+            "case_064: passed",
+            "case_065: passed",
+            "case_066: passed",
+            "case_067: passed",
+            "case_068: passed",
+            "case_069: passed",
+            "case_070: passed",
+            "case_071: passed",
+            "case_072: passed",
+            "case_073: passed",
+            "case_074: passed",
+            "case_075: passed",
+            "case_076: passed",
+            "case_077: passed",
+            "case_078: passed",
+            "case_079: passed",
+            "case_080: passed",
+            "case_081: passed",
+            "case_082: passed",
+            "case_083: passed",
+            "failure: synthetic assertion"
+          ],
+          "maximum_eligible_output_bytes": 1048576,
+          "oracle_class": "boundary",
+          "output_byte_count": 1457,
+          "output_kind": "check",
+          "output_line_count": 85,
+          "output_sha256": "011e2eef36a7965d1d499741dc58338233b1ed4f10d62669c50b0b317a5bf896",
+          "output_utf8": "case_000: passed\ncase_001: passed\ncase_002: passed\ncase_003: passed\ncase_004: passed\ncase_005: passed\ncase_006: passed\ncase_007: passed\ncase_008: passed\ncase_009: passed\ncase_010: passed\ncase_011: passed\ncase_012: passed\ncase_013: passed\ncase_014: passed\ncase_015: passed\ncase_016: passed\ncase_017: passed\ncase_018: passed\ncase_019: passed\ncase_020: passed\ncase_021: passed\ncase_022: passed\ncase_023: passed\ncase_024: passed\ncase_025: passed\ncase_026: passed\ncase_027: passed\ncase_028: passed\ncase_029: passed\ncase_030: passed\ncase_031: passed\ncase_032: passed\ncase_033: passed\ncase_034: passed\ncase_035: passed\ncase_036: passed\ncase_037: passed\ncase_038: passed\ncase_039: passed\ncase_040: passed\ncase_041: passed\ncase_042: passed\ncase_043: passed\ncase_044: passed\ncase_045: passed\ncase_046: passed\ncase_047: passed\ncase_048: passed\ncase_049: passed\ncase_050: passed\ncase_051: passed\ncase_052: passed\ncase_053: passed\ncase_054: passed\ncase_055: passed\ncase_056: passed\ncase_057: passed\ncase_058: passed\ncase_059: passed\ncase_060: passed\ncase_061: passed\ncase_062: passed\ncase_063: passed\ncase_064: passed\ncase_065: passed\ncase_066: passed\ncase_067: passed\ncase_068: passed\ncase_069: passed\ncase_070: passed\ncase_071: passed\ncase_072: passed\ncase_073: passed\ncase_074: passed\ncase_075: passed\ncase_076: passed\ncase_077: passed\ncase_078: passed\ncase_079: passed\ncase_080: passed\ncase_081: passed\ncase_082: passed\ncase_083: passed\nfailure: synthetic assertion\n",
+          "oversized": false,
+          "passthrough_required": false,
+          "projection_candidate_byte_count": 287,
+          "projection_candidate_utf8": "{\"artifact_sha256\":\"011e2eef36a7965d1d499741dc58338233b1ed4f10d62669c50b0b317a5bf896\",\"command\":\"python3 -m unittest synthetic_fixture_test\",\"exit_status\":1,\"head\":[\"case_000: passed\",\"case_001: passed\"],\"tail\":[\"case_083: passed\",\"failure: synthetic assertion\"],\"version\":\"commands-v1\"}",
+          "projection_version": "commands-v1",
+          "synthetic_record_id": "commands_checks_and_logs-development-boundary-boundary-failed_check-v1",
+          "truncated": false,
+          "typed_command_result_receipt": {
+            "byte_count": 1457,
+            "call_id": "call-commands_checks_and_logs-development-boundary-boundary-failed_check-v1",
+            "content_type": "text/plain",
+            "encoding": "utf-8",
+            "exit_status": 1,
+            "expected_eligible": false,
+            "new_suffix": true,
+            "output_sha256": "011e2eef36a7965d1d499741dc58338233b1ed4f10d62669c50b0b317a5bf896",
+            "output_utf8": null,
+            "schema": "compand.command_result.v1",
+            "signed": false,
+            "source_kind": "command_result",
+            "truncated": false,
+            "trusted_adapter": true
+          },
+          "warning_present": false
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-commands_checks_and_logs",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "a5edcb2c5bbf73fbe834e457cd21f1508cda8173d0e0c9d9be317ee0a91cbda1",
+      "oracle_class": "boundary",
+      "record_id": "commands_checks_and_logs-development-boundary-boundary-failed_check-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "integer_exit_status_authoritative",
+        "diagnostic_order_and_tail_preserved"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-commands_checks_and_logs-development-boundary-boundary-warning_on_success-v1",
+              "output": "case_000: passed\ncase_001: passed\ncase_002: passed\ncase_003: passed\ncase_004: passed\ncase_005: passed\ncase_006: passed\ncase_007: passed\ncase_008: passed\ncase_009: passed\ncase_010: passed\ncase_011: passed\ncase_012: passed\ncase_013: passed\ncase_014: passed\ncase_015: passed\ncase_016: passed\ncase_017: passed\ncase_018: passed\ncase_019: passed\ncase_020: passed\ncase_021: passed\ncase_022: passed\ncase_023: passed\ncase_024: passed\ncase_025: passed\ncase_026: passed\ncase_027: passed\ncase_028: passed\ncase_029: passed\ncase_030: passed\ncase_031: passed\ncase_032: passed\ncase_033: passed\ncase_034: passed\ncase_035: passed\ncase_036: passed\ncase_037: passed\ncase_038: passed\ncase_039: passed\ncase_040: passed\ncase_041: passed\ncase_042: passed\ncase_043: passed\ncase_044: passed\ncase_045: passed\ncase_046: passed\ncase_047: passed\ncase_048: passed\ncase_049: passed\ncase_050: passed\ncase_051: passed\ncase_052: passed\ncase_053: passed\ncase_054: passed\ncase_055: passed\ncase_056: passed\ncase_057: passed\ncase_058: passed\ncase_059: passed\ncase_060: passed\ncase_061: passed\ncase_062: passed\ncase_063: passed\ncase_064: passed\ncase_065: passed\ncase_066: passed\ncase_067: passed\ncase_068: passed\ncase_069: passed\ncase_070: passed\ncase_071: passed\ncase_072: passed\ncase_073: passed\ncase_074: passed\ncase_075: passed\ncase_076: passed\ncase_077: passed\ncase_078: passed\ncase_079: passed\ncase_080: passed\ncase_081: passed\ncase_082: passed\ncase_083: passed\nwarning: synthetic boundary signal\n",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "32567361a37dccdf50b8c5c9cada6c19316d67a709a509ca52e0fb7500b34f42",
+      "case_id": "warning_on_success",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "command-aware-projection-v1": "decline_ineligible",
+        "successful-check-projection-v1": "decline_ineligible"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-commands_checks_and_logs-development-boundary-boundary-warning_on_success-v1",
+                "output": "case_000: passed\ncase_001: passed\ncase_002: passed\ncase_003: passed\ncase_004: passed\ncase_005: passed\ncase_006: passed\ncase_007: passed\ncase_008: passed\ncase_009: passed\ncase_010: passed\ncase_011: passed\ncase_012: passed\ncase_013: passed\ncase_014: passed\ncase_015: passed\ncase_016: passed\ncase_017: passed\ncase_018: passed\ncase_019: passed\ncase_020: passed\ncase_021: passed\ncase_022: passed\ncase_023: passed\ncase_024: passed\ncase_025: passed\ncase_026: passed\ncase_027: passed\ncase_028: passed\ncase_029: passed\ncase_030: passed\ncase_031: passed\ncase_032: passed\ncase_033: passed\ncase_034: passed\ncase_035: passed\ncase_036: passed\ncase_037: passed\ncase_038: passed\ncase_039: passed\ncase_040: passed\ncase_041: passed\ncase_042: passed\ncase_043: passed\ncase_044: passed\ncase_045: passed\ncase_046: passed\ncase_047: passed\ncase_048: passed\ncase_049: passed\ncase_050: passed\ncase_051: passed\ncase_052: passed\ncase_053: passed\ncase_054: passed\ncase_055: passed\ncase_056: passed\ncase_057: passed\ncase_058: passed\ncase_059: passed\ncase_060: passed\ncase_061: passed\ncase_062: passed\ncase_063: passed\ncase_064: passed\ncase_065: passed\ncase_066: passed\ncase_067: passed\ncase_068: passed\ncase_069: passed\ncase_070: passed\ncase_071: passed\ncase_072: passed\ncase_073: passed\ncase_074: passed\ncase_075: passed\ncase_076: passed\ncase_077: passed\ncase_078: passed\ncase_079: passed\ncase_080: passed\ncase_081: passed\ncase_082: passed\ncase_083: passed\nwarning: synthetic boundary signal\n",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "artifact_expansion_utf8": null,
+          "case_id": "warning_on_success",
+          "command": "python3 -m unittest synthetic_fixture_test",
+          "exit_status": 0,
+          "lines": [
+            "case_000: passed",
+            "case_001: passed",
+            "case_002: passed",
+            "case_003: passed",
+            "case_004: passed",
+            "case_005: passed",
+            "case_006: passed",
+            "case_007: passed",
+            "case_008: passed",
+            "case_009: passed",
+            "case_010: passed",
+            "case_011: passed",
+            "case_012: passed",
+            "case_013: passed",
+            "case_014: passed",
+            "case_015: passed",
+            "case_016: passed",
+            "case_017: passed",
+            "case_018: passed",
+            "case_019: passed",
+            "case_020: passed",
+            "case_021: passed",
+            "case_022: passed",
+            "case_023: passed",
+            "case_024: passed",
+            "case_025: passed",
+            "case_026: passed",
+            "case_027: passed",
+            "case_028: passed",
+            "case_029: passed",
+            "case_030: passed",
+            "case_031: passed",
+            "case_032: passed",
+            "case_033: passed",
+            "case_034: passed",
+            "case_035: passed",
+            "case_036: passed",
+            "case_037: passed",
+            "case_038: passed",
+            "case_039: passed",
+            "case_040: passed",
+            "case_041: passed",
+            "case_042: passed",
+            "case_043: passed",
+            "case_044: passed",
+            "case_045: passed",
+            "case_046: passed",
+            "case_047: passed",
+            "case_048: passed",
+            "case_049: passed",
+            "case_050: passed",
+            "case_051: passed",
+            "case_052: passed",
+            "case_053: passed",
+            "case_054: passed",
+            "case_055: passed",
+            "case_056: passed",
+            "case_057: passed",
+            "case_058: passed",
+            "case_059: passed",
+            "case_060: passed",
+            "case_061: passed",
+            "case_062: passed",
+            "case_063: passed",
+            "case_064: passed",
+            "case_065: passed",
+            "case_066: passed",
+            "case_067: passed",
+            "case_068: passed",
+            "case_069: passed",
+            "case_070: passed",
+            "case_071: passed",
+            "case_072: passed",
+            "case_073: passed",
+            "case_074: passed",
+            "case_075: passed",
+            "case_076: passed",
+            "case_077: passed",
+            "case_078: passed",
+            "case_079: passed",
+            "case_080: passed",
+            "case_081: passed",
+            "case_082: passed",
+            "case_083: passed",
+            "warning: synthetic boundary signal"
+          ],
+          "maximum_eligible_output_bytes": 1048576,
+          "oracle_class": "boundary",
+          "output_byte_count": 1463,
+          "output_kind": "check",
+          "output_line_count": 85,
+          "output_sha256": "a34b119dc5f669eb8b8ae14f82c27258ea006757503ee809c6ee1d3fac884f19",
+          "output_utf8": "case_000: passed\ncase_001: passed\ncase_002: passed\ncase_003: passed\ncase_004: passed\ncase_005: passed\ncase_006: passed\ncase_007: passed\ncase_008: passed\ncase_009: passed\ncase_010: passed\ncase_011: passed\ncase_012: passed\ncase_013: passed\ncase_014: passed\ncase_015: passed\ncase_016: passed\ncase_017: passed\ncase_018: passed\ncase_019: passed\ncase_020: passed\ncase_021: passed\ncase_022: passed\ncase_023: passed\ncase_024: passed\ncase_025: passed\ncase_026: passed\ncase_027: passed\ncase_028: passed\ncase_029: passed\ncase_030: passed\ncase_031: passed\ncase_032: passed\ncase_033: passed\ncase_034: passed\ncase_035: passed\ncase_036: passed\ncase_037: passed\ncase_038: passed\ncase_039: passed\ncase_040: passed\ncase_041: passed\ncase_042: passed\ncase_043: passed\ncase_044: passed\ncase_045: passed\ncase_046: passed\ncase_047: passed\ncase_048: passed\ncase_049: passed\ncase_050: passed\ncase_051: passed\ncase_052: passed\ncase_053: passed\ncase_054: passed\ncase_055: passed\ncase_056: passed\ncase_057: passed\ncase_058: passed\ncase_059: passed\ncase_060: passed\ncase_061: passed\ncase_062: passed\ncase_063: passed\ncase_064: passed\ncase_065: passed\ncase_066: passed\ncase_067: passed\ncase_068: passed\ncase_069: passed\ncase_070: passed\ncase_071: passed\ncase_072: passed\ncase_073: passed\ncase_074: passed\ncase_075: passed\ncase_076: passed\ncase_077: passed\ncase_078: passed\ncase_079: passed\ncase_080: passed\ncase_081: passed\ncase_082: passed\ncase_083: passed\nwarning: synthetic boundary signal\n",
+          "oversized": false,
+          "passthrough_required": false,
+          "projection_candidate_byte_count": 293,
+          "projection_candidate_utf8": "{\"artifact_sha256\":\"a34b119dc5f669eb8b8ae14f82c27258ea006757503ee809c6ee1d3fac884f19\",\"command\":\"python3 -m unittest synthetic_fixture_test\",\"exit_status\":0,\"head\":[\"case_000: passed\",\"case_001: passed\"],\"tail\":[\"case_083: passed\",\"warning: synthetic boundary signal\"],\"version\":\"commands-v1\"}",
+          "projection_version": "commands-v1",
+          "synthetic_record_id": "commands_checks_and_logs-development-boundary-boundary-warning_on_success-v1",
+          "truncated": false,
+          "typed_command_result_receipt": {
+            "byte_count": 1463,
+            "call_id": "call-commands_checks_and_logs-development-boundary-boundary-warning_on_success-v1",
+            "content_type": "text/plain",
+            "encoding": "utf-8",
+            "exit_status": 0,
+            "expected_eligible": false,
+            "new_suffix": true,
+            "output_sha256": "a34b119dc5f669eb8b8ae14f82c27258ea006757503ee809c6ee1d3fac884f19",
+            "output_utf8": null,
+            "schema": "compand.command_result.v1",
+            "signed": false,
+            "source_kind": "command_result",
+            "truncated": false,
+            "trusted_adapter": true
+          },
+          "warning_present": true
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-commands_checks_and_logs",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "920981d0c87ba98c9800ef2f42fce6c440f00a9afc7ed7ea5dfdf4dd0a3bef61",
+      "oracle_class": "boundary",
+      "record_id": "commands_checks_and_logs-development-boundary-boundary-warning_on_success-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "integer_exit_status_authoritative",
+        "diagnostic_order_and_tail_preserved"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-commands_checks_and_logs-development-boundary-boundary-ambiguous_exit_status-v1",
+              "output": "case_000: passed\ncase_001: passed\ncase_002: passed\ncase_003: passed\ncase_004: passed\ncase_005: passed\ncase_006: passed\ncase_007: passed\ncase_008: passed\ncase_009: passed\ncase_010: passed\ncase_011: passed\ncase_012: passed\ncase_013: passed\ncase_014: passed\ncase_015: passed\ncase_016: passed\ncase_017: passed\ncase_018: passed\ncase_019: passed\ncase_020: passed\ncase_021: passed\ncase_022: passed\ncase_023: passed\ncase_024: passed\ncase_025: passed\ncase_026: passed\ncase_027: passed\ncase_028: passed\ncase_029: passed\ncase_030: passed\ncase_031: passed\ncase_032: passed\ncase_033: passed\ncase_034: passed\ncase_035: passed\ncase_036: passed\ncase_037: passed\ncase_038: passed\ncase_039: passed\ncase_040: passed\ncase_041: passed\ncase_042: passed\ncase_043: passed\ncase_044: passed\ncase_045: passed\ncase_046: passed\ncase_047: passed\ncase_048: passed\ncase_049: passed\ncase_050: passed\ncase_051: passed\ncase_052: passed\ncase_053: passed\ncase_054: passed\ncase_055: passed\ncase_056: passed\ncase_057: passed\ncase_058: passed\ncase_059: passed\ncase_060: passed\ncase_061: passed\ncase_062: passed\ncase_063: passed\ncase_064: passed\ncase_065: passed\ncase_066: passed\ncase_067: passed\ncase_068: passed\ncase_069: passed\ncase_070: passed\ncase_071: passed\ncase_072: passed\ncase_073: passed\ncase_074: passed\ncase_075: passed\ncase_076: passed\ncase_077: passed\ncase_078: passed\ncase_079: passed\ncase_080: passed\ncase_081: passed\ncase_082: passed\ncase_083: passed\n",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "d7766fb04281ed2b6e5c7967052c5b1aa065ccf0324042c6bd12cf780b1ff406",
+      "case_id": "ambiguous_exit_status",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "command-aware-projection-v1": "decline_ineligible",
+        "successful-check-projection-v1": "decline_ineligible"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-commands_checks_and_logs-development-boundary-boundary-ambiguous_exit_status-v1",
+                "output": "case_000: passed\ncase_001: passed\ncase_002: passed\ncase_003: passed\ncase_004: passed\ncase_005: passed\ncase_006: passed\ncase_007: passed\ncase_008: passed\ncase_009: passed\ncase_010: passed\ncase_011: passed\ncase_012: passed\ncase_013: passed\ncase_014: passed\ncase_015: passed\ncase_016: passed\ncase_017: passed\ncase_018: passed\ncase_019: passed\ncase_020: passed\ncase_021: passed\ncase_022: passed\ncase_023: passed\ncase_024: passed\ncase_025: passed\ncase_026: passed\ncase_027: passed\ncase_028: passed\ncase_029: passed\ncase_030: passed\ncase_031: passed\ncase_032: passed\ncase_033: passed\ncase_034: passed\ncase_035: passed\ncase_036: passed\ncase_037: passed\ncase_038: passed\ncase_039: passed\ncase_040: passed\ncase_041: passed\ncase_042: passed\ncase_043: passed\ncase_044: passed\ncase_045: passed\ncase_046: passed\ncase_047: passed\ncase_048: passed\ncase_049: passed\ncase_050: passed\ncase_051: passed\ncase_052: passed\ncase_053: passed\ncase_054: passed\ncase_055: passed\ncase_056: passed\ncase_057: passed\ncase_058: passed\ncase_059: passed\ncase_060: passed\ncase_061: passed\ncase_062: passed\ncase_063: passed\ncase_064: passed\ncase_065: passed\ncase_066: passed\ncase_067: passed\ncase_068: passed\ncase_069: passed\ncase_070: passed\ncase_071: passed\ncase_072: passed\ncase_073: passed\ncase_074: passed\ncase_075: passed\ncase_076: passed\ncase_077: passed\ncase_078: passed\ncase_079: passed\ncase_080: passed\ncase_081: passed\ncase_082: passed\ncase_083: passed\n",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "artifact_expansion_utf8": null,
+          "case_id": "ambiguous_exit_status",
+          "command": "python3 -m unittest synthetic_fixture_test",
+          "exit_status": null,
+          "lines": [
+            "case_000: passed",
+            "case_001: passed",
+            "case_002: passed",
+            "case_003: passed",
+            "case_004: passed",
+            "case_005: passed",
+            "case_006: passed",
+            "case_007: passed",
+            "case_008: passed",
+            "case_009: passed",
+            "case_010: passed",
+            "case_011: passed",
+            "case_012: passed",
+            "case_013: passed",
+            "case_014: passed",
+            "case_015: passed",
+            "case_016: passed",
+            "case_017: passed",
+            "case_018: passed",
+            "case_019: passed",
+            "case_020: passed",
+            "case_021: passed",
+            "case_022: passed",
+            "case_023: passed",
+            "case_024: passed",
+            "case_025: passed",
+            "case_026: passed",
+            "case_027: passed",
+            "case_028: passed",
+            "case_029: passed",
+            "case_030: passed",
+            "case_031: passed",
+            "case_032: passed",
+            "case_033: passed",
+            "case_034: passed",
+            "case_035: passed",
+            "case_036: passed",
+            "case_037: passed",
+            "case_038: passed",
+            "case_039: passed",
+            "case_040: passed",
+            "case_041: passed",
+            "case_042: passed",
+            "case_043: passed",
+            "case_044: passed",
+            "case_045: passed",
+            "case_046: passed",
+            "case_047: passed",
+            "case_048: passed",
+            "case_049: passed",
+            "case_050: passed",
+            "case_051: passed",
+            "case_052: passed",
+            "case_053: passed",
+            "case_054: passed",
+            "case_055: passed",
+            "case_056: passed",
+            "case_057: passed",
+            "case_058: passed",
+            "case_059: passed",
+            "case_060: passed",
+            "case_061: passed",
+            "case_062: passed",
+            "case_063: passed",
+            "case_064: passed",
+            "case_065: passed",
+            "case_066: passed",
+            "case_067: passed",
+            "case_068: passed",
+            "case_069: passed",
+            "case_070: passed",
+            "case_071: passed",
+            "case_072: passed",
+            "case_073: passed",
+            "case_074: passed",
+            "case_075: passed",
+            "case_076: passed",
+            "case_077: passed",
+            "case_078: passed",
+            "case_079: passed",
+            "case_080: passed",
+            "case_081: passed",
+            "case_082: passed",
+            "case_083: passed"
+          ],
+          "maximum_eligible_output_bytes": 1048576,
+          "oracle_class": "boundary",
+          "output_byte_count": 1428,
+          "output_kind": "check",
+          "output_line_count": 84,
+          "output_sha256": "f8678dfe41770452781d07c5812b3f4c70a97b44096754ed5bd898493991d8ba",
+          "output_utf8": "case_000: passed\ncase_001: passed\ncase_002: passed\ncase_003: passed\ncase_004: passed\ncase_005: passed\ncase_006: passed\ncase_007: passed\ncase_008: passed\ncase_009: passed\ncase_010: passed\ncase_011: passed\ncase_012: passed\ncase_013: passed\ncase_014: passed\ncase_015: passed\ncase_016: passed\ncase_017: passed\ncase_018: passed\ncase_019: passed\ncase_020: passed\ncase_021: passed\ncase_022: passed\ncase_023: passed\ncase_024: passed\ncase_025: passed\ncase_026: passed\ncase_027: passed\ncase_028: passed\ncase_029: passed\ncase_030: passed\ncase_031: passed\ncase_032: passed\ncase_033: passed\ncase_034: passed\ncase_035: passed\ncase_036: passed\ncase_037: passed\ncase_038: passed\ncase_039: passed\ncase_040: passed\ncase_041: passed\ncase_042: passed\ncase_043: passed\ncase_044: passed\ncase_045: passed\ncase_046: passed\ncase_047: passed\ncase_048: passed\ncase_049: passed\ncase_050: passed\ncase_051: passed\ncase_052: passed\ncase_053: passed\ncase_054: passed\ncase_055: passed\ncase_056: passed\ncase_057: passed\ncase_058: passed\ncase_059: passed\ncase_060: passed\ncase_061: passed\ncase_062: passed\ncase_063: passed\ncase_064: passed\ncase_065: passed\ncase_066: passed\ncase_067: passed\ncase_068: passed\ncase_069: passed\ncase_070: passed\ncase_071: passed\ncase_072: passed\ncase_073: passed\ncase_074: passed\ncase_075: passed\ncase_076: passed\ncase_077: passed\ncase_078: passed\ncase_079: passed\ncase_080: passed\ncase_081: passed\ncase_082: passed\ncase_083: passed\n",
+          "oversized": false,
+          "passthrough_required": false,
+          "projection_candidate_byte_count": 278,
+          "projection_candidate_utf8": "{\"artifact_sha256\":\"f8678dfe41770452781d07c5812b3f4c70a97b44096754ed5bd898493991d8ba\",\"command\":\"python3 -m unittest synthetic_fixture_test\",\"exit_status\":null,\"head\":[\"case_000: passed\",\"case_001: passed\"],\"tail\":[\"case_082: passed\",\"case_083: passed\"],\"version\":\"commands-v1\"}",
+          "projection_version": "commands-v1",
+          "synthetic_record_id": "commands_checks_and_logs-development-boundary-boundary-ambiguous_exit_status-v1",
+          "truncated": false,
+          "typed_command_result_receipt": {
+            "byte_count": 1428,
+            "call_id": "call-commands_checks_and_logs-development-boundary-boundary-ambiguous_exit_status-v1",
+            "content_type": "text/plain",
+            "encoding": "utf-8",
+            "exit_status": null,
+            "expected_eligible": false,
+            "new_suffix": true,
+            "output_sha256": "f8678dfe41770452781d07c5812b3f4c70a97b44096754ed5bd898493991d8ba",
+            "output_utf8": null,
+            "schema": "compand.command_result.v1",
+            "signed": false,
+            "source_kind": "command_result",
+            "truncated": false,
+            "trusted_adapter": true
+          },
+          "warning_present": false
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-commands_checks_and_logs",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "cfc68c38ae5544de21181eb4d6f77e9413e775b0e0de302dcf9519f7ef885155",
+      "oracle_class": "boundary",
+      "record_id": "commands_checks_and_logs-development-boundary-boundary-ambiguous_exit_status-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "integer_exit_status_authoritative",
+        "diagnostic_order_and_tail_preserved"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-commands_checks_and_logs-development-boundary-boundary-git_status-v1",
+              "output": "case_000: passed\ncase_001: passed\ncase_002: passed\ncase_003: passed\ncase_004: passed\ncase_005: passed\ncase_006: passed\ncase_007: passed\ncase_008: passed\ncase_009: passed\ncase_010: passed\ncase_011: passed\ncase_012: passed\ncase_013: passed\ncase_014: passed\ncase_015: passed\ncase_016: passed\ncase_017: passed\ncase_018: passed\ncase_019: passed\ncase_020: passed\ncase_021: passed\ncase_022: passed\ncase_023: passed\ncase_024: passed\ncase_025: passed\ncase_026: passed\ncase_027: passed\ncase_028: passed\ncase_029: passed\ncase_030: passed\ncase_031: passed\ncase_032: passed\ncase_033: passed\ncase_034: passed\ncase_035: passed\ncase_036: passed\ncase_037: passed\ncase_038: passed\ncase_039: passed\ncase_040: passed\ncase_041: passed\ncase_042: passed\ncase_043: passed\ncase_044: passed\ncase_045: passed\ncase_046: passed\ncase_047: passed\ncase_048: passed\ncase_049: passed\ncase_050: passed\ncase_051: passed\ncase_052: passed\ncase_053: passed\ncase_054: passed\ncase_055: passed\ncase_056: passed\ncase_057: passed\ncase_058: passed\ncase_059: passed\ncase_060: passed\ncase_061: passed\ncase_062: passed\ncase_063: passed\ncase_064: passed\ncase_065: passed\ncase_066: passed\ncase_067: passed\ncase_068: passed\ncase_069: passed\ncase_070: passed\ncase_071: passed\ncase_072: passed\ncase_073: passed\ncase_074: passed\ncase_075: passed\ncase_076: passed\ncase_077: passed\ncase_078: passed\ncase_079: passed\ncase_080: passed\ncase_081: passed\ncase_082: passed\ncase_083: passed\n",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "ed752f85c9c6784aa8064c2fc5fd7aeac41d05529ba7770b2d44af8d0486a229",
+      "case_id": "git_status",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "command-aware-projection-v1": "decline_ineligible",
+        "successful-check-projection-v1": "decline_ineligible"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-commands_checks_and_logs-development-boundary-boundary-git_status-v1",
+                "output": "case_000: passed\ncase_001: passed\ncase_002: passed\ncase_003: passed\ncase_004: passed\ncase_005: passed\ncase_006: passed\ncase_007: passed\ncase_008: passed\ncase_009: passed\ncase_010: passed\ncase_011: passed\ncase_012: passed\ncase_013: passed\ncase_014: passed\ncase_015: passed\ncase_016: passed\ncase_017: passed\ncase_018: passed\ncase_019: passed\ncase_020: passed\ncase_021: passed\ncase_022: passed\ncase_023: passed\ncase_024: passed\ncase_025: passed\ncase_026: passed\ncase_027: passed\ncase_028: passed\ncase_029: passed\ncase_030: passed\ncase_031: passed\ncase_032: passed\ncase_033: passed\ncase_034: passed\ncase_035: passed\ncase_036: passed\ncase_037: passed\ncase_038: passed\ncase_039: passed\ncase_040: passed\ncase_041: passed\ncase_042: passed\ncase_043: passed\ncase_044: passed\ncase_045: passed\ncase_046: passed\ncase_047: passed\ncase_048: passed\ncase_049: passed\ncase_050: passed\ncase_051: passed\ncase_052: passed\ncase_053: passed\ncase_054: passed\ncase_055: passed\ncase_056: passed\ncase_057: passed\ncase_058: passed\ncase_059: passed\ncase_060: passed\ncase_061: passed\ncase_062: passed\ncase_063: passed\ncase_064: passed\ncase_065: passed\ncase_066: passed\ncase_067: passed\ncase_068: passed\ncase_069: passed\ncase_070: passed\ncase_071: passed\ncase_072: passed\ncase_073: passed\ncase_074: passed\ncase_075: passed\ncase_076: passed\ncase_077: passed\ncase_078: passed\ncase_079: passed\ncase_080: passed\ncase_081: passed\ncase_082: passed\ncase_083: passed\n",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "artifact_expansion_utf8": null,
+          "case_id": "git_status",
+          "command": "python3 -m unittest synthetic_fixture_test",
+          "exit_status": 0,
+          "lines": [
+            "case_000: passed",
+            "case_001: passed",
+            "case_002: passed",
+            "case_003: passed",
+            "case_004: passed",
+            "case_005: passed",
+            "case_006: passed",
+            "case_007: passed",
+            "case_008: passed",
+            "case_009: passed",
+            "case_010: passed",
+            "case_011: passed",
+            "case_012: passed",
+            "case_013: passed",
+            "case_014: passed",
+            "case_015: passed",
+            "case_016: passed",
+            "case_017: passed",
+            "case_018: passed",
+            "case_019: passed",
+            "case_020: passed",
+            "case_021: passed",
+            "case_022: passed",
+            "case_023: passed",
+            "case_024: passed",
+            "case_025: passed",
+            "case_026: passed",
+            "case_027: passed",
+            "case_028: passed",
+            "case_029: passed",
+            "case_030: passed",
+            "case_031: passed",
+            "case_032: passed",
+            "case_033: passed",
+            "case_034: passed",
+            "case_035: passed",
+            "case_036: passed",
+            "case_037: passed",
+            "case_038: passed",
+            "case_039: passed",
+            "case_040: passed",
+            "case_041: passed",
+            "case_042: passed",
+            "case_043: passed",
+            "case_044: passed",
+            "case_045: passed",
+            "case_046: passed",
+            "case_047: passed",
+            "case_048: passed",
+            "case_049: passed",
+            "case_050: passed",
+            "case_051: passed",
+            "case_052: passed",
+            "case_053: passed",
+            "case_054: passed",
+            "case_055: passed",
+            "case_056: passed",
+            "case_057: passed",
+            "case_058: passed",
+            "case_059: passed",
+            "case_060: passed",
+            "case_061: passed",
+            "case_062: passed",
+            "case_063: passed",
+            "case_064: passed",
+            "case_065: passed",
+            "case_066: passed",
+            "case_067: passed",
+            "case_068: passed",
+            "case_069: passed",
+            "case_070: passed",
+            "case_071: passed",
+            "case_072: passed",
+            "case_073: passed",
+            "case_074: passed",
+            "case_075: passed",
+            "case_076: passed",
+            "case_077: passed",
+            "case_078: passed",
+            "case_079: passed",
+            "case_080: passed",
+            "case_081: passed",
+            "case_082: passed",
+            "case_083: passed"
+          ],
+          "maximum_eligible_output_bytes": 1048576,
+          "oracle_class": "boundary",
+          "output_byte_count": 1428,
+          "output_kind": "git_status",
+          "output_line_count": 84,
+          "output_sha256": "f8678dfe41770452781d07c5812b3f4c70a97b44096754ed5bd898493991d8ba",
+          "output_utf8": "case_000: passed\ncase_001: passed\ncase_002: passed\ncase_003: passed\ncase_004: passed\ncase_005: passed\ncase_006: passed\ncase_007: passed\ncase_008: passed\ncase_009: passed\ncase_010: passed\ncase_011: passed\ncase_012: passed\ncase_013: passed\ncase_014: passed\ncase_015: passed\ncase_016: passed\ncase_017: passed\ncase_018: passed\ncase_019: passed\ncase_020: passed\ncase_021: passed\ncase_022: passed\ncase_023: passed\ncase_024: passed\ncase_025: passed\ncase_026: passed\ncase_027: passed\ncase_028: passed\ncase_029: passed\ncase_030: passed\ncase_031: passed\ncase_032: passed\ncase_033: passed\ncase_034: passed\ncase_035: passed\ncase_036: passed\ncase_037: passed\ncase_038: passed\ncase_039: passed\ncase_040: passed\ncase_041: passed\ncase_042: passed\ncase_043: passed\ncase_044: passed\ncase_045: passed\ncase_046: passed\ncase_047: passed\ncase_048: passed\ncase_049: passed\ncase_050: passed\ncase_051: passed\ncase_052: passed\ncase_053: passed\ncase_054: passed\ncase_055: passed\ncase_056: passed\ncase_057: passed\ncase_058: passed\ncase_059: passed\ncase_060: passed\ncase_061: passed\ncase_062: passed\ncase_063: passed\ncase_064: passed\ncase_065: passed\ncase_066: passed\ncase_067: passed\ncase_068: passed\ncase_069: passed\ncase_070: passed\ncase_071: passed\ncase_072: passed\ncase_073: passed\ncase_074: passed\ncase_075: passed\ncase_076: passed\ncase_077: passed\ncase_078: passed\ncase_079: passed\ncase_080: passed\ncase_081: passed\ncase_082: passed\ncase_083: passed\n",
+          "oversized": false,
+          "passthrough_required": false,
+          "projection_candidate_byte_count": 275,
+          "projection_candidate_utf8": "{\"artifact_sha256\":\"f8678dfe41770452781d07c5812b3f4c70a97b44096754ed5bd898493991d8ba\",\"command\":\"python3 -m unittest synthetic_fixture_test\",\"exit_status\":0,\"head\":[\"case_000: passed\",\"case_001: passed\"],\"tail\":[\"case_082: passed\",\"case_083: passed\"],\"version\":\"commands-v1\"}",
+          "projection_version": "commands-v1",
+          "synthetic_record_id": "commands_checks_and_logs-development-boundary-boundary-git_status-v1",
+          "truncated": false,
+          "typed_command_result_receipt": {
+            "byte_count": 1428,
+            "call_id": "call-commands_checks_and_logs-development-boundary-boundary-git_status-v1",
+            "content_type": "text/plain",
+            "encoding": "utf-8",
+            "exit_status": 0,
+            "expected_eligible": false,
+            "new_suffix": true,
+            "output_sha256": "f8678dfe41770452781d07c5812b3f4c70a97b44096754ed5bd898493991d8ba",
+            "output_utf8": null,
+            "schema": "compand.command_result.v1",
+            "signed": false,
+            "source_kind": "command_result",
+            "truncated": false,
+            "trusted_adapter": true
+          },
+          "warning_present": false
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-commands_checks_and_logs",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "6528178c62bfcc991ff0acd5718deb7756d25dce2d2489fe71f55fef534dcab1",
+      "oracle_class": "boundary",
+      "record_id": "commands_checks_and_logs-development-boundary-boundary-git_status-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "integer_exit_status_authoritative",
+        "diagnostic_order_and_tail_preserved"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-commands_checks_and_logs-development-boundary-boundary-git_diff-v1",
+              "output": "case_000: passed\ncase_001: passed\ncase_002: passed\ncase_003: passed\ncase_004: passed\ncase_005: passed\ncase_006: passed\ncase_007: passed\ncase_008: passed\ncase_009: passed\ncase_010: passed\ncase_011: passed\ncase_012: passed\ncase_013: passed\ncase_014: passed\ncase_015: passed\ncase_016: passed\ncase_017: passed\ncase_018: passed\ncase_019: passed\ncase_020: passed\ncase_021: passed\ncase_022: passed\ncase_023: passed\ncase_024: passed\ncase_025: passed\ncase_026: passed\ncase_027: passed\ncase_028: passed\ncase_029: passed\ncase_030: passed\ncase_031: passed\ncase_032: passed\ncase_033: passed\ncase_034: passed\ncase_035: passed\ncase_036: passed\ncase_037: passed\ncase_038: passed\ncase_039: passed\ncase_040: passed\ncase_041: passed\ncase_042: passed\ncase_043: passed\ncase_044: passed\ncase_045: passed\ncase_046: passed\ncase_047: passed\ncase_048: passed\ncase_049: passed\ncase_050: passed\ncase_051: passed\ncase_052: passed\ncase_053: passed\ncase_054: passed\ncase_055: passed\ncase_056: passed\ncase_057: passed\ncase_058: passed\ncase_059: passed\ncase_060: passed\ncase_061: passed\ncase_062: passed\ncase_063: passed\ncase_064: passed\ncase_065: passed\ncase_066: passed\ncase_067: passed\ncase_068: passed\ncase_069: passed\ncase_070: passed\ncase_071: passed\ncase_072: passed\ncase_073: passed\ncase_074: passed\ncase_075: passed\ncase_076: passed\ncase_077: passed\ncase_078: passed\ncase_079: passed\ncase_080: passed\ncase_081: passed\ncase_082: passed\ncase_083: passed\n",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "e4ee5775d7a762b4ddc1bbf7fba9d9a89199cbae78963f8ea624cc08b5d3df32",
+      "case_id": "git_diff",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "command-aware-projection-v1": "decline_ineligible",
+        "successful-check-projection-v1": "decline_ineligible"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-commands_checks_and_logs-development-boundary-boundary-git_diff-v1",
+                "output": "case_000: passed\ncase_001: passed\ncase_002: passed\ncase_003: passed\ncase_004: passed\ncase_005: passed\ncase_006: passed\ncase_007: passed\ncase_008: passed\ncase_009: passed\ncase_010: passed\ncase_011: passed\ncase_012: passed\ncase_013: passed\ncase_014: passed\ncase_015: passed\ncase_016: passed\ncase_017: passed\ncase_018: passed\ncase_019: passed\ncase_020: passed\ncase_021: passed\ncase_022: passed\ncase_023: passed\ncase_024: passed\ncase_025: passed\ncase_026: passed\ncase_027: passed\ncase_028: passed\ncase_029: passed\ncase_030: passed\ncase_031: passed\ncase_032: passed\ncase_033: passed\ncase_034: passed\ncase_035: passed\ncase_036: passed\ncase_037: passed\ncase_038: passed\ncase_039: passed\ncase_040: passed\ncase_041: passed\ncase_042: passed\ncase_043: passed\ncase_044: passed\ncase_045: passed\ncase_046: passed\ncase_047: passed\ncase_048: passed\ncase_049: passed\ncase_050: passed\ncase_051: passed\ncase_052: passed\ncase_053: passed\ncase_054: passed\ncase_055: passed\ncase_056: passed\ncase_057: passed\ncase_058: passed\ncase_059: passed\ncase_060: passed\ncase_061: passed\ncase_062: passed\ncase_063: passed\ncase_064: passed\ncase_065: passed\ncase_066: passed\ncase_067: passed\ncase_068: passed\ncase_069: passed\ncase_070: passed\ncase_071: passed\ncase_072: passed\ncase_073: passed\ncase_074: passed\ncase_075: passed\ncase_076: passed\ncase_077: passed\ncase_078: passed\ncase_079: passed\ncase_080: passed\ncase_081: passed\ncase_082: passed\ncase_083: passed\n",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "artifact_expansion_utf8": null,
+          "case_id": "git_diff",
+          "command": "python3 -m unittest synthetic_fixture_test",
+          "exit_status": 0,
+          "lines": [
+            "case_000: passed",
+            "case_001: passed",
+            "case_002: passed",
+            "case_003: passed",
+            "case_004: passed",
+            "case_005: passed",
+            "case_006: passed",
+            "case_007: passed",
+            "case_008: passed",
+            "case_009: passed",
+            "case_010: passed",
+            "case_011: passed",
+            "case_012: passed",
+            "case_013: passed",
+            "case_014: passed",
+            "case_015: passed",
+            "case_016: passed",
+            "case_017: passed",
+            "case_018: passed",
+            "case_019: passed",
+            "case_020: passed",
+            "case_021: passed",
+            "case_022: passed",
+            "case_023: passed",
+            "case_024: passed",
+            "case_025: passed",
+            "case_026: passed",
+            "case_027: passed",
+            "case_028: passed",
+            "case_029: passed",
+            "case_030: passed",
+            "case_031: passed",
+            "case_032: passed",
+            "case_033: passed",
+            "case_034: passed",
+            "case_035: passed",
+            "case_036: passed",
+            "case_037: passed",
+            "case_038: passed",
+            "case_039: passed",
+            "case_040: passed",
+            "case_041: passed",
+            "case_042: passed",
+            "case_043: passed",
+            "case_044: passed",
+            "case_045: passed",
+            "case_046: passed",
+            "case_047: passed",
+            "case_048: passed",
+            "case_049: passed",
+            "case_050: passed",
+            "case_051: passed",
+            "case_052: passed",
+            "case_053: passed",
+            "case_054: passed",
+            "case_055: passed",
+            "case_056: passed",
+            "case_057: passed",
+            "case_058: passed",
+            "case_059: passed",
+            "case_060: passed",
+            "case_061: passed",
+            "case_062: passed",
+            "case_063: passed",
+            "case_064: passed",
+            "case_065: passed",
+            "case_066: passed",
+            "case_067: passed",
+            "case_068: passed",
+            "case_069: passed",
+            "case_070: passed",
+            "case_071: passed",
+            "case_072: passed",
+            "case_073: passed",
+            "case_074: passed",
+            "case_075: passed",
+            "case_076: passed",
+            "case_077: passed",
+            "case_078: passed",
+            "case_079: passed",
+            "case_080: passed",
+            "case_081: passed",
+            "case_082: passed",
+            "case_083: passed"
+          ],
+          "maximum_eligible_output_bytes": 1048576,
+          "oracle_class": "boundary",
+          "output_byte_count": 1428,
+          "output_kind": "git_diff",
+          "output_line_count": 84,
+          "output_sha256": "f8678dfe41770452781d07c5812b3f4c70a97b44096754ed5bd898493991d8ba",
+          "output_utf8": "case_000: passed\ncase_001: passed\ncase_002: passed\ncase_003: passed\ncase_004: passed\ncase_005: passed\ncase_006: passed\ncase_007: passed\ncase_008: passed\ncase_009: passed\ncase_010: passed\ncase_011: passed\ncase_012: passed\ncase_013: passed\ncase_014: passed\ncase_015: passed\ncase_016: passed\ncase_017: passed\ncase_018: passed\ncase_019: passed\ncase_020: passed\ncase_021: passed\ncase_022: passed\ncase_023: passed\ncase_024: passed\ncase_025: passed\ncase_026: passed\ncase_027: passed\ncase_028: passed\ncase_029: passed\ncase_030: passed\ncase_031: passed\ncase_032: passed\ncase_033: passed\ncase_034: passed\ncase_035: passed\ncase_036: passed\ncase_037: passed\ncase_038: passed\ncase_039: passed\ncase_040: passed\ncase_041: passed\ncase_042: passed\ncase_043: passed\ncase_044: passed\ncase_045: passed\ncase_046: passed\ncase_047: passed\ncase_048: passed\ncase_049: passed\ncase_050: passed\ncase_051: passed\ncase_052: passed\ncase_053: passed\ncase_054: passed\ncase_055: passed\ncase_056: passed\ncase_057: passed\ncase_058: passed\ncase_059: passed\ncase_060: passed\ncase_061: passed\ncase_062: passed\ncase_063: passed\ncase_064: passed\ncase_065: passed\ncase_066: passed\ncase_067: passed\ncase_068: passed\ncase_069: passed\ncase_070: passed\ncase_071: passed\ncase_072: passed\ncase_073: passed\ncase_074: passed\ncase_075: passed\ncase_076: passed\ncase_077: passed\ncase_078: passed\ncase_079: passed\ncase_080: passed\ncase_081: passed\ncase_082: passed\ncase_083: passed\n",
+          "oversized": false,
+          "passthrough_required": false,
+          "projection_candidate_byte_count": 275,
+          "projection_candidate_utf8": "{\"artifact_sha256\":\"f8678dfe41770452781d07c5812b3f4c70a97b44096754ed5bd898493991d8ba\",\"command\":\"python3 -m unittest synthetic_fixture_test\",\"exit_status\":0,\"head\":[\"case_000: passed\",\"case_001: passed\"],\"tail\":[\"case_082: passed\",\"case_083: passed\"],\"version\":\"commands-v1\"}",
+          "projection_version": "commands-v1",
+          "synthetic_record_id": "commands_checks_and_logs-development-boundary-boundary-git_diff-v1",
+          "truncated": false,
+          "typed_command_result_receipt": {
+            "byte_count": 1428,
+            "call_id": "call-commands_checks_and_logs-development-boundary-boundary-git_diff-v1",
+            "content_type": "text/plain",
+            "encoding": "utf-8",
+            "exit_status": 0,
+            "expected_eligible": false,
+            "new_suffix": true,
+            "output_sha256": "f8678dfe41770452781d07c5812b3f4c70a97b44096754ed5bd898493991d8ba",
+            "output_utf8": null,
+            "schema": "compand.command_result.v1",
+            "signed": false,
+            "source_kind": "command_result",
+            "truncated": false,
+            "trusted_adapter": true
+          },
+          "warning_present": false
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-commands_checks_and_logs",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "e64c0f952926c6ed99e3c394ec68bb6d3939cbaa4d2b3be6543e872ecd23f9d3",
+      "oracle_class": "boundary",
+      "record_id": "commands_checks_and_logs-development-boundary-boundary-git_diff-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "integer_exit_status_authoritative",
+        "diagnostic_order_and_tail_preserved"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    }
+  ],
+  "cases": [
+    "failed_check",
+    "warning_on_success",
+    "ambiguous_exit_status",
+    "git_status",
+    "git_diff"
+  ],
+  "eligible_techniques": [],
+  "expected_disposition_by_technique": {
+    "command-aware-projection-v1": [
+      "decline_ineligible"
+    ],
+    "successful-check-projection-v1": [
+      "decline_ineligible"
+    ]
+  },
+  "expected_outcome": {
+    "by_record_id": {
+      "commands_checks_and_logs-development-boundary-boundary-ambiguous_exit_status-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "commands_checks_and_logs-development-boundary-boundary-failed_check-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "commands_checks_and_logs-development-boundary-boundary-git_diff-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "commands_checks_and_logs-development-boundary-boundary-git_status-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "commands_checks_and_logs-development-boundary-boundary-warning_on_success-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      }
+    },
+    "schema": "compand.ces1.case_outcome_bundle.v1"
+  },
+  "fixture_family": "commands_checks_and_logs",
+  "fixture_id": "commands_checks_and_logs-boundary-v1",
+  "generator_or_source": {
+    "generator": "scripts/build_compand_phase2_corpus.py",
+    "kind": "sanitized_synthetic",
+    "raw_customer_content": false
+  },
+  "input": {
+    "case_input_hashes": [
+      {
+        "input_sha256": "a5edcb2c5bbf73fbe834e457cd21f1508cda8173d0e0c9d9be317ee0a91cbda1",
+        "record_id": "commands_checks_and_logs-development-boundary-boundary-failed_check-v1"
+      },
+      {
+        "input_sha256": "920981d0c87ba98c9800ef2f42fce6c440f00a9afc7ed7ea5dfdf4dd0a3bef61",
+        "record_id": "commands_checks_and_logs-development-boundary-boundary-warning_on_success-v1"
+      },
+      {
+        "input_sha256": "cfc68c38ae5544de21181eb4d6f77e9413e775b0e0de302dcf9519f7ef885155",
+        "record_id": "commands_checks_and_logs-development-boundary-boundary-ambiguous_exit_status-v1"
+      },
+      {
+        "input_sha256": "6528178c62bfcc991ff0acd5718deb7756d25dce2d2489fe71f55fef534dcab1",
+        "record_id": "commands_checks_and_logs-development-boundary-boundary-git_status-v1"
+      },
+      {
+        "input_sha256": "e64c0f952926c6ed99e3c394ec68bb6d3939cbaa4d2b3be6543e872ecd23f9d3",
+        "record_id": "commands_checks_and_logs-development-boundary-boundary-git_diff-v1"
+      }
+    ],
+    "schema": "compand.ces1.fixture_input_bundle.v1"
+  },
+  "input_sha256": "fc2c528c96f83d212f6ee3b7a1cafdb8871007773de9643a92e19715b021de2e",
+  "license": {
+    "reviewed": true,
+    "spdx": "CC0-1.0"
+  },
+  "oracle_classes": [
+    "boundary"
+  ],
+  "partition": "development",
+  "required_invariants": [
+    "baseline_provider_view_is_byte_unchanged_B0",
+    "baseline_input_and_provider_view_hashes_match",
+    "tenant_principal_session_context_epoch_isolation",
+    "source_bytes_are_never_overwritten",
+    "integer_exit_status_authoritative",
+    "diagnostic_order_and_tail_preserved"
+  ],
+  "revision": 5,
+  "schema": "compand.ces1.fixture.v2",
+  "workload_stratum": "check_output"
+}

@@ -1,0 +1,474 @@
+{
+  "baseline_provider_view": {
+    "case_provider_view_hashes": [
+      {
+        "baseline_provider_view_sha256": "d8332dfbcc0ab9ba0c09709f80822c0682747a45d932de49fa01ec7f5b8c147a",
+        "record_id": "exact_and_partial_overlap-development-boundary-boundary-missing_source-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "1707794043505713fd716bac6072f9519c20767649fb8b1bc2aea3d1cc6ae78d",
+        "record_id": "exact_and_partial_overlap-development-boundary-boundary-evicted_source-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "b1bc3550457eb72c55ccca6998450a7220c1431c9f9e5127a488be509ddaee3b",
+        "record_id": "exact_and_partial_overlap-development-boundary-boundary-below_70_percent_overlap-v1"
+      }
+    ],
+    "schema": "compand.ces1.provider_view_bundle.v1"
+  },
+  "baseline_provider_view_sha256": "c261316fad0839bb483343b9bfb1983eb2e84c0700157cde5215abd1ae065038",
+  "case_record_count": 3,
+  "case_records": [
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-exact_and_partial_overlap-development-boundary-boundary-missing_source-v1",
+              "output": "{\"case_id\": \"missing_source\", \"content_defined_chunk_max_bytes\": 8192, \"content_defined_chunk_min_bytes\": 512, \"content_defined_chunk_target_bytes\": 2048, \"content_defined_overlap_byte_count\": 0, \"content_defined_overlap_ratio\": 0.0, \"exact_duplicate_candidate_byte_count\": 201, \"exact_duplicate_candidate_utf8\": \"{\\\"kind\\\":\\\"exact_provider_visible_reference\\\",\\\"scope\\\":\\\"tenant-a/principal-a/session-a\\\",\\\"sha256\\\":\\\"d3d72b0d3218812c83d4a3f3e9f0d30ee0bb2df9c031f2fc9a85828f53c8c691\\\",\\\"version\\\":\\\"exact-duplicate-reference-v1\\\"}\", \"fastcdc_source_chunks\": [], \"fastcdc_target_chunks\": [{\"byte_count\": 39, \"index\": 0, \"offset\": 0, \"sha256\": \"d3d72b0d3218812c83d4a3f3e9f0d30ee0bb2df9c031f2fc9a85828f53c8c691\"}], \"new_results\": [\"synthetic row alpha\\nsynthetic row beta\\n\", \"synthetic row alpha\\nsynthetic row gamma\\n\"], \"oracle_class\": \"boundary\", \"overlap_ratio\": null, \"parallel_overlap_candidate_byte_count\": 290, \"parallel_overlap_candidate_utf8\": \"{\\\"scope\\\":\\\"tenant-a/principal-a/session-a\\\",\\\"siblings\\\":[{\\\"index\\\":0,\\\"pieces\\\":[{\\\"kind\\\":\\\"literal_utf8\\\",\\\"utf8\\\":\\\"synthetic row alpha\\\\nsynthetic row beta\\\\n\\\"}]},{\\\"index\\\":1,\\\"pieces\\\":[{\\\"kind\\\":\\\"literal_utf8\\\",\\\"utf8\\\":\\\"synthetic row alpha\\\\nsynthetic row gamma\\\\n\\\"}]}],\\\"version\\\":\\\"parallel-overlap-dedup-v1\\\"}\", \"parallel_source_byte_count\": 79, \"provider_visible_source\": null, \"reference_candidate_byte_count\": 201, \"reference_candidate_utf8\": \"{\\\"kind\\\":\\\"exact_provider_visible_reference\\\",\\\"scope\\\":\\\"tenant-a/principal-a/session-a\\\",\\\"sha256\\\":\\\"d3d72b0d3218812c83d4a3f3e9f0d30ee0bb2df9c031f2fc9a85828f53c8c691\\\",\\\"version\\\":\\\"exact-duplicate-reference-v1\\\"}\", \"requester_scope\": \"tenant-a/principal-a/session-a\", \"source_artifact_recoverable\": false, \"source_byte_count\": null, \"source_scope\": \"tenant-a/principal-a/session-a\", \"source_state\": \"missing\", \"subresult_chunk_candidate_byte_count\": 165, \"subresult_chunk_candidate_utf8\": \"{\\\"chunks\\\":[{\\\"kind\\\":\\\"literal_utf8\\\",\\\"utf8\\\":\\\"synthetic row alpha\\\\nsynthetic row beta\\\\n\\\"}],\\\"scope\\\":\\\"tenant-a/principal-a/session-a\\\",\\\"version\\\":\\\"subresult-chunk-dedup-v1\\\"}\", \"synthetic_record_id\": \"exact_and_partial_overlap-development-boundary-boundary-missing_source-v1\", \"target_candidate_byte_count\": 39, \"target_candidate_index\": 0, \"target_candidate_sha256\": \"d3d72b0d3218812c83d4a3f3e9f0d30ee0bb2df9c031f2fc9a85828f53c8c691\"}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "d8332dfbcc0ab9ba0c09709f80822c0682747a45d932de49fa01ec7f5b8c147a",
+      "case_id": "missing_source",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "exact-duplicate-reference-v1": "fail_recovery",
+        "parallel-overlap-dedup-v1": "fail_recovery",
+        "subresult-chunk-dedup-v1": "fail_recovery"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-exact_and_partial_overlap-development-boundary-boundary-missing_source-v1",
+                "output": "{\"case_id\": \"missing_source\", \"content_defined_chunk_max_bytes\": 8192, \"content_defined_chunk_min_bytes\": 512, \"content_defined_chunk_target_bytes\": 2048, \"content_defined_overlap_byte_count\": 0, \"content_defined_overlap_ratio\": 0.0, \"exact_duplicate_candidate_byte_count\": 201, \"exact_duplicate_candidate_utf8\": \"{\\\"kind\\\":\\\"exact_provider_visible_reference\\\",\\\"scope\\\":\\\"tenant-a/principal-a/session-a\\\",\\\"sha256\\\":\\\"d3d72b0d3218812c83d4a3f3e9f0d30ee0bb2df9c031f2fc9a85828f53c8c691\\\",\\\"version\\\":\\\"exact-duplicate-reference-v1\\\"}\", \"fastcdc_source_chunks\": [], \"fastcdc_target_chunks\": [{\"byte_count\": 39, \"index\": 0, \"offset\": 0, \"sha256\": \"d3d72b0d3218812c83d4a3f3e9f0d30ee0bb2df9c031f2fc9a85828f53c8c691\"}], \"new_results\": [\"synthetic row alpha\\nsynthetic row beta\\n\", \"synthetic row alpha\\nsynthetic row gamma\\n\"], \"oracle_class\": \"boundary\", \"overlap_ratio\": null, \"parallel_overlap_candidate_byte_count\": 290, \"parallel_overlap_candidate_utf8\": \"{\\\"scope\\\":\\\"tenant-a/principal-a/session-a\\\",\\\"siblings\\\":[{\\\"index\\\":0,\\\"pieces\\\":[{\\\"kind\\\":\\\"literal_utf8\\\",\\\"utf8\\\":\\\"synthetic row alpha\\\\nsynthetic row beta\\\\n\\\"}]},{\\\"index\\\":1,\\\"pieces\\\":[{\\\"kind\\\":\\\"literal_utf8\\\",\\\"utf8\\\":\\\"synthetic row alpha\\\\nsynthetic row gamma\\\\n\\\"}]}],\\\"version\\\":\\\"parallel-overlap-dedup-v1\\\"}\", \"parallel_source_byte_count\": 79, \"provider_visible_source\": null, \"reference_candidate_byte_count\": 201, \"reference_candidate_utf8\": \"{\\\"kind\\\":\\\"exact_provider_visible_reference\\\",\\\"scope\\\":\\\"tenant-a/principal-a/session-a\\\",\\\"sha256\\\":\\\"d3d72b0d3218812c83d4a3f3e9f0d30ee0bb2df9c031f2fc9a85828f53c8c691\\\",\\\"version\\\":\\\"exact-duplicate-reference-v1\\\"}\", \"requester_scope\": \"tenant-a/principal-a/session-a\", \"source_artifact_recoverable\": false, \"source_byte_count\": null, \"source_scope\": \"tenant-a/principal-a/session-a\", \"source_state\": \"missing\", \"subresult_chunk_candidate_byte_count\": 165, \"subresult_chunk_candidate_utf8\": \"{\\\"chunks\\\":[{\\\"kind\\\":\\\"literal_utf8\\\",\\\"utf8\\\":\\\"synthetic row alpha\\\\nsynthetic row beta\\\\n\\\"}],\\\"scope\\\":\\\"tenant-a/principal-a/session-a\\\",\\\"version\\\":\\\"subresult-chunk-dedup-v1\\\"}\", \"synthetic_record_id\": \"exact_and_partial_overlap-development-boundary-boundary-missing_source-v1\", \"target_candidate_byte_count\": 39, \"target_candidate_index\": 0, \"target_candidate_sha256\": \"d3d72b0d3218812c83d4a3f3e9f0d30ee0bb2df9c031f2fc9a85828f53c8c691\"}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "case_id": "missing_source",
+          "content_defined_chunk_max_bytes": 8192,
+          "content_defined_chunk_min_bytes": 512,
+          "content_defined_chunk_target_bytes": 2048,
+          "content_defined_overlap_byte_count": 0,
+          "content_defined_overlap_ratio": 0.0,
+          "exact_duplicate_candidate_byte_count": 201,
+          "exact_duplicate_candidate_utf8": "{\"kind\":\"exact_provider_visible_reference\",\"scope\":\"tenant-a/principal-a/session-a\",\"sha256\":\"d3d72b0d3218812c83d4a3f3e9f0d30ee0bb2df9c031f2fc9a85828f53c8c691\",\"version\":\"exact-duplicate-reference-v1\"}",
+          "fastcdc_source_chunks": [],
+          "fastcdc_target_chunks": [
+            {
+              "byte_count": 39,
+              "index": 0,
+              "offset": 0,
+              "sha256": "d3d72b0d3218812c83d4a3f3e9f0d30ee0bb2df9c031f2fc9a85828f53c8c691"
+            }
+          ],
+          "new_results": [
+            "synthetic row alpha\nsynthetic row beta\n",
+            "synthetic row alpha\nsynthetic row gamma\n"
+          ],
+          "oracle_class": "boundary",
+          "overlap_ratio": null,
+          "parallel_overlap_candidate_byte_count": 290,
+          "parallel_overlap_candidate_utf8": "{\"scope\":\"tenant-a/principal-a/session-a\",\"siblings\":[{\"index\":0,\"pieces\":[{\"kind\":\"literal_utf8\",\"utf8\":\"synthetic row alpha\\nsynthetic row beta\\n\"}]},{\"index\":1,\"pieces\":[{\"kind\":\"literal_utf8\",\"utf8\":\"synthetic row alpha\\nsynthetic row gamma\\n\"}]}],\"version\":\"parallel-overlap-dedup-v1\"}",
+          "parallel_source_byte_count": 79,
+          "provider_visible_source": null,
+          "reference_candidate_byte_count": 201,
+          "reference_candidate_utf8": "{\"kind\":\"exact_provider_visible_reference\",\"scope\":\"tenant-a/principal-a/session-a\",\"sha256\":\"d3d72b0d3218812c83d4a3f3e9f0d30ee0bb2df9c031f2fc9a85828f53c8c691\",\"version\":\"exact-duplicate-reference-v1\"}",
+          "requester_scope": "tenant-a/principal-a/session-a",
+          "source_artifact_recoverable": false,
+          "source_byte_count": null,
+          "source_scope": "tenant-a/principal-a/session-a",
+          "source_state": "missing",
+          "subresult_chunk_candidate_byte_count": 165,
+          "subresult_chunk_candidate_utf8": "{\"chunks\":[{\"kind\":\"literal_utf8\",\"utf8\":\"synthetic row alpha\\nsynthetic row beta\\n\"}],\"scope\":\"tenant-a/principal-a/session-a\",\"version\":\"subresult-chunk-dedup-v1\"}",
+          "synthetic_record_id": "exact_and_partial_overlap-development-boundary-boundary-missing_source-v1",
+          "target_candidate_byte_count": 39,
+          "target_candidate_index": 0,
+          "target_candidate_sha256": "d3d72b0d3218812c83d4a3f3e9f0d30ee0bb2df9c031f2fc9a85828f53c8c691"
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-exact_and_partial_overlap",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "c947950db821e26e9e90fd00db8c1a90ffb78da7fb88ec6b5437da096d3c6920",
+      "oracle_class": "boundary",
+      "record_id": "exact_and_partial_overlap-development-boundary-boundary-missing_source-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "provider_visible_source_required",
+        "scoped_exact_reconstruction"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-exact_and_partial_overlap-development-boundary-boundary-evicted_source-v1",
+              "output": "{\"case_id\": \"evicted_source\", \"content_defined_chunk_max_bytes\": 8192, \"content_defined_chunk_min_bytes\": 512, \"content_defined_chunk_target_bytes\": 2048, \"content_defined_overlap_byte_count\": 0, \"content_defined_overlap_ratio\": 0.0, \"exact_duplicate_candidate_byte_count\": 201, \"exact_duplicate_candidate_utf8\": \"{\\\"kind\\\":\\\"exact_provider_visible_reference\\\",\\\"scope\\\":\\\"tenant-a/principal-a/session-a\\\",\\\"sha256\\\":\\\"d3d72b0d3218812c83d4a3f3e9f0d30ee0bb2df9c031f2fc9a85828f53c8c691\\\",\\\"version\\\":\\\"exact-duplicate-reference-v1\\\"}\", \"fastcdc_source_chunks\": [], \"fastcdc_target_chunks\": [{\"byte_count\": 39, \"index\": 0, \"offset\": 0, \"sha256\": \"d3d72b0d3218812c83d4a3f3e9f0d30ee0bb2df9c031f2fc9a85828f53c8c691\"}], \"new_results\": [\"synthetic row alpha\\nsynthetic row beta\\n\", \"synthetic row alpha\\nsynthetic row gamma\\n\"], \"oracle_class\": \"boundary\", \"overlap_ratio\": null, \"parallel_overlap_candidate_byte_count\": 290, \"parallel_overlap_candidate_utf8\": \"{\\\"scope\\\":\\\"tenant-a/principal-a/session-a\\\",\\\"siblings\\\":[{\\\"index\\\":0,\\\"pieces\\\":[{\\\"kind\\\":\\\"literal_utf8\\\",\\\"utf8\\\":\\\"synthetic row alpha\\\\nsynthetic row beta\\\\n\\\"}]},{\\\"index\\\":1,\\\"pieces\\\":[{\\\"kind\\\":\\\"literal_utf8\\\",\\\"utf8\\\":\\\"synthetic row alpha\\\\nsynthetic row gamma\\\\n\\\"}]}],\\\"version\\\":\\\"parallel-overlap-dedup-v1\\\"}\", \"parallel_source_byte_count\": 79, \"provider_visible_source\": null, \"reference_candidate_byte_count\": 201, \"reference_candidate_utf8\": \"{\\\"kind\\\":\\\"exact_provider_visible_reference\\\",\\\"scope\\\":\\\"tenant-a/principal-a/session-a\\\",\\\"sha256\\\":\\\"d3d72b0d3218812c83d4a3f3e9f0d30ee0bb2df9c031f2fc9a85828f53c8c691\\\",\\\"version\\\":\\\"exact-duplicate-reference-v1\\\"}\", \"requester_scope\": \"tenant-a/principal-a/session-a\", \"source_artifact_recoverable\": false, \"source_byte_count\": null, \"source_scope\": \"tenant-a/principal-a/session-a\", \"source_state\": \"evicted\", \"subresult_chunk_candidate_byte_count\": 165, \"subresult_chunk_candidate_utf8\": \"{\\\"chunks\\\":[{\\\"kind\\\":\\\"literal_utf8\\\",\\\"utf8\\\":\\\"synthetic row alpha\\\\nsynthetic row beta\\\\n\\\"}],\\\"scope\\\":\\\"tenant-a/principal-a/session-a\\\",\\\"version\\\":\\\"subresult-chunk-dedup-v1\\\"}\", \"synthetic_record_id\": \"exact_and_partial_overlap-development-boundary-boundary-evicted_source-v1\", \"target_candidate_byte_count\": 39, \"target_candidate_index\": 0, \"target_candidate_sha256\": \"d3d72b0d3218812c83d4a3f3e9f0d30ee0bb2df9c031f2fc9a85828f53c8c691\"}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "1707794043505713fd716bac6072f9519c20767649fb8b1bc2aea3d1cc6ae78d",
+      "case_id": "evicted_source",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "exact-duplicate-reference-v1": "fail_recovery",
+        "parallel-overlap-dedup-v1": "fail_recovery",
+        "subresult-chunk-dedup-v1": "fail_recovery"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-exact_and_partial_overlap-development-boundary-boundary-evicted_source-v1",
+                "output": "{\"case_id\": \"evicted_source\", \"content_defined_chunk_max_bytes\": 8192, \"content_defined_chunk_min_bytes\": 512, \"content_defined_chunk_target_bytes\": 2048, \"content_defined_overlap_byte_count\": 0, \"content_defined_overlap_ratio\": 0.0, \"exact_duplicate_candidate_byte_count\": 201, \"exact_duplicate_candidate_utf8\": \"{\\\"kind\\\":\\\"exact_provider_visible_reference\\\",\\\"scope\\\":\\\"tenant-a/principal-a/session-a\\\",\\\"sha256\\\":\\\"d3d72b0d3218812c83d4a3f3e9f0d30ee0bb2df9c031f2fc9a85828f53c8c691\\\",\\\"version\\\":\\\"exact-duplicate-reference-v1\\\"}\", \"fastcdc_source_chunks\": [], \"fastcdc_target_chunks\": [{\"byte_count\": 39, \"index\": 0, \"offset\": 0, \"sha256\": \"d3d72b0d3218812c83d4a3f3e9f0d30ee0bb2df9c031f2fc9a85828f53c8c691\"}], \"new_results\": [\"synthetic row alpha\\nsynthetic row beta\\n\", \"synthetic row alpha\\nsynthetic row gamma\\n\"], \"oracle_class\": \"boundary\", \"overlap_ratio\": null, \"parallel_overlap_candidate_byte_count\": 290, \"parallel_overlap_candidate_utf8\": \"{\\\"scope\\\":\\\"tenant-a/principal-a/session-a\\\",\\\"siblings\\\":[{\\\"index\\\":0,\\\"pieces\\\":[{\\\"kind\\\":\\\"literal_utf8\\\",\\\"utf8\\\":\\\"synthetic row alpha\\\\nsynthetic row beta\\\\n\\\"}]},{\\\"index\\\":1,\\\"pieces\\\":[{\\\"kind\\\":\\\"literal_utf8\\\",\\\"utf8\\\":\\\"synthetic row alpha\\\\nsynthetic row gamma\\\\n\\\"}]}],\\\"version\\\":\\\"parallel-overlap-dedup-v1\\\"}\", \"parallel_source_byte_count\": 79, \"provider_visible_source\": null, \"reference_candidate_byte_count\": 201, \"reference_candidate_utf8\": \"{\\\"kind\\\":\\\"exact_provider_visible_reference\\\",\\\"scope\\\":\\\"tenant-a/principal-a/session-a\\\",\\\"sha256\\\":\\\"d3d72b0d3218812c83d4a3f3e9f0d30ee0bb2df9c031f2fc9a85828f53c8c691\\\",\\\"version\\\":\\\"exact-duplicate-reference-v1\\\"}\", \"requester_scope\": \"tenant-a/principal-a/session-a\", \"source_artifact_recoverable\": false, \"source_byte_count\": null, \"source_scope\": \"tenant-a/principal-a/session-a\", \"source_state\": \"evicted\", \"subresult_chunk_candidate_byte_count\": 165, \"subresult_chunk_candidate_utf8\": \"{\\\"chunks\\\":[{\\\"kind\\\":\\\"literal_utf8\\\",\\\"utf8\\\":\\\"synthetic row alpha\\\\nsynthetic row beta\\\\n\\\"}],\\\"scope\\\":\\\"tenant-a/principal-a/session-a\\\",\\\"version\\\":\\\"subresult-chunk-dedup-v1\\\"}\", \"synthetic_record_id\": \"exact_and_partial_overlap-development-boundary-boundary-evicted_source-v1\", \"target_candidate_byte_count\": 39, \"target_candidate_index\": 0, \"target_candidate_sha256\": \"d3d72b0d3218812c83d4a3f3e9f0d30ee0bb2df9c031f2fc9a85828f53c8c691\"}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "case_id": "evicted_source",
+          "content_defined_chunk_max_bytes": 8192,
+          "content_defined_chunk_min_bytes": 512,
+          "content_defined_chunk_target_bytes": 2048,
+          "content_defined_overlap_byte_count": 0,
+          "content_defined_overlap_ratio": 0.0,
+          "exact_duplicate_candidate_byte_count": 201,
+          "exact_duplicate_candidate_utf8": "{\"kind\":\"exact_provider_visible_reference\",\"scope\":\"tenant-a/principal-a/session-a\",\"sha256\":\"d3d72b0d3218812c83d4a3f3e9f0d30ee0bb2df9c031f2fc9a85828f53c8c691\",\"version\":\"exact-duplicate-reference-v1\"}",
+          "fastcdc_source_chunks": [],
+          "fastcdc_target_chunks": [
+            {
+              "byte_count": 39,
+              "index": 0,
+              "offset": 0,
+              "sha256": "d3d72b0d3218812c83d4a3f3e9f0d30ee0bb2df9c031f2fc9a85828f53c8c691"
+            }
+          ],
+          "new_results": [
+            "synthetic row alpha\nsynthetic row beta\n",
+            "synthetic row alpha\nsynthetic row gamma\n"
+          ],
+          "oracle_class": "boundary",
+          "overlap_ratio": null,
+          "parallel_overlap_candidate_byte_count": 290,
+          "parallel_overlap_candidate_utf8": "{\"scope\":\"tenant-a/principal-a/session-a\",\"siblings\":[{\"index\":0,\"pieces\":[{\"kind\":\"literal_utf8\",\"utf8\":\"synthetic row alpha\\nsynthetic row beta\\n\"}]},{\"index\":1,\"pieces\":[{\"kind\":\"literal_utf8\",\"utf8\":\"synthetic row alpha\\nsynthetic row gamma\\n\"}]}],\"version\":\"parallel-overlap-dedup-v1\"}",
+          "parallel_source_byte_count": 79,
+          "provider_visible_source": null,
+          "reference_candidate_byte_count": 201,
+          "reference_candidate_utf8": "{\"kind\":\"exact_provider_visible_reference\",\"scope\":\"tenant-a/principal-a/session-a\",\"sha256\":\"d3d72b0d3218812c83d4a3f3e9f0d30ee0bb2df9c031f2fc9a85828f53c8c691\",\"version\":\"exact-duplicate-reference-v1\"}",
+          "requester_scope": "tenant-a/principal-a/session-a",
+          "source_artifact_recoverable": false,
+          "source_byte_count": null,
+          "source_scope": "tenant-a/principal-a/session-a",
+          "source_state": "evicted",
+          "subresult_chunk_candidate_byte_count": 165,
+          "subresult_chunk_candidate_utf8": "{\"chunks\":[{\"kind\":\"literal_utf8\",\"utf8\":\"synthetic row alpha\\nsynthetic row beta\\n\"}],\"scope\":\"tenant-a/principal-a/session-a\",\"version\":\"subresult-chunk-dedup-v1\"}",
+          "synthetic_record_id": "exact_and_partial_overlap-development-boundary-boundary-evicted_source-v1",
+          "target_candidate_byte_count": 39,
+          "target_candidate_index": 0,
+          "target_candidate_sha256": "d3d72b0d3218812c83d4a3f3e9f0d30ee0bb2df9c031f2fc9a85828f53c8c691"
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-exact_and_partial_overlap",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "89ee7ea0308273293fb0bd4297b7387bd752956e090e95af2b5bc9b779e24703",
+      "oracle_class": "boundary",
+      "record_id": "exact_and_partial_overlap-development-boundary-boundary-evicted_source-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "provider_visible_source_required",
+        "scoped_exact_reconstruction"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-exact_and_partial_overlap-development-boundary-boundary-below_70_percent_overlap-v1",
+              "output": "{\"case_id\": \"below_70_percent_overlap\", \"content_defined_chunk_max_bytes\": 8192, \"content_defined_chunk_min_bytes\": 512, \"content_defined_chunk_target_bytes\": 2048, \"content_defined_overlap_byte_count\": 0, \"content_defined_overlap_ratio\": 0.0, \"exact_duplicate_candidate_byte_count\": 201, \"exact_duplicate_candidate_utf8\": \"{\\\"kind\\\":\\\"exact_provider_visible_reference\\\",\\\"scope\\\":\\\"tenant-a/principal-a/session-a\\\",\\\"sha256\\\":\\\"2482f97b5b9b7f8649c92bbcf5a1e87c5817fb918026345389bc7d52ad59a7be\\\",\\\"version\\\":\\\"exact-duplicate-reference-v1\\\"}\", \"fastcdc_source_chunks\": [{\"byte_count\": 39, \"index\": 0, \"offset\": 0, \"sha256\": \"d3d72b0d3218812c83d4a3f3e9f0d30ee0bb2df9c031f2fc9a85828f53c8c691\"}], \"fastcdc_target_chunks\": [{\"byte_count\": 15, \"index\": 0, \"offset\": 0, \"sha256\": \"2482f97b5b9b7f8649c92bbcf5a1e87c5817fb918026345389bc7d52ad59a7be\"}], \"new_results\": [\"independent payload one\\n\", \"zzzz qqqq xxxx\\n\"], \"oracle_class\": \"boundary\", \"overlap_ratio\": 0.1111111111111111, \"parallel_overlap_candidate_byte_count\": 248, \"parallel_overlap_candidate_utf8\": \"{\\\"scope\\\":\\\"tenant-a/principal-a/session-a\\\",\\\"siblings\\\":[{\\\"index\\\":0,\\\"pieces\\\":[{\\\"kind\\\":\\\"literal_utf8\\\",\\\"utf8\\\":\\\"independent payload one\\\\n\\\"}]},{\\\"index\\\":1,\\\"pieces\\\":[{\\\"kind\\\":\\\"literal_utf8\\\",\\\"utf8\\\":\\\"zzzz qqqq xxxx\\\\n\\\"}]}],\\\"version\\\":\\\"parallel-overlap-dedup-v1\\\"}\", \"parallel_source_byte_count\": 39, \"provider_visible_source\": \"synthetic row alpha\\nsynthetic row beta\\n\", \"reference_candidate_byte_count\": 201, \"reference_candidate_utf8\": \"{\\\"kind\\\":\\\"exact_provider_visible_reference\\\",\\\"scope\\\":\\\"tenant-a/principal-a/session-a\\\",\\\"sha256\\\":\\\"2482f97b5b9b7f8649c92bbcf5a1e87c5817fb918026345389bc7d52ad59a7be\\\",\\\"version\\\":\\\"exact-duplicate-reference-v1\\\"}\", \"requester_scope\": \"tenant-a/principal-a/session-a\", \"source_artifact_recoverable\": true, \"source_byte_count\": 39, \"source_scope\": \"tenant-a/principal-a/session-a\", \"source_state\": \"visible\", \"subresult_chunk_candidate_byte_count\": 140, \"subresult_chunk_candidate_utf8\": \"{\\\"chunks\\\":[{\\\"kind\\\":\\\"literal_utf8\\\",\\\"utf8\\\":\\\"zzzz qqqq xxxx\\\\n\\\"}],\\\"scope\\\":\\\"tenant-a/principal-a/session-a\\\",\\\"version\\\":\\\"subresult-chunk-dedup-v1\\\"}\", \"synthetic_record_id\": \"exact_and_partial_overlap-development-boundary-boundary-below_70_percent_overlap-v1\", \"target_candidate_byte_count\": 15, \"target_candidate_index\": 1, \"target_candidate_sha256\": \"2482f97b5b9b7f8649c92bbcf5a1e87c5817fb918026345389bc7d52ad59a7be\"}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "b1bc3550457eb72c55ccca6998450a7220c1431c9f9e5127a488be509ddaee3b",
+      "case_id": "below_70_percent_overlap",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "exact-duplicate-reference-v1": "no_material_opportunity",
+        "parallel-overlap-dedup-v1": "decline_framing_overhead",
+        "subresult-chunk-dedup-v1": "no_material_opportunity"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-exact_and_partial_overlap-development-boundary-boundary-below_70_percent_overlap-v1",
+                "output": "{\"case_id\": \"below_70_percent_overlap\", \"content_defined_chunk_max_bytes\": 8192, \"content_defined_chunk_min_bytes\": 512, \"content_defined_chunk_target_bytes\": 2048, \"content_defined_overlap_byte_count\": 0, \"content_defined_overlap_ratio\": 0.0, \"exact_duplicate_candidate_byte_count\": 201, \"exact_duplicate_candidate_utf8\": \"{\\\"kind\\\":\\\"exact_provider_visible_reference\\\",\\\"scope\\\":\\\"tenant-a/principal-a/session-a\\\",\\\"sha256\\\":\\\"2482f97b5b9b7f8649c92bbcf5a1e87c5817fb918026345389bc7d52ad59a7be\\\",\\\"version\\\":\\\"exact-duplicate-reference-v1\\\"}\", \"fastcdc_source_chunks\": [{\"byte_count\": 39, \"index\": 0, \"offset\": 0, \"sha256\": \"d3d72b0d3218812c83d4a3f3e9f0d30ee0bb2df9c031f2fc9a85828f53c8c691\"}], \"fastcdc_target_chunks\": [{\"byte_count\": 15, \"index\": 0, \"offset\": 0, \"sha256\": \"2482f97b5b9b7f8649c92bbcf5a1e87c5817fb918026345389bc7d52ad59a7be\"}], \"new_results\": [\"independent payload one\\n\", \"zzzz qqqq xxxx\\n\"], \"oracle_class\": \"boundary\", \"overlap_ratio\": 0.1111111111111111, \"parallel_overlap_candidate_byte_count\": 248, \"parallel_overlap_candidate_utf8\": \"{\\\"scope\\\":\\\"tenant-a/principal-a/session-a\\\",\\\"siblings\\\":[{\\\"index\\\":0,\\\"pieces\\\":[{\\\"kind\\\":\\\"literal_utf8\\\",\\\"utf8\\\":\\\"independent payload one\\\\n\\\"}]},{\\\"index\\\":1,\\\"pieces\\\":[{\\\"kind\\\":\\\"literal_utf8\\\",\\\"utf8\\\":\\\"zzzz qqqq xxxx\\\\n\\\"}]}],\\\"version\\\":\\\"parallel-overlap-dedup-v1\\\"}\", \"parallel_source_byte_count\": 39, \"provider_visible_source\": \"synthetic row alpha\\nsynthetic row beta\\n\", \"reference_candidate_byte_count\": 201, \"reference_candidate_utf8\": \"{\\\"kind\\\":\\\"exact_provider_visible_reference\\\",\\\"scope\\\":\\\"tenant-a/principal-a/session-a\\\",\\\"sha256\\\":\\\"2482f97b5b9b7f8649c92bbcf5a1e87c5817fb918026345389bc7d52ad59a7be\\\",\\\"version\\\":\\\"exact-duplicate-reference-v1\\\"}\", \"requester_scope\": \"tenant-a/principal-a/session-a\", \"source_artifact_recoverable\": true, \"source_byte_count\": 39, \"source_scope\": \"tenant-a/principal-a/session-a\", \"source_state\": \"visible\", \"subresult_chunk_candidate_byte_count\": 140, \"subresult_chunk_candidate_utf8\": \"{\\\"chunks\\\":[{\\\"kind\\\":\\\"literal_utf8\\\",\\\"utf8\\\":\\\"zzzz qqqq xxxx\\\\n\\\"}],\\\"scope\\\":\\\"tenant-a/principal-a/session-a\\\",\\\"version\\\":\\\"subresult-chunk-dedup-v1\\\"}\", \"synthetic_record_id\": \"exact_and_partial_overlap-development-boundary-boundary-below_70_percent_overlap-v1\", \"target_candidate_byte_count\": 15, \"target_candidate_index\": 1, \"target_candidate_sha256\": \"2482f97b5b9b7f8649c92bbcf5a1e87c5817fb918026345389bc7d52ad59a7be\"}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "case_id": "below_70_percent_overlap",
+          "content_defined_chunk_max_bytes": 8192,
+          "content_defined_chunk_min_bytes": 512,
+          "content_defined_chunk_target_bytes": 2048,
+          "content_defined_overlap_byte_count": 0,
+          "content_defined_overlap_ratio": 0.0,
+          "exact_duplicate_candidate_byte_count": 201,
+          "exact_duplicate_candidate_utf8": "{\"kind\":\"exact_provider_visible_reference\",\"scope\":\"tenant-a/principal-a/session-a\",\"sha256\":\"2482f97b5b9b7f8649c92bbcf5a1e87c5817fb918026345389bc7d52ad59a7be\",\"version\":\"exact-duplicate-reference-v1\"}",
+          "fastcdc_source_chunks": [
+            {
+              "byte_count": 39,
+              "index": 0,
+              "offset": 0,
+              "sha256": "d3d72b0d3218812c83d4a3f3e9f0d30ee0bb2df9c031f2fc9a85828f53c8c691"
+            }
+          ],
+          "fastcdc_target_chunks": [
+            {
+              "byte_count": 15,
+              "index": 0,
+              "offset": 0,
+              "sha256": "2482f97b5b9b7f8649c92bbcf5a1e87c5817fb918026345389bc7d52ad59a7be"
+            }
+          ],
+          "new_results": [
+            "independent payload one\n",
+            "zzzz qqqq xxxx\n"
+          ],
+          "oracle_class": "boundary",
+          "overlap_ratio": 0.1111111111111111,
+          "parallel_overlap_candidate_byte_count": 248,
+          "parallel_overlap_candidate_utf8": "{\"scope\":\"tenant-a/principal-a/session-a\",\"siblings\":[{\"index\":0,\"pieces\":[{\"kind\":\"literal_utf8\",\"utf8\":\"independent payload one\\n\"}]},{\"index\":1,\"pieces\":[{\"kind\":\"literal_utf8\",\"utf8\":\"zzzz qqqq xxxx\\n\"}]}],\"version\":\"parallel-overlap-dedup-v1\"}",
+          "parallel_source_byte_count": 39,
+          "provider_visible_source": "synthetic row alpha\nsynthetic row beta\n",
+          "reference_candidate_byte_count": 201,
+          "reference_candidate_utf8": "{\"kind\":\"exact_provider_visible_reference\",\"scope\":\"tenant-a/principal-a/session-a\",\"sha256\":\"2482f97b5b9b7f8649c92bbcf5a1e87c5817fb918026345389bc7d52ad59a7be\",\"version\":\"exact-duplicate-reference-v1\"}",
+          "requester_scope": "tenant-a/principal-a/session-a",
+          "source_artifact_recoverable": true,
+          "source_byte_count": 39,
+          "source_scope": "tenant-a/principal-a/session-a",
+          "source_state": "visible",
+          "subresult_chunk_candidate_byte_count": 140,
+          "subresult_chunk_candidate_utf8": "{\"chunks\":[{\"kind\":\"literal_utf8\",\"utf8\":\"zzzz qqqq xxxx\\n\"}],\"scope\":\"tenant-a/principal-a/session-a\",\"version\":\"subresult-chunk-dedup-v1\"}",
+          "synthetic_record_id": "exact_and_partial_overlap-development-boundary-boundary-below_70_percent_overlap-v1",
+          "target_candidate_byte_count": 15,
+          "target_candidate_index": 1,
+          "target_candidate_sha256": "2482f97b5b9b7f8649c92bbcf5a1e87c5817fb918026345389bc7d52ad59a7be"
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-exact_and_partial_overlap",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "df71ebced6b5f8438dc2addbd63647d37ec3d4fa3b2a60e0976abc880cd08c94",
+      "oracle_class": "boundary",
+      "record_id": "exact_and_partial_overlap-development-boundary-boundary-below_70_percent_overlap-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "provider_visible_source_required",
+        "scoped_exact_reconstruction"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    }
+  ],
+  "cases": [
+    "missing_source",
+    "evicted_source",
+    "below_70_percent_overlap"
+  ],
+  "eligible_techniques": [],
+  "expected_disposition_by_technique": {
+    "exact-duplicate-reference-v1": [
+      "fail_recovery",
+      "no_material_opportunity"
+    ],
+    "parallel-overlap-dedup-v1": [
+      "decline_framing_overhead",
+      "fail_recovery"
+    ],
+    "subresult-chunk-dedup-v1": [
+      "fail_recovery",
+      "no_material_opportunity"
+    ]
+  },
+  "expected_outcome": {
+    "by_record_id": {
+      "exact_and_partial_overlap-development-boundary-boundary-below_70_percent_overlap-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "exact_and_partial_overlap-development-boundary-boundary-evicted_source-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "exact_and_partial_overlap-development-boundary-boundary-missing_source-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      }
+    },
+    "schema": "compand.ces1.case_outcome_bundle.v1"
+  },
+  "fixture_family": "exact_and_partial_overlap",
+  "fixture_id": "exact_and_partial_overlap-boundary-v1",
+  "generator_or_source": {
+    "generator": "scripts/build_compand_phase2_corpus.py",
+    "kind": "sanitized_synthetic",
+    "raw_customer_content": false
+  },
+  "input": {
+    "case_input_hashes": [
+      {
+        "input_sha256": "c947950db821e26e9e90fd00db8c1a90ffb78da7fb88ec6b5437da096d3c6920",
+        "record_id": "exact_and_partial_overlap-development-boundary-boundary-missing_source-v1"
+      },
+      {
+        "input_sha256": "89ee7ea0308273293fb0bd4297b7387bd752956e090e95af2b5bc9b779e24703",
+        "record_id": "exact_and_partial_overlap-development-boundary-boundary-evicted_source-v1"
+      },
+      {
+        "input_sha256": "df71ebced6b5f8438dc2addbd63647d37ec3d4fa3b2a60e0976abc880cd08c94",
+        "record_id": "exact_and_partial_overlap-development-boundary-boundary-below_70_percent_overlap-v1"
+      }
+    ],
+    "schema": "compand.ces1.fixture_input_bundle.v1"
+  },
+  "input_sha256": "3999035e86d3bd6def3c75397c1e86a0d684f086aba95b2c92ce43de2dbec08e",
+  "license": {
+    "reviewed": true,
+    "spdx": "CC0-1.0"
+  },
+  "oracle_classes": [
+    "boundary"
+  ],
+  "partition": "development",
+  "required_invariants": [
+    "baseline_provider_view_is_byte_unchanged_B0",
+    "baseline_input_and_provider_view_hashes_match",
+    "tenant_principal_session_context_epoch_isolation",
+    "source_bytes_are_never_overwritten",
+    "provider_visible_source_required",
+    "scoped_exact_reconstruction"
+  ],
+  "revision": 5,
+  "schema": "compand.ces1.fixture.v2",
+  "workload_stratum": "parallel_tool_output"
+}

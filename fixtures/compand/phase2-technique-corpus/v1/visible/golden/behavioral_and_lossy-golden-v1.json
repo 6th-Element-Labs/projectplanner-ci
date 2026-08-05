@@ -1,0 +1,402 @@
+{
+  "baseline_provider_view": {
+    "case_provider_view_hashes": [
+      {
+        "baseline_provider_view_sha256": "17de378fd49f478f2fece0d47774634ed8c6d89059afa21d66da4cff8c5cd72b",
+        "record_id": "behavioral_and_lossy-golden-golden-positive-own_text_only-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "10b57c308244b760d368e5387a4ce4c73b36a8910d4bf234e6f7c846f57d1e71",
+        "record_id": "behavioral_and_lossy-golden-golden-negative-changed_single_line-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "ae74a496ddad9d09b8f7ebaf1745bc6e97d1729b9abe2db32c710e6463d0d9d2",
+        "record_id": "behavioral_and_lossy-golden-golden-negative-required_detail_truncated-v1"
+      }
+    ],
+    "schema": "compand.ces1.provider_view_bundle.v1"
+  },
+  "baseline_provider_view_sha256": "202272b2ecd39d0d2a7b3ca51916e2475318709f85c9c108ffe87b4a730bdafb",
+  "case_record_count": 3,
+  "case_records": [
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-behavioral_and_lossy-golden-golden-positive-own_text_only-v1",
+              "output": "{\"case_id\": \"own_text_only\", \"image_descriptor\": \"generated 8x8 checkerboard with one marked corner\", \"near_match\": false, \"oracle_class\": \"positive\", \"owner\": \"compand_fixture\", \"required_detail\": \"Preserve the exact synthetic line number 17.\", \"required_detail_present\": true, \"single_line_changed\": false, \"small_visual_detail_required\": false, \"synthetic_record_id\": \"behavioral_and_lossy-golden-golden-positive-own_text_only-v1\", \"text\": \"Synthetic guidance: avoid repeating already-visible fixture output.\"}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "17de378fd49f478f2fece0d47774634ed8c6d89059afa21d66da4cff8c5cd72b",
+      "case_id": "own_text_only",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "injected-efficiency-instructions-v1": "decline_ineligible",
+        "injected-text-hard-compression-v1": "decline_ineligible",
+        "lean-prompt-v1": "decline_ineligible",
+        "output-shaping-v1": "decline_ineligible",
+        "semantic-cache-v1": "decline_ineligible",
+        "vision-budget-v1": "decline_ineligible"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-behavioral_and_lossy-golden-golden-positive-own_text_only-v1",
+                "output": "{\"case_id\": \"own_text_only\", \"image_descriptor\": \"generated 8x8 checkerboard with one marked corner\", \"near_match\": false, \"oracle_class\": \"positive\", \"owner\": \"compand_fixture\", \"required_detail\": \"Preserve the exact synthetic line number 17.\", \"required_detail_present\": true, \"single_line_changed\": false, \"small_visual_detail_required\": false, \"synthetic_record_id\": \"behavioral_and_lossy-golden-golden-positive-own_text_only-v1\", \"text\": \"Synthetic guidance: avoid repeating already-visible fixture output.\"}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "case_id": "own_text_only",
+          "image_descriptor": "generated 8x8 checkerboard with one marked corner",
+          "near_match": false,
+          "oracle_class": "positive",
+          "owner": "compand_fixture",
+          "required_detail": "Preserve the exact synthetic line number 17.",
+          "required_detail_present": true,
+          "single_line_changed": false,
+          "small_visual_detail_required": false,
+          "synthetic_record_id": "behavioral_and_lossy-golden-golden-positive-own_text_only-v1",
+          "text": "Synthetic guidance: avoid repeating already-visible fixture output."
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-behavioral_and_lossy",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "9f38981fbae40292b027bc0b23005a0888098222d68eee77270debeb85f38b11",
+      "oracle_class": "positive",
+      "record_id": "behavioral_and_lossy-golden-golden-positive-own_text_only-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "user_code_and_diagnostics_never_lossily_rewritten",
+        "paired_outcome_required"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-behavioral_and_lossy-golden-golden-negative-changed_single_line-v1",
+              "output": "{\"case_id\": \"changed_single_line\", \"image_descriptor\": \"generated 8x8 checkerboard with one marked corner\", \"near_match\": false, \"oracle_class\": \"negative\", \"owner\": \"user_fixture\", \"required_detail\": \"Preserve the exact synthetic line number 17.\", \"required_detail_present\": true, \"single_line_changed\": true, \"small_visual_detail_required\": false, \"synthetic_record_id\": \"behavioral_and_lossy-golden-golden-negative-changed_single_line-v1\", \"text\": \"Synthetic guidance: avoid repeating already-visible fixture output.\"}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "10b57c308244b760d368e5387a4ce4c73b36a8910d4bf234e6f7c846f57d1e71",
+      "case_id": "changed_single_line",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "injected-efficiency-instructions-v1": "detect_corruption",
+        "injected-text-hard-compression-v1": "detect_corruption",
+        "lean-prompt-v1": "detect_corruption",
+        "output-shaping-v1": "detect_corruption",
+        "semantic-cache-v1": "detect_corruption",
+        "vision-budget-v1": "detect_corruption"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-behavioral_and_lossy-golden-golden-negative-changed_single_line-v1",
+                "output": "{\"case_id\": \"changed_single_line\", \"image_descriptor\": \"generated 8x8 checkerboard with one marked corner\", \"near_match\": false, \"oracle_class\": \"negative\", \"owner\": \"user_fixture\", \"required_detail\": \"Preserve the exact synthetic line number 17.\", \"required_detail_present\": true, \"single_line_changed\": true, \"small_visual_detail_required\": false, \"synthetic_record_id\": \"behavioral_and_lossy-golden-golden-negative-changed_single_line-v1\", \"text\": \"Synthetic guidance: avoid repeating already-visible fixture output.\"}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "case_id": "changed_single_line",
+          "image_descriptor": "generated 8x8 checkerboard with one marked corner",
+          "near_match": false,
+          "oracle_class": "negative",
+          "owner": "user_fixture",
+          "required_detail": "Preserve the exact synthetic line number 17.",
+          "required_detail_present": true,
+          "single_line_changed": true,
+          "small_visual_detail_required": false,
+          "synthetic_record_id": "behavioral_and_lossy-golden-golden-negative-changed_single_line-v1",
+          "text": "Synthetic guidance: avoid repeating already-visible fixture output."
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-behavioral_and_lossy",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "cec5776996af94a891ab0872c79f90d2c0035059ccfa18350ad9c35a16996e2e",
+      "oracle_class": "negative",
+      "record_id": "behavioral_and_lossy-golden-golden-negative-changed_single_line-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "user_code_and_diagnostics_never_lossily_rewritten",
+        "paired_outcome_required"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-behavioral_and_lossy-golden-golden-negative-required_detail_truncated-v1",
+              "output": "{\"case_id\": \"required_detail_truncated\", \"image_descriptor\": \"generated 8x8 checkerboard with one marked corner\", \"near_match\": false, \"oracle_class\": \"negative\", \"owner\": \"user_fixture\", \"required_detail\": \"Preserve the exact synthetic line number 17.\", \"required_detail_present\": false, \"single_line_changed\": false, \"small_visual_detail_required\": false, \"synthetic_record_id\": \"behavioral_and_lossy-golden-golden-negative-required_detail_truncated-v1\", \"text\": \"Synthetic guidance: avoid repeating already-visible fixture output.\"}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "ae74a496ddad9d09b8f7ebaf1745bc6e97d1729b9abe2db32c710e6463d0d9d2",
+      "case_id": "required_detail_truncated",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "injected-efficiency-instructions-v1": "detect_corruption",
+        "injected-text-hard-compression-v1": "detect_corruption",
+        "lean-prompt-v1": "detect_corruption",
+        "output-shaping-v1": "detect_corruption",
+        "semantic-cache-v1": "detect_corruption",
+        "vision-budget-v1": "detect_corruption"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-behavioral_and_lossy-golden-golden-negative-required_detail_truncated-v1",
+                "output": "{\"case_id\": \"required_detail_truncated\", \"image_descriptor\": \"generated 8x8 checkerboard with one marked corner\", \"near_match\": false, \"oracle_class\": \"negative\", \"owner\": \"user_fixture\", \"required_detail\": \"Preserve the exact synthetic line number 17.\", \"required_detail_present\": false, \"single_line_changed\": false, \"small_visual_detail_required\": false, \"synthetic_record_id\": \"behavioral_and_lossy-golden-golden-negative-required_detail_truncated-v1\", \"text\": \"Synthetic guidance: avoid repeating already-visible fixture output.\"}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "case_id": "required_detail_truncated",
+          "image_descriptor": "generated 8x8 checkerboard with one marked corner",
+          "near_match": false,
+          "oracle_class": "negative",
+          "owner": "user_fixture",
+          "required_detail": "Preserve the exact synthetic line number 17.",
+          "required_detail_present": false,
+          "single_line_changed": false,
+          "small_visual_detail_required": false,
+          "synthetic_record_id": "behavioral_and_lossy-golden-golden-negative-required_detail_truncated-v1",
+          "text": "Synthetic guidance: avoid repeating already-visible fixture output."
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-behavioral_and_lossy",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "53bb49bb9cd0db2a0f732004c8ed1fba507b97f8e082844cc142d546484eb4ff",
+      "oracle_class": "negative",
+      "record_id": "behavioral_and_lossy-golden-golden-negative-required_detail_truncated-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "user_code_and_diagnostics_never_lossily_rewritten",
+        "paired_outcome_required"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    }
+  ],
+  "cases": [
+    "own_text_only",
+    "changed_single_line",
+    "required_detail_truncated"
+  ],
+  "eligible_techniques": [],
+  "expected_disposition_by_technique": {
+    "injected-efficiency-instructions-v1": [
+      "decline_ineligible",
+      "detect_corruption"
+    ],
+    "injected-text-hard-compression-v1": [
+      "decline_ineligible",
+      "detect_corruption"
+    ],
+    "lean-prompt-v1": [
+      "decline_ineligible",
+      "detect_corruption"
+    ],
+    "output-shaping-v1": [
+      "decline_ineligible",
+      "detect_corruption"
+    ],
+    "semantic-cache-v1": [
+      "decline_ineligible",
+      "detect_corruption"
+    ],
+    "vision-budget-v1": [
+      "decline_ineligible",
+      "detect_corruption"
+    ]
+  },
+  "expected_outcome": {
+    "by_record_id": {
+      "behavioral_and_lossy-golden-golden-negative-changed_single_line-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "behavioral_and_lossy-golden-golden-negative-required_detail_truncated-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "behavioral_and_lossy-golden-golden-positive-own_text_only-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      }
+    },
+    "schema": "compand.ces1.case_outcome_bundle.v1"
+  },
+  "fixture_family": "behavioral_and_lossy",
+  "fixture_id": "behavioral_and_lossy-golden-v1",
+  "generator_or_source": {
+    "generator": "scripts/build_compand_phase2_corpus.py",
+    "kind": "sanitized_synthetic",
+    "raw_customer_content": false
+  },
+  "input": {
+    "case_input_hashes": [
+      {
+        "input_sha256": "9f38981fbae40292b027bc0b23005a0888098222d68eee77270debeb85f38b11",
+        "record_id": "behavioral_and_lossy-golden-golden-positive-own_text_only-v1"
+      },
+      {
+        "input_sha256": "cec5776996af94a891ab0872c79f90d2c0035059ccfa18350ad9c35a16996e2e",
+        "record_id": "behavioral_and_lossy-golden-golden-negative-changed_single_line-v1"
+      },
+      {
+        "input_sha256": "53bb49bb9cd0db2a0f732004c8ed1fba507b97f8e082844cc142d546484eb4ff",
+        "record_id": "behavioral_and_lossy-golden-golden-negative-required_detail_truncated-v1"
+      }
+    ],
+    "schema": "compand.ces1.fixture_input_bundle.v1"
+  },
+  "input_sha256": "392d1bd958a415b136807d017a508f4f0dcb9f499f99bd12332b263d03fff65d",
+  "license": {
+    "reviewed": true,
+    "spdx": "CC0-1.0"
+  },
+  "oracle_classes": [
+    "negative",
+    "positive"
+  ],
+  "partition": "golden",
+  "required_invariants": [
+    "baseline_provider_view_is_byte_unchanged_B0",
+    "baseline_input_and_provider_view_hashes_match",
+    "tenant_principal_session_context_epoch_isolation",
+    "source_bytes_are_never_overwritten",
+    "user_code_and_diagnostics_never_lossily_rewritten",
+    "paired_outcome_required"
+  ],
+  "revision": 5,
+  "schema": "compand.ces1.fixture.v2",
+  "workload_stratum": "behavioral_candidate"
+}

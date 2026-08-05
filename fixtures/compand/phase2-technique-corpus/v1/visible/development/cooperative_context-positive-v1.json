@@ -1,0 +1,288 @@
+{
+  "baseline_provider_view": {
+    "case_provider_view_hashes": [
+      {
+        "baseline_provider_view_sha256": "9b9b1c37e0fa6f5602a633308ddf8aa0f6650f30872947a26cb91d25f4d7ef6d",
+        "record_id": "cooperative_context-development-positive-positive-certified_context_epoch-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "061e23a676e393bf50454e6bcb78296bdd7252f0f9162a1374bd9776f0de434f",
+        "record_id": "cooperative_context-development-positive-positive-ordered_batch-v1"
+      }
+    ],
+    "schema": "compand.ces1.provider_view_bundle.v1"
+  },
+  "baseline_provider_view_sha256": "acc5c8d7f5d04f75131250cd349d8ef587582bda3f2e5da81a6a33c25b64ca1a",
+  "case_record_count": 2,
+  "case_records": [
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-cooperative_context-development-positive-positive-certified_context_epoch-v1",
+              "output": "{\"batch_order_frozen\": false, \"candidate_count\": 1, \"case_id\": \"certified_context_epoch\", \"context_epoch\": \"fixture-epoch-1\", \"events\": [\"tool_a.started\", \"tool_a.completed\", \"tool_b.started\", \"tool_b.completed\"], \"expand_artifact_available\": true, \"oracle_class\": \"positive\", \"synthetic_record_id\": \"cooperative_context-development-positive-positive-certified_context_epoch-v1\", \"tool_search_available\": true}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "9b9b1c37e0fa6f5602a633308ddf8aa0f6650f30872947a26cb91d25f4d7ef6d",
+      "case_id": "certified_context_epoch",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "agent-memory-summary-v1": "decline_ineligible",
+        "code-action-batching-v1": "decline_ineligible",
+        "context-paging-v1": "decline_ineligible",
+        "schema-deferral-v1": "decline_ineligible",
+        "turn-elimination-v1": "decline_ineligible"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-cooperative_context-development-positive-positive-certified_context_epoch-v1",
+                "output": "{\"batch_order_frozen\": false, \"candidate_count\": 1, \"case_id\": \"certified_context_epoch\", \"context_epoch\": \"fixture-epoch-1\", \"events\": [\"tool_a.started\", \"tool_a.completed\", \"tool_b.started\", \"tool_b.completed\"], \"expand_artifact_available\": true, \"oracle_class\": \"positive\", \"synthetic_record_id\": \"cooperative_context-development-positive-positive-certified_context_epoch-v1\", \"tool_search_available\": true}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "batch_order_frozen": false,
+          "candidate_count": 1,
+          "case_id": "certified_context_epoch",
+          "context_epoch": "fixture-epoch-1",
+          "events": [
+            "tool_a.started",
+            "tool_a.completed",
+            "tool_b.started",
+            "tool_b.completed"
+          ],
+          "expand_artifact_available": true,
+          "oracle_class": "positive",
+          "synthetic_record_id": "cooperative_context-development-positive-positive-certified_context_epoch-v1",
+          "tool_search_available": true
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-cooperative_context",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "7c1ae7ddd20dfd717aff17e305f2a6b017843accecc32c55b9603a91f4781d43",
+      "oracle_class": "positive",
+      "record_id": "cooperative_context-development-positive-positive-certified_context_epoch-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "cooperative_seam_required",
+        "tool_event_order_preserved"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-cooperative_context-development-positive-positive-ordered_batch-v1",
+              "output": "{\"batch_order_frozen\": true, \"candidate_count\": 1, \"case_id\": \"ordered_batch\", \"context_epoch\": \"fixture-epoch-1\", \"events\": [\"tool_a.started\", \"tool_a.completed\", \"tool_b.started\", \"tool_b.completed\"], \"expand_artifact_available\": true, \"oracle_class\": \"positive\", \"synthetic_record_id\": \"cooperative_context-development-positive-positive-ordered_batch-v1\", \"tool_search_available\": true}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "061e23a676e393bf50454e6bcb78296bdd7252f0f9162a1374bd9776f0de434f",
+      "case_id": "ordered_batch",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "agent-memory-summary-v1": "decline_ineligible",
+        "code-action-batching-v1": "decline_ineligible",
+        "context-paging-v1": "decline_ineligible",
+        "schema-deferral-v1": "decline_ineligible",
+        "turn-elimination-v1": "decline_ineligible"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-cooperative_context-development-positive-positive-ordered_batch-v1",
+                "output": "{\"batch_order_frozen\": true, \"candidate_count\": 1, \"case_id\": \"ordered_batch\", \"context_epoch\": \"fixture-epoch-1\", \"events\": [\"tool_a.started\", \"tool_a.completed\", \"tool_b.started\", \"tool_b.completed\"], \"expand_artifact_available\": true, \"oracle_class\": \"positive\", \"synthetic_record_id\": \"cooperative_context-development-positive-positive-ordered_batch-v1\", \"tool_search_available\": true}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "batch_order_frozen": true,
+          "candidate_count": 1,
+          "case_id": "ordered_batch",
+          "context_epoch": "fixture-epoch-1",
+          "events": [
+            "tool_a.started",
+            "tool_a.completed",
+            "tool_b.started",
+            "tool_b.completed"
+          ],
+          "expand_artifact_available": true,
+          "oracle_class": "positive",
+          "synthetic_record_id": "cooperative_context-development-positive-positive-ordered_batch-v1",
+          "tool_search_available": true
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-cooperative_context",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "c09a0292c0ae2ec52f2d3a5bf1fdd07b363af559e4889d4a508fd0ccad0aef27",
+      "oracle_class": "positive",
+      "record_id": "cooperative_context-development-positive-positive-ordered_batch-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "cooperative_seam_required",
+        "tool_event_order_preserved"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    }
+  ],
+  "cases": [
+    "certified_context_epoch",
+    "ordered_batch"
+  ],
+  "eligible_techniques": [],
+  "expected_disposition_by_technique": {
+    "agent-memory-summary-v1": [
+      "decline_ineligible"
+    ],
+    "code-action-batching-v1": [
+      "decline_ineligible"
+    ],
+    "context-paging-v1": [
+      "decline_ineligible"
+    ],
+    "schema-deferral-v1": [
+      "decline_ineligible"
+    ],
+    "turn-elimination-v1": [
+      "decline_ineligible"
+    ]
+  },
+  "expected_outcome": {
+    "by_record_id": {
+      "cooperative_context-development-positive-positive-certified_context_epoch-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "cooperative_context-development-positive-positive-ordered_batch-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      }
+    },
+    "schema": "compand.ces1.case_outcome_bundle.v1"
+  },
+  "fixture_family": "cooperative_context",
+  "fixture_id": "cooperative_context-positive-v1",
+  "generator_or_source": {
+    "generator": "scripts/build_compand_phase2_corpus.py",
+    "kind": "sanitized_synthetic",
+    "raw_customer_content": false
+  },
+  "input": {
+    "case_input_hashes": [
+      {
+        "input_sha256": "7c1ae7ddd20dfd717aff17e305f2a6b017843accecc32c55b9603a91f4781d43",
+        "record_id": "cooperative_context-development-positive-positive-certified_context_epoch-v1"
+      },
+      {
+        "input_sha256": "c09a0292c0ae2ec52f2d3a5bf1fdd07b363af559e4889d4a508fd0ccad0aef27",
+        "record_id": "cooperative_context-development-positive-positive-ordered_batch-v1"
+      }
+    ],
+    "schema": "compand.ces1.fixture_input_bundle.v1"
+  },
+  "input_sha256": "3a062f1b09c1462d08a558dd4973f75863fd4c0e4cf6f7562c77eb7bc0b812ee",
+  "license": {
+    "reviewed": true,
+    "spdx": "CC0-1.0"
+  },
+  "oracle_classes": [
+    "positive"
+  ],
+  "partition": "development",
+  "required_invariants": [
+    "baseline_provider_view_is_byte_unchanged_B0",
+    "baseline_input_and_provider_view_hashes_match",
+    "tenant_principal_session_context_epoch_isolation",
+    "source_bytes_are_never_overwritten",
+    "cooperative_seam_required",
+    "tool_event_order_preserved"
+  ],
+  "revision": 5,
+  "schema": "compand.ces1.fixture.v2",
+  "workload_stratum": "cooperative_agent_context"
+}

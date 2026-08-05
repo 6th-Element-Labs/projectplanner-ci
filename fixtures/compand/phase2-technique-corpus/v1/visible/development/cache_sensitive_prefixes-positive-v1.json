@@ -1,0 +1,296 @@
+{
+  "baseline_provider_view": {
+    "case_provider_view_hashes": [
+      {
+        "baseline_provider_view_sha256": "12586cc8d43f59eafcec065e1d7c7d76ffac962c2375c54f8396a35c525aa610",
+        "record_id": "cache_sensitive_prefixes-development-positive-positive-cold-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "60bc5a476fab9a8e10495ea737a50eaffc0e0b3b49d6f500c70a7048dffc8c36",
+        "record_id": "cache_sensitive_prefixes-development-positive-positive-warm_same_prefix-v1"
+      }
+    ],
+    "schema": "compand.ces1.provider_view_bundle.v1"
+  },
+  "baseline_provider_view_sha256": "9dae738712ff51638555fe72e05c7d96fda48a568b81ff105fe4622249953321",
+  "case_record_count": 2,
+  "case_records": [
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-cache_sensitive_prefixes-development-positive-positive-cold-v1",
+              "output": "{\"cache_condition\": \"cold\", \"cache_entry_expired\": false, \"cache_fields_present\": true, \"candidate_smaller\": true, \"candidate_suffix_byte_count\": 23, \"candidate_suffix_utf8\": \"synthetic stable suffix\", \"case_id\": \"cold\", \"oracle_class\": \"positive\", \"prefix\": [\"fixed system fixture\", \"fixed tool schema fixture\"], \"projected_candidate_cost_microusd\": 30, \"projected_original_cost_microusd\": 40, \"provider_cached_tokens\": 0, \"provider_visible_prefix_byte_count\": 47, \"provider_visible_prefix_utf8\": \"fixed system fixture\\nfixed tool schema fixture\\n\", \"replayed_prefix_utf8\": \"fixed system fixture\\nfixed tool schema fixture\\n\", \"suffix\": \"synthetic stable suffix\", \"synthetic_record_id\": \"cache_sensitive_prefixes-development-positive-positive-cold-v1\"}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "12586cc8d43f59eafcec065e1d7c7d76ffac962c2375c54f8396a35c525aa610",
+      "case_id": "cold",
+      "eligible_techniques": [
+        "prefix-cache-shaping-v1"
+      ],
+      "expected_disposition_by_technique": {
+        "prefix-cache-shaping-v1": "transform",
+        "provider-kv-reuse-v1": "decline_ineligible",
+        "transport-gzip-v1": "no_material_opportunity"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-cache_sensitive_prefixes-development-positive-positive-cold-v1",
+                "output": "{\"cache_condition\": \"cold\", \"cache_entry_expired\": false, \"cache_fields_present\": true, \"candidate_smaller\": true, \"candidate_suffix_byte_count\": 23, \"candidate_suffix_utf8\": \"synthetic stable suffix\", \"case_id\": \"cold\", \"oracle_class\": \"positive\", \"prefix\": [\"fixed system fixture\", \"fixed tool schema fixture\"], \"projected_candidate_cost_microusd\": 30, \"projected_original_cost_microusd\": 40, \"provider_cached_tokens\": 0, \"provider_visible_prefix_byte_count\": 47, \"provider_visible_prefix_utf8\": \"fixed system fixture\\nfixed tool schema fixture\\n\", \"replayed_prefix_utf8\": \"fixed system fixture\\nfixed tool schema fixture\\n\", \"suffix\": \"synthetic stable suffix\", \"synthetic_record_id\": \"cache_sensitive_prefixes-development-positive-positive-cold-v1\"}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "cache_condition": "cold",
+          "cache_entry_expired": false,
+          "cache_fields_present": true,
+          "candidate_smaller": true,
+          "candidate_suffix_byte_count": 23,
+          "candidate_suffix_utf8": "synthetic stable suffix",
+          "case_id": "cold",
+          "oracle_class": "positive",
+          "prefix": [
+            "fixed system fixture",
+            "fixed tool schema fixture"
+          ],
+          "projected_candidate_cost_microusd": 30,
+          "projected_original_cost_microusd": 40,
+          "provider_cached_tokens": 0,
+          "provider_visible_prefix_byte_count": 47,
+          "provider_visible_prefix_utf8": "fixed system fixture\nfixed tool schema fixture\n",
+          "replayed_prefix_utf8": "fixed system fixture\nfixed tool schema fixture\n",
+          "suffix": "synthetic stable suffix",
+          "synthetic_record_id": "cache_sensitive_prefixes-development-positive-positive-cold-v1"
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-cache_sensitive_prefixes",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "ef38b1d2a5e71952162c42870c380f446cf03f8b6934f1261ce42d276a293b58",
+      "oracle_class": "positive",
+      "record_id": "cache_sensitive_prefixes-development-positive-positive-cold-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "frozen_prefix_byte_identity",
+        "provider_usage_missing_is_not_zero"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-cache_sensitive_prefixes-development-positive-positive-warm_same_prefix-v1",
+              "output": "{\"cache_condition\": \"warm_identical_prefix\", \"cache_entry_expired\": false, \"cache_fields_present\": true, \"candidate_smaller\": true, \"candidate_suffix_byte_count\": 23, \"candidate_suffix_utf8\": \"synthetic stable suffix\", \"case_id\": \"warm_same_prefix\", \"oracle_class\": \"positive\", \"prefix\": [\"fixed system fixture\", \"fixed tool schema fixture\"], \"projected_candidate_cost_microusd\": 30, \"projected_original_cost_microusd\": 40, \"provider_cached_tokens\": 128, \"provider_visible_prefix_byte_count\": 47, \"provider_visible_prefix_utf8\": \"fixed system fixture\\nfixed tool schema fixture\\n\", \"replayed_prefix_utf8\": \"fixed system fixture\\nfixed tool schema fixture\\n\", \"suffix\": \"synthetic stable suffix\", \"synthetic_record_id\": \"cache_sensitive_prefixes-development-positive-positive-warm_same_prefix-v1\"}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "60bc5a476fab9a8e10495ea737a50eaffc0e0b3b49d6f500c70a7048dffc8c36",
+      "case_id": "warm_same_prefix",
+      "eligible_techniques": [
+        "prefix-cache-shaping-v1"
+      ],
+      "expected_disposition_by_technique": {
+        "prefix-cache-shaping-v1": "transform",
+        "provider-kv-reuse-v1": "decline_ineligible",
+        "transport-gzip-v1": "no_material_opportunity"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-cache_sensitive_prefixes-development-positive-positive-warm_same_prefix-v1",
+                "output": "{\"cache_condition\": \"warm_identical_prefix\", \"cache_entry_expired\": false, \"cache_fields_present\": true, \"candidate_smaller\": true, \"candidate_suffix_byte_count\": 23, \"candidate_suffix_utf8\": \"synthetic stable suffix\", \"case_id\": \"warm_same_prefix\", \"oracle_class\": \"positive\", \"prefix\": [\"fixed system fixture\", \"fixed tool schema fixture\"], \"projected_candidate_cost_microusd\": 30, \"projected_original_cost_microusd\": 40, \"provider_cached_tokens\": 128, \"provider_visible_prefix_byte_count\": 47, \"provider_visible_prefix_utf8\": \"fixed system fixture\\nfixed tool schema fixture\\n\", \"replayed_prefix_utf8\": \"fixed system fixture\\nfixed tool schema fixture\\n\", \"suffix\": \"synthetic stable suffix\", \"synthetic_record_id\": \"cache_sensitive_prefixes-development-positive-positive-warm_same_prefix-v1\"}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "cache_condition": "warm_identical_prefix",
+          "cache_entry_expired": false,
+          "cache_fields_present": true,
+          "candidate_smaller": true,
+          "candidate_suffix_byte_count": 23,
+          "candidate_suffix_utf8": "synthetic stable suffix",
+          "case_id": "warm_same_prefix",
+          "oracle_class": "positive",
+          "prefix": [
+            "fixed system fixture",
+            "fixed tool schema fixture"
+          ],
+          "projected_candidate_cost_microusd": 30,
+          "projected_original_cost_microusd": 40,
+          "provider_cached_tokens": 128,
+          "provider_visible_prefix_byte_count": 47,
+          "provider_visible_prefix_utf8": "fixed system fixture\nfixed tool schema fixture\n",
+          "replayed_prefix_utf8": "fixed system fixture\nfixed tool schema fixture\n",
+          "suffix": "synthetic stable suffix",
+          "synthetic_record_id": "cache_sensitive_prefixes-development-positive-positive-warm_same_prefix-v1"
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-cache_sensitive_prefixes",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "95db13afd8f1d864ae85403c3d0685dcb3d0df02f4cbcda062a81cff241dd46b",
+      "oracle_class": "positive",
+      "record_id": "cache_sensitive_prefixes-development-positive-positive-warm_same_prefix-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "frozen_prefix_byte_identity",
+        "provider_usage_missing_is_not_zero"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    }
+  ],
+  "cases": [
+    "cold",
+    "warm_same_prefix"
+  ],
+  "eligible_techniques": [
+    "prefix-cache-shaping-v1"
+  ],
+  "expected_disposition_by_technique": {
+    "prefix-cache-shaping-v1": [
+      "transform"
+    ],
+    "provider-kv-reuse-v1": [
+      "decline_ineligible"
+    ],
+    "transport-gzip-v1": [
+      "no_material_opportunity"
+    ]
+  },
+  "expected_outcome": {
+    "by_record_id": {
+      "cache_sensitive_prefixes-development-positive-positive-cold-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "cache_sensitive_prefixes-development-positive-positive-warm_same_prefix-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      }
+    },
+    "schema": "compand.ces1.case_outcome_bundle.v1"
+  },
+  "fixture_family": "cache_sensitive_prefixes",
+  "fixture_id": "cache_sensitive_prefixes-positive-v1",
+  "generator_or_source": {
+    "generator": "scripts/build_compand_phase2_corpus.py",
+    "kind": "sanitized_synthetic",
+    "raw_customer_content": false
+  },
+  "input": {
+    "case_input_hashes": [
+      {
+        "input_sha256": "ef38b1d2a5e71952162c42870c380f446cf03f8b6934f1261ce42d276a293b58",
+        "record_id": "cache_sensitive_prefixes-development-positive-positive-cold-v1"
+      },
+      {
+        "input_sha256": "95db13afd8f1d864ae85403c3d0685dcb3d0df02f4cbcda062a81cff241dd46b",
+        "record_id": "cache_sensitive_prefixes-development-positive-positive-warm_same_prefix-v1"
+      }
+    ],
+    "schema": "compand.ces1.fixture_input_bundle.v1"
+  },
+  "input_sha256": "d2193f13ffc7b0ea1cc504fbe209d4cee089a8ea844b14eaa7388955d1cac8e9",
+  "license": {
+    "reviewed": true,
+    "spdx": "CC0-1.0"
+  },
+  "oracle_classes": [
+    "positive"
+  ],
+  "partition": "development",
+  "required_invariants": [
+    "baseline_provider_view_is_byte_unchanged_B0",
+    "baseline_input_and_provider_view_hashes_match",
+    "tenant_principal_session_context_epoch_isolation",
+    "source_bytes_are_never_overwritten",
+    "frozen_prefix_byte_identity",
+    "provider_usage_missing_is_not_zero"
+  ],
+  "revision": 5,
+  "schema": "compand.ces1.fixture.v2",
+  "workload_stratum": "cache_conditioned_request"
+}

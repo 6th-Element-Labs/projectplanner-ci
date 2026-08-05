@@ -1,0 +1,399 @@
+{
+  "baseline_provider_view": {
+    "case_provider_view_hashes": [
+      {
+        "baseline_provider_view_sha256": "80d1df09335131685c4039f6f7d1faca79fc4f753f9cc653adeb2df46e0ddae1",
+        "record_id": "structured_json_and_tables-development-boundary-boundary-duplicate_keys-v1"
+      },
+      {
+        "baseline_provider_view_sha256": "f205e462a36a1d0b704438f3fe4255622dff3149694ae0d99db516dab353d9a6",
+        "record_id": "structured_json_and_tables-development-boundary-boundary-heterogeneous_rows-v1"
+      }
+    ],
+    "schema": "compand.ces1.provider_view_bundle.v1"
+  },
+  "baseline_provider_view_sha256": "53b5d7e2fd7235334dad41d3685aad535138b54ea0bbaf296d3ca0a2d94fdc98",
+  "case_record_count": 2,
+  "case_records": [
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-structured_json_and_tables-development-boundary-boundary-duplicate_keys-v1",
+              "output": "{\"case_id\": \"duplicate_keys\", \"json_minified_candidate_byte_count\": 826, \"json_minified_candidate_utf8\": \"[{\\\"row\\\":1,\\\"value\\\":1,\\\"code\\\":\\\"001\\\"},{\\\"row\\\":2,\\\"value\\\":2,\\\"code\\\":\\\"2\\\"},{\\\"row\\\":3,\\\"value\\\":null,\\\"code\\\":\\\"003\\\"},{\\\"row\\\":4,\\\"value\\\":4,\\\"code\\\":\\\"4\\\"},{\\\"row\\\":5,\\\"value\\\":5,\\\"code\\\":\\\"005\\\"},{\\\"row\\\":6,\\\"value\\\":null,\\\"code\\\":\\\"6\\\"},{\\\"row\\\":7,\\\"value\\\":7,\\\"code\\\":\\\"007\\\"},{\\\"row\\\":8,\\\"value\\\":8,\\\"code\\\":\\\"8\\\"},{\\\"row\\\":9,\\\"value\\\":null,\\\"code\\\":\\\"009\\\"},{\\\"row\\\":10,\\\"value\\\":10,\\\"code\\\":\\\"10\\\"},{\\\"row\\\":11,\\\"value\\\":11,\\\"code\\\":\\\"011\\\"},{\\\"row\\\":12,\\\"value\\\":null,\\\"code\\\":\\\"12\\\"},{\\\"row\\\":13,\\\"value\\\":13,\\\"code\\\":\\\"013\\\"},{\\\"row\\\":14,\\\"value\\\":14,\\\"code\\\":\\\"14\\\"},{\\\"row\\\":15,\\\"value\\\":null,\\\"code\\\":\\\"015\\\"},{\\\"row\\\":16,\\\"value\\\":16,\\\"code\\\":\\\"16\\\"},{\\\"row\\\":17,\\\"value\\\":17,\\\"code\\\":\\\"017\\\"},{\\\"row\\\":18,\\\"value\\\":null,\\\"code\\\":\\\"18\\\"},{\\\"row\\\":19,\\\"value\\\":19,\\\"code\\\":\\\"019\\\"},{\\\"row\\\":20,\\\"value\\\":20,\\\"code\\\":\\\"20\\\"},{\\\"row\\\":21,\\\"value\\\":null,\\\"code\\\":\\\"021\\\"},{\\\"row\\\":22,\\\"value\\\":22,\\\"code\\\":\\\"22\\\"},{\\\"row\\\":23,\\\"value\\\":23,\\\"code\\\":\\\"023\\\"},{\\\"row\\\":24,\\\"value\\\":null,\\\"code\\\":\\\"24\\\"}]\", \"oracle_class\": \"boundary\", \"raw_json\": \"{\\\"row\\\":1,\\\"row\\\":2}\", \"required_semantics\": \"decline_ambiguous_duplicate_keys\", \"source_json_byte_count\": 1404, \"source_json_utf8\": \"[\\n  {\\n    \\\"row\\\": 1,\\n    \\\"value\\\": 1,\\n    \\\"code\\\": \\\"001\\\"\\n  },\\n  {\\n    \\\"row\\\": 2,\\n    \\\"value\\\": 2,\\n    \\\"code\\\": \\\"2\\\"\\n  },\\n  {\\n    \\\"row\\\": 3,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"003\\\"\\n  },\\n  {\\n    \\\"row\\\": 4,\\n    \\\"value\\\": 4,\\n    \\\"code\\\": \\\"4\\\"\\n  },\\n  {\\n    \\\"row\\\": 5,\\n    \\\"value\\\": 5,\\n    \\\"code\\\": \\\"005\\\"\\n  },\\n  {\\n    \\\"row\\\": 6,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"6\\\"\\n  },\\n  {\\n    \\\"row\\\": 7,\\n    \\\"value\\\": 7,\\n    \\\"code\\\": \\\"007\\\"\\n  },\\n  {\\n    \\\"row\\\": 8,\\n    \\\"value\\\": 8,\\n    \\\"code\\\": \\\"8\\\"\\n  },\\n  {\\n    \\\"row\\\": 9,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"009\\\"\\n  },\\n  {\\n    \\\"row\\\": 10,\\n    \\\"value\\\": 10,\\n    \\\"code\\\": \\\"10\\\"\\n  },\\n  {\\n    \\\"row\\\": 11,\\n    \\\"value\\\": 11,\\n    \\\"code\\\": \\\"011\\\"\\n  },\\n  {\\n    \\\"row\\\": 12,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"12\\\"\\n  },\\n  {\\n    \\\"row\\\": 13,\\n    \\\"value\\\": 13,\\n    \\\"code\\\": \\\"013\\\"\\n  },\\n  {\\n    \\\"row\\\": 14,\\n    \\\"value\\\": 14,\\n    \\\"code\\\": \\\"14\\\"\\n  },\\n  {\\n    \\\"row\\\": 15,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"015\\\"\\n  },\\n  {\\n    \\\"row\\\": 16,\\n    \\\"value\\\": 16,\\n    \\\"code\\\": \\\"16\\\"\\n  },\\n  {\\n    \\\"row\\\": 17,\\n    \\\"value\\\": 17,\\n    \\\"code\\\": \\\"017\\\"\\n  },\\n  {\\n    \\\"row\\\": 18,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"18\\\"\\n  },\\n  {\\n    \\\"row\\\": 19,\\n    \\\"value\\\": 19,\\n    \\\"code\\\": \\\"019\\\"\\n  },\\n  {\\n    \\\"row\\\": 20,\\n    \\\"value\\\": 20,\\n    \\\"code\\\": \\\"20\\\"\\n  },\\n  {\\n    \\\"row\\\": 21,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"021\\\"\\n  },\\n  {\\n    \\\"row\\\": 22,\\n    \\\"value\\\": 22,\\n    \\\"code\\\": \\\"22\\\"\\n  },\\n  {\\n    \\\"row\\\": 23,\\n    \\\"value\\\": 23,\\n    \\\"code\\\": \\\"023\\\"\\n  },\\n  {\\n    \\\"row\\\": 24,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"24\\\"\\n  }\\n]\\n\", \"structured_codec_candidate_byte_count\": 393, \"structured_codec_candidate_utf8\": \"{\\\"columns\\\":[\\\"row\\\",\\\"value\\\",\\\"code\\\"],\\\"rows\\\":[[1,1,\\\"001\\\"],[2,2,\\\"2\\\"],[3,null,\\\"003\\\"],[4,4,\\\"4\\\"],[5,5,\\\"005\\\"],[6,null,\\\"6\\\"],[7,7,\\\"007\\\"],[8,8,\\\"8\\\"],[9,null,\\\"009\\\"],[10,10,\\\"10\\\"],[11,11,\\\"011\\\"],[12,null,\\\"12\\\"],[13,13,\\\"013\\\"],[14,14,\\\"14\\\"],[15,null,\\\"015\\\"],[16,16,\\\"16\\\"],[17,17,\\\"017\\\"],[18,null,\\\"18\\\"],[19,19,\\\"019\\\"],[20,20,\\\"20\\\"],[21,null,\\\"021\\\"],[22,22,\\\"22\\\"],[23,23,\\\"023\\\"],[24,null,\\\"24\\\"]],\\\"version\\\":\\\"ordered-table-v1\\\"}\", \"synthetic_record_id\": \"structured_json_and_tables-development-boundary-boundary-duplicate_keys-v1\", \"typed_json\": [{\"code\": \"001\", \"row\": 1, \"value\": 1}, {\"code\": \"2\", \"row\": 2, \"value\": 2}, {\"code\": \"003\", \"row\": 3, \"value\": null}, {\"code\": \"4\", \"row\": 4, \"value\": 4}, {\"code\": \"005\", \"row\": 5, \"value\": 5}, {\"code\": \"6\", \"row\": 6, \"value\": null}, {\"code\": \"007\", \"row\": 7, \"value\": 7}, {\"code\": \"8\", \"row\": 8, \"value\": 8}, {\"code\": \"009\", \"row\": 9, \"value\": null}, {\"code\": \"10\", \"row\": 10, \"value\": 10}, {\"code\": \"011\", \"row\": 11, \"value\": 11}, {\"code\": \"12\", \"row\": 12, \"value\": null}, {\"code\": \"013\", \"row\": 13, \"value\": 13}, {\"code\": \"14\", \"row\": 14, \"value\": 14}, {\"code\": \"015\", \"row\": 15, \"value\": null}, {\"code\": \"16\", \"row\": 16, \"value\": 16}, {\"code\": \"017\", \"row\": 17, \"value\": 17}, {\"code\": \"18\", \"row\": 18, \"value\": null}, {\"code\": \"019\", \"row\": 19, \"value\": 19}, {\"code\": \"20\", \"row\": 20, \"value\": 20}, {\"code\": \"021\", \"row\": 21, \"value\": null}, {\"code\": \"22\", \"row\": 22, \"value\": 22}, {\"code\": \"023\", \"row\": 23, \"value\": 23}, {\"code\": \"24\", \"row\": 24, \"value\": null}]}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "80d1df09335131685c4039f6f7d1faca79fc4f753f9cc653adeb2df46e0ddae1",
+      "case_id": "duplicate_keys",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "json-minify-v1": "decline_ineligible",
+        "structured-data-codec-v1": "decline_ineligible"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-structured_json_and_tables-development-boundary-boundary-duplicate_keys-v1",
+                "output": "{\"case_id\": \"duplicate_keys\", \"json_minified_candidate_byte_count\": 826, \"json_minified_candidate_utf8\": \"[{\\\"row\\\":1,\\\"value\\\":1,\\\"code\\\":\\\"001\\\"},{\\\"row\\\":2,\\\"value\\\":2,\\\"code\\\":\\\"2\\\"},{\\\"row\\\":3,\\\"value\\\":null,\\\"code\\\":\\\"003\\\"},{\\\"row\\\":4,\\\"value\\\":4,\\\"code\\\":\\\"4\\\"},{\\\"row\\\":5,\\\"value\\\":5,\\\"code\\\":\\\"005\\\"},{\\\"row\\\":6,\\\"value\\\":null,\\\"code\\\":\\\"6\\\"},{\\\"row\\\":7,\\\"value\\\":7,\\\"code\\\":\\\"007\\\"},{\\\"row\\\":8,\\\"value\\\":8,\\\"code\\\":\\\"8\\\"},{\\\"row\\\":9,\\\"value\\\":null,\\\"code\\\":\\\"009\\\"},{\\\"row\\\":10,\\\"value\\\":10,\\\"code\\\":\\\"10\\\"},{\\\"row\\\":11,\\\"value\\\":11,\\\"code\\\":\\\"011\\\"},{\\\"row\\\":12,\\\"value\\\":null,\\\"code\\\":\\\"12\\\"},{\\\"row\\\":13,\\\"value\\\":13,\\\"code\\\":\\\"013\\\"},{\\\"row\\\":14,\\\"value\\\":14,\\\"code\\\":\\\"14\\\"},{\\\"row\\\":15,\\\"value\\\":null,\\\"code\\\":\\\"015\\\"},{\\\"row\\\":16,\\\"value\\\":16,\\\"code\\\":\\\"16\\\"},{\\\"row\\\":17,\\\"value\\\":17,\\\"code\\\":\\\"017\\\"},{\\\"row\\\":18,\\\"value\\\":null,\\\"code\\\":\\\"18\\\"},{\\\"row\\\":19,\\\"value\\\":19,\\\"code\\\":\\\"019\\\"},{\\\"row\\\":20,\\\"value\\\":20,\\\"code\\\":\\\"20\\\"},{\\\"row\\\":21,\\\"value\\\":null,\\\"code\\\":\\\"021\\\"},{\\\"row\\\":22,\\\"value\\\":22,\\\"code\\\":\\\"22\\\"},{\\\"row\\\":23,\\\"value\\\":23,\\\"code\\\":\\\"023\\\"},{\\\"row\\\":24,\\\"value\\\":null,\\\"code\\\":\\\"24\\\"}]\", \"oracle_class\": \"boundary\", \"raw_json\": \"{\\\"row\\\":1,\\\"row\\\":2}\", \"required_semantics\": \"decline_ambiguous_duplicate_keys\", \"source_json_byte_count\": 1404, \"source_json_utf8\": \"[\\n  {\\n    \\\"row\\\": 1,\\n    \\\"value\\\": 1,\\n    \\\"code\\\": \\\"001\\\"\\n  },\\n  {\\n    \\\"row\\\": 2,\\n    \\\"value\\\": 2,\\n    \\\"code\\\": \\\"2\\\"\\n  },\\n  {\\n    \\\"row\\\": 3,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"003\\\"\\n  },\\n  {\\n    \\\"row\\\": 4,\\n    \\\"value\\\": 4,\\n    \\\"code\\\": \\\"4\\\"\\n  },\\n  {\\n    \\\"row\\\": 5,\\n    \\\"value\\\": 5,\\n    \\\"code\\\": \\\"005\\\"\\n  },\\n  {\\n    \\\"row\\\": 6,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"6\\\"\\n  },\\n  {\\n    \\\"row\\\": 7,\\n    \\\"value\\\": 7,\\n    \\\"code\\\": \\\"007\\\"\\n  },\\n  {\\n    \\\"row\\\": 8,\\n    \\\"value\\\": 8,\\n    \\\"code\\\": \\\"8\\\"\\n  },\\n  {\\n    \\\"row\\\": 9,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"009\\\"\\n  },\\n  {\\n    \\\"row\\\": 10,\\n    \\\"value\\\": 10,\\n    \\\"code\\\": \\\"10\\\"\\n  },\\n  {\\n    \\\"row\\\": 11,\\n    \\\"value\\\": 11,\\n    \\\"code\\\": \\\"011\\\"\\n  },\\n  {\\n    \\\"row\\\": 12,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"12\\\"\\n  },\\n  {\\n    \\\"row\\\": 13,\\n    \\\"value\\\": 13,\\n    \\\"code\\\": \\\"013\\\"\\n  },\\n  {\\n    \\\"row\\\": 14,\\n    \\\"value\\\": 14,\\n    \\\"code\\\": \\\"14\\\"\\n  },\\n  {\\n    \\\"row\\\": 15,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"015\\\"\\n  },\\n  {\\n    \\\"row\\\": 16,\\n    \\\"value\\\": 16,\\n    \\\"code\\\": \\\"16\\\"\\n  },\\n  {\\n    \\\"row\\\": 17,\\n    \\\"value\\\": 17,\\n    \\\"code\\\": \\\"017\\\"\\n  },\\n  {\\n    \\\"row\\\": 18,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"18\\\"\\n  },\\n  {\\n    \\\"row\\\": 19,\\n    \\\"value\\\": 19,\\n    \\\"code\\\": \\\"019\\\"\\n  },\\n  {\\n    \\\"row\\\": 20,\\n    \\\"value\\\": 20,\\n    \\\"code\\\": \\\"20\\\"\\n  },\\n  {\\n    \\\"row\\\": 21,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"021\\\"\\n  },\\n  {\\n    \\\"row\\\": 22,\\n    \\\"value\\\": 22,\\n    \\\"code\\\": \\\"22\\\"\\n  },\\n  {\\n    \\\"row\\\": 23,\\n    \\\"value\\\": 23,\\n    \\\"code\\\": \\\"023\\\"\\n  },\\n  {\\n    \\\"row\\\": 24,\\n    \\\"value\\\": null,\\n    \\\"code\\\": \\\"24\\\"\\n  }\\n]\\n\", \"structured_codec_candidate_byte_count\": 393, \"structured_codec_candidate_utf8\": \"{\\\"columns\\\":[\\\"row\\\",\\\"value\\\",\\\"code\\\"],\\\"rows\\\":[[1,1,\\\"001\\\"],[2,2,\\\"2\\\"],[3,null,\\\"003\\\"],[4,4,\\\"4\\\"],[5,5,\\\"005\\\"],[6,null,\\\"6\\\"],[7,7,\\\"007\\\"],[8,8,\\\"8\\\"],[9,null,\\\"009\\\"],[10,10,\\\"10\\\"],[11,11,\\\"011\\\"],[12,null,\\\"12\\\"],[13,13,\\\"013\\\"],[14,14,\\\"14\\\"],[15,null,\\\"015\\\"],[16,16,\\\"16\\\"],[17,17,\\\"017\\\"],[18,null,\\\"18\\\"],[19,19,\\\"019\\\"],[20,20,\\\"20\\\"],[21,null,\\\"021\\\"],[22,22,\\\"22\\\"],[23,23,\\\"023\\\"],[24,null,\\\"24\\\"]],\\\"version\\\":\\\"ordered-table-v1\\\"}\", \"synthetic_record_id\": \"structured_json_and_tables-development-boundary-boundary-duplicate_keys-v1\", \"typed_json\": [{\"code\": \"001\", \"row\": 1, \"value\": 1}, {\"code\": \"2\", \"row\": 2, \"value\": 2}, {\"code\": \"003\", \"row\": 3, \"value\": null}, {\"code\": \"4\", \"row\": 4, \"value\": 4}, {\"code\": \"005\", \"row\": 5, \"value\": 5}, {\"code\": \"6\", \"row\": 6, \"value\": null}, {\"code\": \"007\", \"row\": 7, \"value\": 7}, {\"code\": \"8\", \"row\": 8, \"value\": 8}, {\"code\": \"009\", \"row\": 9, \"value\": null}, {\"code\": \"10\", \"row\": 10, \"value\": 10}, {\"code\": \"011\", \"row\": 11, \"value\": 11}, {\"code\": \"12\", \"row\": 12, \"value\": null}, {\"code\": \"013\", \"row\": 13, \"value\": 13}, {\"code\": \"14\", \"row\": 14, \"value\": 14}, {\"code\": \"015\", \"row\": 15, \"value\": null}, {\"code\": \"16\", \"row\": 16, \"value\": 16}, {\"code\": \"017\", \"row\": 17, \"value\": 17}, {\"code\": \"18\", \"row\": 18, \"value\": null}, {\"code\": \"019\", \"row\": 19, \"value\": 19}, {\"code\": \"20\", \"row\": 20, \"value\": 20}, {\"code\": \"021\", \"row\": 21, \"value\": null}, {\"code\": \"22\", \"row\": 22, \"value\": 22}, {\"code\": \"023\", \"row\": 23, \"value\": 23}, {\"code\": \"24\", \"row\": 24, \"value\": null}]}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "case_id": "duplicate_keys",
+          "json_minified_candidate_byte_count": 826,
+          "json_minified_candidate_utf8": "[{\"row\":1,\"value\":1,\"code\":\"001\"},{\"row\":2,\"value\":2,\"code\":\"2\"},{\"row\":3,\"value\":null,\"code\":\"003\"},{\"row\":4,\"value\":4,\"code\":\"4\"},{\"row\":5,\"value\":5,\"code\":\"005\"},{\"row\":6,\"value\":null,\"code\":\"6\"},{\"row\":7,\"value\":7,\"code\":\"007\"},{\"row\":8,\"value\":8,\"code\":\"8\"},{\"row\":9,\"value\":null,\"code\":\"009\"},{\"row\":10,\"value\":10,\"code\":\"10\"},{\"row\":11,\"value\":11,\"code\":\"011\"},{\"row\":12,\"value\":null,\"code\":\"12\"},{\"row\":13,\"value\":13,\"code\":\"013\"},{\"row\":14,\"value\":14,\"code\":\"14\"},{\"row\":15,\"value\":null,\"code\":\"015\"},{\"row\":16,\"value\":16,\"code\":\"16\"},{\"row\":17,\"value\":17,\"code\":\"017\"},{\"row\":18,\"value\":null,\"code\":\"18\"},{\"row\":19,\"value\":19,\"code\":\"019\"},{\"row\":20,\"value\":20,\"code\":\"20\"},{\"row\":21,\"value\":null,\"code\":\"021\"},{\"row\":22,\"value\":22,\"code\":\"22\"},{\"row\":23,\"value\":23,\"code\":\"023\"},{\"row\":24,\"value\":null,\"code\":\"24\"}]",
+          "oracle_class": "boundary",
+          "raw_json": "{\"row\":1,\"row\":2}",
+          "required_semantics": "decline_ambiguous_duplicate_keys",
+          "source_json_byte_count": 1404,
+          "source_json_utf8": "[\n  {\n    \"row\": 1,\n    \"value\": 1,\n    \"code\": \"001\"\n  },\n  {\n    \"row\": 2,\n    \"value\": 2,\n    \"code\": \"2\"\n  },\n  {\n    \"row\": 3,\n    \"value\": null,\n    \"code\": \"003\"\n  },\n  {\n    \"row\": 4,\n    \"value\": 4,\n    \"code\": \"4\"\n  },\n  {\n    \"row\": 5,\n    \"value\": 5,\n    \"code\": \"005\"\n  },\n  {\n    \"row\": 6,\n    \"value\": null,\n    \"code\": \"6\"\n  },\n  {\n    \"row\": 7,\n    \"value\": 7,\n    \"code\": \"007\"\n  },\n  {\n    \"row\": 8,\n    \"value\": 8,\n    \"code\": \"8\"\n  },\n  {\n    \"row\": 9,\n    \"value\": null,\n    \"code\": \"009\"\n  },\n  {\n    \"row\": 10,\n    \"value\": 10,\n    \"code\": \"10\"\n  },\n  {\n    \"row\": 11,\n    \"value\": 11,\n    \"code\": \"011\"\n  },\n  {\n    \"row\": 12,\n    \"value\": null,\n    \"code\": \"12\"\n  },\n  {\n    \"row\": 13,\n    \"value\": 13,\n    \"code\": \"013\"\n  },\n  {\n    \"row\": 14,\n    \"value\": 14,\n    \"code\": \"14\"\n  },\n  {\n    \"row\": 15,\n    \"value\": null,\n    \"code\": \"015\"\n  },\n  {\n    \"row\": 16,\n    \"value\": 16,\n    \"code\": \"16\"\n  },\n  {\n    \"row\": 17,\n    \"value\": 17,\n    \"code\": \"017\"\n  },\n  {\n    \"row\": 18,\n    \"value\": null,\n    \"code\": \"18\"\n  },\n  {\n    \"row\": 19,\n    \"value\": 19,\n    \"code\": \"019\"\n  },\n  {\n    \"row\": 20,\n    \"value\": 20,\n    \"code\": \"20\"\n  },\n  {\n    \"row\": 21,\n    \"value\": null,\n    \"code\": \"021\"\n  },\n  {\n    \"row\": 22,\n    \"value\": 22,\n    \"code\": \"22\"\n  },\n  {\n    \"row\": 23,\n    \"value\": 23,\n    \"code\": \"023\"\n  },\n  {\n    \"row\": 24,\n    \"value\": null,\n    \"code\": \"24\"\n  }\n]\n",
+          "structured_codec_candidate_byte_count": 393,
+          "structured_codec_candidate_utf8": "{\"columns\":[\"row\",\"value\",\"code\"],\"rows\":[[1,1,\"001\"],[2,2,\"2\"],[3,null,\"003\"],[4,4,\"4\"],[5,5,\"005\"],[6,null,\"6\"],[7,7,\"007\"],[8,8,\"8\"],[9,null,\"009\"],[10,10,\"10\"],[11,11,\"011\"],[12,null,\"12\"],[13,13,\"013\"],[14,14,\"14\"],[15,null,\"015\"],[16,16,\"16\"],[17,17,\"017\"],[18,null,\"18\"],[19,19,\"019\"],[20,20,\"20\"],[21,null,\"021\"],[22,22,\"22\"],[23,23,\"023\"],[24,null,\"24\"]],\"version\":\"ordered-table-v1\"}",
+          "synthetic_record_id": "structured_json_and_tables-development-boundary-boundary-duplicate_keys-v1",
+          "typed_json": [
+            {
+              "code": "001",
+              "row": 1,
+              "value": 1
+            },
+            {
+              "code": "2",
+              "row": 2,
+              "value": 2
+            },
+            {
+              "code": "003",
+              "row": 3,
+              "value": null
+            },
+            {
+              "code": "4",
+              "row": 4,
+              "value": 4
+            },
+            {
+              "code": "005",
+              "row": 5,
+              "value": 5
+            },
+            {
+              "code": "6",
+              "row": 6,
+              "value": null
+            },
+            {
+              "code": "007",
+              "row": 7,
+              "value": 7
+            },
+            {
+              "code": "8",
+              "row": 8,
+              "value": 8
+            },
+            {
+              "code": "009",
+              "row": 9,
+              "value": null
+            },
+            {
+              "code": "10",
+              "row": 10,
+              "value": 10
+            },
+            {
+              "code": "011",
+              "row": 11,
+              "value": 11
+            },
+            {
+              "code": "12",
+              "row": 12,
+              "value": null
+            },
+            {
+              "code": "013",
+              "row": 13,
+              "value": 13
+            },
+            {
+              "code": "14",
+              "row": 14,
+              "value": 14
+            },
+            {
+              "code": "015",
+              "row": 15,
+              "value": null
+            },
+            {
+              "code": "16",
+              "row": 16,
+              "value": 16
+            },
+            {
+              "code": "017",
+              "row": 17,
+              "value": 17
+            },
+            {
+              "code": "18",
+              "row": 18,
+              "value": null
+            },
+            {
+              "code": "019",
+              "row": 19,
+              "value": 19
+            },
+            {
+              "code": "20",
+              "row": 20,
+              "value": 20
+            },
+            {
+              "code": "021",
+              "row": 21,
+              "value": null
+            },
+            {
+              "code": "22",
+              "row": 22,
+              "value": 22
+            },
+            {
+              "code": "023",
+              "row": 23,
+              "value": 23
+            },
+            {
+              "code": "24",
+              "row": 24,
+              "value": null
+            }
+          ]
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-structured_json_and_tables",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "24d4ebd6eec291ca801ae9295003fc00249106580e84d194daaa310d7a119b4d",
+      "oracle_class": "boundary",
+      "record_id": "structured_json_and_tables-development-boundary-boundary-duplicate_keys-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "preserve_scalar_types",
+        "preserve_key_row_and_column_order"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    },
+    {
+      "baseline_provider_view": {
+        "body": {
+          "input": [
+            {
+              "call_id": "call-structured_json_and_tables-development-boundary-boundary-heterogeneous_rows-v1",
+              "output": "{\"case_id\": \"heterogeneous_rows\", \"json_minified_candidate_byte_count\": 51, \"json_minified_candidate_utf8\": \"[{\\\"row\\\":1,\\\"value\\\":null},{\\\"row\\\":\\\"two\\\",\\\"extra\\\":true}]\", \"oracle_class\": \"boundary\", \"raw_json\": null, \"required_semantics\": \"decline_heterogeneous_rows\", \"source_json_byte_count\": 89, \"source_json_utf8\": \"[\\n  {\\n    \\\"row\\\": 1,\\n    \\\"value\\\": null\\n  },\\n  {\\n    \\\"row\\\": \\\"two\\\",\\n    \\\"extra\\\": true\\n  }\\n]\\n\", \"structured_codec_candidate_byte_count\": 87, \"structured_codec_candidate_utf8\": \"{\\\"columns\\\":[\\\"row\\\",\\\"value\\\"],\\\"rows\\\":[[1,null],[\\\"two\\\",null]],\\\"version\\\":\\\"ordered-table-v1\\\"}\", \"synthetic_record_id\": \"structured_json_and_tables-development-boundary-boundary-heterogeneous_rows-v1\", \"typed_json\": [{\"row\": 1, \"value\": null}, {\"extra\": true, \"row\": \"two\"}]}",
+              "type": "function_call_output"
+            }
+          ],
+          "model": "fixture-model",
+          "store": false,
+          "stream": false
+        },
+        "headers": {
+          "content-type": "application/json",
+          "x-fixture-auth": "dummy"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      "baseline_provider_view_sha256": "f205e462a36a1d0b704438f3fe4255622dff3149694ae0d99db516dab353d9a6",
+      "case_id": "heterogeneous_rows",
+      "eligible_techniques": [],
+      "expected_disposition_by_technique": {
+        "json-minify-v1": "decline_ineligible",
+        "structured-data-codec-v1": "decline_ineligible"
+      },
+      "expected_outcome": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "input": {
+        "provider_request": {
+          "body": {
+            "input": [
+              {
+                "call_id": "call-structured_json_and_tables-development-boundary-boundary-heterogeneous_rows-v1",
+                "output": "{\"case_id\": \"heterogeneous_rows\", \"json_minified_candidate_byte_count\": 51, \"json_minified_candidate_utf8\": \"[{\\\"row\\\":1,\\\"value\\\":null},{\\\"row\\\":\\\"two\\\",\\\"extra\\\":true}]\", \"oracle_class\": \"boundary\", \"raw_json\": null, \"required_semantics\": \"decline_heterogeneous_rows\", \"source_json_byte_count\": 89, \"source_json_utf8\": \"[\\n  {\\n    \\\"row\\\": 1,\\n    \\\"value\\\": null\\n  },\\n  {\\n    \\\"row\\\": \\\"two\\\",\\n    \\\"extra\\\": true\\n  }\\n]\\n\", \"structured_codec_candidate_byte_count\": 87, \"structured_codec_candidate_utf8\": \"{\\\"columns\\\":[\\\"row\\\",\\\"value\\\"],\\\"rows\\\":[[1,null],[\\\"two\\\",null]],\\\"version\\\":\\\"ordered-table-v1\\\"}\", \"synthetic_record_id\": \"structured_json_and_tables-development-boundary-boundary-heterogeneous_rows-v1\", \"typed_json\": [{\"row\": 1, \"value\": null}, {\"extra\": true, \"row\": \"two\"}]}",
+                "type": "function_call_output"
+              }
+            ],
+            "model": "fixture-model",
+            "store": false,
+            "stream": false
+          },
+          "headers": {
+            "content-type": "application/json",
+            "x-fixture-auth": "dummy"
+          },
+          "method": "POST",
+          "path": "/v1/responses"
+        },
+        "scenario": {
+          "case_id": "heterogeneous_rows",
+          "json_minified_candidate_byte_count": 51,
+          "json_minified_candidate_utf8": "[{\"row\":1,\"value\":null},{\"row\":\"two\",\"extra\":true}]",
+          "oracle_class": "boundary",
+          "raw_json": null,
+          "required_semantics": "decline_heterogeneous_rows",
+          "source_json_byte_count": 89,
+          "source_json_utf8": "[\n  {\n    \"row\": 1,\n    \"value\": null\n  },\n  {\n    \"row\": \"two\",\n    \"extra\": true\n  }\n]\n",
+          "structured_codec_candidate_byte_count": 87,
+          "structured_codec_candidate_utf8": "{\"columns\":[\"row\",\"value\"],\"rows\":[[1,null],[\"two\",null]],\"version\":\"ordered-table-v1\"}",
+          "synthetic_record_id": "structured_json_and_tables-development-boundary-boundary-heterogeneous_rows-v1",
+          "typed_json": [
+            {
+              "row": 1,
+              "value": null
+            },
+            {
+              "extra": true,
+              "row": "two"
+            }
+          ]
+        },
+        "schema": "compand.ces1.case_input.v1",
+        "scope": {
+          "context_epoch": "fixture-epoch-1",
+          "principal": "fixture-principal-a",
+          "session": "fixture-session-structured_json_and_tables",
+          "tenant": "fixture-tenant-a"
+        }
+      },
+      "input_sha256": "dfd348c72d95461cec653d573d847c4d333884bafa85bac877656cca4503d29b",
+      "oracle_class": "boundary",
+      "record_id": "structured_json_and_tables-development-boundary-boundary-heterogeneous_rows-v1",
+      "required_invariants": [
+        "baseline_provider_view_is_byte_unchanged_B0",
+        "baseline_input_and_provider_view_hashes_match",
+        "tenant_principal_session_context_epoch_isolation",
+        "source_bytes_are_never_overwritten",
+        "preserve_scalar_types",
+        "preserve_key_row_and_column_order"
+      ],
+      "schema": "compand.ces1.case_record.v1"
+    }
+  ],
+  "cases": [
+    "duplicate_keys",
+    "heterogeneous_rows"
+  ],
+  "eligible_techniques": [],
+  "expected_disposition_by_technique": {
+    "json-minify-v1": [
+      "decline_ineligible"
+    ],
+    "structured-data-codec-v1": [
+      "decline_ineligible"
+    ]
+  },
+  "expected_outcome": {
+    "by_record_id": {
+      "structured_json_and_tables-development-boundary-boundary-duplicate_keys-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      },
+      "structured_json_and_tables-development-boundary-boundary-heterogeneous_rows-v1": {
+        "provider_status": 200,
+        "retry_allowed": false,
+        "status": "verified_completed",
+        "verified_task_success": true
+      }
+    },
+    "schema": "compand.ces1.case_outcome_bundle.v1"
+  },
+  "fixture_family": "structured_json_and_tables",
+  "fixture_id": "structured_json_and_tables-boundary-v1",
+  "generator_or_source": {
+    "generator": "scripts/build_compand_phase2_corpus.py",
+    "kind": "sanitized_synthetic",
+    "raw_customer_content": false
+  },
+  "input": {
+    "case_input_hashes": [
+      {
+        "input_sha256": "24d4ebd6eec291ca801ae9295003fc00249106580e84d194daaa310d7a119b4d",
+        "record_id": "structured_json_and_tables-development-boundary-boundary-duplicate_keys-v1"
+      },
+      {
+        "input_sha256": "dfd348c72d95461cec653d573d847c4d333884bafa85bac877656cca4503d29b",
+        "record_id": "structured_json_and_tables-development-boundary-boundary-heterogeneous_rows-v1"
+      }
+    ],
+    "schema": "compand.ces1.fixture_input_bundle.v1"
+  },
+  "input_sha256": "40f069423dc10d09cab3c780226e0c036bc1e439bd18a00198828d02c3b95958",
+  "license": {
+    "reviewed": true,
+    "spdx": "CC0-1.0"
+  },
+  "oracle_classes": [
+    "boundary"
+  ],
+  "partition": "development",
+  "required_invariants": [
+    "baseline_provider_view_is_byte_unchanged_B0",
+    "baseline_input_and_provider_view_hashes_match",
+    "tenant_principal_session_context_epoch_isolation",
+    "source_bytes_are_never_overwritten",
+    "preserve_scalar_types",
+    "preserve_key_row_and_column_order"
+  ],
+  "revision": 5,
+  "schema": "compand.ces1.fixture.v2",
+  "workload_stratum": "typed_structured_output"
+}
