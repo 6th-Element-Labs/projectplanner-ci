@@ -56,3 +56,48 @@ produces `declined` with `reason_code=no_candidate`; this is intentionally disti
 This registry implements individual `E1` development replay only. It does not compose
 techniques or authorize the `C1` arm, confirmatory traffic, certification, production
 promotion, or cumulative savings claims.
+
+## Frozen ablation and mechanical grading
+
+QA-57 adds a higher-level development command around the replay wire. It validates the
+frozen benchmark, catalog, corpus index, `CHECKSUMS`, every fixture byte, and every case
+input/provider-view hash before creating a deterministic `B0`/`S1`/`E1` plan:
+
+```bash
+python3 scripts/compand_lab.py ablate \
+  --contract-root docs/compand/phase2 \
+  --corpus-root fixtures/compand/phase2-technique-corpus/v1 \
+  --output-root /tmp/compand-ablation \
+  --release-id line-rle-development-v1 \
+  --technique line-rle-v1 \
+  --model-id offline-fixture-model \
+  --config-id frozen-development-config
+```
+
+The command returns nonzero when any CES-1 hard gate fails and still writes a complete
+failure bundle. That is the expected result for the frozen synthetic corpus: it contains no
+provider billing truth and cannot attest its own clean-environment reproduction. Missing
+usage remains missing rather than becoming zero, and the release remains exploratory.
+
+Each release has immutable `raw`, `normalized`, and `published` layers. Score inputs append
+provider usage (including explicit missing values), evaluator version, run/arm/technique,
+candidate and content hashes, config fingerprint, event parent, and monotonic sequence.
+The compiler derives task-level effects, uncertainty, severe tails, four separate grades,
+scorecards, limitations, failure details, and checksums from those events.
+
+Reproduce every derived byte into a new empty directory with the generated command:
+
+```bash
+/tmp/compand-ablation/releases/line-rle-development-v1/reproduce \
+  /tmp/compand-ablation-clean-rerun
+```
+
+The generated command resolves the frozen contract and sanitized corpus relative to the
+repository root. Set `COMPAND_REPO_ROOT=/path/to/clean/checkout` when reproducing from a
+different checkout path. It preserves the release's clean-environment gate state and fails
+if the frozen contract fingerprint changed or any regenerated checksum differs. `C1`
+planning is separately fail-closed: every member must have a hash-valid passing `E1`
+scorecard bound to the same frozen contract and catalog version before a combination entry
+can exist. A list of technique IDs is not passing evidence. QA-57 does not authorize a
+combination run, confirmatory traffic, production promotion, verified Value Index movement,
+or a public savings claim.

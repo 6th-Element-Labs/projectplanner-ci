@@ -37,6 +37,17 @@ from .techniques import (
     get_registration,
     resolve_technique,
 )
+from .grading import (
+    AblationArm,
+    GRADE_WEIGHTS,
+    HARD_GATE_IDS,
+    KPI_IDS,
+    interval_95,
+    jcs_canonical_json_bytes,
+    percentile,
+    scorecard_sha256,
+    weighted_grade,
+)
 
 __all__ = [
     "ClientCredentialRegistry",
@@ -68,4 +79,13 @@ __all__ = [
     "UNSUPPORTED_TECHNIQUE_IDS",
     "get_registration",
     "resolve_technique",
+    "AblationArm",
+    "GRADE_WEIGHTS",
+    "HARD_GATE_IDS",
+    "KPI_IDS",
+    "interval_95",
+    "jcs_canonical_json_bytes",
+    "percentile",
+    "scorecard_sha256",
+    "weighted_grade",
 ]
