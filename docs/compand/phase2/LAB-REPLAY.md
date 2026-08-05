@@ -34,3 +34,25 @@ IDs and content hashes remain stable for the same fixture and configuration.
 `B0` retains the byte-identical baseline. `S1` performs detection and estimation without
 writing transformed bytes. `E1` applies exactly one technique and verifies recovery. A
 plugin exception is recorded as a red event without retrying or modifying the baseline.
+
+## Technique selection
+
+The CLI accepts exactly the 30 IDs frozen in [`technique-catalog.json`](technique-catalog.json).
+The 14 entries marked `cloud_gateway_enforceable` resolve to isolated plugin packages under
+`src/switchboard/domain/compand/techniques/`. Each package implements only the shared
+`Technique` contract and does not import another plugin.
+
+Recovery is technique-owned. Codecs decode their transformed bytes, deltas apply their
+patch, and reference or projection techniques validate transformed scope and hash metadata
+against the retained content-addressed artifact. The shared harness checks the returned
+bytes and records hashes; it never manufactures recovery by copying the original input.
+
+The other 16 IDs resolve to structured `unsupported` records containing the frozen version,
+eligibility, guarantee, host dependency, and reason. They never run through the replay wire
+as fake passthrough transforms. An eligible plugin that sees an inapplicable fixture instead
+produces `declined` with `reason_code=no_candidate`; this is intentionally distinct from
+`status=unsupported`.
+
+This registry implements individual `E1` development replay only. It does not compose
+techniques or authorize the `C1` arm, confirmatory traffic, certification, production
+promotion, or cumulative savings claims.

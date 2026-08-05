@@ -29,6 +29,14 @@ from .lab import (
     candidate_id_for,
     sha256_evidence,
 )
+from .techniques import (
+    ALL_TECHNIQUE_IDS,
+    SUPPORTED_TECHNIQUE_IDS,
+    TECHNIQUE_REGISTRY,
+    UNSUPPORTED_TECHNIQUE_IDS,
+    get_registration,
+    resolve_technique,
+)
 
 __all__ = [
     "ClientCredentialRegistry",
@@ -54,4 +62,10 @@ __all__ = [
     "VerificationProof",
     "candidate_id_for",
     "sha256_evidence",
+    "ALL_TECHNIQUE_IDS",
+    "SUPPORTED_TECHNIQUE_IDS",
+    "TECHNIQUE_REGISTRY",
+    "UNSUPPORTED_TECHNIQUE_IDS",
+    "get_registration",
+    "resolve_technique",
 ]
