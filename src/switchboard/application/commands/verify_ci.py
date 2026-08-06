@@ -51,6 +51,14 @@ def status_from_run(row: Mapping[str, Any] | None) -> str:
     status = _norm(row.get("status"))
     if conclusion in GREEN_RUN or status in GREEN_RUN:
         return "green"
+    # A dispatch-stage abort (mirror sync / workflow trigger) never started a workflow, so
+    # it published no verdict about this SHA — the mirror runner nonetheless stamps
+    # status/conclusion "error" on it, which RED_RUN would otherwise read as "your code
+    # failed CI". Report the absence of a verdict instead (BUG-323). ``stall_from_run``
+    # already attributes exactly these rows to "dispatch", so the pair stays coherent.
+    if _norm(row.get("failure_class")) in DISPATCH_FAILURES and status not in {
+            "triggered", "running"}:
+        return "pending"
     if conclusion in RED_RUN or status in RED_RUN:
         return "red"
     if status in PENDING_RUN or not conclusion:

@@ -124,6 +124,40 @@ def test_status_and_stall_taxonomy():
            "workflow_failed maps to red/run")
 
 
+def test_dispatch_abort_is_not_a_red_verdict():
+    """BUG-323: the shape production actually writes for an environmental abort.
+
+    ``_update_failure`` stamps status/conclusion ``error`` on every non-workflow failure
+    class, so a mirror that died at ``git fetch`` — before any workflow existed — used to
+    be byte-identical on ``status``/``contexts`` to a workflow that ran and failed. The
+    existing taxonomy test only builds ``status="requested"`` with no conclusion, which
+    never reaches the RED_RUN branch.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        project = _home(tmp)
+        for failure_class in ("mirror_sync_failed", "workflow_trigger_failed"):
+            sha = _sha(f"abort-{failure_class}")
+            _mk_run(project, sha, status="error", conclusion="error",
+                    failure_class=failure_class,
+                    failure_reason="error: cannot open .git/FETCH_HEAD: "
+                                   "Read-only file system")
+            result = verify_ci.verify(sha, project=project)
+            ok(result["status"] == "pending" and result["stall"] == "dispatch",
+               f"{failure_class} abort surfaces pending/dispatch, never red")
+            ok(all(c["state"] != "failure" for c in result["contexts"]),
+               f"{failure_class} abort publishes no failing required context")
+            ok(result["failure_class"] == failure_class,
+               f"{failure_class} abort keeps naming its own cause")
+
+        # A workflow that genuinely ran and failed is untouched by the carve-out.
+        red_sha = _sha("abort-control")
+        _mk_run(project, red_sha, status="error", conclusion="error",
+                failure_class="workflow_poll_failed")
+        control = verify_ci.verify(red_sha, project=project)
+        ok(control["status"] == "red" and control["stall"] == "run",
+           "a run-stage failure still surfaces red")
+
+
 def test_callback_stall_when_gh_context_missing():
     with tempfile.TemporaryDirectory() as tmp:
         project = _home(tmp)
@@ -208,6 +242,7 @@ if __name__ == "__main__":
     test_invalid_sha()
     test_missing_run_is_dispatch_stall()
     test_status_and_stall_taxonomy()
+    test_dispatch_abort_is_not_a_red_verdict()
     test_callback_stall_when_gh_context_missing()
     test_ensure_is_sha_only_and_hides_dispatch()
     test_ensure_routes_pr_heads_and_merge_groups_separately()

@@ -77,10 +77,18 @@ ok("Environment=PM_AUTH_MODE=required" in mcp_unit,
    "Production MCP unit forces PM_AUTH_MODE=required")
 ok("PM_AUTH_MODE=required" in provision,
    "Provisioning docs make production auth mode explicit")
-ok("SWITCHBOARD_CI_SOURCE_PATH=/var/lib/projectplanner/ci-source" in web_unit
-   and "git clone --no-checkout" in least_privilege
+ok("git clone --no-checkout" in least_privilege
    and "credential.helper" in least_privilege,
-   "production webhook has a writable authenticated coordination clone for scratchpad mirroring")
+   "production provisioning creates a writable authenticated coordination clone")
+# BUG-323: every unit that can reach the scratchpad dispatcher must be pointed at that
+# clone, not at the ProtectSystem=strict code tree. The web unit serves the GitHub webhook
+# and REST verify_ci; the MCP unit serves the verify_ci tool. A unit missing this line
+# fetches into a read-only checkout and every dispatch aborts on FETCH_HEAD.
+for _unit_name, _unit_text in (("deploy/projectplanner.service", web_unit),
+                               ("deploy/projectplanner-mcp.service", mcp_unit)):
+    ok("Environment=SWITCHBOARD_CI_SOURCE_PATH=/var/lib/projectplanner/ci-source"
+       in _unit_text,
+       f"{_unit_name} points scratchpad mirroring at the writable coordination clone")
 ok("run_discovered_tests" in ci_suite and "TEST_DENYLIST" in ci_suite
    and "find ." in ci_suite,
    "CI gate discovers every Python test unless the documented denylist excludes it")

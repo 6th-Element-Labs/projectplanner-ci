@@ -19,6 +19,12 @@ Environment=PM_AUTH_MODE=required
 Environment=PM_ENFORCE_DELIVERABLE_INTAKE=1
 # Code tree is read-only; don't try to write .pyc back into it.
 Environment=PYTHONDONTWRITEBYTECODE=1
+# CI-12/BUG-323: verify_ci(ensure=true) is an MCP tool, so this unit reaches the
+# scratchpad mirror dispatcher exactly like the web unit does. Without this it falls
+# back to PM_REPO_PATH / the deployed tree, which ProtectSystem=strict keeps read-only —
+# `git fetch` then dies on FETCH_HEAD for every SHA. Point it at the same writable
+# service-owned coordination clone.
+Environment=SWITCHBOARD_CI_SOURCE_PATH=/var/lib/projectplanner/ci-source
 ExecStart=/opt/projectplanner/.venv/bin/python /opt/projectplanner/mcp_server.py
 Restart=always
 RestartSec=3

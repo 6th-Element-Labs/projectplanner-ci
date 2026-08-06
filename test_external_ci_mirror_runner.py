@@ -409,6 +409,49 @@ try:
     listed = store.list_external_ci_runs(status="success", project=P)
     ok(any(r["run_id"] == success["run_id"] for r in listed),
        "external CI runs can be listed by status after execution")
+
+    # --- BUG-323: an unwritable source checkout is refused before any run row exists ----
+    # `git fetch` writes FETCH_HEAD into the checkout before it looks at any commit, so a
+    # read-only checkout aborts every dispatch identically. Recording that as a terminal
+    # `error` run is what let verify_ci report red CI on green code. Refuse up front, and
+    # leave nothing behind to unpoison.
+    ok(external_ci_mirror._source_checkout_write_error(source_path) == "",
+       "a writable coordination checkout passes the writability preflight")
+    readonly_path = os.path.join(_TMP, "readonly-source")
+    os.makedirs(os.path.join(readonly_path, ".git"))
+    os.chmod(os.path.join(readonly_path, ".git"), 0o555)
+    saved_token = os.environ.get("PM_GITHUB_TOKEN")
+    os.environ["PM_GITHUB_TOKEN"] = "test-token"
+    try:
+        if os.access(os.path.join(readonly_path, ".git"), os.W_OK):
+            # Announced, never silent: root bypasses mode bits, so access(W_OK) is
+            # always true and this environment cannot express the condition under test.
+            print("  SKIP  unwritable-checkout preflight (euid can write any mode)")
+        else:
+            readonly_task = store.create_task(
+                {"workstream_id": "CIQA", "title": "read-only checkout"},
+                actor="test", project=P)
+            readonly_request = make_request(readonly_task["task_id"])
+            readonly_request["source_sha"] = "6666666666666666666666666666666666666666"
+            refused = external_ci_mirror.request_external_ci_mirror_run(
+                readonly_request, readonly_path, actor="test", project=P)
+            ok(refused.get("skip_reason") == "source_checkout_not_writable"
+               and refused.get("ok") is False
+               and refused.get("dispatched") is False
+               and refused.get("failure_class") == "mirror_sync_failed",
+               "an unwritable source checkout is refused as an environment fault")
+            ok("SWITCHBOARD_CI_SOURCE_PATH" in (refused.get("error") or ""),
+               "the refusal names the setting an operator has to fix")
+            ok(not store.list_external_ci_runs(
+                   source_sha=readonly_request["source_sha"], project=P)
+               and not refused.get("run_id"),
+               "the refused dispatch creates no external_ci_runs row to unpoison")
+    finally:
+        os.chmod(os.path.join(readonly_path, ".git"), 0o755)
+        if saved_token is None:
+            os.environ.pop("PM_GITHUB_TOKEN", None)
+        else:
+            os.environ["PM_GITHUB_TOKEN"] = saved_token
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 

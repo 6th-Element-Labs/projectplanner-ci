@@ -83,6 +83,37 @@ def _github_credential_error() -> str:
     )
 
 
+def _source_checkout_write_error(source_path: str) -> str:
+    """Return a human-actionable message if the source checkout is not writable, else ''.
+
+    ``git fetch`` writes ``FETCH_HEAD`` into the checkout's git dir before it looks at any
+    commit, so a read-only checkout aborts EVERY dispatch identically, whatever SHA was
+    asked for. That is an environment fault, not a verdict about the code — and until this
+    preflight existed it was recorded as a terminal ``error`` run, which ``verify_ci``
+    then surfaced as a red CI status (BUG-323). Refusing here, before any run row exists,
+    keeps the environment failure out of the CI verdict entirely.
+
+    Same shape and hot-path discipline as ``_github_credential_error``: a single stat-level
+    check, no subprocess, no network. On Linux ``access(W_OK)`` reports EROFS for a
+    read-only *mount* as well as ordinary ownership/mode denial, so this catches the
+    ``ProtectSystem=strict`` case that produced the incident.
+    """
+    git_dir = os.path.join(source_path, ".git")
+    # In a linked worktree ``.git`` is a FILE pointing at the real git dir, and the
+    # writes git needs land in the worktree root. Probe the directory in that case.
+    probe = git_dir if os.path.isdir(git_dir) else source_path
+    if os.access(probe, os.W_OK):
+        return ""
+    return (
+        f"CI source checkout {source_path!r} is not writable by this process "
+        f"(no write access to {probe!r}); `git fetch` cannot create FETCH_HEAD there, so "
+        "the mirror would abort before reaching the requested SHA. Point "
+        "SWITCHBOARD_CI_SOURCE_PATH at the writable service-owned coordination clone "
+        "(deploy/apply-least-privilege.sh provisions /var/lib/projectplanner/ci-source); "
+        "the deployed code tree is deliberately read-only under ProtectSystem=strict."
+    )
+
+
 class ExternalCiError(Exception):
     def __init__(self, failure_class: str, message: str, result: Optional[Dict[str, Any]] = None):
         super().__init__(message)
@@ -405,6 +436,18 @@ def request_external_ci_mirror_run(request: Dict[str, Any], source_path: str,
         return {"error": credential_error,
                 "failure_class": "mirror_sync_failed",
                 "skip_reason": "github_credentials_unavailable",
+                "dispatched": False, "ok": False}
+    # Same precedent, one stage later: an unwritable checkout is an environment fault that
+    # would kill `git fetch` before any SHA-dependent work. Refusing here — still BEFORE
+    # create_external_ci_run — means no run row, no claimed effect, and therefore nothing
+    # for verify_ci to mistake for a red CI verdict on green code (BUG-323). Gated on
+    # `runner is None` for the same reason as the credential check: an injected
+    # CommandRunner has replaced the layer that would have touched this path.
+    writability_error = "" if runner is not None else _source_checkout_write_error(source_path)
+    if writability_error:
+        return {"error": writability_error,
+                "failure_class": "mirror_sync_failed",
+                "skip_reason": "source_checkout_not_writable",
                 "dispatched": False, "ok": False}
     request = dict(request or {})
     # The execution owner is server-owned identity. The REST route forwards the
