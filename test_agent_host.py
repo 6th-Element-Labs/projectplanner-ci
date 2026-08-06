@@ -599,6 +599,51 @@ except StopLoop:
 ok(len(register_calls) >= 2,
    "Agent Host daemon retries registration after transient startup failure")
 
+
+def _policy_inventory(runtime_name):
+    return {
+        "host_id": "host/co23-policy",
+        "limits": {"max_sessions": 1},
+        "runtimes": [{
+            "runtime": runtime_name,
+            "lanes": [],
+            "capabilities": ["docs", "github", "python", "tests"],
+            "policy": {"allow_work": True, "allow_global_claim": False,
+                       "allow_message_only": True, "mode": "project_wide",
+                       "allowed_lanes": [], "lane_mode": "all_project_lanes"},
+        }],
+    }
+
+
+def _authoritative(runtime_name):
+    return {"authoritative_execution_policy": {
+        "runtime": runtime_name,
+        "allow_work": True,
+        "allow_global_claim": False,
+        "lane_mode": "all_project_lanes",
+        "lanes": [],
+        "capabilities": ["docs", "github", "python", "tests"],
+        "max_sessions": 1,
+    }}
+
+
+claude_inventory = _policy_inventory("claude-code")
+ok(agent_host.apply_authoritative_execution_policy(
+       claude_inventory, _authoritative("claude-code")) is True,
+   "claude-code authoritative policy hot-applies to a claude-code host")
+ok(agent_host.apply_authoritative_execution_policy(
+       _policy_inventory("claude-code"), _authoritative("codex")) is False,
+   "a codex policy is refused by a claude-code host")
+ok(agent_host.apply_authoritative_execution_policy(
+       _policy_inventory("codex"), _authoritative("claude-code")) is False,
+   "a claude-code policy is refused by a codex host")
+ok(agent_host.apply_authoritative_execution_policy(
+       _policy_inventory("codex"), _authoritative("codex")) is True,
+   "the codex hot-apply path is unchanged")
+ok(agent_host.apply_authoritative_execution_policy(
+       _policy_inventory("cursor"), _authoritative("cursor")) is False,
+   "an unsupported runtime never hot-applies")
+
 print(f"\n{passed} passed, {failed} failed")
 if failed:
     raise SystemExit(1)

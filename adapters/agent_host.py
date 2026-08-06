@@ -1173,7 +1173,13 @@ def apply_authoritative_execution_policy(inventory, response):
     policy = dict((response or {}).get("authoritative_execution_policy") or {})
     if not policy:
         return False
-    if policy.get("runtime") != "codex" or policy.get("allow_global_claim") is not False:
+    runtimes = inventory.get("runtimes") or []
+    advertised_runtime = runtimes[0].get("runtime") if len(runtimes) == 1 else None
+    # CO-23: an enrollment authorizes exactly one runtime. The policy must name
+    # the same supported runtime this host advertises; anything else is refused.
+    if (policy.get("runtime") not in {"codex", "claude-code"}
+            or policy.get("runtime") != advertised_runtime
+            or policy.get("allow_global_claim") is not False):
         print("[agent_host] refused invalid authoritative execution policy", flush=True)
         return False
     try:
@@ -1191,9 +1197,6 @@ def apply_authoritative_execution_policy(inventory, response):
         return False
     if lane_mode == "all_project_lanes":
         lanes = []
-    runtimes = inventory.get("runtimes") or []
-    if len(runtimes) != 1 or runtimes[0].get("runtime") != "codex":
-        return False
     runtime = runtimes[0]
     before = json.dumps({
         "lanes": runtime.get("lanes"),
