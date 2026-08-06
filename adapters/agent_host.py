@@ -55,6 +55,7 @@ from agent_host_enrollment import (  # noqa: E402
     ACCOUNT_AFFINITIES_FILENAME,
     ACCOUNT_AFFINITY_IDS_KEY,
     host_heartbeat_ttl_s,
+    preflight_claude_local_auth,
     preflight_codex_local_auth,
 )
 from codex.cloud_adapter import launch_wake as launch_codex_cloud_wake  # noqa: E402
@@ -292,13 +293,15 @@ def _redacted_local_auth(runtime):
 
 
 def refresh_local_auth_inventory(inventory, *, now=None, force=False):
-    """Re-probe personal Codex auth and atomically refresh admission inventory."""
+    """Re-probe personal local auth and atomically refresh admission inventory."""
     global _LOCAL_AUTH_LAST_PROBE_AT
     runtimes = inventory.get("runtimes") or []
-    if len(runtimes) != 1 or runtimes[0].get("runtime") != "codex":
+    if len(runtimes) != 1 or runtimes[0].get("runtime") not in {"codex", "claude-code"}:
         return False
+    runtime = runtimes[0]["runtime"]
+    personal_mode = "chatgpt_personal" if runtime == "codex" else "oauth_personal"
     current = dict(runtimes[0].get("local_auth") or {})
-    if current.get("auth_mode") not in {"chatgpt_personal", "unavailable"}:
+    if current.get("auth_mode") not in {personal_mode, "unavailable"}:
         return False
     checked_at = time.time() if now is None else float(now)
     try:
@@ -310,14 +313,18 @@ def refresh_local_auth_inventory(inventory, *, now=None, force=False):
         return False
     _LOCAL_AUTH_LAST_PROBE_AT = checked_at
     try:
-        proof = preflight_codex_local_auth(
-            codex_executable=os.environ.get("PM_CODEX_EXECUTABLE") or "")
+        if runtime == "codex":
+            proof = preflight_codex_local_auth(
+                codex_executable=os.environ.get("PM_CODEX_EXECUTABLE") or "")
+        else:
+            proof = preflight_claude_local_auth(
+                claude_executable=os.environ.get("PM_CLAUDE_EXECUTABLE") or "")
         if proof.get("authenticated") is not True:
-            raise RuntimeError("native Codex local auth is unavailable")
+            raise RuntimeError(f"native {runtime} local auth is unavailable")
         refreshed = {
             "available": True,
-            "runtime": "codex",
-            "auth_mode": "chatgpt_personal",
+            "runtime": runtime,
+            "auth_mode": personal_mode,
             "account_fingerprint": proof.get("account_fingerprint") or None,
             "credential_values_redacted": True,
             "provider_credential_exported": False,
@@ -325,8 +332,8 @@ def refresh_local_auth_inventory(inventory, *, now=None, force=False):
     except Exception as exc:
         refreshed = {
             "available": False,
-            "runtime": "codex",
-            "auth_mode": "chatgpt_personal",
+            "runtime": runtime,
+            "auth_mode": personal_mode,
             "account_fingerprint": None,
             "credential_values_redacted": True,
             "provider_credential_exported": False,

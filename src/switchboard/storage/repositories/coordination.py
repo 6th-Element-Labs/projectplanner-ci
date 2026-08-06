@@ -3853,9 +3853,14 @@ def _enrollment_inventory_error(identity: Dict[str, Any],
         and policy_capabilities.issubset(
             runtime_capabilities | host_proven_capabilities)
     )
+    # CO-23: an enrollment authorizes exactly one server-issued runtime. The
+    # advertised inventory and local-auth proof must both name that runtime;
+    # anything else (including a runtime outside the supported set) mismatches.
+    policy_runtime = str(execution.get("runtime") or "")
     execution_matches = bool(
         len(runtime_rows) == 1
-        and runtime.get("runtime") == execution.get("runtime") == "codex"
+        and policy_runtime in {"codex", "claude-code"}
+        and runtime.get("runtime") == policy_runtime
         and sorted(runtime.get("lanes") or []) == sorted(execution.get("lanes") or [])
         and capability_match
         and runtime_policy.get("allow_work") is execution.get("allow_work")
@@ -3863,7 +3868,7 @@ def _enrollment_inventory_error(identity: Dict[str, Any],
         and advertised_max_sessions == allowed_max_sessions
         and (not execution.get("local_auth_required")
              or (isinstance(local_auth.get("available"), bool)
-                 and local_auth.get("runtime") == "codex"
+                 and local_auth.get("runtime") == policy_runtime
                  and local_auth.get("provider_credential_exported") is False
                  and capacity_local_auth == local_auth))
     )

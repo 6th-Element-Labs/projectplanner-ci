@@ -222,6 +222,59 @@ it, and mounts only the exact workspace writable. `CODEX_HOME` and every protect
 also scrubbed. The run fails closed if the platform sandbox is missing or unusable; removing
 bearer variables from the child environment is defense in depth, not the isolation boundary.
 
+## Enroll a host-bound claude-code host (CO-23)
+
+The approved `claude-host-bound-native-cli` capability (CO-22) admits a second
+host posture: the operator's own machine running the native Claude CLI on a
+personal subscription. The login stays wherever `claude /login` put it (the OS
+keychain); enrollment copies nothing, mints nothing (`claude setup-token` is
+never invoked), and Switchboard only ever learns a redacted account
+fingerprint.
+
+Create the bootstrap with the Claude provider — the server derives the
+execution-policy runtime from the provider allowlist and pins an
+`anthropic-claude` host to exclusive one-seat concurrency that operator policy
+updates cannot widen:
+
+```json
+{
+  "schema": "switchboard.agent.begin_host_enrollment_command.v1",
+  "project": "switchboard",
+  "owner_user_id": "user-123",
+  "requested_host_id": "host/steve-mbp-claude",
+  "provider_allowlist": ["anthropic-claude"],
+  "ttl_seconds": 600
+}
+```
+
+Then install with `--runtime claude-code`. Sign the CLI in on the host first
+(`claude /login`); install fails closed before consuming the bootstrap if the
+CLI is logged out, using an API key, or routed through Bedrock/Vertex:
+
+```bash
+python adapters/agent_host_enrollment.py install \
+  --bundle /path/to/switchboard-agent-host-X.Y.Z \
+  --public-key deploy/agent-host-release-public.pem \
+  --bootstrap-code-file /secure/tmp/switchboard-bootstrap-code \
+  --base-url https://plan.taikunai.com \
+  --project switchboard \
+  --owner-user-id user-123 \
+  --source-repo-root /path/to/clean/projectplanner-checkout \
+  --runtime claude-code \
+  --claude-executable ~/.local/bin/claude
+```
+
+A claude-code host writes no dedicated Codex home and its service environment
+carries no `CODEX_HOME`; the claude executable's directory is added to the
+service PATH (launchd/systemd omit per-user roots like `~/.local/bin`). The
+daemon advertises runtime `claude-code` with `auth_mode=oauth_personal` and
+re-probes the login periodically, so signing out on the host stops work
+admission at the next heartbeat. Run this posture as a separate host instance
+alongside a Codex host; one enrollment authorizes exactly one runtime, and the
+installer refuses a bootstrap whose server-issued policy names a different
+runtime. Repeat the safe check any time with
+`python adapters/agent_host_enrollment.py preflight --runtime claude-code`.
+
 ## Declare a provider account for Settings binding (UI-19)
 
 Host enrollment above proves *a* native login exists; it does not say *which* account,

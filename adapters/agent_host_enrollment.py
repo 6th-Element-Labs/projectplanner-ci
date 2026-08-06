@@ -82,6 +82,25 @@ _COORDINATION_CREDENTIAL_ENV = {
     "PM_MCP_TOKEN",
     "SWITCHBOARD_TOKEN",
 }
+# Claude Code reads several non-keychain auth routes from the environment.
+# The host-bound posture (CO-22, ``claude-host-bound-native-cli``) admits only
+# the operator's own on-host login, so every alternate route is stripped before
+# any preflight or supervised runtime sees the environment.
+_CLAUDE_ALTERNATE_AUTH_ENV = {
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "ANTHROPIC_VERTEX_PROJECT_ID",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_PROFILE",
+    "AWS_WEB_IDENTITY_TOKEN_FILE",
+}
+SUPPORTED_HOST_RUNTIMES = ("codex", "claude-code")
+CLAUDE_WORK_MODULE = "claude_personal_worker:run"
 
 
 class EnrollmentError(RuntimeError):
@@ -485,6 +504,87 @@ def preflight_codex_local_auth(
     }
 
 
+def preflight_claude_local_auth(
+        *, claude_executable: str = "",
+        runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> dict[str, Any]:
+    """Prove the native Claude CLI and on-host claude.ai login without exporting it.
+
+    The credential stays wherever ``claude /login`` put it (the operator's OS
+    keychain). This preflight never mints a token (``claude setup-token`` is
+    never invoked), never reads credential material, and fails closed on
+    logged-out, API-key, Bedrock/Vertex, and malformed auth reports.
+    """
+    requested = str(claude_executable or "claude").strip()
+    resolved = shutil.which(requested)
+    if not resolved:
+        # launchd/systemd PATHs omit per-user install roots; the documented
+        # native install location is ~/.local/bin.
+        fallback = Path.home() / ".local" / "bin" / requested
+        if fallback.is_file() and os.access(fallback, os.X_OK):
+            resolved = str(fallback)
+    if not resolved:
+        raise EnrollmentError("native claude CLI is not installed or not on PATH")
+    executable = str(Path(resolved).resolve())
+    env = os.environ.copy()
+    for key in (_METERED_PROVIDER_ENV | _COORDINATION_CREDENTIAL_ENV
+                | _CLAUDE_ALTERNATE_AUTH_ENV):
+        env.pop(key, None)
+    results: list[subprocess.CompletedProcess] = []
+    for command in ([executable, "--version"],
+                    [executable, "auth", "status", "--json"]):
+        completed = runner(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+            env=env,
+        )
+        if completed.returncode != 0:
+            raise EnrollmentError(
+                "native Claude CLI local-auth preflight failed; sign in on this host first")
+        results.append(completed)
+    version = ((results[0].stdout or results[0].stderr or "").strip().splitlines()
+               or ["claude"])[0][:120]
+    try:
+        payload = json.loads(results[1].stdout or "")
+    except json.JSONDecodeError as exc:
+        raise EnrollmentError(
+            "native Claude CLI auth status was not valid JSON; refusing ambiguous auth"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise EnrollmentError(
+            "native Claude CLI auth status was not an object; refusing ambiguous auth")
+    logged_in = payload.get("loggedIn") is True or payload.get("logged_in") is True
+    method = str(payload.get("authMethod") or payload.get("auth_method") or "").lower()
+    api_provider = str(
+        payload.get("apiProvider") or payload.get("api_provider") or "").lower()
+    observed = f"{method} {api_provider}"
+    if not logged_in:
+        raise EnrollmentError(
+            "native Claude CLI is not logged in; run `claude /login` on this host first")
+    if any(value in observed for value in ("api_key", "api key", "bedrock", "vertex")):
+        raise EnrollmentError(
+            "native Claude CLI must use the on-host claude.ai personal login; "
+            "API-key, Bedrock, and Vertex auth modes are not accepted")
+    account_id = str(payload.get("email") or payload.get("orgId") or "").strip()
+    proof_material = account_id or f"{version}\noauth_personal"
+    return {
+        "schema": "switchboard.claude_local_auth_preflight.v1",
+        "native_cli": True,
+        "cli_version": version,
+        "authenticated": True,
+        "auth_mode": "oauth_personal",
+        "claude_executable": executable,
+        "account_fingerprint": "acct-" + hashlib.sha256(
+            f"anthropic-claude\x1f{proof_material}".encode(
+                "utf-8", errors="replace")).hexdigest()[:16],
+        "credential_values_redacted": True,
+        "provider_credential_exported": False,
+    }
+
+
 def prepare_dedicated_codex_home(
         target_root: Path, *, source_root: Path | None = None) -> Path:
     """Seed an Agent-Host-owned Codex auth root separate from the user's live home.
@@ -620,7 +720,7 @@ def render_service(target_platform: str, *, python: str, entrypoint: Path,
                  "--config", str(config_path)]
     if target_platform == "darwin":
         payload = {
-            "Label": SERVICE_LABEL,
+            "Label": _service_label(service_path),
             "ProgramArguments": arguments,
             # BUG-99: launchd's default PATH (/usr/bin:/bin:/usr/sbin:/sbin)
             # omits Homebrew, so runner sessions could not resolve gh (or even
@@ -676,6 +776,18 @@ def _systemd_quote(value: str) -> str:
     return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def _service_label(service_path: Path) -> str:
+    """Derive the launchd label from the plist filename.
+
+    The default install keeps the historical SERVICE_LABEL; a second host
+    instance on the same machine (e.g. a claude-code host beside a codex one)
+    uses a suffixed plist name and must get its own label, or launchd treats
+    both installs as one service.
+    """
+    stem = str(Path(service_path).stem or "").strip()
+    return stem or SERVICE_LABEL
+
+
 def _host_service_environment(
     config: Mapping[str, Any], *, public_key_path: Path | None = None,
 ) -> dict[str, str]:
@@ -684,9 +796,19 @@ def _host_service_environment(
     key_path = Path(public_key_path).expanduser().resolve() if public_key_path else (
         Path(configured_key).expanduser().resolve() if configured_key else None
     )
-    codex_executable = str(config.get("codex_executable") or "").strip()
     if key_path is None:
         raise EnrollmentError("installed configuration lacks the release public key path")
+    runtime = str(config.get("runtime") or "codex").strip()
+    if runtime == "claude-code":
+        claude_executable = str(config.get("claude_executable") or "").strip()
+        if not claude_executable:
+            raise EnrollmentError(
+                "installed configuration lacks the Connect Claude executable")
+        return {
+            "PM_AGENT_HOST_PUBLIC_KEY_PATH": str(key_path),
+            "PM_CONNECT_CLAUDE_CODE_EXECUTABLE": claude_executable,
+        }
+    codex_executable = str(config.get("codex_executable") or "").strip()
     if not codex_executable:
         raise EnrollmentError("installed configuration lacks the Connect Codex executable")
     return {
@@ -700,7 +822,7 @@ def control_service(target_platform: str, action: str, service_path: Path,
     """Operate only the current user's launchd/systemd service."""
     if target_platform == "darwin":
         domain = f"gui/{os.getuid()}"
-        target = f"{domain}/{SERVICE_LABEL}"
+        target = f"{domain}/{_service_label(service_path)}"
         if action == "start":
             commands = [["launchctl", "bootstrap", domain, str(service_path)]]
         elif action == "stop":
@@ -742,7 +864,7 @@ def control_service(target_platform: str, action: str, service_path: Path,
             # for the label to disappear, then retry once. Observed live on
             # the 0.2.27 install; the rollback fired and the host stayed on
             # stale code until a manual bootout-first retry.
-            label_target = f"{command[2]}/{SERVICE_LABEL}"
+            label_target = f"{command[2]}/{_service_label(service_path)}"
             deadline = time.time() + 5.0
             while time.time() < deadline and runner(
                     ["launchctl", "print", label_target], capture_output=True,
@@ -1132,11 +1254,14 @@ def _validate_persisted_lifecycle_layout(
         key: str(state.get(key) or "").strip()
         for key in ("prefix", "service_path")
     }
+    lifecycle_runtime = str(config.get("runtime") or "codex")
     required_config_paths = {
         key: str(config.get(key) or "").strip()
         for key in (
             "service_path", "repo_root", "source_repo_root", "runner_dir", "runtime_root",
-            "workspace_root", "codex_home", "source_codex_home", "log_root",
+            "workspace_root", "log_root",
+            *(("codex_home", "source_codex_home")
+              if lifecycle_runtime == "codex" else ()),
         )
     }
     if (not all(required_state_paths.values())
@@ -1156,7 +1281,9 @@ def _validate_persisted_lifecycle_layout(
             raise EnrollmentError(
                 f"{key} does not match the Agent Host lifecycle journal")
 
-    source_codex_home = Path(required_config_paths["source_codex_home"])
+    source_codex_home = Path(
+        required_config_paths.get("source_codex_home")
+        or str(Path.home() / ".codex"))
     if not source_codex_home.is_absolute() or source_codex_home.is_symlink():
         raise EnrollmentError("source_codex_home must be an absolute non-symlink path")
     source_repo_root = Path(required_config_paths["source_repo_root"])
@@ -1167,7 +1294,8 @@ def _validate_persisted_lifecycle_layout(
         config_root=config_path.parent,
         state_root=state_root,
         workspace_root=Path(required_config_paths["workspace_root"]),
-        codex_home=Path(required_config_paths["codex_home"]),
+        codex_home=Path(required_config_paths.get("codex_home")
+                        or str(state_root / "codex-home")),
         runner_root=Path(required_config_paths["runner_dir"]),
         runtime_root=Path(required_config_paths["runtime_root"]),
         log_root=Path(required_config_paths["log_root"]),
@@ -1219,8 +1347,9 @@ def _finalize_install(
         raise EnrollmentError("pending enrollment finalization lacks host identity material")
     if not config.get("base_url") or not config.get("project"):
         raise EnrollmentError("pending enrollment finalization lacks endpoint configuration")
+    config_runtime = str(config.get("runtime") or "codex")
     source_codex_home_value = str(config.get("source_codex_home") or "").strip()
-    if not source_codex_home_value:
+    if config_runtime == "codex" and not source_codex_home_value:
         raise EnrollmentError("pending enrollment finalization lacks source Codex home")
     source_repo_root = _validated_source_repo_root(
         str(config.get("source_repo_root") or ""))
@@ -1237,16 +1366,20 @@ def _finalize_install(
             config.get("runtime_root") or state_root / "provider-runtimes"),
         log_root=log_root,
         service_path=service_path,
-        source_codex_home=Path(source_codex_home_value),
+        source_codex_home=Path(source_codex_home_value or str(Path.home() / ".codex")),
     )
     workspace_root.mkdir(parents=True, mode=0o700, exist_ok=True)
     os.chmod(workspace_root, 0o700)
-    if (not codex_home.is_dir() or codex_home.is_symlink()
-            or not (codex_home / "auth.json").is_file()
-            or (codex_home / "auth.json").is_symlink()):
-        raise EnrollmentError("dedicated Codex auth root is not durable")
-    os.chmod(codex_home, 0o700)
-    os.chmod(codex_home / "auth.json", 0o600)
+    if config_runtime == "codex":
+        if (not codex_home.is_dir() or codex_home.is_symlink()
+                or not (codex_home / "auth.json").is_file()
+                or (codex_home / "auth.json").is_symlink()):
+            raise EnrollmentError("dedicated Codex auth root is not durable")
+        os.chmod(codex_home, 0o700)
+        os.chmod(codex_home / "auth.json", 0o600)
+    elif not str(config.get("claude_executable") or "").strip():
+        raise EnrollmentError(
+            "pending enrollment finalization lacks the claude executable")
     try:
         _atomic_json(identity_path, identity, 0o600)
         state["finalization_step"] = "identity_written"
@@ -1262,7 +1395,10 @@ def _finalize_install(
             config_path=config_path,
             service_path=service_path,
             log_root=log_root,
-            writable_roots=(state_root, workspace_root, codex_home, source_repo_root),
+            writable_roots=(
+                (state_root, workspace_root, codex_home, source_repo_root)
+                if config_runtime == "codex"
+                else (state_root, workspace_root, source_repo_root)),
             environment=_host_service_environment(config),
         )
         state["finalization_step"] = "service_rendered"
@@ -1337,6 +1473,8 @@ def _install_host_unlocked(*, bundle_dir: Path, public_key_path: Path, bootstrap
                  service_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
                  local_auth_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
                  codex_executable: str = "",
+                 runtime: str = "codex",
+                 claude_executable: str = "",
                  source_repo_root: Path | None = None,
                  hostname: str = "") -> dict[str, Any]:
     """Prepare a durable local install, consume bootstrap once, then start."""
@@ -1346,6 +1484,9 @@ def _install_host_unlocked(*, bundle_dir: Path, public_key_path: Path, bootstrap
         raise EnrollmentError("bootstrap_code is required")
     if target_platform not in manifest.get("platforms", []):
         raise EnrollmentError(f"bundle does not support {target_platform}")
+    runtime = str(runtime or "codex").strip()
+    if runtime not in SUPPORTED_HOST_RUNTIMES:
+        raise EnrollmentError(f"unsupported Agent Host runtime {runtime!r}")
     selected = dict(paths or _default_paths(target_platform))
     prefix = Path(selected["prefix"])
     config_root = Path(selected["config_root"])
@@ -1435,11 +1576,18 @@ def _install_host_unlocked(*, bundle_dir: Path, public_key_path: Path, bootstrap
                 copied_auth.unlink()
 
     try:
-        codex_home = prepare_dedicated_codex_home(
-            codex_home_candidate, source_root=source_codex_home)
-        local_auth = preflight_codex_local_auth(
-            codex_executable=codex_executable, codex_home=codex_home,
-            runner=local_auth_runner)
+        if runtime == "codex":
+            codex_home = prepare_dedicated_codex_home(
+                codex_home_candidate, source_root=source_codex_home)
+            local_auth = preflight_codex_local_auth(
+                codex_executable=codex_executable, codex_home=codex_home,
+                runner=local_auth_runner)
+        else:
+            # claude-code: the login stays in the operator's OS keychain and is
+            # proven in place. No credential file is copied into the state root.
+            codex_home = None
+            local_auth = preflight_claude_local_auth(
+                claude_executable=claude_executable, runner=local_auth_runner)
     except Exception:
         # Nothing can resume or uninstall a credential copy that predates the local
         # lifecycle journal.  On a fresh install, remove the dedicated root at every
@@ -1570,6 +1718,14 @@ def _install_host_unlocked(*, bundle_dir: Path, public_key_path: Path, bootstrap
         state["status"] = "enrollment_response_incomplete"
         _atomic_json(state_path, state, 0o600)
         raise EnrollmentError("enrollment completion omitted host identity material")
+    issued_runtime = str(
+        (enrollment.get("execution_policy") or {}).get("runtime") or "codex")
+    if issued_runtime != runtime:
+        state["status"] = "enrollment_response_incomplete"
+        _atomic_json(state_path, state, 0o600)
+        raise EnrollmentError(
+            f"server issued a {issued_runtime!r} execution policy for a "
+            f"{runtime!r} install; enroll a bootstrap for this runtime's provider")
     identity = {
         "schema": IDENTITY_SCHEMA,
         "host_id": enrollment["host_id"],
@@ -1583,8 +1739,9 @@ def _install_host_unlocked(*, bundle_dir: Path, public_key_path: Path, bootstrap
     config = {
         "base_url": base_url.rstrip("/"),
         "project": project,
-        "runtime": "codex",
-        "work_module": "adapters.codex_local_worker:run",
+        "runtime": runtime,
+        "work_module": ("adapters.codex_local_worker:run" if runtime == "codex"
+                        else CLAUDE_WORK_MODULE),
         "allow_work": bool((enrollment.get("execution_policy") or {}).get(
             "allow_work", allow_work)),
         "allow_global_claim": False,
@@ -1601,7 +1758,6 @@ def _install_host_unlocked(*, bundle_dir: Path, public_key_path: Path, bootstrap
         "project_allowlist": enrollment.get("project_allowlist") or [project],
         "provider_allowlist": sorted(set(enrollment.get("provider_allowlist") or [])),
         "local_auth_account_proof": local_auth["account_fingerprint"],
-        "codex_executable": local_auth["codex_executable"],
         "release_public_key_path": str(public_key_path.expanduser().resolve()),
         "platform": target_platform,
         "service_path": str(service_path),
@@ -1611,13 +1767,19 @@ def _install_host_unlocked(*, bundle_dir: Path, public_key_path: Path, bootstrap
         "runner_dir": str(state_root / "runner"),
         "runtime_root": str(state_root / "provider-runtimes"),
         "workspace_root": str(workspace_root),
-        "codex_home": str(codex_home),
-        "source_codex_home": str(source_codex_home),
         "log_root": str(log_root),
         "user_home": str(user_home),
         "agent_host_version": manifest["version"],
         "host_heartbeat_ttl_s": DEFAULT_HOST_HEARTBEAT_TTL_S,
     }
+    if runtime == "codex":
+        config.update({
+            "codex_executable": local_auth["codex_executable"],
+            "codex_home": str(codex_home),
+            "source_codex_home": str(source_codex_home),
+        })
+    else:
+        config["claude_executable"] = local_auth["claude_executable"]
     # Journal the only returned bearer and all validated endpoint data before the
     # first post-completion write. Any later boundary can resume or revoke locally.
     state.update({
@@ -1649,7 +1811,9 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
                  http: Callable[..., dict[str, Any]] = request_json,
                  service_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
                  local_auth_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
-                 codex_executable: str = "", source_repo_root: Path | None = None,
+                 codex_executable: str = "", runtime: str = "codex",
+                 claude_executable: str = "",
+                 source_repo_root: Path | None = None,
                  hostname: str = "") -> dict[str, Any]:
     """Serialize enrollment from local-state detection through finalization."""
     selected = dict(paths or _default_paths(target_platform))
@@ -1674,6 +1838,8 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
             service_runner=service_runner,
             local_auth_runner=local_auth_runner,
             codex_executable=codex_executable,
+            runtime=runtime,
+            claude_executable=claude_executable,
             source_repo_root=source_repo_root,
             hostname=hostname,
         )
@@ -2184,26 +2350,40 @@ def service_run(identity_path: Path, config_path: Path) -> None:
     if mode & 0o077:
         raise EnrollmentError("identity file permissions must be 0600")
     env = os.environ.copy()
-    # A personal Codex login belongs to the host. Never let an inherited metered
-    # provider credential cross into the supervised runtime by accident.
-    for key in _METERED_PROVIDER_ENV:
+    # A personal login belongs to the host. Never let an inherited metered
+    # provider credential (or an alternate Claude auth route) cross into the
+    # supervised runtime by accident.
+    for key in _METERED_PROVIDER_ENV | _CLAUDE_ALTERNATE_AUTH_ENV:
         env.pop(key, None)
-    codex_home = Path(str(config.get("codex_home") or "")).expanduser()
-    if (not str(config.get("codex_home") or "").strip()
-            or not codex_home.is_dir() or codex_home.is_symlink()
-            or not (codex_home / "auth.json").is_file()
-            or (codex_home / "auth.json").is_symlink()):
-        raise EnrollmentError("dedicated Codex auth root is unavailable")
-    source_codex_home = Path(
-        str(config.get("source_codex_home") or "")).expanduser()
+    runtime = str(config.get("runtime") or "codex").strip()
+    if runtime not in SUPPORTED_HOST_RUNTIMES:
+        raise EnrollmentError(f"unsupported Agent Host runtime {runtime!r}")
     user_home = Path(str(config.get("user_home") or "")).expanduser()
-    if (not source_codex_home.is_absolute() or source_codex_home.is_symlink()
-            or not user_home.is_absolute() or not user_home.is_dir()
+    if (not user_home.is_absolute() or not user_home.is_dir()
             or user_home.is_symlink()):
         raise EnrollmentError("host credential-isolation roots are unavailable")
-    local_auth = preflight_codex_local_auth(
-        codex_executable=str(config.get("codex_executable") or ""),
-        codex_home=codex_home)
+    codex_home: Path | None = None
+    source_codex_home: Path | None = None
+    if runtime == "codex":
+        codex_home = Path(str(config.get("codex_home") or "")).expanduser()
+        if (not str(config.get("codex_home") or "").strip()
+                or not codex_home.is_dir() or codex_home.is_symlink()
+                or not (codex_home / "auth.json").is_file()
+                or (codex_home / "auth.json").is_symlink()):
+            raise EnrollmentError("dedicated Codex auth root is unavailable")
+        source_codex_home = Path(
+            str(config.get("source_codex_home") or "")).expanduser()
+        if not source_codex_home.is_absolute() or source_codex_home.is_symlink():
+            raise EnrollmentError("host credential-isolation roots are unavailable")
+        local_auth = preflight_codex_local_auth(
+            codex_executable=str(config.get("codex_executable") or ""),
+            codex_home=codex_home)
+    else:
+        claude_executable = str(config.get("claude_executable") or "").strip()
+        if not claude_executable or not Path(claude_executable).is_absolute():
+            raise EnrollmentError("claude executable path is unavailable")
+        local_auth = preflight_claude_local_auth(
+            claude_executable=claude_executable)
     source_repo_root = _validated_source_repo_root(
         str(config.get("source_repo_root") or ""))
     values = {
@@ -2220,8 +2400,7 @@ def service_run(identity_path: Path, config_path: Path) -> None:
         "PM_HOST_ENROLLMENT_ID": identity.get("enrollment_id") or "",
         "PM_HOST_IDENTITY_GENERATION": identity.get("identity_generation") or 1,
         "PM_HOST_PUBLIC_KEY_FINGERPRINT": identity.get("public_key_fingerprint") or "",
-        "PM_RUNTIME": config.get("runtime") or "codex",
-        "PM_AGENT_WORK_MODULE": config.get("work_module") or "adapters.codex_local_worker:run",
+        "PM_RUNTIME": runtime,
         "PM_AGENT_HOST_ALLOW_WORK": "1" if config.get("allow_work") else "0",
         "PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM": "0",
         "PM_HOST_LANES": ",".join(config.get("lanes") or []),
@@ -2246,7 +2425,6 @@ def service_run(identity_path: Path, config_path: Path) -> None:
         "PM_HOST_LOCAL_AUTH_AVAILABLE": "1" if local_auth.get("authenticated") else "0",
         "PM_HOST_LOCAL_AUTH_MODE": local_auth.get("auth_mode") or "unavailable",
         "PM_HOST_LOCAL_AUTH_ACCOUNT_PROOF": local_auth.get("account_fingerprint") or "",
-        "PM_CODEX_EXECUTABLE": local_auth.get("codex_executable") or "",
         "PM_REPO_ROOT": config["repo_root"],
         "PM_AGENT_HOST_SOURCE_REPO_ROOT": str(source_repo_root),
         "PM_AGENT_HOST_WORK_SOURCE_ROOT": str(
@@ -2261,11 +2439,31 @@ def service_run(identity_path: Path, config_path: Path) -> None:
             (Path(config["runner_dir"]).parent / "state.json").resolve()),
         "PM_AGENT_HOST_RUNNER_DIR": str(Path(config["runner_dir"]).resolve()),
         "PM_AGENT_HOST_RUNTIME_ROOT": str(Path(config["runtime_root"]).resolve()),
-        "PM_AGENT_HOST_CODEX_HOME": str(codex_home.resolve()),
-        "PM_AGENT_HOST_SOURCE_CODEX_HOME": str(source_codex_home.resolve()),
         "PM_AGENT_HOST_USER_HOME": str(user_home.resolve()),
-        "CODEX_HOME": str(codex_home.resolve()),
     }
+    if runtime == "codex":
+        values.update({
+            "PM_AGENT_WORK_MODULE": config.get("work_module")
+            or "adapters.codex_local_worker:run",
+            "PM_CODEX_EXECUTABLE": local_auth.get("codex_executable") or "",
+            "PM_AGENT_HOST_CODEX_HOME": str(codex_home.resolve()),
+            "PM_AGENT_HOST_SOURCE_CODEX_HOME": str(source_codex_home.resolve()),
+            "CODEX_HOME": str(codex_home.resolve()),
+        })
+    else:
+        # claude-code: the runtime-scoped module variable keeps the codex and
+        # claude work modules from ever cross-contaminating (the prior fleet
+        # misconfiguration deploy/co-fleet-runtime-config.md records). The
+        # executable's directory joins PATH because launchd/systemd PATHs omit
+        # per-user install roots like ~/.local/bin.
+        claude_path = str(Path(local_auth["claude_executable"]).resolve())
+        values.update({
+            "PM_AGENT_WORK_MODULE_CLAUDE_CODE": config.get("work_module")
+            or CLAUDE_WORK_MODULE,
+            "PM_CLAUDE_EXECUTABLE": claude_path,
+        })
+        env["PATH"] = os.pathsep.join(filter(None, (
+            str(Path(claude_path).parent), env.get("PATH", ""))))
     env.update({key: str(value) for key, value in values.items()})
     env["PYTHONPATH"] = os.pathsep.join(filter(None, (
         str(Path(config["repo_root"]) / "src"),
@@ -2326,6 +2524,10 @@ def main(argv: list[str] | None = None) -> int:
     install.add_argument("--platform", default="")
     install.add_argument("--lanes", default="")
     install.add_argument("--no-start", action="store_true")
+    install.add_argument("--runtime", default="codex",
+                         choices=list(SUPPORTED_HOST_RUNTIMES))
+    install.add_argument("--claude-executable", default="")
+    install.add_argument("--provider-allowlist", default="")
     update = sub.add_parser("update")
     update.add_argument("--bundle", type=Path, required=True)
     update.add_argument("--public-key", type=Path, required=True)
@@ -2367,7 +2569,10 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--config", type=Path, required=True)
     scan = sub.add_parser("residue-scan")
     scan.add_argument("roots", type=Path, nargs="+")
-    sub.add_parser("preflight")
+    preflight = sub.add_parser("preflight")
+    preflight.add_argument("--runtime", default="codex",
+                           choices=list(SUPPORTED_HOST_RUNTIMES))
+    preflight.add_argument("--claude-executable", default="")
     args = parser.parse_args(argv)
     try:
         if args.command == "build-bundle":
@@ -2395,6 +2600,14 @@ def main(argv: list[str] | None = None) -> int:
                 target_platform=_platform(args.platform),
                 lanes=[item.strip() for item in args.lanes.split(",") if item.strip()],
                 start_service=not args.no_start,
+                runtime=args.runtime,
+                claude_executable=args.claude_executable,
+                **({"provider_allowlist": [
+                    item.strip() for item in args.provider_allowlist.split(",")
+                    if item.strip()]}
+                   if args.provider_allowlist.strip()
+                   else ({"provider_allowlist": ("anthropic-claude",)}
+                         if args.runtime == "claude-code" else {})),
             )
         elif args.command == "update":
             result = update_host(
@@ -2435,7 +2648,9 @@ def main(argv: list[str] | None = None) -> int:
             service_run(args.identity, args.config)
             return 0
         elif args.command == "preflight":
-            result = preflight_codex_local_auth()
+            result = (
+                preflight_claude_local_auth(claude_executable=args.claude_executable)
+                if args.runtime == "claude-code" else preflight_codex_local_auth())
         else:
             result = residue_scan(args.roots)
         print(json.dumps(result, sort_keys=True))

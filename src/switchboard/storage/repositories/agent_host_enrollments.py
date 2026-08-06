@@ -45,6 +45,37 @@ PERSONAL_EXECUTION_POLICY = {
 
 MAX_PERSONAL_HOST_SESSIONS = 32
 
+# CO-22/CO-23: one enrolled host advertises exactly one runtime, derived from
+# its provider allowlist. A personal Claude subscription is a single seat, so
+# its policy is pinned to exclusive one-session concurrency and operator
+# updates cannot widen it.
+PROVIDER_RUNTIMES = {
+    "openai-codex": "codex",
+    "anthropic-claude": "claude-code",
+}
+EXCLUSIVE_SEAT_RUNTIMES = {"claude-code"}
+
+
+def _runtime_for_providers(providers: list[str]) -> dict[str, Any]:
+    runtimes = sorted({
+        PROVIDER_RUNTIMES[provider]
+        for provider in providers if provider in PROVIDER_RUNTIMES
+    })
+    if len(runtimes) > 1:
+        return {"error": "ambiguous_provider_runtime"}
+    return {"runtime": runtimes[0] if runtimes else "codex"}
+
+
+def _clamped_max_sessions(runtime: str, requested: Any) -> int:
+    try:
+        sessions = int(requested)
+    except (TypeError, ValueError):
+        sessions = 1
+    sessions = min(MAX_PERSONAL_HOST_SESSIONS, max(1, sessions))
+    if str(runtime or "") in EXCLUSIVE_SEAT_RUNTIMES:
+        return 1
+    return sessions
+
 
 def _completion_recovery_token(
     *, project: str, enrollment_id: str, recovery_secret: str,
@@ -143,8 +174,20 @@ def begin_agent_host_enrollment(
     # bootstrap which can be consumed but whose host can never register.
     projects = sorted(set([project, *_normalized_list(project_allowlist)]))
     lanes = _normalized_list(lane_allowlist)
+    providers = _normalized_list(provider_allowlist) or ["openai-codex"]
+    selected_runtime = _runtime_for_providers(providers)
+    if selected_runtime.get("error"):
+        return _error(
+            "ambiguous_provider_runtime",
+            "provider_allowlist maps to more than one host runtime; "
+            "enroll one runtime per host",
+        )
+    runtime = selected_runtime["runtime"]
     execution_policy = {
         **PERSONAL_EXECUTION_POLICY,
+        "runtime": runtime,
+        "max_sessions": _clamped_max_sessions(
+            runtime, PERSONAL_EXECUTION_POLICY["max_sessions"]),
         "lanes": lanes,
         "lane_mode": "explicit" if lanes else "all_project_lanes",
     }
@@ -164,10 +207,7 @@ def begin_agent_host_enrollment(
                 owner_user_id,
                 json.dumps(_normalized_list(tenant_allowlist), sort_keys=True),
                 json.dumps(projects, sort_keys=True),
-                json.dumps(
-                    _normalized_list(provider_allowlist) or ["openai-codex"],
-                    sort_keys=True,
-                ),
+                json.dumps(providers, sort_keys=True),
                 json.dumps(execution_policy, sort_keys=True),
                 hash_token(bootstrap_code),
                 now + ttl_seconds,
@@ -523,17 +563,18 @@ def update_agent_host_execution_policy(
         if enrollment.get("status") != _ACTIVE:
             return _error("host_identity_revoked", "host identity is not active")
         current = _public(row).get("execution_policy") or {}
+        current_runtime = str(current.get("runtime") or "codex")
         updated_policy = {
             **PERSONAL_EXECUTION_POLICY,
             **current,
-            "runtime": "codex",
+            "runtime": current_runtime,
             "allow_work": True,
             "allow_global_claim": False,
             "personal_wakes_only": False,
             "local_auth_required": True,
             "lane_mode": lane_mode,
             "lanes": lanes,
-            "max_sessions": session_limit,
+            "max_sessions": _clamped_max_sessions(current_runtime, session_limit),
             "revision": int(current.get("revision") or 0) + 1,
             "authorized_at": now,
             "authorized_by_principal_id": str(principal_id or "") or None,
