@@ -525,7 +525,14 @@ def preflight_claude_local_auth(
             resolved = str(fallback)
     if not resolved:
         raise EnrollmentError("native claude CLI is not installed or not on PATH")
-    executable = str(Path(resolved).resolve())
+    # Keep the operator-maintained entry path (usually the ~/.local/bin/claude
+    # symlink) rather than its resolve()d target: the target directory holds
+    # version-named binaries (e.g. .../versions/2.1.218), so a resolved parent
+    # on PATH never satisfies `which claude`, and the target itself changes on
+    # every CLI self-update while the symlink stays stable.
+    executable = str(Path(resolved).expanduser().absolute())
+    if not (Path(executable).is_file() and os.access(executable, os.X_OK)):
+        raise EnrollmentError("native claude CLI path is not executable")
     env = os.environ.copy()
     for key in (_METERED_PROVIDER_ENV | _COORDINATION_CREDENTIAL_ENV
                 | _CLAUDE_ALTERNATE_AUTH_ENV):
@@ -1885,8 +1892,13 @@ def update_host(*, bundle_dir: Path, public_key_path: Path, state_path: Path,
         roots = [
             state_path.parent,
             Path(config_value["workspace_root"]),
-            Path(config_value["codex_home"]),
         ]
+        # A claude-code install has no dedicated Codex auth root (CO-23); the
+        # login lives in the OS keychain and never becomes a writable service
+        # root.
+        codex_home_value = str(config_value.get("codex_home") or "").strip()
+        if codex_home_value:
+            roots.append(Path(codex_home_value))
         previous_source = str(config_value.get("source_repo_root") or "").strip()
         if previous_source:
             roots.append(_validated_source_repo_root(previous_source))

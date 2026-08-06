@@ -129,6 +129,20 @@ try:
         for call in stripped_runner.calls),
        "claude preflight strips metered, token, and coordination credentials")
 
+    versions_dir = TMP / "share" / "claude" / "versions"
+    versions_dir.mkdir(parents=True)
+    versioned_binary = versions_dir / "2.1.218"
+    versioned_binary.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    versioned_binary.chmod(0o755)
+    symlink_bin = TMP / "linkbin"
+    symlink_bin.mkdir()
+    claude_symlink = symlink_bin / "claude"
+    claude_symlink.symlink_to(versioned_binary)
+    symlinked = enrollment.preflight_claude_local_auth(
+        claude_executable=str(claude_symlink), runner=fake_claude(LOGGED_IN))
+    ok(symlinked.get("claude_executable") == str(claude_symlink),
+       "preflight keeps the stable symlink path, not its version-named target")
+
     denied = []
     for label, payload in (
         ("logged-out", {**LOGGED_IN, "loggedIn": False}),
@@ -476,6 +490,20 @@ try:
        and not installed_config.get("codex_executable")
        and not (install_paths["state_root"] / "codex-home").exists(),
        "claude-code install never touches or copies a Codex auth root")
+
+    update_bundle = TMP / "bundle-0.0.3"
+    enrollment.create_signed_bundle(repo_checkout, update_bundle, "0.0.3", signing_private)
+    updated_install = enrollment.update_host(
+        bundle_dir=update_bundle,
+        public_key_path=signing_public,
+        state_path=install_paths["state_root"] / "state.json",
+        source_repo_root=source_repo,
+        restart_service=False,
+        service_runner=fake_service,
+    )
+    ok(updated_install.get("updated") is True
+       and updated_install.get("version") == "0.0.3",
+       "a claude-code install takes a signed update without a Codex auth root")
 
     mismatch_root = TMP / "install-mismatch"
     mismatch_paths = {
