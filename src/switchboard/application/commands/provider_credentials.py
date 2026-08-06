@@ -218,7 +218,11 @@ def _require_provider_native_proof(
 # provider but the one it happened to be copied from.
 _PERSONAL_SUBSCRIPTION_AUTH_TYPE = {
     "openai-codex": "chatgpt_personal",
-    "anthropic-claude": "personal_subscription",
+    # CO-22/CO-23: "personal_subscription" aliases the DISABLED portable
+    # setup-token entry, so the browser's Connect flow (which never sends
+    # auth_type) failed closed with vendor_confirmation_required. The
+    # approved posture for a host-bound Claude login is oauth_personal.
+    "anthropic-claude": "oauth_personal",
     "cursor": "browser_login",
 }
 

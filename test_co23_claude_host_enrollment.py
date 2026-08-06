@@ -555,6 +555,21 @@ try:
        "install refuses a server policy whose runtime disagrees with the request")
 
     # ------------------------------------------------------------------
+    # Settings' bind-host default auth type resolves to the APPROVED entry
+    # ------------------------------------------------------------------
+    from switchboard.application.commands import provider_credentials as cred_commands
+    from switchboard.domain.provider_credentials.capabilities import (
+        provider_auth_decision,
+    )
+    default_auth = cred_commands._PERSONAL_SUBSCRIPTION_AUTH_TYPE["anthropic-claude"]
+    decision = provider_auth_decision(
+        "anthropic-claude", default_auth,
+        host_classes=["trusted_private_worker", "user_owned_persistent"])
+    ok(decision.get("allowed") is True
+       and decision.get("capability_id") == "claude-host-bound-native-cli",
+       "the bind-host default claude auth type resolves to the approved host-bound entry")
+
+    # ------------------------------------------------------------------
     # a second host instance gets its own launchd identity
     # ------------------------------------------------------------------
     import plistlib
