@@ -35,6 +35,13 @@ _PROVIDER_ALIASES = {
     "anthropic-claude": "anthropic-claude",
     "cursor": "cursor",
 }
+# The one vendor each runtime may execute on. Selection is by this map, never by
+# selector order — a runtime must never receive another vendor's connection.
+_RUNTIME_PROVIDERS = {
+    "codex": "openai-codex",
+    "claude_code": "anthropic-claude",
+    "cursor": "cursor",
+}
 
 
 class ExecutionContextError(ValueError):
@@ -208,17 +215,25 @@ def resolve(
     selectors = sorted(
         (dict(item) for item in (policy.get("providers") or {}).get("selectors") or []),
         key=lambda item: int(item.get("priority") or 0))
+    # A runtime may only execute on its OWN vendor's connection. Selectors carry
+    # canonical provider ids (openai-codex/anthropic-claude/cursor), so compare
+    # canonical-to-canonical rather than against short vendor names. Falling back
+    # to the first selector when nothing matches is not a degraded mode: it hands
+    # the task another vendor's credential, which the receiving host refuses with
+    # provider_not_allowed and the task never runs. Refuse here, naming the gap.
+    required_provider = _RUNTIME_PROVIDERS.get(runtime_name, "")
     selected = next((
         item for item in selectors
-        if str(item.get("provider") or "").strip().lower()
-        in {str(runtime or "").strip().lower(),
-            "openai" if runtime_name == "codex" else
-            "anthropic" if runtime_name == "claude_code" else runtime_name}
-    ), selectors[0] if selectors else None)
+        if _PROVIDER_ALIASES.get(
+            str(item.get("provider") or "").strip().lower(), "") == required_provider
+    ), None)
     if not selected:
         raise ExecutionContextError(
             "provider_connection_not_ready",
-            "project execution policy has no provider selector")
+            "project execution policy has no provider selector for this runtime",
+            runtime=runtime_name, required_provider=required_provider,
+            configured_providers=sorted({
+                str(item.get("provider") or "") for item in selectors}))
     provider_name = str(selected.get("provider") or "").strip().lower()
     provider_ref = str(selected.get("connection_reference") or "").strip()
     provider_value = dict((provider_metadata or _provider_metadata)(

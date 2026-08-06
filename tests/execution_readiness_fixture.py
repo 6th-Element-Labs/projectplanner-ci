@@ -56,6 +56,20 @@ def configure_ready_project(project: str, *, actor: str = "test") -> None:
         refresh_state="ready",
         materialization_mode="host_native",
     )
+    claude_provider = default_provider_credential_repository.enroll(
+        project=project,
+        user_id=user_id,
+        provider="anthropic-claude",
+        provider_account_id=f"{project}-fixture-claude-account",
+        auth_type="oauth_personal",
+        project_allowlist=[project],
+        actor=actor,
+        refresh_state="ready",
+        materialization_mode="host_native",
+    )
+    claude_provider = default_provider_credential_repository.verify_host_native(
+        claude_provider["credential_reference"], project=project, actor=actor,
+        principal_user_id=user_id)
     provider = default_provider_credential_repository.verify_host_native(
         provider["credential_reference"], project=project, actor=actor,
         principal_user_id=user_id)
@@ -85,11 +99,18 @@ def configure_ready_project(project: str, *, actor: str = "test") -> None:
                 "burst": {"enabled": True, "max_concurrent_ephemeral": 2},
             },
             "providers": {
+                # One selector per allowed runtime's vendor: a runtime executes
+                # only on its own provider connection, so a project that allows
+                # claude_code must supply an anthropic-claude connection too.
                 "selectors": [
                     {
                         "provider": "codex",
                         "connection_reference": provider["credential_reference"],
-                    }
+                    },
+                    {
+                        "provider": "anthropic-claude",
+                        "connection_reference": claude_provider["credential_reference"],
+                    },
                 ]
             },
             "scm": {
