@@ -2468,7 +2468,10 @@ def service_run(identity_path: Path, config_path: Path) -> None:
         # misconfiguration deploy/co-fleet-runtime-config.md records). The
         # executable's directory joins PATH because launchd/systemd PATHs omit
         # per-user install roots like ~/.local/bin.
-        claude_path = str(Path(local_auth["claude_executable"]).resolve())
+        # Keep the operator-maintained entry path (see preflight_claude_local_auth):
+        # resolving here would swap the stable ~/.local/bin/claude symlink for a
+        # version-named target that `which claude` can never find on PATH.
+        claude_path = str(Path(local_auth["claude_executable"]).expanduser().absolute())
         values.update({
             "PM_AGENT_WORK_MODULE_CLAUDE_CODE": config.get("work_module")
             or CLAUDE_WORK_MODULE,

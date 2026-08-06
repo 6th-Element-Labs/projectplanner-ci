@@ -259,7 +259,14 @@ try:
         encoding="utf-8",
     )
     logged_in_claude.chmod(0o755)
-    logged_in_claude = logged_in_claude.resolve()
+    # The service must keep the operator-maintained symlink path end to end:
+    # the symlink target directory holds version-named binaries, so resolving
+    # anywhere in the flow breaks `which claude` for the daemon.
+    logged_in_link_dir = TMP / "bin-symlink"
+    logged_in_link_dir.mkdir(exist_ok=True)
+    logged_in_symlink = logged_in_link_dir / "claude"
+    logged_in_symlink.symlink_to(logged_in_claude.resolve())
+    logged_in_claude = logged_in_symlink
     claude_config["claude_executable"] = str(logged_in_claude)
     config_path.write_text(json.dumps(claude_config), encoding="utf-8")
 
