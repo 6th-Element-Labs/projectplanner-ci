@@ -1499,6 +1499,65 @@ def _ensure_codex_workspace_trusted(workspace_path: str) -> None:
         print(f"[agent_host] failed to seed Codex trust: {exc}", flush=True)
 
 
+def _ensure_claude_workspace_trusted(workspace_path: str) -> None:
+    """Seed exact-path trust so Connect Claude skips the interactive trust TUI.
+
+    Claude Code asks "Is this a project you trust?" for each new working
+    directory, and every Connect run gets a fresh managed workspace. Nobody
+    answers that prompt on a headless host, so the runner sits on the dialog
+    until its lease expires — the same failure Codex hits above.
+    ``--dangerously-skip-permissions`` governs tool permissions and does NOT
+    dismiss the folder-trust dialog.
+
+    The config is the operator's live ``~/.claude.json``, so this merges into a
+    parsed copy and writes atomically: a partial or clobbering write here would
+    break every other Claude session on the machine. An unreadable or malformed
+    config is left exactly as-is.
+    """
+    raw = str(workspace_path or "").strip()
+    if not raw:
+        return
+    try:
+        workspace = str(Path(raw).expanduser().resolve())
+    except OSError:
+        return
+    if not Path(workspace).is_dir():
+        return
+    config_path = Path.home() / ".claude.json"
+    try:
+        if config_path.is_file():
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+        else:
+            config = {}
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"[agent_host] failed to read Claude config for trust seeding: {exc}",
+              flush=True)
+        return
+    if not isinstance(config, dict):
+        print("[agent_host] Claude config is not an object; not seeding trust",
+              flush=True)
+        return
+    projects = config.get("projects")
+    if not isinstance(projects, dict):
+        projects = {}
+    entry = projects.get(workspace)
+    if not isinstance(entry, dict):
+        entry = {}
+    if entry.get("hasTrustDialogAccepted") is True:
+        return
+    entry["hasTrustDialogAccepted"] = True
+    projects[workspace] = entry
+    config["projects"] = projects
+    temporary = config_path.with_name(f".claude.json.{os.getpid()}.tmp")
+    try:
+        temporary.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        os.replace(temporary, config_path)
+        print(f"[agent_host] seeded Claude trust for {workspace}", flush=True)
+    except OSError as exc:
+        temporary.unlink(missing_ok=True)
+        print(f"[agent_host] failed to seed Claude trust: {exc}", flush=True)
+
+
 def _connect_mcp_endpoint():
     """Public MCP URL the host already uses for Switchboard Communicate."""
     base = str(os.environ.get("PM_BASE") or "https://plan.taikunai.com").rstrip("/")
@@ -2178,12 +2237,12 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
                 materialized_workspace.receipt_path)
             _record_workspace_binding(
                 runner_session_id, materialized_workspace, workspace_request)
-        if (
-            workspace_path
-            and mode == "connect"
-            and str((wake.get("selector") or {}).get("runtime") or "") == "codex"
-        ):
-            _ensure_codex_workspace_trusted(workspace_path)
+        connect_runtime = str((wake.get("selector") or {}).get("runtime") or "")
+        if workspace_path and mode == "connect":
+            if connect_runtime == "codex":
+                _ensure_codex_workspace_trusted(workspace_path)
+            elif connect_runtime == "claude-code":
+                _ensure_claude_workspace_trusted(workspace_path)
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=20, env=env)
         if out.returncode != 0 or not (out.stdout or "").strip():
             detail = (out.stderr or out.stdout or "supervisor emitted no receipt")[-4000:]

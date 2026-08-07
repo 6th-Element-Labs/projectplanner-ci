@@ -3,11 +3,13 @@
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent
 
@@ -643,6 +645,51 @@ ok(agent_host.apply_authoritative_execution_policy(
 ok(agent_host.apply_authoritative_execution_policy(
        _policy_inventory("cursor"), _authoritative("cursor")) is False,
    "an unsupported runtime never hot-applies")
+
+
+# CO-23: Claude Code prompts "Is this a project you trust?" per working directory.
+# Nobody answers it on a headless host, so the runner sits on the TUI until its
+# lease expires. --dangerously-skip-permissions does NOT cover the trust dialog.
+_trust_home = Path(tempfile.mkdtemp(prefix="co23-claude-trust-"))
+_trust_workspace = _trust_home / "workspace"
+_trust_workspace.mkdir()
+_trust_config = _trust_home / ".claude.json"
+
+with patch.object(agent_host.Path, "home", staticmethod(lambda: _trust_home)):
+    agent_host._ensure_claude_workspace_trusted(str(_trust_workspace))
+    seeded = json.loads(_trust_config.read_text()) if _trust_config.is_file() else {}
+ok((seeded.get("projects") or {}).get(str(_trust_workspace.resolve()), {})
+   .get("hasTrustDialogAccepted") is True,
+   "claude workspace trust is seeded for the exact managed workspace path")
+
+_trust_config.write_text(json.dumps({
+    "numStartups": 7,
+    "projects": {"/existing/project": {"hasTrustDialogAccepted": True,
+                                       "allowedTools": ["Bash"]}},
+}))
+with patch.object(agent_host.Path, "home", staticmethod(lambda: _trust_home)):
+    agent_host._ensure_claude_workspace_trusted(str(_trust_workspace))
+    merged = json.loads(_trust_config.read_text())
+ok(merged.get("numStartups") == 7
+   and merged["projects"]["/existing/project"]["allowedTools"] == ["Bash"]
+   and merged["projects"][str(_trust_workspace.resolve())]["hasTrustDialogAccepted"] is True,
+   "seeding preserves every unrelated key and project in the live config")
+
+_before = _trust_config.read_text()
+with patch.object(agent_host.Path, "home", staticmethod(lambda: _trust_home)):
+    agent_host._ensure_claude_workspace_trusted(str(_trust_workspace))
+ok(_trust_config.read_text() == _before,
+   "re-seeding an already-trusted workspace rewrites nothing")
+
+_corrupt = _trust_home / "corrupt" / ".claude.json"
+_corrupt.parent.mkdir()
+_corrupt.write_text("{not valid json")
+with patch.object(agent_host.Path, "home", staticmethod(lambda: _corrupt.parent)):
+    agent_host._ensure_claude_workspace_trusted(str(_trust_workspace))
+ok(_corrupt.read_text() == "{not valid json",
+   "an unparseable config is left untouched rather than overwritten")
+
+shutil.rmtree(_trust_home, ignore_errors=True)
 
 print(f"\n{passed} passed, {failed} failed")
 if failed:
