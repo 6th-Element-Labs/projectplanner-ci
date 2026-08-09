@@ -214,6 +214,51 @@ def build_dependency_graph(
                 "external": external,
             })
 
+    # BUG-325: a context task PROMOTED onto the map by a flow dependency keeps its
+    # edges to other tasks linked to this deliverable. Without this it renders as a
+    # dead end while its real upstream sits in the context footer looking unrelated
+    # — which is what drove an agent to write display-only edges into depends_on, a
+    # scheduler contract, over-blocking the target task (atlas/DIST-2 went to
+    # blocked_by_count 5 on prerequisites it did not have).
+    #
+    # Traversal is CLOSED OVER `internal` — tasks linked to THIS deliverable — and
+    # never reaches outside it, so the map cannot inflate with stub tasks from other
+    # deliverables' stories, which is the failure CONTEXT_LINK_ROLES exists to
+    # prevent. A context task nobody depends on is still never promoted.
+    pending = [tid for tid in nodes if (internal.get(tid) or {}).get("context")]
+    while pending:
+        tid = pending.pop()
+        item = internal.get(tid)
+        if not item:
+            continue
+        depends_on = list((item["detail"] or {}).get("depends_on") or [])
+        if not depends_on and task_lookup:
+            full = task_lookup(item["project_id"], tid) or {}
+            depends_on = list(full.get("depends_on") or [])
+        for dep in depends_on:
+            dep_id = (dep or "").strip().upper()
+            if not dep_id or dep_id == tid:
+                continue
+            linked_dep = internal.get(dep_id)
+            if linked_dep is None:
+                # Outside this deliverable — deliberately not drawn.
+                continue
+            if dep_id not in nodes:
+                _ensure_node(dep_id, linked_dep["project_id"], external=False,
+                             detail=linked_dep["detail"])
+                if linked_dep.get("context"):
+                    pending.append(dep_id)
+            key = (dep_id, tid)
+            if key in seen_edges:
+                continue
+            seen_edges.add(key)
+            edges.append({
+                "from": dep_id,
+                "to": tid,
+                "kind": "depends_on",
+                "external": False,
+            })
+
     context_nodes = [
         {
             "id": tid,
@@ -231,15 +276,26 @@ def build_dependency_graph(
     # border). A blocker is a task that is itself Blocked, OR an unfinished task that
     # something else depends on / is flagged as blocking the deliverable — downstream
     # work is waiting on it. Done tasks never block.
+    #
+    # That predicate is deliberately broad, but it renders as one alarm-red border
+    # and the name asserts more than it checks: "unfinished with a dependent" is not
+    # "stuck". BUG-325 — publish WHY a node was flagged so the map can style the
+    # cases apart and readers stop over-reading the picture. The boolean itself is
+    # unchanged for existing consumers.
     depended_upon = {e["from"] for e in edges}
     _DONE_STATES = {"done", "done_unproven"}
     for tid, node in nodes.items():
         blocks_deliverable = bool((internal.get(tid, {}).get("link") or {}).get("blocks_deliverable"))
-        node["blocker"] = (
-            node.get("state") == "blocked"
-            or (node.get("state") not in _DONE_STATES
-                and (tid in depended_upon or blocks_deliverable))
-        )
+        reason = None
+        if node.get("state") == "blocked":
+            reason = "blocked_status"
+        elif node.get("state") not in _DONE_STATES:
+            if blocks_deliverable:
+                reason = "blocks_deliverable"
+            elif tid in depended_upon:
+                reason = "has_dependents"
+        node["blocker"] = reason is not None
+        node["blocker_reason"] = reason
 
     node_list = sorted(nodes.values(), key=lambda n: n["id"])
     mermaid = render_mermaid_flowchart(node_list, edges)
