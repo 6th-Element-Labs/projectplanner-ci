@@ -493,6 +493,22 @@ def _work_session_health(session: Dict[str, Any],
                 preflight_verdict=verdict,
             ))
         for finding in preflight.get("findings") or []:
+            if not isinstance(finding, dict):
+                message = str(finding or "").strip() or "Malformed repository preflight finding."
+                findings.append(_session_health_finding(
+                    "malformed_repo_preflight_finding",
+                    message,
+                    "invalid_input",
+                    severity="high",
+                    blocking=True,
+                    repair=(
+                        "Replace the malformed repo preflight finding with a structured finding, "
+                        "then rerun preflight_work_session."
+                    ),
+                    work_session_id=work_session_id,
+                    preflight_finding={"raw": message},
+                ))
+                continue
             code = str(finding.get("code") or "preflight_finding")
             blocking = bool(finding.get("blocking", True))
             severity = str(finding.get("severity") or ("high" if blocking else "medium"))
