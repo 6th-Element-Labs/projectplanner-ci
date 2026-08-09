@@ -1,16 +1,15 @@
-"""Automatic, bounded remediation of durable review verdicts (COORD-20).
+"""Automatic remediation of durable review verdicts (COORD-20).
 
 A ``changes_requested`` verdict is not merely a comment. It becomes a
 task-scoped acceptance contract and reopens the work for the lifecycle
 coordinator. The coordinator then ensures the remediation session through the
 same ``start_task(role=...)`` command as every other transition. A verdict on a
-new head closes the prior round; repeated or judgment-class findings fail
-closed through COORD-6.
+new head closes the prior round; judgment-class findings fail closed through
+COORD-6.
 """
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 import time
 import uuid
@@ -35,7 +34,6 @@ REMEDIATION_SUMMARY_SCHEMA = "switchboard.review_remediation_summary.v1"
 REMEDIATION_METRICS_SCHEMA = "switchboard.hands_off_review_metrics.v1"
 ACCEPTANCE_SCHEMA = "switchboard.review_remediation_acceptance.v1"
 CROSS_TASK_REPAIR_SCHEMA = "switchboard.cross_task_review_repair.v1"
-DEFAULT_MAX_ROUNDS = 3
 PENDING_STATUSES = frozenset({
     "queued", "wake_requested", "remediating", "review_pending", "blocked",
 })
@@ -597,7 +595,6 @@ class ReviewRemediationRepository:
         )
         escalation_class = (
             "unreachable_agent_no_host" if reason == "wake_failed" else
-            "repeated_failures" if reason == "round_budget_exhausted" else
             "policy_violation" if reason in {
                 "active_claim_conflict", "terminal_task_conflict",
             } else
@@ -663,7 +660,6 @@ class ReviewRemediationRepository:
                 "remediation_id": remediation_id,
                 "verdict_id": str(remediation.get("verdict_id") or "").strip(),
                 "round": remediation.get("round_no"),
-                "max_rounds": remediation.get("max_rounds"),
                 "reason_code": str(remediation.get("escalation_reason") or ""),
                 "head_sha": str(remediation.get("source_head_sha") or "").strip(),
                 "pr_url": str(remediation.get("source_pr_url") or "").strip(),
@@ -827,13 +823,10 @@ class ReviewRemediationRepository:
         _write_through(project, persist)
 
     def handle_verdict(self, verdict: Mapping[str, Any], *, actor: str,
-                       project: str = DEFAULT_PROJECT,
-                       max_rounds: Optional[int] = None) -> dict[str, Any]:
+                       project: str = DEFAULT_PROJECT) -> dict[str, Any]:
         payload = dict(verdict or {})
         if payload.get("status") not in {"pass", "changes_requested"}:
             return {"schema": REMEDIATION_SCHEMA, "status": "not_applicable"}
-        limit = max(1, int(max_rounds or os.environ.get(
-            "PM_REVIEW_REMEDIATION_MAX_ROUNDS", DEFAULT_MAX_ROUNDS)))
         if payload.get("status") == "pass":
             return _write_through(
                 project, lambda: self._resolve_pass_impl(
@@ -841,7 +834,7 @@ class ReviewRemediationRepository:
 
         staged = _write_through(
             project, lambda: self._queue_impl(
-                payload, actor=actor, project=project, max_rounds=limit))
+                payload, actor=actor, project=project))
         if staged.get("error"):
             return staged
 
@@ -918,7 +911,7 @@ class ReviewRemediationRepository:
             }
 
     def _queue_impl(self, verdict: Mapping[str, Any], *, actor: str,
-                    project: str, max_rounds: int) -> dict[str, Any]:
+                    project: str) -> dict[str, Any]:
         task_id = str(verdict.get("task_id") or "").strip().upper()
         verdict_id = str(verdict.get("verdict_id") or "").strip()
         head_sha = str(verdict.get("head_sha") or "").strip()
@@ -967,6 +960,8 @@ class ReviewRemediationRepository:
             ]
             auto = [finding for finding in findings if finding["class"] == "auto"]
             escalations = [finding for finding in findings if finding["class"] == "escalate"]
+            # Mission Bot V4: this sequence is audit telemetry only.  It must
+            # never decide whether automatic work becomes a Human request.
             round_no = int(c.execute(
                 "SELECT COUNT(*) FROM review_remediations WHERE task_id=?", (task_id,),
             ).fetchone()[0]) + 1
@@ -992,13 +987,17 @@ class ReviewRemediationRepository:
             )
             active_claim_conflict = bool(active_claim and not expected_review_claim)
             terminal = str(task["status"] or "") in {"Done", "Cancelled", "Canceled"}
-            exhausted = round_no > max_rounds
             adversarial = _needs_adversarial_review(auto)
-            human_required = bool(
-                escalations or exhausted or active_claim_conflict or terminal
+            # Only the authenticated review agent's explicit escalation class
+            # carries Human authority.  Factory-observed claim or terminal
+            # conflicts remain typed coordination blocks, never Needs-you.
+            human_required = bool(escalations)
+            queueable = bool(auto) and not active_claim_conflict and not terminal
+            status = (
+                "queued" if queueable else
+                "escalated" if human_required else
+                "blocked"
             )
-            queueable = bool(auto) and not exhausted and not active_claim_conflict and not terminal
-            status = "queued" if queueable else "escalated"
             remediation_id = "reviewremediation-" + uuid.uuid4().hex[:16]
             save_counted = int(
                 str(task["status"] or "") == "In Review"
@@ -1031,9 +1030,12 @@ class ReviewRemediationRepository:
             )
 
             from decisions_store import record_coordinator_decision
-            action = "queue_review_remediation" if queueable else "escalate_review_remediation"
+            action = (
+                "queue_review_remediation" if queueable else
+                "escalate_review_remediation" if human_required else
+                "block_review_remediation"
+            )
             reason = (
-                "round_budget_exhausted" if exhausted else
                 "active_claim_conflict" if active_claim_conflict else
                 "terminal_task_conflict" if terminal else
                 "escalate_findings_require_human" if escalations and not auto else
@@ -1046,12 +1048,15 @@ class ReviewRemediationRepository:
                 inputs_snapshot={
                     "verdict_id": verdict_id, "source_head_sha": head_sha,
                     "auto_findings": auto, "escalation_findings": escalations,
-                    "round": round_no, "max_rounds": max_rounds,
+                    "round": round_no,
                     "active_claim_id": active_claim["id"] if active_claim else None,
                     "expected_review_claim": expected_review_claim,
                 },
-                policy_rule=("coord.review.remediation.queue" if queueable
-                             else "coord.review.remediation.escalate"),
+                policy_rule=(
+                    "coord.review.remediation.queue" if queueable else
+                    "coord.review.remediation.escalate" if human_required else
+                    "coord.review.remediation.block"
+                ),
                 chosen_action={"action": action, "task_id": task_id, "reason": reason},
                 skipped_alternatives=[
                     {"action": "merge", "reason": "changes_requested"},
@@ -1075,7 +1080,6 @@ class ReviewRemediationRepository:
                 "verdict_id": verdict_id,
                 "source_head_sha": head_sha,
                 "round": round_no,
-                "max_rounds": max_rounds,
                 "status": status,
                 "auto_finding_count": len(auto),
                 "escalate_finding_count": len(escalations),
@@ -1087,7 +1091,9 @@ class ReviewRemediationRepository:
             c.execute(
                 "INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                 (task_id, "switchboard/auto-remediation",
-                 "review.remediation_queued" if queueable else "review.remediation_escalated",
+                 "review.remediation_queued" if queueable else
+                 "review.remediation_escalated" if human_required else
+                 "review.remediation_blocked",
                  json.dumps(event, sort_keys=True), now),
             )
             row = c.execute(
@@ -1100,7 +1106,6 @@ class ReviewRemediationRepository:
                 "escalation_required": human_required,
                 "escalation_reason": reason,
                 "lane": str(task["workstream_id"] or ""),
-                "max_rounds": max_rounds,
             })
             if human_required:
                 human_hold = default_mission_journal_repository.record_human_requested_in(
@@ -1298,10 +1303,9 @@ default_review_remediation_repository = ReviewRemediationRepository()
 
 
 def handle_review_verdict(verdict: Mapping[str, Any], *, actor: str,
-                          project: str = DEFAULT_PROJECT,
-                          max_rounds: Optional[int] = None) -> dict[str, Any]:
+                          project: str = DEFAULT_PROJECT) -> dict[str, Any]:
     return default_review_remediation_repository.handle_verdict(
-        verdict, actor=actor, project=project, max_rounds=max_rounds)
+        verdict, actor=actor, project=project)
 
 
 def get_review_remediation(remediation_id: str, *, project: str = DEFAULT_PROJECT
@@ -1361,7 +1365,7 @@ def reconcile_cross_task_review_repairs(
 
 
 __all__ = [
-    "ACCEPTANCE_SCHEMA", "CROSS_TASK_REPAIR_SCHEMA", "DEFAULT_MAX_ROUNDS",
+    "ACCEPTANCE_SCHEMA", "CROSS_TASK_REPAIR_SCHEMA",
     "REMEDIATION_METRICS_SCHEMA",
     "REMEDIATION_SCHEMA", "REMEDIATION_SUMMARY_SCHEMA", "ReviewRemediationRepository",
     "default_review_remediation_repository", "get_review_remediation",

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""COORD-126: a remediation escalation is terminal to the pager."""
+"""COORD-126: an explicit agent-requested escalation is terminal to the pager."""
 from __future__ import annotations
 
 import json
@@ -20,7 +20,6 @@ os.environ["PM_SWITCHBOARD_DB_PATH"] = str(_TMP / "switchboard.db")
 os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = str(_TMP / "registry.db")
 os.environ["PM_DYNAMIC_PROJECTS_DIR"] = str(_TMP / "projects")
 os.environ["PM_AUTH_MODE"] = "dev-open"
-os.environ["PM_REVIEW_REMEDIATION_MAX_ROUNDS"] = "1"
 
 import store  # noqa: E402
 from db.connection import _conn  # noqa: E402
@@ -48,7 +47,7 @@ HEAD_1 = "1" * 40
 HEAD_2 = "2" * 40
 
 
-def _finding(finding_id: str) -> dict[str, str]:
+def _finding(finding_id: str, *, finding_class: str = "auto") -> dict[str, str]:
     return {
         "id": finding_id,
         "location": "src/switchboard/domain/example.py:42",
@@ -56,12 +55,13 @@ def _finding(finding_id: str) -> dict[str, str]:
         "severity": "high",
         "invariant_violated": "The reviewed boundary remains fail closed.",
         "repair_requirement": "Apply the exact bounded repair and test it.",
-        "class": "auto",
+        "class": finding_class,
         "state": "open",
     }
 
 
-def _verdict(task_id: str, head_sha: str, finding_id: str) -> dict[str, object]:
+def _verdict(task_id: str, head_sha: str, finding_id: str, *,
+             finding_class: str = "auto") -> dict[str, object]:
     return {
         "task_id": task_id,
         "pr_url": PR_URL,
@@ -69,7 +69,7 @@ def _verdict(task_id: str, head_sha: str, finding_id: str) -> dict[str, object]:
         "reviewer_principal": REVIEWER,
         "review_mode": "standard",
         "status": "changes_requested",
-        "findings": [_finding(finding_id)],
+        "findings": [_finding(finding_id, finding_class=finding_class)],
     }
 
 
@@ -162,7 +162,9 @@ class HumanEscalationStopTest(unittest.TestCase):
 
         self._move_to_new_head(task_id)
         escalated = review_verdicts.execute_mapping(
-            _verdict(task_id, HEAD_2, "COORD126-2"), actor=REVIEWER,
+            _verdict(
+                task_id, HEAD_2, "COORD126-2", finding_class="escalate"),
+            actor=REVIEWER,
             principal_id="principal-coord126-review", project=PROJECT)
         remediation = escalated["auto_remediation"]
         self.assertEqual("escalated", remediation["status"])
@@ -208,7 +210,8 @@ class HumanEscalationStopTest(unittest.TestCase):
         self.assertEqual("decision_recorded", decision["request"]["status"])
         self.assertNotIn("mission", decision)
         self.assertEqual("HUMAN", journal.get_item(task_id, project=PROJECT)["state"])
-        replay_verdict = dict(_verdict(task_id, HEAD_2, "COORD126-2"))
+        replay_verdict = dict(_verdict(
+            task_id, HEAD_2, "COORD126-2", finding_class="escalate"))
         replay_verdict["verdict_id"] = remediation["verdict_id"]
         replay = default_review_remediation_repository.handle_verdict(
             replay_verdict, actor=REVIEWER, project=PROJECT)

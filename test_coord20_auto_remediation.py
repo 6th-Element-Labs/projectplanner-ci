@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""COORD-20: changes_requested becomes bounded, hands-off remediation work."""
+"""COORD-20: changes_requested becomes hands-off remediation work."""
 from __future__ import annotations
 
 import json
@@ -288,9 +288,22 @@ try:
         principal_id=REVIEWER_PRINCIPAL,
         project=PROJECT,
     ).get("auto_remediation") or {}
-    ok(conflict.get("status") == "escalated"
-       and conflict.get("human_intervention_required") is True,
-       "a genuinely conflicting non-review claim still fails closed")
+    with store._conn(PROJECT) as c:
+        conflict_attention = c.execute(
+            "SELECT COUNT(*) FROM attention_requests WHERE task_id=?",
+            (conflicting_task,),
+        ).fetchone()[0]
+        conflict_human_events = c.execute(
+            "SELECT COUNT(*) FROM mission_events "
+            "WHERE task_id=? AND event_type='human_requested'",
+            (conflicting_task,),
+        ).fetchone()[0]
+    ok(conflict.get("status") == "blocked"
+       and conflict.get("escalation_reason") == "active_claim_conflict"
+       and conflict.get("human_intervention_required") is False,
+       "a conflicting non-review claim remains a typed coordination block")
+    ok(conflict_attention == 0 and conflict_human_events == 0,
+       "factory-detected claim conflicts create neither Attention nor Human state")
 
     # Escalate-class findings never become silent automatic acceptance criteria.
     escalation_task = reviewable_task("judgment finding fixture", "3" * 40)
@@ -335,9 +348,10 @@ try:
        and authority_metrics.get("hands_off_work_units") == 0,
        "human resolution restores original acceptance and is excluded from hands-off proof")
 
-    # Repeated auto rounds are bounded.  New-head review closes the previous unit;
-    # round three exceeds the configured budget and stops at COORD-6.
-    bounded_task = reviewable_task("bounded remediation fixture", "4" * 40)
+    # Historical round counts are telemetry, never lifecycle authority.  Even with
+    # the retired limit configured above, a later exact-head auto finding remains
+    # ordinary remediation and cannot manufacture a Human stop.
+    bounded_task = reviewable_task("policy-free remediation fixture", "4" * 40)
     round1 = commands.execute_mapping(
         verdict(bounded_task, "4" * 40, [finding("COORD20-R1")]),
         actor=REVIEWER, principal_id=REVIEWER_PRINCIPAL, project=PROJECT)
@@ -355,13 +369,27 @@ try:
         row for row in store.list_wake_intents(project=PROJECT)
         if row.get("task_id") == bounded_task
     ]
+    with store._conn(PROJECT) as c:
+        bounded_attention = c.execute(
+            "SELECT COUNT(*) FROM attention_requests WHERE task_id=?",
+            (bounded_task,),
+        ).fetchone()[0]
+        bounded_human_events = c.execute(
+            "SELECT COUNT(*) FROM mission_events "
+            "WHERE task_id=? AND event_type='human_requested'",
+            (bounded_task,),
+        ).fetchone()[0]
     ok(round1.get("auto_remediation", {}).get("status") == "queued"
        and round2.get("auto_remediation", {}).get("status") == "queued"
-       and round3.get("auto_remediation", {}).get("status") == "escalated",
-       "two remediation rounds run automatically and the third fails closed to COORD-6")
+       and round3.get("auto_remediation", {}).get("status") == "queued"
+       and round3.get("auto_remediation", {}).get("human_intervention_required") is False
+       and not round3.get("auto_remediation", {}).get("human_escalation"),
+       "automatic findings remain automatic beyond the retired round budget")
     ok(len(bounded_rows) == 3 and len(bounded_wakes) == 0
-       and store.get_task(bounded_task, project=PROJECT).get("status") == "Blocked",
-       "round budget prevents retry storms without creating worker wakes")
+       and store.get_task(bounded_task, project=PROJECT).get("status") == "Not Started",
+       "later rounds return to the lifecycle queue without independent worker wakes")
+    ok(bounded_attention == 0 and bounded_human_events == 0,
+       "retired retry counts create neither a Needs-you alert nor a Human journal fact")
 
 finally:
     if "real_write_through" in locals():

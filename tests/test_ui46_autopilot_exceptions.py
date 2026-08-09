@@ -50,7 +50,7 @@ review = next(row for row in review_actions
 ok(review.get("exception") is True
    and review.get("exception_kind") == "review_authority"
    and review.get("delivery_impact") == "blocking",
-   "exhausted review remediation becomes a blocking Autopilot exception")
+   "explicitly escalated review remediation becomes a blocking Autopilot exception")
 ok("round 4" in review.get("reason", ""),
    "the exception explains which automatic remediation boundary was reached")
 
