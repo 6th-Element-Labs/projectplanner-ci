@@ -10,7 +10,7 @@ import hashlib
 import json
 import re
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from typing import Any
 
 from switchboard.storage.repositories.mission_journal import (
@@ -56,6 +56,12 @@ def _task_ids_from_text(value: object) -> list[str]:
     import task_id_parser
 
     return task_id_parser.extract_task_ids(str(value or ""))
+
+
+def _task_ids_from_pr_metadata(value: Mapping[str, Any]) -> list[str]:
+    import task_id_parser
+
+    return task_id_parser.task_ids_for_pr(value)
 
 
 def _pr(payload: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -277,19 +283,16 @@ def _mapped_tasks(
         return repository.active_task_ids(project=project)
 
     pull_request = _pr(payload)
-    texts: Iterable[object] = (
-        pull_request.get("title"),
-        pull_request.get("body"),
-        (pull_request.get("head") or {}).get("ref"),
-        (payload.get("issue") or {}).get("title"),
-        (payload.get("issue") or {}).get("body"),
-    )
+    issue = payload.get("issue") or {}
     found: list[str] = []
     pr_number = identity.get("pr_number")
     if isinstance(pr_number, int) and not isinstance(pr_number, bool):
         found.extend(repository.task_ids_for_pr_number(pr_number, project=project))
-    for text in texts:
-        found.extend(_task_ids_from_text(text))
+    found.extend(_task_ids_from_pr_metadata(pull_request))
+    found.extend(_task_ids_from_pr_metadata({
+        "title": issue.get("title"),
+        "body": issue.get("body"),
+    }))
     if event == "merge_group":
         merge_group = payload.get("merge_group") or {}
         for candidate in merge_group.get("pull_requests") or []:

@@ -125,6 +125,63 @@ class GithubMissionEventsTest(unittest.TestCase):
         self.assertEqual("pull_request", payload["object_type"])
         self.assertNotIn("body", payload)
 
+    def test_pull_request_body_mentions_do_not_claim_other_tasks(self):
+        for task_id in ("IDENTITY-2", "IDENTITY-3", "IDENTITY-4"):
+            self.repository.ensure_item(task_id, project="switchboard")
+        payload = self._pull_request_payload("IDENTITY-2")
+        payload["pull_request"]["body"] = (
+            "Runtime defaults stay with IDENTITY-3; overlay work stays with IDENTITY-4."
+        )
+
+        result = project_delivery(
+            "pull_request", payload, project="switchboard", repository=self.repository,
+        )
+
+        self.assertEqual(["IDENTITY-2"], result["mapped_task_ids"])
+        self.assertEqual(
+            ["IDENTITY-2"],
+            [event["task_id"] for event in result["events"]],
+        )
+
+    def test_issue_comment_body_mentions_use_existing_pr_owner_only(self):
+        for task_id in ("IDENTITY-2", "IDENTITY-3", "IDENTITY-4"):
+            self.repository.ensure_item(task_id, project="switchboard")
+        with self.repository._connection("switchboard") as connection:
+            connection.execute(
+                "INSERT INTO task_git_state(task_id,head_sha,pr_number) VALUES (?,?,?)",
+                ("IDENTITY-2", "a" * 40, 157),
+            )
+
+        result = project_delivery(
+            "issue_comment",
+            {
+                "action": "created",
+                "repository": {"full_name": "6th-Element-Labs/ActionEngine"},
+                "issue": {
+                    "number": 157,
+                    "title": "IDENTITY-2 customer-neutral identity",
+                    "body": (
+                        "Runtime defaults stay with IDENTITY-3; "
+                        "overlay work stays with IDENTITY-4."
+                    ),
+                    "pull_request": {"url": "https://github.test/pulls/157"},
+                },
+                "comment": {
+                    "id": 99,
+                    "body": "Automated review started.",
+                    "html_url": "https://github.test/pull/157#issuecomment-99",
+                },
+            },
+            project="switchboard",
+            repository=self.repository,
+        )
+
+        self.assertEqual(["IDENTITY-2"], result["mapped_task_ids"])
+        self.assertEqual(
+            ["IDENTITY-2"],
+            [event["task_id"] for event in result["events"]],
+        )
+
     def test_invalid_material_identity_fails_early_with_typed_reason(self):
         with self.assertRaises(GithubMissionProjectionError) as raised:
             project_delivery(
