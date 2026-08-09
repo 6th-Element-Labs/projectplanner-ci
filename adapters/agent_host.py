@@ -1661,7 +1661,7 @@ def _prove_verification_profile(profile, workspace, execution_context, assignmen
 def _issue_connect_session_mcp_token(wake, inventory, runner_session_id):
     """Mint the task principal used by a Connect session's MCP client."""
     result = sb._http("POST", P_DIRECT_SESSION_MCP_TOKEN, {
-        "project": PROJECT,
+        "project": _wake_project(wake),
         "wake_id": str(wake.get("wake_id") or ""),
         "host_id": str(inventory.get("host_id") or ""),
         "runner_session_id": str(runner_session_id or ""),

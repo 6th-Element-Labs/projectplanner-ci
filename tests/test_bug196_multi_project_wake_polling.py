@@ -63,6 +63,38 @@ class MultiProjectWakePollingTests(TestCase):
             "project": "switchboard",
         }), "atlas")
 
+    def test_connect_session_token_uses_wake_project(self):
+        calls = []
+
+        def fake_http(method, path, body=None):
+            calls.append((method, path, body or {}))
+            return {"issued": True, "token": "dst-switchboard"}
+
+        wake = {
+            "_host_project": "switchboard",
+            "wake_id": "wake-switchboard",
+        }
+        inventory = {"host_id": "host/test"}
+        with (
+            mock.patch.object(agent_host, "PROJECT", "atlas"),
+            mock.patch.object(agent_host.sb, "_http", side_effect=fake_http),
+        ):
+            token = agent_host._issue_connect_session_mcp_token(
+                wake, inventory, "run-switchboard",
+            )
+
+        self.assertEqual(token, "dst-switchboard")
+        self.assertEqual(calls, [(
+            "POST",
+            agent_host.P_DIRECT_SESSION_MCP_TOKEN,
+            {
+                "project": "switchboard",
+                "wake_id": "wake-switchboard",
+                "host_id": "host/test",
+                "runner_session_id": "run-switchboard",
+            },
+        )])
+
     def test_runner_registration_uses_wake_project(self):
         calls = []
 
