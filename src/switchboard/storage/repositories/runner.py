@@ -18,6 +18,9 @@ from constants import DEFAULT_PROJECT, MCP_OPERATOR_SCOPES
 from db.connection import _conn
 from db.core import _json_obj, _text_tail, hash_token
 from switchboard.domain import execution_liveness
+from switchboard.storage.repositories.agent_host_enrollments import (
+    check_agent_host_identity,
+)
 
 RUNNER_CONTROL_ACTIONS = {"snapshot", "kill", "restart", "health", "logs", "open", "inject"}
 # COORD-34 / M4.6: operator Watch/Chat may open only when this bind is complete.
@@ -2504,25 +2507,32 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
     runner_session_id = (record.get("runner_session_id") or record.get("id") or "").strip()
     if not runner_session_id:
         return {"error": "runner_session_id required"}
-    principal = c.execute(
-        "SELECT kind, scopes FROM principals WHERE id=?", (principal_id,),
-    ).fetchone() if principal_id else None
-    scopes: set[str] = set()
-    if principal:
+    submitted_host = str(record.get("host_id") or "").strip()
+    # Plain wake receipts can create non-host runner rows without either side
+    # of an Agent Host identity tuple, and migration tests preserve legacy DBs
+    # predating enrollment. Resolve authority whenever the complete tuple and
+    # modern schema are present; production Agent Host DBs always take this path.
+    host_identity = {"required": False, "allowed": True}
+    if submitted_host and principal_id:
         try:
-            scopes = set(json.loads(principal["scopes"] or "[]"))
-        except (TypeError, json.JSONDecodeError):
-            scopes = set()
-    narrow_host = bool(
-        principal and "write:agent_host" in scopes
-        and "write:ixp" not in scopes and "admin" not in scopes)
-    if narrow_host:
-        submitted_host = str(record.get("host_id") or "").strip()
-        enrollment = c.execute(
-            "SELECT host_id FROM agent_host_enrollments "
-            "WHERE principal_id=? AND host_id=? AND status='active'",
-            (principal_id, submitted_host),
-        ).fetchone()
+            host_identity = check_agent_host_identity(
+                submitted_host, principal_id, project=project)
+        except sqlite3.OperationalError as exc:
+            if "no such table: agent_host_enrollments" not in str(exc):
+                raise
+    authorized_host = bool(
+        host_identity.get("required") is True
+        and host_identity.get("allowed") is True)
+    agent_host_request = bool(
+        authorized_host and str(actor or "").strip() == submitted_host)
+    if host_identity.get("required") is True and not authorized_host:
+        return {
+            "error": host_identity.get("message") or "runner host is not authorized",
+            "error_code": host_identity.get("error_code") or "runner_identity_mismatch",
+            "failure_class": "unbound_identity",
+            "runner_session_id": runner_session_id,
+        }
+    if authorized_host:
         registered_host = c.execute(
             "SELECT principal_id FROM agent_hosts WHERE host_id=?",
             (submitted_host,),
@@ -2531,7 +2541,7 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
             "SELECT host_id, principal_id FROM runner_sessions WHERE runner_session_id=?",
             (runner_session_id,),
         ).fetchone()
-        if (not enrollment or not registered_host
+        if (not registered_host
                 or str(registered_host["principal_id"] or "") != principal_id
                 or (existing and (
                     str(existing["host_id"] or "") != submitted_host
@@ -2546,9 +2556,9 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
         isinstance(record.get("metadata"), dict)
         and record["metadata"].get("preclaim_renewal") is True)
     if renewal_requested:
-        if not narrow_host:
+        if not agent_host_request:
             return {
-                "error": "preclaim renewal requires a narrow Agent Host principal",
+                "error": "preclaim renewal requires an authorized Agent Host",
                 "error_code": "preclaim_renewal_denied",
             }
         renewed = _renew_exact_preclaim_runner_in(
@@ -2646,7 +2656,7 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
         pass
     record = {**record, "host_id": host_id, "metadata": metadata,
               "runner_session_id": runner_session_id}
-    if narrow_host and not _native_agent_host_runner_allowed_in(
+    if agent_host_request and not _native_agent_host_runner_allowed_in(
             c, record, principal_id):
         _connection, binding_error = _personal_runner_connection_in(
             c, record, principal_id, now)
@@ -2737,8 +2747,23 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
     if runner_status in RUNNER_TERMINAL_STATUSES:
         from .claims import terminal_ack_claim_completion_in
         completion_resume = terminal_ack_claim_completion_in(
-            c, runner_session_id, actor, principal_id, narrow_host, now,
+            c, runner_session_id, actor, principal_id, now,
             project=project)
+    completion_pending = bool(
+        completion_resume and completion_resume.get("pending_host_ack"))
+    if (completion_pending
+            and previous_status not in RUNNER_TERMINAL_STATUSES):
+        c.execute(
+            "INSERT INTO activity(task_id,actor,kind,payload,created_at) "
+            "VALUES (?,?,?,?,?)",
+            (record.get("task_id") or None, actor,
+             "task.completion_handoff_ack_pending",
+             json.dumps({
+                 "runner_session_id": runner_session_id,
+                 "claim_id": completion_resume.get("claim_id"),
+                 "error_code": completion_resume.get("error_code"),
+             }, sort_keys=True), now),
+        )
     yielded_cleanup = None
     if runner_status in RUNNER_TERMINAL_STATUSES and not completion_resume:
         yielded_cleanup = _complete_yielded_runner_cleanup_in(
@@ -2755,7 +2780,8 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
     # Released only after the terminal acknowledgement above, which still needs the
     # 'stopping' state that complete_claim set.
     lease_wake_id = str(metadata.get("wake_id") or "").strip()
-    if runner_status in RUNNER_TERMINAL_STATUSES and lease_wake_id:
+    if (runner_status in RUNNER_TERMINAL_STATUSES and lease_wake_id
+            and not completion_pending):
         c.execute(
             "UPDATE resource_leases SET released_at=?,lease_state='stopped',"
             "fence_epoch=COALESCE(fence_epoch,0)+1 "
@@ -2792,9 +2818,10 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
     # lost/old receipt left the exact Work Session active. Reconcile only
     # terminal claim+runner+session tuples; never infer completion from task
     # status or close the current live generation.
-    _reconcile_terminal_bound_work_sessions_in(
-        c, str(record.get("task_id") or ""), actor, now)
-    if runner_status in RUNNER_TERMINAL_STATUSES:
+    if not completion_pending:
+        _reconcile_terminal_bound_work_sessions_in(
+            c, str(record.get("task_id") or ""), actor, now)
+    if runner_status in RUNNER_TERMINAL_STATUSES and not completion_pending:
         c.execute(
             "UPDATE resource_leases SET released_at=COALESCE(released_at,?),"
             "lease_state='terminal' WHERE id=? AND resource_type='execution'",
@@ -2834,6 +2861,11 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
         session["_new_progress_fault"] = True
     if completion_resume and completion_resume.get("completion"):
         session["_completion_resume"] = completion_resume
+    if completion_pending:
+        session["error"] = "completion_handoff_pending"
+        session["error_code"] = completion_resume.get("error_code")
+        session["completion_handoff_pending"] = True
+        session["completion_handoff"] = completion_resume
     if (not missing_runner_bind_fields(record)
             and not session.get("stale")
             and str(session.get("status") or "").lower() in RUNNER_WATCHABLE_STATUSES):
@@ -2938,35 +2970,23 @@ def list_runner_sessions(host_id: str = "", runtime: str = "", task_id: str = ""
                 for r in rows
             ]
     if pending_completion:
-        sessions = [
-            session for session in sessions
-            if (
-                not execution_liveness.is_terminal(session.get("status"))
-                and (
-                    (
-                        isinstance(
-                            (session.get("metadata") or {}).get("completion_handoff"),
-                            dict,
-                        )
-                        and (session.get("metadata") or {}).get("completion_handoff")
-                        and not (
-                            (session.get("metadata") or {}).get("completion_handoff")
-                            or {}
-                        ).get("acknowledged_at")
-                    )
-                    # BUG-270: terminal-task cleanup fences the runner before
-                    # the Host acknowledges process death.  Review/merge
-                    # runners can legitimately have no completion_handoff, so
-                    # the Host's bounded pending query must also return an
-                    # unacknowledged server-owned lease surrender.  Once the
-                    # exact terminal receipt lands, status is terminal and the
-                    # row drops out idempotently.
-                    or bool(
-                        (session.get("metadata") or {}).get("lease_surrender")
-                    )
-                )
-            )
-        ]
+        pending_sessions = []
+        for session in sessions:
+            metadata = session.get("metadata") or {}
+            handoff = metadata.get("completion_handoff")
+            unacknowledged_handoff = bool(
+                isinstance(handoff, dict)
+                and handoff
+                and not handoff.get("acknowledged_at"))
+            # A terminal process with an unacknowledged completion remains
+            # discoverable until the Host's durable receipt converges. Generic
+            # lease surrender is pending only while the runner is nonterminal.
+            pending_surrender = bool(
+                metadata.get("lease_surrender")
+                and not execution_liveness.is_terminal(session.get("status")))
+            if unacknowledged_handoff or pending_surrender:
+                pending_sessions.append(session)
+        sessions = pending_sessions
     if not include_stale:
         sessions = [s for s in sessions if not s.get("stale")]
     return sessions
@@ -3532,14 +3552,31 @@ def complete_runner_control_request(request_id: str, result: Optional[Dict[str, 
             # claim was bound later leaves Coordination ownership active.
             metadata = session.get("metadata") if isinstance(
                 session.get("metadata"), dict) else {}
-            _release_terminal_runner_ownership_in(
-                c, session, metadata, str(session.get("runner_session_id") or ""),
-                actor, now,
-            )
+            handoff = metadata.get("completion_handoff") or {}
+            completion_handoff_pending = bool(
+                isinstance(handoff, dict)
+                and handoff
+                and not handoff.get("acknowledged_at"))
+            if completion_handoff_pending:
+                merged_result.update({
+                    "completion_handoff_pending": True,
+                    "error_code": "completion_handoff_pending",
+                })
+                c.execute(
+                    "UPDATE runner_control_requests SET result_json=? "
+                    "WHERE request_id=?",
+                    (json.dumps(merged_result, sort_keys=True), request_id),
+                )
+            else:
+                _release_terminal_runner_ownership_in(
+                    c, session, metadata,
+                    str(session.get("runner_session_id") or ""), actor, now,
+                )
             execution_id = str(metadata.get("execution_id") or "").strip()
             execution_generation = int(metadata.get("execution_generation") or 0)
             wake_id = str(metadata.get("wake_id") or "").strip()
-            if execution_id and execution_generation > 0 and wake_id:
+            if (not completion_handoff_pending and execution_id
+                    and execution_generation > 0 and wake_id):
                 c.execute(
                     "UPDATE resource_leases SET released_at=COALESCE(released_at,?), "
                     "lease_state='terminal' WHERE id=? AND resource_type='execution' "
@@ -3553,7 +3590,7 @@ def complete_runner_control_request(request_id: str, result: Optional[Dict[str, 
             # from this failed predecessor.  Otherwise Connect returns the old
             # completed wake as "started" without asking a host to spawn anything.
             wake_id = str(metadata.get("wake_id") or "").strip()
-            if wake_id:
+            if wake_id and not completion_handoff_pending:
                 wake_row = c.execute(
                     "SELECT status, runner_session_id, result_json FROM wake_intents "
                     "WHERE wake_id=?", (wake_id,),

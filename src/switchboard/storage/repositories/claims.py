@@ -37,6 +37,9 @@ from switchboard.connect.execution_assignment import (
     require_exact_execution_assignment,
 )
 from switchboard.storage.repositories import decision_records
+from switchboard.storage.repositories.agent_host_enrollments import (
+    check_agent_host_identity,
+)
 from switchboard.storage.repositories.tasks import (
     _deps_done,
     _heal_dependency_blocked_tasks_in,
@@ -1714,8 +1717,7 @@ def _stage_managed_completion_stop_in(
 
 
 def terminal_ack_claim_completion_in(c: sqlite3.Connection, runner_session_id: str,
-                                     actor: str, principal_id: str,
-                                     narrow_host: bool, now: float,
+                                     actor: str, principal_id: str, now: float,
                                      project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
     """Authorize exact host death and run canonical completion atomically."""
     runner = c.execute("SELECT * FROM runner_sessions WHERE runner_session_id=?",
@@ -1727,25 +1729,47 @@ def terminal_ack_claim_completion_in(c: sqlite3.Connection, runner_session_id: s
     handoff = metadata.get("completion_handoff") or {}
     if str(handoff.get("execution_id") or "") != runner_session_id:
         return None
-    if (not narrow_host
-            or str(metadata.get("terminalized_by") or "") not in {
+    pending = {
+        "completed": False,
+        "pending_host_ack": True,
+        "completion_handoff_pending": True,
+        "claim_id": str(handoff.get("claim_id") or ""),
+        "task_id": str(handoff.get("task_id") or ""),
+        "execution_id": runner_session_id,
+    }
+
+    def ack_pending(error_code: str, **details: Any) -> Dict[str, Any]:
+        return {**pending, "error_code": error_code, **details}
+
+    host_id = str(runner["host_id"] or "")
+    host_identity = check_agent_host_identity(
+        host_id, principal_id, project=project)
+    if not (host_identity.get("required") is True
+            and host_identity.get("allowed") is True):
+        return ack_pending(
+            "terminal_ack_host_unauthorized",
+            reason_code=(host_identity.get("error_code")
+                         or "agent_host_identity_not_authoritative"),
+        )
+    if (str(metadata.get("terminalized_by") or "") not in {
                 "runner_lease_expiry", "host_supervisor",
                 "terminal_lease_surrendered"}
-            or str(handoff.get("host_id") or "") != str(runner["host_id"] or "")
+            or str(handoff.get("host_id") or "") != host_id
             or str(handoff.get("host_principal_id") or "") != principal_id
             or int(handoff.get("generation") or 0)
             != int(metadata.get("execution_generation") or 0)
             or int(handoff.get("lease_epoch") or 0)
             != int(metadata.get("lease_epoch") or 0)):
-        return None
+        return ack_pending("terminal_ack_identity_mismatch")
     claim_id = str(handoff.get("claim_id") or "")
     claim = c.execute("SELECT * FROM task_claims WHERE id=?", (claim_id,)).fetchone()
     if not claim:
-        return None
+        return ack_pending("terminal_ack_claim_not_found")
     if claim["status"] == "completed":
         return {"completed": True, "idempotent": True, "claim_id": claim_id}
     if claim["status"] != "active" or claim["task_id"] != handoff.get("task_id"):
-        return None
+        return ack_pending(
+            "terminal_ack_claim_invalid", claim_status=claim["status"])
     execution_lease = c.execute(
         "SELECT * FROM resource_leases WHERE id=? AND resource_type='execution'",
         (str(metadata.get("execution_id") or ""),)).fetchone()
@@ -1755,7 +1779,7 @@ def terminal_ack_claim_completion_in(c: sqlite3.Connection, runner_session_id: s
             != int(handoff.get("generation") or 0)
             or int(execution_lease["fence_epoch"] or 0)
             != int(handoff.get("lease_epoch") or 0)):
-        return None
+        return ack_pending("terminal_ack_execution_lease_invalid")
     metadata["completion_handoff"] = {**handoff, "acknowledged_at": now,
                                       "acknowledged_by": actor}
     c.execute("UPDATE runner_sessions SET metadata_json=?, updated_at=? "

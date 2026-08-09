@@ -3388,12 +3388,16 @@ def expire_runner_leases(inventory, *, now=None):
             # strand a successfully killed execution in Stopping forever.
             _persist_pending_stop_receipt(receipt)
             terminal = _try("POST", P_HEARTBEAT_RUNNER, receipt)
-            if terminal and not terminal.get("error"):
+            terminal_ok = bool(
+                terminal
+                and not terminal.get("error")
+                and not terminal.get("error_code"))
+            if terminal_ok:
                 _delete_pending_stop_receipt(runner_id)
             if reason == "terminal_lease_surrendered":
-                outcome["terminalized"] = bool(terminal and not terminal.get("error"))
+                outcome["terminalized"] = terminal_ok
             else:
-                outcome["expired"] = bool(terminal and not terminal.get("error"))
+                outcome["expired"] = terminal_ok
         else:
             if reason == "terminal_lease_surrendered":
                 outcome["terminalized"] = False
@@ -3620,14 +3624,17 @@ def renew_live_direct_runners(inventory):
             }
             _persist_pending_stop_receipt(receipt)
             terminal = _try("POST", P_HEARTBEAT_RUNNER, receipt)
-            if terminal and not terminal.get("error"):
+            terminal_ok = bool(
+                terminal
+                and not terminal.get("error")
+                and not terminal.get("error_code"))
+            if terminal_ok:
                 _delete_pending_stop_receipt(session.get("runner_session_id"))
             wake_repaired = False
             # SIMPLIFY-3 / BUG-102: same tick — if a wake is bound, force
             # complete_wake(started=false) so claimed limbo cannot outlive the
             # local death. Already-terminal rows stay skipped (BUG-91).
-            if (not terminal_surrender and wake_id
-                    and terminal and not terminal.get("error")):
+            if not terminal_surrender and wake_id and terminal_ok:
                 completion = _try("POST", P_COMPLETE_WAKE, {
                     "project": PROJECT,
                     "wake_id": wake_id,
@@ -3651,7 +3658,7 @@ def renew_live_direct_runners(inventory):
                 "runner_session_id": session.get("runner_session_id"),
                 "task_id": task_id,
                 "wake_id": wake_id or None,
-                "terminalized": bool(terminal and not terminal.get("error")),
+                "terminalized": terminal_ok,
                 "wake_repaired": wake_repaired,
             })
             continue
