@@ -191,19 +191,36 @@ def authorize_principal(principal: Dict[str, Any], project: str,
     superadmin = bool(principal.get("is_superadmin"))
     same_project = binding == selected
     explicit_cross_project = bool(roles)
-    if not (same_project or environment_operator or superadmin or explicit_cross_project):
+    host_identity = None
+    if (not same_project
+            and str(principal.get("kind") or "") in {"host", "agent_host"}):
+        host_identity = store.check_agent_host_identity(
+            str(principal.get("display_name") or ""),
+            str(principal.get("id") or ""),
+            project=selected,
+        )
+    explicit_host_project = bool(
+        host_identity
+        and host_identity.get("required") is True
+        and host_identity.get("allowed") is True)
+    if not (same_project or environment_operator or superadmin
+            or explicit_cross_project or explicit_host_project):
         raise PermissionError("forbidden: token is not valid for this project")
 
     # Base token scopes are valid only on the token's own project. A cross-project
     # role grant contributes only its recorded scopes, so a global/admin base scope
     # cannot silently widen a viewer grant.
     scopes = set(principal.get("scopes") or []) if (
-        same_project or environment_operator or superadmin) else set()
+        same_project or environment_operator or superadmin
+        or explicit_host_project) else set()
     for role in roles:
         scopes.update(role.get("scopes") or [])
     principal["effective_scopes"] = sorted(scopes)
     principal["project_roles"] = roles
     principal["authorized_project"] = selected
+    if explicit_host_project:
+        principal["agent_host_project_grant"] = dict(
+            host_identity.get("project_grant") or {})
     if not _has_scopes(principal, required_scopes, selected):
         raise PermissionError("forbidden: token is missing required scope")
     return principal
@@ -250,7 +267,9 @@ def authenticate(project: str, token: str,
     if not principal and token:
         principal = store.get_principal_by_token_any_project(token)
         binding = (principal or {}).get("project")
-        if binding not in (project, "*"):
+        principal_kind = str((principal or {}).get("kind") or "")
+        if (binding not in (project, "*")
+                and principal_kind not in {"host", "agent_host"}):
             principal = None
     if not principal and token:
         principal = _env_principal(token, project)

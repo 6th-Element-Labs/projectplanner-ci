@@ -856,16 +856,80 @@ def check_agent_host_identity(
     host_id: str, principal_id: str, project: str = DEFAULT_PROJECT
 ) -> dict[str, Any]:
     """Fence enrolled host ids to their active, exact principal identity."""
+    host_id = str(host_id or "").strip()
+    principal_id = str(principal_id or "").strip()
     with _conn(project) as connection:
         row = connection.execute(
             "SELECT status, principal_id, identity_generation, public_key_fingerprint, "
             "owner_user_id, tenant_allowlist_json, project_allowlist_json, "
             "provider_allowlist_json, execution_policy_json "
             "FROM agent_host_enrollments WHERE project_id=? AND host_id=?",
-            (project, str(host_id or "").strip()),
+            (project, host_id),
         ).fetchone()
+    project_grant = None
     if not row:
-        return {"required": False, "allowed": True}
+        # HOST-2 keeps one enrollment/Capacity authority in the source project
+        # and grants bounded placement into target projects. Resolve that exact
+        # source identity here so the same narrow bearer can serve a granted
+        # project without cloning its enrollment identity.
+        from switchboard.storage.repositories.agent_host_grants import (
+            list_agent_host_project_grants,
+        )
+
+        grants = list_agent_host_project_grants(
+            target_project=project, host_id=host_id)
+        denial = None
+        for grant in grants:
+            source_project = str(grant.get("source_project_id") or "")
+            with _conn(source_project) as connection:
+                candidate = connection.execute(
+                    "SELECT status, principal_id, identity_generation, "
+                    "public_key_fingerprint, owner_user_id, tenant_allowlist_json, "
+                    "project_allowlist_json, provider_allowlist_json, execution_policy_json "
+                    "FROM agent_host_enrollments WHERE project_id=? AND host_id=?",
+                    (source_project, host_id),
+                ).fetchone()
+            if not candidate:
+                denial = _error(
+                    "host_enrollment_not_found",
+                    "shared Host grant has no source enrollment",
+                    required=True, allowed=False)
+                continue
+            candidate_identity = dict(candidate)
+            if candidate_identity.get("status") != _ACTIVE:
+                denial = _error(
+                    "host_identity_revoked", "host identity is not active",
+                    required=True, allowed=False,
+                    status=candidate_identity.get("status"))
+                continue
+            if candidate_identity.get("principal_id") != principal_id:
+                denial = _error(
+                    "host_identity_mismatch",
+                    "host id is bound to a different principal",
+                    required=True, allowed=False)
+                continue
+            project_allowlist = _json_list(
+                candidate_identity.get("project_allowlist_json") or "[]")
+            if project not in project_allowlist:
+                denial = _error(
+                    "host_project_not_authorized",
+                    "target project is absent from the server-issued Host allowlist",
+                    required=True, allowed=False)
+                continue
+            if (int(candidate_identity.get("identity_generation") or 0)
+                    != int(grant.get("enrollment_identity_generation") or 0)
+                    or str(candidate_identity.get("public_key_fingerprint") or "")
+                    != str(grant.get("attestation_fingerprint") or "")):
+                denial = _error(
+                    "host_attestation_stale",
+                    "shared Host grant does not match the active enrollment identity",
+                    required=True, allowed=False)
+                continue
+            row = candidate
+            project_grant = grant
+            break
+        if not row:
+            return denial or {"required": False, "allowed": True}
     identity = dict(row)
     if identity.get("status") != _ACTIVE:
         return _error(
@@ -875,14 +939,14 @@ def check_agent_host_identity(
             allowed=False,
             status=identity.get("status"),
         )
-    if identity.get("principal_id") != str(principal_id or "").strip():
+    if identity.get("principal_id") != principal_id:
         return _error(
             "host_identity_mismatch",
             "host id is bound to a different principal",
             required=True,
             allowed=False,
         )
-    return {
+    result = {
         "required": True,
         "allowed": True,
         "identity_generation": identity.get("identity_generation"),
@@ -896,6 +960,9 @@ def check_agent_host_identity(
             or dict(PERSONAL_EXECUTION_POLICY)
         ),
     }
+    if project_grant:
+        result["project_grant"] = dict(project_grant)
+    return result
 
 
 class AgentHostEnrollmentRepository:
