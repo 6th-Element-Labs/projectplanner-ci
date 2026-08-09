@@ -2,6 +2,7 @@
 """BUG-326: one enrolled Host bearer works on explicitly granted projects."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -149,6 +150,46 @@ try:
     assert target_registration.get("host_id") == HOST, target_registration
     assert target_registration.get("authoritative_execution_policy", {}).get(
         "schema") == PERSONAL_EXECUTION_POLICY["schema"], target_registration
+
+    wake_id = "wake-bug326-switchboard"
+    runner_session_id = "run_" + hashlib.sha256(
+        f"{wake_id}:{HOST}".encode()).hexdigest()[:16]
+    assignment = {
+        "schema": "switchboard.connect.assignment.v1",
+        "assignment_id": "assignment-bug326-switchboard",
+        "work_ref": "task:switchboard:BUG-326",
+    }
+    with _conn(TARGET) as connection:
+        connection.execute(
+            "INSERT INTO wake_intents("
+            "wake_id,source,reason,selector_json,policy_json,status,requested_at,"
+            "claimed_at,claimed_by_host,task_id) "
+            "VALUES (?,?,?,?,?,'claimed',?,?,?,?)",
+            (
+                wake_id,
+                "bug326-test",
+                "cross-project token proof",
+                json.dumps({"agent_id": "agent/codex/bug-326", "runtime": "codex"}),
+                json.dumps({"mode": "connect", "assignment": assignment}),
+                now,
+                now,
+                HOST,
+                "BUG-326",
+            ),
+        )
+    issued = store.issue_direct_session_mcp_token(
+        wake_id,
+        HOST,
+        runner_session_id,
+        principal_id=PRINCIPAL,
+        actor=HOST,
+        project=TARGET,
+    )
+    session_principal = auth.principal_for_token_any_project(
+        issued.get("token") or "")
+    assert issued.get("issued") is True, issued
+    assert session_principal.get("assignment_project") == TARGET, session_principal
+    assert session_principal.get("bound_task_id") == "BUG-326", session_principal
 
     try:
         auth.authenticate(UNGRANTED, TOKEN, required_scopes=("write:agent_host",))

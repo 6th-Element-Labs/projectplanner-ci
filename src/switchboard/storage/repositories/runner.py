@@ -413,6 +413,12 @@ def issue_direct_session_mcp_token(
     principal_id = str(principal_id or "").strip()
     expected_runner = "run_" + hashlib.sha256(
         f"{wake_id}:{host_id}".encode()).hexdigest()[:16]
+    from switchboard.storage.repositories.agent_host_enrollments import (
+        check_agent_host_identity,
+    )
+
+    host_identity = check_agent_host_identity(
+        host_id, principal_id, project=project)
     with _conn(project) as c:
         wake_row = c.execute(
             "SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
@@ -422,11 +428,6 @@ def issue_direct_session_mcp_token(
         selector = _json_obj(wake.get("selector_json"), {})
         policy = _json_obj(wake.get("policy_json"), {})
         assignment = policy.get("assignment") or {}
-        enrollment = c.execute(
-            "SELECT enrollment_id FROM agent_host_enrollments "
-            "WHERE host_id=? AND principal_id=? AND status='active'",
-            (host_id, principal_id),
-        ).fetchone()
         reasons = []
         if str(wake.get("status") or "") not in {"pending", "claimed", "completed"}:
             reasons.append("assignment_not_active")
@@ -455,7 +456,8 @@ def issue_direct_session_mcp_token(
                 reasons.append("config_task_mismatch")
         if runner_session_id != expected_runner:
             reasons.append("runner_session_mismatch")
-        if not enrollment:
+        if not (host_identity.get("required") is True
+                and host_identity.get("allowed") is True):
             reasons.append("host_enrollment_mismatch")
         if reasons:
             return {"error": "direct_assignment_token_denied",
