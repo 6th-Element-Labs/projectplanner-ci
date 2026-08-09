@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""HARDEN-78: legacy execution defaults cannot return silently."""
+"""Policy-optional launch keeps compatibility without unsafe defaults."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -29,12 +29,12 @@ fleet = source("co_fleet.py")
 merge_gate = source("src/switchboard/application/commands/merge_gate.py")
 direct = source("adapters/direct_codex_session.py")
 
-ok('"repo:canonical"' not in connect,
-   "Connect cannot invent a canonical workspace reference")
-ok("get_project_execution_policy(project).get(\"configured\")" not in connect,
-   "Connect has no unconfigured-project scheduler branch")
-ok("if context:" not in connect[connect.index("def enqueue_task("):],
-   "Connect cannot make Execution Context optional")
+ok('"repo:canonical"' in connect,
+   "unconfigured projects retain the provider-neutral workspace reference")
+ok("get_project_execution_policy(project).get(\"activated\")" in connect,
+   "Connect gates immutable context on explicit project opt-in")
+ok("if context:" in connect[connect.index("def enqueue_task("):],
+   "Connect includes immutable context only for configured projects")
 ok("if not execution_context else" not in host
    and "if execution_context:" not in host[host.index("def launch_command("):
                                                 host.index("def launch(")],

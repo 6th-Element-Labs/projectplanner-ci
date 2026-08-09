@@ -331,6 +331,18 @@ try:
             cli_blank_project_rejected = exc.code == 2
     ok(cli_missing_project_rejected and cli_blank_project_rejected,
        "installer CLI rejects omitted and blank project scope")
+    parsed_sources = enrollment._project_source_arguments([
+        f"switchboard={ROOT}", f"second-project={ROOT}",
+    ])
+    try:
+        enrollment._project_source_arguments([f"switchboard={ROOT}",
+                                              f"switchboard={ROOT}"])
+        duplicate_source_rejected = False
+    except enrollment.EnrollmentError:
+        duplicate_source_rejected = True
+    ok(parsed_sources == {"switchboard": ROOT, "second-project": ROOT}
+       and duplicate_source_rejected,
+       "install/update CLI accepts explicit project source bindings and rejects duplicates")
     lifecycle_cli_args = {
         "rotate": ["--identity", "identity.json", "--config", "config.json"],
         "revoke": ["--identity", "identity.json", "--config", "config.json",
@@ -2100,6 +2112,10 @@ try:
         service_runner=fake_service,
         local_auth_runner=fake_codex,
         codex_executable=str(TEST_CODEX),
+        project_source_repo_roots={
+            PROJECT: ROOT,
+            "second-project-same-repository": ROOT,
+        },
         hostname="adapter18-linux.test",
     )
     linux_identity = linux_paths["config_root"] / "identity.json"
@@ -2170,6 +2186,9 @@ try:
        and launched_env.get("PM_AGENT_HOST_CONFIG_PATH") == str(linux_config.resolve())
        and launched_env.get("PM_REPO_ROOT") == str(linux_paths["prefix"] / "current")
        and launched_env.get("PM_AGENT_HOST_SOURCE_REPO_ROOT") == str(ROOT.resolve())
+       and json.loads(launched_env.get("PM_HOST_PROJECT_SOURCE_REPO_ROOTS") or "{}")
+       == {PROJECT: str(ROOT.resolve()),
+           "second-project-same-repository": str(ROOT.resolve())}
        and launched_env.get("PM_AGENT_HOST_WORK_SOURCE_ROOT")
        == json.loads(linux_config.read_text())["work_source_root"]
        and Path(captured_exec.get("arguments")[1]).resolve()
@@ -2177,8 +2196,11 @@ try:
        and launched_env.get("PM_AGENT_HOST_STATE_PATH") == str(linux_state.resolve())
        and all(isinstance(value, str) for value in launched_env.values()),
        "service-run strips metered keys and binds the OS test-sandbox protection paths")
-    ok(separated_inventory["repo_root"] == str(ROOT.resolve()),
-       "Agent Host inventory uses the canonical work source, not its signed runtime")
+    ok(separated_inventory["repo_root"] == str(ROOT.resolve())
+       and separated_inventory["project_source_repo_roots"]
+       == {PROJECT: str(ROOT.resolve()),
+           "second-project-same-repository": str(ROOT.resolve())},
+       "Agent Host inventory uses canonical project-bound sources, not its signed runtime")
     personal_auth = {
         "available": True,
         "runtime": "codex",

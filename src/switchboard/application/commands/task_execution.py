@@ -741,6 +741,7 @@ def _arm_task_scope(task_id: str, *, project: str, role: str,
 
 def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "user",
                principal_id: str = "", agent_id: str = "",
+               operator_launch_authorized: bool = False,
                role: str = "implementation",
                runtime: str = "codex", source_sha: str = "",
                instruction: str = "", findings: Optional[list[dict[str, Any]]] = None,
@@ -759,9 +760,14 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
     if not task_id:
         raise TaskExecutionError("invalid_input", "task_id required", project=project)
     from switchboard.storage.repositories import access as access_repo
-    binding = access_repo.resolve_write_actor(
+    binding = ({
+        "ok": True,
+        "actor": actor,
+        "binding": "authorized_operator_launch",
+        "principal_id": principal_id,
+    } if operator_launch_authorized else access_repo.resolve_write_actor(
         actor, project=project, task_id=task_id, agent_id=agent_id,
-        principal_id=principal_id)
+        principal_id=principal_id))
     if not binding.get("ok"):
         raise TaskExecutionError(
             "start_refused",
@@ -978,7 +984,7 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
             # path it would have used was still open. Widen this only by deleting the
             # legacy path in connect_dispatch first.
             readiness = get_project_execution_readiness(project)
-            if (get_project_execution_policy(project).get("configured")
+            if (get_project_execution_policy(project).get("activated")
                     and readiness.get("passed") is not True):
                 raise TaskExecutionError(
                     "start_refused",

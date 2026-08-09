@@ -80,7 +80,7 @@ def host() -> dict:
 # These tests pin the CONFIGURED-project path: hybrid placement derives from
 # the execution context, which exists exactly when the project opted in.
 project_execution_policy.get_project_execution_policy = (
-    lambda _project: {"configured": True})
+    lambda _project: {"configured": True, "activated": True})
 
 
 def test_enqueue_requires_execution_context_and_persists_hybrid_policy():

@@ -541,6 +541,7 @@ def _remove_host_worktree(source_root: Path, workspace_path: Path, *,
 def materialize_host_worktree(
     *, project_id: str, task_id: str, execution_id: str, generation: int,
     branch: str, source_repo_root: str | Path, workspace_root: str | Path,
+    checkout_sha: str = "",
     timeout_s: float | None = None,
 ) -> MaterializedWorkspace:
     """Create or recover a private worktree for a context-less Connect wake.
@@ -573,7 +574,13 @@ def materialize_host_worktree(
                 existing_receipt = parsed
         except (OSError, ValueError):
             pass
-        base_sha = str(existing_receipt.get("base_sha") or resolved["source_head"])
+        requested_sha = str(checkout_sha or "").strip().lower()
+        if requested_sha and not _SHA.fullmatch(requested_sha):
+            raise WorkspaceMaterializationError(
+                "workspace_checkout_sha_invalid",
+                "host worktree checkout SHA must be a full lowercase SHA-1")
+        base_sha = requested_sha or str(
+            existing_receipt.get("base_sha") or resolved["source_head"])
         if not _SHA.fullmatch(base_sha):
             raise WorkspaceMaterializationError(
                 "workspace_receipt_invalid",
@@ -669,6 +676,7 @@ def materialize_host_worktree(
 def verify_host_worktree(
     *, project_id: str, task_id: str, execution_id: str, generation: int,
     branch: str, source_repo_root: str | Path, workspace_root: str | Path,
+    checkout_sha: str = "",
 ) -> MaterializedWorkspace:
     """Re-prove the private host worktree immediately before process spawn."""
     resolved = _host_worktree_static_identity(
@@ -688,6 +696,16 @@ def verify_host_worktree(
         raise WorkspaceMaterializationError(
             "workspace_receipt_invalid",
             "host worktree receipt has an invalid base SHA")
+    requested_sha = str(checkout_sha or "").strip().lower()
+    if requested_sha and not _SHA.fullmatch(requested_sha):
+        raise WorkspaceMaterializationError(
+            "workspace_checkout_sha_invalid",
+            "host worktree checkout SHA must be a full lowercase SHA-1")
+    if requested_sha and requested_sha != base_sha:
+        raise WorkspaceMaterializationError(
+            "workspace_exact_head_mismatch",
+            "host worktree receipt does not match the requested checkout SHA",
+            checkout_sha=requested_sha, receipt_sha=base_sha)
     expected = _host_worktree_expected(resolved, base_sha=base_sha)
     receipt = _check_workspace(
         resolved["workspace_path"], resolved["receipt_path"], expected)

@@ -32,7 +32,7 @@ from switchboard.storage.repositories import project_execution_policy  # noqa: E
 original_policy = project_execution_policy.get_project_execution_policy
 # This test exercises the CONFIGURED-project Connect path end to end.
 project_execution_policy.get_project_execution_policy = (
-    lambda _project: {"configured": True})
+    lambda _project: {"configured": True, "activated": True})
 original_resolve = connect_dispatch.execution_context.resolve
 
 

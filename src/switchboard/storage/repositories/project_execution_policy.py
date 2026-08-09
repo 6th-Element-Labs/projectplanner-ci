@@ -315,6 +315,11 @@ def get_project_execution_policy(project: str = DEFAULT_PROJECT) -> Dict[str, An
         raw = {}
     configured = bool(raw)
     policy = _normalize(raw)
+    # Persistence is not activation. Operators may save a draft while the
+    # project continues to use the compatibility launch path. Once explicitly
+    # active, even an incomplete/invalid policy is authoritative and its
+    # readiness gate fails closed.
+    activated = bool(raw) and policy["lifecycle"]["status"] == "active"
     missing, invalid = _validate(policy, project, configured)
     readiness = _readiness(policy, configured=configured, missing=missing, invalid=invalid)
     return {
@@ -322,6 +327,7 @@ def get_project_execution_policy(project: str = DEFAULT_PROJECT) -> Dict[str, An
         "scope": "project",
         "project": project,
         "configured": configured,
+        "activated": activated,
         **policy,
         "readiness": readiness,
         "valid": readiness["passed"],

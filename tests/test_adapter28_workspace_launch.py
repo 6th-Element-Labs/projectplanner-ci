@@ -152,6 +152,13 @@ def connect_wake(ctx, *, execution_id="execlease-adapter28", generation=1,
         "mode": "connect",
         "assignment": assignment,
         "lifecycle": lifecycle,
+        "repository_binding": {
+            "schema": "switchboard.repository_binding.v1",
+            "project": "switchboard",
+            "repo_role": "canonical",
+            "repository": SLUG,
+            "default_branch": "main",
+        },
         "execution_context": ctx,
         "execution_assignment": build_execution_assignment(
             task_id="ADAPTER-28", assignment=assignment, lifecycle=lifecycle,
@@ -650,7 +657,7 @@ def test_legacy_wake_without_context_launches_from_private_worktree(root):
     """
     remote, sha = action_engine_remote(root)
     source = root / "sources" / "ActionEngine"
-    git("remote", "add", "origin", remote, cwd=source)
+    git("remote", "add", "origin", f"https://github.com/{SLUG}.git", cwd=source)
     wake = connect_wake(context(sha), execution_id="execlease-legacy")
     del wake["policy"]["execution_context"]
     wake["policy"]["execution_assignment"] = build_execution_assignment(
@@ -684,10 +691,48 @@ def test_legacy_wake_without_context_launches_from_private_worktree(root):
        "the compatibility workspace uses the same durable receipt lifecycle")
 
 
+def test_legacy_review_wake_launches_at_exact_head(root):
+    """A policy-free review still checks out the persisted PR head exactly."""
+    remote, base_sha = action_engine_remote(root)
+    source = root / "sources" / "ActionEngine"
+    git("remote", "add", "origin", f"git@github.com:{SLUG}.git", cwd=source)
+    git("checkout", "-b", "agent/review-branch", cwd=source)
+    (source / "review.txt").write_text("review\n", encoding="utf-8")
+    git("add", "review.txt", cwd=source)
+    git("commit", "-m", "review head", cwd=source)
+    review_head = git("rev-parse", "HEAD", cwd=source)
+    git("checkout", "main", cwd=source)
+    ok(git("rev-parse", "HEAD", cwd=source) == base_sha,
+       "the enrolled source checkout remains on the canonical base")
+
+    wake = connect_wake(
+        context(base_sha), execution_id="execlease-legacy-review",
+        role="review_merge", head_sha=review_head,
+        pr_branch="agent/review-branch")
+    wake["policy"].pop("execution_context")
+    wake["policy"]["execution_assignment"] = build_execution_assignment(
+        task_id="ADAPTER-28", assignment=wake["policy"]["assignment"],
+        lifecycle=wake["policy"]["lifecycle"])
+    wake["policy"].pop("account_binding", None)
+    inventory = host_inventory()
+    inventory["repo_root"] = str(source)
+    with Launcher(remote):
+        result = agent_host.launch(
+            wake, inventory, runner_session_id="run_legacy_review")
+    workspace = Path(str(result.get("cwd") or ""))
+    ok(result.get("started") is not False and workspace.is_dir(),
+       f"the context-less review launches (got {result.get('reason')})")
+    ok(git("rev-parse", "HEAD", cwd=workspace) == review_head,
+       "the context-less review workspace is pinned to the exact PR head")
+    receipt = (result.get("metadata") or {}).get("workspace_receipt") or {}
+    ok(receipt.get("base_sha") == review_head,
+       "the compatibility receipt records the exact reviewed head")
+
+
 def test_legacy_worktrees_dedupe_isolate_and_teardown(root):
     remote, sha = action_engine_remote(root)
     source = root / "sources" / "ActionEngine"
-    git("remote", "add", "origin", remote, cwd=source)
+    git("remote", "add", "origin", f"https://github.com/{SLUG}.git", cwd=source)
     inventory = host_inventory()
     inventory["repo_root"] = str(source)
 
@@ -734,7 +779,7 @@ def test_legacy_worktrees_dedupe_isolate_and_teardown(root):
 def test_legacy_workspace_failures_start_no_process(root):
     remote, sha = action_engine_remote(root)
     source = root / "sources" / "ActionEngine"
-    git("remote", "add", "origin", remote, cwd=source)
+    git("remote", "add", "origin", f"https://github.com/{SLUG}.git", cwd=source)
     wake = connect_wake(context(sha), execution_id="execlease-unsafe-root")
     wake["policy"].pop("execution_context")
     wake["policy"]["execution_assignment"] = build_execution_assignment(
@@ -768,6 +813,49 @@ def test_legacy_workspace_failures_start_no_process(root):
     ok(launcher.calls == [], "invalid source refusal starts no supervisor process")
 
 
+def test_legacy_multi_project_wake_uses_bound_repository(root):
+    """A multi-project host never derives one project's worktree from another repo."""
+    action_remote, sha = action_engine_remote(root / "action")
+    action_source = root / "action" / "sources" / "ActionEngine"
+    git("remote", "add", "origin", f"https://github.com/{SLUG}.git",
+        cwd=action_source)
+
+    wrong_remote, _ = action_engine_remote(root / "wrong")
+    wrong_source = root / "wrong" / "sources" / "ActionEngine"
+    git("remote", "add", "origin", wrong_remote, cwd=wrong_source)
+    git("remote", "set-url", "origin", "https://gitlab.com/6th-Element-Labs/ActionEngine.git",
+        cwd=wrong_source)
+
+    wake = connect_wake(context(sha), execution_id="execlease-bound-repo")
+    wake["_host_project"] = "maxwell"
+    wake["policy"].pop("execution_context")
+    wake["policy"]["execution_assignment"] = build_execution_assignment(
+        task_id="ADAPTER-28", assignment=wake["policy"]["assignment"],
+        lifecycle=wake["policy"]["lifecycle"])
+    wake["policy"].pop("account_binding", None)
+    wake["policy"]["repository_binding"]["project"] = "maxwell"
+    inventory = host_inventory()
+    inventory["project"] = "switchboard"
+    inventory["repo_root"] = str(wrong_source)
+    inventory["project_source_repo_roots"] = {"maxwell": str(action_source)}
+    with Launcher(action_remote):
+        launched = agent_host.launch(
+            wake, inventory, runner_session_id="run_bound_repo")
+    ok(launched.get("started") is not False
+       and git("remote", "get-url", "origin", cwd=launched["cwd"])
+       == f"https://github.com/{SLUG}.git",
+       "a context-less wake selects the source root bound to its project")
+
+    inventory.pop("project_source_repo_roots")
+    with Launcher(action_remote) as launcher:
+        refused = agent_host.launch(
+            wake, inventory, runner_session_id="run_unbound_repo")
+    ok(refused.get("started") is False
+       and refused.get("reason") == "project_source_repository_unbound",
+       "a same-slug GitLab source cannot impersonate the canonical GitHub binding")
+    ok(launcher.calls == [], "an unbound repository starts no process")
+
+
 def test_launch_has_no_repo_root_fallback_for_connect():
     source = (Path(__file__).parents[1] / "adapters" / "agent_host.py").read_text(
         encoding="utf-8")
@@ -793,8 +881,10 @@ with tempfile.TemporaryDirectory(prefix="adapter28-") as temporary:
     test_one_generation_owns_workspace_credential_and_identity(base / "generation")
     test_only_supported_provider_clis_launch(base / "runtimes")
     test_legacy_wake_without_context_launches_from_private_worktree(base / "legacy")
+    test_legacy_review_wake_launches_at_exact_head(base / "legacy-review")
     test_legacy_worktrees_dedupe_isolate_and_teardown(base / "legacy-lifecycle")
     test_legacy_workspace_failures_start_no_process(base / "legacy-failures")
+    test_legacy_multi_project_wake_uses_bound_repository(base / "legacy-binding")
 test_launch_has_no_repo_root_fallback_for_connect()
 
 print(f"\nADAPTER-28 workspace launch: {passed} passed, {failed} failed")

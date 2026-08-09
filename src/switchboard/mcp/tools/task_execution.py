@@ -75,7 +75,7 @@ def start_task(task_id: str, ctx: Context, project: str = "maxwell",
     ``runtime``. Callers never pick a host or runner and never assemble a wake;
     failures return the dispatcher's own truthful reason."""
     return _run("start_task", task_id, ctx, project, role=role, runtime=runtime,
-                agent_id=agent_id)
+                agent_id=agent_id, operator_launch_authorized=True)
 
 
 def open_session(task_id: str, ctx: Context, project: str = "maxwell",

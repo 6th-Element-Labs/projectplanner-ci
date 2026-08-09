@@ -62,7 +62,7 @@ try:
         lambda _project: {"passed": True}
     )
     project_execution_policy.get_project_execution_policy = (
-        lambda _project: {"configured": True}
+        lambda _project: {"configured": True, "activated": True}
     )
     connect_dispatch.execution_context.resolve = (
         lambda **kwargs: ready_execution_context(

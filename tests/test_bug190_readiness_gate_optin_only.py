@@ -85,7 +85,7 @@ def run(*, configured, readiness):
     """start_task with launcher=None so the real gate + dispatch seam are exercised."""
     dispatched = []
     project_execution_policy.get_project_execution_policy = (
-        lambda _project: {"configured": configured})
+        lambda _project: {"configured": configured, "activated": configured})
     project_execution_readiness.get_project_execution_readiness = (
         lambda _project: dict(readiness))
     connect_dispatch.enqueue_task = lambda *_a, **_kw: dispatched.append("enqueued") or {
@@ -127,13 +127,12 @@ finally:
     project_execution_readiness.get_project_execution_readiness = saved_readiness
     connect_dispatch.enqueue_task = saved_enqueue
 
-# HARDEN-78 removes the downstream legacy scheduler branch. The readiness
-# projection may remain explanatory here, but Connect itself always resolves
-# exact project authority before creating a wake.
+# Task Execution and Connect share the same opt-in boundary. Readiness may
+# explain an unconfigured project, but it cannot block the compatibility wake.
 dispatch_src = (ROOT / "src/switchboard/application/commands/connect_dispatch.py").read_text()
 ok('execution_context.resolve(' in dispatch_src
-   and 'if get_project_execution_policy(project).get("configured"):' not in dispatch_src,
-   "connect_dispatch always resolves exact project execution authority")
+   and 'if get_project_execution_policy(project).get("activated"):' in dispatch_src,
+   "connect_dispatch resolves exact authority only after project opt-in")
 
 print(f"\nBUG-190 readiness gate opt-in only: {passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)

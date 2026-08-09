@@ -203,6 +203,51 @@ def _wake_project(wake):
                or PROJECT)
 
 
+def _repository_identity(value, *, topology=False):
+    """Normalize repository authority as host/owner/repo.
+
+    Project topology historically stores a bare GitHub owner/repo slug. Origins
+    must name their host explicitly; matching only the trailing path would let
+    a same-named GitLab or local repository impersonate the canonical source.
+    """
+    raw = str(value or "").strip().rstrip("/")
+    if raw.endswith(".git"):
+        raw = raw[:-4]
+    if topology and re.fullmatch(r"[^/@:]+/[^/@:]+", raw):
+        return f"github.com/{raw}".lower()
+    scp = re.fullmatch(r"(?:[^@/]+@)?([^:/]+):(.+)", raw)
+    if scp and "://" not in raw:
+        host, path = scp.group(1), scp.group(2)
+    else:
+        parsed = urllib.parse.urlparse(raw)
+        host, path = parsed.hostname or "", parsed.path
+    parts = [part for part in str(path).replace("\\", "/").split("/") if part]
+    return (f"{host}/{'/'.join(parts[-2:])}".lower()
+            if host and len(parts) >= 2 else "")
+
+
+def _source_origin_identity(source_root):
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(source_root), "remote", "get-url", "origin"],
+            capture_output=True, text=True, timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return (_repository_identity(result.stdout, topology=False)
+            if result.returncode == 0 else "")
+
+
+def _project_source_repo_roots_from_env():
+    try:
+        value = json.loads(os.environ.get("PM_HOST_PROJECT_SOURCE_REPO_ROOTS", "{}"))
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    return {str(project): str(root) for project, root in value.items()
+            if str(project).strip() and str(root).strip()}
+
+
 def _safe_identity(value):
     """Return a stable git-ref component for server-owned identifiers."""
     safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "")).strip(".-")
@@ -931,6 +976,7 @@ def default_inventory():
     return {
         "project": PROJECT, "host_id": host_id, "hostname": socket.gethostname(),
         "agent_host_version": AGENT_HOST_VERSION, "repo_root": repo,
+        "project_source_repo_roots": _project_source_repo_roots_from_env(),
         "policy": policy,
         "runtimes": [{
             "runtime": runtime,
@@ -1713,6 +1759,22 @@ def connect_workspace_request(wake, inventory):
             "review/remediation workspace requires the persisted PR branch",
             role=desired_role,
         )
+    compatibility_checkout_sha = ""
+    if exact_head_role and not context:
+        lifecycle_head = str(lifecycle.get("head_sha") or "").strip().lower()
+        assignment_head = str(
+            execution_assignment.get("exact_head_sha") or ""
+        ).strip().lower()
+        if (not re.fullmatch(r"[0-9a-f]{40}", lifecycle_head)
+                or lifecycle_head != assignment_head):
+            raise WorkspaceMaterializationError(
+                "workspace_exact_head_mismatch",
+                "lifecycle head and assignment head must agree",
+                role=desired_role,
+                lifecycle_head_sha=lifecycle_head or None,
+                assignment_head_sha=assignment_head or None,
+            )
+        compatibility_checkout_sha = lifecycle_head
     if context:
         base_sha = str(context.get("base_sha") or "").strip().lower()
         checkout_sha = str(context.get("checkout_sha") or "").strip().lower()
@@ -1765,10 +1827,43 @@ def connect_workspace_request(wake, inventory):
                 "PM_AGENT_HOST_REPO_CACHE_ROOT",
                 str(state_root / "repository-cache")),
         }
+    binding = dict(policy.get("repository_binding") or {})
+    expected_project = _wake_project(wake)
+    expected_repository = _repository_identity(
+        binding.get("repository"), topology=True)
+    if (binding.get("schema") != "switchboard.repository_binding.v1"
+            or str(binding.get("project") or "") != expected_project
+            or str(binding.get("repo_role") or "") != "canonical"
+            or not expected_repository):
+        raise WorkspaceMaterializationError(
+            "project_source_repository_unbound",
+            "policy-optional launch requires the project's canonical repository binding",
+            project=expected_project,
+        )
+    roots = dict((inventory or {}).get("project_source_repo_roots") or {})
+    source_repo_root = str(
+        roots.get(expected_project) or (inventory or {}).get("repo_root") or "")
+    actual_repository = _source_origin_identity(source_repo_root)
+    if not actual_repository:
+        raise WorkspaceMaterializationError(
+            "legacy_source_repo_invalid",
+            "the selected host source is not a usable Git checkout",
+            project=expected_project,
+            source_repo_root=source_repo_root or None,
+        )
+    if actual_repository != expected_repository:
+        raise WorkspaceMaterializationError(
+            "project_source_repository_unbound",
+            "the host has no source checkout bound to the wake's canonical repository",
+            project=expected_project,
+            expected_repository=expected_repository,
+            actual_repository=actual_repository,
+        )
     return {
         "project_id": project_id,
         "generation": generation,
-        "source_repo_root": str((inventory or {}).get("repo_root") or ""),
+        "source_repo_root": source_repo_root,
+        "checkout_sha": compatibility_checkout_sha,
         **common,
     }
 

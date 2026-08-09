@@ -110,11 +110,23 @@ try:
     unset = store.get_project_execution_policy("exec-alpha")
     readiness = unset["readiness"]
     ok(unset["schema"] == PROJECT_EXECUTION_POLICY_SCHEMA
-       and unset["configured"] is False and unset["valid"] is False,
+       and unset["configured"] is False and unset["activated"] is False
+       and unset["valid"] is False,
        "an unconfigured project reports schema, configured=False, and valid=False")
     ok(readiness["passed"] is False and readiness["status"] == "blocked"
        and readiness["reason_code"] == "project_execution_policy_missing",
        "missing policy yields a typed blocked readiness gate, not an optimistic pass")
+
+    make_project("exec-draft", "acme/draft")
+    store.set_meta("execution_policy", {
+        "lifecycle": {"status": "draft", "revision": 1},
+    }, project="exec-draft")
+    saved_draft = store.get_project_execution_policy("exec-draft")
+    ok(saved_draft["configured"] is True
+       and saved_draft["activated"] is False
+       and saved_draft["readiness"]["reason_code"]
+       in {"project_execution_policy_incomplete", "project_execution_policy_invalid"},
+       "a persisted draft is visible but does not activate strict execution")
 
     # --- invalid fixtures are rejected and persist nothing -------------------
     invalid_cases = [
@@ -190,6 +202,7 @@ try:
         project="exec-alpha", updates=VALID_POLICY, actor="fixture")
     stored = written.get("execution_policy") or {}
     ok(not written.get("error") and stored.get("valid") is True
+       and stored.get("activated") is True
        and stored["readiness"]["passed"] is True
        and stored["readiness"]["reason_code"] == "",
        "a valid policy round-trips and flips readiness to passed")
@@ -223,6 +236,7 @@ try:
         project="exec-alpha", updates={"lifecycle": {"status": "retired"}},
         actor="operator")["execution_policy"]
     ok(retired["readiness"]["passed"] is False
+       and retired["activated"] is False
        and retired["readiness"]["reason_code"] == "project_execution_policy_not_active",
        "a retired policy blocks readiness with its own typed reason code")
     store.set_project_execution_policy(
