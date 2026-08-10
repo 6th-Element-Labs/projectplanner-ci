@@ -204,8 +204,9 @@ bounded_rows = agent_host._drain_runners(host_id)
 agent_host._try = saved_try
 agent_host.subprocess.run = saved_subprocess_run
 ok(len(bounded_calls) == 2
-   and f"task_id={task_id}" in bounded_calls[0][1]
-   and "include_stale=true" in bounded_calls[0][1]
+   and "task_id=" not in bounded_calls[0][1]
+   and "include_stale=false" in bounded_calls[0][1]
+   and "limit=25" in bounded_calls[0][1]
    and "pending_completion=true" in bounded_calls[1][1]
    and "include_stale=true" in bounded_calls[1][1]
    and all("task_id=OLD-1" not in path for _, path in bounded_calls)

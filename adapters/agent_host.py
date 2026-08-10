@@ -131,6 +131,7 @@ _INFLIGHT_LAUNCHES_LOCK = threading.Lock()
 # bound, not an attempt cap or Human escalation.
 _PENDING_COMPLETION_RETRIES_PER_TICK = 4
 _PENDING_COMPLETION_PROJECT_CURSOR = 0
+_STALE_LOCAL_RECOVERY_CURSOR = {}
 
 
 def host_serves_runner_watch():
@@ -3133,10 +3134,10 @@ def _drain_runners(host_id, recover_stale_local=True, *, project=None,
 
     A long-lived personal host can accumulate thousands of stale historical
     runner rows.  Downloading all of them before renewing a handful of live
-    local PTYs makes the heartbeat itself miss its lease.  Recovery therefore
-    asks for stale rows only for task ids that the local supervisor says are
-    alive.  The graceful-drain caller opts out and fetches only centrally-live
-    rows for the host.
+    local PTYs makes the heartbeat itself miss its lease. Recovery therefore
+    fetches centrally-live rows once per project, then checks at most one live
+    local task whose central row is stale. The graceful-drain caller opts out
+    and fetches only centrally-live rows for the host.
     """
     local_inventory_available = False
     try:
@@ -3161,10 +3162,42 @@ def _drain_runners(host_id, recover_stale_local=True, *, project=None,
             str(row.get("task_id") or "") for row in local
             if row.get("alive") is True and str(row.get("task_id") or "")
         })
-        for task_id in live_task_ids:
+        # Fetch centrally-live rows once for this project. The old task-by-task
+        # scan ran every local task against every served project (P x T HTTP
+        # requests), which let discovery itself consume the Host presence TTL.
+        live_rows = []
+        if live_task_ids:
+            live_result = _try("GET", _drain_query(
+                P_LIST_RUNNERS, host_id=host_id, include_stale="false",
+                limit="25", project=project_id)) or {}
+            live_rows = (
+                live_result.get("sessions")
+                or live_result.get("runner_sessions")
+                or []
+            )
+        if isinstance(live_rows, list):
+            sessions.extend(live_rows)
+        else:
+            live_rows = []
+
+        # A live local PTY can briefly outlive its central lease. Recover one
+        # unresolved task per project per tick, rotating forever. This retains
+        # stale-row repair without rebuilding the P x T request explosion.
+        visible_task_ids = {
+            str(row.get("task_id") or "") for row in live_rows
+            if str(row.get("task_id") or "")
+        }
+        recovery_tasks = [
+            task_id for task_id in live_task_ids
+            if task_id not in visible_task_ids
+        ]
+        if recovery_tasks:
+            cursor = int(_STALE_LOCAL_RECOVERY_CURSOR.get(project_id, 0))
+            task_id = recovery_tasks[cursor % len(recovery_tasks)]
+            _STALE_LOCAL_RECOVERY_CURSOR[project_id] = cursor + 1
             result = _try("GET", _drain_query(
                 P_LIST_RUNNERS, host_id=host_id, task_id=task_id,
-                include_stale="true", project=project_id)) or {}
+                include_stale="true", limit="1", project=project_id)) or {}
             rows = result.get("sessions") or result.get("runner_sessions") or []
             if isinstance(rows, list):
                 sessions.extend(rows)
@@ -3188,7 +3221,10 @@ def _drain_runners(host_id, recover_stale_local=True, *, project=None,
         sessions = rows if isinstance(rows, list) else []
     local_by_id = {row.get("runner_session_id"): dict(row) for row in local
                    if row.get("runner_session_id")}
-    merged = dict(local_by_id) if include_local_only else {}
+    # Project identity comes from the central row. A local supervisor record
+    # has no project authority and must never be renewed under the primary
+    # project merely because no central match was found yet.
+    merged = {}
     for row in sessions:
         runner_id = row.get("runner_session_id")
         if runner_id:
@@ -3248,9 +3284,8 @@ def _drain_runner_projects(inventory):
         if project == PROJECT:
             project_rows = _drain_runners(host_id)
         else:
-            # Local-only supervisor rows do not carry a project identity. Include
-            # them once on the primary project; extra projects require a matching
-            # central row before this host may renew anything there.
+            # Local supervisor rows do not carry project authority. Every served
+            # project requires a matching central row before renewal.
             project_rows = _drain_runners(
                 host_id, project=project, include_local_only=False)
         for row in project_rows:
