@@ -125,6 +125,12 @@ RUNNER_WATCH_CAPABILITY = "runner_watch"
 RUNNER_LEASE_CAPABILITIES = ("execution_lease_v2", "runner_lease_enforcement")
 _INFLIGHT_LAUNCHES = set()
 _INFLIGHT_LAUNCHES_LOCK = threading.Lock()
+# Completion receipts are maintenance, not presence authority. Retry a small
+# rotating slice every daemon tick so an old cross-project backlog cannot delay
+# the next host heartbeat. Retries continue indefinitely; this is a throughput
+# bound, not an attempt cap or Human escalation.
+_PENDING_COMPLETION_RETRIES_PER_TICK = 4
+_PENDING_COMPLETION_PROJECT_CURSOR = 0
 
 
 def host_serves_runner_watch():
@@ -3169,10 +3175,11 @@ def _drain_runners(host_id, recover_stale_local=True, *, project=None,
         # runner.
         pending = _try("GET", _drain_query(
             P_LIST_RUNNERS, host_id=host_id, include_stale="true",
-            pending_completion="true", project=project_id)) or {}
+            pending_completion="true", limit="1", project=project_id)) or {}
         rows = pending.get("sessions") or pending.get("runner_sessions") or []
         if isinstance(rows, list):
-            sessions.extend(rows)
+            sessions.extend({**dict(row), "_pending_completion": True}
+                            for row in rows)
     else:
         result = _try("GET", _drain_query(
             P_LIST_RUNNERS, host_id=host_id, include_stale="false",
@@ -3223,10 +3230,21 @@ def _drain_runners(host_id, recover_stale_local=True, *, project=None,
 
 
 def _drain_runner_projects(inventory):
-    """Join local supervisor truth to runner rows on every served project."""
+    """Join live runners everywhere while bounding stale receipt maintenance."""
+    global _PENDING_COMPLETION_PROJECT_CURSOR
+
     host_id = str((inventory or {}).get("host_id") or "")
+    projects = list(_host_projects(inventory))
+    if not projects:
+        return []
+    start = _PENDING_COMPLETION_PROJECT_CURSOR % len(projects)
+    projects = projects[start:] + projects[:start]
+    _PENDING_COMPLETION_PROJECT_CURSOR = (
+        start + _PENDING_COMPLETION_RETRIES_PER_TICK
+    ) % len(projects)
+    pending_remaining = _PENDING_COMPLETION_RETRIES_PER_TICK
     rows = []
-    for project in _host_projects(inventory):
+    for project in projects:
         if project == PROJECT:
             project_rows = _drain_runners(host_id)
         else:
@@ -3236,6 +3254,10 @@ def _drain_runner_projects(inventory):
             project_rows = _drain_runners(
                 host_id, project=project, include_local_only=False)
         for row in project_rows:
+            if row.get("_pending_completion") is True:
+                if pending_remaining <= 0:
+                    continue
+                pending_remaining -= 1
             rows.append({**row, "_host_project": project})
     return rows
 
