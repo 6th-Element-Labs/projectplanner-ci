@@ -3027,16 +3027,21 @@ def supervisor_action(action, runner_session_id, options=None):
 def handle_runner_controls(inventory):
     """Consume pending snapshot/kill requests for runner sessions hosted here."""
     host_id = inventory["host_id"]
-    listed = _try(
-        "GET",
-        f"{P_LIST_RUNNER_CONTROLS}?project={PROJECT}&status=pending&host_id={host_id}",
-    ) or {}
-    requests = listed.get("requests") or []
+    requests = []
+    for project in _host_projects(inventory):
+        listed = _try(
+            "GET",
+            f"{P_LIST_RUNNER_CONTROLS}?project={project}&status=pending&host_id={host_id}",
+        ) or {}
+        requests.extend({**request, "_host_project": project}
+                        for request in (listed.get("requests") or []))
     handled = []
     for req in requests:
+        request_project = str(req.get("_host_project") or PROJECT)
         req_id = req.get("request_id")
         claimed = _try("POST", P_CLAIM_RUNNER_CONTROL,
-                       {"project": PROJECT, "host_id": host_id, "request_id": req_id})
+                       {"project": request_project, "host_id": host_id,
+                        "request_id": req_id})
         if not claimed or not claimed.get("claimed"):
             continue
         req = claimed.get("request") or req
@@ -3087,7 +3092,7 @@ def handle_runner_controls(inventory):
             }
             # Advertise stream coordinates on the central runner_session metadata.
             _try("POST", P_REGISTER_RUNNER, {
-                "project": PROJECT,
+                "project": request_project,
                 "runner_session_id": req.get("runner_session_id"),
                 "host_id": host_id,
                 "status": "running",
@@ -3116,7 +3121,8 @@ def handle_runner_controls(inventory):
             if revoked:
                 result = {**result, "workspace_revoked": bool(revoked.get("revoked"))}
         _try("POST", P_COMPLETE_RUNNER_CONTROL,
-             {"project": PROJECT, "host_id": host_id, "request_id": req_id,
+             {"project": request_project, "host_id": host_id,
+              "request_id": req_id,
               "status": status, "result": result, "snapshot": snapshot})
         handled.append({"request_id": req_id, "action": action, "status": status,
                         "runner_session_id": req.get("runner_session_id")})
@@ -3398,7 +3404,8 @@ def expire_runner_leases(inventory, *, now=None):
     now = time.time() if now is None else float(now)
     host_id = str((inventory or {}).get("host_id") or "")
     outcomes = _drain_pending_stop_receipts(host_id)
-    for session in _drain_runners(host_id):
+    for session in _drain_runner_projects(inventory):
+        session_project = str(session.get("_host_project") or PROJECT)
         metadata = dict(session.get("metadata") or {})
         surrendered = bool(metadata.get("lease_surrender"))
         # ADR-0008 C2: only surrender or true lease expiry may stop a process.
@@ -3447,7 +3454,7 @@ def expire_runner_leases(inventory, *, now=None):
             if revoked:
                 outcome["workspace_revoked"] = bool(revoked.get("revoked"))
             receipt = {
-                "project": PROJECT, "runner_session_id": runner_id,
+                "project": session_project, "runner_session_id": runner_id,
                 "host_id": host_id, "task_id": task_id,
                 "claim_id": session.get("claim_id") or "",
                 "agent_id": session.get("agent_id") or f"codex/{task_id}",
@@ -3516,6 +3523,17 @@ def _delete_pending_stop_receipt(runner_session_id):
         pass
 
 
+def _pending_stop_receipt_project(receipt):
+    """Recover the runner's assigned project from its durable workspace receipt."""
+    metadata = dict((receipt or {}).get("metadata") or {})
+    workspace_receipt = dict(metadata.get("workspace_receipt") or {})
+    return str(
+        workspace_receipt.get("project_id")
+        or (receipt or {}).get("project")
+        or PROJECT
+    ).strip()
+
+
 def _drain_pending_stop_receipts(host_id):
     """Retry exact terminal acknowledgements even after local process removal."""
     outcomes = []
@@ -3534,6 +3552,10 @@ def _drain_pending_stop_receipts(host_id):
             continue
         if str(receipt.get("host_id") or "") != str(host_id or ""):
             continue
+        receipt_project = _pending_stop_receipt_project(receipt)
+        if receipt_project and receipt_project != str(receipt.get("project") or ""):
+            receipt["project"] = receipt_project
+            _persist_pending_stop_receipt(receipt)
         terminal = _require("POST", P_HEARTBEAT_RUNNER, receipt)
         ok = bool(
             terminal
@@ -3705,7 +3727,7 @@ def renew_live_direct_runners(inventory):
                     "terminalized_by": "host_supervisor",
                 })
             receipt = {
-                "project": PROJECT,
+                "project": session_project,
                 "runner_session_id": session.get("runner_session_id"),
                 "host_id": host_id,
                 "task_id": task_id,
@@ -3726,7 +3748,7 @@ def renew_live_direct_runners(inventory):
             # local death. Already-terminal rows stay skipped (BUG-91).
             if not terminal_surrender and wake_id and terminal_ok:
                 completion = _try("POST", P_COMPLETE_WAKE, {
-                    "project": PROJECT,
+                    "project": session_project,
                     "wake_id": wake_id,
                     "runner_session_id": session.get("runner_session_id") or "",
                     "agent_id": session.get("agent_id") or f"codex/{task_id}",
@@ -3843,7 +3865,7 @@ def renew_live_direct_runners(inventory):
                     work_session_id=urllib.parse.quote(
                         work_session_id, safe="")),
                 {
-                    "project": PROJECT,
+                    "project": session_project,
                     "agent_id": session.get("agent_id") or f"codex/{task_id}",
                     "expected_branch": host_preflight.get("branch") or "",
                     "agent_host_bootstrap_binding": {
