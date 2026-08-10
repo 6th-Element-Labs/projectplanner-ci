@@ -146,7 +146,7 @@ def classify_cross_task_repair_proof(
         for item in finding_rows
         if _text(item.get("finding_class")).lower() == "auto"
     )
-    if not canonical_auto_ids or len(canonical_auto_ids) != len(set(canonical_auto_ids)):
+    if len(canonical_auto_ids) != len(set(canonical_auto_ids)):
         return _blocked("source_findings_mismatch")
     canonical_escalation_ids = sorted(
         _text(item.get("finding_id"))
@@ -156,25 +156,40 @@ def classify_cross_task_repair_proof(
     remediation_escalation_ids = _criteria_ids(
         remediation_row.get("escalation_findings"))
     remediation_ids = _criteria_ids(remediation_row.get("acceptance_criteria"))
+    authorization = _mapping(link_row.get("operator_authorization"))
+    operator_authorized = bool(
+        _text(authorization.get("schema"))
+        == "switchboard.review_repair_authorization.v1"
+        and _text(authorization.get("source")) == "task_execution.retry_task"
+        and _text(authorization.get("actor"))
+        and _text(authorization.get("principal_id"))
+        and authorization.get("authorized_at") not in (None, "", 0)
+    )
+    if authorization and not operator_authorized:
+        return _blocked("repair_operator_authorization_invalid")
+    canonical_repair_ids = sorted(
+        canonical_auto_ids + (canonical_escalation_ids if operator_authorized else []))
+    if not canonical_repair_ids:
+        return _blocked("source_findings_mismatch")
     if (
-        link_finding_ids != canonical_auto_ids
+        link_finding_ids != canonical_repair_ids
         or remediation_ids != canonical_auto_ids
         or int(remediation_row.get("auto_finding_count") or 0)
         != len(canonical_auto_ids)
     ):
         return _blocked(
             "repair_finding_set_mismatch",
-            canonical_finding_ids=canonical_auto_ids,
+            canonical_finding_ids=canonical_repair_ids,
             remediation_finding_ids=remediation_ids,
             supplied_finding_ids=link_finding_ids,
         )
-    human_followup_required = bool(canonical_escalation_ids)
+    human_followup_required = bool(canonical_escalation_ids) and not operator_authorized
     if (
         remediation_escalation_ids != canonical_escalation_ids
         or int(remediation_row.get("escalate_finding_count") or 0)
         != len(canonical_escalation_ids)
         or bool(remediation_row.get("human_intervention_required"))
-        != human_followup_required
+        != bool(canonical_escalation_ids)
     ):
         return _blocked("source_escalation_contract_mismatch")
 
@@ -207,7 +222,7 @@ def classify_cross_task_repair_proof(
             not in RESOLVED_REMEDIATION_STATUSES
             or _text(remediation_row.get("resolved_head_sha")) != receipt_head
             or any(
-                _text(item.get("finding_class")).lower() == "auto"
+                _text(item.get("finding_id")) in canonical_repair_ids
                 and (
                     _text(item.get("state")).lower() != "fixed"
                     or _text(item.get("resolved_sha")) != receipt_head
@@ -247,7 +262,7 @@ def classify_cross_task_repair_proof(
             source_remediation_status=remediation_row.get("status"),
         )
     if any(
-        _text(item.get("finding_class")).lower() == "auto"
+        _text(item.get("finding_id")) in canonical_repair_ids
         and _text(item.get("state")).lower() != "open"
         for item in finding_rows
     ):
@@ -301,8 +316,11 @@ def classify_cross_task_repair_proof(
     return {
         "status": "ready",
         "reason": "exact_cross_task_repair_proof",
-        "canonical_finding_ids": canonical_auto_ids,
+        "canonical_finding_ids": canonical_repair_ids,
         "human_followup_required": human_followup_required,
+        "operator_authorized": operator_authorized,
+        "operator_authorization": authorization if operator_authorized else None,
+        "human_intervened": operator_authorized,
         "escalation_finding_ids": canonical_escalation_ids,
         "repair_head_sha": repair_head,
         "repair_pr_url": repair_pr_url,

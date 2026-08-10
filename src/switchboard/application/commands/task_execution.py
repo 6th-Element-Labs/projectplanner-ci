@@ -65,6 +65,7 @@ ERROR_STATUS: dict[str, int] = {
     "stale_execution_generation": 409,
     "wrong_session": 409,
     "start_refused": 409,
+    "terminal_task_requires_repair": 409,
     "control_refused": 502,
     "open_refused": 502,
 }
@@ -78,6 +79,7 @@ ERROR_FAILURE_CLASS: dict[str, str] = {
     "stale_execution_generation": "unbound_identity",
     "wrong_session": "unbound_identity",
     "start_refused": "failed_gate",
+    "terminal_task_requires_repair": "failed_gate",
     "control_refused": "unreachable_agent",
     "open_refused": "unreachable_agent",
 }
@@ -790,6 +792,14 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
     role = str(role or "").strip().lower()
     projection = _projection(task_id, project)
     task = projection.get("task") or {}
+    if str(task.get("status") or "") in {"Done", "Cancelled", "Canceled"}:
+        raise TaskExecutionError(
+            "start_refused",
+            "Terminal tasks are immutable and cannot own a new execution. "
+            "Use retry_task to route an approved review repair into a linked task.",
+            task_id=task_id, project=project,
+            start_error="terminal_task_immutable",
+        )
     if role in {"review_merge", "remediation"}:
         supplied_head = str(source_sha or "").strip().lower()
         persisted_pr_head = str(
@@ -1382,6 +1392,148 @@ def _supersede(projection: dict[str, Any], task_id: str, project: str, *,
 # 6. retry_task — supersede the attempt; never fork a second execution.
 # --------------------------------------------------------------------------
 
+def _route_terminal_review_retry(
+    task_id: str, *, project: str, actor: str, principal_id: str,
+    runtime: str, reason: str,
+    launcher: Optional[Callable[..., dict[str, Any]]],
+) -> dict[str, Any]:
+    """Turn explicit terminal retry authority into one linked repair task."""
+    from switchboard.application.commands import submit_bug
+    from switchboard.storage.repositories import access as access_repo
+    from switchboard.storage.repositories import review_remediations as remediation_repo
+    from switchboard.storage.repositories import review_verdicts as verdict_repo
+
+    binding = access_repo.resolve_write_actor(
+        actor, project=project, task_id=task_id, principal_id=principal_id)
+    if not binding.get("ok") or not str(principal_id or "").strip():
+        raise TaskExecutionError(
+            "terminal_task_requires_repair",
+            "An authenticated operator is required to authorize terminal repair work.",
+            task_id=task_id, project=project,
+            repair_error="review_repair_authority_unbound",
+        )
+
+    findings = verdict_repo.list_review_findings(
+        task_id=task_id, state="open", current_head_only=True, project=project)
+    verdict_ids = sorted({
+        str(row.get("verdict_id") or "").strip()
+        for row in findings if str(row.get("verdict_id") or "").strip()
+    })
+    if not findings or len(verdict_ids) != 1:
+        raise TaskExecutionError(
+            "terminal_task_requires_repair",
+            "The terminal task has no single current open review contract to repair.",
+            task_id=task_id, project=project,
+            repair_error="current_review_repair_contract_missing",
+            open_finding_count=len(findings), verdict_ids=verdict_ids,
+        )
+    verdict_id = verdict_ids[0]
+    remediations = [
+        row for row in remediation_repo.list_review_remediations(
+            task_id=task_id, project=project)
+        if str(row.get("verdict_id") or "") == verdict_id
+        and str(row.get("status") or "") not in {"resolved", "resolved_with_followup"}
+    ]
+    if len(remediations) != 1:
+        raise TaskExecutionError(
+            "terminal_task_requires_repair",
+            "The terminal task's current review remediation is missing or ambiguous.",
+            task_id=task_id, project=project,
+            repair_error="current_review_remediation_missing",
+            verdict_id=verdict_id, remediation_count=len(remediations),
+        )
+    remediation = remediations[0]
+    remediation_id = str(remediation["remediation_id"])
+    existing = remediation_repo.find_cross_task_review_repair(
+        source_task_id=task_id, remediation_id=remediation_id, project=project)
+
+    def start_repair(repair_task_id: str, **kwargs: Any) -> dict[str, Any]:
+        return start_task(
+            repair_task_id, project=project,
+            actor=str(kwargs.get("actor") or actor),
+            principal_id=str(kwargs.get("principal_id") or principal_id),
+            role="implementation", runtime=runtime or "codex",
+            instruction=(
+                f"Repair review findings for terminal source {task_id}. "
+                "Preserve the source task and satisfy its exact linked contract."
+            ),
+            launcher=launcher,
+        )
+
+    if existing:
+        repair_task_id = str(existing["task_id"])
+        if existing.get("status") == "Done":
+            return _envelope(
+                "retry_task", task_id, project,
+                action="repair_completed", started=False,
+                repair_task_id=repair_task_id, repair_reused=True,
+                source_task_id=task_id, remediation_id=remediation_id,
+            )
+        continuation = start_repair(repair_task_id)
+        return _envelope(
+            "retry_task", task_id, project,
+            action="repair_routed", started=bool(continuation.get("started")),
+            attached=bool(continuation.get("attached")),
+            execution_id=continuation.get("execution_id"),
+            wake_id=continuation.get("wake_id"), host_id=continuation.get("host_id"),
+            repair_task_id=repair_task_id, repair_reused=True,
+            source_task_id=task_id, remediation_id=remediation_id,
+        )
+
+    finding_ids = sorted(
+        str(row.get("finding_id") or row.get("id") or "") for row in findings)
+    requirements = [
+        str(row.get("repair_requirement") or "").strip()
+        for row in findings if str(row.get("repair_requirement") or "").strip()
+    ]
+    submitted = submit_bug.execute(
+        {
+            "source_task": task_id,
+            "source_agent": actor,
+            "title": f"Repair terminal review findings for {task_id}",
+            "observed_behavior": (
+                f"{task_id} is terminal with approved, unresolved review findings."
+            ),
+            "expected_behavior": (
+                "A dedicated linked task implements the repair without reopening "
+                "or executing on the terminal source task."
+            ),
+            "repro_steps": reason or "Retry the terminal task after review findings.",
+            "evidence": {
+                "source_task_id": task_id, "source_verdict_id": verdict_id,
+                "remediation_id": remediation_id, "finding_ids": finding_ids,
+                "repair_requirements": requirements,
+            },
+            "severity_hint": "high", "failure_class": "failed_gate",
+            "affected_surface": "terminal review remediation lifecycle",
+            "review_repair": {
+                "source_verdict_id": verdict_id,
+                "remediation_id": remediation_id,
+                "finding_ids": finding_ids,
+            },
+        },
+        actor=actor, principal_id=principal_id, project=project,
+        start_task=start_repair, authorize_review_repair=True,
+    )
+    if submitted.get("error"):
+        raise TaskExecutionError(
+            "terminal_task_requires_repair",
+            str(submitted.get("message") or submitted.get("error")),
+            task_id=task_id, project=project,
+            repair_error=submitted.get("error"),
+        )
+    repair_task_id = str((submitted.get("bug") or {}).get("task_id") or "")
+    continuation = dict(submitted.get("continuation") or {})
+    return _envelope(
+        "retry_task", task_id, project,
+        action="repair_routed", started=bool(continuation.get("started")),
+        attached=bool(continuation.get("attached")),
+        execution_id=continuation.get("execution_id"),
+        wake_id=continuation.get("wake_id"), host_id=continuation.get("host_id"),
+        repair_task_id=repair_task_id, repair_reused=False,
+        source_task_id=task_id, remediation_id=remediation_id,
+    )
+
 def retry_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "user",
                principal_id: str = "", role: str = "implementation",
                runtime: str = "", source_sha: str = "", instruction: str = "",
@@ -1420,6 +1572,12 @@ def retry_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
             superseded_wake_id=superseded["wake_id"] or None,
             message=("Stopping the live session first. Retry again once it is "
                      "terminal; a second session is never started alongside it."),
+        )
+    task_status = str((projection.get("task") or {}).get("status") or "")
+    if task_status in {"Done", "Cancelled", "Canceled"}:
+        return _route_terminal_review_retry(
+            task_id, project=project, actor=actor, principal_id=principal_id,
+            runtime=selected_runtime, reason=reason, launcher=launcher,
         )
     started = start_task(task_id, project=project, actor=actor,
                          principal_id=principal_id, role=role,

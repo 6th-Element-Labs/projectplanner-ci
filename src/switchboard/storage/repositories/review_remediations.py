@@ -399,6 +399,8 @@ def _resolve_cross_task_repair_impl(
             "remediation_id": str(link["remediation_id"]),
             "finding_ids": canonical_ids,
             "human_followup_required": human_followup_required,
+            "operator_authorized": bool(proof.get("operator_authorized")),
+            "operator_authorization": proof.get("operator_authorization"),
             "escalation_finding_ids": list(
                 proof.get("escalation_finding_ids") or []),
             "repair_task_id": repair_task_id,
@@ -420,7 +422,7 @@ def _resolve_cross_task_repair_impl(
             f"UPDATE review_findings SET state='fixed', resolved_by=?, "
             f"resolved_reason=?, resolved_sha=?, resolved_at=?, updated_at=? "
             f"WHERE verdict_id=? AND finding_id IN ({placeholders}) "
-            "AND finding_class='auto' AND state='open'",
+            "AND state='open'",
             (
                 actor, reason, repair_head, now, now,
                 link["source_verdict_id"], *canonical_ids,
@@ -440,7 +442,7 @@ def _resolve_cross_task_repair_impl(
             "'blocked','escalated','wake_failed')",
             (
                 resolution_status,
-                int(not human_followup_required),
+                int(not bool(proof.get("human_intervened"))),
                 repair_head,
                 now,
                 now,
@@ -1319,6 +1321,36 @@ def list_review_remediations(*, task_id: str = "", status: str = "",
         task_id=task_id, status=status, project=project)
 
 
+def find_cross_task_review_repair(*, source_task_id: str, remediation_id: str,
+                                  project: str = DEFAULT_PROJECT
+                                  ) -> Optional[dict[str, Any]]:
+    """Return the canonical existing repair task for one source remediation."""
+    source_task_id = str(source_task_id or "").strip().upper()
+    remediation_id = str(remediation_id or "").strip()
+    with _conn(project) as c:
+        rows = c.execute(
+            "SELECT task_id, status, agent_state FROM tasks "
+            "WHERE json_extract(CASE WHEN json_valid(agent_state) "
+            "THEN agent_state ELSE '{}' END, "
+            "'$.review_repair.source_task_id')=? "
+            "AND json_extract(CASE WHEN json_valid(agent_state) "
+            "THEN agent_state ELSE '{}' END, "
+            "'$.review_repair.remediation_id')=? "
+            "AND status NOT IN ('Cancelled','Canceled') "
+            "ORDER BY created_at, task_id LIMIT 1",
+            (source_task_id, remediation_id),
+        ).fetchall()
+    if not rows:
+        return None
+    row = rows[0]
+    state = _json_object(row["agent_state"])
+    return {
+        "task_id": str(row["task_id"]),
+        "status": str(row["status"] or ""),
+        "review_repair": _json_object(state.get("review_repair")),
+    }
+
+
 def mark_review_remediation_ensured(task_id: str, *, wake_id: str = "", actor: str,
                                     project: str = DEFAULT_PROJECT) -> dict[str, Any]:
     return default_review_remediation_repository.mark_ensured(
@@ -1369,7 +1401,8 @@ __all__ = [
     "REMEDIATION_METRICS_SCHEMA",
     "REMEDIATION_SCHEMA", "REMEDIATION_SUMMARY_SCHEMA", "ReviewRemediationRepository",
     "default_review_remediation_repository", "get_review_remediation",
-    "handle_review_verdict", "list_review_remediations", "mark_review_remediation_ensured",
+    "find_cross_task_review_repair", "handle_review_verdict",
+    "list_review_remediations", "mark_review_remediation_ensured",
     "record_review_save", "reconcile_cross_task_review_repairs",
     "resolve_cross_task_review_repair",
     "required_review_mode", "required_review_mode_in", "resolve_human_review_authority",

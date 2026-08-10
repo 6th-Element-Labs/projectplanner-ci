@@ -73,7 +73,8 @@ def execute(
         get_task: Optional[GetTaskFn] = None,
         set_agent_state: Optional[SetAgentStateFn] = None,
         append_activity: Optional[AppendActivityFn] = None,
-        start_task: Optional[StartTaskFn] = None) -> dict[str, Any]:
+        start_task: Optional[StartTaskFn] = None,
+        authorize_review_repair: bool = False) -> dict[str, Any]:
     """File, route, and continue one agent-discovered bug autonomously.
 
     The BUG task remains the canonical report and implementation record.  A complete,
@@ -137,6 +138,22 @@ def execute(
                     "review_repair requires the exact source verdict, remediation, "
                     "and complete finding id set; no BUG task was created."
                 ),
+            }
+        if authorize_review_repair:
+            if not str(principal_id or "").strip():
+                return {
+                    "error": "review_repair_authority_unbound",
+                    "message": (
+                        "An authenticated operator principal is required to "
+                        "authorize escalation repair work."
+                    ),
+                }
+            review_repair["operator_authorization"] = {
+                "schema": "switchboard.review_repair_authorization.v1",
+                "source": "task_execution.retry_task",
+                "actor": str(actor or "").strip(),
+                "principal_id": str(principal_id or "").strip(),
+                "authorized_at": time.time(),
             }
 
     source = get_task(source_task, project=project)
@@ -294,7 +311,8 @@ def execute_mapping_result(
         get_task: Optional[GetTaskFn] = None,
         set_agent_state: Optional[SetAgentStateFn] = None,
         append_activity: Optional[AppendActivityFn] = None,
-        start_task: Optional[StartTaskFn] = None) -> dict[str, Any]:
+        start_task: Optional[StartTaskFn] = None,
+        authorize_review_repair: bool = False) -> dict[str, Any]:
     """Execute adapter mapping input and return the structured submit_bug result."""
     payload = dict(data or {})
     project = payload.pop("project", None) or project or DEFAULT_PROJECT
@@ -308,6 +326,7 @@ def execute_mapping_result(
         set_agent_state=set_agent_state,
         append_activity=append_activity,
         start_task=start_task,
+        authorize_review_repair=authorize_review_repair,
     )
 
 
