@@ -20,6 +20,7 @@ from db.connection import _conn, _write_through
 from switchboard.domain.completion.repair_proof import (
     classify_cross_task_repair_proof,
 )
+from switchboard.domain.mission_bot_v4 import route_review_findings
 from switchboard.storage.repositories.coordination import (
     deliver_coordination_escalation,
 )
@@ -956,17 +957,28 @@ class ReviewRemediationRepository:
 
             _resolve_prior_in(
                 c, task_id, head_sha, verdict_pr_url, actor, now)
-            findings = [
-                _acceptance_finding(finding) for finding in verdict.get("findings") or []
-                if str(finding.get("state") or "open").lower() == "open"
-            ]
-            auto = [finding for finding in findings if finding["class"] == "auto"]
-            escalations = [finding for finding in findings if finding["class"] == "escalate"]
             # Mission Bot V4: this sequence is audit telemetry only.  It must
             # never decide whether automatic work becomes a Human request.
             round_no = int(c.execute(
                 "SELECT COUNT(*) FROM review_remediations WHERE task_id=?", (task_id,),
             ).fetchone()[0]) + 1
+            routing = route_review_findings(
+                [
+                    dict(finding) for finding in verdict.get("findings") or []
+                    if isinstance(finding, Mapping)
+                ],
+                round_no=round_no,
+            )
+            auto = [
+                _acceptance_finding(finding)
+                for finding in routing["automatic"]
+                if isinstance(finding, Mapping)
+            ]
+            escalations = [
+                _acceptance_finding(finding)
+                for finding in routing["escalations"]
+                if isinstance(finding, Mapping)
+            ]
             first = c.execute(
                 "SELECT original_exit_criteria FROM review_remediations WHERE task_id=? "
                 "ORDER BY round_no LIMIT 1", (task_id,),
@@ -990,11 +1002,21 @@ class ReviewRemediationRepository:
             active_claim_conflict = bool(active_claim and not expected_review_claim)
             terminal = str(task["status"] or "") in {"Done", "Cancelled", "Canceled"}
             adversarial = _needs_adversarial_review(auto)
-            # Only the authenticated review agent's explicit escalation class
-            # carries Human authority.  Factory-observed claim or terminal
-            # conflicts remain typed coordination blocks, never Needs-you.
-            human_required = bool(escalations)
-            queueable = bool(auto) and not active_claim_conflict and not terminal
+            coordination_reason = (
+                "active_claim_conflict" if active_claim_conflict else
+                "terminal_task_conflict" if terminal else
+                ""
+            )
+            # Claim and terminal conflicts are Coordination truth. They take
+            # precedence over a finding-driven Human route and never create a
+            # Human journal fact, hold, or Attention projection.
+            human_required = (
+                routing["result"] == "human" and not coordination_reason
+            )
+            queueable = (
+                routing["result"] == "continue"
+                and not coordination_reason
+            )
             status = (
                 "queued" if queueable else
                 "escalated" if human_required else
@@ -1037,13 +1059,7 @@ class ReviewRemediationRepository:
                 "escalate_review_remediation" if human_required else
                 "block_review_remediation"
             )
-            reason = (
-                "active_claim_conflict" if active_claim_conflict else
-                "terminal_task_conflict" if terminal else
-                "escalate_findings_require_human" if escalations and not auto else
-                "no_auto_findings" if not auto else
-                "auto_findings_ready"
-            )
+            reason = coordination_reason or str(routing["reason"])
             decision = record_coordinator_decision(
                 author="switchboard/auto-remediation",
                 title=f"Review remediation round {round_no} for {task_id}",

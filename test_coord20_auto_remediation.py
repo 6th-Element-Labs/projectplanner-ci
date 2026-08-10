@@ -305,6 +305,116 @@ try:
     ok(conflict_attention == 0 and conflict_human_events == 0,
        "factory-detected claim conflicts create neither Attention nor Human state")
 
+    # A claim conflict is Coordination truth even when the authenticated
+    # verdict also has an escalation-class finding. It must stay blocked and
+    # must not manufacture a Human hold.
+    escalating_conflict_task = reviewable_task(
+        "escalating implementation claim conflict", "9" * 40)
+    with store._conn(PROJECT) as c:
+        c.execute(
+            "INSERT INTO task_claims("
+            "id,task_id,agent_id,principal_id,status,claimed_at,expires_at,"
+            "runner_session_id,execution_generation,execution_role,lease_epoch"
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "claim-escalating-conflict", escalating_conflict_task, WORKER,
+                "direct-session/run-escalating-conflict", "active", now, now + 600,
+                "run-escalating-conflict", 2, "implementation", 1,
+            ),
+        )
+    escalating_conflict = commands.execute_mapping(
+        verdict(
+            escalating_conflict_task,
+            "9" * 40,
+            [finding("COORD20-CONFLICT-ESC", finding_class="escalate")],
+        ),
+        actor=REVIEWER,
+        principal_id=REVIEWER_PRINCIPAL,
+        project=PROJECT,
+    ).get("auto_remediation") or {}
+    with store._conn(PROJECT) as c:
+        escalating_conflict_attention = c.execute(
+            "SELECT COUNT(*) FROM attention_requests WHERE task_id=?",
+            (escalating_conflict_task,),
+        ).fetchone()[0]
+        escalating_conflict_human_events = c.execute(
+            "SELECT COUNT(*) FROM mission_events "
+            "WHERE task_id=? AND event_type='human_requested'",
+            (escalating_conflict_task,),
+        ).fetchone()[0]
+    ok(escalating_conflict.get("status") == "blocked"
+       and escalating_conflict.get("escalation_reason") == "active_claim_conflict"
+       and escalating_conflict.get("human_intervention_required") is False
+       and not escalating_conflict.get("mission_human_hold"),
+       "an escalate finding cannot turn an active-claim conflict into Human")
+    ok(escalating_conflict_attention == 0 and escalating_conflict_human_events == 0,
+       "an escalate finding plus an active claim creates no Attention or Human hold")
+
+    # Terminal board truth takes the same non-Human precedence over an
+    # authenticated escalation finding.
+    terminal_escalation_task = reviewable_task(
+        "terminal escalating conflict", "a" * 40)
+    with store._conn(PROJECT) as c:
+        c.execute(
+            "UPDATE tasks SET status='Done' WHERE task_id=?",
+            (terminal_escalation_task,),
+        )
+    terminal_escalation = commands.execute_mapping(
+        verdict(
+            terminal_escalation_task,
+            "a" * 40,
+            [finding("COORD20-TERMINAL-ESC", finding_class="escalate")],
+        ),
+        actor=REVIEWER,
+        principal_id=REVIEWER_PRINCIPAL,
+        project=PROJECT,
+    ).get("auto_remediation") or {}
+    with store._conn(PROJECT) as c:
+        terminal_escalation_attention = c.execute(
+            "SELECT COUNT(*) FROM attention_requests WHERE task_id=?",
+            (terminal_escalation_task,),
+        ).fetchone()[0]
+        terminal_escalation_human_events = c.execute(
+            "SELECT COUNT(*) FROM mission_events "
+            "WHERE task_id=? AND event_type='human_requested'",
+            (terminal_escalation_task,),
+        ).fetchone()[0]
+    ok(terminal_escalation.get("status") == "blocked"
+       and terminal_escalation.get("escalation_reason") == "terminal_task_conflict"
+       and terminal_escalation.get("human_intervention_required") is False
+       and not terminal_escalation.get("mission_human_hold"),
+       "an escalate finding cannot turn a terminal-task conflict into Human")
+    ok(terminal_escalation_attention == 0 and terminal_escalation_human_events == 0,
+       "an escalate finding plus a terminal task creates no Attention or Human hold")
+
+    # Without a Coordination conflict, the pure router's authenticated
+    # escalation reason governs mixed verdicts and the Human hold it records.
+    mixed_task = reviewable_task("mixed authenticated findings", "b" * 40)
+    mixed = commands.execute_mapping(
+        verdict(
+            mixed_task,
+            "b" * 40,
+            [
+                finding("COORD20-MIXED-AUTO"),
+                finding("COORD20-MIXED-ESC", finding_class="escalate"),
+            ],
+        ),
+        actor=REVIEWER,
+        principal_id=REVIEWER_PRINCIPAL,
+        project=PROJECT,
+    ).get("auto_remediation") or {}
+    mixed_reason = (
+        mixed.get("operator_alert", {})
+        .get("request", {})
+        .get("context", {})
+        .get("reason_code")
+    )
+    ok(mixed.get("status") == "escalated"
+       and mixed.get("human_intervention_required") is True
+       and mixed.get("escalation_reason") == "escalate_findings_require_human"
+       and mixed_reason == "escalate_findings_require_human",
+       "mixed findings preserve the pure authenticated-escalation reason")
+
     # Escalate-class findings never become silent automatic acceptance criteria.
     escalation_task = reviewable_task("judgment finding fixture", "3" * 40)
     escalation = commands.execute_mapping(

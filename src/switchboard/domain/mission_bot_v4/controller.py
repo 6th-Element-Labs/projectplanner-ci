@@ -39,24 +39,46 @@ def decide_mission_transition(context: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError(f"invalid requested_role: {requested_role!r}")
 
     if not context.get("scope_active"):
-        return {"state": "WAITING", "action": "wait", "reason": "scope_inactive"}
+        return {
+            "result": "wait",
+            "state": "WAITING",
+            "action": "wait",
+            "reason": "scope_inactive",
+        }
     if context.get("terminal_provenance"):
-        return {"state": "DONE", "action": "wait", "reason": "terminal_provenance"}
+        return {
+            "result": "done",
+            "state": "DONE",
+            "action": "wait",
+            "reason": "terminal_provenance",
+        }
     if not context.get("dependencies_satisfied", False):
-        return {"state": "WAITING", "action": "wait", "reason": "dependencies_unmet"}
+        return {
+            "result": "wait",
+            "state": "WAITING",
+            "action": "wait",
+            "reason": "dependencies_unmet",
+        }
     if (
         str(context.get("mission_state") or "").upper() == "HUMAN"
         or _authenticated_human_request(context.get("human_request"))
     ):
         return {
+            "result": "human",
             "state": "HUMAN",
             "action": "wait",
             "reason": "authenticated_agent_request",
         }
     if context.get("runner_live"):
-        return {"state": "WAITING", "action": "wait", "reason": "runner_live"}
+        return {
+            "result": "wait",
+            "state": "WAITING",
+            "action": "wait",
+            "reason": "runner_live",
+        }
     if context.get("capacity_attempt_pending"):
         return {
+            "result": "wait",
             "state": "WAITING",
             "action": "wait",
             "reason": "capacity_attempt_pending",
@@ -65,6 +87,7 @@ def decide_mission_transition(context: Mapping[str, Any]) -> dict[str, Any]:
     failure = active_mission_failure(context)
     if failure is not None:
         return {
+            "result": "wait",
             "state": "ACTIVE",
             "action": "block_release",
             "reason": str(failure["reason"]),
@@ -76,9 +99,16 @@ def decide_mission_transition(context: Mapping[str, Any]) -> dict[str, Any]:
     latest_sequence = int(context.get("latest_sequence") or 0)
     if latest_sequence > handled_through:
         return {
+            "result": "continue",
             "state": "ACTIVE",
             "action": "start_task",
+            "reason": "unhandled_event",
             "requested_role": requested_role,
             "event_pointer": handled_through + 1,
         }
-    return {"state": "WAITING", "action": "wait", "reason": "no_unhandled_event"}
+    return {
+        "result": "wait",
+        "state": "WAITING",
+        "action": "wait",
+        "reason": "no_unhandled_event",
+    }
