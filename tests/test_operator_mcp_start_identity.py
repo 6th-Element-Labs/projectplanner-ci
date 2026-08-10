@@ -16,7 +16,9 @@ os.environ["PM_DYNAMIC_PROJECTS_DIR"] = str(TMP)
 
 import store  # noqa: E402
 from switchboard.application.commands import task_execution  # noqa: E402
+from switchboard.application.commands import submit_bug as submit_bug_command  # noqa: E402
 from switchboard.mcp.tools import task_execution as mcp_task_execution  # noqa: E402
+from switchboard.mcp.tools import ops as mcp_ops  # noqa: E402
 
 
 def test_authorized_mcp_operator_launch_needs_no_live_agent() -> None:
@@ -65,7 +67,62 @@ def test_mcp_start_stamps_operator_launch_authority_after_write_gate() -> None:
         mcp_task_execution._SERVICES = original_services
 
 
+def test_mcp_retry_stamps_operator_launch_authority_after_write_gate() -> None:
+    calls = []
+    original_execute = mcp_task_execution.task_execution_command.execute_mapping_result
+    original_services = mcp_task_execution._SERVICES
+    try:
+        def capture(command, task_id, **kwargs):
+            calls.append((command, task_id, kwargs))
+            return {"action": "repair_routed", "repair_task_id": "BUG-2"}
+
+        mcp_task_execution.task_execution_command.execute_mapping_result = capture
+        mcp_task_execution._SERVICES = mcp_task_execution.TaskExecutionToolServices(
+            dumps=lambda value: value,
+            require_write=lambda _ctx, _project: {
+                "id": "env-mcp-token", "actor": "env-mcp-token"},
+        )
+
+        result = mcp_task_execution.retry_task(
+            "TEST-1", object(), project="maxwell", runtime="codex")
+
+        assert result["repair_task_id"] == "BUG-2"
+        assert calls[0][2]["operator_launch_authorized"] is True
+    finally:
+        mcp_task_execution.task_execution_command.execute_mapping_result = original_execute
+        mcp_task_execution._SERVICES = original_services
+
+
+def test_mcp_submit_bug_stamps_operator_launch_authority_after_write_gate() -> None:
+    calls = []
+    original_execute = submit_bug_command.execute_mapping_result
+    original_services = mcp_ops._SERVICES
+    try:
+        def capture(data, **kwargs):
+            calls.append((data, kwargs))
+            return {"submitted": True, "bug": {"task_id": "BUG-3"}}
+
+        submit_bug_command.execute_mapping_result = capture
+        mcp_ops._SERVICES = mcp_ops.OpsToolServices(
+            dumps=lambda value: value,
+            require_write=lambda _ctx, _project, _scopes: {
+                "id": "env-mcp-token", "actor": "env-mcp-token"},
+        )
+
+        result = mcp_ops.submit_bug(
+            "TEST-1", "observed", "expected", "repro", "{}", "high",
+            "execution", object(), project="maxwell")
+
+        assert result["bug"]["task_id"] == "BUG-3"
+        assert calls[0][1]["operator_launch_authorized"] is True
+    finally:
+        submit_bug_command.execute_mapping_result = original_execute
+        mcp_ops._SERVICES = original_services
+
+
 if __name__ == "__main__":
     test_authorized_mcp_operator_launch_needs_no_live_agent()
     test_mcp_start_stamps_operator_launch_authority_after_write_gate()
-    print("Operator MCP Start identity: 2 passed")
+    test_mcp_retry_stamps_operator_launch_authority_after_write_gate()
+    test_mcp_submit_bug_stamps_operator_launch_authority_after_write_gate()
+    print("Operator MCP Start identity: 4 passed")

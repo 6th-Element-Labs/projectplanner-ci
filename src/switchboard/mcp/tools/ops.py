@@ -66,7 +66,8 @@ def submit_bug(source_task: str, observed_behavior: str, expected_behavior: str,
         "duplicate_of": duplicate_of,
         "title": title,
         "review_repair_json": review_repair_json,
-    }, actor=actor_name, principal_id=str(principal.get("id") or ""), project=project)
+    }, actor=actor_name, principal_id=str(principal.get("id") or ""), project=project,
+        operator_launch_authorized=True)
     return services.dumps(result)
 
 

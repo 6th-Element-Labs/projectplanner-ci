@@ -74,7 +74,8 @@ def execute(
         set_agent_state: Optional[SetAgentStateFn] = None,
         append_activity: Optional[AppendActivityFn] = None,
         start_task: Optional[StartTaskFn] = None,
-        authorize_review_repair: bool = False) -> dict[str, Any]:
+        authorize_review_repair: bool = False,
+        operator_launch_authorized: bool = False) -> dict[str, Any]:
     """File, route, and continue one agent-discovered bug autonomously.
 
     The BUG task remains the canonical report and implementation record.  A complete,
@@ -283,9 +284,11 @@ def execute(
     # BUG-116's Start command owns the audited, atomic Triage -> Not Started
     # conversion. Reusing it preserves idempotency, principal attribution, and
     # exactly one routing event instead of duplicating lifecycle policy here.
+    launch_authority = ({"operator_launch_authorized": True}
+                        if operator_launch_authorized else {})
     continuation = start_task(
         task["task_id"], project=project, actor=actor,
-        principal_id=principal_id, role="implementation")
+        principal_id=principal_id, role="implementation", **launch_authority)
     append_activity("bug.continuation_requested", actor, {
         "bug_task_id": task["task_id"],
         "source_task": source_task,
@@ -312,7 +315,8 @@ def execute_mapping_result(
         set_agent_state: Optional[SetAgentStateFn] = None,
         append_activity: Optional[AppendActivityFn] = None,
         start_task: Optional[StartTaskFn] = None,
-        authorize_review_repair: bool = False) -> dict[str, Any]:
+        authorize_review_repair: bool = False,
+        operator_launch_authorized: bool = False) -> dict[str, Any]:
     """Execute adapter mapping input and return the structured submit_bug result."""
     payload = dict(data or {})
     project = payload.pop("project", None) or project or DEFAULT_PROJECT
@@ -327,6 +331,7 @@ def execute_mapping_result(
         append_activity=append_activity,
         start_task=start_task,
         authorize_review_repair=authorize_review_repair,
+        operator_launch_authorized=operator_launch_authorized,
     )
 
 

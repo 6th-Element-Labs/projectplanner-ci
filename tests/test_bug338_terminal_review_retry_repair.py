@@ -21,6 +21,7 @@ os.environ["PM_SQLITE_SINGLE_WRITER"] = "1"
 import store  # noqa: E402
 from switchboard.application.commands import review_verdicts  # noqa: E402
 from switchboard.application.commands import task_execution  # noqa: E402
+from switchboard.storage.repositories import access as access_repo  # noqa: E402
 
 
 PROJECT = "switchboard"
@@ -102,11 +103,21 @@ try:
     assert unbound["error_code"] == "terminal_task_requires_repair", unbound
     assert unbound["repair_error"] == "review_repair_authority_unbound", unbound
 
-    routed = task_execution.retry_task(
-        source_id, project=PROJECT, actor=OPERATOR, principal_id=PRINCIPAL,
-        role="remediation", reason="operator approved exact review repair",
-        launcher=launcher,
-    )
+    original_resolve_write_actor = access_repo.resolve_write_actor
+    try:
+        def forbidden_duplicate_binding(*_args, **_kwargs):
+            raise AssertionError(
+                "authenticated MCP retry must not require a task-scoped agent row")
+
+        access_repo.resolve_write_actor = forbidden_duplicate_binding
+        routed = task_execution.retry_task(
+            source_id, project=PROJECT, actor=OPERATOR, principal_id=PRINCIPAL,
+            operator_launch_authorized=True,
+            role="remediation", reason="operator approved exact review repair",
+            launcher=launcher,
+        )
+    finally:
+        access_repo.resolve_write_actor = original_resolve_write_actor
     repair_id = routed["repair_task_id"]
     assert routed["action"] == "repair_routed", routed
     assert repair_id != source_id

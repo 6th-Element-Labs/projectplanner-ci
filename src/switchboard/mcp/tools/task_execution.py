@@ -120,7 +120,8 @@ def retry_task(task_id: str, ctx: Context, project: str = "maxwell",
     get_task_execution and retry once it is terminal. Switchboard never runs two
     sessions for one task."""
     return _run("retry_task", task_id, ctx, project, role=role,
-                runtime=runtime, reason=reason)
+                runtime=runtime, reason=reason,
+                operator_launch_authorized=True)
 
 
 def report_stale_assignment(

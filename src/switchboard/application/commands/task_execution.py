@@ -1394,7 +1394,7 @@ def _supersede(projection: dict[str, Any], task_id: str, project: str, *,
 
 def _route_terminal_review_retry(
     task_id: str, *, project: str, actor: str, principal_id: str,
-    runtime: str, reason: str,
+    runtime: str, reason: str, operator_launch_authorized: bool,
     launcher: Optional[Callable[..., dict[str, Any]]],
 ) -> dict[str, Any]:
     """Turn explicit terminal retry authority into one linked repair task."""
@@ -1403,8 +1403,13 @@ def _route_terminal_review_retry(
     from switchboard.storage.repositories import review_remediations as remediation_repo
     from switchboard.storage.repositories import review_verdicts as verdict_repo
 
-    binding = access_repo.resolve_write_actor(
-        actor, project=project, task_id=task_id, principal_id=principal_id)
+    binding = ({
+        "ok": True,
+        "actor": actor,
+        "binding": "authorized_operator_launch",
+        "principal_id": principal_id,
+    } if operator_launch_authorized else access_repo.resolve_write_actor(
+        actor, project=project, task_id=task_id, principal_id=principal_id))
     if not binding.get("ok") or not str(principal_id or "").strip():
         raise TaskExecutionError(
             "terminal_task_requires_repair",
@@ -1452,6 +1457,7 @@ def _route_terminal_review_retry(
             repair_task_id, project=project,
             actor=str(kwargs.get("actor") or actor),
             principal_id=str(kwargs.get("principal_id") or principal_id),
+            operator_launch_authorized=operator_launch_authorized,
             role="implementation", runtime=runtime or "codex",
             instruction=(
                 f"Repair review findings for terminal source {task_id}. "
@@ -1535,7 +1541,8 @@ def _route_terminal_review_retry(
     )
 
 def retry_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "user",
-               principal_id: str = "", role: str = "implementation",
+               principal_id: str = "", operator_launch_authorized: bool = False,
+               role: str = "implementation",
                runtime: str = "", source_sha: str = "", instruction: str = "",
                findings: Optional[list[dict[str, Any]]] = None,
                reason: str = "operator retry",
@@ -1577,10 +1584,14 @@ def retry_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
     if task_status in {"Done", "Cancelled", "Canceled"}:
         return _route_terminal_review_retry(
             task_id, project=project, actor=actor, principal_id=principal_id,
-            runtime=selected_runtime, reason=reason, launcher=launcher,
+            runtime=selected_runtime, reason=reason,
+            operator_launch_authorized=operator_launch_authorized,
+            launcher=launcher,
         )
     started = start_task(task_id, project=project, actor=actor,
-                         principal_id=principal_id, role=role,
+                         principal_id=principal_id,
+                         operator_launch_authorized=operator_launch_authorized,
+                         role=role,
                          runtime=selected_runtime, source_sha=source_sha,
                          instruction=instruction, findings=findings,
                          launcher=launcher)
