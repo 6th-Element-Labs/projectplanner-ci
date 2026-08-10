@@ -30,11 +30,14 @@ merge_gate = source("src/switchboard/application/commands/merge_gate.py")
 direct = source("adapters/direct_codex_session.py")
 
 ok('"repo:canonical"' in connect,
-   "unconfigured projects retain the provider-neutral workspace reference")
-ok("get_project_execution_policy(project).get(\"activated\")" in connect,
-   "Connect gates immutable context on explicit project opt-in")
-ok("if context:" in connect[connect.index("def enqueue_task("):],
-   "Connect includes immutable context only for configured projects")
+   "all projects use the provider-neutral workspace reference")
+enqueue = connect[connect.index("def enqueue_task("):]
+ok("get_project_execution_policy" not in enqueue
+   and "execution_context.resolve" not in enqueue,
+   "Connect launch does not read execution policy")
+ok('policy["repository_binding"]' in enqueue
+   and '"repo_role": "canonical"' in enqueue,
+   "Connect launch requires the canonical repository binding")
 ok("if not execution_context else" not in host
    and "if execution_context:" not in host[host.index("def launch_command("):
                                                 host.index("def launch(")],

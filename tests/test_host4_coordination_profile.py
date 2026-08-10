@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""HOST-4: every Coordination start door stamps the bounded profile name."""
+"""HOST-4/BUG-345: evidence policy does not become a host launch gate."""
 
 from __future__ import annotations
 
@@ -20,12 +20,8 @@ os.environ["PM_AUTH_MODE"] = "dev-open"
 import store  # noqa: E402
 from execution_policy_fixture import (  # noqa: E402
     install_ready_execution_policy,
-    ready_execution_context,
 )
 from switchboard.application.commands import connect_dispatch  # noqa: E402
-from switchboard.connect.execution_assignment import (  # noqa: E402
-    SWITCHBOARD_CI_VERIFICATION_PROFILE,
-)
 
 
 PROJECT = "switchboard"
@@ -34,10 +30,6 @@ PROJECT = "switchboard"
 try:
     store.init_db(PROJECT)
     install_ready_execution_policy(PROJECT)
-    connect_dispatch.execution_context.resolve = lambda **kwargs: (
-        ready_execution_context(
-            kwargs["task_id"], project=PROJECT, runtime=kwargs["runtime"])
-    )
 
     strict = store.create_task({
         "workstream_id": "HOST",
@@ -60,10 +52,8 @@ try:
     )
     lifecycle = wake["policy"]["lifecycle"]
     assignment = wake["policy"]["execution_assignment"]
-    assert lifecycle["verification_profile"] == (
-        SWITCHBOARD_CI_VERIFICATION_PROFILE)
-    assert assignment["verification_profile"] == (
-        SWITCHBOARD_CI_VERIFICATION_PROFILE)
+    assert "verification_profile" not in lifecycle
+    assert "verification_profile" not in assignment
     assert assignment["session_policy_profile"] == "code_strict"
     assert "command" not in assignment
 
@@ -93,4 +83,4 @@ finally:
     shutil.rmtree(TMP, ignore_errors=True)
 
 
-print("HOST-4 Coordination verification profile selection: PASS")
+print("HOST-4 policy-free Coordination launch: PASS")

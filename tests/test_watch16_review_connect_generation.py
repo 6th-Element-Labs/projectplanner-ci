@@ -5,10 +5,10 @@ from __future__ import annotations
 from path_setup import ROOT  # noqa: F401
 
 from switchboard.application.commands import connect_dispatch, task_execution
-from execution_policy_fixture import ready_execution_context  # noqa: E402
 from switchboard.storage.repositories import (
     project_execution_policy,
     project_execution_readiness,
+    projects as projects_repo,
 )
 
 
@@ -18,6 +18,9 @@ saved_projection = task_execution._projection
 saved_live_executions = task_execution.runner_repo.task_live_executions
 saved_readiness = project_execution_readiness.get_project_execution_readiness
 saved_policy = project_execution_policy.get_project_execution_policy
+saved_resolve = connect_dispatch.execution_context.resolve
+saved_topology = projects_repo.get_project_repo_topology
+saved_profile = task_execution.work_sessions_repo._task_work_session_profile
 
 
 def request_wake(**kwargs):
@@ -32,9 +35,17 @@ try:
     project_execution_policy.get_project_execution_policy = (
         lambda _project: {"configured": True, "activated": True}
     )
-    connect_dispatch.execution_context.resolve = (
-        lambda **kwargs: ready_execution_context(
-            kwargs["task_id"], runtime=kwargs.get("runtime") or "codex"))
+    connect_dispatch.execution_context.resolve = lambda **_kwargs: (_ for _ in ()).throw(
+        AssertionError("policy-free Connect must not resolve execution context"))
+    projects_repo.get_project_repo_topology = lambda _project: {
+        "roles": {"canonical": {
+            "configured": True,
+            "repo": "6th-Element-Labs/projectplanner",
+            "default_branch": "master",
+        }}
+    }
+    task_execution.work_sessions_repo._task_work_session_profile = (
+        lambda *_args, **_kwargs: "")
     connect_dispatch.coordination_repo.request_wake = request_wake
     task_execution.runner_repo.task_live_executions = lambda *_args, **_kwargs: []
     def projection(head, updated_at):
@@ -74,19 +85,18 @@ finally:
     task_execution.runner_repo.task_live_executions = saved_live_executions
     project_execution_readiness.get_project_execution_readiness = saved_readiness
     project_execution_policy.get_project_execution_policy = saved_policy
+    connect_dispatch.execution_context.resolve = saved_resolve
+    projects_repo.get_project_repo_topology = saved_topology
+    task_execution.work_sessions_repo._task_work_session_profile = saved_profile
 
 assert first["started"] is True and first["role"] == "review_merge", first
 assert retried["started"] is True, retried
 assert len(captured) == 4
 assert captured[0]["policy"]["mode"] == "connect"
-# CO-20 makes hybrid placement mandatory, so every Connect wake policy now also carries
-# the placement decision, its scheduler input, the resolved execution context, the
-# bounded no-host outcome and the placement deadline. Kept as an exact-set assertion so
-# the wake contract stays pinned rather than becoming open-ended.
+# BUG-345 keeps launch policy-free. The exact set pins the small wake contract.
 assert set(captured[0]["policy"]) == {
     "mode", "assignment", "lifecycle", "effect_identity",
-    "placement", "scheduler", "execution_context",
-    "no_eligible_host", "deadline_seconds", "coordination_scope"}
+    "repository_binding", "coordination_scope"}
 assert captured[0]["policy"]["coordination_scope"] == {
     "schema": "switchboard.scoped_start_request.v1",
     "scope_type": "task",

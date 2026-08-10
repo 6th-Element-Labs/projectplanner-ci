@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""CO-20: task-bound Connect generations require project-derived placement."""
+"""CO-20/BUG-345: policy-free launch keeps placement utilities isolated."""
 from __future__ import annotations
 
 from path_setup import ROOT  # noqa: F401
 from switchboard.application.commands import connect_dispatch, execution_context
 from switchboard.storage.repositories import project_execution_policy
+from switchboard.storage.repositories import projects as projects_repo
 from switchboard.domain.coordination.placement import (
     HOST_PLACEMENT_SCHEMA,
     evaluate_host,
@@ -77,19 +78,27 @@ def host() -> dict:
     }
 
 
-# These tests pin the CONFIGURED-project path: hybrid placement derives from
-# the execution context, which exists exactly when the project opted in.
+# A saved policy may still be inspected in Settings, but Connect launch ignores it.
 project_execution_policy.get_project_execution_policy = (
     lambda _project: {"configured": True, "activated": True})
 
 
-def test_enqueue_requires_execution_context_and_persists_hybrid_policy():
+def test_enqueue_ignores_execution_context_and_uses_canonical_binding():
     captured: list[dict] = []
     saved_resolve = execution_context.resolve
     saved_request = connect_dispatch.coordination_repo.request_wake
     saved_capacity = connect_dispatch.capacity_readback
+    saved_topology = projects_repo.get_project_repo_topology
     try:
-        execution_context.resolve = lambda **_kwargs: context()
+        execution_context.resolve = lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("launch must not resolve execution policy"))
+        projects_repo.get_project_repo_topology = lambda _project: {
+            "roles": {"canonical": {
+                "configured": True,
+                "repo": "6th-Element-Labs/projectplanner",
+                "default_branch": "master",
+            }}
+        }
         connect_dispatch.coordination_repo.request_wake = (
             lambda **kwargs: captured.append(kwargs)
             or {"wake_id": "wake-co20", "status": "pending"})
@@ -109,33 +118,29 @@ def test_enqueue_requires_execution_context_and_persists_hybrid_policy():
         execution_context.resolve = saved_resolve
         connect_dispatch.coordination_repo.request_wake = saved_request
         connect_dispatch.capacity_readback = saved_capacity
+        projects_repo.get_project_repo_topology = saved_topology
     assert result["dispatched"] is True
     policy = captured[0]["policy"]
-    assert policy["scheduler"]["mode"] == "hybrid"
-    assert policy["execution_context"]["authority_digest"] == "sha256:authority"
-    assert policy["placement"] == {
-        "canonical_repo": "6th-Element-Labs/projectplanner",
+    assert policy["repository_binding"] == {
+        "schema": "switchboard.repository_binding.v1",
+        "project": "switchboard",
         "repo_role": "canonical",
-        "host_classes": ["ephemeral", "persistent"],
-        "trust_zones": ["cloud_ephemeral", "personal"],
-        "isolation": "task_worktree",
-        "workspace_backend": "worktree",
-        "runtime_binaries": ["codex", "git"],
-        "provider": "openai-codex",
-        "account_affinity_id": "affinity-a",
-        "scm_provider": "github_app",
+        "repository": "6th-Element-Labs/projectplanner",
+        "default_branch": "master",
     }
+    assert "scheduler" not in policy
+    assert "placement" not in policy
+    assert "execution_context" not in policy
 
 
-def test_missing_execution_policy_never_creates_legacy_wake():
+def test_missing_canonical_repository_never_creates_wake():
     calls: list[dict] = []
-    saved_resolve = execution_context.resolve
     saved_request = connect_dispatch.coordination_repo.request_wake
+    saved_topology = projects_repo.get_project_repo_topology
     try:
-        def refuse(**_kwargs):
-            raise execution_context.ExecutionContextError(
-                "project_execution_policy_missing", "missing")
-        execution_context.resolve = refuse
+        projects_repo.get_project_repo_topology = lambda _project: {
+            "roles": {"canonical": {"configured": False}}
+        }
         connect_dispatch.coordination_repo.request_wake = (
             lambda **kwargs: calls.append(kwargs) or {})
         result = connect_dispatch.enqueue_task(
@@ -144,10 +149,10 @@ def test_missing_execution_policy_never_creates_legacy_wake():
             actor="co20-test",
         )
     finally:
-        execution_context.resolve = saved_resolve
         connect_dispatch.coordination_repo.request_wake = saved_request
+        projects_repo.get_project_repo_topology = saved_topology
     assert result["dispatched"] is False
-    assert result["error"] == "project_execution_policy_missing"
+    assert result["error"] == "canonical_repository_unconfigured"
     assert calls == []
 
 
@@ -191,8 +196,8 @@ def test_remediation_claims_use_the_fenced_completion_handoff():
 
 
 if __name__ == "__main__":
-    test_enqueue_requires_execution_context_and_persists_hybrid_policy()
-    test_missing_execution_policy_never_creates_legacy_wake()
+    test_enqueue_ignores_execution_context_and_uses_canonical_binding()
+    test_missing_canonical_repository_never_creates_wake()
     test_host_constraints_fail_closed_independently()
     test_remediation_claims_use_the_fenced_completion_handoff()
-    print("CO-20 mandatory hybrid placement: 4 passed")
+    print("CO-20 policy-free launch and placement utility: 4 passed")

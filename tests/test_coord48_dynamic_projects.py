@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""COORD-48: registry discovery and fail-closed per-project admission."""
+"""COORD-48: registry discovery without policy-based launch refusal."""
 from __future__ import annotations
 
 from path_setup import ROOT  # noqa: F401
@@ -81,10 +81,9 @@ second = daemon.tick()
 assert [row["project"] for row in second["projects"]] == [
     "new-project", "switchboard",
 ]
-blocked = second["projects"][0]
-assert blocked["status"] == "blocked_readiness"
-assert blocked["decision"]["reason_code"] == "scm_missing"
-assert "new-project" not in store.leases
+advisory_red = second["projects"][0]
+assert advisory_red["status"] == "idle"
+assert store.leases == ["atlas", "switchboard", "new-project", "switchboard"]
 
 # The legacy setting is an emergency ceiling, not a source of authority.
 ceiling = coordinator_daemon.CoordinatorDaemon(

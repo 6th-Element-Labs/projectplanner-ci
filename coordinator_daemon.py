@@ -368,17 +368,6 @@ class CoordinatorDaemon:
             )
         return dict(getter(project) or {})
 
-    def _execution_readiness(self, project: str) -> Dict[str, Any]:
-        getter = getattr(self.store, "get_project_execution_readiness", None)
-        if not callable(getter):
-            if not callable(getattr(self.store, "project_ids", None)) \
-                    and project in self.config.projects:
-                return {"passed": True, "status": "ready", "blockers": []}
-            from switchboard.storage.repositories.project_execution_readiness import (
-                get_project_execution_readiness as getter,
-            )
-        return dict(getter(project) or {})
-
     def _has_active_autopilot_scopes(self, project: str) -> bool:
         """Operator already armed Autopilot (scope lease = boot authority)."""
         try:
@@ -393,9 +382,10 @@ class CoordinatorDaemon:
         """Which projects may receive Autopilot ticks this sweep.
 
         DHCP rule (ADR-0008): an armed scope lease is enough authority to ask
-        ``start_task`` to boot a runner. Policy discovery is additive for
-        future opted-in projects; it must not starve a board that already has
-        a live scope. ``PM_COORDINATOR_AUTOPILOT_PROJECTS`` is only a ceiling.
+        ``start_task`` to boot a runner. Policy discovery remains an additive
+        scheduling hint for older configured projects; it has no authority to
+        permit or refuse a launch. ``PM_COORDINATOR_AUTOPILOT_PROJECTS`` is
+        only a ceiling.
         """
         ceiling = set(self.config.projects)
         admitted = []
@@ -414,31 +404,6 @@ class CoordinatorDaemon:
             if policy_armed or self._has_active_autopilot_scopes(project):
                 admitted.append(project)
         return tuple(sorted(admitted))
-
-    def _readiness_refusal(self, project: str,
-                           readiness: Dict[str, Any]) -> Dict[str, Any]:
-        blockers = list(readiness.get("blockers") or [])
-        result = {
-            "schema": RUN_SCHEMA,
-            "project": project,
-            "status": "blocked_readiness",
-            "leader": False,
-            "acting": self.config.act,
-            "decision": {
-                "schema": "switchboard.coordinator_project_admission.v1",
-                "action": "refuse_start",
-                "reason_code": (
-                    readiness.get("reason_code")
-                    or (blockers[0].get("code") if blockers else "")
-                    or "project_execution_readiness_blocked"
-                ),
-                "readiness": readiness,
-            },
-        }
-        self.store.append_activity(
-            "coordinator.daemon.project_refused", self.config.actor,
-            result["decision"], project=project)
-        return result
 
     def _drain_lifecycle(self, project: str) -> Dict[str, Any]:
         """Publish an auditable zero-work-driving action census."""
@@ -769,14 +734,8 @@ class CoordinatorDaemon:
         admitted = self._admitted_projects or self.discover_projects()
         if project not in admitted:
             return {"project": project, "status": "denied_project"}
-        # DHCP: scope says boot; readiness refuses only opted-in projects
-        # (BUG-190). Never block an armed unconfigured dogfood board here.
-        policy = self._execution_policy(project)
-        if policy.get("configured"):
-            readiness = self._execution_readiness(project)
-            if (not readiness.get("passed")
-                    or readiness.get("status") != "ready"):
-                return self._readiness_refusal(project, readiness)
+        # BUG-345 / ADR-0008: the active scope is launch authority. Execution
+        # policy and readiness remain visible diagnostics, never a refusal.
         now = float(self.clock())
         self._register_or_heartbeat(project)
         state = self._state(project)

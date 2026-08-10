@@ -36,12 +36,16 @@ def stubbed_workspace(agent_host, workspace: MaterializedWorkspace):
     saved = (
         agent_host.materialize_repository_workspace,
         agent_host.verify_repository_workspace,
+        agent_host.materialize_host_worktree,
+        agent_host.verify_host_worktree,
         agent_host.revoke_repository_workspace,
         agent_host._record_workspace_binding,
     )
     agent_host.materialize_repository_workspace = (
         lambda *_args, **_kwargs: workspace)
     agent_host.verify_repository_workspace = lambda *_args, **_kwargs: workspace
+    agent_host.materialize_host_worktree = lambda *_args, **_kwargs: workspace
+    agent_host.verify_host_worktree = lambda *_args, **_kwargs: workspace
     agent_host.revoke_repository_workspace = (
         lambda *_args, **_kwargs: {"revoked": True, "stubbed": True})
     agent_host._record_workspace_binding = lambda *_args, **_kwargs: None
@@ -50,5 +54,7 @@ def stubbed_workspace(agent_host, workspace: MaterializedWorkspace):
     finally:
         (agent_host.materialize_repository_workspace,
          agent_host.verify_repository_workspace,
+         agent_host.materialize_host_worktree,
+         agent_host.verify_host_worktree,
          agent_host.revoke_repository_workspace,
          agent_host._record_workspace_binding) = saved

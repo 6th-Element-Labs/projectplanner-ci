@@ -23,9 +23,6 @@ from execution_policy_fixture import (  # noqa: E402
     install_ready_execution_policy, ready_execution_context,
 )
 from switchboard.application.commands import connect_dispatch  # noqa: E402
-from switchboard.application.commands.execution_context import (  # noqa: E402
-    with_checkout_sha,
-)
 from switchboard.connect import (  # noqa: E402
     Ack, HostRuntimeConfig, LaunchRefused, LeaseState, build_launch_spec,
 )
@@ -36,6 +33,7 @@ from connect_workspace_fixture import (  # noqa: E402
 
 
 P = "switchboard"
+ORIGINAL_SOURCE_ORIGIN_IDENTITY = agent_host._source_origin_identity
 connect_dispatch.execution_context.resolve = lambda **kwargs: ready_execution_context(
     kwargs["task_id"], runtime=kwargs["runtime"])
 HEAD = "1af20970ba52ed4cb862c3ae08d44b6b9ccdcde0"
@@ -92,12 +90,23 @@ try:
     assert contract["exact_head_sha"] == HEAD
     assert contract["exact_pr"]["number"] == 831
     assert policy["lifecycle"]["pr_branch"] == PR_BRANCH
-    assert policy["execution_context"]["base_sha"] == "a" * 40
-    assert policy["execution_context"]["checkout_sha"] == HEAD
-    assert policy["execution_context"]["checkout_requirements"] == {
-        "default_branch_tip": False,
-        "ancestor_shas": [UPSTREAM_MERGE],
+    canonical = (
+        store.get_project_repo_topology(P).get("roles") or {}
+    ).get("canonical") or {}
+    # The compatibility path verifies the enrolled host checkout against the
+    # canonical binding. This test runs from the public-CI mirror in the merge
+    # queue, so make that external host fact explicit instead of reading the
+    # test checkout's unrelated origin URL.
+    agent_host._source_origin_identity = lambda _root: agent_host._repository_identity(
+        canonical["repo"], topology=True)
+    assert policy["repository_binding"] == {
+        "schema": "switchboard.repository_binding.v1",
+        "project": P,
+        "repo_role": "canonical",
+        "repository": canonical["repo"],
+        "default_branch": canonical["default_branch"],
     }
+    assert "execution_context" not in policy
     assert contract["launch_pointer"] == {
         "trigger": "changes_requested",
         "evidence_url": task["git_state"]["pr_url"],
@@ -120,11 +129,9 @@ try:
     downstream_wake = next(
         row for row in store.list_wake_intents(project=P)
         if row.get("wake_id") == downstream_result.get("wake_id"))
-    assert downstream_wake["policy"]["execution_context"]["checkout_sha"] == "a" * 40
-    assert downstream_wake["policy"]["execution_context"]["checkout_requirements"] == {
-        "default_branch_tip": True,
-        "ancestor_shas": [UPSTREAM_MERGE],
-    }
+    assert downstream_wake["policy"]["repository_binding"] == (
+        policy["repository_binding"])
+    assert "execution_context" not in downstream_wake["policy"]
 
     from switchboard.connect.contract import Assignment, ResourceLimits
     data = dict(assignment)
@@ -202,10 +209,6 @@ try:
                     "role": "implementation",
                 },
             },
-            "execution_context": with_checkout_sha(
-                policy["execution_context"],
-                policy["execution_context"]["base_sha"],
-            ),
         },
     }
     implementation_branch = agent_host.connect_workspace_request(
@@ -218,6 +221,8 @@ try:
     captured = {}
 
     def fake_run(command, **kwargs):
+        if command and command[0] == "git":
+            return original_run(command, **kwargs)
         captured["command"] = command
         captured["env"] = kwargs["env"]
         return SimpleNamespace(
@@ -239,7 +244,7 @@ try:
     finally:
         agent_host._issue_connect_session_mcp_token = original_token
         agent_host.subprocess.run = original_run
-    assert launched["started"] is True
+    assert launched["started"] is True, launched
     assert json.loads(
         captured["env"]["SWITCHBOARD_EXECUTION_ASSIGNMENT_JSON"]) == contract
     assert json.loads(
@@ -293,6 +298,7 @@ try:
     else:
         raise AssertionError("exact-head role launched without a head")
 finally:
+    agent_host._source_origin_identity = ORIGINAL_SOURCE_ORIGIN_IDENTITY
     shutil.rmtree(TMP, ignore_errors=True)
 
 

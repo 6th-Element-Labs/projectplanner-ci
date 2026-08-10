@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from path_setup import ROOT  # noqa: F401
 
-from execution_policy_fixture import ready_execution_context
 from switchboard.application.commands import connect_dispatch, task_execution
 from switchboard.storage.repositories import (
     project_execution_policy,
     project_execution_readiness,
+    projects as projects_repo,
 )
 
 
@@ -23,6 +23,8 @@ saved_live_executions = task_execution.runner_repo.task_live_executions
 saved_session_profile = task_execution.work_sessions_repo._task_work_session_profile
 saved_readiness = project_execution_readiness.get_project_execution_readiness
 saved_policy = project_execution_policy.get_project_execution_policy
+saved_resolve = connect_dispatch.execution_context.resolve
+saved_topology = projects_repo.get_project_repo_topology
 
 
 def projection(head: str) -> dict:
@@ -64,10 +66,15 @@ try:
     project_execution_policy.get_project_execution_policy = (
         lambda _project: {"configured": True, "activated": True}
     )
-    connect_dispatch.execution_context.resolve = (
-        lambda **kwargs: ready_execution_context(
-            kwargs["task_id"], runtime=kwargs.get("runtime") or "codex")
-    )
+    connect_dispatch.execution_context.resolve = lambda **_kwargs: (_ for _ in ()).throw(
+        AssertionError("policy-free Connect must not resolve execution context"))
+    projects_repo.get_project_repo_topology = lambda _project: {
+        "roles": {"canonical": {
+            "configured": True,
+            "repo": "6th-Element-Labs/projectplanner",
+            "default_branch": "master",
+        }}
+    }
     connect_dispatch.coordination_repo.request_wake = request_wake
     task_execution.runner_repo.task_live_executions = lambda *_args, **_kwargs: []
     task_execution.work_sessions_repo._task_work_session_profile = (
@@ -90,9 +97,8 @@ try:
     assert [
         row["policy"]["lifecycle"]["head_sha"] for row in captured
     ] == [HEAD, HEAD]
-    assert [
-        row["policy"]["execution_context"]["checkout_sha"] for row in captured
-    ] == [HEAD, HEAD]
+    assert all(row["policy"]["repository_binding"]["repository"]
+               == "6th-Element-Labs/projectplanner" for row in captured)
 
     task_execution._projection = lambda *_args, **_kwargs: projection("")
     assert_exact_head_refusal(lambda: task_execution.start_task(
@@ -112,6 +118,8 @@ finally:
     task_execution.work_sessions_repo._task_work_session_profile = saved_session_profile
     project_execution_readiness.get_project_execution_readiness = saved_readiness
     project_execution_policy.get_project_execution_policy = saved_policy
+    connect_dispatch.execution_context.resolve = saved_resolve
+    projects_repo.get_project_repo_topology = saved_topology
 
 
 print("BUG-287 operator recovery exact-head derivation: PASS")

@@ -298,26 +298,9 @@ def enqueue_task(
     # reads wake history or combines delivery state with a named generation.
     generation = generation_ref or str(predecessor_wake_id or "")
     assignment_id = _assignment_id(project, task_id, runtime_name, generation)
-    from switchboard.storage.repositories.project_execution_policy import (
-        get_project_execution_policy,
-    )
-    context: dict[str, Any] = {}
-    if get_project_execution_policy(project).get("activated"):
-        try:
-            context = execution_context.resolve(
-                project=project, task_id=task_id, runtime=runtime_name)
-        except execution_context.ExecutionContextError as exc:
-            return {"dispatched": False, **exc.as_dict(),
-                    "task_id": task_id, "project": project}
-        except Exception as exc:
-            return {
-                "dispatched": False,
-                "error": "execution_context_unavailable",
-                "reason": str(exc),
-                "failure_class": "broken_connection",
-                "task_id": task_id,
-                "project": project,
-            }
+    # BUG-345 / ADR-0008: task scope plus canonical repository topology is the
+    # launch contract. Execution-policy records are advisory configuration and
+    # must not become a second authority that can stop a scoped mission.
     # DHCP: mint a per-task worker principal. Never hand the caller's identity
     # to the runner — that clobbers the coordinator's presence and blocks the
     # next start_task (BREAKDOWN 25). caller_agent_id stays wake auth only.
@@ -327,9 +310,7 @@ def enqueue_task(
         work_ref=f"task:{project}:{task_id}",
         runtime=runtime_name,
         provider=provider,
-        workspace_ref=(
-            f"repo:{context['repo_role']}:{context['repository']}@"
-            f"{context['base_sha']}" if context else "repo:canonical"),
+        workspace_ref="repo:canonical",
         limits=ResourceLimits(
             max_runtime_seconds=int(os.environ.get("PM_CONNECT_MAX_RUNTIME_SECONDS", "7200")),
             spend_limit_microunits=int(
@@ -410,7 +391,6 @@ def enqueue_task(
             "role": lifecycle["role"],
             "task_id": task_id,
         }
-    checkout_sha = str(context.get("base_sha") or "").strip().lower()
     if lifecycle["role"] in {"review_merge", "remediation"}:
         assigned_head = str(lifecycle.get("head_sha") or "").strip().lower()
         persisted_pr_head = str(
@@ -425,29 +405,8 @@ def enqueue_task(
                 "assigned_head_sha": assigned_head or None,
                 "persisted_pr_head_sha": persisted_pr_head or None,
             }
-        checkout_sha = assigned_head
-    if context:
-        try:
-            context = execution_context.with_checkout_sha(
-                context,
-                checkout_sha,
-                # Implementation starts are pinned to the canonical default-branch
-                # tip observed by Coordination. Capacity verifies the instruction;
-                # it never selects or advances the revision itself.
-                require_default_branch_tip=(lifecycle["role"] == "implementation"),
-                required_ancestor_shas=_dependency_merge_requirements(
-                    task, project=project),
-            )
-        except execution_context.ExecutionContextError as exc:
-            return {
-                "dispatched": False,
-                **exc.as_dict(),
-                "role": lifecycle["role"],
-                "task_id": task_id,
-            }
     policy = {
         "mode": CONNECT_WAKE_MODE,
-        **(_hybrid_policy(context, task, runtime_name) if context else {}),
         "assignment": {
             "schema": "switchboard.connect.assignment.v1",
             **asdict(assignment),
@@ -464,29 +423,26 @@ def enqueue_task(
         "task_id": task_id,
         "runtime": runtime_name,
     }
-    if context:
-        policy["execution_context"] = context
-    else:
-        canonical = dict(
-            (projects_repo.get_project_repo_topology(project).get("roles") or {}).get(
-                "canonical") or {})
-        repository = str(canonical.get("repo") or "").strip()
-        if not canonical.get("configured") or not repository:
-            return {
-                "dispatched": False,
-                "error": "canonical_repository_unconfigured",
-                "reason": ("the project must name a canonical repository before "
-                           "a policy-optional CLI can launch"),
-                "task_id": task_id,
-                "project": project,
-            }
-        policy["repository_binding"] = {
-            "schema": "switchboard.repository_binding.v1",
+    canonical = dict(
+        (projects_repo.get_project_repo_topology(project).get("roles") or {}).get(
+            "canonical") or {})
+    repository = str(canonical.get("repo") or "").strip()
+    if not canonical.get("configured") or not repository:
+        return {
+            "dispatched": False,
+            "error": "canonical_repository_unconfigured",
+            "reason": ("the project must name a canonical repository before "
+                       "a policy-free CLI can launch"),
+            "task_id": task_id,
             "project": project,
-            "repo_role": "canonical",
-            "repository": repository,
-            "default_branch": str(canonical.get("default_branch") or ""),
         }
+    policy["repository_binding"] = {
+        "schema": "switchboard.repository_binding.v1",
+        "project": project,
+        "repo_role": "canonical",
+        "repository": repository,
+        "default_branch": str(canonical.get("default_branch") or ""),
+    }
     # The external effect represents one Task Execution-owned dispatch
     # generation. Diagnostic hints are deliberately excluded: agents reload
     # live evidence after boot, so changing a reason or finding must not turn

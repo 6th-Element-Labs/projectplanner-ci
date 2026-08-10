@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unconfigured projects retain the project-independent Connect launch path."""
+"""Every project uses the policy-free canonical Connect launch path."""
 from __future__ import annotations
 
 import os
@@ -45,88 +45,58 @@ def fake_request_wake(**kwargs):
     return {"wake_id": "wake-legacy", "status": "pending"}
 
 
-def counting_resolve(**kwargs):
-    resolve_calls.append(kwargs.get("task_id") or "")
-    return {
-        "schema": execution_context.SCHEMA,
-        "project_id": "switchboard",
-        "repository": "6th-Element-Labs/projectplanner",
-        "repo_role": "canonical",
-        "base_sha": "a" * 40,
-        "placement": {"host_classes": ["personal"], "trust_zones": ["personal"],
-                      "burst": {"enabled": False}},
-        "provider": {"provider": "openai-codex", "account_affinity_id": "affinity-a"},
-        "workspace": {"isolation": "worktree"},
-        "scm": {"provider": "github_app"},
-    }
-
-
 try:
-    execution_context.resolve = counting_resolve
     connect_dispatch.coordination_repo.request_wake = fake_request_wake
     connect_dispatch.capacity_readback = lambda *_a, **_kw: {}
-
-    project_execution_policy.get_project_execution_policy = (
-        lambda _project: {"configured": True, "activated": True})
-    result = connect_dispatch.enqueue_task(
-        dict(TASK), project="switchboard", actor="legacy-test")
-    ok(result.get("dispatched") is True,
-       "a configured execution context dispatches")
-    ok(resolve_calls == ["CO-99"],
-       "a configured project resolves immutable execution context")
-    ok(len(captured) == 1, "exactly one wake is requested")
-    configured_policy = captured[0]["policy"]
-    ok("placement" in configured_policy and "scheduler" in configured_policy
-       and "execution_context" in configured_policy,
-       "a configured project's wake carries hybrid placement")
-
-    # No policy means the normal provider-neutral path for every board project.
-    captured.clear()
-    resolve_calls.clear()
     project_execution_policy.get_project_execution_policy = lambda project: {
-        "configured": project == "saved-draft-policy",
-        "activated": False,
-        "lifecycle": {"status": "draft"},
+        "configured": project in {"switchboard", "saved-draft-policy"},
+        "activated": project == "switchboard",
+        "lifecycle": {"status": "active" if project == "switchboard" else "draft"},
     }
     projects_repo.get_project_repo_topology = lambda project: {
         "roles": {"canonical": {
             "configured": True,
-            "repo": "6th-Element-Labs/ActionEngine",
-            "default_branch": "main",
+            "repo": ("6th-Element-Labs/projectplanner" if project == "switchboard"
+                     else "6th-Element-Labs/ActionEngine"),
+            "default_branch": "master" if project == "switchboard" else "main",
         }},
     }
 
     def refuse_if_called(**_kwargs):
         raise AssertionError(
-            "unconfigured launch must not resolve execution context")
+            "policy-free launch must not resolve execution context")
 
     execution_context.resolve = refuse_if_called
     for project in (
-        "maxwell", "saved-draft-policy", "future-board-created-after-deploy",
+        "switchboard", "maxwell", "saved-draft-policy",
+        "future-board-created-after-deploy",
     ):
         result = connect_dispatch.enqueue_task(
             dict(TASK), project=project, actor="legacy-test")
         ok(result.get("dispatched") is True,
-           f"unconfigured project {project} dispatches")
+           f"project {project} dispatches regardless of policy state")
         wake_policy = captured[-1]["policy"] if captured else {}
         ok("execution_context" not in wake_policy
            and "placement" not in wake_policy
            and "scheduler" not in wake_policy,
-           f"unconfigured project {project} does not invent policy authority")
+           f"project {project} does not invent policy authority")
         ok((wake_policy.get("assignment") or {}).get("workspace_ref")
            == "repo:canonical",
-           f"unconfigured project {project} uses the compatibility workspace ref")
+           f"project {project} uses the canonical workspace ref")
+        expected_repo = ("6th-Element-Labs/projectplanner" if project == "switchboard"
+                         else "6th-Element-Labs/ActionEngine")
+        expected_branch = "master" if project == "switchboard" else "main"
         ok(wake_policy.get("repository_binding") == {
             "schema": "switchboard.repository_binding.v1",
             "project": project,
             "repo_role": "canonical",
-            "repository": "6th-Element-Labs/ActionEngine",
-            "default_branch": "main",
-        }, f"unconfigured project {project} carries its canonical repository binding")
+            "repository": expected_repo,
+            "default_branch": expected_branch,
+        }, f"project {project} carries its canonical repository binding")
     ok(resolve_calls == [],
-       "unconfigured projects never resolve immutable execution context")
-    ok(len(captured) == 3,
-       "each unconfigured project requests exactly one wake")
+       "no project resolves immutable execution context while launching")
+    ok(len(captured) == 4,
+       "each project requests exactly one wake")
 finally:
     execution_context.resolve = saved_resolve
     connect_dispatch.coordination_repo.request_wake = saved_request

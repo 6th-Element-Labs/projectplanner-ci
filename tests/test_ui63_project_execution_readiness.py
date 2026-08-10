@@ -166,9 +166,9 @@ ok('"/api/projects/{project}/execution_readiness"' in projects_api
    and "def get_project_execution_readiness(" in projects_mcp
    and '"get_project_execution_readiness"' in projects_mcp,
    "REST and MCP expose the same readiness function")
-ok("get_project_execution_readiness(project)" in start
-   and "execution_readiness=readiness" in start,
-   "Start reruns and returns the authoritative gate")
+ok("get_project_execution_readiness(project)" not in start
+   and "execution_readiness=readiness" not in start,
+   "Start does not turn the diagnostic readiness surface into launch authority")
 ok("settings-execution-readiness" in settings
    and "data-readiness-state" in settings
    and "Open execution readiness" in runner,

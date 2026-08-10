@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BUG-190: UI-63's readiness refusal fires only for projects that opted in.
+"""BUG-190/BUG-345: readiness is diagnostic and never launch authority.
 
 Regression for the 2026-07-25 autopilot outage. UI-63 (#864) added a hard
 refusal to start_task for any project whose execution readiness was not green.
@@ -13,8 +13,8 @@ latent for two hours because BUG-184 was throwing earlier in the pipeline; when
 that fix landed, every autopilot dispatch reached the new gate and failed with
 "Project execution readiness is blocked." for the rest of the day.
 
-This pins the seam in both directions: an unconfigured project keeps the legacy
-path, and an opted-in project still fails closed.
+BUG-345 removes the remaining opt-in exception. This pins one launch rule for
+both configured and unconfigured projects.
 """
 from __future__ import annotations
 
@@ -107,16 +107,12 @@ try:
     ok(legacy["result"].get("action") == "started",
        "unconfigured project reports a started dispatch rather than start_refused")
 
-    # 2. The opt-in case. UI-63's fail-closed behaviour is preserved intact.
+    # 2. Activated policy is also advisory; red readiness cannot stop launch.
     strict = run(configured=True, readiness=BLOCKED)
-    ok(strict["refusal"].get("error_code") == "start_refused"
-       and strict["refusal"].get("start_error") == "project_execution_policy_missing",
-       "opted-in project with red readiness still refuses with the typed reason code")
-    ok(strict["dispatched"] == [],
-       "opted-in refusal happens before any wake is requested")
-    ok(bool(strict["refusal"].get("execution_readiness"))
-       and bool(strict["refusal"].get("blockers")),
-       "refusal carries the authoritative readiness payload and its blockers")
+    ok(strict["refusal"] == {} and strict["dispatched"] == ["enqueued"],
+       "activated project with red readiness still reaches Connect dispatch")
+    ok(strict["result"].get("action") == "started",
+       "activated red policy reports a started dispatch")
 
     # 3. An opted-in project that is genuinely ready dispatches normally.
     green = run(configured=True, readiness=READY)
@@ -127,12 +123,14 @@ finally:
     project_execution_readiness.get_project_execution_readiness = saved_readiness
     connect_dispatch.enqueue_task = saved_enqueue
 
-# Task Execution and Connect share the same opt-in boundary. Readiness may
-# explain an unconfigured project, but it cannot block the compatibility wake.
+# Task Execution and Connect share the same policy-free boundary. Readiness may
+# explain configuration in Settings, but it cannot block a wake.
 dispatch_src = (ROOT / "src/switchboard/application/commands/connect_dispatch.py").read_text()
-ok('execution_context.resolve(' in dispatch_src
-   and 'if get_project_execution_policy(project).get("activated"):' in dispatch_src,
-   "connect_dispatch resolves exact authority only after project opt-in")
+start_src = (ROOT / "src/switchboard/application/commands/task_execution.py").read_text()
+ok('get_project_execution_policy(project)' not in dispatch_src
+   and 'execution_context.resolve(' not in dispatch_src
+   and 'get_project_execution_readiness(project)' not in start_src,
+   "launch source contains no execution-policy or readiness gate")
 
 print(f"\nBUG-190 readiness gate opt-in only: {passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)

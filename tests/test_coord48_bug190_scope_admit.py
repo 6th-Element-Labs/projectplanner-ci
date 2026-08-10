@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""DHCP admit: armed scopes boot; readiness only gates opted-in projects.
+"""DHCP admit: armed scopes boot; readiness never gates projects.
 
 COORD-48 discovery + a blanket readiness refusal starved unconfigured dogfood
 boards that already had Autopilot scopes. Align with BUG-190 / ADR-0008:
@@ -70,7 +70,7 @@ assert "atlas" in found, found
 store.scopes["switchboard"] = []
 assert "switchboard" not in daemon.discover_projects()
 
-# Restore scope; readiness refusal applies only to opted-in atlas.
+# Restore scope; even an opted-in Atlas treats red readiness as advisory.
 store.scopes["switchboard"] = [{"scope_id": "scope-sb", "status": "active"}]
 store.readiness["atlas"] = {
     "passed": False, "status": "blocked", "reason_code": "scm_missing",
@@ -78,8 +78,8 @@ store.readiness["atlas"] = {
 }
 daemon._admitted_projects = daemon.discover_projects()
 
-# Unconfigured + red readiness must NOT early-return blocked_readiness.
-# Exercise only the gate prelude by temporarily short-circuiting after it.
+# Neither unconfigured nor configured red readiness may early-return. Exercise
+# only the prelude by temporarily short-circuiting after admission.
 orig_register = daemon._register_or_heartbeat
 seen = []
 
@@ -95,9 +95,12 @@ except RuntimeError as exc:
     assert str(exc) == "gate-passed"
 assert seen == ["switchboard"], seen
 
-atlas = daemon.tick_project("atlas")
-assert atlas.get("status") == "blocked_readiness", atlas
-assert atlas["decision"]["reason_code"] == "scm_missing"
+try:
+    daemon.tick_project("atlas")
+    raise AssertionError("expected gate-passed short-circuit")
+except RuntimeError as exc:
+    assert str(exc) == "gate-passed"
+assert seen == ["switchboard", "atlas"], seen
 daemon._register_or_heartbeat = orig_register  # type: ignore[method-assign]
 
 print("COORD-48/BUG-190 DHCP scope admit: passed")

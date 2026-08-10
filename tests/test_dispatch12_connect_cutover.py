@@ -12,8 +12,6 @@ from path_setup import ROOT
 from switchboard.application.commands import connect_dispatch
 from switchboard.application.commands import task_execution
 from switchboard.connect.execution_assignment import build_execution_assignment
-from execution_policy_fixture import ready_execution_context
-from switchboard.application.commands.execution_context import with_generation
 
 
 passed = failed = 0
@@ -29,11 +27,13 @@ def ok(condition: bool, message: str) -> None:
 captured: list[dict] = []
 original_request_wake = connect_dispatch.coordination_repo.request_wake
 from switchboard.storage.repositories import project_execution_policy  # noqa: E402
+from switchboard.storage.repositories import projects as projects_repo  # noqa: E402
 original_policy = project_execution_policy.get_project_execution_policy
 # This test exercises the CONFIGURED-project Connect path end to end.
 project_execution_policy.get_project_execution_policy = (
     lambda _project: {"configured": True, "activated": True})
 original_resolve = connect_dispatch.execution_context.resolve
+original_topology = projects_repo.get_project_repo_topology
 
 
 def fake_request_wake(**kwargs):
@@ -42,8 +42,15 @@ def fake_request_wake(**kwargs):
 
 
 connect_dispatch.coordination_repo.request_wake = fake_request_wake
-connect_dispatch.execution_context.resolve = lambda **kwargs: ready_execution_context(
-    kwargs["task_id"], runtime=kwargs["runtime"])
+connect_dispatch.execution_context.resolve = lambda **_kwargs: (_ for _ in ()).throw(
+    AssertionError("policy-free Connect must not resolve execution context"))
+projects_repo.get_project_repo_topology = lambda _project: {
+    "roles": {"canonical": {
+        "configured": True,
+        "repo": "6th-Element-Labs/projectplanner",
+        "default_branch": "master",
+    }}
+}
 try:
     for runtime in ("codex", "claude", "cursor"):
         result = connect_dispatch.enqueue_task(
@@ -68,6 +75,7 @@ finally:
     connect_dispatch.coordination_repo.request_wake = original_request_wake
     connect_dispatch.execution_context.resolve = original_resolve
     project_execution_policy.get_project_execution_policy = original_policy
+    projects_repo.get_project_repo_topology = original_topology
 
 request_payload_fields = ("selector", "reason", "source", "policy", "task_id")
 offline_start = captured.pop()
@@ -84,11 +92,10 @@ for row in captured:
     policy = row["policy"]
     assignment = policy.get("assignment") or {}
     lifecycle = policy.get("lifecycle") or {}
-    ok({"mode", "assignment", "lifecycle", "scheduler", "placement",
-        "execution_context"}.issubset(policy)
+    ok({"mode", "assignment", "lifecycle", "repository_binding"}.issubset(policy)
        and policy["mode"] == "connect"
-       and policy["scheduler"]["mode"] == "hybrid",
-       "durable wake policy keeps lifecycle identity and hybrid placement")
+       and "execution_context" not in policy,
+       "durable wake keeps lifecycle identity and canonical repository binding")
     ok(set(assignment) == {
         "schema", "assignment_id", "principal_ref", "work_ref", "runtime",
         "provider", "workspace_ref", "limits", "queued_at",
@@ -246,13 +253,10 @@ for row in captured:
             "fence_epoch": 1,
         },
     }
-    host_policy["execution_context"] = with_generation(
-        host_policy["execution_context"], 1)
     host_policy["execution_assignment"] = build_execution_assignment(
         task_id="DISPATCH-12",
         assignment=host_policy["assignment"],
         lifecycle=host_policy["lifecycle"],
-        execution_context=host_policy["execution_context"],
     )
     wake = {
         "wake_id": "wake-host-test", "task_id": "DISPATCH-12",
