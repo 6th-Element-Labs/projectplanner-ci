@@ -3116,11 +3116,13 @@ def handle_runner_controls(inventory):
     return handled
 
 
-def _drain_query(path, **query):
-    return f"{path}?{urllib.parse.urlencode({'project': PROJECT, **query})}"
+def _drain_query(path, *, project=None, **query):
+    return f"{path}?{urllib.parse.urlencode({
+        'project': str(project or PROJECT), **query})}"
 
 
-def _drain_runners(host_id, recover_stale_local=True):
+def _drain_runners(host_id, recover_stale_local=True, *, project=None,
+                   include_local_only=True):
     """Join supervisor truth to only the central rows this tick can act on.
 
     A long-lived personal host can accumulate thousands of stale historical
@@ -3146,6 +3148,7 @@ def _drain_runners(host_id, recover_stale_local=True):
             local = []
     except Exception:
         local = []
+    project_id = str(project or PROJECT)
     sessions = []
     if recover_stale_local:
         live_task_ids = sorted({
@@ -3155,7 +3158,7 @@ def _drain_runners(host_id, recover_stale_local=True):
         for task_id in live_task_ids:
             result = _try("GET", _drain_query(
                 P_LIST_RUNNERS, host_id=host_id, task_id=task_id,
-                include_stale="true")) or {}
+                include_stale="true", project=project_id)) or {}
             rows = result.get("sessions") or result.get("runner_sessions") or []
             if isinstance(rows, list):
                 sessions.extend(rows)
@@ -3166,23 +3169,25 @@ def _drain_runners(host_id, recover_stale_local=True):
         # runner.
         pending = _try("GET", _drain_query(
             P_LIST_RUNNERS, host_id=host_id, include_stale="true",
-            pending_completion="true")) or {}
+            pending_completion="true", project=project_id)) or {}
         rows = pending.get("sessions") or pending.get("runner_sessions") or []
         if isinstance(rows, list):
             sessions.extend(rows)
     else:
         result = _try("GET", _drain_query(
-            P_LIST_RUNNERS, host_id=host_id, include_stale="false")) or {}
+            P_LIST_RUNNERS, host_id=host_id, include_stale="false",
+            project=project_id)) or {}
         rows = result.get("sessions") or result.get("runner_sessions") or []
         sessions = rows if isinstance(rows, list) else []
     local_by_id = {row.get("runner_session_id"): dict(row) for row in local
                    if row.get("runner_session_id")}
-    merged = dict(local_by_id)
+    merged = dict(local_by_id) if include_local_only else {}
     for row in sessions:
         runner_id = row.get("runner_session_id")
         if runner_id:
             local_row = local_by_id.get(runner_id, {})
             combined = {**local_row, **dict(row)}
+            combined["_host_project"] = project_id
             if local_row.get("alive") is True:
                 # Central identity/claim state is authoritative, but only the
                 # local supervisor can report the live PTY transport.  Repair
@@ -3212,7 +3217,27 @@ def _drain_runners(host_id, recover_stale_local=True):
                 # when the supervisor inventory itself was unavailable.
                 combined["alive"] = False
             merged[runner_id] = combined
+    for row in merged.values():
+        row.setdefault("_host_project", project_id)
     return list(merged.values())
+
+
+def _drain_runner_projects(inventory):
+    """Join local supervisor truth to runner rows on every served project."""
+    host_id = str((inventory or {}).get("host_id") or "")
+    rows = []
+    for project in _host_projects(inventory):
+        if project == PROJECT:
+            project_rows = _drain_runners(host_id)
+        else:
+            # Local-only supervisor rows do not carry a project identity. Include
+            # them once on the primary project; extra projects require a matching
+            # central row before this host may renew anything there.
+            project_rows = _drain_runners(
+                host_id, project=project, include_local_only=False)
+        for row in project_rows:
+            rows.append({**row, "_host_project": project})
+    return rows
 
 
 # SIMPLIFY-18: the host shares the server's one terminal vocabulary. The
@@ -3548,18 +3573,25 @@ def renew_live_direct_runners(inventory):
     """
     host_id = str((inventory or {}).get("host_id") or "")
     renewed = []
-    sessions = _drain_runners(host_id)
-    needs_late_binding = any(
-        _direct_work_session_join_needed(row) for row in sessions)
-    work_sessions = _drain_work_sessions() if needs_late_binding else []
+    sessions = _drain_runner_projects(inventory)
+    projects_needing_late_binding = {
+        str(row.get("_host_project") or PROJECT)
+        for row in sessions if _direct_work_session_join_needed(row)
+    }
+    work_sessions_by_project = {
+        project: _drain_project_work_sessions(project)
+        for project in projects_needing_late_binding
+    }
     for session in sessions:
+        session_project = str(session.get("_host_project") or PROJECT)
+        work_sessions = work_sessions_by_project.get(session_project, [])
         metadata = dict(session.get("metadata") or {})
         native_transport = metadata.get("native_host_execution") is True
         admission_preclaim = _direct_work_session_join_needed(session)
         claim_id = str(session.get("claim_id") or "")
         work_session_id = str(metadata.get("work_session_id") or "")
         late_binding = _direct_work_session_binding(session, work_sessions)
-        if (not late_binding and needs_late_binding
+        if (not late_binding and session_project in projects_needing_late_binding
                 and admission_preclaim
                 and not session.get("claim_id")
                 and not metadata.get("work_session_id")):
@@ -3567,7 +3599,8 @@ def renew_live_direct_runners(inventory):
             # between two host ticks.  Query only this task's completed rows so
             # the exact direct-session principal can still close the binding
             # race without scanning historical Work Sessions fleet-wide.
-            completed = _drain_work_sessions(
+            completed = _drain_project_work_sessions(
+                session_project,
                 task_id=str(session.get("task_id") or ""),
                 status="completed",
             )
@@ -3678,7 +3711,7 @@ def renew_live_direct_runners(inventory):
         if not wake_id or not task_id:
             continue
         body = {
-            "project": PROJECT,
+            "project": session_project,
             "runner_session_id": session.get("runner_session_id"),
             "host_id": host_id,
             "agent_id": session.get("agent_id") or f"codex/{task_id}",
@@ -3807,12 +3840,19 @@ def renew_live_direct_runners(inventory):
     return renewed
 
 
-def _drain_work_sessions(*, task_id="", status="active"):
+def _drain_work_sessions(*, project=None, task_id="", status="active"):
     result = _try("GET", _drain_query(
         P_LIST_WORK_SESSIONS, status=status, task_id=task_id,
-        include_expired="true")) or {}
+        include_expired="true", project=project)) or {}
     sessions = result.get("work_sessions") or []
     return sessions if isinstance(sessions, list) else []
+
+
+def _drain_project_work_sessions(project, **filters):
+    """Keep primary-project call shape stable while routing granted projects."""
+    if str(project or PROJECT) == PROJECT:
+        return _drain_work_sessions(**filters)
+    return _drain_work_sessions(project=project, **filters)
 
 
 def _direct_work_session_join_needed(session):
