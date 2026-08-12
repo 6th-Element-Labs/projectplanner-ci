@@ -1205,14 +1205,17 @@ def record_executed_test_run(data: Dict[str, Any], actor: str = "system",
         record["passed"] = bool(passed)
     if exit_code is not None:
         record["exit_code"] = int(exit_code)
-    branch = session_branch or input_branch
-    head_sha = session_head or input_head
-    if branch:
-        record["branch"] = branch
-    if head_sha:
-        record["head_sha"] = head_sha
-
     with _conn(project) as c:
+        # A runner commonly commits after its Work Session is opened.  The typed
+        # test record is then the first authoritative observation of that exact
+        # head.  Fill only an empty head before writing either evidence surface;
+        # an existing head remains authoritative and is checked below.
+        c.execute(
+            "UPDATE work_sessions SET "
+            "head_sha=CASE WHEN COALESCE(TRIM(head_sha), '')='' AND ?<>'' THEN ? ELSE head_sha END "
+            "WHERE work_session_id=?",
+            (input_head, input_head, work_session_id),
+        )
         row = c.execute("SELECT * FROM work_sessions WHERE work_session_id=?",
                         (work_session_id,)).fetchone()
         if not row:
@@ -1220,6 +1223,23 @@ def record_executed_test_run(data: Dict[str, Any], actor: str = "system",
                 "work_session_not_found",
                 f"No Work Session {work_session_id} in project {project}.",
                 "missing_data", work_session_id=work_session_id)
+        row_branch = str(row["branch"] or "").strip()
+        row_head = str(row["head_sha"] or "").strip()
+        if input_branch and row_branch != input_branch:
+            return _record_evidence_error(
+                "branch_mismatch",
+                "branch does not match the bound Work Session.",
+                "stale_branch", branch=input_branch, work_session_branch=row_branch)
+        if input_head and row_head != input_head:
+            return _record_evidence_error(
+                "head_sha_mismatch",
+                "head_sha does not match the bound Work Session; rerun the suite at the "
+                "session head (or update the session first), then re-record.",
+                "stale_branch", head_sha=input_head, work_session_head_sha=row_head)
+        if row_branch:
+            record["branch"] = row_branch
+        if row_head:
+            record["head_sha"] = row_head
         try:
             hygiene = json.loads(row["hygiene_json"] or "{}")
         except (TypeError, ValueError):
@@ -1238,7 +1258,10 @@ def record_executed_test_run(data: Dict[str, Any], actor: str = "system",
             (session_task or None, actor, "work_session.updated",
              json.dumps({
                  "work_session_id": work_session_id,
-                 "updated_fields": ["hygiene_json"],
+                 "updated_fields": [
+                     "hygiene_json",
+                     *(["head_sha"] if input_head and not session_head else []),
+                 ],
                  "evidence": EXECUTED_TEST_RUN_PRIMARY_KEY,
                  "run_id": record["run_id"],
                  "output_sha256": output_sha256,
