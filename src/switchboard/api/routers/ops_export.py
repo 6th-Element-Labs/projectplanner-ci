@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Callable
+from urllib.parse import quote
 
 from fastapi import APIRouter, Body, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
@@ -20,6 +21,25 @@ BodyProjectResolver = Callable[[dict], str]
 
 _REBRAND_MAX = 80 * 1024 * 1024  # 80 MB — protects the small VM
 _OCR_MAX = 40 * 1024 * 1024  # 40 MB — protects the small VM
+
+
+def attachment_content_disposition(filename: str) -> str:
+    """Build a latin-1-safe Content-Disposition for download responses.
+
+    Starlette encodes response headers as latin-1. Raw Unicode in
+    `filename="…"` (em dash, accents, smart quotes) raises UnicodeEncodeError
+    after a successful rebrand/OCR — the classic format.taikunai.com "500 at
+    the end". Mirror FileResponse: ASCII `filename=` when possible, otherwise
+    an ASCII fallback plus RFC 5987 `filename*=utf-8''…`.
+    """
+    name = (filename or "download").replace('"', "").replace("\r", "").replace("\n", "")
+    quoted = quote(name)
+    if quoted == name:
+        return f'attachment; filename="{name}"'
+    ascii_fallback = name.encode("ascii", "replace").decode("ascii").replace("?", "_")
+    if not ascii_fallback.strip("._"):
+        ascii_fallback = "download"
+    return f"attachment; filename=\"{ascii_fallback}\"; filename*=utf-8''{quoted}"
 
 
 def _people_of(t, people):
@@ -148,7 +168,7 @@ def create_router(*, resolve_project: ProjectResolver,
         dl = f"{base}-Taikun.pptx"
         return Response(content=out,
                         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                        headers={"Content-Disposition": f'attachment; filename="{dl}"'})
+                        headers={"Content-Disposition": attachment_content_disposition(dl)})
 
     @router.post("/api/ocr")
     async def ocr_pdf(file: UploadFile = File(...)):
@@ -172,6 +192,6 @@ def create_router(*, resolve_project: ProjectResolver,
         base = name[:-4] if name.lower().endswith(".pdf") else name
         dl = f"{base}-searchable.pdf"
         return Response(content=out, media_type="application/pdf",
-                        headers={"Content-Disposition": f'attachment; filename="{dl}"'})
+                        headers={"Content-Disposition": attachment_content_disposition(dl)})
 
     return router
