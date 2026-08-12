@@ -26,17 +26,18 @@ def ok(condition, message):
     failed += int(not condition)
 
 
-def connect_wake(runtime, *, mission_key=""):
+def connect_wake(runtime, *, mission_key="", project="switchboard"):
     wake = {
         "wake_id": "wake-interactive",
         "task_id": "WATCH-10",
+        "_host_project": project,
         "selector": {"runtime": runtime, "task_id": "WATCH-10",
                      "agent_id": f"agent/{runtime}/watch-10"},
         "policy": {"mode": "connect", "assignment": {
             "schema": "switchboard.connect.assignment.v1",
             "assignment_id": "assignment-interactive",
             "principal_ref": f"agent/{runtime}/watch-10",
-            "work_ref": "task:switchboard:WATCH-10",
+            "work_ref": f"task:{project}:WATCH-10",
             "runtime": runtime,
             "provider": {"codex": "openai", "claude-code": "anthropic",
                          "cursor": "cursor"}[runtime],
@@ -110,8 +111,17 @@ ok(mission_mode == "connect" and mission_child[:2] == ["codex", "exec"],
    f"(argv={mission_child[:3]})")
 ok("--dangerously-bypass-approvals-and-sandbox" in mission_child
    and "mcp_servers.taikun_plan.required=true" in mission_child
-   and 'model_reasoning_effort="high"' in mission_child,
+   and 'model_reasoning_effort="medium"' in mission_child,
    "Mission Bot Codex preserves readable reasoning, autonomous permissions, and required MCP")
+
+simplemark_cmd, _ = agent_host.launch_command(
+    connect_wake("codex", mission_key="mission-bot:WATCH-10:2",
+                 project="simplemark"),
+    inventory, runner_session_id="run_simplemark",
+    workspace_path=str(ROOT))
+simplemark_child = simplemark_cmd[simplemark_cmd.index("--") + 1:]
+ok(any("mcp?project=simplemark" in part for part in simplemark_child),
+   "Connect binds the child MCP endpoint to the wake project, not PM_PROJECT")
 
 claude_cmd, _ = agent_host.launch_command(
     connect_wake("claude-code"), inventory, runner_session_id="run_interactive2",

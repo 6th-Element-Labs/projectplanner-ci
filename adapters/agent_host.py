@@ -1611,21 +1611,21 @@ def _ensure_claude_workspace_trusted(workspace_path: str) -> None:
         print(f"[agent_host] failed to seed Claude trust: {exc}", flush=True)
 
 
-def _connect_mcp_endpoint():
+def _connect_mcp_endpoint(project=PROJECT):
     """Public MCP URL the host already uses for Switchboard Communicate."""
     base = str(os.environ.get("PM_BASE") or "https://plan.taikunai.com").rstrip("/")
-    return f"{base}/mcp?{urllib.parse.urlencode({'project': PROJECT})}"
+    return f"{base}/mcp?{urllib.parse.urlencode({'project': project or PROJECT})}"
 
 
-def _connect_codex_mcp_argv(*, verification_runtime=None):
+def _connect_codex_mcp_argv(*, project=PROJECT, verification_runtime=None):
     """Codex overrides required for readable, Switchboard-bound sessions."""
-    endpoint = _connect_mcp_endpoint()
+    endpoint = _connect_mcp_endpoint(project)
     overrides = (
         # The enrolled Host deliberately has an isolated CODEX_HOME containing
         # auth, not the operator's mutable config. Pin the normal agent effort
         # explicitly so Watch does not degrade to a no-reasoning transcript
         # dominated by raw command output.
-        "-c", 'model_reasoning_effort="high"',
+        "-c", 'model_reasoning_effort="medium"',
         "-c", f"mcp_servers.taikun_plan.url={json.dumps(endpoint)}",
         "-c", 'mcp_servers.taikun_plan.bearer_token_env_var='
               '"SWITCHBOARD_CONNECT_SESSION_TOKEN"',
@@ -2065,6 +2065,7 @@ def launch_command(
         # "via Switchboard" means MCP tools, not improvised REST/curl.
         if runtime == "codex":
             before = before + _connect_codex_mcp_argv(
+                project=_wake_project(wake),
                 verification_runtime=verification_runtime)
             if str((connect_policy.get("lifecycle") or {}).get(
                     "mission_key") or "").strip():
@@ -3254,6 +3255,12 @@ def _drain_runners(host_id, recover_stale_local=True, *, project=None,
                     **dict(row.get("control") or {}),
                     **dict(local_row.get("control") or {}),
                 }
+            elif (local_inventory_available and runner_id in local_by_id
+                  and local_row.get("alive") is False):
+                # The central row can lag the Host after a control request.
+                # Preserve the supervisor's process-death observation so the
+                # next receipt terminalizes rather than renews that dead PTY.
+                combined["alive"] = False
             elif (
                 local_inventory_available
                 and runner_id not in local_by_id
