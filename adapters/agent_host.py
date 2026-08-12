@@ -3561,6 +3561,26 @@ def _pending_stop_receipt_project(receipt):
     ).strip()
 
 
+def _prepare_runner_terminal_ack(runner_session_id, reason):
+    """Release exact local execution state before central terminal ack.
+
+    ``None`` means the runner never owned an isolated workspace. A recorded
+    workspace that cannot be revoked remains a C3 blocker: acknowledging it
+    would expose In Review while the implementation branch is still writable.
+    """
+    _drop_host_bridge(runner_session_id)
+    revoked = revoke_runner_workspace(runner_session_id, reason)
+    if revoked is None:
+        return {"ready": True}
+    workspace_revoked = bool(revoked.get("revoked"))
+    return {
+        "ready": workspace_revoked,
+        "workspace_revoked": workspace_revoked,
+        "error": None if workspace_revoked else str(
+            revoked.get("error") or "workspace_revoke_failed"),
+    }
+
+
 def _drain_pending_stop_receipts(host_id):
     """Retry exact terminal acknowledgements even after local process removal."""
     outcomes = []
@@ -3583,7 +3603,19 @@ def _drain_pending_stop_receipts(host_id):
         if receipt_project and receipt_project != str(receipt.get("project") or ""):
             receipt["project"] = receipt_project
             _persist_pending_stop_receipt(receipt)
-        terminal = _require("POST", P_HEARTBEAT_RUNNER, receipt)
+        receipt_metadata = dict(receipt.get("metadata") or {})
+        teardown = _prepare_runner_terminal_ack(
+            receipt.get("runner_session_id"),
+            receipt_metadata.get("terminalized_by") or "terminal_receipt_replay",
+        )
+        terminal = (
+            _require("POST", P_HEARTBEAT_RUNNER, receipt)
+            if teardown.get("ready")
+            else {
+                "error": teardown.get("error") or "workspace_revoke_failed",
+                "error_code": "workspace_revoke_failed",
+            }
+        )
         ok = bool(
             terminal
             and not terminal.get("error")
@@ -3599,15 +3631,19 @@ def _drain_pending_stop_receipts(host_id):
                 path, kind="runner_stop", response=terminal)
         else:
             path.touch()
-        outcomes.append({
+        outcome = {
             "runner_session_id": receipt.get("runner_session_id"),
             "task_id": receipt.get("task_id"),
             "reason": "pending_terminal_ack_retry",
             "expired": ok,
             "archived": (
                 not ok and _receipt_refusal_is_irrecoverable(terminal)),
-            "error": None if ok else _safe_receipt_error(terminal),
-        })
+            "error": None if ok else (
+                teardown.get("error") or _safe_receipt_error(terminal)),
+        }
+        if "workspace_revoked" in teardown:
+            outcome["workspace_revoked"] = teardown["workspace_revoked"]
+        outcomes.append(outcome)
     return outcomes
 
 
@@ -3762,7 +3798,19 @@ def renew_live_direct_runners(inventory):
                 "metadata": receipt_metadata,
             }
             _persist_pending_stop_receipt(receipt)
-            terminal = _try("POST", P_HEARTBEAT_RUNNER, receipt)
+            teardown = _prepare_runner_terminal_ack(
+                session.get("runner_session_id"),
+                ("terminal_lease_surrendered" if terminal_surrender
+                 else "host_supervisor"),
+            )
+            terminal = (
+                _try("POST", P_HEARTBEAT_RUNNER, receipt)
+                if teardown.get("ready")
+                else {
+                    "error": teardown.get("error") or "workspace_revoke_failed",
+                    "error_code": "workspace_revoke_failed",
+                }
+            )
             terminal_ok = bool(
                 terminal
                 and not terminal.get("error")
@@ -3793,13 +3841,18 @@ def renew_live_direct_runners(inventory):
                     completion and not completion.get("error")
                     and not completion.get("error_code")
                 )
-            renewed.append({
+            outcome = {
                 "runner_session_id": session.get("runner_session_id"),
                 "task_id": task_id,
                 "wake_id": wake_id or None,
                 "terminalized": terminal_ok,
                 "wake_repaired": wake_repaired,
-            })
+            }
+            if "workspace_revoked" in teardown:
+                outcome["workspace_revoked"] = teardown["workspace_revoked"]
+            if not terminal_ok and teardown.get("error"):
+                outcome["error"] = teardown["error"]
+            renewed.append(outcome)
             continue
         connect_transport = metadata.get("connect_assignment") is True
         if (not (native_transport or connect_transport)
