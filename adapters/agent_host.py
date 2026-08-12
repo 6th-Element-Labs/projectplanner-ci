@@ -3293,6 +3293,7 @@ def _drain_runner_projects(inventory):
     ) % len(projects)
     pending_remaining = _PENDING_COMPLETION_RETRIES_PER_TICK
     rows = []
+    pending_by_project = []
     for project in projects:
         if project == PROJECT:
             project_rows = _drain_runners(host_id)
@@ -3301,12 +3302,31 @@ def _drain_runner_projects(inventory):
             # project requires a matching central row before renewal.
             project_rows = _drain_runners(
                 host_id, project=project, include_local_only=False)
+        project_pending = []
         for row in project_rows:
+            stamped = {**row, "_host_project": project}
             if row.get("_pending_completion") is True:
-                if pending_remaining <= 0:
-                    continue
-                pending_remaining -= 1
-            rows.append({**row, "_host_project": project})
+                project_pending.append(stamped)
+            else:
+                rows.append(stamped)
+        if project_pending:
+            pending_by_project.append(project_pending)
+
+    # The receipt cap protects the next Capacity heartbeat, but it must not let
+    # one project's historical backlog spend the whole batch. Take one from
+    # each project in rotated order, then repeat until this tick's budget is
+    # full. Fresh receipts remain first because every project feed is newest
+    # first.
+    project_index = 0
+    while pending_remaining > 0 and pending_by_project:
+        project_index %= len(pending_by_project)
+        project_pending = pending_by_project[project_index]
+        rows.append(project_pending.pop(0))
+        pending_remaining -= 1
+        if project_pending:
+            project_index += 1
+        else:
+            pending_by_project.pop(project_index)
     return rows
 
 
