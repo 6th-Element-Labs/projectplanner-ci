@@ -2712,6 +2712,77 @@ def cancel_wake(wake_id: str, reason: str = "cancelled", actor: str = "system",
         raise
     return _wake_row(row)
 
+
+def terminalize_task_execution_wakes_in(
+        c: sqlite3.Connection, *, task_id: str, actor: str, reason: str,
+        project: str = DEFAULT_PROJECT,
+        now: Optional[float] = None) -> Dict[str, Any]:
+    """Cancel launchable wakes for a task in the caller's transaction."""
+    now_value = float(now if now is not None else time.time())
+    normalized_task_id = str(task_id or "").strip().upper()
+    try:
+        rows = c.execute(
+            "SELECT * FROM wake_intents WHERE task_id=? "
+            "AND (status='pending' OR (status='claimed' "
+            "AND (runner_session_id IS NULL OR runner_session_id=''))) "
+            "ORDER BY wake_id", (normalized_task_id,),
+        ).fetchall()
+    except sqlite3.OperationalError as exc:
+        # Compatibility fixtures can intentionally model provenance without
+        # Capacity tables. No wake table means there are no launchable wakes to
+        # terminalize; other SQL failures remain real errors.
+        if "no such table: wake_intents" not in str(exc).lower():
+            raise
+        rows = []
+    leases_released = 0
+    effects_voided = 0
+    cancelled = 0
+    blocked = 0
+    for row in rows:
+        wake = _wake_row(row)
+        personal = _terminalize_personal_connection_in(
+            c, wake, target_status="cancelled", now=now_value)
+        if not personal.get("ok"):
+            blocked += 1
+            continue
+        result = dict(wake.get("result") or {})
+        result.update({"reason": reason, "cancelled_by": actor})
+        updated = c.execute(
+            "UPDATE wake_intents SET status='cancelled', completed_at=?, "
+            "result_json=? WHERE wake_id=? AND "
+            "(status='pending' OR (status='claimed' "
+            "AND (runner_session_id IS NULL OR runner_session_id='')))",
+            (now_value, json.dumps(result, sort_keys=True), wake["wake_id"]),
+        )
+        if not updated.rowcount:
+            continue
+        cancelled += 1
+        leases_released += _surrender_execution_lease_for_wake_in(
+            c, wake["wake_id"], now=now_value)
+        if wake.get("effect_key"):
+            _store_facade()._update_external_effect_in(
+                c, wake["effect_key"], "void",
+                readback={"wake_id": wake["wake_id"], "status": "cancelled",
+                          "reason": reason},
+                actor=actor, task_id=normalized_task_id,
+                project=project, now=now_value)
+            effects_voided += 1
+        c.execute(
+            "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+            "VALUES (?,?,?,?,?)",
+            (normalized_task_id, actor, "wake.cancelled",
+             json.dumps({"wake_id": wake["wake_id"], "reason": reason},
+                        sort_keys=True), now_value),
+        )
+    return {
+        "schema": "switchboard.task_execution_wake_terminalization.v1",
+        "task_id": normalized_task_id, "reason": reason,
+        "wakes_cancelled": cancelled,
+        "execution_leases_released": leases_released,
+        "effects_voided": effects_voided, "wakes_blocked": blocked,
+        "changed": bool(cancelled),
+    }
+
 def _connect_claim_hold_seconds() -> float:
     """Max seconds a claimed Connect wake may sit without a runner before fail-closed.
 

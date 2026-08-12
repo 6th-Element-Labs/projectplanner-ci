@@ -691,6 +691,15 @@ def _mark_task_merged_impl(task_id: str, merged_sha: str, pr_number: Optional[in
             (not head_sha or current.get("head_sha") == head_sha)
         )
         if same_merge:
+            execution_wake_cleanup = None
+            if target_status == "Done":
+                from switchboard.storage.repositories.coordination import (
+                    terminalize_task_execution_wakes_in,
+                )
+                execution_wake_cleanup = terminalize_task_execution_wakes_in(
+                    c, task_id=task_id, actor=actor,
+                    reason="canonical_merge_observed", project=project, now=now,
+                )
             attention_cleanup = terminalize_task_attention_in(
                 c, project=project, task_id=task_id, actor=actor,
                 reason="canonical_merge_observed", now=now,
@@ -698,7 +707,8 @@ def _mark_task_merged_impl(task_id: str, merged_sha: str, pr_number: Optional[in
             return {"task_id": task_id, "status": target_status,
                     "git_state": current, "idempotent": True,
                     "merge_done_gate": done_gate,
-                    "attention_cleanup": attention_cleanup}
+                    "attention_cleanup": attention_cleanup,
+                    "execution_wake_cleanup": execution_wake_cleanup}
         c.execute("UPDATE tasks SET status=?, updated_at=? WHERE task_id=?",
                   (target_status, now, task_id))
         git_state = _upsert_git_state(c, task_id, {
@@ -779,13 +789,23 @@ def _mark_task_merged_impl(task_id: str, merged_sha: str, pr_number: Optional[in
             _heal_dependency_blocked_tasks_in(
                 c, completed_task_id=task_id, actor="switchboard/dependency-lifecycle",
                 now=now)
+            from switchboard.storage.repositories.coordination import (
+                terminalize_task_execution_wakes_in,
+            )
+            execution_wake_cleanup = terminalize_task_execution_wakes_in(
+                c, task_id=task_id, actor=actor,
+                reason="canonical_merge_observed", project=project, now=now,
+            )
+        else:
+            execution_wake_cleanup = None
         attention_cleanup = terminalize_task_attention_in(
             c, project=project, task_id=task_id, actor=actor,
             reason="canonical_merge_observed", now=now,
         )
     return {"task_id": task_id, "status": target_status, "git_state": git_state,
             "merge_done_gate": done_gate, "merged": True,
-            "attention_cleanup": attention_cleanup}
+            "attention_cleanup": attention_cleanup,
+            "execution_wake_cleanup": execution_wake_cleanup}
 
 
 def mark_task_default_branch_commit(task_id: str, commit_sha: str,

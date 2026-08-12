@@ -114,6 +114,55 @@ with _conn(P) as c:
          blocked["task_id"], "run-blocked", 1, "1" * 40, 991, "continue",
          "pending", now, now, now),
     )
+    for wake_id, status, runner_session_id, wake_task_id in (
+        ("wake-execution-pending", "pending", None, blocked["task_id"]),
+        ("wake-execution-pre-runner", "claimed", None, blocked["task_id"]),
+        ("wake-execution-live", "claimed", "runner-live", blocked["task_id"]),
+        ("wake-execution-other-task", "pending", None, unrelated["task_id"]),
+    ):
+        c.execute(
+            "INSERT INTO wake_intents(wake_id, source, reason, selector_json, "
+            "policy_json, status, requested_at, task_id, runner_session_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (wake_id, "connect", "merge cleanup fixture", "{}", "{}", status,
+             now, wake_task_id, runner_session_id),
+        )
+    personal_wake_id = "wake-execution-pre-runner"
+    c.execute(
+        "UPDATE wake_intents SET claimed_by_host=?, policy_json=? WHERE wake_id=?",
+        (
+            "host-personal",
+            json.dumps({
+                "execution_mode": "personal_agent_host",
+                "require_exact_host_binding": True,
+                "account_binding": {
+                    "claim_id": "claim-personal",
+                    "work_session_id": "ws-personal",
+                },
+                "execution_binding": {
+                    "execution_connection_id": "connection-personal",
+                    "runner_session_id": "runner-personal",
+                    "host_id": "host-personal",
+                    "host_principal_id": "principal-personal",
+                    "agent_id": "agent-personal",
+                    "source_sha": "source-personal",
+                },
+            }, sort_keys=True),
+            personal_wake_id,
+        ),
+    )
+    c.execute(
+        "INSERT INTO personal_execution_connections("
+        "execution_connection_id, wake_id, task_id, claim_id, work_session_id, "
+        "runner_session_id, host_id, host_principal_id, agent_id, source_sha, "
+        "status, created_at, expires_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "connection-personal", personal_wake_id, blocked["task_id"],
+            "claim-personal", "ws-personal", "runner-personal", "host-personal",
+            "principal-personal", "agent-personal", "source-personal", "reserved",
+            now, now + 3600, now,
+        ),
+    )
 
 live = {
     991: {
@@ -168,6 +217,16 @@ assert first["attention_cleanup"] == {
     "completion_wakes_cancelled": 1,
     "changed": True,
 }, first
+assert first["execution_wake_cleanup"] == {
+    "schema": "switchboard.task_execution_wake_terminalization.v1",
+    "task_id": blocked["task_id"],
+    "reason": "canonical_merge_observed",
+    "wakes_cancelled": 2,
+    "execution_leases_released": 0,
+    "effects_voided": 0,
+    "wakes_blocked": 0,
+    "changed": True,
+}, first
 assert second["status"] == "Done", second
 assert second["git_state"]["merged_sha"] == PR_990_MERGE, second
 assert fetches == [(REPO, 991), (REPO, 990)], fetches
@@ -185,6 +244,22 @@ with _conn(P) as c:
         "SELECT status FROM attention_completion_wakes WHERE wake_id='wake-blocked'",
     ).fetchone()
     assert wake["status"] == "cancelled", dict(wake)
+    execution_wakes = {
+        row["wake_id"]: row["status"] for row in c.execute(
+            "SELECT wake_id, status FROM wake_intents WHERE wake_id LIKE 'wake-execution-%'"
+        ).fetchall()
+    }
+    assert execution_wakes == {
+        "wake-execution-pending": "cancelled",
+        "wake-execution-pre-runner": "cancelled",
+        "wake-execution-live": "claimed",
+        "wake-execution-other-task": "pending",
+    }, execution_wakes
+    connection = c.execute(
+        "SELECT status FROM personal_execution_connections "
+        "WHERE execution_connection_id='connection-personal'",
+    ).fetchone()
+    assert connection["status"] == "cancelled", dict(connection)
 
 replay = reconcile(blocked["task_id"])
 assert replay["idempotent"] is True, replay
