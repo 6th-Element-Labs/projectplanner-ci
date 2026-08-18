@@ -1389,6 +1389,31 @@ def _git_root():
         return os.getcwd()
 
 
+def _policy_free_repository_available(wake, inventory):
+    """Prove a policy-free Connect wake has its canonical host source.
+
+    Repository validation during materialization is the final safety gate, but
+    eligibility runs before the host claims the wake.  Refusing an unbound host
+    here prevents a projectplanner-only host from taking an ActionEngine wake
+    and starting a runner that can never bind a safe Work Session.
+    """
+    policy = (wake or {}).get("policy") or {}
+    if policy.get("execution_context"):
+        return True
+    binding = dict(policy.get("repository_binding") or {})
+    project = _wake_project(wake)
+    expected = _repository_identity(binding.get("repository"), topology=True)
+    if (binding.get("schema") != "switchboard.repository_binding.v1"
+            or str(binding.get("project") or "") != project
+            or str(binding.get("repo_role") or "") != "canonical"
+            or not expected):
+        return False
+    roots = dict((inventory or {}).get("project_source_repo_roots") or {})
+    source_root = str(
+        roots.get(project) or (inventory or {}).get("repo_root") or "")
+    return _source_origin_identity(source_root) == expected
+
+
 def eligible_runtime(wake, inventory):
     """Return the host runtime entry that can serve this wake, else None (skip → don't claim)."""
     sel = (wake or {}).get("selector") or {}
@@ -1396,6 +1421,9 @@ def eligible_runtime(wake, inventory):
     want_provider = sel.get("provider")
     want_caps = set(_csv(sel.get("capabilities") or []))
     requested_mode = str(((wake or {}).get("policy") or {}).get("mode") or "").strip()
+    if (requested_mode == "connect"
+            and not _policy_free_repository_available(wake, inventory)):
+        return None
     wants_claim = requested_mode in {"claim_next", "direct_task"} or bool(
         want_lane and requested_mode != "message_only")
     for rt in inventory["runtimes"]:

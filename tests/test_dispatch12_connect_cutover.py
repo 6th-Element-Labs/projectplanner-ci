@@ -232,6 +232,15 @@ ok(not legacy_calls, f"no product start surface calls a legacy launcher ({legacy
 # Host translation consumes the same contract and uses host-local provider syntax.
 import adapters.agent_host as agent_host  # noqa: E402
 
+# The BUG-12 guard proves the host source via `git remote get-url origin` on the
+# project source root. Fixtures below point that root at this checkout, whose
+# origin is a scratchpad mirror in the merge-group lane and a local path on a VM
+# clone; pin the identity so eligibility is judged on policy, not on where the
+# test happens to run.
+agent_host._source_origin_identity = (  # noqa: E305
+    lambda _root, _identity=agent_host._repository_identity(
+        "6th-Element-Labs/projectplanner", topology=True): _identity)
+
 host_source = (ROOT / "adapters" / "agent_host.py").read_text(encoding="utf-8")
 ok('if wake_mode(w, inventory) == "connect":' in host_source
    and "runner_session_id = _runner_session_id_for_wake(w, host_id)" in host_source,

@@ -845,6 +845,8 @@ def test_legacy_multi_project_wake_uses_bound_repository(root):
        "a context-less wake selects the source root bound to its project")
 
     inventory.pop("project_source_repo_roots")
+    ok(agent_host.eligible_runtime(wake, inventory) is None,
+       "a host without the canonical project source is ineligible before claim")
     git("remote", "set-url", "origin",
         "https://github.com/6th-Element-Labs/projectplanner.git",
         cwd=wrong_source)

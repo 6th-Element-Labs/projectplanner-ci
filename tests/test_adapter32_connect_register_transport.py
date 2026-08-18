@@ -79,6 +79,15 @@ class ConnectRegistrationFailureClassificationTest(unittest.TestCase):
         )
 
 
+# The BUG-12 guard proves the host source by `git remote get-url origin` on the
+# configured project source root. These fixtures point that root at this checkout,
+# whose origin is the canonical repo on a developer machine but a scratchpad mirror
+# in the merge-group lane and a local path on a VM clone. Pin the identity so the
+# guard logic is exercised without depending on where the test happens to run.
+CANONICAL_IDENTITY = agent_host._repository_identity(
+    "6th-Element-Labs/projectplanner", topology=True)
+
+
 class ConnectRegisterRetryAndCompleteWakeTest(unittest.TestCase):
     def test_connect_retries_register_then_completes_wake_after_transport_blip(self):
         wake = {
@@ -92,6 +101,12 @@ class ConnectRegisterRetryAndCompleteWakeTest(unittest.TestCase):
             },
             "policy": {
                 "mode": "connect",
+                "repository_binding": {
+                    "schema": "switchboard.repository_binding.v1",
+                    "project": "switchboard",
+                    "repo_role": "canonical",
+                    "repository": "6th-Element-Labs/projectplanner",
+                },
                 "assignment": {
                     "schema": "switchboard.connect.assignment.v1",
                     "assignment_id": "assignment-adapter32",
@@ -112,6 +127,7 @@ class ConnectRegisterRetryAndCompleteWakeTest(unittest.TestCase):
         inventory = {
             "host_id": "host/test-adapter32",
             "repo_root": str(ROOT),
+            "project_source_repo_roots": {"switchboard": str(ROOT)},
             "limits": {"max_sessions": 8},
             "policy": {
                 "allow_work": True,
@@ -184,6 +200,8 @@ class ConnectRegisterRetryAndCompleteWakeTest(unittest.TestCase):
 
         with patch.object(agent_host, "_try", side_effect=fake_try), \
                 patch.object(agent_host, "_require", side_effect=fake_require), \
+                patch.object(agent_host, "_source_origin_identity",
+                             return_value=CANONICAL_IDENTITY), \
                 patch.object(agent_host, "launch", side_effect=fake_launch), \
                 patch.object(agent_host, "confirm_started", return_value=True), \
                 patch.object(agent_host, "active_session_count", return_value=0), \
@@ -224,6 +242,12 @@ class ConnectRegisterRetryAndCompleteWakeTest(unittest.TestCase):
             },
             "policy": {
                 "mode": "connect",
+                "repository_binding": {
+                    "schema": "switchboard.repository_binding.v1",
+                    "project": "switchboard",
+                    "repo_role": "canonical",
+                    "repository": "6th-Element-Labs/projectplanner",
+                },
                 "assignment": {
                     "schema": "switchboard.connect.assignment.v1",
                     "assignment_id": "assignment-adapter32b",
@@ -241,6 +265,7 @@ class ConnectRegisterRetryAndCompleteWakeTest(unittest.TestCase):
         inventory = {
             "host_id": "host/test-adapter32",
             "repo_root": str(ROOT),
+            "project_source_repo_roots": {"switchboard": str(ROOT)},
             "limits": {"max_sessions": 8},
             "policy": {
                 "allow_work": True,
@@ -280,6 +305,8 @@ class ConnectRegisterRetryAndCompleteWakeTest(unittest.TestCase):
 
         with patch.object(agent_host, "_try", side_effect=fake_try), \
                 patch.object(agent_host, "_require", side_effect=always_transport), \
+                patch.object(agent_host, "_source_origin_identity",
+                             return_value=CANONICAL_IDENTITY), \
                 patch.object(
                     agent_host, "launch",
                     return_value={

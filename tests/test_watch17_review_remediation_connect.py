@@ -5,6 +5,9 @@ from __future__ import annotations
 from path_setup import ROOT  # noqa: F401
 
 import ast
+import re
+import subprocess
+import urllib.parse
 from pathlib import Path
 
 import mission_coordinator
@@ -23,11 +26,28 @@ def load_host_eligibility():
     selected = [
         node for node in tree.body
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name in {"_csv", "eligible_runtime"}
+        and node.name in {
+            "_csv", "_wake_project", "_repository_identity",
+            "_source_origin_identity", "_policy_free_repository_available",
+            "eligible_runtime"}
     ]
-    namespace = {"MESSAGE_ONLY_LANE": "__message_only__"}
+    namespace = {
+        "MESSAGE_ONLY_LANE": "__message_only__",
+        "PROJECT": "switchboard",
+        "RUNTIME_PROVIDERS": {
+            "codex": "openai", "claude-code": "anthropic", "cursor": "cursor",
+        },
+        "re": re,
+        "subprocess": subprocess,
+        "urllib": urllib,
+    }
     exec(compile(ast.Module(body=selected, type_ignores=[]),
                  "agent_host.py", "exec"), namespace)
+    # Pin the host source identity: the guard shells out to git on the project
+    # source root, which is a scratchpad mirror in the merge-group lane.
+    canonical = namespace["_repository_identity"](
+        "6th-Element-Labs/projectplanner", topology=True)
+    namespace["_source_origin_identity"] = lambda _root: canonical
     return namespace["eligible_runtime"]
 
 
