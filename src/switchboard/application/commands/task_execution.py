@@ -429,6 +429,42 @@ def _panel_projection(projection: dict[str, Any], *, project: str) -> dict[str, 
     }
 
 
+NEXT_EXECUTION_SCHEMA = "switchboard.next_execution.v1"
+_HANDOFF_ROUTES = frozenset({"review_merge", "remediation", "wait", "coordination_retry", "human", "reconcile"})
+
+
+def _next_execution(projection: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    """WATCH-17: name what runs next when nothing is running.
+
+    After a C3 hand-off the implementation runner is gone, no wake is in flight
+    yet, and the completion owner has already decided the next route (for
+    example ``review_merge`` for the next generation).  Without this field the
+    operator projection reads Ready/idle for a task that is seconds from being
+    picked up, and a launcher that re-issues ``start_task`` collides with the
+    live execution the owner is about to place.  The route is read from the
+    persisted completion projection; nothing is inferred from board status.
+    """
+    completion = projection.get("completion_projection")
+    if not isinstance(completion, Mapping):
+        return None
+    route = str(completion.get("route") or "none").strip().lower()
+    if route not in _HANDOFF_ROUTES or completion.get("terminal"):
+        return None
+    return {
+        "schema": NEXT_EXECUTION_SCHEMA,
+        "route": route,
+        "effect": str(completion.get("current_effect") or "").strip() or None,
+        "owner": str(completion.get("route_owner") or "").strip() or None,
+        "desired_role": str(completion.get("desired_role") or "").strip() or None,
+        "desired_head": str(completion.get("desired_head") or "").strip() or None,
+        "pr_number": completion.get("pr_number") or None,
+        "state": completion.get("state"),
+        "reason_code": str(completion.get("reason_code") or "").strip() or None,
+        "retry_deadline": completion.get("retry_deadline"),
+        "trigger": "completion_owner",
+    }
+
+
 def get_task_execution(task_id: Any, *, project: str = DEFAULT_PROJECT) -> dict[str, Any]:
     """Return the one authoritative answer to "what is running" for a task."""
     task_id = _normalize(task_id)
@@ -447,6 +483,18 @@ def get_task_execution(task_id: Any, *, project: str = DEFAULT_PROJECT) -> dict[
         task_status == "In Review" and not live and not in_flight
         and any(_session_is_terminal(s) for s in sessions))
     panel = _panel_projection(projection, project=project)
+    next_execution = _next_execution(projection)
+    if next_execution and panel.get("state") == "idle":
+        # The completion owner already chose the next hop; say so instead of
+        # "No Connect wake is in flight", which reads as dead.
+        effect = next_execution.get("effect") or next_execution["route"]
+        owner = next_execution.get("owner")
+        panel = dict(panel)
+        panel["detail"] = (
+            f"No Connect wake is in flight yet — completion owner will {effect}"
+            + (f" ({owner})" if owner else "")
+        )
+        panel["next_execution"] = next_execution
     return _envelope(
         "get_task_execution", task_id, project,
         execution_id=execution_id or None,
@@ -454,6 +502,7 @@ def get_task_execution(task_id: Any, *, project: str = DEFAULT_PROJECT) -> dict[
         running=live,
         starting=in_flight,
         panel=panel,
+        next_execution=next_execution,
         has_ended_session=has_ended_session,
         resumable_review=resumable_review,
         execution=projection,

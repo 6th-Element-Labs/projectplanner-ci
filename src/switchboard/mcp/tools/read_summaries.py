@@ -21,7 +21,7 @@ def task_execution(value: Any) -> Any:
     result = _pick(value, (
         "schema", "project", "task_id", "execution_id", "lifecycle_phase",
         "running", "starting", "resumable_review", "has_ended_session",
-        "available_commands", "panel",
+        "available_commands", "panel", "next_execution",
     ))
     execution = value.get("execution")
     if isinstance(execution, dict):
