@@ -823,8 +823,6 @@ def test_legacy_multi_project_wake_uses_bound_repository(root):
     wrong_remote, _ = action_engine_remote(root / "wrong")
     wrong_source = root / "wrong" / "sources" / "ActionEngine"
     git("remote", "add", "origin", wrong_remote, cwd=wrong_source)
-    git("remote", "set-url", "origin", "https://gitlab.com/6th-Element-Labs/ActionEngine.git",
-        cwd=wrong_source)
 
     wake = connect_wake(context(sha), execution_id="execlease-bound-repo")
     wake["_host_project"] = "maxwell"
@@ -847,6 +845,21 @@ def test_legacy_multi_project_wake_uses_bound_repository(root):
        "a context-less wake selects the source root bound to its project")
 
     inventory.pop("project_source_repo_roots")
+    git("remote", "set-url", "origin",
+        "https://github.com/6th-Element-Labs/projectplanner.git",
+        cwd=wrong_source)
+    with Launcher(action_remote) as launcher:
+        refused = agent_host.launch(
+            wake, inventory, runner_session_id="run_projectplanner_source")
+    ok(refused.get("started") is False
+       and refused.get("reason") == "project_source_repository_unbound",
+       "a Maxwell wake refuses the Agent Host's projectplanner checkout")
+    ok(launcher.calls == [],
+       "a non-canonical projectplanner checkout starts no process")
+
+    git("remote", "set-url", "origin",
+        "https://gitlab.com/6th-Element-Labs/ActionEngine.git",
+        cwd=wrong_source)
     with Launcher(action_remote) as launcher:
         refused = agent_host.launch(
             wake, inventory, runner_session_id="run_unbound_repo")
