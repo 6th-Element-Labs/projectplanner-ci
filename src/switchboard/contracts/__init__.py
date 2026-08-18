@@ -108,12 +108,14 @@ from .messaging import (
 )
 from .provider_credentials import (
     ACQUIRE_PROVIDER_CREDENTIAL_LEASE_SCHEMA,
+    ATTACH_PROVIDER_CONNECTION_PROJECT_SCHEMA,
     DELETE_PROVIDER_CONNECTION_SCHEMA,
     ENROLL_PROVIDER_CONNECTION_SCHEMA,
     RELEASE_PROVIDER_CREDENTIAL_LEASE_SCHEMA,
     REVOKE_PROVIDER_CONNECTION_SCHEMA,
     ROTATE_PROVIDER_CONNECTION_SCHEMA,
     AcquireProviderCredentialLeaseCommand,
+    AttachProviderConnectionProjectCommand,
     DeleteProviderConnectionCommand,
     EnrollProviderConnectionCommand,
     ReleaseProviderCredentialLeaseCommand,
@@ -138,6 +140,7 @@ from .reviews import (
 __all__ = [
     "ARCHIVE_PROJECT_COMMAND_SCHEMA",
     "ACQUIRE_PROVIDER_CREDENTIAL_LEASE_SCHEMA",
+    "ATTACH_PROVIDER_CONNECTION_PROJECT_SCHEMA",
     "PROJECT_CONSOLIDATION_APPLY_COMMAND_SCHEMA",
     "PROJECT_CONSOLIDATION_PLAN_COMMAND_SCHEMA",
     "PROJECT_CONSOLIDATION_PLAN_RECEIPT_SCHEMA",
@@ -193,6 +196,7 @@ __all__ = [
     "AckMessageCommand",
     "ArchiveProjectCommand",
     "AcquireProviderCredentialLeaseCommand",
+    "AttachProviderConnectionProjectCommand",
     "ApplyProjectConsolidationCommand",
     "ConsolidationApproval",
     "PlanProjectConsolidationCommand",

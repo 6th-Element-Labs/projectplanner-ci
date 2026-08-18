@@ -728,6 +728,66 @@ class ProviderCredentialRepository:
             )
             return self._public_connection(current, now=now)
 
+    def attach_project(
+            self, credential_reference: str, *, project: str,
+            target_project: str, actor: str,
+            principal_user_id: str = "") -> dict[str, Any]:
+        """Extend host-native scope without rotating or fencing credential leases."""
+        self._prepare()
+        now = time.time()
+        source_project = str(project or "").strip().lower()
+        target = str(target_project or "").strip().lower()
+        with _registry_conn() as c:
+            c.execute("BEGIN IMMEDIATE")
+            row = c.execute(
+                "SELECT * FROM provider_connections WHERE credential_reference=?",
+                (str(credential_reference or "").strip(),),
+            ).fetchone()
+            if not row:
+                raise CredentialVaultError(
+                    "credential_not_available", "provider credential is not available",
+                    status_code=404)
+            self._authorize_connection_in(
+                c, row, project=source_project,
+                principal_user_id=principal_user_id, admin=False)
+            if (row["lifecycle_state"] != "active"
+                    or row["revocation_state"] != "not_revoked"
+                    or row["materialization_mode"] != "host_native"):
+                raise CredentialVaultError(
+                    "provider_native_attachment_required",
+                    "project attachment requires an active provider-native connection",
+                    status_code=409,
+                )
+            existing = _json_list(row["project_allowlist_json"])
+            allowlist = self._validate_allowlist_in(
+                c, row["tenant_id"], source_project, [*existing, target])
+            if allowlist != sorted(set(existing)):
+                c.execute(
+                    "UPDATE provider_connections SET project_allowlist_json=?, "
+                    "updated_at=?, updated_by=? WHERE credential_reference=?",
+                    (json.dumps(allowlist, sort_keys=True), now, actor,
+                     row["credential_reference"]),
+                )
+                current = c.execute(
+                    "SELECT * FROM provider_connections WHERE credential_reference=?",
+                    (row["credential_reference"],),
+                ).fetchone()
+                self._event_in(
+                    c, current, "project_attached", actor=actor, project=target,
+                    details={
+                        "credential_version": current["credential_version"],
+                        "connection_kind": current["connection_kind"],
+                        "fenced_lease_count": 0,
+                    },
+                    now=now,
+                )
+            else:
+                current = row
+            result = self._public_connection(current, now=now)
+            result["active_lease_count"] = self._active_lease_count_in(
+                c, current["credential_reference"], source_project, now)
+            return result
+
     def verify_host_native(
             self, credential_reference: str, *, project: str, actor: str,
             principal_user_id: str = "") -> dict[str, Any]:

@@ -33,6 +33,19 @@ class VerifyConnectionBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class AttachProjectBody(BaseModel):
+    """Typed scope-only update; credential material and rotation fields are forbidden."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    target_project: str = Field(min_length=1, max_length=128)
+
+    @field_validator("target_project", mode="before")
+    @classmethod
+    def _project(cls, value: str) -> str:
+        return str(value or "").strip().lower()
+
+
 class BindHostNativeBody(BaseModel):
     """Typed wire body for bind-host — the browser never supplies a proof; the route
     derives it server-side from the selected, already-attested live host."""
@@ -253,6 +266,31 @@ def create_router(*, resolve_project: ProjectResolver,
                 actor=auth.actor(principal), principal_user_id=principal_id,
                 principal_kind=access["principal_kind"], admin=is_admin,
                 raise_errors=True)
+        except (ValidationError, CredentialVaultError) as exc:
+            _raise_http(exc)
+
+    @router.post(
+        "/api/projects/{project}/provider-connections/{credential_reference}/projects"
+    )
+    def attach_provider_connection_project(
+            request: Request, project: str, credential_reference: str,
+            body: AttachProjectBody = Body(...)):
+        project_id = resolve_project(project)
+        principal = resolve_principal(
+            request, project_id, ("write:credentials",), dev_actor="provider-vault")
+        access = _access(principal)
+        try:
+            return commands.attach_project_mapping(
+                {
+                    "project": project_id,
+                    "credential_reference": credential_reference,
+                    "target_project": body.target_project,
+                },
+                actor=auth.actor(principal),
+                principal_user_id=access["principal_id"],
+                principal_kind=access["principal_kind"],
+                raise_errors=True,
+            )
         except (ValidationError, CredentialVaultError) as exc:
             _raise_http(exc)
 

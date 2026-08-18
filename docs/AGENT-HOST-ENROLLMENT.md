@@ -301,6 +301,17 @@ forge an affinity — it can only detect one this host already declared about it
 `--account-id` is a plain identifier (e.g. an email), never a secret. Settings' "Bind this
 connection" action then becomes available once the daemon's next heartbeat reports it.
 
+## Authorize the Host for another project
+
+The Fleet project-grant action extends an active signed enrollment's project allowlist only after
+the target repository, tenant ownership, advertised runtime, provider, and live Host attestation
+all pass. It preserves the enrollment id, key fingerprint, identity generation, service process,
+and Capacity presence. The corresponding provider connection uses the separate audited
+`attach_provider_connection_to_project` command (or REST `.../provider-connections/{reference}/projects`
+route). That scope update also preserves the credential version and active leases. Revoking a
+project grant removes placement authority even if the enrollment retains its historical target in
+the allowlist; both the live grant and the enrollment scope are required for target-project use.
+
 ## Enroll a separately billed OpenAI API connection (UI-21)
 
 API execution is a distinct, explicitly metered connection. It is never selected as a

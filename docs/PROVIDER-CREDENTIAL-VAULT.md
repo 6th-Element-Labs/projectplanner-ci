@@ -20,6 +20,10 @@ customer's account for another.
   types are rejected by this vault.
 - Revocation and deletion cryptographically erase ciphertext and nonce, fence every live lease,
   and preserve a non-secret audit tombstone. Rotation fences every lease on the previous version.
+- Attaching an existing host-native connection to another authorized project is a scope-only
+  update. It preserves the credential version and every live lease; it never impersonates
+  rotation. The target must be in the same tenant and authorized for the connection's attested
+  Host identity, and the update emits a redacted `project_attached` audit event.
 
 Generate one key for the deployment and make the same value available to the web, MCP, and trusted
 runner bridge processes:
@@ -70,7 +74,7 @@ metadata and lifecycle tools. Required scopes are:
 | Operation | Scope |
 |---|---|
 | List/read metadata and audit events | `read:credentials` |
-| Enroll, rotate, revoke, delete | `write:credentials` |
+| Enroll, attach project, rotate, revoke, delete | `write:credentials` |
 | Acquire or release a launch lease | `use:credentials` |
 
 Human principals may act only for a matching `user_id` unless they are administrators. Agent,

@@ -12,6 +12,7 @@ import store
 from switchboard.contracts import validation_error_message
 from switchboard.contracts.provider_credentials import (
     AcquireProviderCredentialLeaseCommand,
+    AttachProviderConnectionProjectCommand,
     BindHostNativeConnectionCommand,
     DeleteProviderConnectionCommand,
     EnrollProviderConnectionCommand,
@@ -455,6 +456,74 @@ def rotate_mapping(data: dict[str, Any], *, actor: str, principal_user_id: str,
         if raise_errors:
             raise
         return _error(exc, "invalid_provider_rotation")
+
+
+def attach_project_mapping(
+        data: dict[str, Any], *, actor: str, principal_user_id: str,
+        principal_kind: str = "user",
+        repository: ProviderCredentialRepository = default_provider_credential_repository,
+        raise_errors: bool = False) -> dict[str, Any]:
+    """Attach one provider-native connection to an authorized target project."""
+    try:
+        try:
+            require_secret_free_public_payload(dict(data or {}))
+        except CredentialPolicyError as exc:
+            raise CredentialVaultError(exc.code, exc.message, status_code=400) from exc
+        command = AttachProviderConnectionProjectCommand.model_validate(data)
+        metadata = repository.get_metadata(
+            command.credential_reference, project=command.project,
+            principal_user_id=principal_user_id, admin=False)
+        _require_connection_owner(
+            str(metadata.get("user_id") or ""), principal_user_id,
+            principal_kind=principal_kind, admin=False)
+        if metadata.get("materialization_mode") != "host_native":
+            raise CredentialVaultError(
+                "provider_native_attachment_required",
+                "project attachment requires a provider-native connection",
+                status_code=409,
+            )
+        target_access = store.project_access(command.target_project)
+        if not target_access:
+            raise CredentialVaultError(
+                "project_not_available", "target project is not available",
+                status_code=404)
+        if str(target_access.get("org_id") or "") != str(metadata.get("tenant_id") or ""):
+            raise CredentialVaultError(
+                "cross_tenant_allowlist_denied",
+                "provider connections cannot be attached across tenants",
+                status_code=403,
+            )
+        proof = _derive_host_native_proof(
+            project=command.target_project,
+            user_id=str(metadata.get("user_id") or ""),
+            provider=str(metadata.get("provider") or ""),
+            provider_account_id=str(metadata.get("provider_account_id") or ""),
+            host_allowlist=metadata.get("host_allowlist") or (),
+        )
+        host_id = str(proof.get("host_id") or "")
+        host = next((item for item in store.list_agent_hosts(
+            include_stale=True, project=command.target_project)
+            if item.get("host_id") == host_id), None)
+        identity = store.check_agent_host_identity(
+            host_id, str((host or {}).get("principal_id") or ""),
+            project=command.target_project)
+        if identity.get("required") is not True or identity.get("allowed") is not True:
+            raise CredentialVaultError(
+                "provider_native_host_not_authorized",
+                "the provider Host is not authorized for the target project",
+                status_code=403,
+            )
+        return repository.attach_project(
+            command.credential_reference,
+            project=command.project,
+            target_project=command.target_project,
+            actor=actor,
+            principal_user_id=principal_user_id,
+        )
+    except (ValidationError, CredentialVaultError) as exc:
+        if raise_errors:
+            raise
+        return _error(exc, "invalid_provider_project_attachment")
 
 
 def verify_mapping(data: dict[str, Any], *, actor: str, principal_user_id: str,

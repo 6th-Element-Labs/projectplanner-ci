@@ -1,5 +1,5 @@
 {
-  "count": 63,
+  "count": 64,
   "schema": "switchboard.schema_manifest.v1",
   "schemas": [
     {
@@ -165,6 +165,10 @@
     {
       "$id": "switchboard.project_purge.verify_command.v1",
       "path": "switchboard.project_purge.verify_command.v1.json"
+    },
+    {
+      "$id": "switchboard.provider_connection.attach_project_command.v1",
+      "path": "switchboard.provider_connection.attach_project_command.v1.json"
     },
     {
       "$id": "switchboard.provider_connection.bind_host_native_command.v1",

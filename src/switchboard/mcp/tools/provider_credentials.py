@@ -137,6 +137,25 @@ def verify_provider_connection(credential_reference: str, ctx: Context,
         admin=is_admin))
 
 
+def attach_provider_connection_to_project(
+        credential_reference: str, target_project: str, ctx: Context,
+        project: str = "maxwell") -> str:
+    """Extend a provider-native connection to an authorized same-tenant project."""
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:credentials",))
+    access = _access(principal)
+    return services.dumps(commands.attach_project_mapping(
+        {
+            "project": project,
+            "credential_reference": credential_reference,
+            "target_project": target_project,
+        },
+        actor=services.principal_actor(principal),
+        principal_user_id=access["principal_id"],
+        principal_kind=access["principal_kind"],
+    ))
+
+
 def bind_host_native_provider_connection(bind_json: str, ctx: Context,
                                          project: str = "maxwell") -> str:
     """Owner-locked enrollment whose proof is derived from a selected live host."""
@@ -205,6 +224,7 @@ PROVIDER_CREDENTIAL_TOOL_NAMES = (
     "list_provider_auth_capabilities",
     "rotate_provider_connection",
     "verify_provider_connection",
+    "attach_provider_connection_to_project",
     "bind_host_native_provider_connection",
     "revoke_provider_connection",
     "delete_provider_connection",

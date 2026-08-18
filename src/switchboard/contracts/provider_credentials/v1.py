@@ -12,6 +12,9 @@ from ..registry import register
 
 ENROLL_PROVIDER_CONNECTION_SCHEMA = "switchboard.provider_connection.enroll_command.v1"
 ROTATE_PROVIDER_CONNECTION_SCHEMA = "switchboard.provider_connection.rotate_command.v1"
+ATTACH_PROVIDER_CONNECTION_PROJECT_SCHEMA = (
+    "switchboard.provider_connection.attach_project_command.v1"
+)
 REVOKE_PROVIDER_CONNECTION_SCHEMA = "switchboard.provider_connection.revoke_command.v1"
 DELETE_PROVIDER_CONNECTION_SCHEMA = "switchboard.provider_connection.delete_command.v1"
 ACQUIRE_PROVIDER_CREDENTIAL_LEASE_SCHEMA = (
@@ -159,6 +162,25 @@ class RotateProviderConnectionCommand(VersionedModel):
         return cls.model_validate(data)
 
 
+class AttachProviderConnectionProjectCommand(VersionedModel):
+    """Extend one owner-bound connection to an authorized same-tenant project."""
+
+    SCHEMA: ClassVar[str] = ATTACH_PROVIDER_CONNECTION_PROJECT_SCHEMA
+    model_config = ConfigDict(frozen=True, populate_by_name=True, extra="forbid")
+
+    schema_id: str = Field(
+        default=ATTACH_PROVIDER_CONNECTION_PROJECT_SCHEMA, alias="schema")
+    project: str
+    credential_reference: str
+    target_project: str
+
+    @field_validator(
+        "project", "credential_reference", "target_project", mode="before")
+    @classmethod
+    def _strip_text(cls, value: Any) -> str:
+        return str(value or "").strip().lower()
+
+
 class RevokeProviderConnectionCommand(VersionedModel):
     SCHEMA: ClassVar[str] = REVOKE_PROVIDER_CONNECTION_SCHEMA
     model_config = ConfigDict(frozen=True, populate_by_name=True, extra="forbid")
@@ -295,6 +317,7 @@ class ReleaseProviderCredentialLeaseCommand(VersionedModel):
 for _model in (
     EnrollProviderConnectionCommand,
     RotateProviderConnectionCommand,
+    AttachProviderConnectionProjectCommand,
     RevokeProviderConnectionCommand,
     DeleteProviderConnectionCommand,
     VerifyProviderConnectionCommand,

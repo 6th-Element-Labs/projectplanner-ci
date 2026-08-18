@@ -41,6 +41,65 @@ def _canonical_repo(project: str) -> str:
     return str((((topology.get("roles") or {}).get("canonical") or {}).get("repo")) or "")
 
 
+def _extend_enrollment_project_allowlist(
+    *, source_project: str, host_id: str, target_project: str,
+    identity_generation: int, attestation_fingerprint: str, actor: str,
+) -> dict[str, Any]:
+    """Extend the signed enrollment scope without replacing its identity or service."""
+    now = time.time()
+    with _conn(source_project) as connection:
+        row = connection.execute(
+            "SELECT * FROM agent_host_enrollments WHERE project_id=? AND host_id=?",
+            (source_project, host_id),
+        ).fetchone()
+        if not row:
+            return _error("host_enrollment_not_found", "host enrollment was not found")
+        enrollment = dict(row)
+        if enrollment.get("status") != "active":
+            return _error("host_enrollment_revoked", "host enrollment is not active")
+        if (int(enrollment.get("identity_generation") or 0) != identity_generation
+                or str(enrollment.get("public_key_fingerprint") or "")
+                != attestation_fingerprint):
+            return _error(
+                "host_attestation_stale",
+                "host enrollment changed while project authorization was being granted",
+            )
+        try:
+            projects = json.loads(enrollment.get("project_allowlist_json") or "[]")
+        except json.JSONDecodeError:
+            projects = []
+        allowlist = sorted({
+            str(item or "").strip().lower()
+            for item in [source_project, target_project, *projects]
+            if str(item or "").strip()
+        })
+        changed = allowlist != sorted(set(projects))
+        if changed:
+            connection.execute(
+                "UPDATE agent_host_enrollments SET project_allowlist_json=?, updated_at=? "
+                "WHERE enrollment_id=? AND status='active'",
+                (json.dumps(allowlist, sort_keys=True), now, enrollment["enrollment_id"]),
+            )
+            connection.execute(
+                "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                "VALUES (?,?,?,?,?)",
+                (
+                    None,
+                    actor,
+                    "agent_host.project_attached",
+                    json.dumps({
+                        "host_id": host_id,
+                        "source_project": source_project,
+                        "target_project": target_project,
+                        "identity_generation": identity_generation,
+                        "credential_values_redacted": True,
+                    }, sort_keys=True),
+                    now,
+                ),
+            )
+    return {"extended": changed, "project_allowlist": allowlist}
+
+
 def create_agent_host_project_grant(
     *, source_project: str, host_id: str, target_project: str,
     canonical_repository: str, runtime: str, provider: str, trust_zone: str,
@@ -136,6 +195,17 @@ def create_agent_host_project_grant(
             runtime=runtime,
         )
 
+    enrollment_update = _extend_enrollment_project_allowlist(
+        source_project=source_project,
+        host_id=host_id,
+        target_project=target_project,
+        identity_generation=int(enrollment.get("identity_generation") or 0),
+        attestation_fingerprint=fingerprint,
+        actor=actor,
+    )
+    if enrollment_update.get("error"):
+        return enrollment_update
+
     now = time.time()
     grant_id = "hostgrant-" + uuid.uuid4().hex[:20]
     values = (
@@ -167,7 +237,11 @@ def create_agent_host_project_grant(
             "AND host_id=? AND target_project_id=? AND canonical_repository=?",
             (source_project, host_id, target_project, canonical),
         ).fetchone()
-    return {"granted": True, "grant": _public(row)}
+    return {
+        "granted": True,
+        "grant": _public(row),
+        "enrollment_scope": enrollment_update,
+    }
 
 
 def revoke_agent_host_project_grant(

@@ -2,6 +2,7 @@
 
 from .v1 import (
     ACQUIRE_PROVIDER_CREDENTIAL_LEASE_SCHEMA,
+    ATTACH_PROVIDER_CONNECTION_PROJECT_SCHEMA,
     BIND_HOST_NATIVE_CONNECTION_SCHEMA,
     DELETE_PROVIDER_CONNECTION_SCHEMA,
     ENROLL_PROVIDER_CONNECTION_SCHEMA,
@@ -10,6 +11,7 @@ from .v1 import (
     ROTATE_PROVIDER_CONNECTION_SCHEMA,
     VERIFY_PROVIDER_CONNECTION_SCHEMA,
     AcquireProviderCredentialLeaseCommand,
+    AttachProviderConnectionProjectCommand,
     BindHostNativeConnectionCommand,
     DeleteProviderConnectionCommand,
     EnrollProviderConnectionCommand,
@@ -21,6 +23,7 @@ from .v1 import (
 
 __all__ = [
     "ACQUIRE_PROVIDER_CREDENTIAL_LEASE_SCHEMA",
+    "ATTACH_PROVIDER_CONNECTION_PROJECT_SCHEMA",
     "BIND_HOST_NATIVE_CONNECTION_SCHEMA",
     "DELETE_PROVIDER_CONNECTION_SCHEMA",
     "ENROLL_PROVIDER_CONNECTION_SCHEMA",
@@ -29,6 +32,7 @@ __all__ = [
     "ROTATE_PROVIDER_CONNECTION_SCHEMA",
     "VERIFY_PROVIDER_CONNECTION_SCHEMA",
     "AcquireProviderCredentialLeaseCommand",
+    "AttachProviderConnectionProjectCommand",
     "BindHostNativeConnectionCommand",
     "DeleteProviderConnectionCommand",
     "EnrollProviderConnectionCommand",

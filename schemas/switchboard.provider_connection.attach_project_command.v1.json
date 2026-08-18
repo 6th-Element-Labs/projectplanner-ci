@@ -1,0 +1,31 @@
+{
+  "$id": "switchboard.provider_connection.attach_project_command.v1",
+  "additionalProperties": false,
+  "description": "Extend one owner-bound connection to an authorized same-tenant project.",
+  "properties": {
+    "credential_reference": {
+      "title": "Credential Reference",
+      "type": "string"
+    },
+    "project": {
+      "title": "Project",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.provider_connection.attach_project_command.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "target_project": {
+      "title": "Target Project",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project",
+    "credential_reference",
+    "target_project"
+  ],
+  "title": "AttachProviderConnectionProjectCommand",
+  "type": "object"
+}
