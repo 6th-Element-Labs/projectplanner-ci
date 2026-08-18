@@ -23,7 +23,8 @@ def load_host_eligibility():
     selected = [
         node for node in tree.body
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name in {"_csv", "eligible_runtime"}
+        and node.name in {
+            "_csv", "_policy_free_repository_available", "eligible_runtime"}
     ]
     namespace = {"MESSAGE_ONLY_LANE": "__message_only__"}
     exec(compile(ast.Module(body=selected, type_ignores=[]),

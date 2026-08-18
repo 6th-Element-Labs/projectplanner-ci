@@ -92,6 +92,12 @@ class ConnectRegisterRetryAndCompleteWakeTest(unittest.TestCase):
             },
             "policy": {
                 "mode": "connect",
+                "repository_binding": {
+                    "schema": "switchboard.repository_binding.v1",
+                    "project": "switchboard",
+                    "repo_role": "canonical",
+                    "repository": "6th-Element-Labs/projectplanner",
+                },
                 "assignment": {
                     "schema": "switchboard.connect.assignment.v1",
                     "assignment_id": "assignment-adapter32",
@@ -224,6 +230,12 @@ class ConnectRegisterRetryAndCompleteWakeTest(unittest.TestCase):
             },
             "policy": {
                 "mode": "connect",
+                "repository_binding": {
+                    "schema": "switchboard.repository_binding.v1",
+                    "project": "switchboard",
+                    "repo_role": "canonical",
+                    "repository": "6th-Element-Labs/projectplanner",
+                },
                 "assignment": {
                     "schema": "switchboard.connect.assignment.v1",
                     "assignment_id": "assignment-adapter32b",

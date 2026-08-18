@@ -838,6 +838,8 @@ def test_legacy_multi_project_wake_uses_bound_repository(root):
     inventory["project"] = "switchboard"
     inventory["repo_root"] = str(wrong_source)
     inventory["project_source_repo_roots"] = {"maxwell": str(action_source)}
+    ok(agent_host.eligible_runtime(wake, inventory) is not None,
+       "a host with the canonical project source is eligible for the wake")
     with Launcher(action_remote):
         launched = agent_host.launch(
             wake, inventory, runner_session_id="run_bound_repo")
@@ -847,6 +849,8 @@ def test_legacy_multi_project_wake_uses_bound_repository(root):
        "a context-less wake selects the source root bound to its project")
 
     inventory.pop("project_source_repo_roots")
+    ok(agent_host.eligible_runtime(wake, inventory) is None,
+       "a host without the canonical project source is ineligible before claim")
     with Launcher(action_remote) as launcher:
         refused = agent_host.launch(
             wake, inventory, runner_session_id="run_unbound_repo")
