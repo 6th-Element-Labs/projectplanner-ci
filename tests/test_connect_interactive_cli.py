@@ -111,8 +111,10 @@ ok(mission_mode == "connect" and mission_child[:2] == ["codex", "exec"],
    f"(argv={mission_child[:3]})")
 ok("--dangerously-bypass-approvals-and-sandbox" in mission_child
    and "mcp_servers.taikun_plan.required=true" in mission_child
-   and 'model_reasoning_effort="medium"' in mission_child,
-   "Mission Bot Codex preserves readable reasoning, autonomous permissions, and required MCP")
+   and not any(str(value).startswith("model_reasoning_effort=")
+               for value in mission_child),
+   "Mission Bot Codex preserves autonomous permissions and required MCP without "
+   "inventing a model profile")
 
 simplemark_cmd, _ = agent_host.launch_command(
     connect_wake("codex", mission_key="mission-bot:WATCH-10:2",

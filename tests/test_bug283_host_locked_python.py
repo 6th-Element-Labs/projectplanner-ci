@@ -62,6 +62,17 @@ def test_codex_disables_login_shell_only_with_a_proven_runtime():
     assert "allow_login_shell=false" in locked
 
 
+def test_codex_without_named_profile_has_no_model_fallback():
+    ordinary = agent_host._connect_codex_mcp_argv()
+
+    assert not any(
+        str(value).startswith(("model=", "model_reasoning_effort=",
+                               "model_context_window=",
+                               "model_auto_compact_token_limit="))
+        for value in ordinary
+    )
+
+
 def test_unsupported_host_python_fails_before_launch_by_name():
     with patch.object(agent_host.sys, "version_info", (3, 9, 6)):
         try:
@@ -87,6 +98,7 @@ if __name__ == "__main__":
     test_projectplanner_runtime_is_proven_and_precedes_system_python()
     test_proven_runtime_survives_the_non_login_shell_given_to_codex()
     test_codex_disables_login_shell_only_with_a_proven_runtime()
+    test_codex_without_named_profile_has_no_model_fallback()
     test_unsupported_host_python_fails_before_launch_by_name()
     test_other_repositories_are_not_given_projectplanner_runtime_policy()
     print("BUG-283 Host locked Python proof passed")

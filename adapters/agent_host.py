@@ -1663,10 +1663,12 @@ def _connect_codex_mcp_argv(*, project=PROJECT, verification_runtime=None,
         if value == "-c"
     ]
     explicit_profile = profile_overrides(selected_profile, existing_config)
+    # An absent named profile means no model override. The provider's configured
+    # default remains visible as unpinned; never disguise it as a silently chosen
+    # Switchboard profile. Tasks that require a named profile must carry it in the
+    # immutable execution assignment and receive the complete explicit override.
     profile_args = tuple(
-        item for value in (
-            explicit_profile or ['model_reasoning_effort="medium"']
-        )
+        item for value in explicit_profile
         for item in ("-c", value)
     )
     overrides = (
