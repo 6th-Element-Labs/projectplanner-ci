@@ -292,6 +292,17 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
     ("0126_ix_mission_events_task_head",
      "CREATE INDEX IF NOT EXISTS ix_mission_events_task_head "
      "ON mission_events(project_id, task_id, head_sha, sequence)"),
+    ("0137_mission_launch_attempts",
+     "CREATE TABLE IF NOT EXISTS mission_launch_attempts ("
+     "project_id TEXT NOT NULL, task_id TEXT NOT NULL, mission_key TEXT NOT NULL, "
+     "requested_role TEXT NOT NULL, retry_count INTEGER NOT NULL DEFAULT 0, "
+     "reason TEXT NOT NULL DEFAULT '', start_error TEXT NOT NULL DEFAULT '', "
+     "next_retry_at REAL, exhausted INTEGER NOT NULL DEFAULT 0, "
+     "created_at REAL NOT NULL, updated_at REAL NOT NULL, "
+     "PRIMARY KEY(project_id, task_id, mission_key))"),
+    ("0138_ix_mission_launch_attempts_due",
+     "CREATE INDEX IF NOT EXISTS ix_mission_launch_attempts_due "
+     "ON mission_launch_attempts(project_id, exhausted, next_retry_at)"),
     # The promoted host release. One row, deliberately: hosts are compared to an
     # explicitly promoted artifact, never to whatever is on master, or every
     # merge would block the fleet.

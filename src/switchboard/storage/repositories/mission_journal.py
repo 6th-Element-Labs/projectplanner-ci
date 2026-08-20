@@ -495,9 +495,9 @@ class MissionJournalRepository:
     ) -> dict[str, Any]:
         """Close an existing mission from already-persisted canonical truth.
 
-        The staged v4 runtime calls this only after canonical provenance is
-        committed.  It never creates a mission and it accepts only the exact
-        canonical merge already visible on that connection.
+        A mission runtime calls this only after canonical provenance is
+        committed. It never creates a mission. It accepts only the exact Git
+        merge or verified offline evidence already visible on that connection.
         """
         exact_task_id = str(task_id or "").strip().upper()
         exact_kind = str(terminal_kind or "").strip()
@@ -505,13 +505,13 @@ class MissionJournalRepository:
         exact_actor = str(actor or "").strip()
         if (
             not exact_task_id
-            or exact_kind != "github_merge"
+            or exact_kind not in TERMINAL_KINDS
             or not exact_ref
             or not exact_actor
         ):
             raise MissionJournalError(
                 "terminal_provenance_required",
-                "canonical terminal projection requires task, merge SHA, and actor",
+                "terminal projection requires task, provenance reference, and actor",
             )
         mission = connection.execute(
             "SELECT * FROM mission_items WHERE project_id=? AND task_id=?",
@@ -527,19 +527,32 @@ class MissionJournalRepository:
             "SELECT status FROM tasks WHERE task_id=?", (exact_task_id,),
         ).fetchone()
         provenance = connection.execute(
-            "SELECT merged_sha,in_main_content FROM task_git_state WHERE task_id=?",
+            "SELECT merged_sha,in_main_content,evidence_json "
+            "FROM task_git_state WHERE task_id=?",
             (exact_task_id,),
         ).fetchone()
-        if (
-            task is None
-            or str(task["status"] or "") != "Done"
-            or provenance is None
-            or not bool(provenance["in_main_content"])
-            or str(provenance["merged_sha"] or "").strip().lower() != exact_ref
-        ):
+        verified = False
+        if provenance is not None and exact_kind == "github_merge":
+            verified = (
+                bool(provenance["in_main_content"])
+                and str(provenance["merged_sha"] or "").strip().lower() == exact_ref
+            )
+        elif provenance is not None and exact_kind == "offline":
+            try:
+                evidence = json.loads(provenance["evidence_json"] or "{}")
+            except (TypeError, ValueError):
+                evidence = {}
+            offline = evidence.get("offline_evidence") if isinstance(evidence, dict) else None
+            offline = offline if isinstance(offline, dict) else {}
+            verified = (
+                str(offline.get("evidence_hash") or "").strip().lower() == exact_ref
+                and bool(str(offline.get("verifier") or "").strip())
+                and offline.get("reviewed_at") is not None
+            )
+        if task is None or str(task["status"] or "") != "Done" or not verified:
             raise MissionJournalError(
                 "terminal_provenance_unverified",
-                "mission terminal projection requires persisted canonical Done truth",
+                "mission terminal projection requires persisted Done provenance",
             )
         current_kind = str(mission["terminal_kind"] or "")
         current_ref = str(mission["terminal_ref"] or "").strip().lower()
@@ -562,7 +575,7 @@ class MissionJournalRepository:
             ),
             occurred_at=timestamp,
             pr_number=None,
-            head_sha=exact_ref,
+            head_sha=exact_ref if exact_kind == "github_merge" else None,
             generation=None,
             execution_id=None,
             external_ref=exact_ref,

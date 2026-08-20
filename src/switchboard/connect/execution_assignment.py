@@ -402,7 +402,7 @@ def build_execution_assignment(
     # a second lifecycle owner and can race the reporting runner.  Its exact
     # handoff is the journal-backed yield command instead: Coordination records
     # the new cursor/role and Capacity independently acknowledges surrender.
-    if str(lifecycle.get("mission_key") or "").strip().startswith("v4:"):
+    if str(lifecycle.get("mission_key") or "").strip().startswith(("v4:", "v5:")):
         typed_tools = {
             "executed_test_run": "record_executed_test_run",
             "agent_requires_human": "agent_requires_human",

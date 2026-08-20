@@ -51,6 +51,7 @@ This is the highest-value architecture material in the repository and must remai
 2. **Visual and operational explanation:** [`COMPLETION-LIFECYCLE-PIPELINE.md`](COMPLETION-LIFECYCLE-PIPELINE.md)
 3. **Coordinator rules:** [`COORDINATOR-CONTRACT.md`](COORDINATOR-CONTRACT.md)
 4. **Capacity clock:** [`EXECUTION-LEASE-POLICY.md`](EXECUTION-LEASE-POLICY.md)
+5. **Scoped pager:** [`MISSION-BOT-V5.md`](MISSION-BOT-V5.md)
 
 The Mermaid diagrams live in the lifecycle explainer. The ADR carries the binding C1-C3,
 M1-M3, and W1-W4 rules. Neither document replaces the other.

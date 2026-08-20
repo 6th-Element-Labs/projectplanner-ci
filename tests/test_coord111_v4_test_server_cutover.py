@@ -55,9 +55,10 @@ def test_v4_test_owner_calls_only_the_scoped_v4_runtime():
     assert v4.call_args.kwargs["scope_authority"] == authority
 
 
-def test_production_entrypoint_constructs_only_v4_owner():
+def test_production_entrypoint_constructs_only_v5_owner():
     source = (_ROOT / "coordinator_daemon.py").read_text(encoding="utf-8")
-    assert "V4ScopedCompletionCoordinator(" in source
+    assert "V5ScopedCompletionCoordinator(" in source
+    assert "V4ScopedCompletionCoordinator(" not in source
     assert "daemon = ScopedCompletionCoordinator(" not in source
 
 
@@ -321,7 +322,7 @@ def test_v4_assignment_uses_the_journal_yield_not_the_legacy_factory():
 if __name__ == "__main__":
     test_v4_isolated_edge_accepts_forwarded_hosts_on_loopback_only()
     test_v4_test_owner_calls_only_the_scoped_v4_runtime()
-    test_production_entrypoint_constructs_only_v4_owner()
+    test_production_entrypoint_constructs_only_v5_owner()
     test_v4_projects_terminal_provenance_before_completing_task_scope()
     test_v4_keeps_scope_active_when_terminal_projection_is_not_confirmed()
     test_v4_projects_terminal_provenance_before_completing_deliverable_scope()

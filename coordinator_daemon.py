@@ -74,8 +74,11 @@ def _summarize_task_receipt(entry: Mapping[str, Any]) -> Dict[str, Any]:
     # standalone task scopes store the raw completion tick itself.
     tick = row.get("completion")
     if not isinstance(tick, Mapping):
-        tick = row if str(row.get("schema") or "").startswith(
-            "switchboard.completion_tick") else {}
+        schema = str(row.get("schema") or "")
+        tick = row if schema.startswith((
+            "switchboard.completion_tick",
+            "switchboard.mission_worker_tick.v5",
+        )) else {}
     decision = tick.get("decision") or {}
     observation = tick.get("observation") or {}
     receipt = (tick.get("execution") or {}).get("receipt") or {}
@@ -117,6 +120,15 @@ def _summarize_task_receipt(entry: Mapping[str, Any]) -> Dict[str, Any]:
         ),
         "error": _clip(row["error"]) if row.get("error") else None,
         "reason": _clip(row["reason"]) if row.get("reason") else None,
+        "tick_reason": _receipt_scalar(tick.get("reason"), 160),
+        "retry_count": _receipt_scalar(tick.get("retry_count"), 20),
+        "next_retry_at": _receipt_scalar(tick.get("next_retry_at"), 40),
+        "start_error": _receipt_scalar(
+            tick.get("start_error")
+            or (tick.get("start_receipt") or {}).get("start_error")
+            or (tick.get("start_receipt") or {}).get("error"),
+            160,
+        ),
         "completion_wake": (
             _receipt_scalar(
                 (wake or {}).get("status")
@@ -242,6 +254,7 @@ class DaemonConfig:
     # limits.
     max_deliverables_per_tick: int = 64
     max_tasks_per_scope_tick: int = 64
+    mission_bot_v5_max_concurrency: int = 3
     lifecycle_enabled: bool = True
     review_reserved_slots: int = 1
     # Journald safety: the steady-state tick line is a bounded summary; the
@@ -270,6 +283,8 @@ class DaemonConfig:
                 1, int(env.get("PM_COORDINATOR_AUTOPILOT_MAX_DELIVERABLES", "64"))),
             max_tasks_per_scope_tick=max(
                 1, int(env.get("PM_COORDINATOR_AUTOPILOT_MAX_TASKS_PER_SCOPE", "64"))),
+            mission_bot_v5_max_concurrency=max(
+                1, int(env.get("PM_MISSION_BOT_V5_MAX_CONCURRENCY", "3"))),
             lifecycle_enabled=enabled_from_env(
                 "PM_COORDINATOR_AUTOPILOT_LIFECYCLE", True, env),
             review_reserved_slots=max(
@@ -896,10 +911,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     if config.act:
         # ACT=1: this process owns and drives operator-armed scopes. ACT=0 stays
         # the janitor above. One switch, matching docs/COORDINATOR-AUTOPILOT.md.
-        from switchboard.application.mission_bot_v4.coordinator import (
-            V4ScopedCompletionCoordinator,
+        from switchboard.application.mission_bot_v5.coordinator import (
+            V5ScopedCompletionCoordinator,
         )
-        daemon = V4ScopedCompletionCoordinator(
+        daemon = V5ScopedCompletionCoordinator(
             config, store_mod=store,
             agent_id=f"{config.actor}/{uuid.uuid4().hex[:12]}")
     else:

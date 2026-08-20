@@ -1,10 +1,10 @@
 # Durable deliverable autopilot (COORD-8)
 
-`coordinator_daemon.py` runs the existing deliverable mission coordinator as a
-durable service profile. It owns one lifecycle decision stream: Ready tasks,
-review, remediation, merge, and reconciliation all flow through the same leader.
-Every task-session transition calls `Task Execution.start_task(role=...)`; the
-Execution service alone owns idempotency, placement, assignment, and transport.
+`coordinator_daemon.py` runs Mission Bot v5 as a durable scoped pager. It reads
+one fenced `autopilot_scopes` lease, `runner_sessions` liveness, mission events,
+dependencies, and terminal provenance. Its only work-driving effect is
+`Task Execution.start_task(role=...)`. Task Execution alone owns idempotency,
+placement, assignment, and transport.
 
 UI-27 makes the durable scope table the arming boundary. The shipped service is
 effect-capable (`PM_COORDINATOR_AUTOPILOT_ACT=1`) but does no work while there

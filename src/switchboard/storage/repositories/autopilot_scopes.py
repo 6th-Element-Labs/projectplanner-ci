@@ -712,7 +712,8 @@ def start_task_scope_in(
 def acquire_autopilot_scope_lease(
         scope_id: str, *, holder_agent_id: str,
         project: str = DEFAULT_PROJECT, ttl_seconds: int = 120,
-        now: Optional[float] = None) -> Dict[str, Any]:
+        now: Optional[float] = None,
+        registration_required: bool = True) -> Dict[str, Any]:
     """Acquire or renew the sole fenced coordinator authority for one scope."""
     at = time.time() if now is None else float(now)
     holder = str(holder_agent_id or "").strip()
@@ -720,18 +721,19 @@ def acquire_autopilot_scope_lease(
         return {"error": "holder_agent_id required", "scope_id": scope_id}
     ttl = max(30, min(int(ttl_seconds or 120), 3600))
     with _conn(project) as c:
-        presence = c.execute(
-            "SELECT heartbeat_at,ttl_s FROM agent_presence WHERE agent_id=?",
-            (holder,),
-        ).fetchone()
-        if (not presence
-                or float(presence["heartbeat_at"] or 0)
-                + int(presence["ttl_s"] or 0) <= at):
-            return {
-                "error": "scope_holder_not_registered",
-                "scope_id": scope_id,
-                "holder_agent_id": holder,
-            }
+        if registration_required:
+            presence = c.execute(
+                "SELECT heartbeat_at,ttl_s FROM agent_presence WHERE agent_id=?",
+                (holder,),
+            ).fetchone()
+            if (not presence
+                    or float(presence["heartbeat_at"] or 0)
+                    + int(presence["ttl_s"] or 0) <= at):
+                return {
+                    "error": "scope_holder_not_registered",
+                    "scope_id": scope_id,
+                    "holder_agent_id": holder,
+                }
         row = c.execute(
             "SELECT scope_id,status,lease_id,holder_agent_id,generation,"
             "fence_epoch,expires_at,scope_type,deliverable_id,task_project,task_id "

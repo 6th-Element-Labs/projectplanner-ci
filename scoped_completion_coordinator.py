@@ -56,12 +56,21 @@ class ScopedCompletionCoordinator(CoordinatorDaemon):
     ) -> Dict[str, Any]:
         """Require an explicit lifecycle engine implementation.
 
-        The production entrypoint constructs ``V4ScopedCompletionCoordinator``.
+        The production entrypoint constructs ``V5ScopedCompletionCoordinator``.
         Keeping this base class engine-free prevents a retired controller from
         remaining as a hidden fallback or second writer.
         """
         raise RuntimeError(
             "scoped completion coordinator requires an explicit lifecycle engine"
+        )
+
+    def _acquire_scope_authority(
+        self, project: str, scope: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self.store.acquire_autopilot_scope_lease(
+            scope["scope_id"], holder_agent_id=self.agent_id,
+            project=project, ttl_seconds=self.config.lease_ttl_seconds,
+            now=float(self.clock()),
         )
 
 
@@ -127,10 +136,7 @@ class ScopedCompletionCoordinator(CoordinatorDaemon):
     def run_scope(self, project: str, scope: Dict[str, Any],
                   denied_lanes: Iterable[str] = ()) -> Dict[str, Any]:
         self._register_or_heartbeat(project)
-        authority = self.store.acquire_autopilot_scope_lease(
-            scope["scope_id"], holder_agent_id=self.agent_id,
-            project=project, ttl_seconds=self.config.lease_ttl_seconds,
-            now=float(self.clock()))
+        authority = self._acquire_scope_authority(project, scope)
         if authority.get("error"):
             return {
                 "status": "scope_authority_denied",

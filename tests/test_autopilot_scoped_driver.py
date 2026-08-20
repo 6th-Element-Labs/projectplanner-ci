@@ -173,8 +173,8 @@ ok(persisted.get("schema") == "switchboard.autopilot_scope_result_summary.v1"
 # --- 3. construction: ACT decides the class --------------------------------
 entry_src = (ROOT / "coordinator_daemon.py").read_text(encoding="utf-8")
 ok("if config.act:" in entry_src
-   and "V4ScopedCompletionCoordinator(" in entry_src,
-   "the entrypoint constructs only V4ScopedCompletionCoordinator when ACT=1")
+   and "V5ScopedCompletionCoordinator(" in entry_src,
+   "the entrypoint constructs only V5ScopedCompletionCoordinator when ACT=1")
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

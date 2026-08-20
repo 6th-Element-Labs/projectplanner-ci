@@ -936,6 +936,7 @@ def _arm_task_scope(task_id: str, *, project: str, role: str,
 def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "user",
                principal_id: str = "", agent_id: str = "",
                operator_launch_authorized: bool = False,
+               scope_launch_authorized: bool = False,
                role: str = "implementation",
                runtime: str = "codex", source_sha: str = "",
                instruction: str = "", findings: Optional[list[dict[str, Any]]] = None,
@@ -963,7 +964,9 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
         "actor": actor,
         "binding": "authorized_operator_launch",
         "principal_id": principal_id,
-    } if operator_launch_authorized else access_repo.resolve_write_actor(
+    } if (
+        operator_launch_authorized or scope_launch_authorized
+    ) else access_repo.resolve_write_actor(
         actor, project=project, task_id=task_id, agent_id=agent_id,
         principal_id=principal_id))
     if not binding.get("ok"):
@@ -976,7 +979,7 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
     caller_agent_id = str(binding.get("agent_id") or "").strip()
     actor = str(binding.get("actor") or actor)
     active_claim = coordination_repo.task_start_ownership(task_id, project=project)
-    if active_claim and (
+    if active_claim and not scope_launch_authorized and (
             not caller_agent_id
             or caller_agent_id != str(active_claim.get("agent_id") or "")):
         raise TaskExecutionError(
@@ -1139,7 +1142,7 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
     pending_agent_id = str(
         ((pending.get("selector") or {}).get("agent_id")
          if isinstance(pending, dict) else "") or "")
-    if (pending and caller_agent_id and pending_agent_id
+    if (pending and not scope_launch_authorized and caller_agent_id and pending_agent_id
             and pending_agent_id != caller_agent_id):
         raise TaskExecutionError(
             "start_refused",

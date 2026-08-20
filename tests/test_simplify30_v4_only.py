@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SIMPLIFY-30: v4 is the only production Mission Bot lifecycle writer."""
+"""Mission Bot v5 is the only production lifecycle writer."""
 from pathlib import Path
 
 from path_setup import ROOT
@@ -27,15 +27,20 @@ for removed in (
 
 daemon = read("coordinator_daemon.py")
 scoped = read("scoped_completion_coordinator.py")
-v4_surface = read("src/switchboard/application/mission_bot_v4/__init__.py")
+v5_surface = read("src/switchboard/application/mission_bot_v5/__init__.py")
+v5_worker = read("src/switchboard/application/mission_bot_v5/worker.py")
 
-assert "V4ScopedCompletionCoordinator(" in daemon
+assert "V5ScopedCompletionCoordinator(" in daemon
+assert "V4ScopedCompletionCoordinator(" not in daemon
 assert "daemon = ScopedCompletionCoordinator(" not in daemon
 assert "completion_driver" not in scoped
 assert "drain_completion_wakes" not in scoped
 assert "complete_completion_wake_for_tick" not in scoped
 assert "requires an explicit lifecycle engine" in scoped
-assert "run_shadow" not in v4_surface
-assert "run_scoped_mission_tick" in v4_surface
+assert "run_shadow" not in v5_surface
+assert "run_scoped_mission_tick" in v5_surface
+assert "mission_bot_v4" not in v5_surface
+assert "mission_launch_pointer" not in v5_worker
+assert "has_pending_capacity_attempt" not in v5_worker
 
-print("SIMPLIFY-30 v4-only production writer: PASS")
+print("Mission Bot v5-only production writer: PASS")
