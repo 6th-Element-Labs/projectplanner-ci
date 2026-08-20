@@ -4130,12 +4130,23 @@ def _direct_work_session_binding(session, work_sessions, *, allowed_statuses=Non
     matches = []
     for candidate in work_sessions or []:
         env = dict(candidate.get("env") or {})
+        candidate_runner_id = str(
+            candidate.get("runner_session_id") or "").strip()
+        candidate_execution_id = str(
+            env.get("execution_id") or candidate.get("execution_id") or "").strip()
+        candidate_generation = (
+            env.get("execution_generation")
+            if env.get("execution_generation") not in (None, "")
+            else candidate.get("execution_generation")
+        )
         if (str(candidate.get("status") or "").lower() not in allowed
                 or str(candidate.get("principal_id") or "") != expected_principal
                 or str(candidate.get("task_id") or "").upper() != task_id
                 or str(candidate.get("agent_id") or "") != agent_id
                 or not str(candidate.get("claim_id") or "").strip()
                 or not str(candidate.get("work_session_id") or "").strip()):
+            continue
+        if candidate_runner_id and candidate_runner_id != runner_session_id:
             continue
         if (claim_id
                 and str(candidate.get("claim_id") or "").strip() != claim_id):
@@ -4144,11 +4155,12 @@ def _direct_work_session_binding(session, work_sessions, *, allowed_statuses=Non
                 and str(candidate.get("work_session_id") or "").strip()
                 != work_session_id):
             continue
-        if (execution_id
-                and str(env.get("execution_id") or "").strip() != execution_id):
+        if execution_id and candidate_execution_id \
+                and candidate_execution_id != execution_id:
             continue
         if (generation not in (None, "")
-                and str(env.get("execution_generation") or "") != str(generation)):
+                and candidate_generation not in (None, "")
+                and str(candidate_generation) != str(generation)):
             continue
         matches.append(candidate)
     return dict(matches[0]) if len(matches) == 1 else None

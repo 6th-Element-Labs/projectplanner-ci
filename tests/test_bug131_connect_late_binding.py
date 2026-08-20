@@ -40,7 +40,9 @@ def work_session(status="active"):
         "work_session_id": "worksession-bug131", "claim_id": "taskclaim-bug131",
         "principal_id": f"direct-session/{RUN_ID}", "task_id": TASK_ID,
         "agent_id": AGENT_ID, "status": status,
-        "env": {"execution_id": "exec-bug131", "execution_generation": 2},
+        "runner_session_id": RUN_ID,
+        "execution_generation": 2,
+        "env": {},
     }
 
 
@@ -91,7 +93,7 @@ try:
     }, "preflight validation carries the exact host execution tuple")
 
     mismatched = work_session()
-    mismatched["env"]["execution_generation"] = 1
+    mismatched["execution_generation"] = 1
     ok(agent_host._direct_work_session_binding(runner(), [mismatched]) is None,
        "a Work Session from another execution generation fails closed")
     claimed_runner = runner()
