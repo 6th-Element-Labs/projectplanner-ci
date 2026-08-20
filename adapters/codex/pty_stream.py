@@ -859,6 +859,46 @@ def _start_pty_attention_watcher(
         return None
 
 
+def _start_codex_telemetry_collector(
+    *, child_command: list[str] | None, child_cwd: str, log_path: str,
+    runner_session_id: str, task_id: str, host_id: str, started_at: float,
+):
+    """Attach safe rollout telemetry to an interactive Codex Connect run."""
+    command = list(child_command or [])
+    executable = Path(command[0]).name.lower() if command else ""
+    if "codex" not in executable:
+        return None
+    codex_home = str(os.environ.get("CODEX_HOME") or "").strip()
+    if not codex_home or not Path(codex_home).is_dir():
+        return None
+    try:
+        from switchboard.application.codex_telemetry import (
+            CodexRolloutTelemetryCollector,
+            binding_from_environment,
+        )
+        event_path = Path(log_path).resolve().parent / "codex-telemetry.jsonl"
+        collector = CodexRolloutTelemetryCollector(
+            codex_home=codex_home,
+            cwd=child_cwd or os.getcwd(),
+            binding=binding_from_environment(
+                runner_session_id=runner_session_id,
+                task_id=task_id,
+                host_id=host_id,
+                command=command,
+            ),
+            event_path=event_path,
+            started_at=started_at,
+            poll_interval=float(
+                os.environ.get("PM_CODEX_TELEMETRY_POLL_SECONDS") or 0.5),
+        )
+        return collector.start()
+    except Exception as exc:  # noqa: BLE001 — telemetry cannot brick execution
+        sys.stderr.write(
+            f"codex_telemetry_collector_disabled:{type(exc).__name__}:{exc}\n")
+        sys.stderr.flush()
+        return None
+
+
 def serve(
     *,
     master_fd: int,
@@ -878,6 +918,7 @@ def serve(
     initial_rows: int = 40,
     initial_cols: int = 120,
 ) -> int:
+    child_started_at = time.time()
     slave_fd = -1
     if child_command:
         # This process is the execution authority: it allocates the PTY before
@@ -1046,10 +1087,24 @@ def serve(
         child_pid=int(child_pid or 0),
         child_process=child_process,
     )
+    telemetry_collector = _start_codex_telemetry_collector(
+        child_command=child_command,
+        child_cwd=child_cwd,
+        log_path=log_path,
+        runner_session_id=runner_session_id,
+        task_id=str(task_id or ""),
+        host_id=host_id,
+        started_at=child_started_at,
+    )
     threading.Thread(target=pump_until_host_ws, name="pty-pump", daemon=True).start()
     try:
         server.serve_forever(poll_interval=0.05)
     finally:
+        if telemetry_collector is not None:
+            try:
+                telemetry_collector.stop()
+            except Exception:
+                pass
         if attention_watcher is not None:
             try:
                 attention_watcher.stop()

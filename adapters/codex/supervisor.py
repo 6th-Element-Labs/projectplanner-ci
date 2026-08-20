@@ -163,9 +163,43 @@ def _assignment_workspace(meta, runner_dir=None):
     return ""
 
 
+def _codex_telemetry_summary(meta):
+    command = list(meta.get("command") or [])
+    executable = Path(command[0]).name.lower() if command else ""
+    if "codex" not in executable:
+        return None
+    log_path = str(meta.get("log_path") or "").strip()
+    if not log_path:
+        return {"status": "not_available", "reason": "runner_log_path_missing"}
+    summary_path = Path(log_path).resolve().with_name(
+        "codex-telemetry-summary.json")
+    event_path = summary_path.with_name("codex-telemetry.jsonl")
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {
+            "status": "pending",
+            "event_path": str(event_path),
+            "summary_path": str(summary_path),
+        }
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        return {
+            "status": "invalid",
+            "reason": type(exc).__name__,
+            "event_path": str(event_path),
+            "summary_path": str(summary_path),
+        }
+    return {
+        "status": "captured",
+        "event_path": str(event_path),
+        "summary_path": str(summary_path),
+        **summary,
+    }
+
+
 def _snapshot(meta, runner_dir=None):
     cwd = _assignment_workspace(meta, runner_dir) or meta.get("cwd") or os.getcwd()
-    return {
+    snapshot = {
         "captured_at": _now(),
         "runner_session_id": meta.get("runner_session_id"),
         "agent_id": meta.get("agent_id"),
@@ -183,6 +217,10 @@ def _snapshot(meta, runner_dir=None):
         "diff_check": _git(["diff", "--check", "HEAD"], cwd),
         "log_tail": _tail(meta.get("log_path", "")),
     }
+    telemetry = _codex_telemetry_summary(meta)
+    if telemetry is not None:
+        snapshot["codex_telemetry"] = telemetry
+    return snapshot
 
 
 def _await_stream_ready(ready_path: Path, timeout_s: float | None = None) -> dict:

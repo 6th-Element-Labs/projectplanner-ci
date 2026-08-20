@@ -4,19 +4,24 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from pathlib import Path
 import selectors
 import subprocess
 import time
 import tomllib
-from typing import Any, Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
+from pathlib import Path
+from typing import Any
 
+from switchboard.application.codex_telemetry import (
+    CodexTelemetryWriter,
+    binding_from_environment,
+    sanitize_app_server_message,
+)
 from switchboard.connect.execution_assignment import (
     CODEX_CONTEXT_PROFILE_SCHEMA,
     ExecutionAssignmentError,
     resolve_codex_context_profile,
 )
-
 
 PINNED_CODEX_VERSION = "0.144.5"
 ATTENTION_METHODS = {
@@ -256,7 +261,7 @@ class CodexAppServer:
         self, command: list[str], *, cwd: str, env: dict[str, str],
         http: Callable[..., dict[str, Any]], binding: dict[str, str],
         popen: Callable[..., Any] = subprocess.Popen, poll_interval: float = 1.0,
-        journal_path: str = "", context_profile: str = "",
+        journal_path: str = "", context_profile: str = "", telemetry_path: str = "",
     ):
         self.command = command
         self.cwd = cwd
@@ -274,6 +279,21 @@ class CodexAppServer:
         configured_journal = journal_path or str(
             os.environ.get("PM_CODEX_APP_SERVER_JOURNAL") or "").strip()
         self.journal_path = Path(configured_journal).resolve() if configured_journal else None
+        configured_telemetry = str(telemetry_path or "").strip()
+        if not configured_telemetry and self.journal_path:
+            configured_telemetry = str(
+                self.journal_path.with_name("codex-telemetry.jsonl"))
+        self.telemetry = (
+            CodexTelemetryWriter(configured_telemetry)
+            if configured_telemetry else None
+        )
+        self.telemetry_binding = binding_from_environment(
+            runner_session_id=str(binding.get("runner_session_id") or ""),
+            task_id=str(binding.get("task_id") or ""),
+            host_id=str(binding.get("host_id") or ""),
+            command=command,
+            environment=env,
+        )
         if self.journal_path and self.journal_path.is_file():
             saved = json.loads(self.journal_path.read_text(encoding="utf-8"))
             if saved.get("binding") != self.binding:
@@ -447,6 +467,9 @@ class CodexAppServer:
                         continue
                     output.append(line)
                     message = json.loads(line)
+                    if self.telemetry is not None:
+                        self.telemetry.append(sanitize_app_server_message(
+                            message, self.telemetry_binding))
                     if message.get("id") == initialize_id and "result" in message:
                         self._send(process, {"jsonrpc": "2.0", "method": "initialized",
                                              "params": {}})

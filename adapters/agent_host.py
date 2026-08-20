@@ -2327,6 +2327,7 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
             execution_context = dict(
                 (wake.get("policy") or {}).get("execution_context") or {})
             env.update({
+                "SWITCHBOARD_TELEMETRY_PROJECT": _wake_project(wake),
                 "SWITCHBOARD_CONNECT_ASSIGNMENT_ID": str(
                     assignment.get("assignment_id") or ""),
                 "SWITCHBOARD_CONNECT_PRINCIPAL_REF": str(
@@ -2668,7 +2669,7 @@ def _host_repo_preflight(rec, inventory, metadata=None):
             "failure_class": "conflict_markers", "severity": "high", "blocking": True,
         })
     blocking = any(item.get("blocking") for item in findings)
-    return {
+    result = {
         "schema": "switchboard.repo_preflight.v1",
         "attestation_schema": "switchboard.agent_host_repo_preflight.v1",
         "source": "agent_host_attestation",
@@ -2689,6 +2690,9 @@ def _host_repo_preflight(rec, inventory, metadata=None):
         "verdict": "deny" if blocking else "pass",
         "ok": not blocking,
     }
+    if isinstance(snap.get("codex_telemetry"), dict):
+        result["codex_telemetry"] = snap["codex_telemetry"]
+    return result
 
 
 def report_cloud_usage(rec, wake):
