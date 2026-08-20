@@ -231,6 +231,46 @@ def _same_pr_reference(current: Dict[str, Any], evidence_obj: Dict[str, Any]) ->
     return bool(current_url and incoming_url and current_url == incoming_url)
 
 
+def _verified_remediation_head(evidence_obj: Dict[str, Any]) -> str:
+    """Return a head only when two server receipts prove the same commit."""
+    head_sha = str(evidence_obj.get("head_sha") or "").strip().lower()
+    pr_ready = evidence_obj.get("pr_ready")
+    test_run = evidence_obj.get("executed_test_run")
+    if (
+        not re.fullmatch(r"[0-9a-f]{40}", head_sha)
+        or not isinstance(pr_ready, dict)
+        or not isinstance(test_run, dict)
+    ):
+        return ""
+    if pr_ready.get("schema") != "switchboard.pr_ready.v1":
+        return ""
+    if pr_ready.get("status") not in {"already_ready", "marked_ready"}:
+        return ""
+    if pr_ready.get("is_draft") is not False or test_run.get("passed") is not True:
+        return ""
+    if test_run.get("exit_code") != 0 or not test_run.get("commands"):
+        return ""
+    if not str(test_run.get("run_id") or "").startswith("testrun-"):
+        return ""
+    if not re.fullmatch(
+        r"[0-9a-f]{64}", str(test_run.get("output_sha256") or "").strip().lower()
+    ):
+        return ""
+    if str(pr_ready.get("head_sha") or "").strip().lower() != head_sha:
+        return ""
+    if str(test_run.get("head_sha") or "").strip().lower() != head_sha:
+        return ""
+    evidence_pr = evidence_obj.get("pr_number")
+    ready_pr = pr_ready.get("pr_number")
+    if evidence_pr is not None and ready_pr is not None and str(evidence_pr) != str(ready_pr):
+        return ""
+    evidence_url = str(evidence_obj.get("pr_url") or "").strip()
+    ready_url = str(pr_ready.get("pr_url") or "").strip()
+    if evidence_url and ready_url and evidence_url != ready_url:
+        return ""
+    return head_sha
+
+
 def _preserve_provider_pr_evidence(current: Dict[str, Any],
                                    updates: Dict[str, Any],
                                    evidence_obj: Dict[str, Any],
@@ -322,6 +362,34 @@ def _preserve_provider_pr_evidence(current: Dict[str, Any],
             if current.get(field) not in (None, "", False):
                 updates[field] = current.get(field)
         return updates
+    verified_head = _verified_remediation_head(evidence_obj)
+    current_head = str(current.get("head_sha") or "").strip().lower()
+    if verified_head and verified_head != current_head:
+        # Some recovered/remediation executions predate full Execution Context
+        # bindings. The PR-ready adapter and executed-test registry are still
+        # server-owned exact-head receipts, so together they may advance only
+        # the head of the already-bound PR. Provider branch and PR identity stay
+        # authoritative.
+        updates["branch"] = current.get("branch") or updates.get("branch")
+        updates["head_sha"] = verified_head
+        updates["pr_number"] = current.get("pr_number") or updates.get("pr_number")
+        updates["pr_url"] = current.get("pr_url") or updates.get("pr_url")
+        updates["evidence"] = {
+            **evidence_obj,
+            "branch": updates.get("branch"),
+            "head_sha": verified_head,
+            "pr_number": updates.get("pr_number"),
+            "pr_url": updates.get("pr_url"),
+            "provider_evidence_advanced": {
+                "source": "pr_ready_and_executed_test_run",
+                "previous_head_sha": current_head,
+                "head_sha": verified_head,
+            },
+        }
+        for field in ("merged_sha", "merged_at", "in_main_content"):
+            if current.get(field) not in (None, "", False):
+                updates[field] = current.get(field)
+        return updates
     provider = {
         field: current.get(field)
         for field in ("branch", "head_sha", "pr_number", "pr_url")
@@ -348,6 +416,33 @@ def _preserve_provider_pr_evidence(current: Dict[str, Any],
         }
     updates["evidence"] = preserved_evidence
     return updates
+
+
+def _verified_remediation_reconcile_updates(
+    current: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Recover a verified remediation head from completed-claim evidence."""
+    current_evidence = dict(current.get("evidence") or {})
+    claim_evidence = current_evidence.get("claim_evidence")
+    if not isinstance(claim_evidence, dict):
+        return {}
+    evidence_obj = {**current_evidence, **claim_evidence}
+    verified_head = _verified_remediation_head(evidence_obj)
+    current_head = str(current.get("head_sha") or "").strip().lower()
+    if not verified_head or verified_head == current_head:
+        return {}
+    return _preserve_provider_pr_evidence(
+        current,
+        {
+            "branch": evidence_obj.get("branch"),
+            "head_sha": verified_head,
+            "pushed_at": current.get("pushed_at"),
+            "pr_number": evidence_obj.get("pr_number"),
+            "pr_url": evidence_obj.get("pr_url"),
+            "evidence": evidence_obj,
+        },
+        evidence_obj,
+    )
 
 
 def mark_task_pr_opened(task_id: str, pr_number: int, pr_url: str = "",
@@ -1936,6 +2031,11 @@ def reconcile(project: str = DEFAULT_PROJECT, incremental: bool = False,
         for row in rows:
             task = _task_row(row)
             git_state = _load_git_state(c, task["task_id"])
+            remediation_updates = _verified_remediation_reconcile_updates(git_state)
+            if remediation_updates:
+                git_state = _upsert_git_state(
+                    c, task["task_id"], remediation_updates,
+                )
             tasks.append(task)
             status = task.get("status")
             # PR-evidence hydration retired (ADR-0006): pr_number is now derived from a
@@ -2278,7 +2378,9 @@ __all__ = [
     "_parse_evidence",
     "_upsert_git_state",
     "_same_pr_reference",
+    "_verified_remediation_head",
     "_preserve_provider_pr_evidence",
+    "_verified_remediation_reconcile_updates",
     "mark_task_pr_opened",
     "_mark_task_pr_opened_impl",
     "mark_task_merged",

@@ -1425,6 +1425,77 @@ try:
        "complete_claim preserves existing webhook PR head over stale claim evidence")
     ok(provider_after["git_state"]["evidence"]["provider_evidence_preserved"]["conflicts"]["head_sha"]["claim"] == "stalehead",
        "complete_claim records stale claim evidence conflict")
+    verified_head = "2" * 40
+    current_provider = {
+        "branch": "codex/remediation",
+        "head_sha": "1" * 40,
+        "pr_number": 5,
+        "pr_url": "https://github.com/example/repo/pull/5",
+    }
+    verified_evidence = {
+        "branch": "codex/remediation-worktree",
+        "head_sha": verified_head,
+        "pr_number": 5,
+        "pr_url": "https://github.com/example/repo/pull/5",
+        "pr_ready": {
+            "schema": "switchboard.pr_ready.v1",
+            "status": "already_ready",
+            "is_draft": False,
+            "head_sha": verified_head,
+            "pr_number": 5,
+            "pr_url": "https://github.com/example/repo/pull/5",
+        },
+        "executed_test_run": {
+            "commands": ["python -m pytest"],
+            "exit_code": 0,
+            "output_sha256": "3" * 64,
+            "passed": True,
+            "run_id": "testrun-remediation",
+            "head_sha": verified_head,
+        },
+    }
+    advanced = store._preserve_provider_pr_evidence(
+        current_provider,
+        {"evidence": verified_evidence},
+        verified_evidence,
+    )
+    ok(
+        advanced["head_sha"] == verified_head,
+        "complete_claim advances provider head when PR-ready and test receipts agree",
+    )
+    ok(
+        advanced["branch"] == "codex/remediation",
+        "verified remediation keeps the provider-owned PR branch",
+    )
+    reconciled = store._verified_remediation_reconcile_updates(
+        {
+            **current_provider,
+            "evidence": {
+                "executed_test_run": verified_evidence["executed_test_run"],
+                "claim_evidence": verified_evidence,
+            },
+        }
+    )
+    ok(
+        reconciled["head_sha"] == verified_head,
+        "reconcile repairs a previously completed verified remediation head",
+    )
+    unverified_evidence = {
+        **verified_evidence,
+        "executed_test_run": {
+            **verified_evidence["executed_test_run"],
+            "head_sha": "4" * 40,
+        },
+    }
+    preserved = store._preserve_provider_pr_evidence(
+        current_provider,
+        {"evidence": unverified_evidence},
+        unverified_evidence,
+    )
+    ok(
+        preserved["head_sha"] == current_provider["head_sha"],
+        "complete_claim preserves provider head when server receipts disagree",
+    )
     merged = store.mark_task_merged(first["task_id"], "merge789", 1, "https://example/pr/1",
                                     "claude/TEST-1-first", "abc123",
                                     actor="github-webhook", project=P)
