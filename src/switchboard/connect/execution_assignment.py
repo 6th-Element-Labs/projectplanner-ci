@@ -18,6 +18,25 @@ MISSION_LAUNCH_POINTER_SCHEMA = "switchboard.mission_launch_pointer.v4"
 REVIEW_REMEDIATION_POINTER_SCHEMA = (
     "switchboard.review_remediation_launch_pointer.v4"
 )
+CODEX_CONTEXT_PROFILE_SCHEMA = "switchboard.codex_context_profile.v1"
+
+# These are names, not free-form Codex command fragments.  The same catalog is
+# imported by the host launcher, so Coordination and Capacity cannot silently
+# disagree about what a selected profile means.
+CODEX_CONTEXT_PROFILES: dict[str, dict[str, Any]] = {
+    "luna-max-large-codebase": {
+        "model": "gpt-5.6-luna",
+        "reasoning_effort": "max",
+        "context_window": 600000,
+        "auto_compact_token_limit": 500000,
+    },
+    "luna-max-long-running": {
+        "model": "gpt-5.6-luna",
+        "reasoning_effort": "max",
+        "context_window": 800000,
+        "auto_compact_token_limit": 720000,
+    },
+}
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 _MISSION_POINTER_FIELDS = frozenset({
     "schema",
@@ -67,6 +86,7 @@ CONTRACT_FIELDS: tuple[str, ...] = (
     "claim_expectations",
     "typed_tools",
     "session_policy_profile",
+    "context_profile",
     "verification_profile",
     "launch_pointer",
 )
@@ -137,6 +157,74 @@ class ExecutionAssignmentError(ValueError):
     def __init__(self, code: str):
         super().__init__(code)
         self.code = code
+
+
+def resolve_codex_context_profile(profile: Any) -> tuple[str, dict[str, Any]]:
+    """Resolve one allowlisted Codex context profile.
+
+    The wire contract carries only the profile name.  Keeping the effective
+    values in this module lets the server, Agent Host, and native worker use the
+    same validated tuple without passing provider command text through a wake.
+    """
+    selected = str(profile or "").strip().lower()
+    if not selected:
+        return "", {}
+    values = CODEX_CONTEXT_PROFILES.get(selected)
+    if not isinstance(values, dict):
+        raise ExecutionAssignmentError("execution_assignment_context_profile_unknown")
+    model = str(values.get("model") or "").strip()
+    effort = str(values.get("reasoning_effort") or "").strip().lower()
+    try:
+        context_window = int(values.get("context_window") or 0)
+        auto_compact = int(values.get("auto_compact_token_limit") or 0)
+    except (TypeError, ValueError) as exc:
+        raise ExecutionAssignmentError(
+            "execution_assignment_context_profile_invalid") from exc
+    if (
+        not model
+        or effort != "max"
+        or context_window <= 0
+        or auto_compact <= 0
+        or auto_compact >= context_window
+    ):
+        raise ExecutionAssignmentError("execution_assignment_context_profile_invalid")
+    return selected, {
+        "schema": CODEX_CONTEXT_PROFILE_SCHEMA,
+        "profile": selected,
+        "model": model,
+        "reasoning_effort": effort,
+        "context_window": context_window,
+        "auto_compact_token_limit": auto_compact,
+    }
+
+
+def context_profile_from_lifecycle(lifecycle: Mapping[str, Any]) -> str:
+    """Return the canonical profile name from a lifecycle request.
+
+    A few launch surfaces existed before this field was named.  Accepting their
+    read-only aliases at the boundary keeps adapters interoperable while the
+    server emits only ``context_profile`` in the immutable assignment.
+    """
+    supplied = [
+        str(lifecycle.get(key) or "").strip().lower()
+        for key in (
+            "context_profile",
+            "profile",
+            "codex_profile",
+            "launcher_profile",
+            "codex_context_profile",
+            "model_profile",
+            "requested_context_profile",
+        )
+        if str(lifecycle.get(key) or "").strip()
+    ]
+    if not supplied:
+        return ""
+    if len(set(supplied)) != 1:
+        raise ExecutionAssignmentError(
+            "execution_assignment_context_profile_conflict")
+    selected, _ = resolve_codex_context_profile(supplied[0])
+    return selected
 
 
 def normalize_mission_launch_pointer(
@@ -352,6 +440,16 @@ def build_execution_assignment(
     }
     if profile:
         contract["session_policy_profile"] = profile
+    context_profile = context_profile_from_lifecycle(lifecycle)
+    if context_profile:
+        runtime = str(
+            (context.get("runtime") or {}).get("registry_name")
+            or assignment.get("runtime") or ""
+        ).strip().lower()
+        if runtime and runtime not in {"codex", "openai"}:
+            raise ExecutionAssignmentError(
+                "execution_assignment_context_profile_runtime_invalid")
+        contract["context_profile"] = context_profile
     verification_profile = str(
         lifecycle.get("verification_profile") or ""
     ).strip().lower()

@@ -22,6 +22,10 @@ from typing import Any, Callable, Mapping, Optional
 from constants import DEFAULT_PROJECT
 from switchboard.application.commands import runner_pty as runner_pty_command
 from switchboard.application.queries import task_session as task_session_query
+from switchboard.connect.execution_assignment import (
+    ExecutionAssignmentError,
+    context_profile_from_lifecycle,
+)
 from switchboard.security import redact_provider_secrets
 from switchboard.storage.repositories import completion_runs as completion_runs_repo
 from switchboard.storage.repositories import coordination as coordination_repo
@@ -196,6 +200,145 @@ def _in_flight_wake(projection: dict[str, Any]) -> Optional[dict[str, Any]]:
     if projection.get("lifecycle_phase") == "start_failed_retry":
         return None
     return attempt
+
+
+_CONTEXT_PROFILE_ALIASES = (
+    "context_profile",
+    "profile",
+    "codex_profile",
+    "launcher_profile",
+    "codex_context_profile",
+    "model_profile",
+    "requested_context_profile",
+)
+
+
+def _context_profile_request(*, task_id: str, project: str,
+                             context_profile: str = "", profile: str = "",
+                             codex_profile: str = "", launcher_profile: str = "",
+                             codex_context_profile: str = "",
+                             model_profile: str = "",
+                             requested_context_profile: str = "") -> str:
+    """Normalize and validate a caller's named Codex profile before Start branches."""
+    supplied = {
+        "context_profile": context_profile,
+        "profile": profile,
+        "codex_profile": codex_profile,
+        "launcher_profile": launcher_profile,
+        "codex_context_profile": codex_context_profile,
+        "model_profile": model_profile,
+        "requested_context_profile": requested_context_profile,
+    }
+    try:
+        return context_profile_from_lifecycle(supplied)
+    except ExecutionAssignmentError as exc:
+        raise TaskExecutionError(
+            "invalid_input",
+            "Codex context profile request is invalid.",
+            task_id=task_id,
+            project=project,
+            start_error=exc.code,
+            diagnostic_cause=str(exc),
+        ) from exc
+
+
+def _persisted_context_profile(*, task_id: str, project: str,
+                               active_runner: Mapping[str, Any] | None,
+                               pending: Mapping[str, Any] | None,
+                               attempt: Mapping[str, Any] | None = None) -> str:
+    """Read the profile stamped on the live or pending generation.
+
+    A pending wake exposes the immutable assignment through Task Execution's
+    projection. A live Agent Host exposes the same value in its redacted launch
+    receipt; accepting the assignment metadata as well keeps this check safe
+    during the brief registration window before the receipt is copied to the
+    runner row.
+    """
+    candidates: list[tuple[str, Mapping[str, Any]]] = []
+
+    def add(source: str, value: Any) -> None:
+        if not isinstance(value, Mapping):
+            return
+        if any(str(value.get(key) or "").strip() for key in _CONTEXT_PROFILE_ALIASES):
+            candidates.append((source, value))
+        elif str(value.get("profile") or "").strip():
+            candidates.append((source, {"context_profile": value.get("profile")}))
+
+    if isinstance(pending, Mapping):
+        add("pending execution", pending)
+        add("pending assignment", pending.get("execution_assignment"))
+
+    if isinstance(attempt, Mapping) and attempt is not pending:
+        add("execution attempt", attempt)
+        add("execution assignment", attempt.get("execution_assignment"))
+
+    if isinstance(active_runner, Mapping):
+        metadata = active_runner.get("metadata")
+        if isinstance(metadata, Mapping):
+            add("live runner", metadata)
+            add("live assignment", metadata.get("execution_assignment"))
+            add("live launch receipt", metadata.get("codex_launch_receipt"))
+
+    resolved: list[tuple[str, str]] = []
+    for source, value in candidates:
+        try:
+            selected = context_profile_from_lifecycle(value)
+        except ExecutionAssignmentError as exc:
+            raise TaskExecutionError(
+                "invalid_input",
+                "Persisted Codex context profile is invalid.",
+                task_id=task_id,
+                project=project,
+                start_error=exc.code,
+                diagnostic_cause=str(exc),
+                profile_source=source,
+            ) from exc
+        if selected:
+            resolved.append((source, selected))
+
+    distinct = {selected for _, selected in resolved}
+    if len(distinct) > 1:
+        raise TaskExecutionError(
+            "invalid_input",
+            "Persisted Codex context profile sources disagree.",
+            task_id=task_id,
+            project=project,
+            start_error="execution_assignment_context_profile_mismatch",
+            persisted_profiles=sorted(distinct),
+            profile_sources=[source for source, _ in resolved],
+        )
+    return next(iter(distinct), "")
+
+
+def _validate_existing_context_profile(*, task_id: str, project: str,
+                                       requested: str,
+                                       active_runner: Mapping[str, Any] | None,
+                                       pending: Mapping[str, Any] | None,
+                                       attempt: Mapping[str, Any] | None = None) -> str:
+    """Refuse a named profile that cannot be proven to match the generation."""
+    persisted = _persisted_context_profile(
+        task_id=task_id, project=project,
+        active_runner=active_runner, pending=pending,
+        attempt=attempt,
+    )
+    # A named profile is a valid request for a fresh generation. Only an
+    # existing live or in-flight generation has an immutable profile to compare
+    # against; treating an empty read model as a mismatch would reject every
+    # new Start that explicitly selects a profile.
+    if not active_runner and not pending:
+        return persisted
+    if requested and requested != persisted:
+        raise TaskExecutionError(
+            "invalid_input",
+            "Requested Codex context profile does not match the active generation.",
+            task_id=task_id,
+            project=project,
+            start_error="execution_assignment_context_profile_mismatch",
+            requested_context_profile=requested,
+            persisted_context_profile=persisted or None,
+            lifecycle_state="live" if active_runner else "pending",
+        )
+    return persisted
 
 
 def _require_live_runner(projection: dict[str, Any], task_id: str,
@@ -801,6 +944,10 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
                mission_key: str = "",
                mission_dossier: Optional[Mapping[str, Any]] = None,
                mission_launch_pointer: Optional[Mapping[str, Any]] = None,
+               context_profile: str = "", profile: str = "",
+               codex_profile: str = "", launcher_profile: str = "",
+               codex_context_profile: str = "", model_profile: str = "",
+               requested_context_profile: str = "",
                launcher: Optional[Callable[..., dict[str, Any]]] = None) -> dict[str, Any]:
     """Start or resume THE task session (COORD-44 contract, service-owned).
 
@@ -839,6 +986,17 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
             claim_id=active_claim.get("claim_id"),
             owner_agent_id=active_claim.get("agent_id"))
     role = str(role or "").strip().lower()
+    requested_context_profile = _context_profile_request(
+        task_id=task_id,
+        project=project,
+        context_profile=context_profile,
+        profile=profile,
+        codex_profile=codex_profile,
+        launcher_profile=launcher_profile,
+        codex_context_profile=codex_context_profile,
+        model_profile=model_profile,
+        requested_context_profile=requested_context_profile,
+    )
     projection = _projection(task_id, project)
     task = projection.get("task") or {}
     if str(task.get("status") or "") in {"Done", "Cancelled", "Canceled"}:
@@ -966,6 +1124,18 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
             requested_head_sha=requested_head or None)
     active_runner = live_execution or projection.get("active_runner") or {}
     pending = _in_flight_wake(projection)
+    persisted_context_profile = _validate_existing_context_profile(
+        task_id=task_id,
+        project=project,
+        requested=requested_context_profile,
+        active_runner=active_runner,
+        pending=pending,
+        attempt=(
+            projection.get("active_attempt")
+            if isinstance(projection.get("active_attempt"), Mapping)
+            else None
+        ),
+    )
     pending_agent_id = str(
         ((pending.get("selector") or {}).get("agent_id")
          if isinstance(pending, dict) else "") or "")
@@ -1063,6 +1233,7 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
                 mission_key=logical_mission,
                 mission_dossier=dict(mission_dossier or {}),
                 mission_launch_pointer=dict(mission_launch_pointer or {}),
+                context_profile=requested_context_profile,
                 # Task Execution owns admission. Resolve the evidence policy
                 # from the same task snapshot used to create this generation,
                 # rather than relying on a later wake-layer task re-read.
@@ -1168,6 +1339,8 @@ def start_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
         capacity=result.get("capacity"),
         scope=task_scope or result.get("scope"),
         intake_routing=intake_routing or result.get("intake_routing") or None,
+        context_profile=(
+            persisted_context_profile or requested_context_profile or None),
     )
 
 
@@ -1561,6 +1734,10 @@ def retry_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
                runtime: str = "", source_sha: str = "", instruction: str = "",
                findings: Optional[list[dict[str, Any]]] = None,
                reason: str = "operator retry",
+               context_profile: str = "", profile: str = "",
+               codex_profile: str = "", launcher_profile: str = "",
+               codex_context_profile: str = "", model_profile: str = "",
+               requested_context_profile: str = "",
                launcher: Optional[Callable[..., dict[str, Any]]] = None) -> dict[str, Any]:
     """Replace the current attempt with a new one.
 
@@ -1609,6 +1786,12 @@ def retry_task(task_id: Any, *, project: str = DEFAULT_PROJECT, actor: str = "us
                          role=role,
                          runtime=selected_runtime, source_sha=source_sha,
                          instruction=instruction, findings=findings,
+                         context_profile=context_profile, profile=profile,
+                         codex_profile=codex_profile,
+                         launcher_profile=launcher_profile,
+                         codex_context_profile=codex_context_profile,
+                         model_profile=model_profile,
+                         requested_context_profile=requested_context_profile,
                          launcher=launcher)
     return _envelope(
         "retry_task", task_id, project,

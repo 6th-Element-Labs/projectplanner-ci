@@ -8,7 +8,14 @@ from pathlib import Path
 import selectors
 import subprocess
 import time
-from typing import Any, Callable
+import tomllib
+from typing import Any, Callable, Iterable, Mapping
+
+from switchboard.connect.execution_assignment import (
+    CODEX_CONTEXT_PROFILE_SCHEMA,
+    ExecutionAssignmentError,
+    resolve_codex_context_profile,
+)
 
 
 PINNED_CODEX_VERSION = "0.144.5"
@@ -22,6 +29,147 @@ ATTENTION_METHODS = {
 
 class AppServerError(RuntimeError):
     pass
+
+
+_PROFILE_CONFIG_KEYS = {
+    "model": "model",
+    "model_reasoning_effort": "reasoning_effort",
+    "model_context_window": "context_window",
+    "model_auto_compact_token_limit": "auto_compact_token_limit",
+}
+
+
+def _config_value(raw: str) -> str:
+    value = str(raw or "").strip()
+    if not value:
+        return ""
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        return value.strip('"\'')
+    return str(decoded)
+
+
+def _profile_config(profile: str) -> tuple[str, dict[str, Any]]:
+    try:
+        selected, values = resolve_codex_context_profile(profile)
+    except ExecutionAssignmentError as exc:
+        raise AppServerError(str(exc)) from exc
+    if selected:
+        validate_profile_templates(selected)
+    return selected, values
+
+
+def validate_profile_templates(profile: str = "") -> None:
+    """Ensure checked-in TOML templates match the server-owned profile catalog."""
+    selected = str(profile or "").strip().lower()
+    names = [selected] if selected else [
+        "luna-max-large-codebase", "luna-max-long-running"]
+    profile_dir = Path(__file__).resolve().parent / "codex" / "profiles"
+    for name in names:
+        try:
+            _, values = resolve_codex_context_profile(name)
+        except ExecutionAssignmentError as exc:
+            raise AppServerError(str(exc)) from exc
+        path = profile_dir / f"{name}.config.toml"
+        if not path.is_file() or path.is_symlink():
+            raise AppServerError(
+                f"codex context profile template missing: {name}")
+        try:
+            with path.open("rb") as stream:
+                configured = tomllib.load(stream)
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            raise AppServerError(
+                f"codex context profile template invalid: {name}") from exc
+        expected = {
+            "model": values["model"],
+            "model_reasoning_effort": values["reasoning_effort"],
+            "model_context_window": int(values["context_window"]),
+            "model_auto_compact_token_limit": int(
+                values["auto_compact_token_limit"]),
+        }
+        if configured != expected:
+            raise AppServerError(
+                f"codex context profile template drifted: {name}")
+
+
+def profile_overrides(
+        profile: str, existing: Iterable[str] = ()) -> list[str]:
+    """Return explicit Codex ``-c`` expressions for one named profile.
+
+    Existing host overrides are checked for controlled keys before the profile
+    is appended.  This prevents an operator config or a duplicate override from
+    silently changing the requested model or context limits.
+    """
+    selected, values = _profile_config(profile)
+    if not selected:
+        return []
+    for override in existing:
+        key, separator, raw = str(override or "").partition("=")
+        field = _PROFILE_CONFIG_KEYS.get(key.strip())
+        if not separator or not field:
+            continue
+        expected = str(values[field])
+        if _config_value(raw) != expected:
+            raise AppServerError(
+                f"codex context profile {selected!r} conflicts with {key.strip()}")
+    return [
+        f'model={json.dumps(values["model"])}',
+        f'model_reasoning_effort={json.dumps(values["reasoning_effort"])}',
+        f'model_context_window={int(values["context_window"])}',
+        f'model_auto_compact_token_limit={int(values["auto_compact_token_limit"])}',
+    ]
+
+
+def launch_receipt(profile: str, binding: Mapping[str, Any], *,
+                   codex_version: str = PINNED_CODEX_VERSION) -> dict[str, Any]:
+    """Build a redacted, provider-effective launch receipt."""
+    selected, values = _profile_config(profile)
+    if not selected:
+        return {}
+    effort = values["reasoning_effort"]
+    context_window = int(values["context_window"])
+    auto_compact = int(values["auto_compact_token_limit"])
+    return {
+        "schema": "switchboard.codex_launch_receipt.v1",
+        "profile": selected,
+        "profile_schema": CODEX_CONTEXT_PROFILE_SCHEMA,
+        "model": values["model"],
+        "model_reasoning_effort": effort,
+        "model_context_window": context_window,
+        "model_auto_compact_token_limit": auto_compact,
+        # Short aliases make the receipt easy to consume without weakening the
+        # canonical Codex config field names above.
+        "reasoning_effort": effort,
+        "context_window": context_window,
+        "auto_compact_token_limit": auto_compact,
+        "codex_version": str(codex_version or "").strip(),
+        "host_id": str(binding.get("host_id") or ""),
+        "task_id": str(binding.get("task_id") or ""),
+        "claim_id": str(binding.get("claim_id") or ""),
+        "work_session_id": str(binding.get("work_session_id") or ""),
+        "host": str(binding.get("host_id") or ""),
+        "task": str(binding.get("task_id") or ""),
+        "claim": str(binding.get("claim_id") or ""),
+        "work_session": str(binding.get("work_session_id") or ""),
+    }
+
+
+def persist_launch_receipt(path: str | Path, profile: str,
+                           binding: Mapping[str, Any]) -> dict[str, Any]:
+    """Persist one redacted profile receipt atomically under the runner root."""
+    receipt_path = Path(path).expanduser()
+    if receipt_path.exists() and receipt_path.is_symlink():
+        raise AppServerError("Codex launch receipt path must not be a symlink")
+    receipt_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    receipt = launch_receipt(profile, binding)
+    if not receipt:
+        return receipt
+    temporary = receipt_path.with_suffix(receipt_path.suffix + ".tmp")
+    temporary.write_text(json.dumps(receipt, sort_keys=True), encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    temporary.replace(receipt_path)
+    return receipt
 
 
 def _stable_key(binding: dict[str, str], request_id: Any, method: str) -> str:
@@ -108,7 +256,7 @@ class CodexAppServer:
         self, command: list[str], *, cwd: str, env: dict[str, str],
         http: Callable[..., dict[str, Any]], binding: dict[str, str],
         popen: Callable[..., Any] = subprocess.Popen, poll_interval: float = 1.0,
-        journal_path: str = "",
+        journal_path: str = "", context_profile: str = "",
     ):
         self.command = command
         self.cwd = cwd
@@ -119,6 +267,8 @@ class CodexAppServer:
         self.poll_interval = poll_interval
         self._next_id = 1
         self.receipts: list[dict[str, Any]] = []
+        self.context_profile = ""
+        self.launch_receipt: dict[str, Any] = {}
         self._pending_deliveries: list[tuple[str, int, dict[str, Any]]] = []
         self._replies: dict[str, dict[str, Any]] = {}
         configured_journal = journal_path or str(
@@ -134,6 +284,21 @@ class CodexAppServer:
                 (entry["request_id"], int(entry["expected_version"]), entry["receipt"])
                 for entry in saved.get("pending_deliveries") or []
             ]
+            self.launch_receipt = dict(saved.get("launch_receipt") or {})
+            self.context_profile = str(
+                self.launch_receipt.get("profile") or "").strip().lower()
+        selected_profile = str(context_profile or "").strip().lower()
+        if selected_profile:
+            selected_profile, _ = _profile_config(selected_profile)
+            if (self.context_profile
+                    and self.context_profile != selected_profile):
+                raise AppServerError("Codex App Server journal profile mismatch")
+            self.context_profile = selected_profile
+            if not self.launch_receipt:
+                self.launch_receipt = launch_receipt(
+                    selected_profile, self.binding)
+        if self.launch_receipt:
+            self._save()
 
     def _save(self) -> None:
         if not self.journal_path:
@@ -143,6 +308,7 @@ class CodexAppServer:
         temporary.write_text(json.dumps({
             "schema": "switchboard.codex_app_server_journal.v1",
             "binding": self.binding,
+            "launch_receipt": self.launch_receipt,
             "replies": self._replies,
             "receipts": self.receipts,
             "pending_deliveries": [
@@ -320,7 +486,9 @@ class CodexAppServer:
         return subprocess.CompletedProcess(self.command, 0, stdout, stderr)
 
 
-def pinned_command(executable: str, overrides: list[str]) -> list[str]:
+def pinned_command(
+        executable: str, overrides: list[str], *, profile: str = "",
+        context_profile: str = "") -> list[str]:
     version = subprocess.run(
         [executable, "--version"], capture_output=True, text=True, check=False,
     )
@@ -330,7 +498,11 @@ def pinned_command(executable: str, overrides: list[str]) -> list[str]:
     if version.returncode or actual != expected:
         raise AppServerError(
             f"Codex App Server version mismatch: expected {expected}, found {actual or 'unknown'}")
+    selected_profile = str(profile or context_profile or "").strip().lower()
+    explicit_profile_overrides = profile_overrides(
+        selected_profile, overrides) if selected_profile else []
     return [
         executable, "app-server", "--stdio",
-        *[value for override in overrides for value in ("-c", override)],
+        *[value for override in (*explicit_profile_overrides, *overrides)
+          for value in ("-c", override)],
     ]

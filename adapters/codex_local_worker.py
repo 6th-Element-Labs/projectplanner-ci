@@ -26,9 +26,18 @@ try:
 except ModuleNotFoundError:  # package import in tests and library callers
     from adapters import switchboard_core as sb
 try:
-    from codex_app_server import CodexAppServer, pinned_command
+    from codex_app_server import (
+        CodexAppServer, persist_launch_receipt, pinned_command, profile_overrides,
+    )
 except ModuleNotFoundError:
-    from adapters.codex_app_server import CodexAppServer, pinned_command
+    from adapters.codex_app_server import (
+        CodexAppServer, persist_launch_receipt, pinned_command, profile_overrides,
+    )
+from switchboard.connect.execution_assignment import (  # noqa: E402
+    ExecutionAssignmentError,
+    context_profile_from_lifecycle,
+    resolve_codex_context_profile,
+)
 
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -47,6 +56,33 @@ _PERSONAL_EXECUTION_LIFECYCLE_KEY = "_switchboard_personal_execution_lifecycle"
 _TERMINAL_WAKE_STATUSES = {"completed", "failed", "cancelled", "expired"}
 _TERMINALIZATION_READBACK_TIMEOUT_S = 35 * 60
 _RECOVERY_SCHEMA = "switchboard.personal_postprocessing_recovery.v1"
+
+
+def _context_profile(task: dict[str, Any]) -> str:
+    """Read and validate the server-minted profile, if this launch has one."""
+    raw = str(os.environ.get("SWITCHBOARD_EXECUTION_ASSIGNMENT_JSON") or "").strip()
+    assignment: dict[str, Any] = {}
+    if raw:
+        try:
+            decoded = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("native Codex execution assignment is invalid") from exc
+        if not isinstance(decoded, dict):
+            raise RuntimeError("native Codex execution assignment is invalid")
+        assignment = decoded
+    task_assignment = task.get("execution_assignment")
+    if isinstance(task_assignment, dict):
+        assignment = {**assignment, **task_assignment}
+    try:
+        selected = context_profile_from_lifecycle(assignment)
+    except ExecutionAssignmentError as exc:
+        raise RuntimeError(str(exc)) from exc
+    if selected:
+        try:
+            resolve_codex_context_profile(selected)
+        except ExecutionAssignmentError as exc:
+            raise RuntimeError(str(exc)) from exc
+    return selected
 
 
 def _recovery_root() -> Path:
@@ -501,6 +537,7 @@ def run(
     executable = str(Path(resolved_executable).resolve())
     if not Path(executable).is_absolute():
         raise RuntimeError("native Codex CLI path is not absolute")
+    context_profile = _context_profile(task)
     git_common_dir = Path(_git(
         workspace, "rev-parse", "--path-format=absolute", "--git-common-dir")).resolve()
     try:
@@ -535,12 +572,34 @@ def run(
             child_token, mcp_overrides = _work_session_mcp_bootstrap(http, values)
             environment["SWITCHBOARD_WORK_SESSION_TOKEN"] = child_token
         command = (
-            pinned_command(executable, mcp_overrides)
+            pinned_command(
+                executable, mcp_overrides, context_profile=context_profile)
             if runner is None else [
                 executable, "app-server", "--stdio",
-                *[value for override in mcp_overrides for value in ("-c", override)],
+                *[
+                    value
+                    for override in (
+                        *profile_overrides(context_profile, mcp_overrides),
+                        *mcp_overrides,
+                    )
+                    for value in ("-c", override)
+                ],
             ]
         )
+        launch_receipt_record: dict[str, Any] = {}
+        runner_root = str(os.environ.get("PM_AGENT_HOST_RUNNER_DIR") or "").strip()
+        if context_profile and runner_root:
+            launch_receipt_record = persist_launch_receipt(
+                Path(runner_root)
+                / values["runner_session_id"] / "codex-launch-receipt.json",
+                context_profile,
+                {
+                    "host_id": values["host_id"],
+                    "task_id": values["task_id"],
+                    "claim_id": values["claim_id"],
+                    "work_session_id": values["work_session_id"],
+                },
+            )
         heartbeat_thread = threading.Thread(
             target=heartbeat_loop,
             name=f"switchboard-heartbeat-{values['runner_session_id']}",
@@ -548,6 +607,7 @@ def run(
         )
         heartbeat_thread.start()
         app_server_receipts: list[dict[str, Any]] = []
+        app_server: CodexAppServer | None = None
         if runner is None:
             app_server = CodexAppServer(
                 command, cwd=workspace, env=environment, http=http,
@@ -555,6 +615,7 @@ def run(
                     "project": os.environ.get("PM_PROJECT", "switchboard"),
                     **_recovery_binding(values),
                 },
+                context_profile=context_profile,
                 journal_path=str(
                     Path(os.environ["PM_AGENT_HOST_RUNNER_DIR"])
                     / values["runner_session_id"] / "codex-app-server.json"),
@@ -628,6 +689,9 @@ def run(
                 "native_cli": True,
                 "app_server": True,
                 "app_server_receipts": app_server_receipts,
+                "codex_launch_receipt": (
+                    (app_server.launch_receipt if app_server is not None else {})
+                    or launch_receipt_record),
                 "auth_mode": "chatgpt_personal",
                 "provider_credential_exported": False,
                 "host_coordination_credential_exported": False,

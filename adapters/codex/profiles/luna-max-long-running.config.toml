@@ -1,0 +1,5 @@
+# Switchboard named Codex context profile: long-running work.
+model = "gpt-5.6-luna"
+model_reasoning_effort = "max"
+model_context_window = 800000
+model_auto_compact_token_limit = 720000

@@ -68,14 +68,18 @@ def explain_task_block(task_id: str, project: str = "maxwell") -> str:
 
 def start_task(task_id: str, ctx: Context, project: str = "maxwell",
                role: str = "implementation", runtime: str = "codex",
-               agent_id: str = "") -> str:
+               agent_id: str = "", context_profile: str = "",
+               profile: str = "", requested_context_profile: str = "") -> str:
     """Start or resume THE task session — identical to the UI Start button.
     Attaches when a live watchable runner exists, reports 'starting' when a dispatch
     is already in flight (idempotent), otherwise asks Connect for capacity matching
     ``runtime``. Callers never pick a host or runner and never assemble a wake;
     failures return the dispatcher's own truthful reason."""
     return _run("start_task", task_id, ctx, project, role=role, runtime=runtime,
-                agent_id=agent_id, operator_launch_authorized=True)
+                agent_id=agent_id, context_profile=context_profile,
+                profile=profile,
+                requested_context_profile=requested_context_profile,
+                operator_launch_authorized=True)
 
 
 def open_session(task_id: str, ctx: Context, project: str = "maxwell",
@@ -111,7 +115,8 @@ def stop_task(task_id: str, ctx: Context, project: str = "maxwell",
 
 def retry_task(task_id: str, ctx: Context, project: str = "maxwell",
                role: str = "implementation", runtime: str = "",
-               reason: str = "operator retry") -> str:
+               reason: str = "operator retry", context_profile: str = "",
+               profile: str = "", requested_context_profile: str = "") -> str:
     """Replace the current attempt — supersede, never fork.
 
     A queued start is cancelled synchronously and the replacement launches in the
@@ -121,6 +126,8 @@ def retry_task(task_id: str, ctx: Context, project: str = "maxwell",
     sessions for one task."""
     return _run("retry_task", task_id, ctx, project, role=role,
                 runtime=runtime, reason=reason,
+                context_profile=context_profile, profile=profile,
+                requested_context_profile=requested_context_profile,
                 operator_launch_authorized=True)
 
 

@@ -163,6 +163,9 @@ def assignment_note(ack: Ack, completion_contract: dict | None = None) -> str:
                 "workspace_assignment",
                 "claim_expectations",
                 "typed_tools",
+                "session_policy_profile",
+                "context_profile",
+                "verification_profile",
                 "launch_pointer",
             )
         }

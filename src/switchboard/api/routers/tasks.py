@@ -55,6 +55,9 @@ class StartTaskBody(BaseModel):
     role: Optional[str] = None
     runtime: Optional[str] = None
     agent_id: Optional[str] = None
+    context_profile: Optional[str] = None
+    profile: Optional[str] = None
+    requested_context_profile: Optional[str] = None
 
 
 class ExecutionCommandBody(BaseModel):
@@ -77,6 +80,9 @@ class ExecutionCommandBody(BaseModel):
     scopes: Optional[list[str]] = None
     ttl_seconds: Optional[int] = None
     grace_seconds: Optional[int] = None
+    context_profile: Optional[str] = None
+    profile: Optional[str] = None
+    requested_context_profile: Optional[str] = None
 
 
 def create_router(*, resolve_project: ProjectResolver,
@@ -520,7 +526,11 @@ def create_router(*, resolve_project: ProjectResolver,
             project = resolve_project((body or {}).get("project"))
             return await run_execution_command(
                 request, "start_task", task_id, project,
-                runtime=(body or {}).get("runtime") or "claude-code")
+                runtime=(body or {}).get("runtime") or "claude-code",
+                context_profile=(body or {}).get("context_profile") or "",
+                profile=(body or {}).get("profile") or "",
+                requested_context_profile=(
+                    (body or {}).get("requested_context_profile") or ""))
 
         async def run_execution_command(request: Request, command: str, task_id: str,
                                         project: str, **kwargs):
@@ -556,7 +566,10 @@ def create_router(*, resolve_project: ProjectResolver,
             return await run_execution_command(
                 request, "start_task", task_id, resolve_project(body.project),
                 role=body.role or "implementation", runtime=body.runtime or "codex",
-                agent_id=body.agent_id or "")
+                agent_id=body.agent_id or "",
+                context_profile=body.context_profile or "",
+                profile=body.profile or "",
+                requested_context_profile=body.requested_context_profile or "")
 
         @router.get("/api/tasks/{task_id}/execution")
         async def get_task_execution(task_id: str, project: str = Query(...)):
@@ -608,7 +621,10 @@ def create_router(*, resolve_project: ProjectResolver,
                 request, "retry_task", task_id, resolve_project(body.project),
                 role=body.role or "implementation",
                 runtime=body.runtime or "",
-                reason=body.reason or "operator retry")
+                reason=body.reason or "operator retry",
+                context_profile=body.context_profile or "",
+                profile=body.profile or "",
+                requested_context_profile=body.requested_context_profile or "")
 
         @router.post("/api/tasks/{task_id}/execution/stale-assignment")
         async def report_stale_task_assignment(

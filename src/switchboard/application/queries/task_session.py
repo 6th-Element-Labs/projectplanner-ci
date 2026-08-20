@@ -169,6 +169,11 @@ def _attempt(wake: Optional[dict[str, Any]], sessions: list[dict[str, Any]]) -> 
     policy = wake.get("policy") if isinstance(wake.get("policy"), dict) else {}
     assignment = policy.get("assignment") if isinstance(policy.get("assignment"), dict) else {}
     lifecycle = policy.get("lifecycle") if isinstance(policy.get("lifecycle"), dict) else {}
+    execution_assignment = (
+        policy.get("execution_assignment")
+        if isinstance(policy.get("execution_assignment"), dict)
+        else {}
+    )
     selector = wake.get("selector") if isinstance(wake.get("selector"), dict) else {}
     return {
         "wake_id": wake_id,
@@ -187,6 +192,20 @@ def _attempt(wake: Optional[dict[str, Any]], sessions: list[dict[str, Any]]) -> 
         "execution_id": lifecycle.get("execution_id"),
         "generation": (assignment.get("generation") or lifecycle.get("generation")
                        or policy.get("generation")),
+        # Keep the server-stamped profile on the Task Execution projection so
+        # Start can compare a pending generation before it returns early.  The
+        # execution assignment is preferred; lifecycle aliases are retained
+        # only for older persisted wakes and are validated at the command edge.
+        "context_profile": (
+            execution_assignment.get("context_profile")
+            or lifecycle.get("context_profile")
+            or lifecycle.get("codex_profile")
+            or lifecycle.get("launcher_profile")
+            or lifecycle.get("codex_context_profile")
+            or lifecycle.get("model_profile")
+            or lifecycle.get("requested_context_profile")
+            or None
+        ),
         "result": wake.get("result") or {},
     }
 

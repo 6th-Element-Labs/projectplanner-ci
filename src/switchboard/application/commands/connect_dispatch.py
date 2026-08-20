@@ -18,6 +18,7 @@ from switchboard.application.session_boot import ADVERTISED_LAUNCH_RUNTIMES
 from switchboard.connect import Assignment, ResourceLimits
 from switchboard.connect.execution_assignment import (
     ExecutionAssignmentError,
+    context_profile_from_lifecycle,
     normalize_mission_launch_pointer,
 )
 from switchboard.domain.coordination.wake_intents import genuine_wake_intents
@@ -272,6 +273,12 @@ def enqueue_task(
     mission_dossier: dict[str, Any] | None = None,
     mission_launch_pointer: dict[str, Any] | None = None,
     session_policy_profile: str = "",
+    context_profile: str = "",
+    codex_profile: str = "",
+    launcher_profile: str = "",
+    codex_context_profile: str = "",
+    model_profile: str = "",
+    requested_context_profile: str = "",
 ) -> dict[str, Any]:
     """Persist one provider-neutral assignment for any Start surface.
 
@@ -301,6 +308,31 @@ def enqueue_task(
     # BUG-345 / ADR-0008: task scope plus canonical repository topology is the
     # launch contract. Execution-policy records are advisory configuration and
     # must not become a second authority that can stop a scoped mission.
+    try:
+        selected_context_profile = context_profile_from_lifecycle({
+            "context_profile": context_profile,
+            "codex_profile": codex_profile,
+            "launcher_profile": launcher_profile,
+            "codex_context_profile": codex_context_profile,
+            "model_profile": model_profile,
+            "requested_context_profile": requested_context_profile,
+        })
+    except ExecutionAssignmentError as exc:
+        return {
+            "dispatched": False,
+            "error": exc.code,
+            "diagnostic_cause": str(exc),
+            "failure_class": "invalid_input",
+            "task_id": task_id,
+        }
+    if selected_context_profile and runtime_name != "codex":
+        return {
+            "dispatched": False,
+            "error": "execution_assignment_context_profile_runtime_invalid",
+            "failure_class": "invalid_input",
+            "task_id": task_id,
+            "runtime": runtime_name,
+        }
     # DHCP: mint a per-task worker principal. Never hand the caller's identity
     # to the runner — that clobbers the coordinator's presence and blocks the
     # next start_task (BREAKDOWN 25). caller_agent_id stays wake auth only.
@@ -344,6 +376,8 @@ def enqueue_task(
     if session_policy_profile:
         lifecycle["session_policy_profile"] = str(
             session_policy_profile).strip().lower()
+    if selected_context_profile:
+        lifecycle["context_profile"] = selected_context_profile
     # DISPATCH-12: ordinary implementation Starts leave identity allocation to
     # the server. Extra lifecycle fields are only for review/remediation or an
     # explicit coordination route (BUG-174 repair claims need route/task_id).

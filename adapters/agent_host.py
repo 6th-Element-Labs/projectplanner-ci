@@ -59,12 +59,19 @@ from agent_host_enrollment import (  # noqa: E402
     preflight_codex_local_auth,
 )
 from codex.cloud_adapter import launch_wake as launch_codex_cloud_wake  # noqa: E402
+from codex_app_server import (  # noqa: E402
+    persist_launch_receipt,
+    profile_overrides,
+)
 from switchboard.connect import (  # noqa: E402
     Ack,
     Assignment,
     HostRuntimeConfig,
     ResourceLimits,
     build_launch_spec,
+)
+from switchboard.connect.execution_assignment import (  # noqa: E402
+    context_profile_from_lifecycle,
 )
 from switchboard.connect.verification_profile import (  # noqa: E402
     VerificationRuntimeError,
@@ -1645,15 +1652,25 @@ def _connect_mcp_endpoint(project=PROJECT):
     return f"{base}/mcp?{urllib.parse.urlencode({'project': project or PROJECT})}"
 
 
-def _connect_codex_mcp_argv(*, project=PROJECT, verification_runtime=None):
+def _connect_codex_mcp_argv(*, project=PROJECT, verification_runtime=None,
+                            context_profile="", existing_args=()):
     """Codex overrides required for readable, Switchboard-bound sessions."""
     endpoint = _connect_mcp_endpoint(project)
+    selected_profile = str(context_profile or "").strip().lower()
+    existing_config = [
+        str(existing_args[index + 1])
+        for index, value in enumerate(existing_args[:-1])
+        if value == "-c"
+    ]
+    explicit_profile = profile_overrides(selected_profile, existing_config)
+    profile_args = tuple(
+        item for value in (
+            explicit_profile or ['model_reasoning_effort="medium"']
+        )
+        for item in ("-c", value)
+    )
     overrides = (
-        # The enrolled Host deliberately has an isolated CODEX_HOME containing
-        # auth, not the operator's mutable config. Pin the normal agent effort
-        # explicitly so Watch does not degrade to a no-reasoning transcript
-        # dominated by raw command output.
-        "-c", 'model_reasoning_effort="medium"',
+        *profile_args,
         "-c", f"mcp_servers.taikun_plan.url={json.dumps(endpoint)}",
         "-c", 'mcp_servers.taikun_plan.bearer_token_env_var='
               '"SWITCHBOARD_CONNECT_SESSION_TOKEN"',
@@ -2063,6 +2080,10 @@ def launch_command(
     if mode == "connect":
         connect_policy = wake.get("policy") or {}
         assignment_data = dict(connect_policy.get("assignment") or {})
+        lifecycle = dict(connect_policy.get("lifecycle") or {})
+        execution_assignment = dict(
+            connect_policy.get("execution_assignment") or {})
+        context_profile = context_profile_from_lifecycle(execution_assignment)
         assignment_schema = assignment_data.pop("schema", "")
         if assignment_schema != "switchboard.connect.assignment.v1":
             raise ValueError("connect assignment schema is invalid")
@@ -2094,9 +2115,10 @@ def launch_command(
         if runtime == "codex":
             before = before + _connect_codex_mcp_argv(
                 project=_wake_project(wake),
-                verification_runtime=verification_runtime)
-            if str((connect_policy.get("lifecycle") or {}).get(
-                    "mission_key") or "").strip():
+                verification_runtime=verification_runtime,
+                context_profile=context_profile,
+                existing_args=before)
+            if str(lifecycle.get("mission_key") or "").strip():
                 before = ("exec",) + before
         config = HostRuntimeConfig(
             runtime=runtime,
@@ -2104,9 +2126,6 @@ def launch_command(
             executable=executable,
             arguments_before_note=before,
         )
-        lifecycle = dict(connect_policy.get("lifecycle") or {})
-        execution_assignment = dict(
-            connect_policy.get("execution_assignment") or {})
         execution_context = dict(connect_policy.get("execution_context") or {})
         has_execution_context = bool(execution_context)
         if (has_execution_context and execution_context.get("schema")
@@ -2214,6 +2233,8 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
     """Spawn a supervised run_agent for this wake via supervisor.py (the proven CLI). Returns the
     supervisor session record (with runner_session_id, pid) or None on failure."""
     mode = wake_mode(wake, inventory)
+    context_profile = context_profile_from_lifecycle(
+        ((wake.get("policy") or {}).get("execution_assignment") or {}))
     if mode == "cloud_execution":
         selector = wake.get("selector") or {}
         if selector.get("runtime") != "codex":
@@ -2414,6 +2435,27 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
                 rec.setdefault("metadata", {})[
                     "verification_toolchain_receipt"
                 ] = verification_toolchain_receipt
+            if mode == "connect" and connect_runtime == "codex" and context_profile:
+                account_binding = dict(
+                    (wake.get("policy") or {}).get("account_binding") or {})
+                runner_root = Path(
+                    os.environ.get("PM_AGENT_HOST_RUNNER_DIR")
+                    or os.environ.get("PM_RUNNER_DIR")
+                    or Path(str(rec.get("log_path") or ".")).parent
+                )
+                receipt = persist_launch_receipt(
+                    runner_root / str(runner_session_id)
+                    / "codex-launch-receipt.json",
+                    context_profile,
+                    {
+                        "host_id": inventory.get("host_id"),
+                        "task_id": wake.get("task_id") or "",
+                        "claim_id": account_binding.get("claim_id") or "",
+                        "work_session_id": (
+                            account_binding.get("work_session_id") or ""),
+                    },
+                )
+                rec.setdefault("metadata", {})["codex_launch_receipt"] = receipt
         return rec
     except Exception as e:
         if materialized_workspace:
