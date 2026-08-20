@@ -480,6 +480,12 @@ try:
     verified = enrollment.verify_bundle(bundle_020, public_path)
     ok(verified["version"] == "0.2.0" and len(manifest["files"]) > 20,
        "signed bundle covers the Agent Host runtime and verifies exactly")
+    bundled_paths = {item["path"] for item in manifest["files"]}
+    ok({
+        "adapters/codex/profiles/luna-max-large-codebase.config.toml",
+        "adapters/codex/profiles/luna-max-long-running.config.toml",
+    }.issubset(bundled_paths),
+       "signed Agent Host bundle includes named Codex profile templates")
 
     first_payload = bundle_020 / "payload" / manifest["files"][0]["path"]
     original = first_payload.read_bytes()

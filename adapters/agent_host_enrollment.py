@@ -281,6 +281,15 @@ def create_signed_bundle(source_root: Path, output_dir: Path, version: str,
         path for path in (source_root / "adapters").rglob("*.py")
         if "__pycache__" not in path.parts
     )
+    # Named Codex profiles are executable launch configuration. The installed
+    # Host validates these checked-in templates before it emits the server-owned
+    # model and context overrides, so they must be part of the signed payload.
+    candidates.extend(sorted(
+        path for path in (
+            source_root / "adapters" / "codex" / "profiles"
+        ).glob("*.config.toml")
+        if path.is_file()
+    ))
     candidates.extend(sorted(
         path for path in (source_root / "src" / "switchboard").rglob("*.py")
         if "__pycache__" not in path.parts
