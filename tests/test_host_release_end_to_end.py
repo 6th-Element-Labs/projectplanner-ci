@@ -180,6 +180,28 @@ try:
     installed_root = fetched_dir / "bundle" / "payload"
     ok((installed_root / "adapters" / "agent_host.py").is_file(),
        "the downloaded bundle contains a real host payload")
+    import importlib.util  # noqa: E402
+    bundled_contract_path = (
+        installed_root / "src" / "switchboard" / "connect" /
+        "execution_assignment.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "bundled_execution_assignment", bundled_contract_path,
+    )
+    bundled_contract = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(bundled_contract)
+    v5_contract = bundled_contract.build_execution_assignment(
+        task_id="QA-175",
+        assignment={"assignment_id": "assignment-v5-bundle"},
+        lifecycle={
+            "role": "implementation", "execution_id": "exec-v5-bundle",
+            "generation": 1,
+            "mission_key": "v5:1:QA-175:1:implementation",
+        },
+    )
+    ok(v5_contract["typed_tools"] == bundled_contract.MISSION_TYPED_TOOLS,
+       "the installed Host bundle validates the v5 mission tool contract")
 
     host_digest = attestation.compute_bundle_digest(str(installed_root))
     ok(host_digest == published["bundle_digest"],

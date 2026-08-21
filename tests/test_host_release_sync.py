@@ -69,6 +69,12 @@ try:
     ok(ea.contract_fingerprint() == SERVER_FP, "fingerprint is stable across calls")
     ok("session_policy_profile" in ea.CONTRACT_FIELDS,
        "the field that broke the fleet is declared in CONTRACT_FIELDS")
+    prefixes = ea.MISSION_KEY_PREFIXES
+    ea.MISSION_KEY_PREFIXES = ("v4:",)
+    legacy_v4_only = ea.contract_fingerprint()
+    ea.MISSION_KEY_PREFIXES = prefixes
+    ok(legacy_v4_only != SERVER_FP,
+       "adding v5 mission semantics changes the Host compatibility fingerprint")
 
     # Every key the builder can emit must be declared, or a future wire change
     # ships with a fingerprint that fails to move — the exact silent drift.
@@ -81,6 +87,15 @@ try:
     )
     undeclared = sorted(set(built) - set(ea.CONTRACT_FIELDS))
     ok(not undeclared, f"builder emits no undeclared field: {undeclared}")
+    v5 = ea.build_execution_assignment(
+        task_id="QA-175",
+        assignment={"assignment_id": "asg-v5"},
+        lifecycle={"role": "implementation", "execution_id": "exec-v5",
+                   "generation": 1,
+                   "mission_key": "v5:1:QA-175:1:implementation"},
+    )
+    ok(v5["typed_tools"] == ea.MISSION_TYPED_TOOLS,
+       "the Host contract gives v5 the mission context and yield tools")
 
     # ── readiness ──────────────────────────────────────────────────────────
     good = hr.evaluate(host(), REQUIRED)

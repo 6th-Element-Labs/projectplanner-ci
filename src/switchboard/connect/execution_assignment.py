@@ -20,6 +20,19 @@ REVIEW_REMEDIATION_POINTER_SCHEMA = (
 )
 CODEX_CONTEXT_PROFILE_SCHEMA = "switchboard.codex_context_profile.v1"
 
+DEFAULT_TYPED_TOOLS: dict[str, str] = {
+    "executed_test_run": "record_executed_test_run",
+    "agent_requires_human": "agent_requires_human",
+    "stale_assignment": "report_stale_assignment",
+}
+MISSION_TYPED_TOOLS: dict[str, str] = {
+    "executed_test_run": "record_executed_test_run",
+    "agent_requires_human": "agent_requires_human",
+    "mission_context": "get_mission_context",
+    "mission_yield": "yield_mission",
+}
+MISSION_KEY_PREFIXES: tuple[str, ...] = ("v4:", "v5:")
+
 # These are names, not free-form Codex command fragments.  The same catalog is
 # imported by the host launcher, so Coordination and Capacity cannot silently
 # disagree about what a selected profile means.
@@ -65,10 +78,10 @@ _REVIEW_REMEDIATION_POINTER_FIELDS = frozenset({
 #: claimed and the 90s hold expires.
 #:
 #: Adding a field here (BUG-249 added ``session_policy_profile``) is therefore a
-#: wire-breaking change. The fingerprint below turns that into something the
-#: control plane can see at heartbeat instead of discovering at launch: hosts
-#: report the fingerprint their bundled copy produces, and a host whose
-#: fingerprint differs from the server's is not eligible for work.
+#: wire-breaking change. Conditional contract semantics are declared beside
+#: this tuple and are also included in the fingerprint below. Hosts report the
+#: fingerprint their bundled copy produces, and a host whose fingerprint
+#: differs from the server's is not eligible for work.
 #:
 #: KEEP IN SYNC with build_execution_assignment. The conformance test
 #: tests/test_host_contract_fingerprint.py fails if a field is added to the
@@ -93,16 +106,26 @@ CONTRACT_FIELDS: tuple[str, ...] = (
 
 
 def contract_fingerprint() -> str:
-    """Stable id of the contract SHAPE this build produces.
+    """Stable id of the contract shape and conditional semantics this build produces.
 
-    Derived from the schema plus the sorted field set — not from any one
-    contract's values — so two builds agree if and only if they can produce
-    byte-identical contracts for the same lifecycle.
+    Field names alone are insufficient. A server and Host can expose the same
+    keys but select different typed tools for a mission prefix; exact launch
+    validation then refuses every wake even though the old shape-only digest
+    agrees. Keep every conditional contract input in this manifest.
     """
     payload = json.dumps(
         {
             "schema": SCHEMA,
             "fields": sorted(CONTRACT_FIELDS),
+            "default_typed_tools": DEFAULT_TYPED_TOOLS,
+            "mission_typed_tools": MISSION_TYPED_TOOLS,
+            "mission_key_prefixes": sorted(MISSION_KEY_PREFIXES),
+            "offline_evidence_profile": OFFLINE_EVIDENCE_PROFILE,
+            "code_strict_profile": CODE_STRICT_PROFILE,
+            "switchboard_ci_verification_profile": (
+                SWITCHBOARD_CI_VERIFICATION_PROFILE
+            ),
+            "codex_context_profiles": CODEX_CONTEXT_PROFILES,
             "mission_launch_pointer_schemas": sorted({
                 MISSION_LAUNCH_POINTER_SCHEMA,
                 REVIEW_REMEDIATION_POINTER_SCHEMA,
@@ -392,23 +415,16 @@ def build_execution_assignment(
     # omitted (not defaulted) when absent so contracts minted before the
     # profile existed rebuild byte-identically on the claim path.
     profile = str(lifecycle.get("session_policy_profile") or "").strip().lower()
-    typed_tools = {
-        "executed_test_run": "record_executed_test_run",
-        "agent_requires_human": "agent_requires_human",
-        "stale_assignment": "report_stale_assignment",
-    }
+    typed_tools = dict(DEFAULT_TYPED_TOOLS)
     # A v4 mission is already inside the durable pager contract.  Returning a
     # stale observation through the legacy completion-run factory would create
     # a second lifecycle owner and can race the reporting runner.  Its exact
     # handoff is the journal-backed yield command instead: Coordination records
     # the new cursor/role and Capacity independently acknowledges surrender.
-    if str(lifecycle.get("mission_key") or "").strip().startswith(("v4:", "v5:")):
-        typed_tools = {
-            "executed_test_run": "record_executed_test_run",
-            "agent_requires_human": "agent_requires_human",
-            "mission_context": "get_mission_context",
-            "mission_yield": "yield_mission",
-        }
+    if str(lifecycle.get("mission_key") or "").strip().startswith(
+        MISSION_KEY_PREFIXES
+    ):
+        typed_tools = dict(MISSION_TYPED_TOOLS)
 
     context = dict(execution_context or {})
     contract: dict[str, Any] = {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Promoting a release must never strand the fleet it is trying to fix.
+"""Contract incompatibility cannot be weakened by rollout observation.
 
 Found by looking at the real prod fleet after deploy: both live hosts report an
 empty contract fingerprint, because they predate attestation. Under a plain
@@ -8,9 +8,9 @@ promotion the readiness model judges exactly that state incompatible — correct
 because the self-update that would rescue a host ships inside the release it
 does not have.
 
-So enforcement is staged. A promoted release starts in OBSERVE: the verdict is
-computed, the red light shows, the operator can act — and nothing is withheld.
-Enforcement is a separate deliberate flip, made after the fleet has converged.
+Release rollout metadata may start in OBSERVE, but an incompatible Host cannot
+successfully launch. It must be withheld in both modes. The updater and Host
+heartbeat remain available; only new work is denied until the contract agrees.
 
 This is the same rule autopilot fixes live under: the loop must converge on its
 own, and "the operator notices and repairs it" is not convergence.
@@ -66,30 +66,30 @@ try:
     ok(promoted["enforce"] is False,
        "a freshly promoted release does NOT enforce — publishing is not a fleet-wide stop")
 
-    # Observe: the verdict is real and visible, but nothing is withheld.
+    # Observe never means "claim wakes that cannot launch".
     observed = hr.evaluate(LEGACY, promoted)
     ok(observed["state"] == hr.BLOCKED,
        f"a pre-attestation host is still judged incompatible: {observed['state']}")
     ok(observed["actionable"] is True, "and the operator is still offered the fix")
-    ok(observed["withholds_work"] is False,
-       "but work is NOT withheld — this is the flip that would strand the fleet")
-    ok("Observe mode" in observed["detail"],
-       f"and the reason says so plainly: ...{observed['detail'][-52:]}")
+    ok(observed["withholds_work"] is True,
+       "contract-incompatible work is withheld even during rollout observation")
+    ok("cannot be trusted" in observed["detail"],
+       "the reason names the missing compatibility proof")
 
     host = dict(LEGACY)
     host["readiness"] = observed
     host["runtimes"] = [{"runtime": "codex", "local_auth": {"available": True}}]
-    ok(coordination._host_can_handle(host, {"runtime": "codex"}) is True,
-       "placement still admits it, so the fleet keeps working while it converges")
+    ok(coordination._host_can_handle(host, {"runtime": "codex"}) is False,
+       "placement refuses it before it can claim and fail a wake")
 
-    # Enforce: same verdict, now with teeth.
+    # The rollout flag does not weaken or strengthen contract safety.
     enforced_release = rel.set_enforcement(enforce=True, project=P)
     ok(enforced_release["enforce"] is True, "enforcement is a separate deliberate flip")
 
     enforced = hr.evaluate(LEGACY, rel.get_promoted_release(project=P))
     ok(enforced["state"] == hr.BLOCKED, "the verdict is unchanged")
     ok(enforced["withholds_work"] is True,
-       "but now it withholds work — the protection the incident needed")
+       "contract safety remains enforced")
     ok("Observe mode" not in enforced["detail"],
        "and stops claiming otherwise")
 
@@ -100,15 +100,15 @@ try:
        "placement now refuses it")
 
     # A skewed (not merely old) host behaves the same way under both modes.
-    ok(hr.evaluate(SKEWED, promoted)["withholds_work"] is False,
-       "observe spares a contract-skewed host too — no silent partial enforcement")
+    ok(hr.evaluate(SKEWED, promoted)["withholds_work"] is True,
+       "observe also refuses a contract-skewed host")
     ok(hr.evaluate(SKEWED, rel.get_promoted_release(project=P))["withholds_work"] is True,
        "and enforcement catches it")
 
-    # Reversible: a bad enforcement decision must be undoable in one call.
+    # Disabling rollout enforcement cannot make an impossible launch eligible.
     rel.set_enforcement(enforce=False, project=P)
-    ok(hr.evaluate(LEGACY, rel.get_promoted_release(project=P))["withholds_work"] is False,
-       "enforcement is reversible, so a wrong call is not an outage")
+    ok(hr.evaluate(LEGACY, rel.get_promoted_release(project=P))["withholds_work"] is True,
+       "the rollout flag cannot bypass contract compatibility")
 
     # Offline is liveness, not policy: it withholds regardless of enforcement.
     ok(hr.evaluate({**LEGACY, "stale": True},

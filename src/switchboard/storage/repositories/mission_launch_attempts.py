@@ -30,6 +30,7 @@ class MissionLaunchAttemptRepository:
         requested_role: str,
         reason: str,
         start_error: str,
+        failure_ref: str = "",
         max_attempts: int,
         base_delay_seconds: int,
         now: float | None = None,
@@ -39,10 +40,23 @@ class MissionLaunchAttemptRepository:
         def write() -> dict[str, Any]:
             with self._connector(project) as connection:
                 prior = connection.execute(
-                    "SELECT retry_count,created_at FROM mission_launch_attempts "
+                    "SELECT retry_count,created_at,last_failure_ref "
+                    "FROM mission_launch_attempts "
                     "WHERE project_id=? AND task_id=? AND mission_key=?",
                     (project, task_id, mission_key),
                 ).fetchone()
+                normalized_ref = str(failure_ref or "").strip()
+                if (
+                    prior is not None
+                    and normalized_ref
+                    and str(prior["last_failure_ref"] or "") == normalized_ref
+                ):
+                    row = connection.execute(
+                        "SELECT * FROM mission_launch_attempts "
+                        "WHERE project_id=? AND task_id=? AND mission_key=?",
+                        (project, task_id, mission_key),
+                    ).fetchone()
+                    return dict(row)
                 count = int(prior["retry_count"] if prior else 0) + 1
                 exhausted = count >= max(1, int(max_attempts))
                 delay = max(1, int(base_delay_seconds)) * (2 ** max(0, count - 1))
@@ -51,16 +65,19 @@ class MissionLaunchAttemptRepository:
                 connection.execute(
                     "INSERT INTO mission_launch_attempts("
                     "project_id,task_id,mission_key,requested_role,retry_count,reason,"
-                    "start_error,next_retry_at,exhausted,created_at,updated_at) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?) "
+                    "start_error,last_failure_ref,next_retry_at,exhausted,created_at,"
+                    "updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(project_id,task_id,mission_key) DO UPDATE SET "
                     "requested_role=excluded.requested_role,retry_count=excluded.retry_count,"
                     "reason=excluded.reason,start_error=excluded.start_error,"
+                    "last_failure_ref=CASE WHEN excluded.last_failure_ref!='' "
+                    "THEN excluded.last_failure_ref ELSE last_failure_ref END,"
                     "next_retry_at=excluded.next_retry_at,exhausted=excluded.exhausted,"
                     "updated_at=excluded.updated_at",
                     (
                         project, task_id, mission_key, requested_role, count, reason,
-                        start_error, next_retry_at, int(exhausted), created_at, timestamp,
+                        start_error, normalized_ref, next_retry_at, int(exhausted),
+                        created_at, timestamp,
                     ),
                 )
                 row = connection.execute(

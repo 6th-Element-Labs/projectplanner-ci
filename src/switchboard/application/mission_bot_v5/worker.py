@@ -57,6 +57,22 @@ def _start_was_admitted(receipt: Mapping[str, Any]) -> bool:
     }
 
 
+def _pre_runner_failure(event: Mapping[str, Any]) -> tuple[str, str]:
+    """Return one durable Capacity failure identity and visible cause."""
+    if (
+        str(event.get("event_type") or "") != "execution_ended"
+        or str(event.get("source_plane") or "") != "capacity"
+    ):
+        return "", ""
+    payload = event.get("payload")
+    payload = payload if isinstance(payload, Mapping) else {}
+    failure_ref = str(
+        payload.get("wake_id") or event.get("external_ref") or event.get("event_id") or ""
+    ).strip()
+    cause = str(payload.get("reason_code") or "pre_runner_execution_ended").strip()
+    return failure_ref, cause
+
+
 def tick_scoped_mission(
     task_id: str,
     *,
@@ -108,6 +124,7 @@ def tick_scoped_mission(
     )
     if not events or int(events[0].get("sequence") or 0) != event_pointer:
         return _wait("event_cursor_changed", task_id=task_id)
+    event = events[0]
 
     # Recheck the row and W2 fence immediately before the sole side effect.
     current = ports.journal.get_item(task_id, project=project) or {}
@@ -130,24 +147,48 @@ def tick_scoped_mission(
 
     role = str(item["requested_role"])
     mission_key = f"v5:{scope_authority.get('generation')}:{task_id}:{event_pointer}:{role}"
+    failure_ref, failure_cause = _pre_runner_failure(event)
+    retry_key = (
+        f"v5:{scope_authority.get('generation')}:{task_id}:{role}:pre-runner"
+        if failure_ref else mission_key
+    )
+    observed_failure_recorded = False
     if ports.launch_attempts is not None:
         prior = ports.launch_attempts.get(
-            task_id, project=project, mission_key=mission_key,
+            task_id, project=project, mission_key=retry_key,
         ) or {}
+        if failure_ref and str(prior.get("last_failure_ref") or "") != failure_ref:
+            prior = ports.launch_attempts.record_failure(
+                task_id,
+                project=project,
+                mission_key=retry_key,
+                requested_role=role,
+                reason="pre_runner_launch_failed",
+                start_error=failure_cause,
+                failure_ref=failure_ref,
+                max_attempts=ports.max_launch_attempts,
+                base_delay_seconds=ports.retry_base_seconds,
+                now=float(ports.clock()),
+            )
+            observed_failure_recorded = True
         if prior.get("exhausted"):
-            return _wait(
+            result = _wait(
                 "launch_retry_exhausted", task_id=task_id,
                 retry_count=int(prior.get("retry_count") or 0),
                 start_error=str(prior.get("start_error") or ""),
             )
+            result["mutations"] = int(observed_failure_recorded)
+            return result
         next_retry_at = prior.get("next_retry_at")
         if next_retry_at is not None and float(next_retry_at) > float(ports.clock()):
-            return _wait(
+            result = _wait(
                 "launch_retry_backoff", task_id=task_id,
                 retry_count=int(prior.get("retry_count") or 0),
                 next_retry_at=float(next_retry_at),
                 start_error=str(prior.get("start_error") or ""),
             )
+            result["mutations"] = int(observed_failure_recorded)
+            return result
     instruction = json.dumps({
         "schema": "switchboard.mission_pointer.v5",
         "project": project,
@@ -179,7 +220,7 @@ def tick_scoped_mission(
             attempt = ports.launch_attempts.record_failure(
                 task_id,
                 project=project,
-                mission_key=mission_key,
+                mission_key=retry_key,
                 requested_role=role,
                 reason="start_not_admitted",
                 start_error=start_error,
@@ -201,9 +242,9 @@ def tick_scoped_mission(
             "start_receipt": dict(receipt),
         }
 
-    if ports.launch_attempts is not None:
+    if ports.launch_attempts is not None and retry_key == mission_key:
         ports.launch_attempts.clear(
-            task_id, project=project, mission_key=mission_key,
+            task_id, project=project, mission_key=retry_key,
         )
 
     try:

@@ -19,7 +19,7 @@ So liveness and readiness are two different lights here:
 ``update_failed``     the promoted digest failed to install on this host
 ``offline``           heartbeat expired
 
-Only ``blocked`` withholds work, and it is a refusal with a reason
+``blocked`` always withholds work, and it is a refusal with a reason
 (``host_release_incompatible``) rather than a silent skip — a skip that records
 nothing is the failure mode this board keeps re-finding.
 
@@ -143,13 +143,9 @@ def evaluate(host: Mapping[str, Any],
         out.update(detail="No release has been promoted; the control plane has no opinion.")
         return out
 
-    # Observe vs enforce. A promoted release starts in observe: the verdict is
-    # computed and shown, but nothing is withheld. This exists because the FIRST
-    # promotion on any fleet meets hosts that predate attestation — they report
-    # no fingerprint, so they are judged incompatible, and the self-update that
-    # would rescue them ships inside the release they do not have. Enforcing on
-    # day one would strand every host at once. Observe lets the fleet converge,
-    # then enforcement is flipped deliberately.
+    # Digest rollout can remain observe-first, but contract incompatibility
+    # cannot. An incompatible Host has no possible successful launch: allowing
+    # it to claim only converts a visible readiness problem into a failed wake.
     enforcing = bool(required.get("enforce"))
 
     req_version = _text(required.get("version"))
@@ -162,15 +158,13 @@ def evaluate(host: Mapping[str, Any],
     # it is the only condition that makes work actually impossible.
     if req_contract and host_contract and host_contract != req_contract:
         out.update(state=BLOCKED, reason=BLOCKED_REASON, contract_matches=False,
-                   actionable=self_updates, withholds_work=enforcing,
-                   enforcing=enforcing,
+                   actionable=self_updates, withholds_work=True,
+                   enforcing=True,
                    detail=(f"Bundled execution-assignment contract {host_contract} "
                            f"cannot satisfy the server's {req_contract}. "
                            f"Every launch would be refused at admission."
                            + (" Update this Host through the Switchboard deployment."
-                              if not self_updates else "")
-                           + ("" if enforcing else
-                              " Observe mode: work is not being withheld yet.")))
+                              if not self_updates else "")))
         return out
 
     # A host that never reports its contract is running a build from before
@@ -178,15 +172,13 @@ def evaluate(host: Mapping[str, Any],
     # 0.4.15 host was in.
     if req_contract and not host_contract:
         out.update(state=BLOCKED, reason=BLOCKED_REASON, contract_matches=False,
-                   actionable=self_updates, withholds_work=enforcing,
-                   enforcing=enforcing,
+                   actionable=self_updates, withholds_work=True,
+                   enforcing=True,
                    detail=("Host does not report a contract fingerprint, so its "
                            "bundle predates attestation and cannot be trusted "
                            "to build a matching contract."
                            + (" Update this Host through the Switchboard deployment."
-                              if not self_updates else "")
-                           + ("" if enforcing else
-                              " Observe mode: work is not being withheld yet.")))
+                              if not self_updates else "")))
         return out
 
     # Source-deployed service Hosts are kept current by the VM deployment, not

@@ -240,6 +240,13 @@ ADDITIVE_COLUMN_MIGRATIONS: List[Tuple[str, str, str, str]] = [
      "ALTER TABLE agent_hosts ADD COLUMN update_error TEXT NOT NULL DEFAULT ''"),
     ("0131_agent_hosts_self_test_at", "agent_hosts", "self_test_at",
      "ALTER TABLE agent_hosts ADD COLUMN self_test_at REAL"),
+    # Mission Bot v5 counts one terminal pre-runner wake once. Without the
+    # durable event reference, each projected Capacity failure creates a new
+    # mission event/key and silently resets the launch retry budget.
+    ("0139_mission_launch_attempts_last_failure_ref", "mission_launch_attempts",
+     "last_failure_ref",
+     "ALTER TABLE mission_launch_attempts "
+     "ADD COLUMN last_failure_ref TEXT NOT NULL DEFAULT ''"),
 ]
 
 # Idempotent DDL migrations (``CREATE ... IF NOT EXISTS``) applied after the column set,

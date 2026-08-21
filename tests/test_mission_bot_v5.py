@@ -189,6 +189,16 @@ class WorkerTest(unittest.TestCase):
                 sql for name, sql in DDL_MIGRATIONS
                 if name == "0137_mission_launch_attempts"
             ))
+            columns = {
+                row[1] for row in connection.execute(
+                    "PRAGMA table_info(mission_launch_attempts)"
+                )
+            }
+            if "last_failure_ref" not in columns:
+                connection.execute(
+                    "ALTER TABLE mission_launch_attempts "
+                    "ADD COLUMN last_failure_ref TEXT NOT NULL DEFAULT ''"
+                )
             try:
                 yield connection
                 connection.commit()
@@ -235,6 +245,113 @@ class WorkerTest(unittest.TestCase):
         self.assertEqual("launch_retry_exhausted", exhausted["reason"])
         self.assertEqual(2, exhausted["retry_count"])
         self.assertEqual("cli_busy", exhausted["start_error"])
+
+    def test_terminal_pre_runner_wakes_share_one_bounded_retry_budget(self):
+        attempts_path = Path(self.temp.name) / "capacity-attempts.db"
+
+        @contextmanager
+        def connector(_project):
+            connection = sqlite3.connect(attempts_path)
+            connection.row_factory = sqlite3.Row
+            connection.execute(next(
+                sql for name, sql in DDL_MIGRATIONS
+                if name == "0137_mission_launch_attempts"
+            ))
+            columns = {
+                row[1] for row in connection.execute(
+                    "PRAGMA table_info(mission_launch_attempts)"
+                )
+            }
+            if "last_failure_ref" not in columns:
+                connection.execute(
+                    "ALTER TABLE mission_launch_attempts "
+                    "ADD COLUMN last_failure_ref TEXT NOT NULL DEFAULT ''"
+                )
+            try:
+                yield connection
+                connection.commit()
+            finally:
+                connection.close()
+
+        attempts = MissionLaunchAttemptRepository(
+            connector, write_through=lambda _project, write: write(),
+        )
+        now = [100.0]
+        starts = []
+
+        def admitted(task_id, **kwargs):
+            starts.append({"task_id": task_id, **kwargs})
+            return {"action": "starting", "starting": True}
+
+        base = self.ports()
+        ports = ScopedMissionWorkerPorts(
+            validate_scope=base.validate_scope,
+            get_task=base.get_task,
+            has_live_execution=lambda *_args, **_kwargs: False,
+            start_task=admitted,
+            journal=self.journal,
+            launch_attempts=attempts,
+            clock=lambda: now[0],
+            max_launch_attempts=2,
+            retry_base_seconds=10,
+        )
+
+        first = tick_scoped_mission(
+            "BOT-5", project="switchboard",
+            scope_authority={"generation": 3}, actor="coordinator", ports=ports,
+        )
+        self.assertTrue(first["cursor_advanced"])
+        self.assertEqual(1, len(starts))
+
+        self.journal.append_event(
+            "BOT-5", project="switchboard", event_type="execution_ended",
+            source_plane="capacity", idempotency_key="wake-failed-1",
+            execution_id="exec-1", generation=1, external_ref="wake:wake-1",
+            payload={
+                "wake_id": "wake-1", "terminal_status": "failed",
+                "reason_code": "runtime_launch_configuration_error",
+                "receipt_ref": "wake:wake-1",
+            },
+        )
+        backed_off = tick_scoped_mission(
+            "BOT-5", project="switchboard",
+            scope_authority={"generation": 3}, actor="coordinator", ports=ports,
+        )
+        self.assertEqual("launch_retry_backoff", backed_off["reason"])
+        self.assertEqual(1, backed_off["retry_count"])
+        self.assertEqual(1, len(starts))
+
+        duplicate = tick_scoped_mission(
+            "BOT-5", project="switchboard",
+            scope_authority={"generation": 3}, actor="coordinator", ports=ports,
+        )
+        self.assertEqual(1, duplicate["retry_count"])
+
+        now[0] = 110.0
+        retry = tick_scoped_mission(
+            "BOT-5", project="switchboard",
+            scope_authority={"generation": 3}, actor="coordinator", ports=ports,
+        )
+        self.assertTrue(retry["cursor_advanced"])
+        self.assertEqual(2, len(starts))
+
+        self.journal.append_event(
+            "BOT-5", project="switchboard", event_type="execution_ended",
+            source_plane="capacity", idempotency_key="wake-failed-2",
+            execution_id="exec-2", generation=2, external_ref="wake:wake-2",
+            payload={
+                "wake_id": "wake-2", "terminal_status": "failed",
+                "reason_code": "runtime_launch_configuration_error",
+                "receipt_ref": "wake:wake-2",
+            },
+        )
+        exhausted = tick_scoped_mission(
+            "BOT-5", project="switchboard",
+            scope_authority={"generation": 3}, actor="coordinator", ports=ports,
+        )
+        self.assertEqual("launch_retry_exhausted", exhausted["reason"])
+        self.assertEqual(2, exhausted["retry_count"])
+        self.assertEqual(2, len(starts))
 
 
 class CiRemediationTest(unittest.TestCase):
