@@ -16,6 +16,7 @@ from __future__ import annotations
 import io
 import os
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -288,6 +289,22 @@ try:
                               url="http://example.invalid/b.tar.gz")
     ok(plain_http is not None and "http" in str(plain_http),
        f"a bundle offered over plain http is refused: {plain_http}")
+
+    restart_calls = []
+
+    def capture_restart(command, **kwargs):
+        del kwargs
+        restart_calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    agent_host_enrollment.control_service(
+        "darwin", "self-restart",
+        Path("com.6thelement.switchboard-agent-host.plist"),
+        runner=capture_restart)
+    expected_target = (
+        f"gui/{os.getuid()}/com.6thelement.switchboard-agent-host")
+    ok(restart_calls == [["launchctl", "kickstart", "-k", expected_target]],
+       "automatic update replaces its own launchd process atomically")
 
     # Missing enrollment inputs must fail before anything is fetched, not after.
     try:

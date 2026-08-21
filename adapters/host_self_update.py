@@ -275,7 +275,7 @@ def install(plan: UpdatePlan, *,
         # tampered bundle never reaches the installer at all.
         manifest = enrollment.verify_bundle(root, Path(public_key_path))
         result = update(bundle_dir=root, public_key_path=Path(public_key_path),
-                        state_path=Path(state_path))
+                        state_path=Path(state_path), self_restart=True)
         return {"version": manifest.get("version"), **dict(result or {})}
     finally:
         shutil.rmtree(workdir, ignore_errors=True)

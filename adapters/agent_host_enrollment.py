@@ -852,6 +852,13 @@ def control_service(target_platform: str, action: str, service_path: Path,
                 ["launchctl", "bootout", target],
                 ["launchctl", "bootstrap", domain, str(service_path)],
             ]
+        elif action == "self-restart":
+            # Automatic update runs inside the launchd job.  A bootout here
+            # kills the updater before it can execute the following bootstrap.
+            # kickstart asks launchd to replace this process atomically.  The
+            # plist selectors are unchanged during signed self-update; the new
+            # service-run reads the updated config after it starts.
+            commands = [["launchctl", "kickstart", "-k", target]]
         else:
             raise EnrollmentError(f"unsupported service action: {action}")
     elif target_platform == "linux":
@@ -1899,6 +1906,7 @@ def update_host(*, bundle_dir: Path, public_key_path: Path, state_path: Path,
                 source_repo_root: Path | None = None,
                 project_source_repo_roots: Mapping[str, Path | str] | None = None,
                 restart_service: bool = True,
+                self_restart: bool = False,
                 service_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> dict[str, Any]:
     manifest = verify_bundle(bundle_dir, public_key_path)
     state = _read_json(state_path)
@@ -1974,7 +1982,9 @@ def update_host(*, bundle_dir: Path, public_key_path: Path, state_path: Path,
         render(config)
         if restart_service:
             control_service(
-                state["platform"], "restart", Path(state["service_path"]), runner=service_runner)
+                state["platform"],
+                "self-restart" if self_restart else "restart",
+                Path(state["service_path"]), runner=service_runner)
     except Exception as update_error:
         if previous:
             rollback = prefix / f".current.rollback.{os.getpid()}"
@@ -1985,7 +1995,9 @@ def update_host(*, bundle_dir: Path, public_key_path: Path, state_path: Path,
         if restart_service:
             try:
                 control_service(
-                    state["platform"], "restart", Path(state["service_path"]),
+                    state["platform"],
+                    "self-restart" if self_restart else "restart",
+                    Path(state["service_path"]),
                     runner=service_runner)
             except Exception as rollback_error:
                 raise EnrollmentError(
