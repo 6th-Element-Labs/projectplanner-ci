@@ -729,6 +729,40 @@ def test_legacy_review_wake_launches_at_exact_head(root):
        "the compatibility receipt records the exact reviewed head")
 
 
+def test_legacy_fresh_build_uses_canonical_remote_head(root):
+    """An operator's checked-out branch never becomes a new task's base."""
+    remote, canonical_sha = action_engine_remote(root)
+    source = root / "sources" / "ActionEngine"
+    git("remote", "add", "origin", f"https://github.com/{SLUG}.git", cwd=source)
+    git("update-ref", "refs/remotes/origin/main", canonical_sha, cwd=source)
+    git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main",
+        cwd=source)
+    git("checkout", "-b", "operator/unrelated-wip", cwd=source)
+    (source / "operator-wip.txt").write_text("not task input\n", encoding="utf-8")
+    git("add", "operator-wip.txt", cwd=source)
+    git("commit", "-m", "operator WIP", cwd=source)
+    operator_head = git("rev-parse", "HEAD", cwd=source)
+    ok(operator_head != canonical_sha,
+       "the fixture operator checkout differs from canonical origin HEAD")
+
+    wake = connect_wake(context(canonical_sha), execution_id="execlease-canonical")
+    wake["policy"].pop("execution_context")
+    wake["policy"]["execution_assignment"] = build_execution_assignment(
+        task_id="ADAPTER-28", assignment=wake["policy"]["assignment"],
+        lifecycle=wake["policy"]["lifecycle"])
+    wake["policy"].pop("account_binding", None)
+    inventory = host_inventory()
+    inventory["repo_root"] = str(source)
+    with Launcher(remote):
+        launched = agent_host.launch(
+            wake, inventory, runner_session_id="run_canonical")
+    receipt = (launched.get("metadata") or {}).get("workspace_receipt") or {}
+    ok(launched.get("started") is not False
+       and receipt.get("base_sha") == canonical_sha
+       and git("rev-parse", "HEAD", cwd=Path(launched["cwd"])) == canonical_sha,
+       "a fresh context-less task starts at canonical origin HEAD, not operator HEAD")
+
+
 def test_legacy_worktrees_dedupe_isolate_and_teardown(root):
     remote, sha = action_engine_remote(root)
     source = root / "sources" / "ActionEngine"
@@ -897,6 +931,7 @@ with tempfile.TemporaryDirectory(prefix="adapter28-") as temporary:
     test_only_supported_provider_clis_launch(base / "runtimes")
     test_legacy_wake_without_context_launches_from_private_worktree(base / "legacy")
     test_legacy_review_wake_launches_at_exact_head(base / "legacy-review")
+    test_legacy_fresh_build_uses_canonical_remote_head(base / "canonical-head")
     test_legacy_worktrees_dedupe_isolate_and_teardown(base / "legacy-lifecycle")
     test_legacy_workspace_failures_start_no_process(base / "legacy-failures")
     test_legacy_multi_project_wake_uses_bound_repository(base / "legacy-binding")

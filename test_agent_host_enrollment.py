@@ -2191,7 +2191,8 @@ try:
        and launched_env.get("PM_AGENT_HOST_IDENTITY_PATH") == str(linux_identity.resolve())
        and launched_env.get("PM_AGENT_HOST_CONFIG_PATH") == str(linux_config.resolve())
        and launched_env.get("PM_REPO_ROOT") == str(linux_paths["prefix"] / "current")
-       and launched_env.get("PM_AGENT_HOST_SOURCE_REPO_ROOT") == str(ROOT.resolve())
+       and launched_env.get("PM_AGENT_HOST_SOURCE_REPO_ROOT")
+       == json.loads(linux_config.read_text())["work_source_root"]
        and json.loads(launched_env.get("PM_HOST_PROJECT_SOURCE_REPO_ROOTS") or "{}")
        == {PROJECT: str(ROOT.resolve()),
            "second-project-same-repository": str(ROOT.resolve())}
@@ -2202,7 +2203,8 @@ try:
        and launched_env.get("PM_AGENT_HOST_STATE_PATH") == str(linux_state.resolve())
        and all(isinstance(value, str) for value in launched_env.values()),
        "service-run strips metered keys and binds the OS test-sandbox protection paths")
-    ok(separated_inventory["repo_root"] == str(ROOT.resolve())
+    ok(separated_inventory["repo_root"]
+       == json.loads(linux_config.read_text())["work_source_root"]
        and separated_inventory["project_source_repo_roots"]
        == {PROJECT: str(ROOT.resolve()),
            "second-project-same-repository": str(ROOT.resolve())},

@@ -2449,6 +2449,8 @@ def service_run(identity_path: Path, config_path: Path) -> None:
             claude_executable=claude_executable)
     source_repo_root = _validated_source_repo_root(
         str(config.get("source_repo_root") or ""))
+    work_source_root = _validated_source_repo_root(
+        str(config.get("work_source_root") or source_repo_root))
     project_source_repo_roots = _validated_project_source_repo_roots(
         config.get("project_source_repo_roots") or {})
     values = {
@@ -2493,9 +2495,11 @@ def service_run(identity_path: Path, config_path: Path) -> None:
         "PM_HOST_LOCAL_AUTH_MODE": local_auth.get("auth_mode") or "unavailable",
         "PM_HOST_LOCAL_AUTH_ACCOUNT_PROOF": local_auth.get("account_fingerprint") or "",
         "PM_REPO_ROOT": config["repo_root"],
-        "PM_AGENT_HOST_SOURCE_REPO_ROOT": str(source_repo_root),
-        "PM_AGENT_HOST_WORK_SOURCE_ROOT": str(
-            config.get("work_source_root") or source_repo_root),
+        # Runners derive worktrees from the Host-owned clean mirror.  The
+        # operator checkout is only the durable origin seed and may be dirty or
+        # checked out on an unrelated branch.
+        "PM_AGENT_HOST_SOURCE_REPO_ROOT": str(work_source_root),
+        "PM_AGENT_HOST_WORK_SOURCE_ROOT": str(work_source_root),
         "PM_RUNNER_DIR": config["runner_dir"],
         "PM_PROVIDER_RUNTIME_ROOT": config["runtime_root"],
         "PM_AGENT_HOST_VERSION": config.get("agent_host_version") or AGENT_HOST_VERSION,

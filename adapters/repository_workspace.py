@@ -441,6 +441,18 @@ def _host_worktree_static_identity(
         source_head = _run(
             ["git", "rev-parse", "HEAD"], cwd=source_root,
             deadline=deadline).stdout.strip().lower()
+        default_ref = subprocess.run(
+            ["git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
+            cwd=str(source_root), capture_output=True, text=True, check=False,
+            timeout=_remaining_timeout(deadline, 30),
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        )
+        canonical_ref = (default_ref.stdout or "").strip()
+        if (default_ref.returncode == 0
+                and canonical_ref.startswith("refs/remotes/origin/")):
+            source_head = _run(
+                ["git", "rev-parse", f"{canonical_ref}^{{commit}}"],
+                cwd=source_root, deadline=deadline).stdout.strip().lower()
         remote = _run(
             ["git", "remote", "get-url", "origin"], cwd=source_root,
             deadline=deadline).stdout.strip()
