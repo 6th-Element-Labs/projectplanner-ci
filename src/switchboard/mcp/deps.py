@@ -95,6 +95,15 @@ def _write_binding_comment(task_id: str, binding, project: str = "maxwell") -> N
     )
 
 
+def install_worker_runtime(mcp: Any) -> None:
+    """Wire handshake digest cache and the CLI worker tools/list filter."""
+    from switchboard.mcp import handshake_cache
+    from switchboard.mcp.worker_pack import install_worker_catalog
+
+    handshake_cache.configure_from_env()
+    install_worker_catalog(mcp)
+
+
 # Public aliases (module-level helpers above are named with a leading
 # underscore to match the exact identifiers moved out of mcp_server_impl).
 dumps = _dumps

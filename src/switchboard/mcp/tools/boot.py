@@ -31,6 +31,7 @@ def get_project_contract(
     board_id: str = "",
     mission_id: str = "",
     milestone_id: str = "",
+    if_none_match: str = "",
 ) -> str:
     """Return the project-level project/lane/task contract for any Switchboard project.
 
@@ -41,15 +42,26 @@ def get_project_contract(
     mission_context from get_mission_status. Use it at boot and whenever a repo contains
     docs for a different project.
     """
-    return _services().dumps(session_boot.get_project_contract(
-        project=project,
-        lane=lane,
-        task_id=task_id,
-        deliverable_id=deliverable_id,
-        board_id=board_id,
-        mission_id=mission_id,
-        milestone_id=milestone_id,
-    ))
+    from switchboard.mcp.authorization import current_transport_principal
+    from switchboard.mcp.handshake_cache import cache_for_process
+    services = _services()
+    principal = current_transport_principal() or {}
+    return cache_for_process().wrap(
+        "project_contract",
+        project,
+        session_boot.get_project_contract(
+            project=project,
+            lane=lane,
+            task_id=task_id,
+            deliverable_id=deliverable_id,
+            board_id=board_id,
+            mission_id=mission_id,
+            milestone_id=milestone_id,
+        ),
+        principal_id=str(principal.get("id") or ""),
+        if_none_match=if_none_match,
+        dumps=services.dumps,
+    )
 
 
 def prepare_agent_session(

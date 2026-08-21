@@ -71,6 +71,10 @@ def current_project_context() -> Optional[ProjectContext]:
     return _current_context.get()
 
 
+def current_transport_principal() -> Optional[Mapping[str, Any]]:
+    return _transport_principal.get()
+
+
 def _principal_for_dispatch(project: str) -> Mapping[str, Any]:
     principal = _transport_principal.get()
     if principal is not None:
@@ -324,10 +328,14 @@ class MCPAuthorizationGuard:
 
         @functools.wraps(function)
         def authorized(*args, **kwargs):
+            from switchboard.mcp import worker_pack
+            principal_hint = _transport_principal.get()
+            if worker_pack.blocks_tool(function.__name__, principal_hint):
+                raise ValueError(
+                    f"tool {function.__name__} is not in the worker catalog")
             bound = signature.bind_partial(*args, **kwargs)
             bound.apply_defaults()
             requested = str(bound.arguments.get(declaration.project_argument) or "").strip()
-            principal_hint = _transport_principal.get()
             binding = str((principal_hint or {}).get("project") or "").strip()
             selected = requested
             if declaration.fixed_authorization_project:

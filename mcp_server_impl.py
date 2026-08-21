@@ -456,6 +456,7 @@ globals().update(_ops_tool_functions)
 
 # A new or removed MCP tool must update the explicit read/write/project census.
 _mcp_authorization.assert_complete()
+deps.install_worker_runtime(mcp)
 
 
 if __name__ == "__main__":

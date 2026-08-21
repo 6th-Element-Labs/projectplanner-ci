@@ -38,12 +38,26 @@ def doc_search(query: str, project: str = "maxwell") -> str:
     return services.dumps([{"file": h["file"], "text": h["text"]} for h in hits]) if hits else "no matches"
 
 
-def get_working_agreement(project: str = "maxwell") -> str:
+def get_working_agreement(project: str = "maxwell", if_none_match: str = "") -> str:
     """Connect-time policy for agents: definition of done, branch convention, merge strategy,
-    canonical main SHA, and the session-start sequence. Call before register_agent."""
+    canonical main SHA, and the session-start sequence. Call before register_agent.
+
+    Repeat calls in the same worker session return ``unchanged: true`` plus a digest.
+    Pass ``if_none_match`` with the prior ``cache.digest`` to skip the fat body.
+    """
     from switchboard.application.queries.working_agreement import execute
+    from switchboard.mcp.authorization import current_transport_principal
+    from switchboard.mcp.handshake_cache import cache_for_process
     services = _services()
-    return services.dumps(execute(project=project))
+    principal = current_transport_principal() or {}
+    return cache_for_process().wrap(
+        "working_agreement",
+        project,
+        execute(project=project),
+        principal_id=str(principal.get("id") or ""),
+        if_none_match=if_none_match,
+        dumps=services.dumps,
+    )
 
 
 def ask_plan(question: str, project: str = "maxwell") -> str:
