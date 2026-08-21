@@ -57,6 +57,65 @@ class MultiProjectWakePollingTests(TestCase):
         ])
         self.assertEqual(summary["pending"], 2)
 
+    def test_switchboard_release_response_drives_multi_project_host_update(self):
+        release = {
+            "version": "0.4.49",
+            "bundle_digest": "sha256:new",
+            "contract_fingerprint": "eac1:new",
+            "download_url": "https://plan.example/release",
+        }
+        update_responses = []
+
+        def fake_try(method, path, body=None):
+            body = body or {}
+            if path == agent_host.P_HEARTBEAT_HOST:
+                return {
+                    "required_host_release": release
+                    if body.get("project") == "switchboard" else {},
+                    "project": body.get("project"),
+                }
+            if path.startswith(agent_host.P_LIST_WAKES):
+                return {"wake_intents": []}
+            return {"ok": True}
+
+        inventory = {
+            "host_id": "host/test",
+            "placement": {"projects": ["maxwell", "switchboard"]},
+            "limits": {"max_sessions": 0},
+        }
+        with (
+            mock.patch.object(agent_host, "PROJECT", "maxwell"),
+            mock.patch.dict(
+                agent_host.os.environ,
+                {"PM_AGENT_HOST_RELEASE_PROJECT": ""},
+            ),
+            mock.patch.object(agent_host, "_try", side_effect=fake_try),
+            mock.patch.object(agent_host.co_drain, "discover_request", return_value=None),
+            mock.patch.object(agent_host, "_reap_bound_finalizers", return_value=[]),
+            mock.patch.object(
+                agent_host, "heartbeat_capacity",
+                return_value={
+                    "active_sessions": 0,
+                    "local_auth": {"available": True},
+                },
+            ),
+            mock.patch.object(
+                agent_host, "apply_authoritative_execution_policy",
+                return_value=False,
+            ) as policy,
+            mock.patch.object(
+                agent_host, "apply_required_host_release",
+                side_effect=lambda _inventory, response, _capacity: (
+                    update_responses.append(response) or {"phase": "installing"}
+                ),
+            ),
+        ):
+            summary = agent_host.run_once(inventory)
+
+        self.assertEqual(release, update_responses[0]["required_host_release"])
+        self.assertEqual("installing", summary["host_update"]["phase"])
+        self.assertEqual("maxwell", policy.call_args.args[1]["project"])
+
     def test_wake_project_stays_bound_to_poll_source(self):
         self.assertEqual(agent_host._wake_project({
             "_host_project": "atlas",

@@ -4716,15 +4716,25 @@ def run_once(inventory):
     if relay_auth_faults:
         heartbeat_body["relay_auth_fault"] = relay_auth_faults[-1]
     heartbeat = _try("POST", P_HEARTBEAT_HOST, heartbeat_body)
+    host_projects = _host_projects(inventory)
+    release_project = str(
+        os.environ.get("PM_AGENT_HOST_RELEASE_PROJECT")
+        or ("switchboard" if "switchboard" in host_projects else PROJECT)
+    ).strip()
+    release_heartbeat = heartbeat if PROJECT == release_project else None
     # DOGFOOD-25: presence must reach EVERY project this host serves. Wake
     # polling already spans _host_projects, but heartbeating only PM_PROJECT
     # left every other board with a stale host row, so their placements
     # refused this host with host_unavailable and wakes expired unclaimed.
     # Policy authority stays with the primary project's response alone.
-    for extra_project in _host_projects(inventory):
+    for extra_project in host_projects:
         if extra_project != PROJECT:
-            _try("POST", P_HEARTBEAT_HOST,
-                 {**heartbeat_body, "project": extra_project})
+            extra_heartbeat = _try(
+                "POST", P_HEARTBEAT_HOST,
+                {**heartbeat_body, "project": extra_project},
+            )
+            if extra_project == release_project:
+                release_heartbeat = extra_heartbeat
     if apply_authoritative_execution_policy(inventory, heartbeat):
         advertised = _try("POST", P_REGISTER_HOST, registration_inventory(inventory))
         apply_authoritative_execution_policy(inventory, advertised)
@@ -4733,7 +4743,9 @@ def run_once(inventory):
     # this host stops asking for wakes: the server withholds work from a
     # draining host, and a host that kept claiming would never reach the quiet
     # state its own update is waiting for.
-    update_plan = apply_required_host_release(inventory, heartbeat, capacity)
+    update_plan = apply_required_host_release(
+        inventory, release_heartbeat or heartbeat, capacity,
+    )
     if update_plan is not None:
         return {
             "host_id": host_id,
