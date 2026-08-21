@@ -4144,6 +4144,35 @@ def heartbeat_host(host_id: str, active_sessions: Optional[int] = None,
                      json.dumps({"host_id": host_id, "origin": "host_reported",
                                  "relay_auth_fault": dict(relay_auth_fault)},
                                 sort_keys=True), now))
+            else:
+                relay_state = _json_obj(row["relay_auth_json"], {}) or {}
+                if (relay_state.get("faulted")
+                        and isinstance(relay_state.get("fault"), dict)
+                        and not _relay_auth_fault_runner_is_live_in(
+                            c, relay_state, host_id, now)):
+                    recovered = {
+                        "schema": HOST_RELAY_AUTH_SCHEMA,
+                        "consecutive_failures": 0,
+                        "faulted": False,
+                        "fault": None,
+                        "recovered_at": now,
+                        "recovery_reason": "fault_runner_not_live",
+                    }
+                    c.execute(
+                        "UPDATE agent_hosts SET relay_auth_json=? WHERE host_id=?",
+                        (json.dumps(recovered, sort_keys=True), host_id))
+                    c.execute(
+                        "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                        "VALUES (?,?,?,?,?)",
+                        (None, actor, "agent_host.relay_auth_recovered",
+                         json.dumps({
+                             "host_id": host_id,
+                             "origin": "authenticated_heartbeat",
+                             "reason": "fault_runner_not_live",
+                             "runner_session_id": str(
+                                 (relay_state.get("fault") or {}).get(
+                                     "runner_session_id") or ""),
+                         }, sort_keys=True), now))
             from .runner import terminal_task_cleanup_for_host_in
             terminal_cleanup = terminal_task_cleanup_for_host_in(
                 c, host_id, actor, now)
@@ -4215,6 +4244,38 @@ def _host_relay_auth_fault(state: Dict[str, Any], host_id: str,
             "the host tunnel is being refused: re-key or restart this Agent "
             "Host (its bearer may predate the last credential rotation)"),
     }
+
+
+def _relay_auth_fault_runner_is_live_in(
+        c: sqlite3.Connection, state: Dict[str, Any], host_id: str,
+        now: float) -> bool:
+    """Return true unless the fault's exact runner is provably no longer live.
+
+    A healthy Host heartbeat proves the Host bearer works, but it does not by
+    itself prove that a live executor companion recovered. Keep faults that
+    have no runner identity. When the named runner is missing, terminal, or
+    past its heartbeat TTL, the fault is historical and must not remain on the
+    healthy Host projection forever.
+    """
+    fault = state.get("fault") or {}
+    runner_session_id = str(
+        fault.get("runner_session_id")
+        or (state.get("host_reported") or {}).get("runner_session_id")
+        or ""
+    ).strip()
+    if not runner_session_id:
+        return True
+    runner = c.execute(
+        "SELECT status, heartbeat_at, heartbeat_ttl_s FROM runner_sessions "
+        "WHERE runner_session_id=? AND host_id=?",
+        (runner_session_id, host_id),
+    ).fetchone()
+    if not runner:
+        return False
+    status = str(runner["status"] or "").lower()
+    expires_at = float(runner["heartbeat_at"] or 0) + int(
+        runner["heartbeat_ttl_s"] or 60)
+    return status in {"starting", "ready", "running"} and now < expires_at
 
 
 def record_host_relay_auth_event(

@@ -19,6 +19,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 from path_setup import ROOT  # noqa: F401
@@ -279,6 +280,61 @@ try:
        "a host-reported fault records the credential source only the host knows")
     ok((heartbeat.get("fault") or {}).get("reason") == "relay_auth_failed",
        "a host-reported fault also surfaces as the host row's fault")
+
+    ambiguous = store.heartbeat_host(
+        host_id, active_sessions=0, principal_id=principal_id,
+        actor=host_id, project=P)
+    ok((ambiguous.get("fault") or {}).get("reason") == "relay_auth_failed",
+       "a healthy heartbeat does not erase a fault with no runner identity")
+
+    store.record_host_relay_auth_event(
+        host_id, outcome="accepted", actor=host_id, project=P)
+    runner_session_id = "run-harden79-recovered"
+    now = time.time()
+    with _conn(P) as c:
+        c.execute(
+            "INSERT INTO runner_sessions("
+            "runner_session_id, host_id, agent_id, runtime, task_id, status, "
+            "heartbeat_at, heartbeat_ttl_s, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (runner_session_id, host_id, "agent/harden79", "codex",
+             "HARDEN-79", "starting", now, 3600, now))
+    store.heartbeat_host(
+        host_id, active_sessions=1,
+        relay_auth_fault={
+            "schema": relay_auth.FAULT_SCHEMA,
+            "reason": relay_auth.FAULT_REASON,
+            "runner_session_id": runner_session_id,
+            "attempt_count": 5,
+            "first_failure_at": now,
+        },
+        principal_id=principal_id, actor=host_id, project=P)
+    live_fault = store.heartbeat_host(
+        host_id, active_sessions=1, principal_id=principal_id,
+        actor=host_id, project=P)
+    ok((live_fault.get("fault") or {}).get("runner_session_id")
+       == runner_session_id,
+       "an authenticated heartbeat keeps the fault while its runner is starting")
+
+    with _conn(P) as c:
+        c.execute(
+            "UPDATE runner_sessions SET heartbeat_at=1, heartbeat_ttl_s=1 "
+            "WHERE runner_session_id=?", (runner_session_id,))
+    reconciled = store.heartbeat_host(
+        host_id, active_sessions=0, principal_id=principal_id,
+        actor=host_id, project=P)
+    ok(reconciled.get("fault") is None
+       and (reconciled.get("relay_auth") or {}).get("recovery_reason")
+       == "fault_runner_not_live",
+       "a healthy heartbeat clears the fault after its runner is not live")
+    with _conn(P) as c:
+        recovery = c.execute(
+            "SELECT payload FROM activity WHERE kind=? ORDER BY id DESC LIMIT 1",
+            ("agent_host.relay_auth_recovered",)).fetchone()
+    recovery_payload = json.loads(recovery["payload"]) if recovery else {}
+    ok(recovery_payload.get("reason") == "fault_runner_not_live"
+       and recovery_payload.get("runner_session_id") == runner_session_id,
+       "the one recovery transition records why the stale fault was cleared")
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
 
