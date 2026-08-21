@@ -168,8 +168,9 @@ assert (
 blocked_task, blocked_lifecycle, blocked_claim = assigned_claim(
     "Blocked", "remediation", "BLOCKED")
 assert blocked_claim["claimed"] is True, blocked_claim
-assert blocked_claim["task"]["status"] == "Blocked", blocked_claim
-assert blocked_claim["dispatch_reason"]["workflow_status_preserved"] == "Blocked"
+assert blocked_claim["task"]["status"] == "In Progress", blocked_claim
+assert blocked_claim["dispatch_reason"]["workflow_status_before"] == "Blocked"
+assert blocked_claim["dispatch_reason"]["workflow_status_projected"] == "In Progress"
 assert blocked_claim["work_session"]["status"] == "bound"
 assert (
     blocked_claim["dispatch_reason"]["assigned_execution"]["execution_id"]
@@ -192,8 +193,9 @@ assert durable_claim["execution_role"] == "remediation"
 implementation_task, implementation_lifecycle, implementation_claim = assigned_claim(
     "Blocked", "implementation", "IMPLEMENTATION")
 assert implementation_claim["claimed"] is True, implementation_claim
-assert implementation_claim["task"]["status"] == "Blocked"
-assert implementation_claim["dispatch_reason"]["workflow_status_preserved"] == "Blocked"
+assert implementation_claim["task"]["status"] == "In Progress"
+assert implementation_claim["dispatch_reason"]["workflow_status_before"] == "Blocked"
+assert implementation_claim["dispatch_reason"]["workflow_status_projected"] == "In Progress"
 assert implementation_claim["dispatch_reason"]["assigned_execution"]["role"] == "implementation"
 assert (
     implementation_claim["dispatch_reason"]["assigned_execution"]["execution_id"]
@@ -203,9 +205,17 @@ assert (
 wrong_role_task, _, wrong_role_claim = assigned_claim(
     "Blocked", "review_merge", "WRONG-ROLE")
 assert wrong_role_claim["claimed"] is True, wrong_role_claim
-assert wrong_role_claim["task"]["status"] == "Blocked"
-assert wrong_role_claim["dispatch_reason"]["workflow_status_preserved"] == "Blocked"
+assert wrong_role_claim["task"]["status"] == "In Review"
+assert wrong_role_claim["dispatch_reason"]["workflow_status_before"] == "Blocked"
+assert wrong_role_claim["dispatch_reason"]["workflow_status_projected"] == "In Review"
 assert wrong_role_claim["dispatch_reason"]["assigned_execution"]["role"] == "review_merge"
+
+not_started_task, _, not_started_claim = assigned_claim(
+    "Not Started", "implementation", "NOT-STARTED")
+assert not_started_claim["claimed"] is True, not_started_claim
+assert not_started_claim["task"]["status"] == "In Progress"
+assert not_started_claim["dispatch_reason"]["workflow_status_before"] == "Not Started"
+assert not_started_claim["dispatch_reason"]["workflow_status_projected"] == "In Progress"
 
 unassigned = store.create_task({
     "task_id": "BUG-202-UNASSIGNED",

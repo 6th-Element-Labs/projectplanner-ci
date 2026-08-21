@@ -956,7 +956,16 @@ def _claim_task_impl(task_id: str, agent_id: str,
              json.dumps([task_id]), now, ttl),
         )
         if assigned_execution:
-            next_status = task_status
+            # A durable assigned execution is already the authority to work, but
+            # the board still needs to project that work immediately.  Keeping a
+            # stale Not Started/Blocked value here made a live claimed runner look
+            # idle in the UI.  Review/merge work stays yellow; every other active
+            # assigned role becomes In Progress (blue) until completion moves it
+            # to In Review.
+            if task_status == "In Review" or assigned_execution["role"] == "review_merge":
+                next_status = "In Review"
+            else:
+                next_status = "In Progress"
         elif review_continuation:
             next_status = "In Review"
         else:
@@ -972,7 +981,10 @@ def _claim_task_impl(task_id: str, agent_id: str,
             dispatch_reason["assigned_execution"] = assigned_execution
             if assigned_execution["route"] == "coordination_retry":
                 dispatch_reason["repair_execution"] = assigned_execution
-            dispatch_reason["workflow_status_preserved"] = next_status
+            dispatch_reason["workflow_status_before"] = task_status
+            dispatch_reason["workflow_status_projected"] = next_status
+            if next_status == task_status:
+                dispatch_reason["workflow_status_preserved"] = next_status
         if orphan_adoption:
             dispatch_reason["orphan_adopted"] = True
         if risk and override_identity_risk:
