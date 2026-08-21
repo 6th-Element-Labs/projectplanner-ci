@@ -102,10 +102,14 @@ def decide(*, required: Optional[Mapping[str, Any]],
     download_url = _text(required.get("download_url"))
     request_id = _text(required.get("update_request_id"))
 
-    # Matching the promoted digest is the only definition of current. Version
-    # equality is not enough: the whole point of the digest is that a
-    # hand-patched tree keeps its version.
-    if target_digest and installed_digest and target_digest == installed_digest:
+    # Current means both release identity fields match.  A publisher may issue
+    # a newer release with the same payload digest (for example, to repair
+    # release metadata or prove the updater path).  Digest-only comparison
+    # strands that host on the older version.  Version-only comparison remains
+    # unsafe because a hand-patched tree can keep its version.
+    if (target_digest and installed_digest
+            and target_digest == installed_digest
+            and target_version and target_version == installed_version):
         return UpdatePlan(act=False, reason=SKIP_ALREADY_CURRENT, phase=IDLE)
 
     # An update already under way owns the decision until it finishes or times

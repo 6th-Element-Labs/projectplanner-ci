@@ -101,9 +101,14 @@ try:
        f"a promoted release starts a drain: {p['phase']}")
     ok(p["target_digest"] == "sha256:new", "the plan names the target digest")
 
-    current = plan(installed_digest="sha256:new")
+    current = plan(installed_digest="sha256:new", installed_version="0.4.16")
     ok(current.act is False and current["reason"] == up.SKIP_ALREADY_CURRENT,
-       "a host already on the promoted digest does nothing")
+       "a host already on the promoted version and digest does nothing")
+
+    newer_version = plan(installed_digest="sha256:new",
+                         installed_version="0.4.15")
+    ok(newer_version.act is True,
+       "a newer promoted version installs even when its payload digest matches")
 
     # Version equality is NOT currency: this is the hand-patched tree again.
     same_version = plan(installed_version="0.4.16", installed_digest="sha256:patched")
