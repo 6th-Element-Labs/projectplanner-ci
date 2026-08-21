@@ -25,11 +25,13 @@ EXPECTED_WORK_MODULES = {
     # Fleet PYTHONPATH includes adapters/, so the deployed Claude worker's
     # schema-of-record value is intentionally the unprefixed module name.
     "claude-code": "claude_personal_worker:run",
+    "opencode": "adapters.run_agent:run",
 }
 RUNTIME_BINARIES = {
     "codex": "codex",
     "claude-code": "claude",
     "cursor": "cursor",
+    "opencode": "opencode",
 }
 
 

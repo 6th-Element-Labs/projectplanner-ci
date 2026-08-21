@@ -225,6 +225,7 @@ _PERSONAL_SUBSCRIPTION_AUTH_TYPE = {
     # approved posture for a host-bound Claude login is oauth_personal.
     "anthropic-claude": "oauth_personal",
     "cursor": "browser_login",
+    "opencode-zen": "zen_host_login",
 }
 
 

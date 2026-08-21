@@ -16,7 +16,7 @@ AUTOPILOT_SCOPE_AUTHORITY_SCHEMA = "switchboard.autopilot_scope_authority.v1"
 LIVE_SCOPE_STATUSES = frozenset({"active", "paused"})
 SCOPE_TYPES = frozenset({"deliverable", "task"})
 SUPPORTED_RUNTIMES = frozenset({
-    "claude-code", "codex", "cursor", "langgraph", "openai-loop",
+    "claude-code", "codex", "cursor", "langgraph", "openai-loop", "opencode",
 })
 AUTOPILOT_SCOPE_RESULT_MAX_BYTES = 64 * 1024
 _SCOPE_METADATA_COLUMNS = (

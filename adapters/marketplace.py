@@ -18,6 +18,7 @@ PROFILES = {
     "claude-code": {"tier": "T2", "control": "hook_deny", "caveat": "hooks must be enabled by Claude Code", "files": ["switchboard_core.py", "claude-code"]},
     "codex": {"tier": "T1/T2", "control": "advisory_poll unless launcher honors deny", "caveat": "native pre-tool denial is launcher-dependent", "files": ["switchboard_core.py", "codex"]},
     "cursor": {"tier": "T1", "control": "advisory_poll", "caveat": "the project rule is advisory unless a managed runner adds a guard", "files": []},
+    "opencode": {"tier": "T1", "control": "advisory_poll", "caveat": "session MCP is required; a Done-deny plugin is follow-on", "files": ["opencode"]},
     "openai-loop": {"tier": "T1", "control": "integrator_enforced", "caveat": "the integrator must call guard_tool before every effect", "files": ["switchboard_core.py", "openai-loop"]},
     "langgraph": {"tier": "T2", "control": "hook_deny when every boundary is wrapped", "caveat": "unwrapped graph boundaries reduce fidelity to T1", "files": ["switchboard_core.py", "langgraph"]},
     "agent-host": {"tier": "T3", "control": "managed runner + runner kill", "caveat": "production enrollment requires a server-issued signed host bundle", "files": []},

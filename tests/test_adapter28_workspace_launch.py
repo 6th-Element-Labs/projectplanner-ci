@@ -642,7 +642,8 @@ def test_only_supported_provider_clis_launch(root):
                 wake, inventory, runner_session_id="run_unsupported",
                 workspace_path=str(root)),
             "an unsupported runtime refuses instead of guessing '<runtime> --prompt'")
-    ok(set(agent_host.CONNECT_RUNTIME_DEFAULTS) == {"codex", "claude-code", "cursor"},
+    ok(set(agent_host.CONNECT_RUNTIME_DEFAULTS) == {
+        "codex", "claude-code", "cursor", "opencode"},
        "the supported provider CLI set is explicit")
 
 

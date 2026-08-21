@@ -57,6 +57,7 @@ from agent_host_enrollment import (  # noqa: E402
     host_heartbeat_ttl_s,
     preflight_claude_local_auth,
     preflight_codex_local_auth,
+    preflight_opencode_local_auth,
 )
 from codex.cloud_adapter import launch_wake as launch_codex_cloud_wake  # noqa: E402
 from codex_app_server import (  # noqa: E402
@@ -355,10 +356,15 @@ def refresh_local_auth_inventory(inventory, *, now=None, force=False):
     """Re-probe personal local auth and atomically refresh admission inventory."""
     global _LOCAL_AUTH_LAST_PROBE_AT
     runtimes = inventory.get("runtimes") or []
-    if len(runtimes) != 1 or runtimes[0].get("runtime") not in {"codex", "claude-code"}:
+    if len(runtimes) != 1 or runtimes[0].get("runtime") not in {
+            "codex", "claude-code", "opencode"}:
         return False
     runtime = runtimes[0]["runtime"]
-    personal_mode = "chatgpt_personal" if runtime == "codex" else "oauth_personal"
+    personal_mode = {
+        "codex": "chatgpt_personal",
+        "claude-code": "oauth_personal",
+        "opencode": "zen_host_login",
+    }[runtime]
     current = dict(runtimes[0].get("local_auth") or {})
     if current.get("auth_mode") not in {personal_mode, "unavailable"}:
         return False
@@ -375,9 +381,12 @@ def refresh_local_auth_inventory(inventory, *, now=None, force=False):
         if runtime == "codex":
             proof = preflight_codex_local_auth(
                 codex_executable=os.environ.get("PM_CODEX_EXECUTABLE") or "")
-        else:
+        elif runtime == "claude-code":
             proof = preflight_claude_local_auth(
                 claude_executable=os.environ.get("PM_CLAUDE_EXECUTABLE") or "")
+        else:
+            proof = preflight_opencode_local_auth(
+                opencode_executable=os.environ.get("PM_OPENCODE_EXECUTABLE") or "")
         if proof.get("authenticated") is not True:
             raise RuntimeError(f"native {runtime} local auth is unavailable")
         refreshed = {
@@ -1537,6 +1546,7 @@ CONNECT_RUNTIME_DEFAULTS = {
     "codex": ("codex", "--dangerously-bypass-approvals-and-sandbox"),
     "claude-code": ("claude", "--dangerously-skip-permissions"),
     "cursor": ("cursor-agent", "--force"),
+    "opencode": ("opencode", "--auto"),
 }
 
 
@@ -1650,6 +1660,49 @@ def _connect_mcp_endpoint(project=PROJECT):
     """Public MCP URL the host already uses for Switchboard Communicate."""
     base = str(os.environ.get("PM_BASE") or "https://plan.taikunai.com").rstrip("/")
     return f"{base}/mcp?{urllib.parse.urlencode({'project': project or PROJECT})}"
+
+
+def _connect_opencode_mcp_config(project=PROJECT):
+    """Session-scoped OpenCode config that requires Switchboard MCP.
+
+    The bearer stays in SWITCHBOARD_CONNECT_SESSION_TOKEN. This JSON must never
+    contain the raw token. Do not write this into the operator global config.
+    """
+    return {
+        "$schema": "https://opencode.ai/config.json",
+        "mcp": {
+            "taikun-plan": {
+                "type": "remote",
+                "url": _connect_mcp_endpoint(project),
+                "enabled": True,
+                "oauth": False,
+                "headers": {
+                    "Authorization": "Bearer {env:SWITCHBOARD_CONNECT_SESSION_TOKEN}",
+                },
+            }
+        },
+    }
+
+
+def _connect_opencode_session_env(project=PROJECT):
+    return {
+        "OPENCODE_CONFIG_CONTENT": json.dumps(
+            _connect_opencode_mcp_config(project), separators=(",", ":")),
+    }
+
+
+def _opencode_model_pin(wake):
+    selector = (wake or {}).get("selector") or {}
+    lifecycle = ((wake or {}).get("policy") or {}).get("lifecycle") or {}
+    for value in (
+        selector.get("model"),
+        lifecycle.get("model"),
+        os.environ.get("PM_OPENCODE_MODEL"),
+    ):
+        pin = str(value or "").strip()
+        if pin:
+            return pin
+    return ""
 
 
 def _connect_codex_mcp_argv(*, project=PROJECT, verification_runtime=None,
@@ -2122,6 +2175,10 @@ def launch_command(
                 existing_args=before)
             if str(lifecycle.get("mission_key") or "").strip():
                 before = ("exec",) + before
+        elif runtime == "opencode":
+            model = _opencode_model_pin(wake)
+            if model:
+                before = before + ("--model", model)
         config = HostRuntimeConfig(
             runtime=runtime,
             provider=assignment.provider,
@@ -2359,6 +2416,8 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
             env["SWITCHBOARD_CONNECT_SESSION_TOKEN"] = session_token
             env["PM_MCP_TOKEN"] = session_token
             env.pop("SWITCHBOARD_TOKEN", None)
+            if str(assignment.get("runtime") or "").strip() == "opencode":
+                env.update(_connect_opencode_session_env(_wake_project(wake)))
         env.update({str(k): str(v) for k, v in (extra_env or {}).items()})
         if verification_runtime:
             # Capacity's verified runtime wins over inherited/caller PATH. A

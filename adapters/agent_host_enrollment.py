@@ -77,6 +77,7 @@ _METERED_PROVIDER_ENV = {
     "CODEX_ACCESS_TOKEN",
     "ANTHROPIC_API_KEY",
     "AZURE_OPENAI_API_KEY",
+    "OPENCODE_API_KEY",
 }
 _COORDINATION_CREDENTIAL_ENV = {
     "PM_MCP_TOKEN",
@@ -99,8 +100,9 @@ _CLAUDE_ALTERNATE_AUTH_ENV = {
     "AWS_PROFILE",
     "AWS_WEB_IDENTITY_TOKEN_FILE",
 }
-SUPPORTED_HOST_RUNTIMES = ("codex", "claude-code")
+SUPPORTED_HOST_RUNTIMES = ("codex", "claude-code", "opencode")
 CLAUDE_WORK_MODULE = "claude_personal_worker:run"
+OPENCODE_WORK_MODULE = "adapters.run_agent:run"
 
 
 class EnrollmentError(RuntimeError):
@@ -601,6 +603,87 @@ def preflight_claude_local_auth(
     }
 
 
+def _resolve_native_cli(requested: str, *, default_name: str) -> str:
+    requested = str(requested or default_name).strip() or default_name
+    resolved = shutil.which(requested)
+    if not resolved:
+        fallback = Path.home() / ".local" / "bin" / Path(requested).name
+        if fallback.is_file() and os.access(fallback, os.X_OK):
+            resolved = str(fallback)
+    if not resolved:
+        candidate = Path(requested).expanduser()
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            resolved = str(candidate)
+    if not resolved:
+        raise EnrollmentError(
+            f"native {default_name} CLI is not installed or not on PATH")
+    executable = str(Path(resolved).expanduser().absolute())
+    if not (Path(executable).is_file() and os.access(executable, os.X_OK)):
+        raise EnrollmentError(f"native {default_name} CLI path is not executable")
+    return executable
+
+
+def preflight_opencode_local_auth(
+        *, opencode_executable: str = "",
+        runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> dict[str, Any]:
+    """Prove the native OpenCode CLI and on-host Zen login without exporting it.
+
+    The credential stays in the operator OpenCode auth file. This preflight never
+    copies ``auth.json``, never reads key material, and fails closed when Zen is
+    missing or the CLI reports no credentials.
+    """
+    executable = _resolve_native_cli(opencode_executable, default_name="opencode")
+    env = os.environ.copy()
+    for key in _METERED_PROVIDER_ENV | _COORDINATION_CREDENTIAL_ENV:
+        env.pop(key, None)
+    results: list[subprocess.CompletedProcess] = []
+    for command in ([executable, "--version"], [executable, "auth", "list"]):
+        completed = runner(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+            env=env,
+        )
+        if completed.returncode != 0:
+            raise EnrollmentError(
+                "native OpenCode CLI local-auth preflight failed; "
+                "run `opencode auth login` on this host first")
+        results.append(completed)
+    version = ((results[0].stdout or results[0].stderr or "").strip().splitlines()
+               or ["opencode"])[0][:120]
+    status_text = (
+        (results[1].stdout or "") + "\n" + (results[1].stderr or "")
+    ).strip().lower()
+    if not status_text:
+        raise EnrollmentError(
+            "native OpenCode CLI auth list was empty; refusing ambiguous auth")
+    if any(marker in status_text for marker in (
+            "no credentials", "logged out", "not logged in", "not authenticated")):
+        raise EnrollmentError(
+            "native OpenCode CLI is not logged in; "
+            "run `opencode auth login` on this host first")
+    if "opencode" not in status_text and "zen" not in status_text:
+        raise EnrollmentError(
+            "native OpenCode CLI must be logged in to OpenCode Zen on this host")
+    proof_material = f"{version}\nzen_host_login"
+    return {
+        "schema": "switchboard.opencode_local_auth_preflight.v1",
+        "native_cli": True,
+        "cli_version": version,
+        "authenticated": True,
+        "auth_mode": "zen_host_login",
+        "opencode_executable": executable,
+        "account_fingerprint": "acct-" + hashlib.sha256(
+            f"opencode-zen\x1f{proof_material}".encode(
+                "utf-8", errors="replace")).hexdigest()[:16],
+        "credential_values_redacted": True,
+        "provider_credential_exported": False,
+    }
+
+
 def prepare_dedicated_codex_home(
         target_root: Path, *, source_root: Path | None = None) -> Path:
     """Seed an Agent-Host-owned Codex auth root separate from the user's live home.
@@ -823,6 +906,15 @@ def _host_service_environment(
         return {
             "PM_AGENT_HOST_PUBLIC_KEY_PATH": str(key_path),
             "PM_CONNECT_CLAUDE_CODE_EXECUTABLE": claude_executable,
+        }
+    if runtime == "opencode":
+        opencode_executable = str(config.get("opencode_executable") or "").strip()
+        if not opencode_executable:
+            raise EnrollmentError(
+                "installed configuration lacks the Connect OpenCode executable")
+        return {
+            "PM_AGENT_HOST_PUBLIC_KEY_PATH": str(key_path),
+            "PM_CONNECT_OPENCODE_EXECUTABLE": opencode_executable,
         }
     codex_executable = str(config.get("codex_executable") or "").strip()
     if not codex_executable:
@@ -1422,9 +1514,16 @@ def _finalize_install(
             raise EnrollmentError("dedicated Codex auth root is not durable")
         os.chmod(codex_home, 0o700)
         os.chmod(codex_home / "auth.json", 0o600)
-    elif not str(config.get("claude_executable") or "").strip():
-        raise EnrollmentError(
-            "pending enrollment finalization lacks the claude executable")
+    elif config_runtime == "claude-code":
+        if not str(config.get("claude_executable") or "").strip():
+            raise EnrollmentError(
+                "pending enrollment finalization lacks the claude executable")
+    elif config_runtime == "opencode":
+        if not str(config.get("opencode_executable") or "").strip():
+            raise EnrollmentError(
+                "pending enrollment finalization lacks the opencode executable")
+    else:
+        raise EnrollmentError(f"unsupported Agent Host runtime {config_runtime!r}")
     try:
         _atomic_json(identity_path, identity, 0o600)
         state["finalization_step"] = "identity_written"
@@ -1524,6 +1623,7 @@ def _install_host_unlocked(*, bundle_dir: Path, public_key_path: Path, bootstrap
                  codex_executable: str = "",
                  runtime: str = "codex",
                  claude_executable: str = "",
+                 opencode_executable: str = "",
                  source_repo_root: Path | None = None,
                  project_source_repo_roots: Mapping[str, Path | str] | None = None,
                  hostname: str = "") -> dict[str, Any]:
@@ -1635,12 +1735,20 @@ def _install_host_unlocked(*, bundle_dir: Path, public_key_path: Path, bootstrap
             local_auth = preflight_codex_local_auth(
                 codex_executable=codex_executable, codex_home=codex_home,
                 runner=local_auth_runner)
-        else:
+        elif runtime == "claude-code":
             # claude-code: the login stays in the operator's OS keychain and is
             # proven in place. No credential file is copied into the state root.
             codex_home = None
             local_auth = preflight_claude_local_auth(
                 claude_executable=claude_executable, runner=local_auth_runner)
+        elif runtime == "opencode":
+            # OpenCode Zen login stays in the operator auth file and is proven
+            # in place. Do not copy ~/.local/share/opencode/auth.json.
+            codex_home = None
+            local_auth = preflight_opencode_local_auth(
+                opencode_executable=opencode_executable, runner=local_auth_runner)
+        else:
+            raise EnrollmentError(f"unsupported Agent Host runtime {runtime!r}")
     except Exception:
         # Nothing can resume or uninstall a credential copy that predates the local
         # lifecycle journal.  On a fresh install, remove the dedicated root at every
@@ -1794,8 +1902,10 @@ def _install_host_unlocked(*, bundle_dir: Path, public_key_path: Path, bootstrap
         "base_url": base_url.rstrip("/"),
         "project": project,
         "runtime": runtime,
-        "work_module": ("adapters.codex_local_worker:run" if runtime == "codex"
-                        else CLAUDE_WORK_MODULE),
+        "work_module": (
+            "adapters.codex_local_worker:run" if runtime == "codex"
+            else CLAUDE_WORK_MODULE if runtime == "claude-code"
+            else OPENCODE_WORK_MODULE),
         "allow_work": bool((enrollment.get("execution_policy") or {}).get(
             "allow_work", allow_work)),
         "allow_global_claim": False,
@@ -1833,8 +1943,10 @@ def _install_host_unlocked(*, bundle_dir: Path, public_key_path: Path, bootstrap
             "codex_home": str(codex_home),
             "source_codex_home": str(source_codex_home),
         })
-    else:
+    elif runtime == "claude-code":
         config["claude_executable"] = local_auth["claude_executable"]
+    else:
+        config["opencode_executable"] = local_auth["opencode_executable"]
     # Journal the only returned bearer and all validated endpoint data before the
     # first post-completion write. Any later boundary can resume or revoke locally.
     state.update({
@@ -1868,6 +1980,7 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
                  local_auth_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
                  codex_executable: str = "", runtime: str = "codex",
                  claude_executable: str = "",
+                 opencode_executable: str = "",
                  source_repo_root: Path | None = None,
                  project_source_repo_roots: Mapping[str, Path | str] | None = None,
                  hostname: str = "") -> dict[str, Any]:
@@ -1896,6 +2009,7 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
             codex_executable=codex_executable,
             runtime=runtime,
             claude_executable=claude_executable,
+            opencode_executable=opencode_executable,
             source_repo_root=source_repo_root,
             project_source_repo_roots=project_source_repo_roots,
             hostname=hostname,
@@ -2092,7 +2206,7 @@ def rotate_identity(*, identity_path: Path, config_path: Path, project: str,
             "service_restarted": True}
 
 
-_CO6_CANONICAL_PROVIDERS = ("openai-codex", "anthropic-claude", "cursor")
+_CO6_CANONICAL_PROVIDERS = ("openai-codex", "anthropic-claude", "cursor", "opencode-zen")
 
 
 def declare_account_affinity(*, identity_path: Path, config_path: Path, project: str,
@@ -2184,8 +2298,8 @@ def enroll_api_key(*, identity_path: Path, config_path: Path, project: str,
     config = _read_json(config_path)
     project = _require_lifecycle_project(project, identity, config)
     provider = str(provider or "").strip().lower()
-    if provider != "openai-codex":
-        raise EnrollmentError("only openai-codex API enrollment is enabled")
+    if provider not in {"openai-codex", "opencode-zen"}:
+        raise EnrollmentError("only openai-codex or opencode-zen API enrollment is enabled")
     provider_account_id = str(provider_account_id or "").strip()
     billing_account_id = str(billing_account_id or "").strip()
     currency = str(budget_currency or "").strip().upper()
@@ -2453,12 +2567,18 @@ def service_run(identity_path: Path, config_path: Path) -> None:
         local_auth = preflight_codex_local_auth(
             codex_executable=str(config.get("codex_executable") or ""),
             codex_home=codex_home)
-    else:
+    elif runtime == "claude-code":
         claude_executable = str(config.get("claude_executable") or "").strip()
         if not claude_executable or not Path(claude_executable).is_absolute():
             raise EnrollmentError("claude executable path is unavailable")
         local_auth = preflight_claude_local_auth(
             claude_executable=claude_executable)
+    else:
+        opencode_executable = str(config.get("opencode_executable") or "").strip()
+        if not opencode_executable or not Path(opencode_executable).is_absolute():
+            raise EnrollmentError("opencode executable path is unavailable")
+        local_auth = preflight_opencode_local_auth(
+            opencode_executable=opencode_executable)
     source_repo_root = _validated_source_repo_root(
         str(config.get("source_repo_root") or ""))
     work_source_root = _validated_source_repo_root(
@@ -2533,7 +2653,7 @@ def service_run(identity_path: Path, config_path: Path) -> None:
             "PM_AGENT_HOST_SOURCE_CODEX_HOME": str(source_codex_home.resolve()),
             "CODEX_HOME": str(codex_home.resolve()),
         })
-    else:
+    elif runtime == "claude-code":
         # claude-code: the runtime-scoped module variable keeps the codex and
         # claude work modules from ever cross-contaminating (the prior fleet
         # misconfiguration deploy/co-fleet-runtime-config.md records). The
@@ -2550,6 +2670,16 @@ def service_run(identity_path: Path, config_path: Path) -> None:
         })
         env["PATH"] = os.pathsep.join(filter(None, (
             str(Path(claude_path).parent), env.get("PATH", ""))))
+    else:
+        opencode_path = str(Path(local_auth["opencode_executable"]).expanduser().absolute())
+        values.update({
+            "PM_AGENT_WORK_MODULE_OPENCODE": config.get("work_module")
+            or OPENCODE_WORK_MODULE,
+            "PM_OPENCODE_EXECUTABLE": opencode_path,
+            "PM_CONNECT_OPENCODE_EXECUTABLE": opencode_path,
+        })
+        env["PATH"] = os.pathsep.join(filter(None, (
+            str(Path(opencode_path).parent), env.get("PATH", ""))))
     env.update({key: str(value) for key, value in values.items()})
     env["PYTHONPATH"] = os.pathsep.join(filter(None, (
         str(Path(config["repo_root"]) / "src"),
@@ -2631,6 +2761,7 @@ def main(argv: list[str] | None = None) -> int:
     install.add_argument("--runtime", default="codex",
                          choices=list(SUPPORTED_HOST_RUNTIMES))
     install.add_argument("--claude-executable", default="")
+    install.add_argument("--opencode-executable", default="")
     install.add_argument("--provider-allowlist", default="")
     update = sub.add_parser("update")
     update.add_argument("--bundle", type=Path, required=True)
@@ -2655,7 +2786,7 @@ def main(argv: list[str] | None = None) -> int:
     api_key.add_argument("--identity", type=Path, required=True)
     api_key.add_argument("--config", type=Path, required=True)
     api_key.add_argument("--project", required=True, type=_non_blank_project)
-    api_key.add_argument("--provider", required=True, choices=["openai-codex"])
+    api_key.add_argument("--provider", required=True, choices=["openai-codex", "opencode-zen"])
     api_key.add_argument("--provider-account", default="")
     api_key.add_argument("--billing-account", required=True)
     api_key.add_argument("--budget-ceiling", required=True, type=float)
@@ -2680,6 +2811,7 @@ def main(argv: list[str] | None = None) -> int:
     preflight.add_argument("--runtime", default="codex",
                            choices=list(SUPPORTED_HOST_RUNTIMES))
     preflight.add_argument("--claude-executable", default="")
+    preflight.add_argument("--opencode-executable", default="")
     args = parser.parse_args(argv)
     try:
         if args.command == "build-bundle":
@@ -2712,12 +2844,15 @@ def main(argv: list[str] | None = None) -> int:
                 start_service=not args.no_start,
                 runtime=args.runtime,
                 claude_executable=args.claude_executable,
+                opencode_executable=args.opencode_executable,
                 **({"provider_allowlist": [
                     item.strip() for item in args.provider_allowlist.split(",")
                     if item.strip()]}
                    if args.provider_allowlist.strip()
                    else ({"provider_allowlist": ("anthropic-claude",)}
-                         if args.runtime == "claude-code" else {})),
+                         if args.runtime == "claude-code"
+                         else {"provider_allowlist": ("opencode-zen",)}
+                         if args.runtime == "opencode" else {})),
             )
         elif args.command == "update":
             result = update_host(
@@ -2763,7 +2898,11 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "preflight":
             result = (
                 preflight_claude_local_auth(claude_executable=args.claude_executable)
-                if args.runtime == "claude-code" else preflight_codex_local_auth())
+                if args.runtime == "claude-code"
+                else preflight_opencode_local_auth(
+                    opencode_executable=args.opencode_executable)
+                if args.runtime == "opencode"
+                else preflight_codex_local_auth())
         else:
             result = residue_scan(args.roots)
         print(json.dumps(result, sort_keys=True))

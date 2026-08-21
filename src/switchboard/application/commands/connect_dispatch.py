@@ -36,6 +36,9 @@ _RUNTIMES = {
     "claude-code": ("claude-code", "anthropic"),
     "anthropic": ("claude-code", "anthropic"),
     "cursor": ("cursor", "cursor"),
+    "opencode": ("opencode", "opencode-zen"),
+    "opencode-cli": ("opencode", "opencode-zen"),
+    "zen": ("opencode", "opencode-zen"),
 }
 _UNSUPPORTED_RUNTIME_REPAIR = (
     "Call start_task with a supported runtime; do not use runtime=cli. "

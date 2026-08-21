@@ -23,6 +23,9 @@ _RUNTIME_ALIASES = {
     "claude_code": "claude_code",
     "anthropic": "claude_code",
     "cursor": "cursor",
+    "opencode": "opencode",
+    "opencode-cli": "opencode",
+    "zen": "opencode",
 }
 _PROVIDER_ALIASES = {
     "openai": "openai-codex",
@@ -34,6 +37,10 @@ _PROVIDER_ALIASES = {
     "claude-code": "anthropic-claude",
     "anthropic-claude": "anthropic-claude",
     "cursor": "cursor",
+    "opencode": "opencode-zen",
+    "opencode-cli": "opencode-zen",
+    "opencode-zen": "opencode-zen",
+    "zen": "opencode-zen",
 }
 # The one vendor each runtime may execute on. Selection is by this map, never by
 # selector order — a runtime must never receive another vendor's connection.
@@ -41,6 +48,7 @@ _RUNTIME_PROVIDERS = {
     "codex": "openai-codex",
     "claude_code": "anthropic-claude",
     "cursor": "cursor",
+    "opencode": "opencode-zen",
 }
 
 

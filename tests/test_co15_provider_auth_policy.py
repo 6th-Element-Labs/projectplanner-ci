@@ -69,7 +69,7 @@ store.add_org_member(store.DEFAULT_ORG_ID, USER_ID, role="member", created_by="c
 
 matrix = list_provider_auth_capabilities(now=time.time())
 records = {row["capability_id"]: row for row in matrix["capabilities"]}
-ok(matrix["fail_closed"] is True and len(records) == 8,
+ok(matrix["fail_closed"] is True and len(records) == 11,
    "one versioned server matrix contains every supported and denied auth path")
 ok(records["codex-chatgpt-capsule-trusted-private"]["state"] == "supported"
    and records["claude-subscription-switchboard"]["state"]

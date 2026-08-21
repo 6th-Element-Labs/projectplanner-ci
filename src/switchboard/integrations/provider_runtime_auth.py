@@ -42,6 +42,7 @@ _PROVIDER_CLI = {
     "openai-codex": "codex",
     "anthropic-claude": "claude",
     "cursor": "cursor-agent",
+    "opencode-zen": "opencode",
 }
 _PROVIDER_CLI_CANDIDATES = {
     # Cursor renamed the standalone binary from ``cursor-agent`` to ``agent``.
@@ -53,6 +54,7 @@ _PROVIDER_PREFLIGHT = {
     "openai-codex": ("login", "status"),
     "anthropic-claude": ("auth", "status", "--json"),
     "cursor": ("status", "--format", "json"),
+    "opencode-zen": ("auth", "list"),
 }
 _PROVIDER_SECRET_KEYS = {
     "OPENAI_API_KEY",
@@ -62,6 +64,7 @@ _PROVIDER_SECRET_KEYS = {
     "ANTHROPIC_AUTH_TOKEN",
     "CLAUDE_CODE_OAUTH_TOKEN",
     "CURSOR_API_KEY",
+    "OPENCODE_API_KEY",
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
     "AWS_SESSION_TOKEN",
@@ -261,6 +264,11 @@ class ProviderRuntimeAuth:
             self._secure_directory(cursor_home)
             env["CURSOR_CONFIG_DIR"] = str(cursor_home)
             env["CURSOR_API_KEY"] = credential
+        elif provider == "opencode-zen":
+            opencode_home = root / "opencode"
+            self._secure_directory(opencode_home)
+            env["OPENCODE_CONFIG_DIR"] = str(opencode_home)
+            env["OPENCODE_API_KEY"] = credential
         return env, state
 
     @staticmethod

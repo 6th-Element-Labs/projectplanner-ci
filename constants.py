@@ -54,7 +54,7 @@ REPO_TOPOLOGY_SCHEMA = "switchboard.project_repo_topology.v1"
 # per-project branches, env files, or credential material.
 PROJECT_EXECUTION_POLICY_SCHEMA = "switchboard.project_execution_policy.v1"
 PROJECT_EXECUTION_RUNTIMES = frozenset({
-    "claude_code", "codex", "cursor", "langgraph", "generic_cli",
+    "claude_code", "codex", "cursor", "langgraph", "generic_cli", "opencode",
 })
 PROJECT_EXECUTION_WORKSPACE_ROLES = frozenset({
     "canonical", "public_ci", "public", "release",

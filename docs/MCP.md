@@ -51,7 +51,7 @@ Reads (bearer required when `PM_AUTH_MODE=required`; `dev-open` for local/test):
   prepares a desktop/operator session whose `first_calls` end in `start_task` — the same Connect
   door as the UI Start button. Default/worker boot is unchanged. `launch_runtime` selects the CLI
   worker (default `codex`); it is never inferred from the launcher's own runtime. Advertised
-  launch runtimes today: `codex`, `claude`.
+  launch runtimes today: `codex`, `claude`, `opencode`.
 - `get_project_contract(project, lane?, task_id?, deliverable_id?, board_id?, mission_id?,
   milestone_id?)` — project-agnostic lane/task contract from the board.
   selected Project workspace: selected project, lane tasks, assigned task deliverable/exit criteria,

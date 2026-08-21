@@ -15,6 +15,10 @@ PROVIDER_ALIASES = {
     "claude-code": "anthropic-claude",
     "anthropic-claude": "anthropic-claude",
     "cursor": "cursor",
+    "opencode": "opencode-zen",
+    "opencode-cli": "opencode-zen",
+    "opencode-zen": "opencode-zen",
+    "zen": "opencode-zen",
 }
 ALLOWED_PROVIDERS = frozenset(PROVIDER_ALIASES.values())
 ALLOWED_CONCURRENCY_MODES = frozenset({"exclusive", "bounded"})

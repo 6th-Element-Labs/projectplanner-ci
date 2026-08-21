@@ -15,7 +15,7 @@ import store
 
 # Proven end-to-end launch runtimes advertised to MCP clients. Aliases may still
 # be accepted by Connect; do not advertise cursor until Host→CLI proof lands.
-ADVERTISED_LAUNCH_RUNTIMES = ("codex", "claude")
+ADVERTISED_LAUNCH_RUNTIMES = ("codex", "claude", "opencode")
 DEFAULT_LAUNCH_RUNTIME = "codex"
 _LAUNCHER_INTENT_ALIASES = frozenset({"launch", "operator", "start"})
 

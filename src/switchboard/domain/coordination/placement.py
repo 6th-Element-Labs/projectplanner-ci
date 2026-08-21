@@ -47,6 +47,8 @@ def _provider_key(value: Any) -> str:
         return "openai-codex"
     if raw in {"anthropic", "claude", "claude-code", "anthropic-claude"}:
         return "anthropic-claude"
+    if raw in {"opencode", "opencode-cli", "opencode-zen", "zen"}:
+        return "opencode-zen"
     return raw
 
 

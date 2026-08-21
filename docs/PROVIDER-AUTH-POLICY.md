@@ -18,12 +18,16 @@ stale evidence, missing host bindings, and unapproved vendor states fail closed.
 | Cursor browser login | `supported_host_bound` | Exact registered, user-owned persistent Agent Host only | Run browser login on that host; credentials stay local | Cursor recommends browser login and says credentials are stored locally. No supported export/bootstrap contract is inferred. |
 | Cursor portable personal session | `unavailable` | None | None documented | Headless/CI documentation uses `CURSOR_API_KEY`; Switchboard will not copy a browser session to an ephemeral worker. |
 | Cursor API key | `supported` | Managed or user-owned worker, separately budgeted | `CURSOR_API_KEY` | Cursor documents API keys for scripts, headless operation, and CI. |
+| OpenCode Zen host login | `supported_host_bound` | Exact registered, user-owned persistent Agent Host only | Operator runs `opencode auth login` on that host; credential stays in the host OpenCode auth file | ADAPTER-60. Same host-bound posture as Claude/Cursor. Exclusive, `max_parallel=1`. LiteLLM is off because Zen is already the gateway. |
+| OpenCode Zen auth.json export | `unavailable` | None | None documented | Switchboard will not copy the host OpenCode auth file onto another worker. |
+| OpenCode Zen API key | `supported` | Managed or user-owned worker, separately budgeted | Host CLI `enroll-api-key --provider opencode-zen` | Official Zen API key; native CLI stays the execution path. |
 
 Official evidence reviewed 2026-07-16:
 
 - OpenAI: [Codex authentication](https://learn.chatgpt.com/docs/auth) and [advanced CI authentication](https://learn.chatgpt.com/docs/auth/ci-cd-auth).
 - Anthropic: [Claude CLI usage](https://code.claude.com/docs/en/cli-usage), [environment variables](https://code.claude.com/docs/en/env-vars), and [legal and compliance](https://code.claude.com/docs/en/legal-and-compliance).
 - Cursor: [CLI authentication](https://docs.cursor.com/en/cli/reference/authentication) and [headless CLI](https://docs.cursor.com/en/cli/headless).
+- OpenCode: [Zen](https://opencode.ai/docs/zen/), [CLI](https://opencode.ai/docs/cli/), and [MCP servers](https://opencode.ai/docs/mcp-servers/).
 - LiteLLM: [gateway and SDK documentation](https://docs.litellm.ai/).
 
 The evidence has a dated revalidation boundary in code. After it expires, previously enabled

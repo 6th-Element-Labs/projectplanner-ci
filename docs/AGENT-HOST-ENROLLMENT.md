@@ -275,6 +275,26 @@ installer refuses a bootstrap whose server-issued policy names a different
 runtime. Repeat the safe check any time with
 `python adapters/agent_host_enrollment.py preflight --runtime claude-code`.
 
+## Enroll a host-bound OpenCode host (ADAPTER-60)
+
+OpenCode is a third personal-host runtime. One enrollment still authorizes
+exactly one runtime. Do not add OpenCode onto an existing Codex or Claude host.
+
+Sign the CLI in on the host first (`opencode auth login`, OpenCode Zen). The
+login stays in the operator OpenCode auth file. Enrollment copies nothing and
+Switchboard only ever learns a redacted account fingerprint.
+
+```bash
+python adapters/agent_host_enrollment.py preflight --runtime opencode
+```
+
+Then install the signed bundle with `--runtime opencode` and
+`--provider-allowlist opencode-zen`. Optional: `--opencode-executable ~/.local/bin/opencode`.
+
+Connect launch is `opencode --auto` with session-scoped `OPENCODE_CONFIG_CONTENT`
+that requires Switchboard MCP. The child receives a minted task principal, not
+the host bearer. Pin Ox Alpha per task with model `opencode/x-preview-f-free`.
+
 ## Declare a provider account for Settings binding (UI-19)
 
 Host enrollment above proves *a* native login exists; it does not say *which* account,

@@ -80,8 +80,8 @@ class HostApiKeyEnrollmentBody(BaseModel):
     @classmethod
     def _openai_mvp_only(cls, value: str) -> str:
         provider = str(value or "").strip().lower()
-        if provider != "openai-codex":
-            raise ValueError("only openai-codex API enrollment is enabled")
+        if provider not in {"openai-codex", "opencode-zen"}:
+            raise ValueError("only openai-codex or opencode-zen API enrollment is enabled")
         return provider
 
     @field_validator("provider_account_id", "billing_account_id", mode="before")

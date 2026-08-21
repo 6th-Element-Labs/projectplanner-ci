@@ -182,7 +182,7 @@ def test_cli_runtime_repair() -> None:
     ok(result.get("dispatched") is False, "cli runtime does not dispatch")
     ok(result.get("error") == "unsupported_runtime", "typed unsupported_runtime")
     ok(result.get("requested_runtime") == "cli", "requested_runtime preserved")
-    ok(result.get("supported_runtimes") == ["codex", "claude"],
+    ok(result.get("supported_runtimes") == ["codex", "claude", "opencode"],
        "supported_runtimes from advertised registry")
     ok("do not claim_task" in str(result.get("repair") or "").lower()
        or "do not claim_task" in str(result.get("reason") or "").lower(),

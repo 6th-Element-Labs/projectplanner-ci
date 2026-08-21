@@ -900,6 +900,8 @@ def _arm_task_scope(task_id: str, *, project: str, role: str,
         "anthropic": "claude-code",
         "claude": "claude-code",
         "openai": "codex",
+        "zen": "opencode",
+        "opencode-cli": "opencode",
     }.get(str(runtime or "codex").strip().lower(), str(runtime or "codex"))
     from switchboard.application.commands import autopilot
     try:

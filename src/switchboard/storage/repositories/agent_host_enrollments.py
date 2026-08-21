@@ -52,8 +52,9 @@ MAX_PERSONAL_HOST_SESSIONS = 32
 PROVIDER_RUNTIMES = {
     "openai-codex": "codex",
     "anthropic-claude": "claude-code",
+    "opencode-zen": "opencode",
 }
-EXCLUSIVE_SEAT_RUNTIMES = {"claude-code"}
+EXCLUSIVE_SEAT_RUNTIMES = {"claude-code", "opencode"}
 
 
 def _runtime_for_providers(providers: list[str]) -> dict[str, Any]:

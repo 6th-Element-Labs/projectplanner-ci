@@ -3930,7 +3930,7 @@ def _enrollment_inventory_error(identity: Dict[str, Any],
     policy_runtime = str(execution.get("runtime") or "")
     execution_matches = bool(
         len(runtime_rows) == 1
-        and policy_runtime in {"codex", "claude-code"}
+        and policy_runtime in {"codex", "claude-code", "opencode"}
         and runtime.get("runtime") == policy_runtime
         and sorted(runtime.get("lanes") or []) == sorted(execution.get("lanes") or [])
         and capability_match

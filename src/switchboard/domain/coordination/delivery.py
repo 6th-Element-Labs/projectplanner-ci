@@ -8,6 +8,8 @@ RUNTIME_PREFIXES = (
     ("claude", "claude-code"),
     ("codex", "codex"),
     ("cursor", "cursor"),
+    ("opencode", "opencode"),
+    ("zen", "opencode"),
     ("langgraph", "langgraph"),
     ("openai", "openai-loop"),
 )

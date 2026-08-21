@@ -61,6 +61,7 @@ def ready_execution_context(
         "codex": "openai-codex",
         "claude-code": "anthropic-claude",
         "cursor": "cursor",
+        "opencode": "opencode-zen",
     }[runtime]
     context = {
         "schema": "switchboard.execution_context.v1",

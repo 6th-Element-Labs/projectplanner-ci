@@ -1,0 +1,14 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "taikun-plan": {
+      "type": "remote",
+      "url": "https://plan.taikunai.com/mcp?project=switchboard",
+      "enabled": true,
+      "oauth": false,
+      "headers": {
+        "Authorization": "Bearer {env:SWITCHBOARD_CONNECT_SESSION_TOKEN}"
+      }
+    }
+  }
+}

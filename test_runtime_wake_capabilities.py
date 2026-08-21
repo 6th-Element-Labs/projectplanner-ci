@@ -28,6 +28,7 @@ required_runtimes = {
     "codex-cli",
     "codex-app",
     "cursor-agent",
+    "opencode-cli",
     "langgraph-worker",
     "openai-responses-loop",
     "anthropic-messages-loop",

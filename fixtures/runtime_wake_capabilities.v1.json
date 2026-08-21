@@ -238,6 +238,51 @@
       }
     },
     {
+      "id": "opencode-cli",
+      "label": "OpenCode CLI",
+      "adapter_setup": ["OpenCode adapter handshake", "session-scoped Switchboard MCP", "startup inbox drain"],
+      "host_setup": ["live Agent Host advertising runtime=opencode", "OpenCode launcher template", "local supervisor"],
+      "security_constraints": ["CLI arguments come from a host allowlist", "session MCP config does not edit the operator global OpenCode config"],
+      "capabilities": {
+        "active_message_delivery": {
+          "support": "conditional",
+          "requires": ["agent_registration", "inbox_poll_boundary"],
+          "when_ready": {"delivery_status": "active", "proof": "acknowledgement"},
+          "missing_setup": {"allowed": false, "reason": "no_active_registered_polling_session"}
+        },
+        "wake_intent": {
+          "support": "conditional",
+          "requires": ["known_runtime_mapping", "agent_host_registration"],
+          "when_ready": {"wake_status": "pending"},
+          "missing_setup": {"allowed": false, "reason": "no_eligible_host", "wake_status": "failed"}
+        },
+        "start_runtime": {
+          "support": "conditional",
+          "requires": ["live_host", "launcher_template", "host_capacity", "scoped_credential"],
+          "when_ready": {"result": "new_managed_process", "continuity_mode": "fresh_switchboard_state"},
+          "missing_setup": {"allowed": false, "reason": "host_cannot_start_opencode"}
+        },
+        "same_session_resume": {
+          "support": "conditional",
+          "requires": ["opencode_session_id", "session_store_available", "resume_launcher"],
+          "when_ready": {"continuity_mode": "exact_vendor_session", "launcher_profile": "opencode --session <session-id>"},
+          "missing_setup": {"allowed": false, "reason": "opencode_session_handle_missing_or_unreadable"}
+        },
+        "snapshot_kill_restart": {
+          "support": "conditional",
+          "requires": ["host_owned_process", "runner_session_id", "supervisor_control"],
+          "when_ready": {"restart_semantics": "resume_when_handle_valid_else_policy_controlled_fresh"},
+          "missing_setup": {"allowed": false, "reason": "no_supervised_process_handle"}
+        },
+        "startup_inbox_drain": {
+          "support": "conditional",
+          "requires": ["opencode_adapter", "scoped_credential", "stable_agent_id"],
+          "when_ready": {"boundary": "agent_start"},
+          "missing_setup": {"allowed": false, "reason": "startup_adapter_or_identity_missing"}
+        }
+      }
+    },
+    {
       "id": "langgraph-worker",
       "label": "LangGraph worker",
       "adapter_setup": ["LangGraph Switchboard nodes", "durable checkpointer", "inbox node at graph boundaries"],
