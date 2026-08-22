@@ -22,6 +22,9 @@ from switchboard.domain.provider_credentials import (
     list_provider_auth_capabilities,
     provider_auth_decision,
 )
+from switchboard.storage.repositories.agent_host_enrollments import (
+    _clamped_max_sessions,
+)
 
 
 passed = failed = 0
@@ -234,11 +237,21 @@ def test_enrollment_preflight():
             ok(True, "logged-out OpenCode preflight fails closed")
 
 
+def test_opencode_host_uses_operator_concurrency_limit():
+    ok(_clamped_max_sessions("opencode", 16) == 16,
+       "OpenCode host honors an operator-set 16-session limit")
+    ok(_clamped_max_sessions("opencode", 99) == 32,
+       "OpenCode host still obeys the global personal-host ceiling")
+    ok(_clamped_max_sessions("claude-code", 16) == 1,
+       "Claude personal subscription keeps its exclusive-seat limit")
+
+
 if __name__ == "__main__":
     test_connect_admits_opencode_aliases()
     test_execution_context_one_vendor()
     test_provider_auth_matrix()
     test_connect_launch_argv_and_mcp_config()
     test_enrollment_preflight()
+    test_opencode_host_uses_operator_concurrency_limit()
     print(f"\nADAPTER-60 OpenCode runtime: {passed} passed, {failed} failed")
     raise SystemExit(1 if failed else 0)

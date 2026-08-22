@@ -47,14 +47,15 @@ MAX_PERSONAL_HOST_SESSIONS = 32
 
 # CO-22/CO-23: one enrolled host advertises exactly one runtime, derived from
 # its provider allowlist. A personal Claude subscription is a single seat, so
-# its policy is pinned to exclusive one-session concurrency and operator
-# updates cannot widen it.
+# its policy is pinned to exclusive one-session concurrency. OpenCode/Zen is
+# operator-sized: the enrolled host's explicit max_sessions setting is the
+# concurrency authority, up to MAX_PERSONAL_HOST_SESSIONS.
 PROVIDER_RUNTIMES = {
     "openai-codex": "codex",
     "anthropic-claude": "claude-code",
     "opencode-zen": "opencode",
 }
-EXCLUSIVE_SEAT_RUNTIMES = {"claude-code", "opencode"}
+EXCLUSIVE_SEAT_RUNTIMES = {"claude-code"}
 
 
 def _runtime_for_providers(providers: list[str]) -> dict[str, Any]:
