@@ -95,7 +95,7 @@ jobs:
           repositories: ActionEngine
 
       - name: Check out exact private SHA
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           repository: 6th-Element-Labs/ActionEngine
           ref: ${{ inputs.source_sha }}
@@ -188,7 +188,7 @@ jobs:
           repositories: ActionEngine
 
       - name: Check out exact private SHA
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           repository: 6th-Element-Labs/ActionEngine
           ref: ${{ inputs.source_sha }}
@@ -296,7 +296,7 @@ jobs:
           repositories: ActionEngine
 
       - name: Check out exact private SHA
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           repository: 6th-Element-Labs/ActionEngine
           ref: ${{ inputs.source_sha }}
@@ -352,7 +352,7 @@ jobs:
           repositories: ActionEngine
 
       - name: Check out exact private SHA
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           repository: 6th-Element-Labs/ActionEngine
           ref: ${{ inputs.source_sha }}
