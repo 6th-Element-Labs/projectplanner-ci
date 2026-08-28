@@ -85,8 +85,10 @@ jobs:
 
       - name: Test database connection
         run: |
-          test "$(PGPASSWORD=taikun psql -h localhost -U taikun -d scada -tAc 'SELECT current_database()')" = scada
-          test "$(PGPASSWORD=taikun psql -h localhost -U taikun -d scada -tAc \"SELECT to_regclass('public.physics_results') IS NOT NULL\")" = t
+          database="$(PGPASSWORD=taikun psql -h localhost -U taikun -d scada -tAc 'SELECT current_database()')"
+          table_exists="$(PGPASSWORD=taikun psql -h localhost -U taikun -d scada -tAc "SELECT to_regclass('public.physics_results') IS NOT NULL")"
+          test "$database" = scada
+          test "$table_exists" = t
 
       - name: Test physics results reader
         working-directory: source
