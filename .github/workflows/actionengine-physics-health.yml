@@ -15,6 +15,18 @@ jobs:
   physics-health:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      ACTIONENGINE_ENV: testing
+      SCADA_PGHOST: localhost
+      SCADA_PGPORT: "5432"
+      SCADA_PGDATABASE: scada
+      SCADA_PGUSER: taikun
+      SCADA_PGPASSWORD: taikun
+      DATABASE_HOST: localhost
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: scada
+      DATABASE_USER: taikun
+      DATABASE_PASSWORD: taikun
     services:
       postgres:
         image: postgres:16
@@ -72,22 +84,9 @@ jobs:
             PRIMARY KEY (asset_id, metric));"
 
       - name: Test database connection
-        working-directory: source
         run: |
-          python - <<'PY'
-          from actionengine.engine.taikun_cli.registry import TaikunRegistry
-          registry = TaikunRegistry()
-          db_tool = registry.get_tool("db.run_sql")
-          result = db_tool.implementation(sql="SELECT current_database()", limit=1)
-          assert result.success
-          assert (result.data or {}).get("rows")
-          result = db_tool.implementation(
-              sql="SELECT table_name FROM information_schema.tables WHERE table_name = 'physics_results'",
-              limit=1,
-          )
-          assert result.success
-          assert (result.data or {}).get("rows")
-          PY
+          test "$(PGPASSWORD=taikun psql -h localhost -U taikun -d scada -tAc 'SELECT current_database()')" = scada
+          test "$(PGPASSWORD=taikun psql -h localhost -U taikun -d scada -tAc \"SELECT to_regclass('public.physics_results') IS NOT NULL\")" = t
 
       - name: Test physics results reader
         working-directory: source
