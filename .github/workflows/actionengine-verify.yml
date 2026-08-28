@@ -1,0 +1,441 @@
+# Trusted public-runner verification for the private ActionEngine repository.
+#
+# This workflow lives only on the public CI repository's default branch. It
+# checks out the caller-supplied exact private SHA with a short-lived,
+# least-privilege GitHub App token. The private source is never pushed to the
+# public repository, and the checkout credential is not persisted.
+name: actionengine-verify
+run-name: ActionEngine verify ${{ inputs.source_sha }} (${{ inputs.purpose }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact private ActionEngine SHA to verify
+        required: true
+        type: string
+      base_sha:
+        description: Exact totalPreProd base SHA for changed-file policy
+        required: true
+        type: string
+      pr_title:
+        description: Canonical PR title
+        required: true
+        type: string
+      purpose:
+        description: Audit purpose
+        required: true
+        default: head
+        type: choice
+        options:
+          - head
+          - ci_repair
+
+permissions: {}
+
+concurrency:
+  group: actionengine-${{ inputs.source_sha }}
+  cancel-in-progress: true
+
+env:
+  CANONICAL_REPO: 6th-Element-Labs/ActionEngine
+  STATUS_CONTEXT: ActionEngine CI / public mirror gate
+  TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+  PYTHON_VERSION: "3.11"
+  INSTALL_SPEC: -e .[dev,full] -e distributions/actionengine_optimizer -e distributions/actionengine_scada
+
+jobs:
+  announce:
+    name: Announce exact-SHA verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate request
+        env:
+          BASE_SHA: ${{ inputs.base_sha }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+      - name: Mint least-privilege App token
+        id: app_token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.SWITCHBOARD_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
+          owner: 6th-Element-Labs
+          repositories: ActionEngine
+
+      - name: Post pending canonical status
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          gh api "repos/$CANONICAL_REPO/statuses/$SOURCE_SHA" \
+            -f state=pending \
+            -f context="$STATUS_CONTEXT" \
+            -f description="public CI: exact private SHA verification running" \
+            -f target_url="$TARGET_URL"
+
+  lint:
+    name: Lint and policy
+    needs: announce
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Mint read-only checkout token
+        id: app_token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.SWITCHBOARD_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
+          owner: 6th-Element-Labs
+          repositories: ActionEngine
+
+      - name: Check out exact private SHA
+        uses: actions/checkout@v5
+        with:
+          repository: 6th-Element-Labs/ActionEngine
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          token: ${{ steps.app_token.outputs.token }}
+
+      - name: Verify exact SHA
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install lint tools
+        run: pip install --quiet ruff pyyaml jsonschema
+
+      - name: Run whole-tree lint and format checks
+        run: |
+          ruff check --output-format=github .
+          ruff format --check .
+
+      - name: Run architecture and identity gates
+        run: |
+          python scripts/lint_module_boundaries.py --modern-only
+          ./scripts/lint_customer_identity.sh validate
+          ./scripts/lint_customer_identity.sh gate
+
+      - name: Validate PR title
+        env:
+          PR_TITLE: ${{ inputs.pr_title }}
+        run: |
+          printf '%s' "$PR_TITLE" | grep -qE "^(feat|fix|docs|style|refactor|test|chore|perf|ci|build|revert|safety|security|merge)(\(.+\))?: .+"
+
+  unit:
+    name: Unit and contracts
+    needs: announce
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ACTIONENGINE_ENV: testing
+      SCADA_PGHOST: localhost
+      SCADA_PGPORT: "5432"
+      SCADA_PGDATABASE: actionengine_test
+      SCADA_PGUSER: taikun
+      SCADA_PGPASSWORD: taikun
+      DATABASE_HOST: localhost
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: actionengine_test
+      DATABASE_USER: taikun
+      DATABASE_PASSWORD: taikun
+      REDIS_HOST: localhost
+      REDIS_PORT: "6379"
+      TAIKUN_TENANT_ID: test
+      PYTHONPATH: ${{ github.workspace }}
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: taikun
+          POSTGRES_PASSWORD: taikun
+          POSTGRES_DB: actionengine_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+    steps:
+      - name: Mint read-only checkout token
+        id: app_token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.SWITCHBOARD_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
+          owner: 6th-Element-Labs
+          repositories: ActionEngine
+
+      - name: Check out exact private SHA
+        uses: actions/checkout@v5
+        with:
+          repository: 6th-Element-Labs/ActionEngine
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          token: ${{ steps.app_token.outputs.token }}
+
+      - name: Verify exact SHA
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            requirements.txt
+            distributions/*/pyproject.toml
+
+      - name: Install dependencies
+        run: uv pip install --system ${{ env.INSTALL_SPEC }}
+
+      - name: Load alarm schema
+        run: |
+          PGPASSWORD=taikun psql -h localhost -U taikun -d actionengine_test \
+            -v ON_ERROR_STOP=1 -f actionengine/engine/alarm_management_schema.sql
+
+      - name: Run unit tests
+        run: pytest tests/unit/ -q --no-cov
+
+      - name: Run contract type checks
+        run: |
+          uv pip install --system --quiet mypy
+          mypy actionengine/engine/utils/db_pool.py \
+               actionengine/engine/utils/sql_builder.py \
+               actionengine/engine/config/tenant.py \
+               --ignore-missing-imports
+
+      - name: Run contract tests
+        run: |
+          pytest tests/test_db_pool_contract.py \
+                 tests/test_sql_builder.py \
+                 tests/test_sso_user_service_contract.py \
+                 -q --no-cov
+
+  base:
+    name: Base coverage gate
+    needs: announce
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ACTIONENGINE_ENV: testing
+      SCADA_PGHOST: localhost
+      SCADA_PGPORT: "5432"
+      SCADA_PGDATABASE: actionengine_test
+      SCADA_PGUSER: taikun
+      SCADA_PGPASSWORD: taikun
+      DATABASE_HOST: localhost
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: actionengine_test
+      DATABASE_USER: taikun
+      DATABASE_PASSWORD: taikun
+      REDIS_HOST: localhost
+      REDIS_PORT: "6379"
+      TAIKUN_TENANT_ID: test
+      PYTHONPATH: ${{ github.workspace }}
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: taikun
+          POSTGRES_PASSWORD: taikun
+          POSTGRES_DB: actionengine_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+    steps:
+      - name: Mint read-only checkout token
+        id: app_token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.SWITCHBOARD_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
+          owner: 6th-Element-Labs
+          repositories: ActionEngine
+
+      - name: Check out exact private SHA
+        uses: actions/checkout@v5
+        with:
+          repository: 6th-Element-Labs/ActionEngine
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          token: ${{ steps.app_token.outputs.token }}
+
+      - name: Verify exact SHA
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            requirements.txt
+            distributions/*/pyproject.toml
+
+      - name: Install dependencies
+        run: uv pip install --system ${{ env.INSTALL_SPEC }}
+
+      - name: Load alarm schema
+        run: |
+          PGPASSWORD=taikun psql -h localhost -U taikun -d actionengine_test \
+            -v ON_ERROR_STOP=1 -f actionengine/engine/alarm_management_schema.sql
+
+      - name: Run base coverage gate
+        run: |
+          pytest tests/base/ -q --cov=actionengine --cov=actionengine_optimizer \
+            --cov-report=xml --cov-fail-under=12
+
+  maxwell-ui-freeze:
+    name: Maxwell UI freeze
+    needs: announce
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Mint read-only checkout token
+        id: app_token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.SWITCHBOARD_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
+          owner: 6th-Element-Labs
+          repositories: ActionEngine
+
+      - name: Check out exact private SHA
+        uses: actions/checkout@v5
+        with:
+          repository: 6th-Element-Labs/ActionEngine
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          token: ${{ steps.app_token.outputs.token }}
+
+      - name: Verify exact SHA
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install static test runner
+        run: python -m pip install --quiet pytest
+
+      - name: Run Maxwell UI freeze contract
+        env:
+          MAXWELL_UI_FREEZE_BASE_SHA: ${{ inputs.base_sha }}
+          MAXWELL_UI_FREEZE_HEAD_SHA: ${{ inputs.source_sha }}
+          MAXWELL_UI_FREEZE_SKIP_CHANGED_FILES: "0"
+        run: |
+          python -m pytest -o addopts='' --confcutdir=tests/unit \
+            tests/unit/test_maxwell_ui_freeze_policy.py -q
+
+  report:
+    name: Publish canonical verdict
+    if: always()
+    needs:
+      - announce
+      - lint
+      - unit
+      - base
+      - maxwell-ui-freeze
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Mint least-privilege App token
+        id: app_token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.SWITCHBOARD_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
+          owner: 6th-Element-Labs
+          repositories: ActionEngine
+
+      - name: Post and verify terminal canonical status
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          ANNOUNCE: ${{ needs.announce.result }}
+          LINT: ${{ needs.lint.result }}
+          UNIT: ${{ needs.unit.result }}
+          BASE: ${{ needs.base.result }}
+          UI: ${{ needs.maxwell-ui-freeze.result }}
+        run: |
+          set -euo pipefail
+          state=failure
+          description="public CI: one or more verification legs failed"
+          if [ "$ANNOUNCE" = success ] && [ "$LINT" = success ] && \
+             [ "$UNIT" = success ] && [ "$BASE" = success ] && \
+             [ "$UI" = success ]; then
+            state=success
+            description="public CI: exact private SHA verification passed"
+          fi
+
+          gh api "repos/$CANONICAL_REPO/statuses/$SOURCE_SHA" \
+            -f state="$state" \
+            -f context="$STATUS_CONTEXT" \
+            -f description="$description" \
+            -f target_url="$TARGET_URL"
+
+          readback="$(gh api "repos/$CANONICAL_REPO/commits/$SOURCE_SHA/status")"
+          jq -e \
+            --arg context "$STATUS_CONTEXT" \
+            --arg state "$state" \
+            --arg target "$TARGET_URL" \
+            '[.statuses[] | select(.context == $context)][0]
+             | .state == $state and .target_url == $target' \
+            <<<"$readback" >/dev/null
+
+          test "$state" = success
