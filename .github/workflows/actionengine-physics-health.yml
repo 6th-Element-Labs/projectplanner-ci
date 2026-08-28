@@ -79,12 +79,14 @@ jobs:
           registry = TaikunRegistry()
           db_tool = registry.get_tool("db.run_sql")
           result = db_tool.implementation(sql="SELECT current_database()", limit=1)
-          assert result["rows"]
+          assert result.success
+          assert (result.data or {}).get("rows")
           result = db_tool.implementation(
               sql="SELECT table_name FROM information_schema.tables WHERE table_name = 'physics_results'",
               limit=1,
           )
-          assert result["rows"]
+          assert result.success
+          assert (result.data or {}).get("rows")
           PY
 
       - name: Test physics results reader
