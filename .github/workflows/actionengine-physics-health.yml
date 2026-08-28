@@ -90,6 +90,18 @@ jobs:
           test "$database" = scada
           test "$table_exists" = t
 
+      - name: Seed disposable physics fixture
+        run: |
+          PGPASSWORD=taikun psql -h localhost -U taikun -d scada -v ON_ERROR_STOP=1 -c "
+          INSERT INTO physics_results (asset_id, metric, value, unit, provenance)
+          VALUES (
+            'TEST_ASSET',
+            'pressure',
+            100.0,
+            'psi',
+            '{\"source\": \"public_ci_test\"}'::jsonb
+          );"
+
       - name: Test physics results reader
         working-directory: source
         run: |
