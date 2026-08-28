@@ -1,0 +1,94 @@
+name: ActionEngine DuckDB compatibility
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: actionengine-duckdb-compatibility
+  cancel-in-progress: true
+
+jobs:
+  compatibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        duckdb-version: ["1.1.0", latest]
+        python-version: ["3.10", "3.11"]
+    steps:
+      - name: Check out trusted public workflow
+        uses: actions/checkout@v4
+
+      - name: Mint read-only source token
+        id: app_token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.SWITCHBOARD_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
+          owner: 6th-Element-Labs
+          repositories: ActionEngine
+
+      - name: Check out current private main
+        uses: ./.github/actions/actionengine-checkout
+        with:
+          token: ${{ steps.app_token.outputs.token }}
+          ref: refs/heads/main
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install compatibility environment
+        working-directory: source
+        env:
+          DUCKDB_VERSION: ${{ matrix.duckdb-version }}
+        run: |
+          python -m pip install --upgrade pip
+          if [ "$DUCKDB_VERSION" = latest ]; then
+            pip install --upgrade duckdb
+          else
+            pip install "duckdb==$DUCKDB_VERSION"
+          fi
+          grep -v '^duckdb' requirements.txt > requirements-no-duckdb.txt
+          pip install -r requirements-no-duckdb.txt || true
+
+      - name: Run DuckDB verification
+        working-directory: source
+        run: |
+          python scripts/verify_duckdb_setup.py
+          python - <<'PY'
+          from actionengine.engine.data_virtualization.adapters.duckdb_federation_adapter import DuckDBFederationAdapter
+          from actionengine.engine.data_virtualization.adapters.external_pool_manager import ExternalPoolManager
+          assert DuckDBFederationAdapter is not None
+          assert hasattr(ExternalPoolManager, "get_pool")
+          PY
+
+      - name: Verify extension surface and performance
+        working-directory: source
+        run: |
+          python - <<'PY'
+          import time
+          import duckdb
+
+          times = []
+          for _ in range(5):
+              conn = duckdb.connect(":memory:")
+              started = time.time()
+              conn.execute("INSTALL postgres")
+              conn.execute("LOAD postgres")
+              times.append((time.time() - started) * 1000)
+              settings = {r[0]: r[1] for r in conn.execute("SELECT name, value FROM duckdb_settings()").fetchall()}
+              assert "pg_connection_cache" in settings
+              assert "pg_connection_limit" in settings
+              functions = [r[0] for r in conn.execute("SELECT function_name FROM duckdb_functions() WHERE function_name = 'postgres_query'").fetchall()]
+              assert "postgres_query" in functions
+              conn.close()
+          average = sum(times) / len(times)
+          print(f"Extension load time: {average:.0f}ms avg")
+          assert average <= 1000
+          PY

@@ -1,0 +1,122 @@
+name: ActionEngine physics pipeline health
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: actionengine-physics-health
+  cancel-in-progress: true
+
+jobs:
+  physics-health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: taikun
+          POSTGRES_PASSWORD: taikun
+          POSTGRES_DB: scada
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    steps:
+      - name: Check out trusted public workflow
+        uses: actions/checkout@v4
+
+      - name: Mint read-only source token
+        id: app_token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.SWITCHBOARD_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
+          owner: 6th-Element-Labs
+          repositories: ActionEngine
+
+      - name: Check out current private main
+        uses: ./.github/actions/actionengine-checkout
+        with:
+          token: ${{ steps.app_token.outputs.token }}
+          ref: refs/heads/main
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        working-directory: source
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[full]" \
+            -e distributions/actionengine_optimizer \
+            -e distributions/actionengine_scada
+          pip install pytest asyncio
+
+      - name: Create physics results table
+        run: |
+          PGPASSWORD=taikun psql -h localhost -U taikun -d scada -c "
+          CREATE TABLE IF NOT EXISTS physics_results (
+            asset_id TEXT NOT NULL, metric TEXT NOT NULL,
+            value DOUBLE PRECISION NOT NULL, unit TEXT NOT NULL,
+            ts TIMESTAMPTZ NOT NULL DEFAULT now(), provenance JSONB NOT NULL,
+            PRIMARY KEY (asset_id, metric));"
+
+      - name: Test database connection
+        working-directory: source
+        run: |
+          python - <<'PY'
+          from actionengine.engine.taikun_cli.registry import TaikunRegistry
+          registry = TaikunRegistry()
+          db_tool = registry.get_tool("db.run_sql")
+          result = db_tool.implementation(sql="SELECT current_database()", limit=1)
+          assert result["rows"]
+          result = db_tool.implementation(
+              sql="SELECT table_name FROM information_schema.tables WHERE table_name = 'physics_results'",
+              limit=1,
+          )
+          assert result["rows"]
+          PY
+
+      - name: Test physics results reader
+        working-directory: source
+        run: |
+          python - <<'PY'
+          import asyncio
+          from actionengine.engine.tools.hmi.physics_results_reader import PhysicsResultsReader
+
+          async def main():
+              reader = PhysicsResultsReader()
+              await reader._read_physics_results("TEST_ASSET", 20)
+              result = await reader.run(asset_id="TEST_ASSET", fresh_minutes=20)
+              assert result.success
+          asyncio.run(main())
+          PY
+
+      - name: Test physics workflow
+        working-directory: source
+        run: |
+          python - <<'PY'
+          import asyncio
+          import json
+          from actionengine.engine.taikun_cli.workflows.workflow_engine import WorkflowEngine
+
+          async def main():
+              with open("workflows/templates/hmi/asset_detail_view.json") as handle:
+                  workflow = json.load(handle)
+              result = await WorkflowEngine().execute_workflow(
+                  workflow, {"asset_id": "TEST_ASSET"}
+              )
+              assert result.get("status")
+              assert "read_physics_results" in result.get("results", {})
+          asyncio.run(main())
+          PY

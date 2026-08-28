@@ -1,0 +1,179 @@
+name: ActionEngine core fitness
+
+on:
+  schedule:
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: actionengine-core-fitness
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  agent-queue-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out trusted public workflow
+        uses: actions/checkout@v4
+
+      - name: Mint read-only source token
+        id: app_token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.SWITCHBOARD_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
+          owner: 6th-Element-Labs
+          repositories: ActionEngine
+
+      - name: Check out current private main
+        uses: ./.github/actions/actionengine-checkout
+        with:
+          token: ${{ steps.app_token.outputs.token }}
+          ref: refs/heads/main
+
+      - name: Build manifest-generated agent-queue image
+        run: |
+          docker build \
+            --file source/packaging/generated/agent-queue.Dockerfile \
+            --tag actionengine-agent-queue:fitness \
+            source
+
+      - name: Re-run image absence gate
+        run: |
+          docker run --rm --entrypoint python \
+            actionengine-agent-queue:fitness \
+            scripts/assemble_profile_image.py \
+            --root /app --profile agent-queue \
+            --report packaging/generated/agent-queue.image-contract.json
+
+      - name: Export image proof reports
+        if: always()
+        run: |
+          docker run --rm --entrypoint cat actionengine-agent-queue:fitness \
+            /app/packaging/generated/agent-queue.image-contract.json \
+            > agent-queue.image-contract.json
+          docker run --rm --entrypoint cat actionengine-agent-queue:fitness \
+            /app/packaging/generated/agent-queue.sense4-fitness.json \
+            > agent-queue.sense4-fitness.json
+
+      - name: Upload image proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: actionengine-agent-queue-image-proof
+          path: |
+            agent-queue.image-contract.json
+            agent-queue.sense4-fitness.json
+          if-no-files-found: error
+
+  core-only-fitness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ACTIONENGINE_ENV: testing
+      SCADA_PGHOST: localhost
+      SCADA_PGPORT: "5432"
+      SCADA_PGDATABASE: actionengine_test
+      SCADA_PGUSER: taikun
+      SCADA_PGPASSWORD: taikun
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGDATABASE: actionengine_test
+      PGUSER: taikun
+      PGPASSWORD: taikun
+      DATABASE_HOST: localhost
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: actionengine_test
+      DATABASE_USER: taikun
+      DATABASE_PASSWORD: taikun
+      SENSE4_WITH_DB: "1"
+      SENSE4_REQUIRE_DB: "1"
+      READ_SQL_POSTGRES_DIRECT: "1"
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: taikun
+          POSTGRES_PASSWORD: taikun
+          POSTGRES_DB: actionengine_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    steps:
+      - name: Check out trusted public workflow
+        uses: actions/checkout@v4
+
+      - name: Mint read-only source token
+        id: app_token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.SWITCHBOARD_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
+          owner: 6th-Element-Labs
+          repositories: ActionEngine
+
+      - name: Check out current private main
+        uses: ./.github/actions/actionengine-checkout
+        with:
+          token: ${{ steps.app_token.outputs.token }}
+          ref: refs/heads/main
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: source/pyproject.toml
+
+      - name: Install core and dev only
+        working-directory: source
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Prove optional packages absent
+        working-directory: source
+        run: |
+          python - <<'PY'
+          import importlib
+          names = ("ortools", "pymodbus", "asyncua", "petbox.dca", "duckdb", "chromadb", "sentence_transformers")
+          leaked = []
+          for name in names:
+              try: importlib.import_module(name)
+              except ImportError: print(f"OK absent: {name}")
+              else: leaked.append(name)
+          if leaked: raise SystemExit(f"core-only install leaked: {', '.join(leaked)}")
+          PY
+
+      - name: Run core fitness gate
+        working-directory: source
+        env:
+          USE_DURABLE: "off"
+          TAIKUN_TENANT_ID: core-fitness
+          ACTIONENGINE_PROFILE: core
+          CAPABILITIES_ENABLED: ""
+        run: |
+          python scripts/dependency_lock_report.py --no-check-locks \
+            --output dependency-lock-report.json
+          python scripts/apply_profile_db_bundle.py --profile core -v
+          python scripts/core_fitness_gate.py --output core-fitness-report.json
+
+      - name: Upload core fitness reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: actionengine-core-fitness-report
+          path: |
+            source/dependency-lock-report.json
+            source/core-fitness-report.json
+          if-no-files-found: ignore

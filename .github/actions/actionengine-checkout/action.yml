@@ -1,0 +1,49 @@
+name: Check out private ActionEngine
+description: Fetch one trusted private ActionEngine ref without persisting credentials
+
+inputs:
+  token:
+    description: Short-lived GitHub App installation token
+    required: true
+  ref:
+    description: Branch, tag, or exact SHA to fetch
+    required: true
+  path:
+    description: Destination under the public workflow workspace
+    required: false
+    default: source
+  depth:
+    description: Shallow fetch depth
+    required: false
+    default: "2"
+
+outputs:
+  source_sha:
+    description: Exact checked-out ActionEngine SHA
+    value: ${{ steps.checkout.outputs.source_sha }}
+
+runs:
+  using: composite
+  steps:
+    - name: Fetch private source
+      id: checkout
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        SOURCE_REF: ${{ inputs.ref }}
+        SOURCE_PATH: ${{ inputs.path }}
+        FETCH_DEPTH: ${{ inputs.depth }}
+      run: |
+        set -euo pipefail
+        test ! -e "$SOURCE_PATH"
+        mkdir -p "$SOURCE_PATH"
+        git -C "$SOURCE_PATH" init -q
+        git -C "$SOURCE_PATH" remote add origin \
+          https://github.com/6th-Element-Labs/ActionEngine.git
+        git -C "$SOURCE_PATH" \
+          -c credential.https://github.com.helper='!gh auth git-credential' \
+          fetch --no-tags --depth="$FETCH_DEPTH" origin "$SOURCE_REF"
+        git -C "$SOURCE_PATH" checkout --detach FETCH_HEAD
+        source_sha="$(git -C "$SOURCE_PATH" rev-parse HEAD)"
+        echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+        echo "Checked out exact ActionEngine SHA $source_sha"
