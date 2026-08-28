@@ -95,13 +95,18 @@ jobs:
           repositories: ActionEngine
 
       - name: Check out exact private SHA
-        uses: actions/checkout@v4
-        with:
-          repository: 6th-Element-Labs/ActionEngine
-          ref: ${{ inputs.source_sha }}
-          fetch-depth: 0
-          persist-credentials: false
-          token: ${{ steps.app_token.outputs.token }}
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          BASE_SHA: ${{ inputs.base_sha }}
+        run: |
+          set -euo pipefail
+          test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)"
+          git init -q .
+          git remote add origin "https://github.com/$CANONICAL_REPO.git"
+          git -c credential.https://github.com.helper='!gh auth git-credential' \
+            fetch --no-tags --depth=1 origin "$SOURCE_SHA" "$BASE_SHA"
+          git checkout --detach "$SOURCE_SHA"
 
       - name: Verify exact SHA
         env:
@@ -188,13 +193,18 @@ jobs:
           repositories: ActionEngine
 
       - name: Check out exact private SHA
-        uses: actions/checkout@v4
-        with:
-          repository: 6th-Element-Labs/ActionEngine
-          ref: ${{ inputs.source_sha }}
-          fetch-depth: 1
-          persist-credentials: false
-          token: ${{ steps.app_token.outputs.token }}
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          BASE_SHA: ${{ inputs.base_sha }}
+        run: |
+          set -euo pipefail
+          test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)"
+          git init -q .
+          git remote add origin "https://github.com/$CANONICAL_REPO.git"
+          git -c credential.https://github.com.helper='!gh auth git-credential' \
+            fetch --no-tags --depth=1 origin "$SOURCE_SHA" "$BASE_SHA"
+          git checkout --detach "$SOURCE_SHA"
 
       - name: Verify exact SHA
         env:
@@ -296,13 +306,18 @@ jobs:
           repositories: ActionEngine
 
       - name: Check out exact private SHA
-        uses: actions/checkout@v4
-        with:
-          repository: 6th-Element-Labs/ActionEngine
-          ref: ${{ inputs.source_sha }}
-          fetch-depth: 1
-          persist-credentials: false
-          token: ${{ steps.app_token.outputs.token }}
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          BASE_SHA: ${{ inputs.base_sha }}
+        run: |
+          set -euo pipefail
+          test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)"
+          git init -q .
+          git remote add origin "https://github.com/$CANONICAL_REPO.git"
+          git -c credential.https://github.com.helper='!gh auth git-credential' \
+            fetch --no-tags --depth=1 origin "$SOURCE_SHA" "$BASE_SHA"
+          git checkout --detach "$SOURCE_SHA"
 
       - name: Verify exact SHA
         env:
@@ -352,13 +367,18 @@ jobs:
           repositories: ActionEngine
 
       - name: Check out exact private SHA
-        uses: actions/checkout@v4
-        with:
-          repository: 6th-Element-Labs/ActionEngine
-          ref: ${{ inputs.source_sha }}
-          fetch-depth: 0
-          persist-credentials: false
-          token: ${{ steps.app_token.outputs.token }}
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          BASE_SHA: ${{ inputs.base_sha }}
+        run: |
+          set -euo pipefail
+          test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)"
+          git init -q .
+          git remote add origin "https://github.com/$CANONICAL_REPO.git"
+          git -c credential.https://github.com.helper='!gh auth git-credential' \
+            fetch --no-tags --depth=1 origin "$SOURCE_SHA" "$BASE_SHA"
+          git checkout --detach "$SOURCE_SHA"
 
       - name: Verify exact SHA
         env:
