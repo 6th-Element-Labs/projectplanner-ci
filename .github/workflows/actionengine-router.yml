@@ -1,0 +1,101 @@
+# Trusted public CI router for private ActionEngine totalPreProd pull requests.
+# It reads only PR metadata and commit status through the least-privilege App,
+# then dispatches the trusted verifier in this public repository.
+name: actionengine-router
+run-name: ActionEngine public CI router
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      force_pr_number:
+        description: Optional ActionEngine PR number to verify even when already green
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: actionengine-public-ci-router
+  cancel-in-progress: false
+
+env:
+  CANONICAL_REPO: 6th-Element-Labs/ActionEngine
+  STATUS_CONTEXT: ActionEngine CI / public mirror gate
+  VERIFY_WORKFLOW: actionengine-verify.yml
+
+jobs:
+  route:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Mint least-privilege metadata token
+        id: app_token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.SWITCHBOARD_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
+          owner: 6th-Element-Labs
+          repositories: ActionEngine
+
+      - name: Dispatch missing exact-SHA verification
+        env:
+          APP_TOKEN: ${{ steps.app_token.outputs.token }}
+          FORCE_PR_NUMBER: ${{ inputs.force_pr_number }}
+          PUBLIC_REPO_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          dispatch_pr() {
+            local pr_json="$1"
+            local number sha base title current
+            number="$(jq -r '.number' <<<"$pr_json")"
+            sha="$(jq -r '.head.sha' <<<"$pr_json")"
+            base="$(jq -r '.base.sha' <<<"$pr_json")"
+            title="$(jq -r '.title' <<<"$pr_json")"
+
+            current="$(
+              GH_TOKEN="$APP_TOKEN" gh api \
+                "repos/$CANONICAL_REPO/commits/$sha/status" \
+              | jq -r --arg context "$STATUS_CONTEXT" \
+                  '[.statuses[] | select(.context == $context)][0].state // "missing"'
+            )"
+            if [ -z "$FORCE_PR_NUMBER" ] && [ "$current" != missing ]; then
+              echo "PR #$number $sha already has public status $current; skip"
+              return
+            fi
+
+            echo "Dispatching PR #$number exact SHA $sha"
+            GH_TOKEN="$PUBLIC_REPO_TOKEN" gh workflow run "$VERIFY_WORKFLOW" \
+              --repo "$GITHUB_REPOSITORY" \
+              --ref master \
+              -f source_sha="$sha" \
+              -f base_sha="$base" \
+              -f pr_title="$title" \
+              -f purpose=head
+          }
+
+          if [ -n "$FORCE_PR_NUMBER" ]; then
+            [[ "$FORCE_PR_NUMBER" =~ ^[0-9]+$ ]]
+            pr="$(GH_TOKEN="$APP_TOKEN" gh api "repos/$CANONICAL_REPO/pulls/$FORCE_PR_NUMBER")"
+            test "$(jq -r '.base.ref' <<<"$pr")" = totalPreProd
+            dispatch_pr "$pr"
+            exit 0
+          fi
+
+          page=1
+          while :; do
+            prs="$(
+              GH_TOKEN="$APP_TOKEN" gh api \
+                "repos/$CANONICAL_REPO/pulls?state=open&base=totalPreProd&per_page=100&page=$page"
+            )"
+            count="$(jq 'length' <<<"$prs")"
+            [ "$count" -gt 0 ] || break
+            while IFS= read -r pr; do dispatch_pr "$pr"; done < <(jq -c '.[]' <<<"$prs")
+            [ "$count" -eq 100 ] || break
+            page=$((page + 1))
+          done
