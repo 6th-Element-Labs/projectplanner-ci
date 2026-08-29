@@ -377,7 +377,7 @@ jobs:
           git init -q .
           git remote add origin "https://github.com/$CANONICAL_REPO.git"
           git -c credential.https://github.com.helper='!gh auth git-credential' \
-            fetch --no-tags --depth=50 origin "$SOURCE_SHA" "$BASE_SHA"
+            fetch --no-tags --depth=500 origin "$SOURCE_SHA" "$BASE_SHA"
           git checkout --detach "$SOURCE_SHA"
 
       - name: Verify exact SHA
