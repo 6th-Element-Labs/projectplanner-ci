@@ -47,6 +47,8 @@ env:
 jobs:
   announce:
     name: Announce exact-SHA verification
+    outputs:
+      check_run_id: ${{ steps.check_run.outputs.id }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -78,6 +80,21 @@ jobs:
             -f context="$STATUS_CONTEXT" \
             -f description="public CI: exact private SHA verification running" \
             -f target_url="$TARGET_URL"
+
+      - name: Post pending canonical check
+        id: check_run
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          check_run_id="$(gh api "repos/$CANONICAL_REPO/check-runs" \
+            -f name="$STATUS_CONTEXT" \
+            -f head_sha="$SOURCE_SHA" \
+            -f status=in_progress \
+            -f details_url="$TARGET_URL" \
+            --jq .id)"
+          echo "id=$check_run_id" >> "$GITHUB_OUTPUT"
 
   lint:
     name: Lint and policy
@@ -427,6 +444,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
           SOURCE_SHA: ${{ inputs.source_sha }}
+          CHECK_RUN_ID: ${{ needs.announce.outputs.check_run_id }}
           ANNOUNCE: ${{ needs.announce.result }}
           LINT: ${{ needs.lint.result }}
           UNIT: ${{ needs.unit.result }}
@@ -449,6 +467,11 @@ jobs:
             -f description="$description" \
             -f target_url="$TARGET_URL"
 
+          gh api --method PATCH "repos/$CANONICAL_REPO/check-runs/$CHECK_RUN_ID" \
+            -f status=completed \
+            -f conclusion="$state" \
+            -f details_url="$TARGET_URL" >/dev/null
+
           readback="$(gh api "repos/$CANONICAL_REPO/commits/$SOURCE_SHA/status")"
           jq -e \
             --arg context "$STATUS_CONTEXT" \
@@ -457,5 +480,10 @@ jobs:
             '[.statuses[] | select(.context == $context)][0]
              | .state == $state and .target_url == $target' \
             <<<"$readback" >/dev/null
+
+          check_readback="$(gh api "repos/$CANONICAL_REPO/check-runs/$CHECK_RUN_ID")"
+          jq -e --arg state "$state" \
+            '.status == "completed" and .conclusion == $state' \
+            <<<"$check_readback" | grep -qx true
 
           test "$state" = success
