@@ -1,0 +1,137 @@
+# Trusted public-runner deployment for private ActionEngine preproduction.
+#
+# Private-repository Actions billing can stop jobs before they start. This
+# workflow keeps the release control plane on the public CI repository while
+# preserving the same exact-SHA gate, least-privilege GitHub App lookup,
+# environment-scoped AWS OIDC role, SSM-only host access, deploy.sh canary,
+# automatic rollback, and host receipt used by the canonical deploy workflow.
+name: actionengine-preprod-deploy
+run-name: ActionEngine preprod deploy ${{ inputs.source_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact gated ActionEngine totalPreProd SHA to deploy
+        required: true
+        type: string
+      skip_fmp_sync:
+        description: Skip final FMP asset reconciliation if the upstream is unavailable
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: actionengine-preprod-deploy
+  cancel-in-progress: false
+
+env:
+  CANONICAL_REPO: 6th-Element-Labs/ActionEngine
+  GATE_CONTEXT: ActionEngine CI / public mirror gate
+  DEPLOY_CONTEXT: ActionEngine Deploy / public preprod
+
+jobs:
+  deploy:
+    name: Deploy ActionEngine preprod
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: actionengine-preprod
+    steps:
+      - name: Check out trusted public workflow
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Validate request
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+      - name: Mint least-privilege source token
+        id: app_token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.SWITCHBOARD_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
+          owner: 6th-Element-Labs
+          repositories: ActionEngine
+
+      - name: Authorize exact gated totalPreProd revision
+        id: authorize
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          resolved="$(gh api "repos/$CANONICAL_REPO/commits/$SOURCE_SHA" --jq .sha)"
+          test "$resolved" = "$SOURCE_SHA"
+
+          gate="$(
+            gh api "repos/$CANONICAL_REPO/commits/$SOURCE_SHA/status" \
+              | jq -r --arg context "$GATE_CONTEXT" \
+                  '[.statuses[] | select(.context == $context)][0].state // "missing"'
+          )"
+          test "$gate" = success || {
+            echo "::error::$SOURCE_SHA has not passed '$GATE_CONTEXT' (found: $gate)"
+            exit 1
+          }
+
+          branch_sha="$(gh api "repos/$CANONICAL_REPO/commits/totalPreProd" --jq .sha)"
+          relation="$(
+            gh api "repos/$CANONICAL_REPO/compare/$SOURCE_SHA...$branch_sha" --jq .status
+          )"
+          case "$relation" in
+            identical|ahead) ;;
+            *)
+              echo "::error::$SOURCE_SHA is not contained in totalPreProd at $branch_sha (relation: $relation)"
+              exit 1
+              ;;
+          esac
+
+          gh api "repos/$CANONICAL_REPO/statuses/$SOURCE_SHA" \
+            -f state=pending \
+            -f context="$DEPLOY_CONTEXT" \
+            -f description="preprod: protected public deployment running" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+      - name: Assume preprod deployment role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.ACTIONENGINE_AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: actionengine-preprod-${{ github.run_id }}
+          aws-region: us-east-1
+
+      - name: Deploy exact SHA over SSM
+        id: deploy
+        env:
+          INSTANCE_ID: ${{ vars.ACTIONENGINE_PREPROD_INSTANCE_ID }}
+          SHA: ${{ inputs.source_sha }}
+          ACTOR: ${{ github.actor }}
+          SKIP_FMP_SYNC: ${{ inputs.skip_fmp_sync && '1' || '0' }}
+        run: bash .github/scripts/actionengine_preprod_deploy.sh
+
+      - name: Publish canonical deployment verdict
+        if: always() && steps.authorize.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+        run: |
+          if [ "$DEPLOY_OUTCOME" = success ]; then
+            state=success
+            description="preprod: exact SHA deployed; canary green"
+          else
+            state=failure
+            description="preprod: deployment failed or rolled back"
+          fi
+          gh api "repos/$CANONICAL_REPO/statuses/$SOURCE_SHA" \
+            -f state="$state" \
+            -f context="$DEPLOY_CONTEXT" \
+            -f description="$description" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
