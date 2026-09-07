@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       force_pr_number:
-        description: Optional ActionEngine PR number to verify even when already green
+        description: Optional ActionEngine PR number (into totalPreProd or main) to verify even when already green
         required: false
         default: ""
         type: string
@@ -82,20 +82,56 @@ jobs:
           if [ -n "$FORCE_PR_NUMBER" ]; then
             [[ "$FORCE_PR_NUMBER" =~ ^[0-9]+$ ]]
             pr="$(GH_TOKEN="$APP_TOKEN" gh api "repos/$CANONICAL_REPO/pulls/$FORCE_PR_NUMBER")"
-            test "$(jq -r '.base.ref' <<<"$pr")" = totalPreProd
+            case "$(jq -r '.base.ref' <<<"$pr")" in totalPreProd|main) ;; *) echo "PR is not into a protected branch"; exit 1 ;; esac
             dispatch_pr "$pr"
             exit 0
           fi
 
-          page=1
-          while :; do
-            prs="$(
-              GH_TOKEN="$APP_TOKEN" gh api \
-                "repos/$CANONICAL_REPO/pulls?state=open&base=totalPreProd&per_page=100&page=$page"
-            )"
-            count="$(jq 'length' <<<"$prs")"
-            [ "$count" -gt 0 ] || break
-            while IFS= read -r pr; do dispatch_pr "$pr"; done < <(jq -c '.[]' <<<"$prs")
-            [ "$count" -eq 100 ] || break
-            page=$((page + 1))
+          # 1. Open PRs into either protected branch: verify the PR head.
+          for base in totalPreProd main; do
+            page=1
+            while :; do
+              prs="$(
+                GH_TOKEN="$APP_TOKEN" gh api \
+                  "repos/$CANONICAL_REPO/pulls?state=open&base=$base&per_page=100&page=$page"
+              )"
+              count="$(jq 'length' <<<"$prs")"
+              [ "$count" -gt 0 ] || break
+              while IFS= read -r pr; do dispatch_pr "$pr"; done < <(jq -c '.[]' <<<"$prs")
+              [ "$count" -eq 100 ] || break
+              page=$((page + 1))
+            done
           done
+          # 2. Merge-queue commits: GitHub builds them on temporary
+          #    gh-readonly-queue/<base>/pr-<n>-<sha> branches. The queue waits
+          #    on the same required status, so verify those heads too.
+          branches="$(
+            GH_TOKEN="$APP_TOKEN" gh api --paginate \
+              "repos/$CANONICAL_REPO/branches?per_page=100" \
+            | jq -c '.[] | select(.name | startswith("gh-readonly-queue/"))'
+          )"
+          while IFS= read -r br; do
+            [ -n "$br" ] || continue
+            name="$(jq -r '.name' <<<"$br")"
+            sha="$(jq -r '.commit.sha' <<<"$br")"
+            base_branch="$(cut -d/ -f2 <<<"$name")"
+            base_sha="$(GH_TOKEN="$APP_TOKEN" gh api "repos/$CANONICAL_REPO/branches/$base_branch" --jq .commit.sha)"
+            current="$(
+              GH_TOKEN="$APP_TOKEN" gh api \
+                "repos/$CANONICAL_REPO/commits/$sha/status" \
+              | jq -r --arg context "$STATUS_CONTEXT" \
+                  '[.statuses[] | select(.context == $context)][0].state // "missing"'
+            )"
+            if [ "$current" != missing ]; then
+              echo "queue $name $sha already has public status $current; skip"
+              continue
+            fi
+            echo "Dispatching merge-queue head $name $sha"
+            GH_TOKEN="$PUBLIC_REPO_TOKEN" gh workflow run "$VERIFY_WORKFLOW" \
+              --repo "$GITHUB_REPOSITORY" \
+              --ref master \
+              -f source_sha="$sha" \
+              -f base_sha="$base_sha" \
+              -f pr_title="merge-queue: $name" \
+              -f purpose=ci_repair
+          done <<<"$branches"
