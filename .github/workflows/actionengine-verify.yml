@@ -348,7 +348,11 @@ jobs:
 
       - name: Run base coverage gate
         run: |
-          pytest tests/base/ -q --cov=actionengine --cov=actionengine_optimizer \
+          # Keep the private gate's feature coverage inputs aligned. Newly
+          # installed PPM custody code must be exercised without lowering 12%.
+          pytest tests/base/ tests/unit/test_ppm_*.py \
+            tests/unit/test_sensor_ppm_publication.py -q \
+            --cov=actionengine --cov=actionengine_optimizer \
             --cov-report=xml --cov-fail-under=12
 
   maxwell-ui-freeze:
