@@ -350,8 +350,11 @@ jobs:
         run: |
           # Keep the private gate's feature coverage inputs aligned. Newly
           # installed PPM custody code must be exercised without lowering 12%.
-          pytest tests/base/ tests/unit/test_ppm_*.py \
-            tests/unit/test_sensor_ppm_publication.py -q \
+          paths=(tests/base/)
+          for file in tests/unit/test_ppm_*.py tests/unit/test_sensor_ppm_publication.py; do
+            if [ -f "$file" ]; then paths+=("$file"); fi
+          done
+          pytest "${paths[@]}" -q \
             --cov=actionengine --cov=actionengine_optimizer \
             --cov-report=xml --cov-fail-under=12
 
