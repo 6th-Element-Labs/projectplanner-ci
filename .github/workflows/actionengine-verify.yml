@@ -400,11 +400,39 @@ jobs:
       - name: Install static test runner
         run: python -m pip install --quiet pytest
 
+      # Same boundary as ActionEngine ci.yml: only an exact totalPreProd -> main
+      # promotion (the PR head is the totalPreProd tip, or the queue merge commit
+      # of the main tip and the totalPreProd tip) skips the cumulative
+      # changed-file comparison. The static and browser proofs still run on the
+      # complete tree.
+      - name: Decide the changed-file boundary
+        id: boundary
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          BASE_SHA: ${{ inputs.base_sha }}
+        run: |
+          set -euo pipefail
+          main_sha="$(gh api "repos/$CANONICAL_REPO/branches/main" --jq .commit.sha)"
+          preprod_sha="$(gh api "repos/$CANONICAL_REPO/branches/totalPreProd" --jq .commit.sha)"
+          first_parent="$(git rev-parse --verify --quiet "$SOURCE_SHA^1" || true)"
+          second_parent="$(git rev-parse --verify --quiet "$SOURCE_SHA^2" || true)"
+          skip=0
+          if [ "$BASE_SHA" = "$main_sha" ]; then
+            if [ "$SOURCE_SHA" = "$preprod_sha" ]; then
+              skip=1
+            elif [ "$first_parent" = "$main_sha" ] && [ "$second_parent" = "$preprod_sha" ]; then
+              skip=1
+            fi
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+          echo "Maxwell freeze diff base: $BASE_SHA skip_changed_files=$skip"
+
       - name: Run Maxwell UI freeze contract
         env:
           MAXWELL_UI_FREEZE_BASE_SHA: ${{ inputs.base_sha }}
           MAXWELL_UI_FREEZE_HEAD_SHA: ${{ inputs.source_sha }}
-          MAXWELL_UI_FREEZE_SKIP_CHANGED_FILES: "0"
+          MAXWELL_UI_FREEZE_SKIP_CHANGED_FILES: ${{ steps.boundary.outputs.skip }}
         run: |
           python -m pytest -o addopts='' --confcutdir=tests/unit \
             tests/unit/test_maxwell_ui_freeze_policy.py -q
