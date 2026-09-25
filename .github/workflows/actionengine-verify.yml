@@ -234,7 +234,12 @@ jobs:
             -v ON_ERROR_STOP=1 -f actionengine/engine/alarm_management_schema.sql
 
       - name: Run unit tests
-        run: pytest tests/unit/ -q --no-cov
+        run: |
+          # Same suites as the private ci.yml unit leg. tests/emissions_advisor
+          # joined it in ActionEngine #894; older SHAs may lack the folder.
+          paths=(tests/unit/)
+          if [ -d tests/emissions_advisor ]; then paths+=(tests/emissions_advisor/); fi
+          pytest "${paths[@]}" -q --no-cov
 
       - name: Run contract type checks
         run: |
