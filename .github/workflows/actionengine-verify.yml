@@ -104,8 +104,17 @@ jobs:
           test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)"
           git init -q .
           git remote add origin "https://github.com/$CANONICAL_REPO.git"
-          git -c credential.https://github.com.helper='!gh auth git-credential' \
-            fetch --no-tags --depth=50 origin "$SOURCE_SHA" "$BASE_SHA"
+          for attempt in 1 2 3; do
+            if git -c credential.https://github.com.helper='!gh auth git-credential' \
+              fetch --no-tags --no-recurse-submodules --depth=50 origin "$SOURCE_SHA" "$BASE_SHA"; then
+              break
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              echo "Fetch failed after 3 attempts" >&2
+              exit 1
+            fi
+            sleep "$((attempt * 10))"
+          done
           git checkout --detach "$SOURCE_SHA"
 
       - name: Verify exact SHA
@@ -196,13 +205,26 @@ jobs:
         run: test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)"
 
       - name: Check out exact private SHA
-        uses: actions/checkout@v5
-        with:
-          repository: ${{ env.CANONICAL_REPO }}
-          ref: ${{ inputs.source_sha }}
-          token: ${{ steps.app_token.outputs.token }}
-          persist-credentials: false
-          fetch-depth: 50
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          BASE_SHA: ${{ inputs.base_sha }}
+        run: |
+          set -euo pipefail
+          git init -q .
+          git remote add origin "https://github.com/$CANONICAL_REPO.git"
+          for attempt in 1 2 3; do
+            if git -c credential.https://github.com.helper='!gh auth git-credential' \
+              fetch --no-tags --no-recurse-submodules --depth=50 origin "$SOURCE_SHA" "$BASE_SHA"; then
+              break
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              echo "Fetch failed after 3 attempts" >&2
+              exit 1
+            fi
+            sleep "$((attempt * 10))"
+          done
+          git checkout --detach "$SOURCE_SHA"
 
       - name: Verify exact SHA
         env:
@@ -318,8 +340,17 @@ jobs:
           test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)"
           git init -q .
           git remote add origin "https://github.com/$CANONICAL_REPO.git"
-          git -c credential.https://github.com.helper='!gh auth git-credential' \
-            fetch --no-tags --depth=50 origin "$SOURCE_SHA" "$BASE_SHA"
+          for attempt in 1 2 3; do
+            if git -c credential.https://github.com.helper='!gh auth git-credential' \
+              fetch --no-tags --no-recurse-submodules --depth=50 origin "$SOURCE_SHA" "$BASE_SHA"; then
+              break
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              echo "Fetch failed after 3 attempts" >&2
+              exit 1
+            fi
+            sleep "$((attempt * 10))"
+          done
           git checkout --detach "$SOURCE_SHA"
 
       - name: Verify exact SHA
@@ -386,8 +417,17 @@ jobs:
           test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)"
           git init -q .
           git remote add origin "https://github.com/$CANONICAL_REPO.git"
-          git -c credential.https://github.com.helper='!gh auth git-credential' \
-            fetch --no-tags --depth=500 origin "$SOURCE_SHA" "$BASE_SHA"
+          for attempt in 1 2 3; do
+            if git -c credential.https://github.com.helper='!gh auth git-credential' \
+              fetch --no-tags --no-recurse-submodules --depth=500 origin "$SOURCE_SHA" "$BASE_SHA"; then
+              break
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              echo "Fetch failed after 3 attempts" >&2
+              exit 1
+            fi
+            sleep "$((attempt * 10))"
+          done
           git checkout --detach "$SOURCE_SHA"
 
       - name: Verify exact SHA
