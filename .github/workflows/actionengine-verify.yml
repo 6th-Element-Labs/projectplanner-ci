@@ -128,7 +128,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install lint tools
-        run: pip install --quiet ruff pyyaml jsonschema
+        run: pip install --quiet "ruff==0.16.10" pyyaml jsonschema
 
       - name: Run whole-tree lint and format checks
         run: |
