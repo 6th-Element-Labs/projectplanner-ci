@@ -218,12 +218,13 @@ jobs:
 
       - uses: actions/cache@v4
         with:
+          # Public Actions caches must never contain the private app or installers.
+          # Cache downloaded dependencies only; compiled output stays on the runner.
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            source/src-tauri/target
-          key: ${{ matrix.leg }}-cargo-${{ hashFiles('source/src-tauri/Cargo.lock') }}
-          restore-keys: ${{ matrix.leg }}-cargo-
+          key: simplemark-${{ matrix.leg }}-cargo-deps-v1-${{ hashFiles('source/src-tauri/Cargo.lock') }}
+          restore-keys: simplemark-${{ matrix.leg }}-cargo-deps-v1-
 
       # §3: `libayatana-appindicator3-dev`, never the pre-Ayatana package — asking
       # apt for both is a conflict, not belt and braces. `libfuse2` is for the
