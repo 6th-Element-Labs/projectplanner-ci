@@ -80,6 +80,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
           SOURCE_SHA: ${{ inputs.source_sha }}
+          AUDIT_ONLY: ${{ inputs.audit_only && 'true' || 'false' }}
         run: |
           set -euo pipefail
           resolved="$(gh api "repos/$CANONICAL_REPO/commits/$SOURCE_SHA" --jq .sha)"
@@ -98,6 +99,13 @@ jobs:
           branch=totalPreProd
           [ "$TARGET_ENVIRONMENT" != production ] || branch=main
           branch_sha="$(gh api "repos/$CANONICAL_REPO/commits/$branch" --jq .sha)"
+          # Queued or manually retried historical deploys must not reinstall an
+          # older schedule/runtime after a newer protected release. Rollbacks
+          # use a gated forward revert; historical read-only audits remain valid.
+          if [ "$AUDIT_ONLY" != true ] && [ "$SOURCE_SHA" != "$branch_sha" ]; then
+            echo "::error::Stale deployment: $SOURCE_SHA is not the latest $branch revision $branch_sha"
+            exit 1
+          fi
           relation="$(
             gh api "repos/$CANONICAL_REPO/compare/$SOURCE_SHA...$branch_sha" --jq .status
           )"

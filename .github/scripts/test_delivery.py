@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import textwrap
 import unittest
 from unittest.mock import patch
 
@@ -100,6 +101,59 @@ class RouterTests(unittest.TestCase):
 
 
 class AuthorizationTests(unittest.TestCase):
+    def controller_authorize(self, *, stale=False, audit=False, environment="preprod", gate="success"):
+        workflow = (HERE.parent / "workflows/actionengine-preprod-deploy.yml").read_text()
+        step = workflow.split("      - name: Authorize exact gated totalPreProd revision\n", 1)[1]
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1].split("\n      - name:", 1)[0])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gh = root / "gh"
+            gh.write_text('#!/usr/bin/env bash\nset -eu\n'
+                          'printf "%s\\n" "$2" >> "$AUTH_LOG"\n'
+                          'case "$2" in\n'
+                          ' */commits/*/status) printf \'{"statuses":[{"context":"gate","state":"%s"}]}\\n\' "$TEST_GATE" ;;\n'
+                          ' */commits/totalPreProd|*/commits/main) echo "$TEST_BRANCH_SHA" ;;\n'
+                          ' */commits/*) echo "$SOURCE_SHA" ;;\n'
+                          ' */compare/*) echo ahead ;;\n'
+                          ' */statuses/*) echo posted ;;\n'
+                          ' *) exit 99 ;;\nesac\n')
+            gh.chmod(0o755)
+            log = root / "auth.log"
+            env = {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"],
+                   "AUTH_LOG": str(log), "SOURCE_SHA": SHA,
+                   "TEST_BRANCH_SHA": "b" * 40 if stale else SHA,
+                   "TEST_GATE": gate, "AUDIT_ONLY": "true" if audit else "false",
+                   "CANONICAL_REPO": "synthetic/source", "GATE_CONTEXT": "gate",
+                   "DEPLOY_CONTEXT": "deploy", "TARGET_ENVIRONMENT": environment,
+                   "GITHUB_SERVER_URL": "https://github.com", "GITHUB_REPOSITORY": "synthetic/control",
+                   "GITHUB_RUN_ID": "123"}
+            result = subprocess.run(["bash", "-c", script], env=env, text=True,
+                                    capture_output=True, timeout=10)
+            return result, log.read_text()
+
+    def test_current_gated_release_can_deploy(self):
+        result, log = self.controller_authorize()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("/statuses/", log)
+
+    def test_stale_merged_release_cannot_deploy_either_environment(self):
+        for environment in ("preprod", "production"):
+            with self.subTest(environment=environment):
+                result, log = self.controller_authorize(stale=True, environment=environment)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("Stale deployment", result.stdout)
+                self.assertNotIn("/statuses/", log)
+
+    def test_historical_read_only_provenance_audit_remains_allowed(self):
+        result, _ = self.controller_authorize(stale=True, audit=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_latest_release_still_requires_public_ci(self):
+        result, log = self.controller_authorize(gate="failure")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("has not passed", result.stdout)
+        self.assertNotIn("/statuses/", log)
+
     def test_ungated_source_cannot_create_private_staging(self):
         def api(path):
             if path.startswith("commits/") and not path.endswith("/status"):
