@@ -66,10 +66,19 @@ This option requires these environment secrets: `APPLE_CERTIFICATE`,
 `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_TEAM_ID`,
 `KEYCHAIN_PASSWORD`, `APPLE_API_ISSUER`, `APPLE_API_KEY`, and `APPLE_API_KEY_P8`.
 It does not sign Windows installers or supply the required human smoke evidence.
-Publication remains gated separately; its legacy Apple-ID credential check must
-also be updated to accept API notarization before using the API-only credential set.
+Publication remains gated separately and requires a canonical revision whose
+trust verifier accepts API notarization.
 Signing credentials must not be copied from another product without its owner's
 approval. Updater signing keys are unrelated and must not be reused.
+
+Promotion downloads all private draft assets and requires five smoke records:
+`platform-smoke-macos-arm64.json`, `platform-smoke-macos-x64.json`,
+`platform-smoke-windows-msi.json`, `platform-smoke-windows-nsis.json`, and
+`platform-smoke-linux.json`. Each must name the corresponding final installer
+and match both its actual SHA-256 and the release tag's exact commit. Container
+checks and `SHA256SUMS` verification run before the existing OS trust and smoke
+gates. Neither a record for the other architecture/format nor an older build
+can satisfy this handoff. The workflow does not synthesize smoke evidence.
 
 ```bash
 gh workflow run simplemark-release.yml --repo 6th-Element-Labs/projectplanner-ci --ref master -f source_ref=main -f validation_only=true
