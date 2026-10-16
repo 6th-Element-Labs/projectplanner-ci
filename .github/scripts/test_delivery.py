@@ -124,6 +124,29 @@ class AuthorizationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("cannot skip", result.stderr)
 
+    def test_automatic_bot_actor_reaches_ssm_and_preserves_provenance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            aws = root / "aws"
+            aws.write_text("#!/usr/bin/env bash\n"
+                           "printf '%s\\n' \"$@\" >> \"$AWS_LOG\"\n"
+                           "if [[ $2 == send-command ]]; then echo test-command;\n"
+                           "elif [[ $* == *'--query Status'* ]]; then echo Success; fi\n")
+            sleep = root / "sleep"
+            sleep.write_text("#!/bin/sh\nexit 0\n")
+            aws.chmod(0o755)
+            sleep.chmod(0o755)
+            log = root / "aws.log"
+            env = {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"],
+                   "AWS_LOG": str(log), "INSTANCE_ID": "i-" + "0" * 17,
+                   "SHA": SHA, "ACTOR": "github-actions[bot]", "DEPLOY_ENV": "prod",
+                   "SKIP_FMP_SYNC": "0"}
+            result = subprocess.run(["bash", str(HERE / "actionengine_deploy.sh")],
+                                    env=env, text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("github-public:github-actions[bot]", log.read_text())
+            self.assertIn("canary green", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
