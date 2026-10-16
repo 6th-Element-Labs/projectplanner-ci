@@ -276,7 +276,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .artifacts
-          npx tauri build --target "${{ matrix.target }}" --bundles "${{ matrix.bundles }}" \
+          bundles="${{ matrix.bundles }}"
+          # DMG-only builds delete the temporary .app; signed verification needs it.
+          if [[ '${{ matrix.os }}' == macos && '${{ inputs.sign_macos }}' == true ]]; then
+            bundles=app,dmg
+          fi
+          npx tauri build --target "${{ matrix.target }}" --bundles "$bundles" \
             2>&1 | tee ".artifacts/release-build-${{ matrix.leg }}.log"
 
       - name: Verify the signed app and notarize the final DMG

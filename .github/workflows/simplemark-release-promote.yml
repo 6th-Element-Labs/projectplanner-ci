@@ -89,18 +89,25 @@ jobs:
       # The evidence is what the gate reads. It is produced by APP-6's smoke
       # lanes and attached to the draft; this workflow never synthesises it,
       # because evidence a workflow wrote about itself proves nothing.
-      - name: Download the platform smoke evidence from the draft
+      - name: Download the private installers and smoke evidence from the draft
         env:
           GH_TOKEN: ${{ steps.source.outputs.token }}
         run: |
           set -euo pipefail
-          mkdir -p .artifacts/evidence
+          mkdir -p .artifacts/release
           gh release download "${RELEASE_TAG}" \
-            --dir .artifacts/evidence \
-            --pattern 'platform-smoke-*.json'
-          ls -l .artifacts/evidence
+            --dir .artifacts/release
 
-      # One invocation per platform. Each fails closed on its own, so a partial
+      - name: Bind every smoke record to the exact released source and installer
+        run: |
+          set -euo pipefail
+          node scripts/assert-release-version.mjs --tag "$RELEASE_TAG"
+          export SOURCE_SHA="$(git rev-parse HEAD)"
+          python3 ../control/.github/scripts/simplemark_release.py verify-promotion
+          cd .artifacts/release
+          sha256sum -c SHA256SUMS
+
+      # One invocation per installer. Each fails closed on its own, so a partial
       # pass cannot promote: the first missing or incomplete platform ends the
       # job before the publish step is ever reached.
       - name: Verify macos release trust
@@ -110,19 +117,30 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-        run: node scripts/verify-release-trust.mjs --target macos --mode public-release --evidence .artifacts/evidence/platform-smoke-macos.json
+        run: |
+          set -euo pipefail
+          for leg in macos-arm64 macos-x64; do
+            node scripts/verify-release-trust.mjs --target macos --mode public-release --evidence ".artifacts/release/platform-smoke-$leg.json"
+          done
 
       - name: Verify windows release trust
         env:
           SIMPLEMARK_WINDOWS_CERTIFICATE: ${{ secrets.SIMPLEMARK_WINDOWS_CERTIFICATE }}
           SIMPLEMARK_WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.SIMPLEMARK_WINDOWS_CERTIFICATE_PASSWORD }}
           SIMPLEMARK_WINDOWS_TIMESTAMP_URL: ${{ secrets.SIMPLEMARK_WINDOWS_TIMESTAMP_URL }}
-        run: node scripts/verify-release-trust.mjs --target windows --mode public-release --evidence .artifacts/evidence/platform-smoke-windows.json
+        run: |
+          set -euo pipefail
+          for leg in windows-msi windows-nsis; do
+            node scripts/verify-release-trust.mjs --target windows --mode public-release --evidence ".artifacts/release/platform-smoke-$leg.json"
+          done
 
       - name: Verify linux release trust
-        run: node scripts/verify-release-trust.mjs --target linux --mode public-release --evidence .artifacts/evidence/platform-smoke-linux.json
+        run: node scripts/verify-release-trust.mjs --target linux --mode public-release --evidence .artifacts/release/platform-smoke-linux.json
 
       # Reached only when all three gates above passed. Every step before this
       # one is a hard failure, so there is no arrangement of skipped or

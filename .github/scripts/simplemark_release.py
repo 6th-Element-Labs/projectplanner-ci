@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Authorize releases and keep installer handoffs in private draft assets."""
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -80,14 +81,56 @@ def verdict(sha, tag, result):
         "target_url": f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"})
 
 
+def promotion_evidence(sha, tag, directory):
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise ValueError("An exact canonical source SHA is required")
+    if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?", tag):
+        raise ValueError("Invalid release tag")
+    version = tag[1:]
+    root = Path(directory)
+    installers = [
+        ("macos-arm64", "macos", f"SimpleMark-{version}-macos-arm64.dmg"),
+        ("macos-x64", "macos", f"SimpleMark-{version}-macos-x64.dmg"),
+        ("windows-msi", "windows", f"SimpleMark-{version}-windows-x64.msi"),
+        ("windows-nsis", "windows", f"SimpleMark-{version}-windows-x64-setup.exe"),
+        ("linux", "linux", f"SimpleMark-{version}-linux-x64.AppImage"),
+    ]
+    verified = []
+    for leg, target, name in installers:
+        artifact = root / name
+        evidence = root / f"platform-smoke-{leg}.json"
+        if not artifact.is_file() or not artifact.stat().st_size or not evidence.is_file():
+            raise ValueError(f"Missing installer or exact smoke evidence for {leg}")
+        body = json.loads(evidence.read_text())
+        if body.get("schema") != "simplemark.platform-smoke.v1" or body.get("target") != target:
+            raise ValueError(f"Wrong smoke evidence schema or target for {leg}")
+        if body.get("commit") != sha:
+            raise ValueError(f"Smoke evidence does not identify the released commit for {leg}")
+        recorded = body.get("artifact", {})
+        digest = hashlib.sha256()
+        with artifact.open("rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(block)
+        if recorded.get("name") != name or recorded.get("sha256") != digest.hexdigest():
+            raise ValueError(f"Smoke evidence does not identify the exact installer bytes for {leg}")
+        verified.append((target, artifact))
+    return verified
+
+
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("command", choices=["authorize", "verdict"])
+    p.add_argument("command", choices=["authorize", "verdict", "verify-promotion"])
     a = p.parse_args()
     if a.command == "authorize":
         authorize(os.environ["SOURCE_REF"], os.environ.get("RELEASE_TAG", ""),
                   os.environ.get("VALIDATION_ONLY") == "true",
                   os.environ.get("EMERGENCY") == "true", os.environ.get("REASON", ""))
-    else:
+    elif a.command == "verdict":
         verdict(os.environ["SOURCE_SHA"], os.environ.get("RELEASE_TAG", ""),
                 os.environ["RELEASE_RESULT"])
+    else:
+        for target, artifact in promotion_evidence(os.environ["SOURCE_SHA"], os.environ["RELEASE_TAG"],
+                                                  ".artifacts/release"):
+            subprocess.run(["node", "scripts/verify-native-artifact.mjs", "--target", target,
+                            "--artifact", str(artifact)], check=True)
+        print("Every installer has smoke evidence bound to the exact released commit and bytes")

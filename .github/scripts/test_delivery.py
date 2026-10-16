@@ -1,4 +1,6 @@
 import importlib.util
+import hashlib
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -22,7 +24,7 @@ SHA = "a" * 40
 
 
 class RouterTests(unittest.TestCase):
-    def route(self, statuses, tags=(), releases=(), product="all", preprod_auto="on"):
+    def route(self, statuses, tags=(), releases=(), product="all", preprod_auto="on", macos_signing="off"):
         calls = []
 
         def api(path, token, method="GET", body=None):
@@ -41,7 +43,8 @@ class RouterTests(unittest.TestCase):
                 return list(releases)
             raise AssertionError(path)
 
-        with patch.object(router, "api", side_effect=api), patch.dict(os.environ, {"PREPROD_AUTO": preprod_auto}):
+        with patch.object(router, "api", side_effect=api), patch.dict(os.environ, {
+                "PREPROD_AUTO": preprod_auto, "SIMPLEMARK_MACOS_SIGNING_ENABLED": macos_signing}):
             router.route("source-token", "public-token", product)
         return calls
 
@@ -85,6 +88,15 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(len(dispatches), 1)
         self.assertIn("simplemark-release.yml", dispatches[0][0])
         self.assertEqual(dispatches[0][1]["inputs"]["validation_only"], "false")
+        self.assertEqual(dispatches[0][1]["inputs"]["sign_macos"], "false")
+
+    def test_configured_tag_route_requests_protected_mac_signing(self):
+        calls = self.route([], [{"name": "v0.1.0", "commit": {"sha": SHA}}],
+                           product="simplemark", macos_signing="on")
+        dispatches = [b for p, _, b in calls if "dispatches" in p]
+        self.assertEqual(len(dispatches), 1)
+        self.assertEqual(dispatches[0]["inputs"]["sign_macos"], "true")
+        self.assertEqual(dispatches[0]["ref"], "master")
 
 
 class AuthorizationTests(unittest.TestCase):
@@ -233,6 +245,61 @@ class MacSigningTests(unittest.TestCase):
         self.assertIn("notarytool submit", log)
         self.assertIn("stapler staple", log)
         self.assertIn("spctl --assess --type open", log)
+
+
+class PromotionBindingTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.records = {}
+        for leg, target, suffix in [
+            ("macos-arm64", "macos", "macos-arm64.dmg"),
+            ("macos-x64", "macos", "macos-x64.dmg"),
+            ("windows-msi", "windows", "windows-x64.msi"),
+            ("windows-nsis", "windows", "windows-x64-setup.exe"),
+            ("linux", "linux", "linux-x64.AppImage"),
+        ]:
+            name = f"SimpleMark-0.1.0-{suffix}"
+            content = f"distinct installer bytes for {leg}".encode()
+            (self.root / name).write_bytes(content)
+            body = {"schema": "simplemark.platform-smoke.v1", "target": target, "commit": SHA,
+                    "artifact": {"name": name, "sha256": hashlib.sha256(content).hexdigest()}}
+            path = self.root / f"platform-smoke-{leg}.json"
+            path.write_text(json.dumps(body))
+            self.records[leg] = (path, body)
+
+    def test_all_five_exact_installers_are_required(self):
+        self.assertEqual(len(release.promotion_evidence(SHA, "v0.1.0", self.root)), 5)
+        self.records["windows-nsis"][0].unlink()
+        with self.assertRaisesRegex(ValueError, "windows-nsis"):
+            release.promotion_evidence(SHA, "v0.1.0", self.root)
+
+    def test_smoke_from_another_commit_is_rejected(self):
+        path, body = self.records["macos-x64"]
+        body["commit"] = "b" * 40
+        path.write_text(json.dumps(body))
+        with self.assertRaisesRegex(ValueError, "released commit for macos-x64"):
+            release.promotion_evidence(SHA, "v0.1.0", self.root)
+
+    def test_modified_installer_bytes_are_rejected(self):
+        name = self.records["windows-msi"][1]["artifact"]["name"]
+        (self.root / name).write_bytes(b"replaced after the smoke test")
+        with self.assertRaisesRegex(ValueError, "exact installer bytes for windows-msi"):
+            release.promotion_evidence(SHA, "v0.1.0", self.root)
+
+    def test_arm_smoke_cannot_stand_in_for_the_intel_installer(self):
+        path, _ = self.records["macos-x64"]
+        path.write_text(json.dumps(self.records["macos-arm64"][1]))
+        with self.assertRaisesRegex(ValueError, "exact installer bytes for macos-x64"):
+            release.promotion_evidence(SHA, "v0.1.0", self.root)
+
+    def test_cross_platform_evidence_is_rejected(self):
+        path, body = self.records["linux"]
+        body["target"] = "windows"
+        path.write_text(json.dumps(body))
+        with self.assertRaisesRegex(ValueError, "target for linux"):
+            release.promotion_evidence(SHA, "v0.1.0", self.root)
 
 
 if __name__ == "__main__":

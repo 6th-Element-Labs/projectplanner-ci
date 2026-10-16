@@ -69,7 +69,8 @@ def route(source_token, public_token, product="all"):
             if any(r["tag_name"] == tag["name"] for r in releases):
                 continue
             dispatch("simplemark-release.yml", {"source_ref": tag["name"],
-                     "tag": tag["name"], "validation_only": "false"}, public_token)
+                     "tag": tag["name"], "validation_only": "false",
+                     "sign_macos": str(os.environ.get("SIMPLEMARK_MACOS_SIGNING_ENABLED") == "on").lower()}, public_token)
             api(f"repos/{SIMPLEMARK}/statuses/{sha}", source_token, "POST",
                 {"state": "pending", "context": context,
                  "description": "Release queued on free public runners"})
