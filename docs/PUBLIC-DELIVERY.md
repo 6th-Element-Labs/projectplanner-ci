@@ -60,6 +60,8 @@ Mac jobs then use `simplemark-release-signing`. They import the Developer ID
 Application certificate into a temporary runner keychain, use App Store Connect
 API notarization, and verify the app and final DMG before the private handoff.
 The keychain, certificate file, and API key file are removed even on failure.
+Apple signing requires the ordinary exact-SHA gate and main ancestry; it cannot
+be combined with an emergency bypass.
 This option requires these environment secrets: `APPLE_CERTIFICATE`,
 `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_TEAM_ID`,
 `KEYCHAIN_PASSWORD`, `APPLE_API_ISSUER`, `APPLE_API_KEY`, and `APPLE_API_KEY_P8`.
