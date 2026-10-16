@@ -60,6 +60,12 @@ jobs:
       tag: ${{ steps.check.outputs.tag }}
       version: ${{ steps.check.outputs.version }}
     steps:
+      - name: Require ordinary gated source for Apple signing
+        if: inputs.sign_macos && inputs.emergency
+        working-directory: .
+        run: |
+          echo 'Apple signing requires ordinary main ancestry and the exact public full-suite result.' >&2
+          exit 1
       - name: Check out trusted public control plane
         uses: actions/checkout@v5
         with:
