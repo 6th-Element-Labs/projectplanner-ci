@@ -22,7 +22,7 @@ SHA = "a" * 40
 
 
 class RouterTests(unittest.TestCase):
-    def route(self, statuses, tags=(), releases=()):
+    def route(self, statuses, tags=(), releases=(), product="all", preprod_auto="on"):
         calls = []
 
         def api(path, token, method="GET", body=None):
@@ -41,8 +41,8 @@ class RouterTests(unittest.TestCase):
                 return list(releases)
             raise AssertionError(path)
 
-        with patch.object(router, "api", side_effect=api):
-            router.route("source-token", "public-token")
+        with patch.object(router, "api", side_effect=api), patch.dict(os.environ, {"PREPROD_AUTO": preprod_auto}):
+            router.route("source-token", "public-token", product)
         return calls
 
     def test_failed_exact_sha_gate_cannot_dispatch_deployment(self):
@@ -62,6 +62,18 @@ class RouterTests(unittest.TestCase):
                      for e in ("preprod", "production")]
         calls = self.route(statuses)
         self.assertFalse(any("dispatches" in p for p, _, _ in calls))
+
+    def test_actionengine_router_needs_no_simplemark_access(self):
+        calls = self.route([{"context": "ActionEngine CI / public mirror gate", "state": "success"}],
+                           product="actionengine")
+        self.assertFalse(any("simplemark" in p.lower() for p, _, _ in calls))
+
+    def test_paused_preprod_requests_read_only_provenance_audit(self):
+        calls = self.route([{"context": "ActionEngine CI / public mirror gate", "state": "success"}],
+                           product="actionengine", preprod_auto="off")
+        dispatches = [b["inputs"] for p, _, b in calls if "dispatches" in p]
+        self.assertEqual(dispatches[0]["audit_only"], "true")
+        self.assertEqual(dispatches[1]["audit_only"], "false")
 
     def test_existing_release_is_never_overwritten(self):
         calls = self.route([], [{"name": "v0.1.0", "commit": {"sha": SHA}}], [{"tag_name": "v0.1.0"}])

@@ -28,16 +28,13 @@ def dispatch(workflow, inputs, token):
         {"ref": "master", "inputs": inputs})
 
 
-def route(source_token, public_token):
-    for branch, environment in (("totalPreProd", "preprod"), ("main", "production")):
-        if environment == "preprod":
-            flag = api(f"repos/{ACTIONENGINE}/actions/variables/DEPLOY_PREPROD_AUTO", source_token)
-            if flag["value"] != "on":
-                print("Preprod automatic deployment is paused by DEPLOY_PREPROD_AUTO")
-                continue
+def route(source_token, public_token, product="all"):
+    targets = (("totalPreProd", "preprod"), ("main", "production")) if product != "simplemark" else ()
+    for branch, environment in targets:
+        audit_only = environment == "preprod" and os.environ.get("PREPROD_AUTO", "off") != "on"
         sha = api(f"repos/{ACTIONENGINE}/commits/{branch}", source_token)["sha"]
         statuses = api(f"repos/{ACTIONENGINE}/commits/{sha}/status", source_token)["statuses"]
-        context = f"ActionEngine Deploy / public {environment}"
+        context = f"ActionEngine Deploy / public {environment}" + (" audit" if audit_only else "")
         if latest_state(statuses, "ActionEngine CI / public mirror gate") != "success":
             print(f"{branch}: waiting for exact-SHA public verification")
             continue
@@ -46,11 +43,14 @@ def route(source_token, public_token):
             print(f"{branch}: public deployment already recorded")
             continue
         dispatch("actionengine-preprod-deploy.yml",
-                 {"source_sha": sha, "environment": environment}, public_token)
+                 {"source_sha": sha, "environment": environment, "audit_only": str(audit_only).lower()}, public_token)
         api(f"repos/{ACTIONENGINE}/statuses/{sha}", source_token, "POST",
             {"state": "pending", "context": context,
              "description": f"{environment}: queued on free public runners"})
         print(f"Queued {environment} deployment for {sha}")
+
+    if product == "actionengine":
+        return
 
     # Tags are the release request; no private Actions runner is needed to relay it.
     page = 1
@@ -83,4 +83,4 @@ if __name__ == "__main__":
     if (os.environ.get("GITHUB_REPOSITORY") != PUBLIC_REPO
             or os.environ.get("GITHUB_REF") != "refs/heads/master"):
         raise SystemExit("Delivery routing is restricted to the trusted public repository")
-    route(os.environ["SOURCE_TOKEN"], os.environ["PUBLIC_TOKEN"])
+    route(os.environ["SOURCE_TOKEN"], os.environ["PUBLIC_TOKEN"], os.environ.get("DELIVERY_PRODUCT", "all"))

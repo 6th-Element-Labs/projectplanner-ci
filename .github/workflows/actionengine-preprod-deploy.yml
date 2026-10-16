@@ -17,6 +17,10 @@ on:
         options: [preprod, production]
         default: preprod
         required: true
+      audit_only:
+        description: Read protected release provenance without deploying
+        type: boolean
+        default: false
       source_sha:
         description: Exact gated canonical ActionEngine SHA to deploy
         required: true
@@ -38,7 +42,7 @@ concurrency:
 env:
   CANONICAL_REPO: 6th-Element-Labs/ActionEngine
   GATE_CONTEXT: ActionEngine CI / public mirror gate
-  DEPLOY_CONTEXT: ActionEngine Deploy / public ${{ inputs.environment || 'preprod' }}
+  DEPLOY_CONTEXT: ActionEngine Deploy / public ${{ inputs.environment || 'preprod' }}${{ inputs.audit_only && ' audit' || '' }}
   TARGET_ENVIRONMENT: ${{ inputs.environment || 'preprod' }}
 
 jobs:
@@ -120,6 +124,7 @@ jobs:
 
       - name: Deploy exact SHA over SSM
         id: deploy
+        if: ${{ !inputs.audit_only }}
         env:
           INSTANCE_ID: ${{ vars.ACTIONENGINE_INSTANCE_ID || vars.ACTIONENGINE_PREPROD_INSTANCE_ID }}
           DEPLOY_ENV: ${{ inputs.environment == 'production' && 'prod' || 'preprod' }}
@@ -128,19 +133,44 @@ jobs:
           SKIP_FMP_SYNC: ${{ inputs.skip_fmp_sync && '1' || '0' }}
         run: bash .github/scripts/actionengine_deploy.sh
 
+      - name: Check out canonical audit helper
+        if: inputs.audit_only
+        uses: actions/checkout@v5
+        with:
+          repository: 6th-Element-Labs/ActionEngine
+          token: ${{ steps.app_token.outputs.token }}
+          ref: ${{ inputs.source_sha }}
+          path: audit-source
+          persist-credentials: false
+      - name: Audit protected release provenance over SSM
+        id: audit
+        if: inputs.audit_only
+        env:
+          INSTANCE_ID: ${{ vars.ACTIONENGINE_INSTANCE_ID || vars.ACTIONENGINE_PREPROD_INSTANCE_ID }}
+        run: bash audit-source/.github/scripts/ssm_release_audit.sh
+
       - name: Publish canonical deployment verdict
         if: always() && steps.authorize.outcome == 'success'
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
           SOURCE_SHA: ${{ inputs.source_sha }}
-          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+          DEPLOY_OUTCOME: ${{ inputs.audit_only && steps.audit.outcome || steps.deploy.outcome }}
+          AUDIT_ONLY: ${{ inputs.audit_only }}
         run: |
           if [ "$DEPLOY_OUTCOME" = success ]; then
             state=success
-            description="$TARGET_ENVIRONMENT: exact SHA deployed; canary green"
+            if [ "$AUDIT_ONLY" = true ]; then
+              description="$TARGET_ENVIRONMENT: protected release provenance verified"
+            else
+              description="$TARGET_ENVIRONMENT: exact SHA deployed; canary green"
+            fi
           else
             state=failure
-            description="$TARGET_ENVIRONMENT: deployment failed or rolled back"
+            if [ "$AUDIT_ONLY" = true ]; then
+              description="$TARGET_ENVIRONMENT: release provenance audit failed"
+            else
+              description="$TARGET_ENVIRONMENT: deployment failed or rolled back"
+            fi
           fi
           gh api "repos/$CANONICAL_REPO/statuses/$SOURCE_SHA" \
             -f state="$state" \

@@ -55,8 +55,8 @@ jobs:
         id: source
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.SWITCHBOARD_APP_ID }}
-          private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.SIMPLEMARK_RELEASE_APP_ID }}
+          private-key: ${{ secrets.SIMPLEMARK_RELEASE_APP_PRIVATE_KEY }}
           owner: 6th-Element-Labs
           repositories: simplemark
           permission-contents: write

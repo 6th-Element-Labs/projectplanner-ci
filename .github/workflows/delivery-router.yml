@@ -10,7 +10,7 @@ concurrency:
   group: public-delivery-router
   cancel-in-progress: false
 jobs:
-  route:
+  actionengine:
     if: github.repository == '6th-Element-Labs/projectplanner-ci' && !github.event.repository.private && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -24,11 +24,38 @@ jobs:
           app-id: ${{ secrets.SWITCHBOARD_APP_ID }}
           private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
           owner: 6th-Element-Labs
-          repositories: |
-            ActionEngine
-            simplemark
+          repositories: ActionEngine
+          permission-contents: read
+          permission-statuses: write
       - name: Route gated deployments and requested releases
         env:
           SOURCE_TOKEN: ${{ steps.source.outputs.token }}
           PUBLIC_TOKEN: ${{ github.token }}
+          DELIVERY_PRODUCT: actionengine
+          PREPROD_AUTO: ${{ vars.DEPLOY_PREPROD_AUTO }}
+        run: python3 .github/scripts/delivery_router.py
+
+  simplemark:
+    if: github.repository == '6th-Element-Labs/projectplanner-ci' && !github.event.repository.private && github.ref == 'refs/heads/master' && vars.SIMPLEMARK_RELEASE_ENABLED == 'on'
+    runs-on: ubuntu-latest
+    environment: simplemark-release
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/create-github-app-token@v3
+        id: source
+        with:
+          app-id: ${{ secrets.SIMPLEMARK_RELEASE_APP_ID }}
+          private-key: ${{ secrets.SIMPLEMARK_RELEASE_APP_PRIVATE_KEY }}
+          owner: 6th-Element-Labs
+          repositories: simplemark
+          permission-contents: read
+          permission-statuses: write
+      - name: Route version tags without a private runner
+        env:
+          SOURCE_TOKEN: ${{ steps.source.outputs.token }}
+          PUBLIC_TOKEN: ${{ github.token }}
+          DELIVERY_PRODUCT: simplemark
         run: python3 .github/scripts/delivery_router.py

@@ -65,8 +65,8 @@ jobs:
         id: source
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.SWITCHBOARD_APP_ID }}
-          private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.SIMPLEMARK_RELEASE_APP_ID }}
+          private-key: ${{ secrets.SIMPLEMARK_RELEASE_APP_PRIVATE_KEY }}
           owner: 6th-Element-Labs
           repositories: simplemark
           permission-contents: write
@@ -97,6 +97,7 @@ jobs:
         run: python3 control/.github/scripts/simplemark_release.py authorize
 
   gate:
+    environment: simplemark-release
     name: emergency public gate
     if: github.repository == '6th-Element-Labs/projectplanner-ci' && !github.event.repository.private && inputs.emergency && inputs.run_gate
     needs: version
@@ -112,8 +113,8 @@ jobs:
         id: source
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.SWITCHBOARD_APP_ID }}
-          private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.SIMPLEMARK_RELEASE_APP_ID }}
+          private-key: ${{ secrets.SIMPLEMARK_RELEASE_APP_PRIVATE_KEY }}
           owner: 6th-Element-Labs
           repositories: simplemark
           permission-contents: write
@@ -188,8 +189,8 @@ jobs:
         id: source
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.SWITCHBOARD_APP_ID }}
-          private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.SIMPLEMARK_RELEASE_APP_ID }}
+          private-key: ${{ secrets.SIMPLEMARK_RELEASE_APP_PRIVATE_KEY }}
           owner: 6th-Element-Labs
           repositories: simplemark
           permission-contents: write
@@ -373,8 +374,8 @@ jobs:
         id: source
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.SWITCHBOARD_APP_ID }}
-          private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.SIMPLEMARK_RELEASE_APP_ID }}
+          private-key: ${{ secrets.SIMPLEMARK_RELEASE_APP_PRIVATE_KEY }}
           owner: 6th-Element-Labs
           repositories: simplemark
           permission-contents: write
@@ -527,8 +528,8 @@ jobs:
       - uses: actions/create-github-app-token@v3
         id: source
         with:
-          app-id: ${{ secrets.SWITCHBOARD_APP_ID }}
-          private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.SIMPLEMARK_RELEASE_APP_ID }}
+          private-key: ${{ secrets.SIMPLEMARK_RELEASE_APP_PRIVATE_KEY }}
           owner: 6th-Element-Labs
           repositories: simplemark
           permission-contents: write

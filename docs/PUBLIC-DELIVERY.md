@@ -16,8 +16,8 @@ For compatibility, the public workflow file remains
 `actionengine-preprod-deploy.yml`; it now supports `environment=preprod` and
 `environment=production`. Each environment has a separate OIDC role, a single
 allowed SSM instance, and a branch policy restricted to this repository's
-`master`. Production cannot skip FMP reconciliation. `DEPLOY_PREPROD_AUTO=off`
-pauses automatic preprod releases. Manual rollbacks still require a gated SHA
+`master`. Production cannot skip FMP reconciliation. `DEPLOY_PREPROD_AUTO=off` in this public control repository
+pauses automatic preprod releases and routes a read-only protected-receipt audit. Manual rollbacks still require a gated SHA
 contained in the target branch. No deploy in flight is cancelled.
 
 ```bash
@@ -31,9 +31,11 @@ private runner allocation. Do not re-enable it or add a private relay job.
 ## SimpleMark
 
 The existing `StevenRidder/simplemark-ci` sandbox continues to verify source.
-This trusted public control repository handles release execution with its
-existing GitHub App; no credential is copied to another repository. Tokens are
-restricted to canonical `6th-Element-Labs/simplemark`.
+This trusted public control repository handles release execution with a
+dedicated GitHub App installed only on canonical `6th-Element-Labs/simplemark`.
+Its Contents/Statuses write key is scoped to the master-restricted release
+environments. The existing ActionEngine CI App stays read-only and separate.
+Set `SIMPLEMARK_RELEASE_ENABLED=on` only after that release App is configured.
 
 The router discovers new canonical `v*` tags. `simplemark-release.yml` requires
 the exact public full-suite result and canonical main ancestry for ordinary
