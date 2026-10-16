@@ -11,7 +11,7 @@ SKIP_FMP_SYNC="${SKIP_FMP_SYNC:-0}"
 
 [[ "$INSTANCE_ID" =~ ^i-[0-9a-f]{17}$ ]]
 [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]
-[[ "$ACTOR" =~ ^[A-Za-z0-9_-]+$ ]]
+[[ "$ACTOR" =~ ^[A-Za-z0-9_-]+(\[bot\])?$ ]]
 if [ "$DEPLOY_ENV" = prod ] && [ "$SKIP_FMP_SYNC" != 0 ]; then
   echo "Production cannot skip FMP reconciliation" >&2; exit 2
 fi
