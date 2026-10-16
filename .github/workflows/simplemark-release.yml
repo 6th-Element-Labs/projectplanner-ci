@@ -550,4 +550,5 @@ jobs:
           STAGING_TAG: ${{ needs.version.outputs.staging_tag }}
         run: |
           [[ "$STAGING_TAG" =~ ^ci-staging-[0-9]+-[0-9]+$ ]]
-          gh release delete "$STAGING_TAG" --yes --cleanup-tag
+          # Unpublished draft releases have no Git tag to delete.
+          gh release delete "$STAGING_TAG" --yes
