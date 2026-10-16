@@ -1,0 +1,551 @@
+# Public standard runners; canonical source and draft installers remain private.
+# Only the exact gated canonical SHA may produce an ordinary draft release.
+name: simplemark-release
+run-name: SimpleMark ${{ inputs.validation_only && 'validation' || 'draft' }} ${{ inputs.tag || inputs.source_ref }}
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Canonical SHA, branch, or version tag
+        type: string
+        default: main
+        required: true
+      tag:
+        description: Release tag; optional for validation
+        type: string
+        default: ''
+      validation_only:
+        description: Build and verify every installer without creating a product release
+        type: boolean
+        default: true
+      emergency:
+        description: Explicit emergency bypass of main ancestry and the existing public status
+        type: boolean
+        default: false
+      reason:
+        description: Required reason for an emergency release
+        type: string
+        default: ''
+      run_gate:
+        description: Run the full public gate for an emergency revision
+        type: boolean
+        default: true
+permissions:
+  contents: read
+concurrency:
+  group: simplemark-release-${{ inputs.tag || inputs.source_ref }}
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
+    working-directory: source
+env:
+  GH_REPO: 6th-Element-Labs/simplemark
+  RELEASE_TAG: ${{ inputs.tag }}
+jobs:
+  # §5: the version check runs BEFORE the matrix. Four platforms should not
+  # spend twenty minutes compiling to discover a typo in a version string.
+  version:
+    if: github.repository == '6th-Element-Labs/projectplanner-ci' && !github.event.repository.private
+    environment: simplemark-release
+    name: version
+    runs-on: ubuntu-22.04
+    outputs:
+      sha: ${{ steps.check.outputs.sha }}
+      staging_tag: ${{ steps.check.outputs.staging_tag }}
+      tag: ${{ steps.check.outputs.tag }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - name: Check out trusted public control plane
+        uses: actions/checkout@v5
+        with:
+          path: control
+          persist-credentials: false
+      - name: Mint token restricted to canonical SimpleMark
+        id: source
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.SWITCHBOARD_APP_ID }}
+          private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
+          owner: 6th-Element-Labs
+          repositories: simplemark
+          permission-contents: write
+          permission-statuses: write
+      - name: Check out exact canonical source
+        uses: actions/checkout@v5
+        with:
+          repository: 6th-Element-Labs/simplemark
+          token: ${{ steps.source.outputs.token }}
+          ref: ${{ inputs.source_ref }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: Authorize canonical source and reserve private staging
+        id: check
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ steps.source.outputs.token }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+          VALIDATION_ONLY: ${{ inputs.validation_only }}
+          EMERGENCY: ${{ inputs.emergency }}
+          REASON: ${{ inputs.reason }}
+        run: python3 control/.github/scripts/simplemark_release.py authorize
+
+  gate:
+    name: emergency public gate
+    if: github.repository == '6th-Element-Labs/projectplanner-ci' && !github.event.repository.private && inputs.emergency && inputs.run_gate
+    needs: version
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out trusted public control plane
+        uses: actions/checkout@v5
+        with:
+          path: control
+          persist-credentials: false
+      - name: Mint token restricted to canonical SimpleMark
+        id: source
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.SWITCHBOARD_APP_ID }}
+          private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
+          owner: 6th-Element-Labs
+          repositories: simplemark
+          permission-contents: write
+          permission-statuses: write
+      - name: Check out exact canonical source
+        uses: actions/checkout@v5
+        with:
+          repository: 6th-Element-Labs/simplemark
+          token: ${{ steps.source.outputs.token }}
+          ref: ${{ needs.version.outputs.sha }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: source/package-lock.json
+      - run: npm ci && npx playwright install --with-deps chromium
+      - run: bash scripts/simplemark_ci.sh
+
+  build:
+    if: always() && github.repository == '6th-Element-Labs/projectplanner-ci' && !github.event.repository.private && needs.version.result == 'success' && needs.gate.result != 'failure' && needs.gate.result != 'cancelled'
+    environment: simplemark-release
+    name: ${{ matrix.leg }}
+    needs: [version, gate]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      # §10: one platform's failure still lets the other three report.
+      # This improves diagnosis; it never publishes a partial release, because
+      # the release job needs every leg (see `needs` below).
+      fail-fast: false
+      matrix:
+        include:
+          - leg: macos-arm64
+            # macos-26 (GA 2026-02-26) is the first image whose SDK carries
+            # FoundationModels. On macos-15 the Swift bridge cannot compile and
+            # `build.rs` degrades to a warning, so the DMG would build green
+            # with note summaries silently absent.
+            runner: macos-26
+            target: aarch64-apple-darwin
+            bundles: dmg
+            os: macos
+            arch: arm64
+          - leg: macos-x64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            bundles: dmg
+            os: macos
+            arch: x64
+          - leg: windows-x64
+            runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            bundles: msi,nsis
+            os: windows
+            arch: x64
+          - leg: linux-x64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage,deb
+            os: linux
+            arch: x64
+
+    steps:
+      - name: Check out trusted public control plane
+        uses: actions/checkout@v5
+        with:
+          path: control
+          persist-credentials: false
+      - name: Mint token restricted to canonical SimpleMark
+        id: source
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.SWITCHBOARD_APP_ID }}
+          private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
+          owner: 6th-Element-Labs
+          repositories: simplemark
+          permission-contents: write
+          permission-statuses: write
+      - name: Check out exact canonical source
+        uses: actions/checkout@v5
+        with:
+          repository: 6th-Element-Labs/simplemark
+          token: ${{ steps.source.outputs.token }}
+          ref: ${{ needs.version.outputs.sha }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: source/package-lock.json
+
+      # §3: nothing is cross-compiled. Every runner is native to its own
+      # architecture, so this only ever confirms the host target is installed.
+      - name: Add the Rust target for this leg
+        run: rustup target add ${{ matrix.target }}
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            source/src-tauri/target
+          key: ${{ matrix.leg }}-cargo-${{ hashFiles('source/src-tauri/Cargo.lock') }}
+          restore-keys: ${{ matrix.leg }}-cargo-
+
+      # §3: `libayatana-appindicator3-dev`, never the pre-Ayatana package — asking
+      # apt for both is a conflict, not belt and braces. `libfuse2` is for the
+      # AppImage bundling step, which runs after the slow part.
+      - name: Install the Linux system dependencies
+        if: matrix.os == 'linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf libfuse2
+
+      - name: Install the workspace dependencies
+        run: npm ci
+
+      - name: Build the native package
+        env:
+          # Layer 2: turn a silent degrade into a build failure, but only where
+          # the capability is genuinely owed. Local builds leave this unset so
+          # an older Mac still produces a working app.
+          SIMPLEMARK_REQUIRE_INTELLIGENCE: ${{ matrix.leg == 'macos-arm64' && '1' || '' }}
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts
+          npx tauri build --target "${{ matrix.target }}" --bundles "${{ matrix.bundles }}" \
+            2>&1 | tee ".artifacts/release-build-${{ matrix.leg }}.log"
+
+      # Layer 3: assert the capability is in the binary. A published release
+      # that quietly lost a native feature is the failure this exists to stop.
+      - name: Assert native capabilities are present
+        # macOS only. Windows and Linux own no native capabilities and have no
+        # macOS floor, so there is nothing to assert — and their binary is not
+        # even called `simplemark` on Windows.
+        if: startsWith(matrix.leg, 'macos')
+        run: |
+          set -euo pipefail
+          node scripts/verify-native-capabilities.mjs \
+            --binary "src-tauri/target/${{ matrix.target }}/release/simplemark" \
+            --leg "${{ matrix.leg }}" \
+            ${{ startsWith(matrix.leg, 'macos') && '--max-minos 11.0' || '' }}
+
+      # §3 and §10: assert the bundle at the path Tauri wrote it to *before*
+      # renaming, so a Tauri release that changes its output layout fails here
+      # instead of uploading nothing. Then §10's real check — the bytes are read
+      # and the container signature asserted, because a zipped `dist/` renamed to
+      # `.dmg` is the worst failure available and the extension cannot catch it.
+      #
+      # §3: the Linux `.deb` is built but is not a first-lane release asset, so
+      # it is deliberately not collected here. It becomes one when
+      # `RELEASE-TRUST.md` admits it, which needs a smoke lane of its own.
+      - name: Collect, name, and verify the installers
+        run: |
+          set -euo pipefail
+
+          version="${{ needs.version.outputs.version }}"
+          bundle="src-tauri/target/${{ matrix.target }}/release/bundle"
+          # Kept relative to the workspace root on purpose. On the Windows
+          # runner these are Git Bash paths, and handing `/d/a/...` to a native
+          # Windows `node` depends on MSYS argument mangling to come out right.
+          out=".artifacts/release"
+          mkdir -p "$out"
+
+          collect() {
+            format="$1"
+            pattern="$2"
+            final="$3"
+            directory="$bundle/$format"
+
+            if [ ! -d "$directory" ]; then
+              echo "release: expected bundle directory $directory does not exist" >&2
+              exit 1
+            fi
+
+            source="$(find "$directory" -maxdepth 1 -type f -name "$pattern" | sort | head -n 1)"
+            if [ -z "$source" ]; then
+              echo "release: no $pattern under $directory" >&2
+              exit 1
+            fi
+
+            cp "$source" "$out/$final"
+            node scripts/verify-native-artifact.mjs \
+              --target "${{ matrix.os }}" --artifact "$out/$final"
+          }
+
+          case "${{ matrix.os }}" in
+            macos)
+              collect dmg '*.dmg' "SimpleMark-$version-macos-${{ matrix.arch }}.dmg"
+              ;;
+            windows)
+              collect msi '*.msi' "SimpleMark-$version-windows-x64.msi"
+              collect nsis '*.exe' "SimpleMark-$version-windows-x64-setup.exe"
+              ;;
+            linux)
+              collect appimage '*.AppImage' "SimpleMark-$version-linux-x64.AppImage"
+              ;;
+            *)
+              echo "release: unknown os ${{ matrix.os }}" >&2
+              exit 1
+              ;;
+          esac
+
+          ls -l "$out"
+
+      # §7: thirty days. This is a handoff between the build legs and the release
+      # job, plus a short window to diagnose a bad release. The release itself is
+      # the durable home, so nothing here needs the 90-day default.
+      - name: Hand off installers through private draft assets
+        env:
+          GH_TOKEN: ${{ steps.source.outputs.token }}
+          STAGING_TAG: ${{ needs.version.outputs.staging_tag }}
+        run: gh release upload "$STAGING_TAG" .artifacts/release/* --clobber
+
+      # §10 permits `if: always()` on a diagnostic upload; it is the build output
+      # of a leg that may have just failed, and never becomes a shipped artifact.
+      - name: Upload the build log
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: simplemark-release-log-${{ matrix.leg }}
+          path: source/.artifacts/release-build-${{ matrix.leg }}.log
+          if-no-files-found: warn
+          retention-days: 30
+
+  draft:
+    env:
+      RELEASE_TAG: ${{ needs.version.outputs.tag }}
+    if: always() && github.repository == '6th-Element-Labs/projectplanner-ci' && !github.event.repository.private && needs.version.result == 'success' && needs.build.result == 'success' && needs.gate.result != 'failure' && needs.gate.result != 'cancelled'
+    name: draft release
+    # §10: every leg green. `fail-fast: false` exists to improve diagnosis, never
+    # to publish a partial release — a release missing a platform is worse than
+    # no release, because it looks complete.
+    needs: [version, gate, build]
+    runs-on: ubuntu-22.04
+    # §8: the one job that elevates, and it declares it here rather than at the
+    # top level. The protected environment is what scopes signing material to
+    # this job instead of every job in the workflow, including a fork's.
+    permissions:
+      contents: write
+    environment: simplemark-release
+    steps:
+      - name: Check out trusted public control plane
+        uses: actions/checkout@v5
+        with:
+          path: control
+          persist-credentials: false
+      - name: Mint token restricted to canonical SimpleMark
+        id: source
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.SWITCHBOARD_APP_ID }}
+          private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
+          owner: 6th-Element-Labs
+          repositories: simplemark
+          permission-contents: write
+          permission-statuses: write
+      - name: Check out exact canonical source
+        uses: actions/checkout@v5
+        with:
+          repository: 6th-Element-Labs/simplemark
+          token: ${{ steps.source.outputs.token }}
+          ref: ${{ needs.version.outputs.sha }}
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: Download the private installer handoff
+        env:
+          GH_TOKEN: ${{ steps.source.outputs.token }}
+          STAGING_TAG: ${{ needs.version.outputs.staging_tag }}
+        run: |
+          mkdir -p .artifacts/incoming
+          gh release download "$STAGING_TAG" --dir .artifacts/incoming
+
+      # §10: a release missing a platform looks complete, so the expected set is
+      # asserted by name before anything is uploaded.
+      - name: Assert the release is complete
+        id: assets
+        run: |
+          set -euo pipefail
+          version="${{ needs.version.outputs.version }}"
+          cd .artifacts/incoming
+
+          expected=(
+            "SimpleMark-$version-macos-arm64.dmg"
+            "SimpleMark-$version-macos-x64.dmg"
+            "SimpleMark-$version-windows-x64.msi"
+            "SimpleMark-$version-windows-x64-setup.exe"
+            "SimpleMark-$version-linux-x64.AppImage"
+          )
+
+          missing=()
+          for asset in "${expected[@]}"; do
+            if [ ! -s "$asset" ]; then missing+=("$asset"); fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "release: the draft is incomplete, missing or empty:" >&2
+            printf '  %s\n' "${missing[@]}" >&2
+            exit 1
+          fi
+
+          ls -l
+
+      # §6: one SHA256SUMS generated centrally after every leg finishes, so it is
+      # a manifest of a complete release rather than four unrelated files.
+      - name: Generate SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd .artifacts/incoming
+          rm -f SHA256SUMS
+          sha256sum SimpleMark-* > SHA256SUMS
+          sha256sum -c SHA256SUMS
+          cat SHA256SUMS
+
+      # §9: assembled from inputs, never generated prose.
+      - name: Assemble the release notes
+        run: |
+          set -euo pipefail
+          # No `|| true` (§10). The first release legitimately has no previous
+          # tag, so that case is handled by the `if` — which is allowed to fail
+          # under `set -e` — rather than by swallowing a failure that might have
+          # been something else.
+          if previous="$(git describe --tags --abbrev=0 "${{ needs.version.outputs.sha }}^" 2>/dev/null)"; then
+            range="$previous..${{ needs.version.outputs.sha }}"
+          else
+            range="${{ needs.version.outputs.sha }}"
+          fi
+          git log --format=%s "$range" > .artifacts/commits.txt
+          node scripts/release-notes.mjs \
+            --tag "${RELEASE_TAG}" \
+            --sha "${{ needs.version.outputs.sha }}" \
+            --sums .artifacts/incoming/SHA256SUMS \
+            --commits .artifacts/commits.txt \
+            > .artifacts/release-notes.md
+          cat .artifacts/release-notes.md
+
+      # §2 and §10: created with `--draft`, and there is no `gh release edit
+      # --draft=false` anywhere in this file. Publishing is `release-promote.yml`,
+      # which runs the trust gate first.
+      #
+      # `gh` rather than a third-party release action: no action to pin by SHA,
+      # and the token stays scoped to this one step (§8).
+      - name: Record any explicit emergency bypass
+        if: inputs.emergency
+        env:
+          RELEASE_REASON: ${{ inputs.reason }}
+          RAN_GATE: ${{ inputs.run_gate }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          p=Path(".artifacts/release-notes.md")
+          p.write_text("## Built through the emergency lane\n\n"
+                       + "Source: " + os.environ["SOURCE_REF"] + "\n\n"
+                       + "Canonical gate ran: " + os.environ["RAN_GATE"] + "\n\n"
+                       + "Reason: " + os.environ["RELEASE_REASON"] + "\n\n" + p.read_text())
+          PY
+
+      - name: Create the complete private draft release
+        if: ${{ !inputs.validation_only }}
+        env:
+          GH_TOKEN: ${{ steps.source.outputs.token }}
+          EMERGENCY: ${{ inputs.emergency }}
+          RAN_GATE: ${{ inputs.run_gate }}
+        run: |
+          set -euo pipefail
+          title="SimpleMark ${{ needs.version.outputs.version }}"
+          if [ "$EMERGENCY" = true ]; then
+            if [ "$RAN_GATE" = true ]; then
+              title="$title — emergency lane"
+            else
+              title="$title — EMERGENCY, GATE SKIPPED"
+            fi
+          fi
+          gh release create "${RELEASE_TAG}" \
+            --draft \
+            --target "${{ needs.version.outputs.sha }}" \
+            --title "$title" \
+            --notes-file .artifacts/release-notes.md \
+            .artifacts/incoming/SimpleMark-* \
+            .artifacts/incoming/SHA256SUMS
+          echo "release: created ${RELEASE_TAG} as a draft; promotion is release-promote.yml"
+
+  finish:
+    name: record result and remove private staging
+    needs: [version, gate, build, draft]
+    if: always() && github.repository == '6th-Element-Labs/projectplanner-ci' && !github.event.repository.private && needs.version.outputs.staging_tag != ''
+    runs-on: ubuntu-22.04
+    environment: simplemark-release
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/create-github-app-token@v3
+        id: source
+        with:
+          app-id: ${{ secrets.SWITCHBOARD_APP_ID }}
+          private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
+          owner: 6th-Element-Labs
+          repositories: simplemark
+          permission-contents: write
+          permission-statuses: write
+      - name: Publish the canonical build verdict
+        if: ${{ !inputs.validation_only }}
+        env:
+          GH_TOKEN: ${{ steps.source.outputs.token }}
+          SOURCE_SHA: ${{ needs.version.outputs.sha }}
+          RELEASE_TAG: ${{ needs.version.outputs.tag }}
+          RELEASE_RESULT: ${{ needs.draft.result }}
+        run: python3 .github/scripts/simplemark_release.py verdict
+      - name: Remove only this run's temporary private draft
+        if: always()
+        env:
+          GH_TOKEN: ${{ steps.source.outputs.token }}
+          STAGING_TAG: ${{ needs.version.outputs.staging_tag }}
+        run: |
+          [[ "$STAGING_TAG" =~ ^ci-staging-[0-9]+-[0-9]+$ ]]
+          gh release delete "$STAGING_TAG" --yes --cleanup-tag

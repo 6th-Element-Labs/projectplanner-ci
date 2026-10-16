@@ -1,0 +1,34 @@
+name: public delivery router
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+permissions:
+  actions: write
+  contents: read
+concurrency:
+  group: public-delivery-router
+  cancel-in-progress: false
+jobs:
+  route:
+    if: github.repository == '6th-Element-Labs/projectplanner-ci' && !github.event.repository.private && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/create-github-app-token@v3
+        id: source
+        with:
+          app-id: ${{ secrets.SWITCHBOARD_APP_ID }}
+          private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
+          owner: 6th-Element-Labs
+          repositories: |
+            ActionEngine
+            simplemark
+      - name: Route gated deployments and requested releases
+        env:
+          SOURCE_TOKEN: ${{ steps.source.outputs.token }}
+          PUBLIC_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/delivery_router.py
