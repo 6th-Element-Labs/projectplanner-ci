@@ -85,6 +85,13 @@ After a successful signed Mac validation, set the public control repository's
 signing for ordinary release drafts automatically. The flag defaults off when
 absent; it does not enable Windows signing or bypass publication checks.
 
+Signed Intel jobs apply GitHub's temporary TCP fallback for
+[runner-images #14924](https://github.com/actions/runner-images/issues/14924).
+The hosted Intel image can drop HTTP/3 requests to Apple's ticket service after
+successful notarization. Blocking outbound UDP/443 on that disposable runner
+makes the Apple tools use ordinary TCP HTTPS. Certificate, notarization, staple,
+and Gatekeeper verification still have to pass.
+
 ```bash
 gh workflow run simplemark-release.yml --repo 6th-Element-Labs/projectplanner-ci --ref master -f source_ref=main -f validation_only=true
 gh workflow run simplemark-release.yml --repo 6th-Element-Labs/projectplanner-ci --ref master -f source_ref=main -f validation_only=true -f sign_macos=true

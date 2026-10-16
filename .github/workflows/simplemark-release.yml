@@ -251,6 +251,15 @@ jobs:
       - name: Install the workspace dependencies
         run: npm ci
 
+      - name: Use TCP HTTPS for Apple ticket checks on the Intel runner
+        if: inputs.sign_macos && matrix.leg == 'macos-x64'
+        # GitHub confirmed dropped HTTP/3 connections on this image and recommends
+        # forcing TCP: https://github.com/actions/runner-images/issues/14924
+        # This affects only this disposable hosted runner; all trust checks remain.
+        run: |
+          printf '%s\n' 'block return out quick proto udp from any to any port 443' | sudo pfctl -f -
+          sudo pfctl -E
+
       - name: Prepare protected Apple signing and API notarization credentials
         if: inputs.sign_macos && matrix.os == 'macos'
         env:
