@@ -58,4 +58,5 @@ jobs:
           SOURCE_TOKEN: ${{ steps.source.outputs.token }}
           PUBLIC_TOKEN: ${{ github.token }}
           DELIVERY_PRODUCT: simplemark
+          SIMPLEMARK_MACOS_SIGNING_ENABLED: ${{ vars.SIMPLEMARK_MACOS_SIGNING_ENABLED }}
         run: python3 .github/scripts/delivery_router.py

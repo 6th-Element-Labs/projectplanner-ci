@@ -24,7 +24,7 @@ SHA = "a" * 40
 
 
 class RouterTests(unittest.TestCase):
-    def route(self, statuses, tags=(), releases=(), product="all", preprod_auto="on"):
+    def route(self, statuses, tags=(), releases=(), product="all", preprod_auto="on", macos_signing="off"):
         calls = []
 
         def api(path, token, method="GET", body=None):
@@ -43,7 +43,8 @@ class RouterTests(unittest.TestCase):
                 return list(releases)
             raise AssertionError(path)
 
-        with patch.object(router, "api", side_effect=api), patch.dict(os.environ, {"PREPROD_AUTO": preprod_auto}):
+        with patch.object(router, "api", side_effect=api), patch.dict(os.environ, {
+                "PREPROD_AUTO": preprod_auto, "SIMPLEMARK_MACOS_SIGNING_ENABLED": macos_signing}):
             router.route("source-token", "public-token", product)
         return calls
 
@@ -87,6 +88,15 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(len(dispatches), 1)
         self.assertIn("simplemark-release.yml", dispatches[0][0])
         self.assertEqual(dispatches[0][1]["inputs"]["validation_only"], "false")
+        self.assertEqual(dispatches[0][1]["inputs"]["sign_macos"], "false")
+
+    def test_configured_tag_route_requests_protected_mac_signing(self):
+        calls = self.route([], [{"name": "v0.1.0", "commit": {"sha": SHA}}],
+                           product="simplemark", macos_signing="on")
+        dispatches = [b for p, _, b in calls if "dispatches" in p]
+        self.assertEqual(len(dispatches), 1)
+        self.assertEqual(dispatches[0]["inputs"]["sign_macos"], "true")
+        self.assertEqual(dispatches[0]["ref"], "master")
 
 
 class AuthorizationTests(unittest.TestCase):

@@ -80,6 +80,11 @@ checks and `SHA256SUMS` verification run before the existing OS trust and smoke
 gates. Neither a record for the other architecture/format nor an older build
 can satisfy this handoff. The workflow does not synthesize smoke evidence.
 
+After a successful signed Mac validation, set the public control repository's
+`SIMPLEMARK_MACOS_SIGNING_ENABLED=on`. The tag router then requests protected Mac
+signing for ordinary release drafts automatically. The flag defaults off when
+absent; it does not enable Windows signing or bypass publication checks.
+
 ```bash
 gh workflow run simplemark-release.yml --repo 6th-Element-Labs/projectplanner-ci --ref master -f source_ref=main -f validation_only=true
 gh workflow run simplemark-release.yml --repo 6th-Element-Labs/projectplanner-ci --ref master -f source_ref=main -f validation_only=true -f sign_macos=true

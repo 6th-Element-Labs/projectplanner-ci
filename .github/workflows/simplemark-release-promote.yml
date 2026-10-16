@@ -107,7 +107,7 @@ jobs:
           cd .artifacts/release
           sha256sum -c SHA256SUMS
 
-      # One invocation per platform. Each fails closed on its own, so a partial
+      # One invocation per installer. Each fails closed on its own, so a partial
       # pass cannot promote: the first missing or incomplete platform ends the
       # job before the publish step is ever reached.
       - name: Verify macos release trust
