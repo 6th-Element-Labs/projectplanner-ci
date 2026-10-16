@@ -4,6 +4,30 @@ Standard hosted runners in this public repository execute deployment and release
 work. Canonical source, merge authority, and product release assets remain in the
 private repositories. Enterprise and organization Actions hard budgets stay $0.
 
+## Organization execution policy
+
+Organization Actions permissions use **Selected repositories**. The allowlist is
+limited to these existing public repositories in `6th-Element-Labs`:
+
+- `projectplanner-ci`
+- `ActionEngine-ci`
+- `taikun-pulse-ci`
+- `dispatch-ci`
+- `taikun-books-ci`
+- `dispatch-public`
+
+All private repositories are blocked by this organization policy. A new CI
+repository must be public and explicitly added by the organization owner.
+Keep standard hosted runners, the included 10 GB cache limit, and both $0 hard
+budgets. Do not enable private execution, add paid larger runners, or raise a
+budget to repair a failing workflow. Free execution requires the workflow run
+to belong to a public repository; canonical source can remain private.
+
+Old private Actions artifacts require separate owner-approved cleanup. Disabling
+workflows and setting a budget do not remove retained files or past storage
+accrual. Artifact deletion is permanent; preserve source, releases, workflow run
+records, and logs. See [GitHub Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions).
+
 ## ActionEngine
 
 `delivery-router.yml` polls canonical `main` and `totalPreProd` every five minutes.
