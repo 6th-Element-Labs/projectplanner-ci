@@ -148,5 +148,92 @@ class AuthorizationTests(unittest.TestCase):
             self.assertIn("canary green", result.stdout)
 
 
+class MacSigningTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        self.runner = self.root / "runner"
+        self.runner.mkdir()
+        self.log = self.root / "commands.log"
+        self.env = {**os.environ, "PATH": str(self.bin) + os.pathsep + os.environ["PATH"],
+                    "RUNNER_TEMP": str(self.runner), "GITHUB_ENV": str(self.root / "github-env"),
+                    "APPLE_CERTIFICATE": "dGVzdC1jZXJ0aWZpY2F0ZQ==",
+                    "APPLE_CERTIFICATE_PASSWORD": "test-password",
+                    "APPLE_SIGNING_IDENTITY": "Developer ID Application: Test (AAAAAAAAAA)",
+                    "KEYCHAIN_PASSWORD": "test-keychain-password", "APPLE_API_ISSUER": "test-issuer",
+                    "APPLE_API_KEY": "test-key-id", "APPLE_API_KEY_P8": "test-p8",
+                    "APPLE_TEAM_ID": "AAAAAAAAAA", "SIGNING_TEST_LOG": str(self.log),
+                    "TEST_SIGNED_TEAM": "AAAAAAAAAA", "TEST_NOTARY_STATUS": "Accepted"}
+        commands = {
+            "security": 'if [[ $1 == find-identity ]]; then echo "$APPLE_SIGNING_IDENTITY"; fi',
+            "codesign": 'if [[ $1 == -dv ]]; then printf "TeamIdentifier=%s\\nAuthority=Developer ID Application: Test\\n" "$TEST_SIGNED_TEAM" >&2; fi',
+            "spctl": "true",
+            "xcrun": 'if [[ $1 == notarytool ]]; then printf \'{"status":"%s"}\\n\' "$TEST_NOTARY_STATUS"; fi',
+        }
+        for name, body in commands.items():
+            path = self.bin / name
+            path.write_text('#!/usr/bin/env bash\nset -eu\n'
+                            'printf "%s\\n" "${0##*/} $*" >> "$SIGNING_TEST_LOG"\n' + body + "\n")
+            path.chmod(0o755)
+        bundle = self.root / "src-tauri/target/aarch64-apple-darwin/release/bundle"
+        (bundle / "macos/SimpleMark.app").mkdir(parents=True)
+        (bundle / "dmg").mkdir()
+        (bundle / "dmg/SimpleMark.dmg").write_bytes(b"test-installer")
+
+    def run_signing(self, command, *args):
+        return subprocess.run(["bash", str(HERE / "simplemark_macos_signing.sh"), command, *args],
+                              env=self.env, cwd=self.root, text=True, capture_output=True, timeout=10)
+
+    def test_missing_api_key_fails_before_import(self):
+        self.env.pop("APPLE_API_KEY_P8")
+        result = self.run_signing("prepare")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("missing APPLE_API_KEY_P8", result.stderr)
+        self.assertFalse(self.log.exists())
+
+    def test_development_certificate_cannot_enter_the_release_lane(self):
+        self.env["APPLE_SIGNING_IDENTITY"] = "Apple Development: Test"
+        result = self.run_signing("prepare")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Developer ID Application", result.stderr)
+        self.assertFalse(self.log.exists())
+
+    def test_api_material_is_private_and_cleanup_removes_it(self):
+        result = self.run_signing("prepare")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        key = self.runner / "simplemark-notary.p8"
+        self.assertEqual(key.stat().st_mode & 0o777, 0o600)
+        self.assertIn(str(key), (self.root / "github-env").read_text())
+        result = self.run_signing("cleanup")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(key.exists())
+        self.assertFalse((self.runner / "simplemark-developer-id.p12").exists())
+
+    def test_wrong_team_never_submits_the_installer(self):
+        self.env["TEST_SIGNED_TEAM"] = "BBBBBBBBBB"
+        result = self.run_signing("verify", "aarch64-apple-darwin")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unexpected Apple team", result.stderr)
+        self.assertNotIn("notarytool submit", self.log.read_text())
+
+    def test_rejected_notarization_never_staples_the_installer(self):
+        self.env["TEST_NOTARY_STATUS"] = "Invalid"
+        result = self.run_signing("verify", "aarch64-apple-darwin")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("notarization was not accepted", result.stderr)
+        self.assertNotIn("stapler staple", self.log.read_text())
+
+    def test_accepted_installer_is_stapled_and_assessed(self):
+        result = self.run_signing("verify", "aarch64-apple-darwin")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        log = self.log.read_text()
+        self.assertIn("notarytool submit", log)
+        self.assertIn("stapler staple", log)
+        self.assertIn("spctl --assess --type open", log)
+
+
 if __name__ == "__main__":
     unittest.main()
