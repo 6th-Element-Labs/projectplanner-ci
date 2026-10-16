@@ -55,8 +55,23 @@ material scoped to the `simplemark-release-signing` environment. Missing signing
 credentials or evidence still fail closed. Emergency drafts require an explicit
 reason; a skipped gate is disclosed in the draft title and notes.
 
+For an explicitly requested signed Mac build, set `sign_macos=true`. Only the two
+Mac jobs then use `simplemark-release-signing`. They import the Developer ID
+Application certificate into a temporary runner keychain, use App Store Connect
+API notarization, and verify the app and final DMG before the private handoff.
+The keychain, certificate file, and API key file are removed even on failure.
+This option requires these environment secrets: `APPLE_CERTIFICATE`,
+`APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_TEAM_ID`,
+`KEYCHAIN_PASSWORD`, `APPLE_API_ISSUER`, `APPLE_API_KEY`, and `APPLE_API_KEY_P8`.
+It does not sign Windows installers or supply the required human smoke evidence.
+Publication remains gated separately; its legacy Apple-ID credential check must
+also be updated to accept API notarization before using the API-only credential set.
+Signing credentials must not be copied from another product without its owner's
+approval. Updater signing keys are unrelated and must not be reused.
+
 ```bash
 gh workflow run simplemark-release.yml --repo 6th-Element-Labs/projectplanner-ci --ref master -f source_ref=main -f validation_only=true
+gh workflow run simplemark-release.yml --repo 6th-Element-Labs/projectplanner-ci --ref master -f source_ref=main -f validation_only=true -f sign_macos=true
 gh workflow run simplemark-release.yml --repo 6th-Element-Labs/projectplanner-ci --ref master -f source_ref=v0.1.0 -f tag=v0.1.0 -f validation_only=false
 gh workflow run simplemark-release-promote.yml --repo 6th-Element-Labs/projectplanner-ci --ref master -f tag=v0.1.0
 ```
@@ -71,6 +86,7 @@ An existing product release is never overwritten.
 python3 .github/scripts/test_delivery.py
 actionlint -shellcheck= .github/workflows/delivery-router.yml .github/workflows/actionengine-preprod-deploy.yml .github/workflows/simplemark-release.yml .github/workflows/simplemark-release-promote.yml
 bash -n .github/scripts/actionengine_deploy.sh
+bash -n .github/scripts/simplemark_macos_signing.sh
 ```
 
 Runtime acceptance additionally requires successful public deploy runs with live

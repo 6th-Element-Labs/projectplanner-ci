@@ -18,6 +18,10 @@ on:
         description: Build and verify every installer without creating a product release
         type: boolean
         default: true
+      sign_macos:
+        description: Sign and notarize both Mac installers using the protected signing environment
+        type: boolean
+        default: false
       emergency:
         description: Explicit emergency bypass of main ancestry and the existing public status
         type: boolean
@@ -138,7 +142,7 @@ jobs:
 
   build:
     if: always() && github.repository == '6th-Element-Labs/projectplanner-ci' && !github.event.repository.private && needs.version.result == 'success' && needs.gate.result != 'failure' && needs.gate.result != 'cancelled'
-    environment: simplemark-release
+    environment: ${{ inputs.sign_macos && matrix.os == 'macos' && 'simplemark-release-signing' || 'simplemark-release' }}
     name: ${{ matrix.leg }}
     needs: [version, gate]
     runs-on: ${{ matrix.runner }}
@@ -241,8 +245,24 @@ jobs:
       - name: Install the workspace dependencies
         run: npm ci
 
+      - name: Prepare protected Apple signing and API notarization credentials
+        if: inputs.sign_macos && matrix.os == 'macos'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bash ../control/.github/scripts/simplemark_macos_signing.sh prepare
+
       - name: Build the native package
         env:
+          APPLE_SIGNING_IDENTITY: ${{ inputs.sign_macos && matrix.os == 'macos' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_API_ISSUER: ${{ inputs.sign_macos && matrix.os == 'macos' && secrets.APPLE_API_ISSUER || '' }}
+          APPLE_API_KEY: ${{ inputs.sign_macos && matrix.os == 'macos' && secrets.APPLE_API_KEY || '' }}
           # Layer 2: turn a silent degrade into a build failure, but only where
           # the capability is genuinely owed. Local builds leave this unset so
           # an older Mac still produces a working app.
@@ -252,6 +272,19 @@ jobs:
           mkdir -p .artifacts
           npx tauri build --target "${{ matrix.target }}" --bundles "${{ matrix.bundles }}" \
             2>&1 | tee ".artifacts/release-build-${{ matrix.leg }}.log"
+
+      - name: Verify the signed app and notarize the final DMG
+        if: inputs.sign_macos && matrix.os == 'macos'
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: bash ../control/.github/scripts/simplemark_macos_signing.sh verify '${{ matrix.target }}'
+
+      - name: Remove temporary Apple signing material
+        if: always() && inputs.sign_macos && matrix.os == 'macos'
+        run: bash ../control/.github/scripts/simplemark_macos_signing.sh cleanup
 
       # Layer 3: assert the capability is in the binary. A published release
       # that quietly lost a native feature is the failure this exists to stop.
