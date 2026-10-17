@@ -24,8 +24,9 @@ root=/home/ubuntu/ActionEngine
 remote_command="set -euo pipefail
 cd $root
 git fetch --quiet origin $SHA
-git show FETCH_HEAD:deploy/total/deploy.sh > /tmp/deploy-$SHA.sh
-SKIP_FMP_SYNC='$SKIP_FMP_SYNC' DEPLOY_ACTOR='github-public:$ACTOR' bash /tmp/deploy-$SHA.sh '$DEPLOY_ENV' $SHA"
+# Enter the installed canonical door. It enforces the current host guards,
+# checks out the exact target, and re-execs that revision with its helpers present.
+SKIP_FMP_SYNC='$SKIP_FMP_SYNC' DEPLOY_ACTOR='github-public:$ACTOR' bash $root/deploy/total/deploy.sh '$DEPLOY_ENV' $SHA"
 
 payload="$(
   jq -n \
