@@ -2,6 +2,7 @@ import importlib.util
 import hashlib
 import json
 import os
+import shlex
 from pathlib import Path
 import subprocess
 import tempfile
@@ -211,7 +212,54 @@ class AuthorizationTests(unittest.TestCase):
                                     env=env, text=True, capture_output=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("github-public:github-actions[bot]", log.read_text())
+            self.assertIn("bash /home/ubuntu/ActionEngine/deploy/total/deploy.sh", log.read_text())
+            self.assertNotIn("/tmp/deploy-", log.read_text())
             self.assertIn("canary green", result.stdout)
+
+    def test_first_upgrade_enters_current_guard_then_reexecs_target_with_helpers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            def git(*args):
+                return subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
+
+            git("init", "-q")
+            git("config", "user.name", "Synthetic deploy test")
+            git("config", "user.email", "synthetic@example.invalid")
+            deploy = root / "deploy/total"
+            deploy.mkdir(parents=True)
+            door = deploy / "deploy.sh"
+            door.write_text('#!/usr/bin/env bash\nset -euo pipefail\n'
+                            'test ! -f deploy/total/deployment_lock.py\n'
+                            'echo current_guard >> "$BOOTSTRAP_LOG"\n'
+                            'git checkout --quiet --detach "$2"\n'
+                            'exec bash "$0" "$@"\n')
+            git("add", ".")
+            git("commit", "-qm", "old installed door")
+            previous = git("rev-parse", "HEAD")
+            (deploy / "deployment_lock.py").write_text("# synthetic target helper\n")
+            door.write_text('#!/usr/bin/env bash\nset -euo pipefail\n'
+                            'test -f deploy/total/deployment_lock.py\n'
+                            'echo target_with_helper >> "$BOOTSTRAP_LOG"\n')
+            git("add", ".")
+            git("commit", "-qm", "target with new helper")
+            target = git("rev-parse", "HEAD")
+            git("remote", "add", "origin", str(root))
+            git("checkout", "--quiet", "--detach", previous)
+            # Render the actual public caller, then execute its remote command
+            # against an old checkout lacking the target's new companion file.
+            prefix = (HERE / "actionengine_deploy.sh").read_text().split("\npayload=", 1)[0]
+            prefix = prefix.replace("root=/home/ubuntu/ActionEngine", "root=" + shlex.quote(str(root)))
+            env = {**os.environ, "INSTANCE_ID": "i-" + "0" * 17, "SHA": target,
+                   "ACTOR": "tester", "DEPLOY_ENV": "preprod", "SKIP_FMP_SYNC": "0",
+                   "BOOTSTRAP_LOG": str(root / "bootstrap.log")}
+            command = subprocess.check_output(["bash", "-c", prefix + '\nprintf "%s" "$remote_command"\n'],
+                                              env=env, text=True)
+            result = subprocess.run(["bash", "-c", command], env=env, text=True,
+                                    capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(git("rev-parse", "HEAD"), target)
+            self.assertEqual((root / "bootstrap.log").read_text().splitlines(),
+                             ["current_guard", "target_with_helper"])
 
 
 class MacSigningTests(unittest.TestCase):
