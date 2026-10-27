@@ -1,0 +1,26 @@
+name: release-controller-tests
+on:
+  pull_request:
+    paths:
+      - '.github/scripts/**'
+      - '.github/workflows/actionengine-preprod-deploy.yml'
+      - '.github/workflows/release-controller-tests.yml'
+  push:
+    branches: [master]
+    paths:
+      - '.github/scripts/**'
+      - '.github/workflows/actionengine-preprod-deploy.yml'
+      - '.github/workflows/release-controller-tests.yml'
+permissions:
+  contents: read
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s .github/scripts -p 'test_*.py'

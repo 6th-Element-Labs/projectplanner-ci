@@ -70,7 +70,7 @@ jobs:
         id: app_token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.SWITCHBOARD_APP_ID }}
+          client-id: ${{ vars.SWITCHBOARD_APP_CLIENT_ID }}
           private-key: ${{ secrets.SWITCHBOARD_APP_PRIVATE_KEY }}
           owner: 6th-Element-Labs
           repositories: ActionEngine
@@ -141,20 +141,18 @@ jobs:
           SKIP_FMP_SYNC: ${{ inputs.skip_fmp_sync && '1' || '0' }}
         run: bash .github/scripts/actionengine_deploy.sh
 
-      - name: Check out canonical audit helper
+      - name: Fetch exact canonical audit source
         if: inputs.audit_only
-        uses: actions/checkout@v5
-        with:
-          repository: 6th-Element-Labs/ActionEngine
-          token: ${{ steps.app_token.outputs.token }}
-          ref: ${{ inputs.source_sha }}
-          path: audit-source
-          persist-credentials: false
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: bash .github/scripts/actionengine_audit_source.sh
       - name: Audit protected release provenance over SSM
         id: audit
         if: inputs.audit_only
         env:
           INSTANCE_ID: ${{ vars.ACTIONENGINE_INSTANCE_ID || vars.ACTIONENGINE_PREPROD_INSTANCE_ID }}
+          EXPECTED_SHA: ${{ inputs.source_sha }}
         run: bash audit-source/.github/scripts/ssm_release_audit.sh
 
       - name: Publish canonical deployment verdict
